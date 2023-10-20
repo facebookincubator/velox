@@ -80,14 +80,18 @@ and date_sub(‘2023-07-10’, -2147483648) get -5877588-12-29.</p>
 <dt class="sig sig-object spark" id="dayofyear">
 <span class="sig-name descname"><span class="pre">dayofyear</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dayofyear" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns Returns the day of year of the date/timestamp.</p>
-<p>SELECT dayofyear(‘2016-04-09’); – 100</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">dayofyear</span><span class="p">(</span><span class="s1">&#39;2016-04-09&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">100</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="dayofmonth">
 <span class="sig-name descname"><span class="pre">dayofmonth</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dayofmonth" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the day of month of the date/timestamp.</p>
-<p>SELECT dayofmonth(‘2009-07-30’); – 30</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">dayofmonth</span><span class="p">(</span><span class="s1">&#39;2009-07-30&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">30</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="spark function">
@@ -95,8 +99,10 @@ and date_sub(‘2023-07-10’, -2147483648) get -5877588-12-29.</p>
 <span class="sig-name descname"><span class="pre">dayofweek</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date/timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dayofweek" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, …, 7 = Saturday).
 We can use <cite>dow</cite> as alias for</p>
-<p>SELECT dayofweek(‘2009-07-30’); – 5
-SELECT dayofweek(‘2023-08-22 11:23:00.100’); – 3</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">dayofweek</span><span class="p">(</span><span class="s1">&#39;2009-07-30&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">5</span>
+<span class="n">SELECT</span> <span class="n">dayofweek</span><span class="p">(</span><span class="s1">&#39;2023-08-22 11:23:00.100&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="py function">

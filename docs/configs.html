@@ -45,6 +45,124 @@
 <h1>Configuration properties<a class="headerlink" href="#configuration-properties" title="Permalink to this heading">¶</a></h1>
 <section id="generic-configuration">
 <h2>Generic Configuration<a class="headerlink" href="#generic-configuration" title="Permalink to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 18%" />
+<col style="width: 9%" />
+<col style="width: 9%" />
+<col style="width: 64%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>preferred_output_batch_bytes</p></td>
+<td><p>integer</p></td>
+<td><p>10MB</p></td>
+<td><p>Preferred size of batches in bytes to be returned by operators from Operator::getOutput. It is used when an
+estimate of average row size is known. Otherwise preferred_output_batch_rows is used.</p></td>
+</tr>
+<tr class="row-odd"><td><p>preferred_output_batch_rows</p></td>
+<td><p>integer</p></td>
+<td><p>1024</p></td>
+<td><p>Preferred number of rows to be returned by operators from Operator::getOutput. It is used when an estimate of
+average row size is not known. When the estimate of average row size is known, preferred_output_batch_bytes is used.</p></td>
+</tr>
+<tr class="row-even"><td><p>max_output_batch_rows</p></td>
+<td><p>integer</p></td>
+<td><p>10000</p></td>
+<td><p>Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
+average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.</p></td>
+</tr>
+<tr class="row-odd"><td><p>table_scan_getoutput_time_limit_ms</p></td>
+<td><p>integer</p></td>
+<td><p>5000</p></td>
+<td><p>TableScan operator will exit getOutput() method after this many milliseconds even if it has no data to return yet. Zero means ‘no time limit’.</p></td>
+</tr>
+<tr class="row-even"><td><p>abandon_partial_aggregation_min_rows</p></td>
+<td><p>integer</p></td>
+<td><p>100,000</p></td>
+<td><p>Min number of rows when we check if a partial aggregation is not reducing the cardinality well and might be
+a subject to being abandoned.</p></td>
+</tr>
+<tr class="row-odd"><td><p>abandon_partial_aggregation_min_pct</p></td>
+<td><p>integer</p></td>
+<td><p>80</p></td>
+<td><p>If a partial aggregation’s number of output rows constitues this or highler percentage of the number of input rows,
+then this partial aggregation will be a subject to being abandoned.</p></td>
+</tr>
+<tr class="row-even"><td><p>session_timezone</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>User provided session timezone. Stores a string with the actual timezone name, e.g: “America/Los_Angeles”.</p></td>
+</tr>
+<tr class="row-odd"><td><p>adjust_timestamp_to_session_timezone</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, timezone-less timestamp conversions (e.g. string to timestamp, when the string does not specify a timezone)
+will be adjusted to the user provided <cite>session_timezone</cite> (if any). For instance: if this option is true and user
+supplied “America/Los_Angeles”, then “1970-01-01” will be converted to -28800 instead of 0. Similarly, timestamp
+to date conversions will adhere to user ‘session_timezone’, e.g: Timestamp(0) to Date will be -1 (number of days
+since epoch) for “America/Los_Angeles”.</p></td>
+</tr>
+<tr class="row-even"><td><p>track_operator_cpu_usage</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether to track CPU usage for stages of individual operators. Can be expensive when processing small batches,
+e.g. &lt; 10K rows.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hash_adaptivity_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If false, the ‘group by’ code is forced to use generic hash mode hashtable.</p></td>
+</tr>
+<tr class="row-even"><td><p>adaptive_filter_reordering_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If true, the conjunction expression can reorder inputs based on the time taken to calculate them.</p></td>
+</tr>
+<tr class="row-odd"><td><p>max_local_exchange_buffer_size</p></td>
+<td><p>integer</p></td>
+<td><p>32MB</p></td>
+<td><p>Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.</p></td>
+</tr>
+<tr class="row-even"><td><p>exchange.max_buffer_size</p></td>
+<td><p>integer</p></td>
+<td><p>32MB</p></td>
+<td><p>Size of buffer in the exchange client that holds data fetched from other nodes before it is processed.
+A larger buffer can increase network throughput for larger clusters and thus decrease query processing time
+at the expense of reducing the amount of memory available for other usage.</p></td>
+</tr>
+<tr class="row-odd"><td><p>max_page_partitioning_buffer_size</p></td>
+<td><p>integer</p></td>
+<td><p>32MB</p></td>
+<td><p>The target size for a Task’s buffered output. The producer Drivers are blocked when the buffered size exceeds this.
+The Drivers are resumed when the buffered size goes below PartitionedOutputBufferManager::kContinuePct (90)% of this.</p></td>
+</tr>
+<tr class="row-even"><td><p>min_table_rows_for_parallel_join_build</p></td>
+<td><p>integer</p></td>
+<td><p>1000</p></td>
+<td><p>The minimum number of table rows that can trigger the parallel hash join table build.</p></td>
+</tr>
+<tr class="row-odd"><td><p>debug.validate_output_from_operators</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If set to true, then during execution of tasks, the output vectors of every operator are validated for consistency.
+This is an expensive check so should only be used for debugging. It can help debug issues where malformed vector
+cause failures or crashes by helping identify which operator is generating them.</p></td>
+</tr>
+<tr class="row-even"><td><p>enable_expression_evaluation_cache</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
+evalWithMemo are enabled.</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="expression-evaluation-configuration">
 <span id="expression-evaluation-conf"></span><h2>Expression Evaluation Configuration<a class="headerlink" href="#expression-evaluation-configuration" title="Permalink to this heading">¶</a></h2>
@@ -153,6 +271,145 @@ value of <cite>max_partial_aggregation_memory</cite>. Specify higher value for <
 </section>
 <section id="spilling">
 <h2>Spilling<a class="headerlink" href="#spilling" title="Permalink to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 18%" />
+<col style="width: 9%" />
+<col style="width: 9%" />
+<col style="width: 64%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>spill_enabled</p></td>
+<td><p>boolean</p></td>
+<td><p>false</p></td>
+<td><p>Spill memory to disk to avoid exceeding memory limits for the query.</p></td>
+</tr>
+<tr class="row-odd"><td><p>aggregation_spill_enabled</p></td>
+<td><p>boolean</p></td>
+<td><p>true</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether HashAggregation operator can spill to disk under memory pressure.
+memory limits for the query.</p></td>
+</tr>
+<tr class="row-even"><td><p>join_spill_enabled</p></td>
+<td><p>boolean</p></td>
+<td><p>true</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.
+limits for the query.</p></td>
+</tr>
+<tr class="row-odd"><td><p>order_by_spill_enabled</p></td>
+<td><p>boolean</p></td>
+<td><p>true</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether OrderBy operator can spill to disk under memory pressure.
+limits for the query.</p></td>
+</tr>
+<tr class="row-even"><td><p>row_number_spill_enabled</p></td>
+<td><p>boolean</p></td>
+<td><p>true</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether RowNumber operator can spill to disk under memory pressure.</p></td>
+</tr>
+<tr class="row-odd"><td><p>aggregation_spill_memory_threshold</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Maximum amount of memory in bytes that a final aggregation can use before spilling. 0 means unlimited.</p></td>
+</tr>
+<tr class="row-even"><td><p>aggregation_spill_all</p></td>
+<td><p>boolean</p></td>
+<td><p>false</p></td>
+<td><p>If true and spilling has been triggered during the input processing, the spiller will spill all the remaining in-memory state to disk before output processing. This is to simplify the aggregation query OOM prevention in output processing stage.</p></td>
+</tr>
+<tr class="row-odd"><td><p>join_spill_memory_threshold</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Maximum amount of memory in bytes that a hash join build side can use before spilling. 0 means unlimited.</p></td>
+</tr>
+<tr class="row-even"><td><p>order_by_spill_memory_threshold</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Maximum amount of memory in bytes that an order by can use before spilling. 0 means unlimited.</p></td>
+</tr>
+<tr class="row-odd"><td><p>min_spillable_reservation_pct</p></td>
+<td><p>integer</p></td>
+<td><p>5</p></td>
+<td><p>The minimal available spillable memory reservation in percentage of the current memory usage. Suppose the current
+memory usage size of M, available memory reservation size of N and min reservation percentage of P,
+if M * P / 100 &gt; N, then spiller operator needs to grow the memory reservation with percentage of
+‘spillable_reservation_growth_pct’ (see below). This ensures we have sufficient amount of memory reservation to
+process the large input outlier.</p></td>
+</tr>
+<tr class="row-even"><td><p>spillable_reservation_growth_pct</p></td>
+<td><p>integer</p></td>
+<td><p>10</p></td>
+<td><p>The spillable memory reservation growth percentage of the current memory usage. Suppose a growth percentage of N
+and the current memory usage size of M, the next memory reservation size will be M * (1 + N / 100). After growing
+the memory reservation K times, the memory reservation size will be M * (1 + N / 100) ^ K. Hence the memory
+reservation grows along a series of powers of (1 + N / 100). If the memory reservation fails, it starts spilling.</p></td>
+</tr>
+<tr class="row-odd"><td><p>max_spill_level</p></td>
+<td><p>integer</p></td>
+<td><p>4</p></td>
+<td><p>The maximum allowed spilling level with zero being the initial spilling level. Applies to hash join build
+spilling which might use recursive spilling when the build table is very large. -1 means unlimited.
+In this case an extremely large query might run out of spilling partition bits. The max spill level
+can be used to prevent a query from using too much io and cpu resources.</p></td>
+</tr>
+<tr class="row-even"><td><p>max_spill_file_size</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>The maximum allowed spill file size. Zero means unlimited.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spill_write_buffer_size</p></td>
+<td><p>integer</p></td>
+<td><p>4MB</p></td>
+<td><p>The maximum size in bytes to buffer the serialized spill data before write to disk for IO efficiency.
+If set to zero, buffering is disabled.</p></td>
+</tr>
+<tr class="row-even"><td><p>min_spill_run_size</p></td>
+<td><p>integer</p></td>
+<td><p>256MB</p></td>
+<td><p>The minimum spill run size (bytes) limit used to select partitions for spilling. The spiller tries to spill a
+previously spilled partitions if its data size exceeds this limit, otherwise it spills the partition with most data.
+If the limit is zero, then the spiller always spills a previously spilled partition if it has any data. This is
+to avoid spill from a partition with a small amount of data which might result in generating too many small
+spilled files.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spill_compression_codec</p></td>
+<td><p>string</p></td>
+<td><p>none</p></td>
+<td><p>Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
+efficiency. The supported compression codecs are: ZLIB, SNAPPY, LZO, ZSTD, LZ4 and GZIP.
+NONE means no compression.</p></td>
+</tr>
+<tr class="row-even"><td><p>spiller_start_partition_bit</p></td>
+<td><p>integer</p></td>
+<td><p>29</p></td>
+<td><p>The start partition bit which is used with <cite>spiller_partition_bits</cite> together to calculate the spilling partition number.</p></td>
+</tr>
+<tr class="row-odd"><td><p>join_spiller_partition_bits</p></td>
+<td><p>integer</p></td>
+<td><p>2</p></td>
+<td><p>The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
+value is 3, meaning we only support up to 8-way spill partitioning.</p></td>
+</tr>
+<tr class="row-even"><td><p>aggregation_spiller_partition_bits</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>The number of bits (N) used to calculate the spilling partition number for hash aggregation: 2 ^ N. At the moment the
+maximum value is 3, meaning we only support up to 8-way spill partitioning.</p></td>
+</tr>
+<tr class="row-odd"><td><p>testing.spill_pct</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="table-writer">
 <h2>Table Writer<a class="headerlink" href="#table-writer" title="Permalink to this heading">¶</a></h2>

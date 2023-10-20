@@ -218,6 +218,15 @@ takes the current state, initially <code class="docutils literal notranslate"><s
 <code class="docutils literal notranslate"><span class="pre">combineFunction</span></code> will be invoked to combine two states into a new state.
 The final state is returned. Throws an error if <code class="docutils literal notranslate"><span class="pre">initialState</span></code> is NULL or
 <code class="docutils literal notranslate"><span class="pre">inputFunction</span></code> or <code class="docutils literal notranslate"><span class="pre">combineFunction</span></code> returns a NULL.</p>
+<p>Take care when designing <code class="docutils literal notranslate"><span class="pre">initialState</span></code>, <code class="docutils literal notranslate"><span class="pre">inputFunction</span></code> and <code class="docutils literal notranslate"><span class="pre">combineFunction</span></code>.
+These need to support evaluating aggregation in a distributed manner using partial
+aggregation on many nodes, followed by shuffle over group-by keys, followed by
+final aggregation. Make sure that</p>
+<blockquote>
+<div><p>combineFunction(s1, s2) = combineFunction(s2, s1) for any s1 and s2;</p>
+<p>inputFunction(inputFunction(initialState, x), y) = combineFunction(inputFunction(initialState, x), inputFunction(initialState, y)) for any x and y</p>
+</div></blockquote>
+<p>Check out <a class="reference external" href="https://velox-lib.io/blog/reduce-agg">blog post about reduce_agg</a> for more context.</p>
 <p>Note that reduce_agg doesn’t support evaluation over sorted inputs.:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">Compute</span> <span class="nb">sum</span> <span class="p">(</span><span class="k">for</span> <span class="n">illustration</span> <span class="n">purposes</span> <span class="n">only</span><span class="p">;</span> <span class="n">use</span> <span class="n">SUM</span> <span class="n">aggregate</span> <span class="n">function</span> <span class="ow">in</span> <span class="n">production</span> <span class="n">queries</span><span class="p">)</span><span class="o">.</span>
 <span class="n">SELECT</span> <span class="nb">id</span><span class="p">,</span> <span class="n">reduce_agg</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span><span class="p">,</span> <span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span><span class="p">)</span>

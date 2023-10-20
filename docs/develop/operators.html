@@ -374,6 +374,31 @@ aggregation step is ‘single’. Such computations cannot be split into partial
 implement aggregations over grouping sets.</p>
 <p>The output consists of grouping keys, followed by aggregation inputs,
 followed by the group ID column. The type of group ID column is BIGINT.</p>
+<table class="docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>groupingSets</p></td>
+<td><p>List of grouping key sets. Keys within each set must be unique, but keys can repeat across the sets. Grouping keys are specified with their output names.</p></td>
+</tr>
+<tr class="row-odd"><td><p>groupingKeyInfos</p></td>
+<td><p>The names and order of the grouping key columns in the output.</p></td>
+</tr>
+<tr class="row-even"><td><p>aggregationInputs</p></td>
+<td><p>Input columns to duplicate.</p></td>
+</tr>
+<tr class="row-odd"><td><p>groupIdName</p></td>
+<td><p>The name for the group-id column that identifies the grouping set. Zero-based integer corresponding to the position of the grouping set in the ‘groupingSets’ list.</p></td>
+</tr>
+</tbody>
+</table>
 <p>GroupIdNode is typically used to compute GROUPING SETS, CUBE and ROLLUP.</p>
 <p>While usually GroupingSets do not repeat with the same grouping key column, there are some use-cases where
 they might. To illustrate why GroupingSets might do so lets examine the following SQL query:</p>
