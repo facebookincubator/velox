@@ -279,7 +279,7 @@ arrange for all rows with the same keys to appear on the same machine. Whether
 the join is executed using broadcast or partitioned strategy has no effect on
 the join execution itself. The only difference is that broadcast execution
 allows for dynamic filter pushdown while partitioned execution does not.</p>
-<p>PartitionedOutput operator and PartitionedOutputBufferManager support
+<p>PartitionedOutput operator and OutputBufferManager support
 broadcasting the results of the plan evaluation. This functionality is enabled
 by setting boolean flag “broadcast” in the PartitionedOutputNode to true.</p>
 </section>
