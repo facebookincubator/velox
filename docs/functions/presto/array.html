@@ -168,11 +168,16 @@ E must be bigint or varchar.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="array_max">
 <span class="sig-name descname"><span class="pre">array_max</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_max" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the maximum value of input array.</p>
+<dd><p>Returns the maximum value of input array.
+Returns NaN if E is REAL or DOUBLE and array contains a NaN value.
+Returns NULL if array doesn’t contain a NaN value, but contains a NULL value.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span> <span class="o">--</span> <span class="mi">3</span>
 <span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
 <span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="n">NULL</span>
 <span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[]);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">NULL</span><span class="p">,</span> <span class="n">nan</span><span class="p">()]);</span> <span class="o">--</span> <span class="n">NaN</span>
+<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[{</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">3</span><span class="p">,</span> <span class="n">nan</span><span class="p">()]);</span> <span class="o">--</span> <span class="n">NaN</span>
+<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="o">-</span><span class="mf">0.0001</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.0003</span><span class="p">,</span> <span class="n">nan</span><span class="p">()]);</span> <span class="o">--</span> <span class="n">NaN</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -180,11 +185,16 @@ E must be bigint or varchar.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="array_min">
 <span class="sig-name descname"><span class="pre">array_min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_min" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the minimum value of input array.</p>
+<dd><p>Returns the minimum value of input array.
+Returns NaN if E is REAL or DOUBLE and array contains a NaN value.
+Returns NULL if array doesn’t contain a NaN value, but contains a NULL value.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span> <span class="o">--</span> <span class="mi">1</span>
 <span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">2</span>
 <span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="n">NULL</span>
 <span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[]);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">NULL</span><span class="p">,</span> <span class="n">nan</span><span class="p">()]);</span> <span class="o">--</span> <span class="n">NaN</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[{</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">3</span><span class="p">,</span> <span class="n">nan</span><span class="p">()]);</span> <span class="o">--</span> <span class="n">NaN</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="o">-</span><span class="mf">0.0001</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.0003</span><span class="p">,</span> <span class="n">nan</span><span class="p">()]);</span> <span class="o">--</span> <span class="n">NaN</span>
 </pre></div>
 </div>
 </dd></dl>
