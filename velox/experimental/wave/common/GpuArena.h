@@ -125,7 +125,14 @@ class GpuArena {
 
   template <typename T>
   WaveBufferPtr allocate(int32_t items) {
+    static_assert(std::is_trivially_destructible_v<T>);
     return allocateBytes(sizeof(T) * items);
+  }
+
+  template <typename T>
+  T* allocate(int n, WaveBufferPtr& holder) {
+    holder = allocate<T>(n);
+    return holder->as<T>();
   }
 
   void free(Buffer* buffer);

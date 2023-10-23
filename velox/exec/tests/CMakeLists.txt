@@ -48,12 +48,13 @@ add_executable(
   LimitTest.cpp
   LocalPartitionTest.cpp
   Main.cpp
+  MemoryReclaimerTest.cpp
   MergeJoinTest.cpp
   MergeTest.cpp
   MultiFragmentTest.cpp
   NestedLoopJoinTest.cpp
   OrderByTest.cpp
-  PartitionedOutputBufferManagerTest.cpp
+  OutputBufferManagerTest.cpp
   PlanNodeSerdeTest.cpp
   PlanNodeToStringTest.cpp
   PrintPlanWithStatsTest.cpp
@@ -77,7 +78,8 @@ add_executable(
   UnnestTest.cpp
   VectorHasherTest.cpp
   ValuesTest.cpp
-  WindowFunctionRegistryTest.cpp)
+  WindowFunctionRegistryTest.cpp
+  SortBufferTest.cpp)
 
 add_executable(
   velox_exec_infra_test
@@ -97,6 +99,8 @@ add_test(
   NAME velox_exec_test
   COMMAND velox_exec_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+set_tests_properties(velox_exec_test PROPERTIES TIMEOUT 3000)
 
 add_test(
   NAME velox_exec_infra_test
@@ -189,12 +193,6 @@ target_link_libraries(
   velox_memory)
 
 # Aggregation Fuzzer.
-
-add_library(velox_aggregation_fuzzer AggregationFuzzer.cpp)
-
-target_link_libraries(velox_aggregation_fuzzer velox_type velox_vector_fuzzer
-                      velox_exec_test_lib velox_expression_test_utility)
-
 add_executable(velox_aggregation_fuzzer_test AggregationFuzzerTest.cpp)
 
 target_link_libraries(
@@ -259,7 +257,6 @@ target_link_libraries(
   velox_spiller_benchmark_base
   velox_vector_fuzzer
   glog::glog
-
   gflags::gflags
   Folly::folly
   pthread)

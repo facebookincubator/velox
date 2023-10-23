@@ -50,11 +50,30 @@ class Stream {
   /// to 'device'.
   void prefetch(Device* device, void* address, size_t size);
 
+  // Enqueues a copy from host to device.
+  void
+  hostToDeviceAsync(void* deviceAddress, const void* hostAddress, size_t size);
+
+  // Enqueues a copy from device to host.
+  void
+  deviceToHostAsync(void* hostAddress, const void* deviceAddress, size_t size);
+
   /// Adds a callback to be invoked after pending processing is done.
   void addCallback(std::function<void()> callback);
 
+  auto stream() const {
+    return stream_.get();
+  }
+
+  /// Mutable reference to arbitrary non-owned user data. Can be used for
+  /// tagging streams when scheduling.
+  void*& userData() {
+    return userData_;
+  }
+
  protected:
   std::unique_ptr<StreamImpl> stream_;
+  void* userData_{nullptr};
 
   friend class Event;
 };
@@ -106,8 +125,62 @@ class GpuAllocator {
   /// Frees a pointer from allocate(). 'size' must correspond to the size given
   /// to allocate(). A Memory must be freed to the same allocator it came from.
   virtual void free(void* ptr, size_t bytes) = 0;
+
+  class Deleter;
+
+  template <typename T>
+  using UniquePtr = std::unique_ptr<T, GpuAllocator::Deleter>;
+
+  /// Convenient method to do allocation with automatic life cycle management.
+  template <typename T>
+  UniquePtr<T> allocate();
+
+  /// Convenient method to do allocation with automatic life cycle management.
+  template <typename T>
+  UniquePtr<T[]> allocate(size_t n);
 };
 
+// Returns an allocator that produces unified memory.
 GpuAllocator* getAllocator(Device* device);
+
+// Returns an allocator that produces device memory on current device.
+GpuAllocator* getDeviceAllocator(Device* device);
+
+/// Returns an allocator that produces pinned host memory.
+GpuAllocator* getHostAllocator(Device* device);
+
+class GpuAllocator::Deleter {
+ public:
+  Deleter() = default;
+
+  Deleter(GpuAllocator* allocator, size_t bytes)
+      : allocator_(allocator), bytes_(bytes) {}
+
+  void operator()(void* ptr) const {
+    if (ptr) {
+      allocator_->free(ptr, bytes_);
+    }
+  }
+
+ private:
+  GpuAllocator* allocator_;
+  size_t bytes_;
+};
+
+template <typename T>
+GpuAllocator::UniquePtr<T> GpuAllocator::allocate() {
+  static_assert(std::is_trivially_destructible_v<T>);
+  auto bytes = sizeof(T);
+  T* ptr = static_cast<T*>(allocate(bytes));
+  return UniquePtr<T>(ptr, Deleter(this, bytes));
+}
+
+template <typename T>
+GpuAllocator::UniquePtr<T[]> GpuAllocator::allocate(size_t n) {
+  static_assert(std::is_trivially_destructible_v<T>);
+  auto bytes = n * sizeof(T);
+  T* ptr = static_cast<T*>(allocate(bytes));
+  return UniquePtr<T[]>(ptr, Deleter(this, bytes));
+}
 
 } // namespace facebook::velox::wave

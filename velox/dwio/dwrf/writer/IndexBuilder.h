@@ -45,15 +45,15 @@ class IndexBuilder : public PositionRecorder {
   }
 
   virtual void addEntry(const StatisticsBuilder& writer) {
-    auto stats = entry_.mutable_statistics();
+    auto* stats = entry_.mutable_statistics();
     writer.toProto(*stats);
     *index_.add_entry() = entry_;
     entry_.Clear();
   }
 
   virtual size_t getEntrySize() const {
-    int32_t size = index_.entry_size() + 1;
-    DWIO_ENSURE_GT(size, 0, "Invalid entry size or missing current entry.");
+    const int32_t size = index_.entry_size() + 1;
+    VELOX_CHECK_GT(size, 0, "Invalid entry size or missing current entry.");
     return size;
   }
 
@@ -66,7 +66,7 @@ class IndexBuilder : public PositionRecorder {
   }
 
   void capturePresentStreamOffset() {
-    if (!presentStreamOffset_) {
+    if (!presentStreamOffset_.has_value()) {
       presentStreamOffset_ = entry_.positions_size();
     } else {
       DWIO_ENSURE_EQ(presentStreamOffset_.value(), entry_.positions_size());
@@ -75,8 +75,9 @@ class IndexBuilder : public PositionRecorder {
 
   void removePresentStreamPositions(bool isPaged) {
     DWIO_ENSURE(presentStreamOffset_.has_value());
-    auto streamCount = isPaged ? PRESENT_STREAM_INDEX_ENTRIES_PAGED
-                               : PRESENT_STREAM_INDEX_ENTRIES_UNPAGED;
+    const auto streamCount = isPaged ? PRESENT_STREAM_INDEX_ENTRIES_PAGED
+                                     : PRESENT_STREAM_INDEX_ENTRIES_UNPAGED;
+
     // Only need to process entries that have been added to the row index
     for (uint32_t i = 0; i < index_.entry_size(); ++i) {
       index_.mutable_entry(i)->mutable_positions()->ExtractSubrange(
@@ -85,23 +86,23 @@ class IndexBuilder : public PositionRecorder {
   }
 
  private:
-  friend class IndexBuilderTest;
-
-  std::unique_ptr<BufferedOutputStream> out_;
-  proto::RowIndex index_;
-  proto::RowIndexEntry entry_;
-  std::optional<int32_t> presentStreamOffset_;
-
   proto::RowIndexEntry* getEntry(int32_t index) {
     if (index < 0) {
       return &entry_;
     } else if (index < index_.entry_size()) {
       return index_.mutable_entry(index);
     } else {
-      DWIO_ENSURE_EQ(index, index_.entry_size());
+      VELOX_CHECK_EQ(index, index_.entry_size());
       return &entry_;
     }
   }
+
+  const std::unique_ptr<BufferedOutputStream> out_;
+  proto::RowIndex index_;
+  proto::RowIndexEntry entry_;
+  std::optional<int32_t> presentStreamOffset_;
+
+  friend class IndexBuilderTest;
 };
 
 } // namespace facebook::velox::dwrf

@@ -21,14 +21,9 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
-DEFINE_int32(
-    parquet_prefetch_rowgroups,
-    1,
-    "Number of next row groups to "
-    "prefetch. 1 means prefetch the next row group before decoding "
-    "the current one");
-
 namespace facebook::velox::parquet {
+
+using dwio::common::ColumnSelector;
 
 /// Metadata and options for reading Parquet.
 class ReaderBase {
@@ -79,11 +74,14 @@ class ReaderBase {
       StructColumnReader& reader);
 
   /// Returns the uncompressed size for columns in 'type' and its children in
-  /// row
-  /// group.
+  /// row group.
   int64_t rowGroupUncompressedSize(
       int32_t rowGroupIndex,
       const dwio::common::TypeWithId& type) const;
+
+  /// Checks whether the specific row group has been loaded and
+  /// the data still exists in the buffered inputs.
+  bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
  private:
   // Reads and parses file footer.
@@ -110,7 +108,7 @@ class ReaderBase {
   const uint64_t filePreloadThreshold_;
   // Copy of options. Must be owned by 'this'.
   const dwio::common::ReaderOptions options_;
-  std::unique_ptr<velox::dwio::common::BufferedInput> input_;
+  std::shared_ptr<velox::dwio::common::BufferedInput> input_;
   uint64_t fileLength_;
   std::unique_ptr<thrift::FileMetaData> fileMetaData_;
   RowTypePtr schema_;
@@ -119,7 +117,7 @@ class ReaderBase {
   const bool binaryAsString = false;
 
   // Map from row group index to pre-created loading BufferedInput.
-  std::unordered_map<uint32_t, std::unique_ptr<dwio::common::BufferedInput>>
+  std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
 };
 
@@ -140,11 +138,17 @@ ReaderBase::ReaderBase(
 }
 
 void ReaderBase::loadFileMetaData() {
-  bool preloadFile_ = fileLength_ <= filePreloadThreshold_;
-  uint64_t readSize =
-      preloadFile_ ? fileLength_ : std::min(fileLength_, directorySizeGuess_);
-  auto stream = input_->read(
-      fileLength_ - readSize, readSize, dwio::common::LogType::FOOTER);
+  bool preloadFile =
+      fileLength_ <= std::max(filePreloadThreshold_, directorySizeGuess_);
+  uint64_t readSize = preloadFile ? fileLength_ : directorySizeGuess_;
+
+  std::unique_ptr<dwio::common::SeekableInputStream> stream;
+  if (preloadFile) {
+    stream = input_->loadCompleteFile();
+  } else {
+    stream = input_->read(
+        fileLength_ - readSize, readSize, dwio::common::LogType::FOOTER);
+  }
 
   std::vector<char> copy(readSize);
   const char* bufferStart = nullptr;
@@ -262,7 +266,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           auto element = children.at(0)->getChildren();
           VELOX_CHECK_EQ(children.size(), 1);
           return std::make_shared<const ParquetTypeWithId>(
-              children[0]->type,
+              children[0]->type(),
               std::move(element),
               curSchemaIdx, // TODO: there are holes in the ids
               maxSchemaElementIdx,
@@ -282,7 +286,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           auto childrenCopy = children;
           return std::make_shared<const ParquetTypeWithId>(
               TypeFactory<TypeKind::MAP>::create(
-                  children[0]->type, children[1]->type),
+                  children[0]->type(), children[1]->type()),
               std::move(childrenCopy),
               curSchemaIdx, // TODO: there are holes in the ids
               maxSchemaElementIdx,
@@ -307,7 +311,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           // child of LIST
           auto childrenCopy = children;
           return std::make_shared<ParquetTypeWithId>(
-              TypeFactory<TypeKind::ARRAY>::create(children[0]->type),
+              TypeFactory<TypeKind::ARRAY>::create(children[0]->type()),
               std::move(childrenCopy),
               curSchemaIdx,
               maxSchemaElementIdx,
@@ -322,7 +326,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           auto childrenCopy = children;
           return std::make_shared<const ParquetTypeWithId>(
               TypeFactory<TypeKind::MAP>::create(
-                  children[0]->type, children[1]->type),
+                  children[0]->type(), children[1]->type()),
               std::move(childrenCopy),
               curSchemaIdx, // TODO: there are holes in the ids
               maxSchemaElementIdx,
@@ -553,7 +557,7 @@ std::shared_ptr<const RowType> ReaderBase::createRowType(
       folly::toLowerAscii(childName);
     }
     childNames.push_back(std::move(childName));
-    childTypes.push_back(child->type);
+    childTypes.push_back(child->type());
   }
   return TypeFactory<TypeKind::ROW>::create(
       std::move(childNames), std::move(childTypes));
@@ -568,19 +572,12 @@ void ReaderBase::scheduleRowGroups(
       currentGroup + 1 < rowGroupIds.size() ? rowGroupIds[currentGroup + 1] : 0;
   auto input = inputs_[thisGroup].get();
   if (!input) {
-    auto newInput = input_->clone();
-    reader.enqueueRowGroup(thisGroup, *newInput);
-    newInput->load(dwio::common::LogType::STRIPE);
-    inputs_[thisGroup] = std::move(newInput);
+    inputs_[thisGroup] = reader.loadRowGroup(thisGroup, input_);
   }
-  for (auto counter = 0; counter < FLAGS_parquet_prefetch_rowgroups;
-       ++counter) {
+  for (auto counter = 0; counter < options_.prefetchRowGroups(); ++counter) {
     if (nextGroup) {
-      if (inputs_.count(nextGroup) != 0) {
-        auto newInput = input_->clone();
-        reader.enqueueRowGroup(nextGroup, *newInput);
-        newInput->load(dwio::common::LogType::STRIPE);
-        inputs_[nextGroup] = std::move(newInput);
+      if (inputs_.count(nextGroup) == 0) {
+        inputs_[nextGroup] = reader.loadRowGroup(nextGroup, input_);
       }
     } else {
       break;
@@ -588,7 +585,7 @@ void ReaderBase::scheduleRowGroups(
     nextGroup =
         nextGroup + 1 < rowGroupIds.size() ? rowGroupIds[nextGroup + 1] : 0;
   }
-  if (currentGroup > 1) {
+  if (currentGroup >= 1) {
     inputs_.erase(rowGroupIds[currentGroup - 1]);
   }
 }
@@ -596,9 +593,9 @@ void ReaderBase::scheduleRowGroups(
 int64_t ReaderBase::rowGroupUncompressedSize(
     int32_t rowGroupIndex,
     const dwio::common::TypeWithId& type) const {
-  if (type.column != ParquetTypeWithId::kNonLeaf) {
+  if (type.column() != ParquetTypeWithId::kNonLeaf) {
     return fileMetaData_->row_groups[rowGroupIndex]
-        .columns[type.column]
+        .columns[type.column()]
         .meta_data.total_uncompressed_size;
   }
   int64_t sum = 0;
@@ -606,6 +603,10 @@ int64_t ReaderBase::rowGroupUncompressedSize(
     sum += rowGroupUncompressedSize(rowGroupIndex, *child);
   }
   return sum;
+}
+
+bool ReaderBase::isRowGroupBuffered(int32_t rowGroupIndex) const {
+  return inputs_.count(rowGroupIndex) != 0;
 }
 
 ParquetRowReader::ParquetRowReader(
@@ -635,9 +636,11 @@ ParquetRowReader::ParquetRowReader(
   if (rowGroups_.empty()) {
     return; // TODO
   }
-  ParquetParams params(pool_, readerBase_->fileMetaData());
-
+  ParquetParams params(pool_, columnReaderStats_, readerBase_->fileMetaData());
+  auto columnSelector = std::make_shared<ColumnSelector>(
+      ColumnSelector::apply(options_.getSelector(), readerBase_->schema()));
   columnReader_ = ParquetColumnReader::build(
+      columnSelector->getSchemaWithId(),
       readerBase_->schemaWithId(), // Id is schema id
       params,
       *options_.getScanSpec());
@@ -746,6 +749,10 @@ void ParquetRowReader::updateRuntimeStats(
 
 void ParquetRowReader::resetFilterCaches() {
   columnReader_->resetFilterCaches();
+}
+
+bool ParquetRowReader::isRowGroupBuffered(int32_t rowGroupIndex) const {
+  return readerBase_->isRowGroupBuffered(rowGroupIndex);
 }
 
 std::optional<size_t> ParquetRowReader::estimatedRowSize() const {

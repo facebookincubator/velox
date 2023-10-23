@@ -46,6 +46,16 @@ enum class Table : uint8_t {
   TBL_REGION,
 };
 
+static constexpr auto tables = {
+    tpch::Table::TBL_PART,
+    tpch::Table::TBL_SUPPLIER,
+    tpch::Table::TBL_PARTSUPP,
+    tpch::Table::TBL_CUSTOMER,
+    tpch::Table::TBL_ORDERS,
+    tpch::Table::TBL_LINEITEM,
+    tpch::Table::TBL_NATION,
+    tpch::Table::TBL_REGION};
+
 /// Returns table name as a string.
 std::string_view toTableName(Table table);
 
@@ -224,5 +234,8 @@ RowVectorPtr genTpchRegion(
     size_t maxRows = 10000,
     size_t offset = 0,
     double scaleFactor = 1);
+
+/// Gets the specified TPC-H query number as a string.
+std::string getQuery(int query);
 
 } // namespace facebook::velox::tpch

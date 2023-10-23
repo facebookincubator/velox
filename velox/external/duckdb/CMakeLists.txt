@@ -9,10 +9,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_subdirectory(tpch)
-
 add_compile_definitions(DISABLE_DUCKDB_REMOTE_INSTALL)
-add_compile_definitions(BUILD_PARQUET_EXTENSION)
 
 add_library(
   duckdb
@@ -30,8 +27,7 @@ add_library(
   duckdb-libpg_query.cpp
   duckdb-miniz.cpp
   duckdb-re2.cpp
-  duckdb-utf8proc.cpp
-  parquet-amalgamation.cpp)
+  duckdb-utf8proc.cpp)
 
 set_property(TARGET duckdb PROPERTY JOB_POOL_COMPILE high_memory_pool)
 

@@ -20,7 +20,6 @@
 #include <re2/re2.h>
 #include <sstream>
 #include <typeindex>
-#include "velox/common/base/Exceptions.h"
 #include "velox/type/TimestampConversion.h"
 
 namespace std {
@@ -223,7 +222,7 @@ std::string ArrayType::toString() const {
 }
 
 const TypePtr& ArrayType::childAt(uint32_t idx) const {
-  VELOX_USER_CHECK_EQ(idx, 0, "List type should have only one child");
+  VELOX_USER_CHECK_EQ(idx, 0, "Array type should have only one child");
   return elementType();
 }
 
@@ -261,6 +260,17 @@ const TypePtr& MapType::childAt(uint32_t idx) const {
   }
   VELOX_USER_FAIL(
       "Map type should have only two children. Tried to access child '{}'",
+      idx);
+}
+
+const char* MapType::nameOf(uint32_t idx) const {
+  if (idx == 0) {
+    return "key";
+  } else if (idx == 1) {
+    return "value";
+  }
+  VELOX_USER_FAIL(
+      "Map type should have only two children. Tried to get name of child '{}'",
       idx);
 }
 
@@ -309,6 +319,33 @@ const folly::F14FastMap<std::string, uint32_t> createdChildrenIndex(
   }
   return index;
 }
+
+std::string namesAndTypesToString(
+    const std::vector<std::string>& names,
+    const std::vector<TypePtr>& types) {
+  std::stringstream ss;
+  ss << "[names: {";
+  if (!names.empty()) {
+    for (const auto& name : names) {
+      ss << "'" << name << "', ";
+    }
+    ss.seekp(-2, std::ios_base::cur);
+  } else {
+    ss << " ";
+  }
+  ss << "}, types: {";
+  if (!types.empty()) {
+    for (const auto& type : types) {
+      ss << (type ? type->toString() : "NULL") << ", ";
+    }
+    ss.seekp(-2, std::ios_base::cur);
+  } else {
+    ss << " ";
+  }
+  ss << "}]";
+  return ss.str();
+}
+
 } // namespace
 
 RowType::RowType(std::vector<std::string>&& names, std::vector<TypePtr>&& types)
@@ -317,8 +354,17 @@ RowType::RowType(std::vector<std::string>&& names, std::vector<TypePtr>&& types)
       parameters_{createTypeParameters(children_)},
       // TODO: lazily initialize index on first access instead.
       childrenIndices_{createdChildrenIndex(names_)} {
-  VELOX_USER_CHECK_EQ(
-      names_.size(), children_.size(), "Mismatch names/types sizes");
+  VELOX_CHECK_EQ(
+      names_.size(),
+      children_.size(),
+      "Mismatch names/types sizes: {}",
+      namesAndTypesToString(names_, children_));
+  for (auto& child : children_) {
+    VELOX_CHECK_NOT_NULL(
+        child,
+        "Child types cannot be null: {}",
+        namesAndTypesToString(names_, children_));
+  }
 }
 
 uint32_t RowType::size() const {
@@ -354,6 +400,20 @@ const TypePtr& RowType::findChild(folly::StringPiece name) const {
     return children_[*idx];
   }
   VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
+}
+
+bool RowType::isOrderable() const {
+  return std::all_of(
+      children_.cbegin(), children_.cend(), [](const auto& child) {
+        return child->isOrderable();
+      });
+}
+
+bool RowType::isComparable() const {
+  return std::all_of(
+      children_.cbegin(), children_.cend(), [](const auto& child) {
+        return child->isComparable();
+      });
 }
 
 bool RowType::containsChild(std::string_view name) const {
@@ -514,11 +574,23 @@ bool FunctionType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
+
   if (!Type::hasSameTypeId(other)) {
     return false;
   }
+
   auto& otherTyped = *reinterpret_cast<const FunctionType*>(&other);
-  return children_ == otherTyped.children_;
+  if (children_.size() != otherTyped.size()) {
+    return false;
+  }
+
+  for (auto i = 0; i < children_.size(); ++i) {
+    if (!children_.at(i)->equivalent(*otherTyped.children_.at(i))) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 std::string FunctionType::toString() const {
@@ -687,6 +759,7 @@ VELOX_DEFINE_SCALAR_ACCESSOR(BOOLEAN);
 VELOX_DEFINE_SCALAR_ACCESSOR(TINYINT);
 VELOX_DEFINE_SCALAR_ACCESSOR(SMALLINT);
 VELOX_DEFINE_SCALAR_ACCESSOR(BIGINT);
+VELOX_DEFINE_SCALAR_ACCESSOR(HUGEINT);
 VELOX_DEFINE_SCALAR_ACCESSOR(REAL);
 VELOX_DEFINE_SCALAR_ACCESSOR(DOUBLE);
 VELOX_DEFINE_SCALAR_ACCESSOR(TIMESTAMP);
@@ -943,19 +1016,12 @@ std::string DateType::toString(int32_t days) const {
   // Find the number of seconds for the days_;
   // Casting 86400 to int64 to handle overflows gracefully.
   int64_t daySeconds = days * (int64_t)(86400);
-
-  // gmtime is not thread-safe. Make sure to use gmtime_r.
   std::tm tmValue;
-  VELOX_CHECK_NOT_NULL(
-      gmtime_r((const time_t*)&daySeconds, &tmValue),
-      "Can't convert days to dates: {}",
-      days);
-
-  // return ISO 8601 time format.
-  // %F - equivalent to "%Y-%m-%d" (the ISO 8601 date format)
-  std::ostringstream oss;
-  oss << std::put_time(&tmValue, "%F");
-  return oss.str();
+  VELOX_CHECK(
+      epochToUtc(daySeconds, tmValue), "Can't convert days to dates: {}", days);
+  TimestampToStringOptions options;
+  options.dateOnly = true;
+  return tmToString(tmValue, 0, options);
 }
 
 int32_t DateType::toDays(folly::StringPiece in) const {
@@ -976,6 +1042,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"SMALLINT", SMALLINT()},
       {"INTEGER", INTEGER()},
       {"BIGINT", BIGINT()},
+      {"HUGEINT", HUGEINT()},
       {"REAL", REAL()},
       {"DOUBLE", DOUBLE()},
       {"VARCHAR", VARCHAR()},

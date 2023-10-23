@@ -19,20 +19,33 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/SortedAggregations.h"
 #include "velox/exec/Task.h"
+#include "velox/expression/Expr.h"
 
 namespace facebook::velox::exec {
 
 namespace {
-std::vector<TypePtr> populateAggregateInputs(
+std::vector<core::LambdaTypedExprPtr> extractLambdaInputs(
+    const core::AggregationNode::Aggregate& aggregate) {
+  std::vector<core::LambdaTypedExprPtr> lambdas;
+  for (const auto& arg : aggregate.call->inputs()) {
+    if (auto lambda =
+            std::dynamic_pointer_cast<const core::LambdaTypedExpr>(arg)) {
+      lambdas.push_back(lambda);
+    }
+  }
+
+  return lambdas;
+}
+
+void populateAggregateInputs(
     const core::AggregationNode::Aggregate& aggregate,
     const RowType& inputType,
     AggregateInfo& info,
     memory::MemoryPool* pool) {
   auto& channels = info.inputs;
   auto& constants = info.constantInputs;
-  std::vector<TypePtr> argTypes;
+
   for (const auto& arg : aggregate.call->inputs()) {
-    argTypes.push_back(arg->type());
     if (auto field =
             dynamic_cast<const core::FieldAccessTypedExpr*>(arg.get())) {
       channels.push_back(inputType.getChildIdx(field->name()));
@@ -56,8 +69,28 @@ std::vector<TypePtr> populateAggregateInputs(
           arg->toString());
     }
   }
+}
 
-  return argTypes;
+void verifyIntermediateInputs(
+    const std::string& name,
+    const std::vector<TypePtr>& types) {
+  VELOX_USER_CHECK_GE(
+      types.size(),
+      1,
+      "Intermediate aggregates must have at least one argument: {}",
+      name);
+  VELOX_USER_CHECK_NE(
+      types[0]->kind(),
+      TypeKind::FUNCTION,
+      "First argument of an intermediate aggregate cannot be a lambda: {}",
+      name);
+  for (auto i = 1; i < types.size(); ++i) {
+    VELOX_USER_CHECK_EQ(
+        types[i]->kind(),
+        TypeKind::FUNCTION,
+        "Non-first argument of an intermediate aggregate must be a lambda: {}",
+        name);
+  }
 }
 } // namespace
 
@@ -106,24 +139,18 @@ HashAggregation::HashAggregation(
   std::vector<AggregateInfo> aggregateInfos;
   aggregateInfos.reserve(numAggregates);
 
+  std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
+
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode->aggregates()[i];
 
     AggregateInfo info;
     info.distinct = aggregate.distinct;
-    auto argTypes =
-        populateAggregateInputs(aggregate, inputType->asRow(), info, pool());
+    populateAggregateInputs(aggregate, inputType->asRow(), info, pool());
 
-    if (isRawInput(aggregationNode->step())) {
-      info.intermediateType =
-          Aggregate::intermediateType(aggregate.call->name(), argTypes);
-    } else {
-      VELOX_CHECK_EQ(
-          argTypes.size(),
-          1,
-          "Intermediate aggregates must have a single argument");
-      info.intermediateType = argTypes[0];
-    }
+    info.intermediateType = Aggregate::intermediateType(
+        aggregate.call->name(), aggregate.rawInputTypes);
+
     // Setup aggregation mask: convert the Variable Reference name to the
     // channel (projection) index, if there is a mask.
     if (const auto& mask = aggregate.mask) {
@@ -135,10 +162,23 @@ HashAggregation::HashAggregation(
     const auto& resultType = outputType_->childAt(numHashers + i);
     info.function = Aggregate::create(
         aggregate.call->name(),
-        aggregationNode->step(),
-        argTypes,
+        isPartialOutput(aggregationNode->step())
+            ? core::AggregationNode::Step::kPartial
+            : core::AggregationNode::Step::kSingle,
+        aggregate.rawInputTypes,
         resultType,
         driverCtx->queryConfig());
+
+    auto lambdas = extractLambdaInputs(aggregate);
+    if (!lambdas.empty()) {
+      if (expressionEvaluator == nullptr) {
+        expressionEvaluator = std::make_shared<SimpleExpressionEvaluator>(
+            operatorCtx_->execCtx()->queryCtx(),
+            operatorCtx_->execCtx()->pool());
+      }
+      info.function->setLambdaExpressions(lambdas, expressionEvaluator);
+    }
+
     info.output = numHashers + i;
 
     // Sorting keys and orders.
@@ -263,10 +303,12 @@ void HashAggregation::updateRuntimeStats() {
 }
 
 void HashAggregation::recordSpillStats() {
-  const auto spillStatsOr = groupingSet_->spilledStats();
+  auto spillStatsOr = groupingSet_->spilledStats();
   if (!spillStatsOr.has_value()) {
     return;
   }
+  VELOX_CHECK_EQ(spillStatsOr.value().spillRuns, 0);
+  spillStatsOr.value().spillRuns = numSpillRuns_;
   Operator::recordSpillStats(spillStatsOr.value());
 }
 
@@ -398,13 +440,17 @@ RowVectorPtr HashAggregation::getOutput() {
     return output;
   }
 
-  const auto batchSize =
-      isGlobal_ ? 1 : outputBatchRows(groupingSet_->estimateRowSize());
-
+  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
+  const auto maxOutputRows =
+      isGlobal_ ? 1 : queryConfig.preferredOutputBatchRows();
   // Reuse output vectors if possible.
-  prepareOutput(batchSize);
+  prepareOutput(maxOutputRows);
 
-  bool hasData = groupingSet_->getOutput(batchSize, resultIterator_, output_);
+  bool hasData = groupingSet_->getOutput(
+      maxOutputRows,
+      queryConfig.preferredOutputBatchBytes(),
+      resultIterator_,
+      output_);
   if (!hasData) {
     resultIterator_.reset();
     if (noMoreInput_) {
@@ -429,24 +475,42 @@ bool HashAggregation::isFinished() {
   return finished_;
 }
 
-void HashAggregation::reclaim(uint64_t targetBytes) {
+void HashAggregation::reclaim(
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
   VELOX_CHECK(canReclaim());
-  auto* driver = operatorCtx_->driver();
 
-  /// NOTE: an aggregation operator is reclaimable if it hasn't started output
-  /// processing and is not under non-reclaimable execution section.
-  if (noMoreInput_ || nonReclaimableSection_) {
-    // TODO: add stats to record the non-reclaimable case and reduce the log
-    // frequency if it is too verbose.
-    LOG(WARNING) << "Can't reclaim from aggregation operator, noMoreInput_["
-                 << noMoreInput_ << "], nonReclaimableSection_["
-                 << nonReclaimableSection_ << "], " << toString();
+  // NOTE: an aggregation operator is reclaimable if it hasn't started output
+  // processing and is not under non-reclaimable execution section.
+  if (nonReclaimableSection_) {
+    // TODO: reduce the log frequency if it is too verbose.
+    ++stats.numNonReclaimableAttempts;
+    LOG(WARNING)
+        << "Can't reclaim from aggregation operator which is under non-reclaimable section, pool["
+        << pool()->toString()
+        << ", usage: " << succinctBytes(pool()->currentBytes()) << "]";
     return;
   }
 
-  // TODO: support fine-grain disk spilling based on 'targetBytes' after having
-  // row container memory compaction support later.
-  groupingSet_->spill(0, targetBytes);
+  if (noMoreInput_) {
+    if (groupingSet_->hasSpilled()) {
+      LOG(WARNING)
+          << "Can't reclaim from aggregation operator which has spilled and is under output processing, pool["
+          << pool()->toString()
+          << ", usage: " << succinctBytes(pool()->currentBytes()) << "]";
+      return;
+    }
+    // Spill all the rows starting from the next output row pointed by
+    // 'resultIterator_'.
+    groupingSet_->spill(resultIterator_);
+    // NOTE: we will only spill once during the output processing stage so
+    // record stats here.
+    recordSpillStats();
+  } else {
+    // TODO: support fine-grain disk spilling based on 'targetBytes' after
+    // having row container memory compaction support later.
+    groupingSet_->spill(0, targetBytes);
+  }
   VELOX_CHECK_EQ(groupingSet_->numRows(), 0);
   VELOX_CHECK_EQ(groupingSet_->numDistinct(), 0);
   // Release the minimum reserved memory.

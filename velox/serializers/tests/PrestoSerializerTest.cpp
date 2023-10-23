@@ -16,6 +16,7 @@
 #include "velox/serializers/PrestoSerializer.h"
 #include <folly/Random.h>
 #include <gtest/gtest.h>
+#include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -95,18 +96,6 @@ class PrestoSerializerTest
     }
   }
 
-  void serializeRle(
-      const RowVectorPtr& rowVector,
-      std::ostream* output,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions*
-          serdeOptions) {
-    facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
-    OStreamOutputStream out(output, &listener);
-    auto arena = std::make_unique<StreamArena>(pool_.get());
-    auto paramOptions = getParamSerdeOptions(serdeOptions);
-    serde_->serializeConstants(rowVector, arena.get(), &paramOptions, &out);
-  }
-
   std::unique_ptr<ByteStream> toByteStream(const std::string& input) {
     auto byteStream = std::make_unique<ByteStream>();
     ByteRange byteRange{
@@ -135,8 +124,11 @@ class PrestoSerializerTest
         size, [](vector_size_t row) { return row; });
     auto b = vectorMaker_->flatVector<double>(
         size, [](vector_size_t row) { return row * 0.1; });
+    auto c = vectorMaker_->flatVector<std::string>(size, [](vector_size_t row) {
+      return row % 2 == 0 ? "LaaaaaaaaargeString" : "inlineStr";
+    });
 
-    std::vector<VectorPtr> childVectors = {a, b};
+    std::vector<VectorPtr> childVectors = {a, b, c};
 
     return vectorMaker_->rowVector(childVectors);
   }
@@ -154,18 +146,39 @@ class PrestoSerializerTest
     assertEqualVectors(deserialized, rowVector);
   }
 
-  void testRleRoundTrip(
-      const VectorPtr& constantVector,
+  void serializeEncoded(
+      const RowVectorPtr& rowVector,
+      std::ostream* output,
+      const serializer::presto::PrestoVectorSerde::PrestoOptions*
+          serdeOptions) {
+    facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+    OStreamOutputStream out(output, &listener);
+    StreamArena arena{pool_.get()};
+    auto paramOptions = getParamSerdeOptions(serdeOptions);
+
+    for (const auto& child : rowVector->children()) {
+      paramOptions.encodings.push_back(child->encoding());
+    }
+
+    serde_->serializeEncoded(rowVector, &arena, &paramOptions, &out);
+  }
+
+  void testEncodedRoundTrip(
+      const RowVectorPtr& data,
       const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions =
           nullptr) {
-    auto rowVector = vectorMaker_->rowVector({constantVector});
     std::ostringstream out;
-    serializeRle(rowVector, &out, serdeOptions);
+    serializeEncoded(data, &out, serdeOptions);
 
-    auto rowType = asRowType(rowVector->type());
+    auto rowType = asRowType(data->type());
     auto deserialized = deserialize(rowType, out.str(), serdeOptions);
 
-    assertEqualVectors(rowVector, deserialized);
+    assertEqualVectors(data, deserialized);
+
+    for (auto i = 0; i < data->childrenSize(); ++i) {
+      VELOX_CHECK_EQ(
+          data->childAt(i)->encoding(), deserialized->childAt(i)->encoding());
+    }
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -288,40 +301,35 @@ TEST_P(PrestoSerializerTest, unknown) {
 
 TEST_P(PrestoSerializerTest, multiPage) {
   std::ostringstream out;
-
-  // page 1
-  auto a = makeTestVector(1'234);
-  serialize(a, &out, nullptr);
-
-  // page 2
-  auto b = makeTestVector(538);
-  serialize(b, &out, nullptr);
-
-  // page 3
-  auto c = makeTestVector(2'048);
-  serialize(c, &out, nullptr);
+  std::vector<RowVectorPtr> testVectors;
+  // Note: Page of size 1250 is a slight increase in size that initiates string
+  // buffer re-use.
+  for (int size : {1234, 1250, 538, 2408}) {
+    auto vec = makeTestVector(size);
+    serialize(vec, &out, nullptr);
+    testVectors.push_back(std::move(vec));
+  }
 
   auto bytes = out.str();
 
-  auto rowType = asRowType(a->type());
+  auto rowType = asRowType(testVectors[0]->type());
   auto byteStream = toByteStream(bytes);
 
   RowVectorPtr deserialized;
   auto paramOptions = getParamSerdeOptions(nullptr);
-  serde_->deserialize(
-      byteStream.get(), pool_.get(), rowType, &deserialized, &paramOptions);
-  ASSERT_FALSE(byteStream->atEnd());
-  assertEqualVectors(deserialized, a);
 
-  serde_->deserialize(
-      byteStream.get(), pool_.get(), rowType, &deserialized, &paramOptions);
-  assertEqualVectors(deserialized, b);
-  ASSERT_FALSE(byteStream->atEnd());
-
-  serde_->deserialize(
-      byteStream.get(), pool_.get(), rowType, &deserialized, &paramOptions);
-  assertEqualVectors(deserialized, c);
-  ASSERT_TRUE(byteStream->atEnd());
+  for (int i = 0; i < testVectors.size(); i++) {
+    RowVectorPtr& vec = testVectors[i];
+    serde_->deserialize(
+        byteStream.get(), pool_.get(), rowType, &deserialized, &paramOptions);
+    if (i < testVectors.size() - 1) {
+      ASSERT_FALSE(byteStream->atEnd());
+    } else {
+      ASSERT_TRUE(byteStream->atEnd());
+    }
+    assertEqualVectors(deserialized, vec);
+    deserialized->validate({});
+  }
 }
 
 TEST_P(PrestoSerializerTest, timestampWithNanosecondPrecision) {
@@ -374,33 +382,77 @@ TEST_P(PrestoSerializerTest, longDecimal) {
   testRoundTrip(vector);
 }
 
-TEST_P(PrestoSerializerTest, rle) {
-  // Test RLE vectors with non-null value.
-  testRleRoundTrip(
-      BaseVector::createConstant(BOOLEAN(), true, 12, pool_.get()));
-  testRleRoundTrip(BaseVector::createConstant(INTEGER(), 779, 12, pool_.get()));
-  testRleRoundTrip(BaseVector::createConstant(DOUBLE(), 1.23, 12, pool_.get()));
-  testRleRoundTrip(
-      BaseVector::createConstant(VARCHAR(), "Hello, world!", 12, pool_.get()));
-  testRleRoundTrip(BaseVector::wrapInConstant(
-      12, 0, vectorMaker_->arrayVector<int64_t>({{1, 2, 3}})));
-  testRleRoundTrip(BaseVector::wrapInConstant(
-      12,
-      0,
-      vectorMaker_->mapVector(
-          {0},
-          vectorMaker_->flatVector<int32_t>({1}),
-          vectorMaker_->flatVector<int64_t>({7}))));
+TEST_P(PrestoSerializerTest, encodings) {
+  auto baseNoNulls = vectorMaker_->flatVector<int64_t>({1, 2, 3, 4});
+  auto baseWithNulls =
+      vectorMaker_->flatVectorNullable<int32_t>({1, std::nullopt, 2, 3});
+  auto baseArray = vectorMaker_->arrayVector<int32_t>(
+      {{1, 2, 3}, {}, {4, 5}, {6, 7, 8, 9, 10}});
+  auto indices = makeIndices(
+      8, [](auto row) { return row / 2; }, pool_.get());
 
-  // Test RLE vector with null value.
-  testRleRoundTrip(BaseVector::createNullConstant(BOOLEAN(), 17, pool_.get()));
-  testRleRoundTrip(BaseVector::createNullConstant(BIGINT(), 17, pool_.get()));
-  testRleRoundTrip(BaseVector::createNullConstant(REAL(), 17, pool_.get()));
-  testRleRoundTrip(BaseVector::createNullConstant(VARCHAR(), 17, pool_.get()));
-  testRleRoundTrip(
-      BaseVector::createNullConstant(ARRAY(INTEGER()), 17, pool_.get()));
-  testRleRoundTrip(BaseVector::createNullConstant(
-      MAP(VARCHAR(), INTEGER()), 17, pool_.get()));
+  auto data = vectorMaker_->rowVector({
+      BaseVector::wrapInDictionary(nullptr, indices, 8, baseNoNulls),
+      BaseVector::wrapInDictionary(nullptr, indices, 8, baseWithNulls),
+      BaseVector::wrapInDictionary(nullptr, indices, 8, baseArray),
+      BaseVector::createConstant(INTEGER(), 123, 8, pool_.get()),
+      BaseVector::createNullConstant(VARCHAR(), 8, pool_.get()),
+      BaseVector::wrapInConstant(8, 1, baseArray),
+      BaseVector::wrapInConstant(8, 2, baseArray),
+  });
+
+  testEncodedRoundTrip(data);
+}
+
+TEST_P(PrestoSerializerTest, scatterEncoded) {
+  // Makes a struct with nulls and constant/dictionary encoded children. The
+  // children need to get gaps where the parent struct has a null.
+  VectorFuzzer::Options opts;
+  opts.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
+  opts.nullRatio = 0.1;
+  VectorFuzzer fuzzer(opts, pool_.get());
+
+  auto rowType = ROW(
+      {{"inner",
+        ROW(
+            {{"i1", BIGINT()},
+             {"i2", VARCHAR()},
+             {"i3", ARRAY(INTEGER())},
+             {"i4", ROW({{"ii1", BIGINT()}})}})}});
+  auto row = fuzzer.fuzzInputRow(rowType);
+  auto inner =
+      const_cast<RowVector*>(row->childAt(0)->wrappedVector()->as<RowVector>());
+  if (!inner->mayHaveNulls()) {
+    return;
+  }
+  auto numNulls = BaseVector::countNulls(inner->nulls(), 0, inner->size());
+  auto numNonNull = inner->size() - numNulls;
+  auto indices = makeIndices(
+      numNonNull, [](auto row) { return row; }, pool_.get());
+
+  inner->children()[0] = BaseVector::createConstant(
+      BIGINT(),
+      variant::create<TypeKind::BIGINT>(11L),
+      numNonNull,
+      pool_.get());
+  inner->children()[1] = BaseVector::wrapInDictionary(
+      BufferPtr(nullptr), indices, numNonNull, inner->childAt(1));
+  inner->children()[2] =
+      BaseVector::wrapInConstant(numNonNull, 3, inner->childAt(2));
+
+  // i4 is a struct that we wrap in constant. We make ths struct like it was
+  // read from seriailization, needing scatter for struct nulls.
+  auto i4 = const_cast<RowVector*>(
+      inner->childAt(3)->wrappedVector()->as<RowVector>());
+  auto i4NonNull = i4->mayHaveNulls()
+      ? i4->size() - BaseVector::countNulls(i4->nulls(), 0, i4->size())
+      : i4->size();
+  i4->childAt(0)->resize(i4NonNull);
+  inner->children()[3] =
+      BaseVector::wrapInConstant(numNonNull, 3, inner->childAt(3));
+  serializer::presto::testingScatterStructNulls(
+      row->size(), row->size(), nullptr, nullptr, *row);
 }
 
 TEST_P(PrestoSerializerTest, lazy) {
@@ -431,6 +483,28 @@ TEST_P(PrestoSerializerTest, ioBufRoundTrip) {
 
     assertEqualVectors(inputRowVector, outputRowVector);
   }
+}
+
+TEST_P(PrestoSerializerTest, roundTrip) {
+  VectorFuzzer::Options opts;
+  opts.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
+  opts.nullRatio = 0.1;
+  VectorFuzzer fuzzer(opts, pool_.get());
+
+  const size_t numRounds = 20;
+
+  for (size_t i = 0; i < numRounds; ++i) {
+    auto rowType = fuzzer.randRowType();
+    auto inputRowVector = fuzzer.fuzzInputRow(rowType);
+    testRoundTrip(inputRowVector);
+  }
+}
+
+TEST_P(PrestoSerializerTest, emptyArrayOfRowVector) {
+  // The value of nullCount_ + nonNullCount_ of the inner RowVector is 0.
+  auto arrayOfRow = vectorMaker_->arrayOfRowVector(ROW({UNKNOWN()}), {{}});
+  testRoundTrip(arrayOfRow);
 }
 
 INSTANTIATE_TEST_SUITE_P(

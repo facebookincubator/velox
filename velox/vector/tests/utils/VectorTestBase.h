@@ -130,30 +130,17 @@ class VectorTestBase {
     return vectorMaker_.rowVector(rowType, size);
   }
 
-  /// Splits input vector into 2. First half of rows goes to first vector, the
-  /// rest to the second vector. Input vector must have at least 2 rows.
-  /// @return 2 vectors
-  std::vector<RowVectorPtr> split(const RowVectorPtr& vector);
+  /// Splits input vector into 'n' vectors evenly. Input vector must have at
+  /// least 'n' rows.
+  /// @return 'n' vectors
+  std::vector<RowVectorPtr> split(const RowVectorPtr& vector, int32_t n = 2);
 
-  // Returns a one element ArrayVector with 'vector' as elements of array at 0.
-  VectorPtr asArray(VectorPtr vector) {
-    BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(
-        1, vector->pool(), vector->size());
-    BufferPtr offsets =
-        AlignedBuffer::allocate<vector_size_t>(1, vector->pool(), 0);
-    return std::make_shared<ArrayVector>(
-        vector->pool(),
-        ARRAY(vector->type()),
-        BufferPtr(nullptr),
-        1,
-        offsets,
-        sizes,
-        vector,
-        0);
-  }
+  /// Returns a one element ArrayVector with 'elements' as elements of array at
+  /// 0.
+  VectorPtr asArray(VectorPtr elements);
 
   template <typename T>
-  FlatVectorPtr<T> makeFlatVector(
+  FlatVectorPtr<EvalType<T>> makeFlatVector(
       vector_size_t size,
       std::function<T(vector_size_t /*row*/)> valueAt,
       std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr,
@@ -235,6 +222,13 @@ class VectorTestBase {
       const RowTypePtr& rowType,
       const std::vector<std::vector<variant>>& data) {
     return vectorMaker_.arrayOfRowVector(rowType, data);
+  }
+
+  template <typename TupleT>
+  ArrayVectorPtr makeArrayOfRowVector(
+      const std::vector<std::vector<std::optional<TupleT>>>& data,
+      const RowTypePtr& rowType) {
+    return vectorMaker_.arrayOfRowVector(data, rowType);
   }
 
   // Create an ArrayVector<ArrayVector<T>> from nested std::vectors of values.
@@ -432,6 +426,29 @@ class VectorTestBase {
     return vectorMaker_.arrayVectorNullable<T>(data, arrayType);
   }
 
+  /// Creates an ArrayVector from a list of JSON arrays.
+  ///
+  /// JSON arrays can represent a null array, an empty array or array with null
+  /// elements.
+  ///
+  /// Examples:
+  ///  [1, 2, 3]
+  ///  [1, 2, null, 4]
+  ///  [null, null]
+  ///  [] - empty array
+  ///  null - null array
+  ///
+  /// @tparam T Type of array elements. Must be an integer: int8_t, int16_t,
+  /// int32_t, int64_t.
+  /// @param jsonArrays A list of JSON arrays. JSON array cannot be an empty
+  /// string.
+  template <typename T>
+  ArrayVectorPtr makeArrayVectorFromJson(
+      const std::vector<std::string>& jsonArrays,
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
+    return vectorMaker_.arrayVectorFromJson<T>(jsonArrays, arrayType);
+  }
+
   template <typename T>
   ArrayVectorPtr makeArrayVector(
       vector_size_t size,
@@ -494,47 +511,44 @@ class VectorTestBase {
   MapVectorPtr makeMapVector(
       const std::vector<std::vector<std::pair<TKey, std::optional<TValue>>>>&
           maps,
-      const TypePtr& type =
+      const TypePtr& mapType =
           MAP(CppToType<TKey>::create(), CppToType<TValue>::create())) {
-    return vectorMaker_.mapVector(maps, type);
+    return vectorMaker_.mapVector(maps, mapType);
   }
 
   // Create nullabe map vector from nested std::vector representation.
   template <typename TKey, typename TValue>
   MapVectorPtr makeNullableMapVector(
-      const std::vector<
-          std::optional<std::vector<std::pair<TKey, std::optional<TValue>>>>>&
-          maps) {
-    std::vector<vector_size_t> lengths;
-    std::vector<TKey> keys;
-    std::vector<TValue> values;
-    std::vector<bool> nullValues;
-    std::vector<bool> nullRow;
+      const std::vector<std::optional<
+          std::vector<std::pair<TKey, std::optional<TValue>>>>>& maps,
+      const TypePtr& mapType =
+          MAP(CppToType<TKey>::create(), CppToType<TValue>::create())) {
+    return vectorMaker_.mapVector(maps, mapType);
+  }
 
-    auto undefined = TValue();
-
-    for (const auto& map : maps) {
-      if (!map.has_value()) {
-        nullRow.push_back(true);
-        lengths.push_back(0);
-        continue;
-      }
-      nullRow.push_back(false);
-      lengths.push_back(map->size());
-      for (const auto& [key, value] : map.value()) {
-        keys.push_back(key);
-        values.push_back(value.value_or(undefined));
-        nullValues.push_back(!value.has_value());
-      }
-    }
-
-    return makeMapVector<TKey, TValue>(
-        maps.size(),
-        [&](vector_size_t row) { return lengths[row]; },
-        [&](vector_size_t idx) { return keys[idx]; },
-        [&](vector_size_t idx) { return values[idx]; },
-        [&](vector_size_t row) { return nullRow[row]; },
-        [&](vector_size_t idx) { return nullValues[idx]; });
+  /// Creates a MapVector from a list of JSON maps.
+  ///
+  /// JSON maps can represent a null map, an empty map or a map with null
+  /// values. Null keys are not allowed.
+  ///
+  /// Examples:
+  ///  {1: 10, 2: 20, 3: 30}
+  ///  {1: 10, 2: 20, 3: null, 4: 40}
+  ///  {1: null, 2: null}
+  ///  {} - empty map
+  ///  null - null map
+  ///
+  /// @tparam K Type of map keys. Must be an integer: int8_t, int16_t,
+  /// int32_t, int64_t.
+  /// @tparam V Type of map value. Can be an integer or a floating point number.
+  /// @param jsonMaps A list of JSON maps. JSON map cannot be an empty
+  /// string.
+  template <typename K, typename V>
+  MapVectorPtr makeMapVectorFromJson(
+      const std::vector<std::string>& jsonMaps,
+      const TypePtr& mapType =
+          MAP(CppToType<K>::create(), CppToType<V>::create())) {
+    return vectorMaker_.mapVectorFromJson<K, V>(jsonMaps, mapType);
   }
 
   // Convenience function to create vector from vectors of keys and values.

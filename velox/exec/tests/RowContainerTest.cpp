@@ -256,6 +256,18 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     EXPECT_EQ(usage, sum);
   }
 
+  std::vector<char*> store(
+      RowContainer& rowContainer,
+      DecodedVector& decodedVector,
+      vector_size_t size) {
+    std::vector<char*> rows(size);
+    for (size_t row = 0; row < size; ++row) {
+      rows[row] = rowContainer.newRow();
+      rowContainer.store(decodedVector, row, rows[row], 0);
+    }
+    return rows;
+  }
+
   // Stores the input vector in Row Container, extracts it and compares. Returns
   // the container.
   std::unique_ptr<RowContainer> roundTrip(const VectorPtr& input) {
@@ -265,13 +277,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     // Store the vector in the rowContainer.
     auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
     auto size = input->size();
-    SelectivityVector allRows(size);
-    std::vector<char*> rows(size);
-    DecodedVector decoded(*input, allRows);
-    for (size_t row = 0; row < size; ++row) {
-      rows[row] = rowContainer->newRow();
-      rowContainer->store(decoded, row, rows[row], 0);
-    }
+    DecodedVector decoded(*input);
+    auto rows = store(*rowContainer, decoded, size);
 
     testExtractColumn(*rowContainer, rows, 0, input);
     return rowContainer;
@@ -1226,4 +1233,76 @@ TEST_F(RowContainerTest, mixedFree) {
   EXPECT_EQ(0, data2->numRows());
   data1->checkConsistency();
   data2->checkConsistency();
+}
+
+TEST_F(RowContainerTest, unknown) {
+  std::vector<TypePtr> types = {UNKNOWN()};
+  auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
+
+  auto data = makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(5),
+  });
+
+  auto size = data->size();
+  DecodedVector decoded(*data->childAt(0));
+  auto rows = store(*rowContainer, decoded, size);
+
+  std::vector<uint64_t> hashes(size, 0);
+  rowContainer->hash(
+      0, folly::Range(rows.data(), rows.size()), false /*mix*/, hashes.data());
+  for (auto hash : hashes) {
+    ASSERT_EQ(BaseVector::kNullHash, hash);
+  }
+
+  // Fill in hashes with sequential numbers: 0, 1, 2,..
+  std::iota(hashes.begin(), hashes.end(), 0);
+  rowContainer->hash(
+      0, folly::Range(rows.data(), rows.size()), true /*mix*/, hashes.data());
+  for (auto i = 0; i < size; ++i) {
+    ASSERT_EQ(bits::hashMix(i, BaseVector::kNullHash), hashes[i]);
+  }
+
+  for (size_t row = 0; row < size; ++row) {
+    ASSERT_TRUE(rowContainer->equals<false>(
+        rows[row], rowContainer->columnAt(0), decoded, row));
+  }
+
+  {
+    // Verify compare method with two rows as input
+    std::sort(rows.begin(), rows.end(), [&](const char* l, const char* r) {
+      return rowContainer->compare(l, r, 0, {}) < 0;
+    });
+    VectorPtr result = BaseVector::create(UNKNOWN(), rows.size(), pool_.get());
+    rowContainer->extractColumn(rows.data(), rows.size(), 0, result);
+    // Since the Vector is just a null constant, it should be indistinguishable
+    // from the original.
+    assertEqualVectors(data->childAt(0), result);
+  }
+
+  std::vector<std::pair<int, char*>> indexedRows(rows.size());
+  for (size_t i = 0; i < rows.size(); ++i) {
+    indexedRows[i] = std::make_pair(i, rows[i]);
+  }
+
+  // Verify compare method with row and decoded vector as input
+  // Sorting a NULL constant Vector doesn't change the Vector, so we just
+  // validate that it runs without throwing an exception.
+  EXPECT_NO_THROW(std::sort(
+      indexedRows.begin(),
+      indexedRows.end(),
+      [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+        return rowContainer->compare(
+                   l.second, rowContainer->columnAt(0), decoded, r.first, {}) <
+            0;
+      }));
+
+  // Verify compareRows method with row as input.
+  // Sorting a NULL constant Vector doesn't change the Vector, so we just
+  // validate that it runs without throwing an exception.
+  EXPECT_NO_THROW(std::sort(
+      indexedRows.begin(),
+      indexedRows.end(),
+      [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+        return rowContainer->compareRows(l.second, r.second) < 0;
+      }));
 }

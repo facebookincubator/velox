@@ -77,7 +77,10 @@ class HashBuild final : public Operator {
 
   bool isFinished() override;
 
-  void reclaim(uint64_t targetBytes) override;
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
+
+  bool canReclaim() const override;
 
   void abort() override;
 
@@ -112,7 +115,7 @@ class HashBuild final : public Operator {
     return spillConfig_.has_value();
   }
 
-  const Spiller::Config* spillConfig() const {
+  const common::SpillConfig* spillConfig() const {
     return spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   }
 
@@ -236,6 +239,10 @@ class HashBuild final : public Operator {
   // Invoked to check if it needs to trigger spilling for test purpose only.
   bool testingTriggerSpill();
 
+  // Indicates if this hash build operator is under non-reclaimable state or
+  // not.
+  bool nonReclaimableState() const;
+
   const std::shared_ptr<const core::HashJoinNode> joinNode_;
 
   const core::JoinType joinType_;
@@ -247,6 +254,8 @@ class HashBuild final : public Operator {
   // The maximum memory usage that a hash build can hold before spilling.
   // If it is zero, then there is no such limit.
   const uint64_t spillMemoryThreshold_;
+
+  bool exceededMaxSpillLevelLimit_{false};
 
   std::shared_ptr<SpillOperatorGroup> spillGroup_;
 

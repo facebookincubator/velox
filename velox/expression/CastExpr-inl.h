@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #pragma once
+
+#include <charconv>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/StringWriter.h"
@@ -30,10 +33,10 @@ inline std::string makeErrorMessage(
     const TypePtr& toType,
     const std::string& details = "") {
   return fmt::format(
-      "Failed to cast from {} to {}: {}. {}",
+      "Cannot cast {} '{}' to {}. {}",
       input.type()->toString(),
-      toType->toString(),
       input.toString(row),
+      toType->toString(),
       details);
 }
 
@@ -47,6 +50,81 @@ inline std::exception_ptr makeBadCastException(
       makeErrorMessage(input, row, resultType, errorDetails),
       false));
 };
+
+// Copied from format.h of fmt.
+inline int countDigits(uint128_t n) {
+  int count = 1;
+  for (;;) {
+    if (n < 10) {
+      return count;
+    }
+    if (n < 100) {
+      return count + 1;
+    }
+    if (n < 1000) {
+      return count + 2;
+    }
+    if (n < 10000) {
+      return count + 3;
+    }
+    n /= 10000u;
+    count += 4;
+  }
+}
+
+/// @brief Convert the unscaled value of a decimal to varchar and write to raw
+/// string buffer from start position.
+/// @tparam T The type of input value.
+/// @param unscaledValue The input unscaled value.
+/// @param scale The scale of decimal.
+/// @param maxVarcharSize The estimated max size of a varchar.
+/// @param startPosition The start position to write from.
+/// @return A string view.
+template <typename T>
+StringView convertToStringView(
+    T unscaledValue,
+    int32_t scale,
+    int32_t maxVarcharSize,
+    char* const startPosition) {
+  char* writePosition = startPosition;
+  if (unscaledValue == 0) {
+    *writePosition++ = '0';
+  } else {
+    if (unscaledValue < 0) {
+      *writePosition++ = '-';
+      unscaledValue = -unscaledValue;
+    }
+    auto [position, errorCode] = std::to_chars(
+        writePosition,
+        writePosition + maxVarcharSize,
+        unscaledValue / DecimalUtil::kPowersOfTen[scale]);
+    VELOX_DCHECK_EQ(
+        errorCode,
+        std::errc(),
+        "Failed to cast decimal to varchar: {}",
+        std::make_error_code(errorCode).message());
+    writePosition = position;
+
+    if (scale > 0) {
+      *writePosition++ = '.';
+      uint128_t fraction = unscaledValue % DecimalUtil::kPowersOfTen[scale];
+      // Append leading zeros.
+      int numLeadingZeros = std::max(scale - countDigits(fraction), 0);
+      std::memset(writePosition, '0', numLeadingZeros);
+      writePosition += numLeadingZeros;
+      // Append remaining fraction digits.
+      auto [position, errorCode] = std::to_chars(
+          writePosition, writePosition + maxVarcharSize, fraction);
+      VELOX_DCHECK_EQ(
+          errorCode,
+          std::errc(),
+          "Failed to cast decimal to varchar: {}",
+          std::make_error_code(errorCode).message());
+      writePosition = position;
+    }
+  }
+  return StringView(startPosition, writePosition - startPosition);
+}
 
 } // namespace
 
@@ -96,6 +174,9 @@ void CastExpr::applyToSelectedNoThrowLocal(
       try {
         func(row);
       } catch (const VeloxException& e) {
+        if (!e.isUserError()) {
+          throw;
+        }
         // Avoid double throwing.
         context.setVeloxExceptionError(row, std::current_exception());
       } catch (const std::exception& e) {
@@ -246,14 +327,19 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
+  const auto castToIntByTruncate =
+      context.execCtx()->queryCtx()->queryConfig().isCastToIntByTruncate();
   applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
     auto value = simpleInput->valueAt(row);
     auto integralPart = value / scaleFactor;
-    auto fractionPart = value % scaleFactor;
-    auto sign = value >= 0 ? 1 : -1;
-    bool needsRoundUp =
-        (scaleFactor != 1) && (sign * fractionPart >= (scaleFactor >> 1));
-    integralPart += needsRoundUp ? sign : 0;
+    if (!castToIntByTruncate) {
+      auto fractionPart = value % scaleFactor;
+      auto sign = value >= 0 ? 1 : -1;
+      bool needsRoundUp =
+          (scaleFactor != 1) && (sign * fractionPart >= (scaleFactor >> 1));
+      integralPart += needsRoundUp ? sign : 0;
+    }
+
     if (integralPart > std::numeric_limits<To>::max() ||
         integralPart < std::numeric_limits<To>::min()) {
       if (setNullInResultAtError()) {
@@ -276,6 +362,85 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
 }
 
 template <typename FromNativeType>
+VectorPtr CastExpr::applyDecimalToBooleanCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context) {
+  VectorPtr result;
+  context.ensureWritable(rows, BOOLEAN(), result);
+  (*result).clearNulls(rows);
+  auto resultBuffer =
+      result->asUnchecked<FlatVector<bool>>()->mutableRawValues<uint64_t>();
+  const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
+  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+    auto value = simpleInput->valueAt(row);
+    bits::setBit(resultBuffer, row, value != 0);
+  });
+  return result;
+}
+
+template <typename FromNativeType>
+VectorPtr CastExpr::applyDecimalToVarcharCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType) {
+  VectorPtr result;
+  context.ensureWritable(rows, VARCHAR(), result);
+  (*result).clearNulls(rows);
+  const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
+  int precision = getDecimalPrecisionScale(*fromType).first;
+  int scale = getDecimalPrecisionScale(*fromType).second;
+  // A varchar's size is estimated with unscaled value digits, dot, leading
+  // zero, and possible minus sign.
+  int32_t rowSize = precision + 1;
+  if (scale > 0) {
+    ++rowSize; // A dot.
+  }
+  if (precision == scale) {
+    ++rowSize; // Leading zero.
+  }
+
+  auto flatResult = result->asFlatVector<StringView>();
+  if (StringView::isInline(rowSize)) {
+    char inlined[StringView::kInlineSize];
+    applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
+      if (simpleInput->isNullAt(row)) {
+        result->setNull(row, true);
+      } else {
+        flatResult->setNoCopy(
+            row,
+            convertToStringView<FromNativeType>(
+                simpleInput->valueAt(row), scale, rowSize, inlined));
+      }
+    });
+    return result;
+  }
+
+  Buffer* buffer =
+      flatResult->getBufferWithSpace(rows.countSelected() * rowSize);
+  char* rawBuffer = buffer->asMutable<char>() + buffer->size();
+
+  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
+    if (simpleInput->isNullAt(row)) {
+      result->setNull(row, true);
+    } else {
+      auto stringView = convertToStringView<FromNativeType>(
+          simpleInput->valueAt(row), scale, rowSize, rawBuffer);
+      flatResult->setNoCopy(row, stringView);
+      if (!stringView.isInline()) {
+        // If string view is inline, correponding bytes on the raw string buffer
+        // are not needed.
+        rawBuffer += stringView.size();
+      }
+    }
+  });
+  // Update the exact buffer size.
+  buffer->setSize(rawBuffer - buffer->asMutable<char>());
+  return result;
+}
+
+template <typename FromNativeType>
 VectorPtr CastExpr::applyDecimalToPrimitiveCast(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -283,6 +448,8 @@ VectorPtr CastExpr::applyDecimalToPrimitiveCast(
     const TypePtr& fromType,
     const TypePtr& toType) {
   switch (toType->kind()) {
+    case TypeKind::BOOLEAN:
+      return applyDecimalToBooleanCast<FromNativeType>(rows, input, context);
     case TypeKind::TINYINT:
       return applyDecimalToIntegralCast<FromNativeType, TypeKind::TINYINT>(
           rows, input, context, fromType, toType);
@@ -338,7 +505,10 @@ void CastExpr::applyCastPrimitives(
         applyCastKernel<ToKind, FromKind, false /*truncate*/>(
             row, context, inputSimpleVector, resultFlatVector);
 
-      } catch (const VeloxUserError& ue) {
+      } catch (const VeloxException& ue) {
+        if (!ue.isUserError()) {
+          throw;
+        }
         setError(row, ue.message());
       } catch (const std::exception& e) {
         setError(row, e.what());
@@ -350,7 +520,10 @@ void CastExpr::applyCastPrimitives(
       try {
         applyCastKernel<ToKind, FromKind, true /*truncate*/>(
             row, context, inputSimpleVector, resultFlatVector);
-      } catch (const VeloxUserError& ue) {
+      } catch (const VeloxException& ue) {
+        if (!ue.isUserError()) {
+          throw;
+        }
         setError(row, ue.message());
       } catch (const std::exception& e) {
         setError(row, e.what());

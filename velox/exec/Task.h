@@ -18,6 +18,7 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/LocalPartition.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/TaskStats.h"
@@ -26,7 +27,7 @@
 
 namespace facebook::velox::exec {
 
-class PartitionedOutputBufferManager;
+class OutputBufferManager;
 
 class HashJoinBridge;
 class NestedLoopJoinBridge;
@@ -75,6 +76,8 @@ class Task : public std::enable_shared_from_this<Task> {
   std::string toString() const;
 
   std::string toJsonString() const;
+
+  std::string toShortJsonString() const;
 
   /// Returns universally unique identifier of the task.
   const std::string& uuid() const {
@@ -571,7 +574,7 @@ class Task : public std::enable_shared_from_this<Task> {
     return spillDirectory_;
   }
 
-  /// True if produces output via PartitionedOutputBufferManager.
+  /// True if produces output via OutputBufferManager.
   bool hasPartitionedOutput() const {
     return numDriversInPartitionedOutput_ > 0;
   }
@@ -622,6 +625,13 @@ class Task : public std::enable_shared_from_this<Task> {
   std::unique_ptr<memory::MemoryReclaimer> createNodeReclaimer(
       bool isHashJoinNode) const;
 
+  // Creates a memory reclaimer instance for an exchange client if the task
+  // memory pool has set memory reclaimer. We don't support to reclaim memory
+  // from an exchange client, and the customized reclaimer is used to handle
+  // memory arbitration request initiated under the driver execution context.
+  std::unique_ptr<memory::MemoryReclaimer> createExchangeClientReclaimer()
+      const;
+
   // Creates a memory reclaimer instance for this task. If the query memory
   // pool doesn't set memory reclaimer, then the function simply returns null.
   // Otherwise, it creates a customized memory reclaimer for this task.
@@ -638,12 +648,15 @@ class Task : public std::enable_shared_from_this<Task> {
   /// occurred. This should only be called inside mutex_ protection.
   std::string errorMessageLocked() const;
 
-  class MemoryReclaimer : public memory::MemoryReclaimer {
+  class MemoryReclaimer : public exec::MemoryReclaimer {
    public:
     static std::unique_ptr<memory::MemoryReclaimer> create(
         const std::shared_ptr<Task>& task);
 
-    uint64_t reclaim(memory::MemoryPool* pool, uint64_t targetBytes) override;
+    uint64_t reclaim(
+        memory::MemoryPool* pool,
+        uint64_t targetBytes,
+        memory::MemoryReclaimer::Stats& stats) override;
 
     void abort(memory::MemoryPool* pool, const std::exception_ptr& error)
         override;
@@ -870,7 +883,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // NOTE: 'childPools_' holds the ownerships of node memory pools.
   std::unordered_map<core::PlanNodeId, memory::MemoryPool*> nodePools_;
 
-  // Set to true by PartitionedOutputBufferManager when all output is
+  // Set to true by OutputBufferManager when all output is
   // acknowledged. If this happens before Drivers are at end, the last
   // Driver to finish will set state_ to kFinished. If Drivers have
   // finished then setting this to true will also set state_ to
@@ -978,7 +991,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// During ungrouped execution we use the [0] entry in this vector.
   std::unordered_map<uint32_t, SplitGroupState> splitGroupStates_;
 
-  std::weak_ptr<PartitionedOutputBufferManager> bufferManager_;
+  std::weak_ptr<OutputBufferManager> bufferManager_;
 
   /// Boolean indicating that we have already received no-more-output-buffers
   /// message. Subsequent messages will be ignored.

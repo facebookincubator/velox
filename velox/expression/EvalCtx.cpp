@@ -29,7 +29,10 @@ ScopedContextSaver::~ScopedContextSaver() {
 }
 
 EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
-    : execCtx_(execCtx), exprSet_(exprSet), row_(row) {
+    : execCtx_(execCtx),
+      exprSet_(exprSet),
+      row_(row),
+      cacheEnabled_(execCtx->exprEvalCacheEnabled()) {
   // TODO Change the API to replace raw pointers with non-const references.
   // Sanity check inputs to prevent crashes.
   VELOX_CHECK_NOT_NULL(execCtx);
@@ -47,7 +50,10 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
 }
 
 EvalCtx::EvalCtx(core::ExecCtx* execCtx)
-    : execCtx_(execCtx), exprSet_(nullptr), row_(nullptr) {
+    : execCtx_(execCtx),
+      exprSet_(nullptr),
+      row_(nullptr),
+      cacheEnabled_(execCtx->exprEvalCacheEnabled()) {
   VELOX_CHECK_NOT_NULL(execCtx);
 }
 
@@ -219,11 +225,13 @@ void EvalCtx::convertElementErrorsToTopLevelNulls(
     return;
   }
 
+  auto rawNulls = result->mutableRawNulls();
+
   const auto* rawElementToTopLevelRows =
       elementToTopLevelRows->as<vector_size_t>();
   elementRows.applyToSelected([&](auto row) {
     if (errors_->isIndexInRange(row) && !errors_->isNullAt(row)) {
-      result->setNull(rawElementToTopLevelRows[row], true);
+      bits::setNull(rawNulls, rawElementToTopLevelRows[row], true);
     }
   });
 }
@@ -269,6 +277,54 @@ VectorPtr EvalCtx::ensureFieldLoaded(
   }
 
   return field;
+}
+
+// static
+void EvalCtx::addNulls(
+    const SelectivityVector& rows,
+    const uint64_t* rawNulls,
+    EvalCtx& context,
+    const TypePtr& type,
+    VectorPtr& result) {
+  // If there's no `result` yet, return a NULL ContantVector.
+  if (!result) {
+    result = BaseVector::createNullConstant(type, rows.end(), context.pool());
+    return;
+  }
+
+  // If result is already a NULL ConstantVector, resize the vector if necessary,
+  // or do nothing otherwise.
+  if (result->isConstantEncoding() && result->isNullAt(0)) {
+    if (result->size() < rows.end()) {
+      if (result.unique()) {
+        result->resize(rows.end());
+      } else {
+        result =
+            BaseVector::createNullConstant(type, rows.end(), context.pool());
+      }
+    }
+    return;
+  }
+
+  if (!result.unique() || !result->isNullsWritable()) {
+    BaseVector::ensureWritable(
+        SelectivityVector::empty(), type, context.pool(), result);
+  }
+
+  if (result->size() < rows.end()) {
+    BaseVector::ensureWritable(
+        SelectivityVector::empty(), type, context.pool(), result);
+    if (result->encoding() == VectorEncoding::Simple::ROW) {
+      // Avoid calling resize on all children by adding top level nulls only.
+      // We know from the check above that result is unique and isNullsWritable.
+      result->asUnchecked<RowVector>()->appendNulls(
+          rows.end() - result->size());
+    } else {
+      result->resize(rows.end());
+    }
+  }
+
+  result->addNulls(rawNulls, rows);
 }
 
 ScopedFinalSelectionSetter::ScopedFinalSelectionSetter(

@@ -55,6 +55,7 @@ enum class FilterKind {
   kMultiRange,
   kHugeintRange,
   kTimestampRange,
+  kHugeintValuesUsingHashTable,
 };
 
 class Filter;
@@ -341,6 +342,13 @@ class AlwaysFalse final : public Filter {
     return false;
   }
 
+  bool testTimestampRange(
+      Timestamp /*min*/,
+      Timestamp /*max*/,
+      bool /*hasNull*/) const final {
+    return false;
+  }
+
   bool testLength(int32_t /* unused */) const final {
     return false;
   }
@@ -418,6 +426,13 @@ class AlwaysTrue final : public Filter {
     return true;
   }
 
+  bool testTimestampRange(
+      Timestamp /*min*/,
+      Timestamp /*max*/,
+      bool /*hasNull*/) const final {
+    return true;
+  }
+
   bool testLength(int32_t /* unused */) const final {
     return true;
   }
@@ -480,10 +495,19 @@ class IsNull final : public Filter {
     return false;
   }
 
+  bool testTimestamp(Timestamp /* unused */) const final {
+    return false;
+  }
+
   bool testBytesRange(
       std::optional<std::string_view> /*min*/,
       std::optional<std::string_view> /*max*/,
       bool hasNull) const final {
+    return hasNull;
+  }
+
+  bool testTimestampRange(Timestamp /*min*/, Timestamp /*max*/, bool hasNull)
+      const final {
     return hasNull;
   }
 
@@ -546,9 +570,20 @@ class IsNotNull final : public Filter {
     return true;
   }
 
+  bool testTimestamp(Timestamp /* unused */) const final {
+    return true;
+  }
+
   bool testBytesRange(
       std::optional<std::string_view> /*min*/,
       std::optional<std::string_view> /*max*/,
+      bool /*hasNull*/) const final {
+    return true;
+  }
+
+  bool testTimestampRange(
+      Timestamp /*min*/,
+      Timestamp /*max*/,
       bool /*hasNull*/) const final {
     return true;
   }
@@ -941,6 +976,47 @@ class BigintValuesUsingHashTable final : public Filter {
   bool containsEmptyMarker_ = false;
   std::vector<int64_t> values_;
   int32_t sizeMask_;
+};
+
+/// IN-list filter for int128_t data type, implemented as a hash table.
+class HugeintValuesUsingHashTable final : public Filter {
+ public:
+  HugeintValuesUsingHashTable(
+      const int128_t min,
+      const int128_t max,
+      const std::vector<int128_t>& values,
+      const bool nullAllowed);
+
+  HugeintValuesUsingHashTable(
+      const HugeintValuesUsingHashTable& other,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, other.kind()),
+        min_(other.min_),
+        max_(other.max_),
+        values_(other.values_) {}
+
+  folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<HugeintValuesUsingHashTable>(
+          *this, nullAllowed.value());
+    } else {
+      return std::make_unique<HugeintValuesUsingHashTable>(*this);
+    }
+  }
+
+  bool testInt128(int128_t value) const final;
+
+  bool testingEquals(const Filter& other) const override;
+
+ private:
+  const int128_t min_;
+  const int128_t max_;
+  folly::F14FastSet<int128_t> values_;
 };
 
 /// IN-list filter for integral data types. Implemented as a bitmask. Offers
@@ -1965,6 +2041,8 @@ class MultiRange final : public Filter {
 
   bool testBytes(const char* value, int32_t length) const final;
 
+  bool testTimestamp(Timestamp value) const final;
+
   bool testLength(int32_t length) const final;
 
   bool testBytesRange(
@@ -2006,6 +2084,8 @@ static inline bool applyFilter(TFilter& filter, T value) {
     return filter.testDouble(value);
   } else if constexpr (std::is_same_v<T, bool>) {
     return filter.testBool(value);
+  } else if constexpr (std::is_same_v<T, Timestamp>) {
+    return filter.testTimestamp(value);
   } else {
     VELOX_FAIL("Bad argument type to filter: {}", typeid(T).name());
   }
@@ -2029,6 +2109,10 @@ static inline bool applyFilter(TFilter& filter, StringView value) {
 // Creates a hash or bitmap based IN filter depending on value distribution.
 std::unique_ptr<Filter> createBigintValues(
     const std::vector<int64_t>& values,
+    bool nullAllowed);
+
+std::unique_ptr<Filter> createHugeintValues(
+    const std::vector<int128_t>& values,
     bool nullAllowed);
 
 // Creates a hash or bitmap based NOT IN filter depending on value distribution.

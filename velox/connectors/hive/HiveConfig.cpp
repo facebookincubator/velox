@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/core/Config.h"
+#include "velox/core/QueryConfig.h"
 
 #include <boost/algorithm/string.hpp>
 
@@ -132,12 +133,17 @@ std::string HiveConfig::gcsEndpoint(const Config* config) {
 
 // static
 std::string HiveConfig::gcsScheme(const Config* config) {
-  return config->get<std::string>(kGCSScheme, std::string(""));
+  return config->get<std::string>(kGCSScheme, std::string("https"));
 }
 
 // static
 std::string HiveConfig::gcsCredentials(const Config* config) {
   return config->get<std::string>(kGCSCredentials, std::string(""));
+}
+
+// static.
+bool HiveConfig::isOrcUseColumnNames(const Config* config) {
+  return config->get<bool>(kOrcUseColumnNames, false);
 }
 
 // static.
@@ -158,6 +164,53 @@ int32_t HiveConfig::maxCoalescedDistanceBytes(const Config* config) {
 // static.
 int32_t HiveConfig::numCacheFileHandles(const Config* config) {
   return config->get<int32_t>(kNumCacheFileHandles, 20'000);
+}
+
+uint64_t HiveConfig::fileWriterFlushThresholdBytes(const Config* config) {
+  return config->get<int32_t>(kFileWriterFlushThresholdBytes, 96L << 20);
+}
+
+uint64_t HiveConfig::getOrcWriterMaxStripeSize(
+    const Config* connectorQueryCtxConfig,
+    const Config* connectorPropertiesConfig) {
+  if (connectorQueryCtxConfig != nullptr &&
+      connectorQueryCtxConfig->isValueExists(kOrcWriterMaxStripeSize)) {
+    return toCapacity(
+        connectorQueryCtxConfig->get<std::string>(kOrcWriterMaxStripeSize)
+            .value(),
+        core::CapacityUnit::BYTE);
+  }
+  if (connectorPropertiesConfig != nullptr &&
+      connectorPropertiesConfig->isValueExists(kOrcWriterMaxStripeSizeConfig)) {
+    return toCapacity(
+        connectorPropertiesConfig
+            ->get<std::string>(kOrcWriterMaxStripeSizeConfig)
+            .value(),
+        core::CapacityUnit::BYTE);
+  }
+  return 64L * 1024L * 1024L;
+}
+
+uint64_t HiveConfig::getOrcWriterMaxDictionaryMemory(
+    const Config* connectorQueryCtxConfig,
+    const Config* connectorPropertiesConfig) {
+  if (connectorQueryCtxConfig != nullptr &&
+      connectorQueryCtxConfig->isValueExists(kOrcWriterMaxDictionaryMemory)) {
+    return toCapacity(
+        connectorQueryCtxConfig->get<std::string>(kOrcWriterMaxDictionaryMemory)
+            .value(),
+        core::CapacityUnit::BYTE);
+  }
+  if (connectorPropertiesConfig != nullptr &&
+      connectorPropertiesConfig->isValueExists(
+          kOrcWriterMaxDictionaryMemoryConfig)) {
+    return toCapacity(
+        connectorPropertiesConfig
+            ->get<std::string>(kOrcWriterMaxDictionaryMemoryConfig)
+            .value(),
+        core::CapacityUnit::BYTE);
+  }
+  return 16L * 1024L * 1024L;
 }
 
 } // namespace facebook::velox::connector::hive

@@ -15,7 +15,7 @@
  */
 
 #include "velox/exec/PartitionedOutput.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -25,11 +25,11 @@ BlockingReason Destination::advance(
     uint64_t maxBytes,
     const std::vector<vector_size_t>& sizes,
     const RowVectorPtr& output,
-    PartitionedOutputBufferManager& bufferManager,
+    OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     bool* atEnd,
     ContinueFuture* future) {
-  if (row_ >= rows_.size()) {
+  if (rangeIdx_ >= ranges_.size()) {
     *atEnd = true;
     return BlockingReason::kNotBlocked;
   }
@@ -39,46 +39,47 @@ BlockingReason Destination::advance(
     return flush(bufferManager, bufferReleaseFn, future);
   }
 
-  auto firstRow = row_;
-  for (; row_ < rows_.size(); ++row_) {
-    // TODO: add support for serializing partial ranges if the full range is too
-    // big.
-    for (vector_size_t i = 0; i < rows_[row_].size; i++) {
-      bytesInCurrent_ += sizes[rows_[row_].begin + i];
+  // Collect ranges to serialize.
+  rangesToSerialize_.clear();
+  bool shouldFlush = false;
+  while (rangeIdx_ < ranges_.size() && !shouldFlush) {
+    auto& currRange = ranges_[rangeIdx_];
+    auto startRow = rowsInCurrentRange_;
+    for (; rowsInCurrentRange_ < currRange.size && !shouldFlush;
+         rowsInCurrentRange_++) {
+      ++rowsInCurrent_;
+      bytesInCurrent_ += sizes[currRange.begin + rowsInCurrentRange_];
+      shouldFlush = bytesInCurrent_ >= adjustedMaxBytes ||
+          rowsInCurrent_ >= targetNumRows_;
     }
-    if (bytesInCurrent_ >= adjustedMaxBytes ||
-        row_ - firstRow >= targetNumRows_) {
-      serialize(output, firstRow, row_ + 1);
-      if (row_ == rows_.size() - 1) {
-        *atEnd = true;
-      }
-      ++row_;
-      return flush(bufferManager, bufferReleaseFn, future);
+    rangesToSerialize_.push_back(
+        {currRange.begin + startRow, rowsInCurrentRange_ - startRow});
+    if (rowsInCurrentRange_ == currRange.size) {
+      rowsInCurrentRange_ = 0;
+      rangeIdx_++;
     }
   }
-  serialize(output, firstRow, row_);
-  *atEnd = true;
-  return BlockingReason::kNotBlocked;
-}
 
-void Destination::serialize(
-    const RowVectorPtr& output,
-    vector_size_t begin,
-    vector_size_t end) {
+  // Serialize
   if (!current_) {
     current_ = std::make_unique<VectorStreamGroup>(pool_);
     auto rowType = asRowType(output->type());
-    vector_size_t numRows = 0;
-    for (vector_size_t i = begin; i < end; i++) {
-      numRows += rows_[i].size;
-    }
-    current_->createStreamTree(rowType, numRows);
+    current_->createStreamTree(rowType, rowsInCurrent_);
   }
-  current_->append(output, folly::Range(&rows_[begin], end - begin));
+  current_->append(
+      output, folly::Range(&rangesToSerialize_[0], rangesToSerialize_.size()));
+  // Update output state variable.
+  if (rangeIdx_ == ranges_.size()) {
+    *atEnd = true;
+  }
+  if (shouldFlush) {
+    return flush(bufferManager, bufferReleaseFn, future);
+  }
+  return BlockingReason::kNotBlocked;
 }
 
 BlockingReason Destination::flush(
-    PartitionedOutputBufferManager& bufferManager,
+    OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     ContinueFuture* future) {
   if (!current_) {
@@ -95,6 +96,7 @@ BlockingReason Destination::flush(
   current_->flush(&stream);
   current_.reset();
   bytesInCurrent_ = 0;
+  rowsInCurrent_ = 0;
   setTargetSizePct();
 
   bool blocked = bufferManager.enqueue(
@@ -128,7 +130,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->inputType(),
           planNode->outputType(),
           planNode->outputType())),
-      bufferManager_(PartitionedOutputBufferManager::getInstance()),
+      bufferManager_(OutputBufferManager::getInstance()),
       // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
       // prevent it from deleting while there are output buffers being accessed
       // out of the partitioned output buffer manager such as in Prestissimo,
@@ -305,7 +307,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
   detail::Destination* blockedDestination = nullptr;
   auto bufferManager = bufferManager_.lock();
   VELOX_CHECK_NOT_NULL(
-      bufferManager, "PartitionedOutputBufferManager was already destructed");
+      bufferManager, "OutputBufferManager was already destructed");
 
   // Limit serialized pages to 1MB.
   static const uint64_t kMaxPageSize = 1 << 20;

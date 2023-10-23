@@ -15,7 +15,7 @@
  */
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 
 namespace facebook::velox::exec::test {
 namespace {
@@ -29,7 +29,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
       memory::MemoryPool* pool)
       : ExchangeSource(taskId, destination, queue, pool) {}
 
-  bool supportsFlowControl() const override {
+  bool supportsFlowControlV2() const override {
     return true;
   }
 
@@ -40,25 +40,28 @@ class LocalExchangeSource : public exec::ExchangeSource {
     return !requestPending_.exchange(true);
   }
 
-  ContinueFuture request(uint32_t maxBytes) override {
+  folly::SemiFuture<Response> request(
+      uint32_t maxBytes,
+      uint32_t /*maxWaitSeconds*/) override {
     ++numRequests_;
 
-    auto [promise, future] =
-        makeVeloxContinuePromiseContract("LocalExchangeSource::request");
+    auto promise = VeloxPromise<Response>("LocalExchangeSource::request");
+    auto future = promise.getSemiFuture();
+
     if (numRequests_ % 2 == 0) {
       {
         std::lock_guard<std::mutex> l(queue_->mutex());
         requestPending_ = false;
       }
       // Simulate no-data.
-      promise.setValue();
-      return std::move(future);
+      promise.setValue(Response{0, false});
+      return future;
     }
 
     promise_ = std::move(promise);
 
-    auto buffers = PartitionedOutputBufferManager::getInstance().lock();
-    VELOX_CHECK_NOT_NULL(buffers, "invalid PartitionedOutputBufferManager");
+    auto buffers = OutputBufferManager::getInstance().lock();
+    VELOX_CHECK_NOT_NULL(buffers, "invalid OutputBufferManager");
     VELOX_CHECK(requestPending_);
     auto requestedSequence = sequence_;
     auto self = shared_from_this();
@@ -83,18 +86,21 @@ class LocalExchangeSource : public exec::ExchangeSource {
           }
           std::vector<std::unique_ptr<SerializedPage>> pages;
           bool atEnd = false;
+          int64_t totalBytes = 0;
           for (auto& inputPage : data) {
             if (!inputPage) {
               atEnd = true;
               // Keep looping, there could be extra end markers.
               continue;
             }
+            totalBytes += inputPage->length();
             inputPage->unshare();
             pages.push_back(
                 std::make_unique<SerializedPage>(std::move(inputPage)));
             inputPage = nullptr;
           }
           numPages_ += pages.size();
+          totalBytes_ += totalBytes;
 
           try {
             common::testutil::TestValue::adjust(
@@ -106,7 +112,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
           }
 
           int64_t ackSequence;
-          ContinuePromise requestPromise;
+          VeloxPromise<Response> requestPromise;
           {
             std::vector<ContinuePromise> queuePromises;
             {
@@ -134,33 +140,37 @@ class LocalExchangeSource : public exec::ExchangeSource {
           }
 
           if (!requestPromise.isFulfilled()) {
-            requestPromise.setValue();
+            requestPromise.setValue(Response{totalBytes, atEnd_});
           }
         });
 
-    return std::move(future);
+    return future;
   }
 
   void close() override {
     checkSetRequestPromise();
 
-    auto buffers = PartitionedOutputBufferManager::getInstance().lock();
+    auto buffers = OutputBufferManager::getInstance().lock();
     buffers->deleteResults(taskId_, destination_);
   }
 
   folly::F14FastMap<std::string, int64_t> stats() const override {
-    return {{"localExchangeSource.numPages", numPages_}};
+    return {
+        {"localExchangeSource.numPages", numPages_},
+        {"localExchangeSource.totalBytes", totalBytes_},
+        {ExchangeClient::kBackgroundCpuTimeMs, 123},
+    };
   }
 
  private:
   bool checkSetRequestPromise() {
-    ContinuePromise promise;
+    VeloxPromise<Response> promise;
     {
       std::lock_guard<std::mutex> l(queue_->mutex());
       promise = std::move(promise_);
     }
     if (promise.valid() && !promise.isFulfilled()) {
-      promise.setValue();
+      promise.setValue(Response{0, false});
       return true;
     }
 
@@ -168,8 +178,9 @@ class LocalExchangeSource : public exec::ExchangeSource {
   }
 
   // Records the total number of pages fetched from sources.
-  int64_t numPages_{0};
-  ContinuePromise promise_{ContinuePromise::makeEmpty()};
+  std::atomic<int64_t> numPages_{0};
+  std::atomic<uint64_t> totalBytes_{0};
+  VeloxPromise<Response> promise_{VeloxPromise<Response>::makeEmpty()};
   int32_t numRequests_{0};
 };
 
@@ -183,6 +194,8 @@ std::unique_ptr<ExchangeSource> createLocalExchangeSource(
   if (strncmp(taskId.c_str(), "local://", 8) == 0) {
     return std::make_unique<LocalExchangeSource>(
         taskId, destination, std::move(queue), pool);
+  } else if (strncmp(taskId.c_str(), "bad://", 6) == 0) {
+    throw std::runtime_error("Testing error");
   }
   return nullptr;
 }

@@ -20,6 +20,8 @@
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
+#include "velox/dwio/common/WriterFactory.h"
+#include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::dwrf {
 class Writer;
@@ -338,10 +340,20 @@ class HiveWriterParameters {
 };
 
 struct HiveWriterInfo {
-  explicit HiveWriterInfo(HiveWriterParameters parameters)
-      : writerParameters(std::move(parameters)) {}
+  HiveWriterInfo(
+      HiveWriterParameters parameters,
+      std::shared_ptr<memory::MemoryPool> _writerPool,
+      std::shared_ptr<memory::MemoryPool> _sinkPool,
+      std::shared_ptr<memory::MemoryPool> _sortPool)
+      : writerParameters(std::move(parameters)),
+        writerPool(std::move(_writerPool)),
+        sinkPool(std::move(_sinkPool)),
+        sortPool(std::move(_sortPool)) {}
 
   const HiveWriterParameters writerParameters;
+  const std::shared_ptr<memory::MemoryPool> writerPool;
+  const std::shared_ptr<memory::MemoryPool> sinkPool;
+  const std::shared_ptr<memory::MemoryPool> sortPool;
   int64_t numWrittenRows = 0;
 };
 
@@ -389,7 +401,8 @@ class HiveDataSink : public DataSink {
       RowTypePtr inputType,
       std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
-      CommitStrategy commitStrategy);
+      CommitStrategy commitStrategy,
+      const std::shared_ptr<const Config>& connectorProperties);
 
   static uint32_t maxBucketCount() {
     static const uint32_t kMaxBucketCount = 100'000;
@@ -400,11 +413,47 @@ class HiveDataSink : public DataSink {
 
   int64_t getCompletedBytes() const override;
 
-  std::vector<std::string> finish() const override;
+  int32_t numWrittenFiles() const override;
 
-  void close() override;
+  std::vector<std::string> close(bool success) override;
 
  private:
+  class WriterReclaimer : public exec::MemoryReclaimer {
+   public:
+    static std::unique_ptr<memory::MemoryReclaimer> create(
+        bool canReclaim,
+        uint64_t flushThresholdBytes);
+
+    bool reclaimableBytes(
+        const memory::MemoryPool& pool,
+        uint64_t& reclaimableBytes) const override;
+
+    uint64_t reclaim(
+        memory::MemoryPool* pool,
+        uint64_t targetBytes,
+        memory::MemoryReclaimer::Stats& stats) override;
+
+   private:
+    WriterReclaimer(bool canReclaim, uint64_t flushThresholdBytes)
+        : exec::MemoryReclaimer(),
+          canReclaim_(canReclaim),
+          flushThresholdBytes_(flushThresholdBytes) {}
+
+    const bool canReclaim_{false};
+    const uint64_t flushThresholdBytes_;
+  };
+
+  FOLLY_ALWAYS_INLINE bool sortWrite() const {
+    return !sortColumnIndices_.empty();
+  }
+
+  FOLLY_ALWAYS_INLINE bool canReclaim() const {
+    // Currently, we only support memory reclaim on dwrf file writer.
+    return (spillConfig_ != nullptr) && !sortWrite() &&
+        (insertTableHandle_->tableStorageFormat() ==
+         dwio::common::FileFormat::DWRF);
+  }
+
   // Returns true if the table is partitioned.
   FOLLY_ALWAYS_INLINE bool isPartitioned() const {
     return partitionIdGenerator_ != nullptr;
@@ -418,6 +467,9 @@ class HiveDataSink : public DataSink {
   FOLLY_ALWAYS_INLINE bool isCommitRequired() const {
     return commitStrategy_ != CommitStrategy::kNoCommit;
   }
+
+  std::shared_ptr<memory::MemoryPool> createWriterPool(
+      const HiveWriterId& writerId);
 
   // Compute the partition id and bucket id for each row in 'input'.
   void computePartitionAndBucketIds(const RowVectorPtr& input);
@@ -436,6 +488,10 @@ class HiveDataSink : public DataSink {
   // the newly created writer in 'writers_'.
   uint32_t appendWriter(const HiveWriterId& id);
 
+  std::unique_ptr<facebook::velox::dwio::common::Writer>
+  maybeCreateBucketSortWriter(
+      std::unique_ptr<facebook::velox::dwio::common::Writer> writer);
+
   HiveWriterParameters getWriterParameters(
       const std::optional<std::string>& partition,
       std::optional<uint32_t> bucketId) const;
@@ -452,15 +508,45 @@ class HiveDataSink : public DataSink {
 
   HiveWriterParameters::UpdateMode getUpdateMode() const;
 
+  FOLLY_ALWAYS_INLINE bool closedOrAborted() const {
+    VELOX_CHECK(!(closed_ && aborted_));
+    return closed_ || aborted_;
+  }
+
+  FOLLY_ALWAYS_INLINE void checkNotClosed() const {
+    VELOX_CHECK(!closed_, "Hive data sink has been closed");
+  }
+
+  FOLLY_ALWAYS_INLINE void checkNotAborted() const {
+    VELOX_CHECK(!aborted_, "Hive data sink hash been aborted");
+  }
+
+  // Invoked to write 'input' to the specified file writer.
+  void write(size_t index, const VectorPtr& input);
+
+  void closeInternal(bool abort);
+
   const RowTypePtr inputType_;
   const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;
-  const ConnectorQueryCtx* connectorQueryCtx_;
+  const ConnectorQueryCtx* const connectorQueryCtx_;
   const CommitStrategy commitStrategy_;
+  const std::shared_ptr<const Config> connectorProperties_;
   const uint32_t maxOpenWriters_;
   const std::vector<column_index_t> partitionChannels_;
   const std::unique_ptr<PartitionIdGenerator> partitionIdGenerator_;
   const int32_t bucketCount_{0};
   const std::unique_ptr<core::PartitionFunction> bucketFunction_;
+  const std::shared_ptr<dwio::common::WriterFactory> writerFactory_;
+  const common::SpillConfig* const spillConfig_;
+
+  std::vector<column_index_t> sortColumnIndices_;
+  std::vector<CompareFlags> sortCompareFlags_;
+
+  bool closed_{false};
+  bool aborted_{false};
+
+  uint32_t numSpillRuns_{0};
+  tsan_atomic<bool> nonReclaimableSection_{false};
 
   // The map from writer id to the writer index in 'writers_' and 'writerInfo_'.
   folly::F14FastMap<HiveWriterId, uint32_t, HiveWriterIdHasher, HiveWriterIdEq>
@@ -471,7 +557,7 @@ class HiveDataSink : public DataSink {
   std::vector<std::shared_ptr<HiveWriterInfo>> writerInfo_;
   std::vector<std::unique_ptr<dwio::common::Writer>> writers_;
   // IO statistics collected for each writer.
-  std::vector<std::shared_ptr<dwio::common::IoStatistics>> ioStats_;
+  std::vector<std::shared_ptr<io::IoStatistics>> ioStats_;
 
   // Below are structures updated when processing current input. partitionIds_
   // are indexed by the row of input_. partitionRows_, rawPartitionRows_ and

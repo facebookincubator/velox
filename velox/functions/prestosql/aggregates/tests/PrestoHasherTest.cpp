@@ -109,6 +109,25 @@ class PrestoHasherTest : public testing::Test,
 
     checkHashes(dictionaryVector, modifiedExpected);
 
+    // The dictionary vector is larger than the values.
+    // We make it much larger so that if we allocate any Buffers using the base
+    // Vector's size, it won't be large enough to hold the number of elements in
+    // the DictionaryVector even after aligning the size and expanding it to the
+    // preferred size.
+    auto longerSize = vectorSize * 100;
+
+    modifiedExpected.resize(longerSize);
+    for (size_t i = 0; i < longerSize; ++i) {
+      modifiedExpected[i] = expected[i % vectorSize];
+    }
+
+    BufferPtr longerIndices = makeIndices(
+        longerSize, [vectorSize](auto row) { return row % vectorSize; });
+
+    dictionaryVector = wrapInDictionary(longerIndices, longerSize, vector);
+
+    checkHashes(dictionaryVector, modifiedExpected);
+
     // Wrap in a constant vector of various sizes.
 
     for (int size = 1; size <= vectorSize - 1; size++) {
@@ -310,16 +329,25 @@ TEST_F(PrestoHasherTest, maps) {
 }
 
 TEST_F(PrestoHasherTest, rows) {
-  auto row = makeRowVector(
-      {makeFlatVector<int64_t>({1, 3}), makeFlatVector<int64_t>({2, 4})});
+  auto row = makeRowVector({
+      makeFlatVector<int64_t>({1, 3}),
+      makeFlatVector<int64_t>({2, 4}),
+  });
 
   assertHash(row, {4329740752828761434, 655643799837772474});
 
-  row = makeRowVector(
-      {makeNullableFlatVector<int64_t>({1, std::nullopt}),
-       makeNullableFlatVector<int64_t>({std::nullopt, 4})});
+  row = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, std::nullopt}),
+      makeNullableFlatVector<int64_t>({std::nullopt, 4}),
+  });
 
   assertHash(row, {7113531408683827503, -1169223928725763049});
+
+  row->setNull(0, true);
+  assertHash(row, {0, -1169223928725763049});
+
+  row->setNull(1, true);
+  assertHash(row, {0, 0});
 }
 
 TEST_F(PrestoHasherTest, wrongVectorType) {

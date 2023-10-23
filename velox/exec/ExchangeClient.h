@@ -26,6 +26,8 @@ namespace facebook::velox::exec {
 class ExchangeClient {
  public:
   static constexpr int32_t kDefaultMaxQueuedBytes = 32 << 20; // 32 MB.
+  static constexpr int32_t kDefaultMaxWaitSeconds = 2;
+  static inline const std::string kBackgroundCpuTimeMs = "backgroundCpuTimeMs";
 
   ExchangeClient(
       std::string taskId,
@@ -60,6 +62,8 @@ class ExchangeClient {
   void close();
 
   // Returns runtime statistics aggregated across all of the exchange sources.
+  // ExchangeClient is expected to report background CPU time by including a
+  // runtime metric named ExchangeClient::kBackgroundCpuTimeMs.
   folly::F14FastMap<std::string, RuntimeMetric> stats() const;
 
   std::shared_ptr<ExchangeQueue> queue() const {
@@ -84,9 +88,12 @@ class ExchangeClient {
 
   int32_t getNumSourcesToRequestLocked(int64_t averagePageSize);
 
-  RequestSpec pickSourcesToRequest();
-
   RequestSpec pickSourcesToRequestLocked();
+
+  void pickSourcesToRequestLocked(
+      RequestSpec& requestSpec,
+      int32_t numToRequest,
+      std::queue<std::shared_ptr<ExchangeSource>>& sources);
 
   int32_t countPendingSourcesLocked();
 
@@ -100,9 +107,13 @@ class ExchangeClient {
   std::shared_ptr<ExchangeQueue> queue_;
   std::unordered_set<std::string> taskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
-  bool allSourcesSupportFlowControl_{true};
-  uint32_t nextSourceIndex_{0};
   bool closed_{false};
+
+  // A queue of sources that have returned non-empty response from the latest
+  // request.
+  std::queue<std::shared_ptr<ExchangeSource>> producingSources_;
+  // A queue of sources that returned empty response from the latest request.
+  std::queue<std::shared_ptr<ExchangeSource>> emptySources_;
 };
 
 } // namespace facebook::velox::exec

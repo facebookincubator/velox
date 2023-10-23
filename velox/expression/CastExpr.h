@@ -228,6 +228,12 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType);
 
   template <typename FromNativeType>
+  VectorPtr applyDecimalToBooleanCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context);
+
+  template <typename FromNativeType>
   VectorPtr applyDecimalToPrimitiveCast(
       const SelectivityVector& rows,
       const BaseVector& input,
@@ -241,6 +247,13 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const BaseVector& input,
       VectorPtr& result);
+
+  template <typename FromNativeType>
+  VectorPtr applyDecimalToVarcharCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType);
 
   template <TypeKind ToKind>
   void applyCastPrimitivesDispatch(
@@ -287,7 +300,8 @@ class CastCallToSpecialForm : public FunctionCallToSpecialForm {
   ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<ExprPtr>&& compiledChildren,
-      bool trackCpuUsage) override;
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override;
 };
 
 class TryCastCallToSpecialForm : public FunctionCallToSpecialForm {
@@ -297,7 +311,8 @@ class TryCastCallToSpecialForm : public FunctionCallToSpecialForm {
   ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<ExprPtr>&& compiledChildren,
-      bool trackCpuUsage) override;
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override;
 };
 } // namespace facebook::velox::exec
 

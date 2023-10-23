@@ -15,7 +15,8 @@
  */
 
 #include "velox/common/base/Fs.h"
-#include "velox/dwio/common/DataSink.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/common/FileSink.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <gtest/gtest.h>
@@ -32,20 +33,20 @@ void runTest() {
   ASSERT_FALSE(fs::exists(filePath.string()));
 
   auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
-  auto localFileSink =
-      DataSink::create(fmt::format("file:{}", filePath.string()), pool.get());
+  auto localFileSink = FileSink::create(
+      fmt::format("file:{}", filePath.string()), {.pool = pool.get()});
+  ASSERT_TRUE(localFileSink->isBuffered());
   localFileSink->close();
 
   EXPECT_TRUE(fs::exists(filePath.string()));
 }
 
-TEST(LocalFileSinkTest, create) {
-  LocalFileSink::registerFactory();
-  runTest();
+TEST(LocalFileSinkTest, missingRegistration) {
+  VELOX_ASSERT_THROW(runTest(), "FileSink is not registered for file:");
 }
 
-TEST(LocalFileSinkTest, writeFileSink) {
-  WriteFileDataSink::registerLocalFileFactory();
+TEST(LocalFileSinkTest, create) {
+  LocalFileSink::registerFactory();
   runTest();
 }
 

@@ -20,10 +20,6 @@
 namespace facebook::velox::substrait {
 
 std::string VeloxSubstraitSignature::toSubstraitSignature(const TypePtr& type) {
-  if (type->isDate()) {
-    return "date";
-  }
-
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return "bool";
@@ -32,6 +28,9 @@ std::string VeloxSubstraitSignature::toSubstraitSignature(const TypePtr& type) {
     case TypeKind::SMALLINT:
       return "i16";
     case TypeKind::INTEGER:
+      if (type->isDate()) {
+        return "date";
+      }
       return "i32";
     case TypeKind::BIGINT:
       return "i64";
@@ -58,6 +57,58 @@ std::string VeloxSubstraitSignature::toSubstraitSignature(const TypePtr& type) {
           "Substrait type signature conversion not supported for type {}.",
           mapTypeKindToName(type->kind()));
   }
+}
+
+// static
+TypePtr VeloxSubstraitSignature::fromSubstraitSignature(
+    const std::string& signature) {
+  if (signature == "bool") {
+    return BOOLEAN();
+  }
+
+  if (signature == "i8") {
+    return TINYINT();
+  }
+
+  if (signature == "i16") {
+    return SMALLINT();
+  }
+
+  if (signature == "i32") {
+    return INTEGER();
+  }
+
+  if (signature == "i64") {
+    return BIGINT();
+  }
+
+  if (signature == "fp32") {
+    return REAL();
+  }
+
+  if (signature == "fp64") {
+    return DOUBLE();
+  }
+
+  if (signature == "str") {
+    return VARCHAR();
+  }
+
+  if (signature == "vbin") {
+    return VARBINARY();
+  }
+
+  if (signature == "ts") {
+    return TIMESTAMP();
+  }
+
+  if (signature == "date") {
+    return DATE();
+  }
+
+  VELOX_UNSUPPORTED(
+      "Substrait type signature conversion to Velox type not supported for {}.",
+      signature);
 }
 
 std::string VeloxSubstraitSignature::toSubstraitSignature(

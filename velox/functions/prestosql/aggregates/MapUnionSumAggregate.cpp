@@ -16,7 +16,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Strings.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/CheckedArithmeticImpl.h"
+#include "velox/functions/lib/CheckedArithmeticImpl.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/FlatVector.h"
 
@@ -54,12 +54,16 @@ struct Accumulator {
       // Ignore null map keys.
       if (!mapKeys->isNullAt(offset + i)) {
         auto key = mapKeys->valueAt(offset + i);
-        addValue(key, mapValues, offset + i);
+        addValue(key, mapValues, offset + i, mapValues->typeKind());
       }
     }
   }
 
-  void addValue(K key, const SimpleVector<S>* mapValues, vector_size_t row) {
+  void addValue(
+      K key,
+      const SimpleVector<S>* mapValues,
+      vector_size_t row,
+      TypeKind valueKind) {
     if (mapValues->isNullAt(row)) {
       sums[key] += 0;
     } else {
@@ -68,7 +72,25 @@ struct Accumulator {
       if constexpr (std::is_same_v<S, double> || std::is_same_v<S, float>) {
         sums[key] += value;
       } else {
-        sums[key] = functions::checkedPlus<S>(sums[key], value);
+        S checkedSum;
+        auto overflow = __builtin_add_overflow(sums[key], value, &checkedSum);
+
+        if (UNLIKELY(overflow)) {
+          auto errorValue = (int128_t(sums[key]) + int128_t(value));
+
+          if (errorValue < 0) {
+            VELOX_ARITHMETIC_ERROR(
+                "Value {} is less than {}",
+                errorValue,
+                std::numeric_limits<S>::min());
+          } else {
+            VELOX_ARITHMETIC_ERROR(
+                "Value {} exceeds {}",
+                errorValue,
+                std::numeric_limits<S>::max());
+          }
+        }
+        sums[key] = checkedSum;
       }
     }
   }
@@ -125,7 +147,7 @@ struct StringViewAccumulator {
           }
         }
 
-        base.addValue(key, mapValues, offset + i);
+        base.addValue(key, mapValues, offset + i, mapValues->typeKind());
       }
     }
   }
@@ -269,14 +291,14 @@ class MapUnionSumAggregate : public exec::Aggregate {
   }
 
   void destroy(folly::Range<char**> groups) override {
-    for (auto* group : groups) {
-      if constexpr (std::is_same_v<K, StringView>) {
+    if constexpr (std::is_same_v<K, StringView>) {
+      for (auto* group : groups) {
         if (!isNull(group)) {
           value<AccumulatorType>(group)->strings.free(*allocator_);
         }
       }
-      std::destroy_at(value<AccumulatorType>(group));
     }
+    destroyAccumulators<AccumulatorType>(groups);
   }
 
  private:
@@ -324,10 +346,27 @@ std::unique_ptr<exec::Aggregate> createMapUnionSumAggregate(
 }
 
 exec::AggregateRegistrationResult registerMapUnionSum(const std::string& name) {
+  const std::vector<std::string> keyTypes = {
+      "tinyint",
+      "smallint",
+      "integer",
+      "bigint",
+      "real",
+      "double",
+      "varchar",
+  };
+  const std::vector<std::string> valueTypes = {
+      "tinyint",
+      "smallint",
+      "integer",
+      "bigint",
+      "double",
+      "real",
+  };
+
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-  for (auto keyType : {"tinyint", "smallint", "integer", "bigint", "varchar"}) {
-    for (auto valueType :
-         {"tinyint", "smallint", "integer", "bigint", "double", "real"}) {
+  for (auto keyType : keyTypes) {
+    for (auto valueType : valueTypes) {
       auto mapType = fmt::format("map({},{})", keyType, valueType);
       signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                                .returnType(mapType)
@@ -363,6 +402,11 @@ exec::AggregateRegistrationResult registerMapUnionSum(const std::string& name) {
                 valueTypeKind, resultType);
           case TypeKind::BIGINT:
             return createMapUnionSumAggregate<int64_t>(
+                valueTypeKind, resultType);
+          case TypeKind::REAL:
+            return createMapUnionSumAggregate<float>(valueTypeKind, resultType);
+          case TypeKind::DOUBLE:
+            return createMapUnionSumAggregate<double>(
                 valueTypeKind, resultType);
           case TypeKind::VARCHAR:
             return createMapUnionSumAggregate<StringView>(

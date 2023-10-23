@@ -22,7 +22,9 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/LambdaExpr.h"
+#include "velox/expression/RowConstructor.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
+#include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/SwitchExpr.h"
 #include "velox/expression/TryExpr.h"
 #include "velox/expression/VectorFunction.h"
@@ -36,7 +38,6 @@ using core::TypedExprPtr;
 
 const char* const kAnd = "and";
 const char* const kOr = "or";
-const char* const kRowConstructor = "row_constructor";
 
 struct ITypedExprHasher {
   size_t operator()(const ITypedExpr* expr) const {
@@ -81,6 +82,8 @@ struct Scope {
   std::vector<const ITypedExpr*> captureFieldAccesses;
   // Deduplicatable ITypedExprs. Only applies within the one scope.
   ExprDedupMap visited;
+
+  std::vector<TypedExprPtr> rewrittenExpressions;
 
   Scope(std::vector<std::string>&& _locals, Scope* _parent, ExprSet* _exprSet)
       : locals(_locals), parent(_parent), exprSet(_exprSet) {}
@@ -217,43 +220,18 @@ std::vector<TypePtr> getTypes(const std::vector<ExprPtr>& exprs) {
   return types;
 }
 
-ExprPtr getRowConstructorExpr(
-    const core::QueryConfig& config,
-    const TypePtr& type,
-    std::vector<ExprPtr>&& compiledChildren,
-    bool trackCpuUsage) {
-  static auto rowConstructorVectorFunction =
-      vectorFunctionFactories().withRLock([&config](auto& functionMap) {
-        auto functionIterator = functionMap.find(exec::kRowConstructor);
-        return functionIterator->second.factory(
-            exec::kRowConstructor, {}, config);
-      });
-
-  return std::make_shared<Expr>(
-      type,
-      std::move(compiledChildren),
-      rowConstructorVectorFunction,
-      "row_constructor",
-      trackCpuUsage);
-}
-
 ExprPtr getSpecialForm(
     const core::QueryConfig& config,
     const std::string& name,
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage) {
-  if (name == kRowConstructor) {
-    return getRowConstructorExpr(
-        config, type, std::move(compiledChildren), trackCpuUsage);
-  }
-
   // If we just check the output of constructSpecialForm we'll have moved
   // compiledChildren, and if the function isn't a special form we'll still need
   // compiledChildren. Splitting the check in two avoids this use after move.
   if (isFunctionCallToSpecialFormRegistered(name)) {
     return constructSpecialForm(
-        name, type, std::move(compiledChildren), trackCpuUsage);
+        name, type, std::move(compiledChildren), trackCpuUsage, config);
   }
 
   return nullptr;
@@ -407,16 +385,23 @@ ExprPtr compileRewrittenExpression(
   auto inputTypes = getTypes(compiledInputs);
   bool isConstantExpr = false;
   if (dynamic_cast<const core::ConcatTypedExpr*>(expr.get())) {
-    result = getRowConstructorExpr(
-        config, resultType, std::move(compiledInputs), trackCpuUsage);
+    result = getSpecialForm(
+        config,
+        RowConstructorCallToSpecialForm::kRowConstructor,
+        resultType,
+        std::move(compiledInputs),
+        trackCpuUsage);
   } else if (auto cast = dynamic_cast<const core::CastTypedExpr*>(expr.get())) {
     VELOX_CHECK(!compiledInputs.empty());
-    auto castExpr = std::make_shared<CastExpr>(
-        resultType,
-        std::move(compiledInputs[0]),
-        trackCpuUsage,
-        cast->nullOnFailure());
-    result = castExpr;
+    if (FOLLY_UNLIKELY(*resultType == *compiledInputs[0]->type())) {
+      result = compiledInputs[0];
+    } else {
+      result = std::make_shared<CastExpr>(
+          resultType,
+          std::move(compiledInputs[0]),
+          trackCpuUsage,
+          cast->nullOnFailure());
+    }
   } else if (auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
     if (auto specialForm = getSpecialForm(
             config,
@@ -498,6 +483,11 @@ ExprPtr compileRewrittenExpression(
       captureFieldReference(fieldReference.get(), expr.get(), scope);
     }
     result = fieldReference;
+  } else if (
+      auto dereference =
+          dynamic_cast<const core::DereferenceTypedExpr*>(expr.get())) {
+    result = std::make_shared<FieldReference>(
+        expr->type(), std::move(compiledInputs), dereference->index());
   } else if (auto row = dynamic_cast<const core::InputTypedExpr*>(expr.get())) {
     VELOX_UNSUPPORTED("InputTypedExpr '{}' is not supported", row->toString());
   } else if (
@@ -536,6 +526,9 @@ ExprPtr compileExpression(
     const std::unordered_set<std::string>& flatteningCandidates,
     bool enableConstantFolding) {
   auto rewritten = rewriteExpression(expr);
+  if (rewritten.get() != expr.get()) {
+    scope->rewrittenExpressions.push_back(rewritten);
+  }
   return compileRewrittenExpression(
       rewritten == nullptr ? expr : rewritten,
       scope,

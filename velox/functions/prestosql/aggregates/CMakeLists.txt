@@ -21,12 +21,15 @@ add_library(
   ArrayAggAggregate.cpp
   AverageAggregate.cpp
   BitwiseAggregates.cpp
+  BitwiseXorAggregate.cpp
   BoolAggregates.cpp
   CentralMomentsAggregates.cpp
+  Compare.cpp
   CountIfAggregate.cpp
   CovarianceAggregates.cpp
   ChecksumAggregate.cpp
   EntropyAggregates.cpp
+  GeometricMeanAggregate.cpp
   HistogramAggregate.cpp
   MapAggAggregate.cpp
   MapUnionAggregate.cpp
@@ -36,6 +39,7 @@ add_library(
   MultiMapAggAggregate.cpp
   CountAggregate.cpp
   PrestoHasher.cpp
+  ReduceAgg.cpp
   SetAggregates.cpp
   SumAggregate.cpp
   ValueList.cpp

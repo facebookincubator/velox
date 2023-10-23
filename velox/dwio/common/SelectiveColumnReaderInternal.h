@@ -134,13 +134,10 @@ void SelectiveColumnReader::getFlatValues(
     upcastScalarValues<T, TVector>(rows);
   }
   valueSize_ = sizeof(TVector);
-  BufferPtr nulls = anyNulls_
-      ? (returnReaderNulls_ ? nullsInReadRange_ : resultNulls_)
-      : nullptr;
   *result = std::make_shared<FlatVector<TVector>>(
       &memoryPool_,
       type,
-      nulls,
+      resultNulls(),
       numValues_,
       values_,
       std::move(stringBuffers_));
@@ -365,7 +362,7 @@ void SelectiveColumnReader::filterNulls(
         }
       }
     }
-    readOffset_ += rows.back() + 1;
+
     return;
   }
 
@@ -388,7 +385,6 @@ void SelectiveColumnReader::filterNulls(
       }
     }
   }
-  readOffset_ += rows.back() + 1;
 }
 
 } // namespace facebook::velox::dwio::common

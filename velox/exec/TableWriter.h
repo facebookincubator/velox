@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::exec {
@@ -109,28 +110,17 @@ class TableWriter : public Operator {
     return BlockingReason::kNotBlocked;
   }
 
+  void initialize() override;
+
   void addInput(RowVectorPtr input) override;
 
-  void noMoreInput() override {
-    Operator::noMoreInput();
-    if (aggregation_ != nullptr) {
-      aggregation_->noMoreInput();
-    }
-    close();
-  }
+  void noMoreInput() override;
 
   virtual bool needsInput() const override {
     return true;
   }
 
-  void close() override {
-    if (!closed_) {
-      if (dataSink_) {
-        dataSink_->close();
-      }
-      closed_ = true;
-    }
-  }
+  void close() override;
 
   RowVectorPtr getOutput() override;
 
@@ -138,19 +128,70 @@ class TableWriter : public Operator {
     return finished_;
   }
 
+  /// NOTE: we don't reclaim memory from table write operator directly but from
+  /// its paired connector pool which reclaims memory from the file writers
+  /// created inside the connector.
+  bool canReclaim() const override {
+    return false;
+  }
+
  private:
+  // The memory reclaimer customized for connector which interface with the
+  // memory arbitrator to reclaim memory from the file writers created within
+  // the connector.
+  class ConnectorReclaimer : public Operator::MemoryReclaimer {
+   public:
+    static std::unique_ptr<memory::MemoryReclaimer>
+    create(DriverCtx* driverCtx, Operator* op, bool canReclaim);
+
+    void enterArbitration() override {}
+
+    void leaveArbitration() noexcept override {}
+
+    bool reclaimableBytes(
+        const memory::MemoryPool& pool,
+        uint64_t& reclaimableBytes) const override;
+
+    uint64_t reclaim(
+        memory::MemoryPool* pool,
+        uint64_t targetBytes,
+        memory::MemoryReclaimer::Stats& stats) override;
+
+    void abort(memory::MemoryPool* pool, const std::exception_ptr& /* error */)
+        override {}
+
+   private:
+    ConnectorReclaimer(
+        const std::shared_ptr<Driver>& driver,
+        Operator* op,
+        bool canReclaim)
+        : Operator::MemoryReclaimer(driver, op), canReclaim_(canReclaim) {}
+
+    const bool canReclaim_{false};
+  };
+
   void createDataSink();
+
+  std::vector<std::string> closeDataSink();
+
+  void abortDataSink();
 
   // Updates physicalWrittenBytes in OperatorStats with current written bytes.
   void updateWrittenBytes();
 
+  // Updates numWrittenFiles in runtimeStats.
+  void updateNumWrittenFiles();
+
   std::string createTableCommitContext(bool lastOutput);
+
+  void setConnectorMemoryReclaimer();
 
   const DriverCtx* const driverCtx_;
   memory::MemoryPool* const connectorPool_;
   const std::shared_ptr<connector::ConnectorInsertTableHandle>
       insertTableHandle_;
   const connector::CommitStrategy commitStrategy_;
+
   std::unique_ptr<Operator> aggregation_;
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;

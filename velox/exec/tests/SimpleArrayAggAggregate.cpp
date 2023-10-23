@@ -41,9 +41,6 @@ void copyValueListToArrayWriter(ArrayWriter<T>& writer, ValueList& elements) {
   ValueListReader reader(elements);
   for (vector_size_t i = 0; i < size; ++i) {
     reader.next(*writer.elementsVector(), writer.valuesOffset() + i);
-    writer.elementsVector()->setNull(
-        writer.valuesOffset() + i,
-        writer.elementsVector()->isNullAt(writer.valuesOffset() + i));
   }
   writer.resize(size);
 }
@@ -60,6 +57,17 @@ class ArrayAggAggregate {
   using OutputType = Array<Generic<T1>>;
 
   static constexpr bool default_null_behavior_ = false;
+
+  static bool toIntermediate(
+      exec::out_type<Array<Generic<T1>>>& out,
+      exec::optional_arg_type<Generic<T1>> in) {
+    if (in.has_value()) {
+      out.add_item().copy_from(in.value());
+    } else {
+      out.add_null();
+    }
+    return true;
+  }
 
   struct AccumulatorType {
     ValueList elements_;
@@ -87,7 +95,7 @@ class ArrayAggAggregate {
         HashStringAllocator* allocator,
         exec::optional_arg_type<Array<Generic<T1>>> other) {
       if (!other.has_value()) {
-        return true;
+        return false;
       }
       for (auto element : other.value()) {
         elements_.appendValue(element, allocator);
@@ -98,7 +106,7 @@ class ArrayAggAggregate {
     bool writeFinalResult(
         bool nonNullGroup,
         exec::out_type<Array<Generic<T1>>>& out) {
-      if (!nonNullGroup || elements_.size() == 0) {
+      if (!nonNullGroup) {
         return false;
       }
       copyValueListToArrayWriter(out, elements_);
@@ -110,7 +118,7 @@ class ArrayAggAggregate {
         exec::out_type<Array<Generic<T1>>>& out) {
       // If the group's accumulator is null, the corresponding intermediate
       // result is null too.
-      if (!nonNullGroup || elements_.size() == 0) {
+      if (!nonNullGroup) {
         return false;
       }
       copyValueListToArrayWriter(out, elements_);

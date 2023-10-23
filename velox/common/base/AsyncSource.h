@@ -21,10 +21,12 @@
 #include <folly/futures/Future.h>
 #include <functional>
 #include <memory>
+#include "velox/common/time/CpuWallTimer.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/testutil/TestValue.h"
 
 namespace facebook::velox {
 
@@ -43,6 +45,8 @@ class AsyncSource {
   // Makes an item if it is not already made. To be called on a background
   // executor.
   void prepare() {
+    common::testutil::TestValue::adjust(
+        "facebook::velox::AsyncSource::prepare", this);
     std::function<std::unique_ptr<Item>()> make = nullptr;
     {
       std::lock_guard<std::mutex> l(mutex_);
@@ -54,6 +58,7 @@ class AsyncSource {
     }
     std::unique_ptr<Item> item;
     try {
+      CpuWallTimer timer(timing_);
       item = make();
     } catch (std::exception& e) {
       std::lock_guard<std::mutex> l(mutex_);
@@ -78,6 +83,8 @@ class AsyncSource {
   // the item is preparing on the executor, waits for the item and otherwise
   // makes it on the caller thread.
   std::unique_ptr<Item> move() {
+    common::testutil::TestValue::adjust(
+        "facebook::velox::AsyncSource::move", this);
     std::function<std::unique_ptr<Item>()> make = nullptr;
     ContinueFuture wait;
     {
@@ -130,6 +137,13 @@ class AsyncSource {
     return item_ != nullptr || exception_ != nullptr;
   }
 
+  /// Returns the timing of prepare(). If the item was made on the calling
+  /// thread, the timing is 0 since only off-thread activity needs to be added
+  /// to the caller's timing.
+  const CpuWallTiming& prepareTiming() {
+    return timing_;
+  }
+
  private:
   mutable std::mutex mutex_;
   // True if 'prepare() is making the item.
@@ -138,5 +152,6 @@ class AsyncSource {
   std::unique_ptr<Item> item_;
   std::function<std::unique_ptr<Item>()> make_;
   std::exception_ptr exception_;
+  CpuWallTiming timing_;
 };
 } // namespace facebook::velox

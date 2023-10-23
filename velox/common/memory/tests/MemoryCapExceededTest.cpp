@@ -15,11 +15,11 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MallocAllocator.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-#include <gmock/gmock.h>
 #include <re2/re2.h>
 
 DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
@@ -192,7 +192,7 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
       std::make_shared<memory::MallocAllocator>(64LL << 20),
       std::vector<std::string>{
           "allocateContiguous failed with .* pages",
-          "unlimited max capacity unlimited capacity used .* available .*",
+          "max capacity 128.00MB unlimited capacity used .* available .*",
           ".* reservation .used .*MB, reserved .*MB, min 0B. counters",
           "allocs .*, frees .*, reserves .*, releases .*, collisions .*"}});
   const memory::MmapAllocator::Options options = {.capacity = 64LL << 20};
@@ -200,11 +200,13 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
       std::make_shared<memory::MmapAllocator>(options),
       std::vector<std::string>{
           "allocateContiguous failed with .* pages",
-          "unlimited max capacity unlimited capacity used .* available .*",
+          "max capacity 128.00MB unlimited capacity used .* available .*",
           ".* reservation .used .*MB, reserved .*MB, min .*B. counters",
           ".*, frees .*, reserves .*, releases .*, collisions .*"}});
   for (auto& allocExp : allocatorExpectations) {
-    memory::MemoryManager manager({.allocator = allocExp.first.get()});
+    memory::MemoryManager manager(
+        {.capacity = (int64_t)allocExp.first->capacity(),
+         .allocator = allocExp.first.get()});
 
     vector_size_t size = 1'024;
     // This limit ensures that only the Aggregation Operator fails.

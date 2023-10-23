@@ -52,15 +52,21 @@ FilterProject::FilterProject(
           operatorId,
           project ? project->id() : filter->id(),
           "FilterProject"),
-      hasFilter_(filter != nullptr) {
+      hasFilter_(filter != nullptr),
+      project_(project),
+      filter_(filter) {}
+
+void FilterProject::initialize() {
+  Operator::initialize();
   std::vector<core::TypedExprPtr> allExprs;
   if (hasFilter_) {
-    allExprs.push_back(filter->filter());
+    VELOX_CHECK_NOT_NULL(filter_);
+    allExprs.push_back(filter_->filter());
   }
-  if (project) {
-    const auto& inputType = project->sources()[0]->outputType();
-    for (column_index_t i = 0; i < project->projections().size(); i++) {
-      auto& projection = project->projections()[i];
+  if (project_) {
+    const auto& inputType = project_->sources()[0]->outputType();
+    for (column_index_t i = 0; i < project_->projections().size(); i++) {
+      auto& projection = project_->projections()[i];
       bool identityProjection = checkAddIdentityProjection(
           projection, inputType, i, identityProjections_);
       if (!identityProjection) {
@@ -78,8 +84,8 @@ FilterProject::FilterProject(
   exprs_ = makeExprSetFromFlag(std::move(allExprs), operatorCtx_->execCtx());
 
   if (numExprs_ > 0 && !identityProjections_.empty()) {
-    auto inputType = project ? project->sources()[0]->outputType()
-                             : filter->sources()[0]->outputType();
+    const auto inputType = project_ ? project_->sources()[0]->outputType()
+                                    : filter_->sources()[0]->outputType();
     std::unordered_set<uint32_t> distinctFieldIndices;
     for (auto field : exprs_->distinctFields()) {
       auto fieldIndex = inputType->getChildIdx(field->name());
@@ -92,21 +98,13 @@ FilterProject::FilterProject(
       }
     }
   }
+  filter_.reset();
+  project_.reset();
 }
 
 void FilterProject::addInput(RowVectorPtr input) {
   input_ = std::move(input);
   numProcessedInputRows_ = 0;
-  if (!resultProjections_.empty()) {
-    results_.resize(resultProjections_.back().inputChannel + 1);
-    for (auto& result : results_) {
-      if (result && result.unique() && result->isFlatEncoding()) {
-        BaseVector::prepareForReuse(result, 0);
-      } else {
-        result.reset();
-      }
-    }
-  }
 }
 
 bool FilterProject::allInputProcessed() {
@@ -145,20 +143,9 @@ RowVectorPtr FilterProject::getOutput() {
   if (!hasFilter_) {
     numProcessedInputRows_ = size;
     VELOX_CHECK(!isIdentityProjection_);
-    project(*rows, evalCtx);
+    auto results = project(*rows, evalCtx);
 
-    if (results_.size() > 0) {
-      auto outCol = results_[0];
-      if (outCol && outCol->isCodegenOutput()) {
-        // codegen can output different size when it merged filter + projection
-        size = outCol->size();
-        if (size == 0) { // all filtered out
-          return nullptr;
-        }
-      }
-    }
-
-    return fillOutput(size, nullptr);
+    return fillOutput(size, nullptr, results);
   }
 
   // evaluate filter
@@ -172,26 +159,34 @@ RowVectorPtr FilterProject::getOutput() {
   bool allRowsSelected = (numOut == size);
 
   // evaluate projections (if present)
+  std::vector<VectorPtr> results;
   if (!isIdentityProjection_) {
     if (!allRowsSelected) {
       rows->setFromBits(filterEvalCtx_.selectedBits->as<uint64_t>(), size);
     }
-    project(*rows, evalCtx);
+    results = project(*rows, evalCtx);
   }
 
   return fillOutput(
-      numOut, allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices);
+      numOut,
+      allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices,
+      results);
 }
 
-void FilterProject::project(const SelectivityVector& rows, EvalCtx& evalCtx) {
+std::vector<VectorPtr> FilterProject::project(
+    const SelectivityVector& rows,
+    EvalCtx& evalCtx) {
+  std::vector<VectorPtr> results;
   exprs_->eval(
-      hasFilter_ ? 1 : 0, numExprs_, !hasFilter_, rows, evalCtx, results_);
+      hasFilter_ ? 1 : 0, numExprs_, !hasFilter_, rows, evalCtx, results);
+  return results;
 }
 
 vector_size_t FilterProject::filter(
     EvalCtx& evalCtx,
     const SelectivityVector& allRows) {
-  exprs_->eval(0, 1, true, allRows, evalCtx, results_);
-  return processFilterResults(results_[0], allRows, filterEvalCtx_, pool());
+  std::vector<VectorPtr> results;
+  exprs_->eval(0, 1, true, allRows, evalCtx, results);
+  return processFilterResults(results[0], allRows, filterEvalCtx_, pool());
 }
 } // namespace facebook::velox::exec

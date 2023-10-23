@@ -58,7 +58,7 @@ class SharedArbitrator : public MemoryArbitrator {
 
   Stats stats() const final;
 
-  std::string kind() override;
+  std::string kind() const override;
 
   std::string toString() const final;
 
@@ -86,6 +86,7 @@ class SharedArbitrator : public MemoryArbitrator {
     MemoryPool* const requestor_;
     SharedArbitrator* const arbitrator_;
     const std::chrono::steady_clock::time_point startTime_;
+    const ScopedMemoryArbitrationContext arbitrationCtx_;
   };
 
   // Invoked to check if the memory growth will exceed the memory pool's max
@@ -191,11 +192,14 @@ class SharedArbitrator : public MemoryArbitrator {
   std::vector<ContinuePromise> waitPromises_;
 
   tsan_atomic<uint64_t> numRequests_{0};
+  std::atomic<uint64_t> numSucceeded_{0};
   tsan_atomic<uint64_t> numAborted_{0};
-  std::atomic<uint64_t> numFailures_{0};
+  tsan_atomic<uint64_t> numFailures_{0};
   tsan_atomic<uint64_t> queueTimeUs_{0};
   tsan_atomic<uint64_t> arbitrationTimeUs_{0};
   tsan_atomic<uint64_t> numShrunkBytes_{0};
   tsan_atomic<uint64_t> numReclaimedBytes_{0};
+  tsan_atomic<uint64_t> reclaimTimeUs_{0};
+  tsan_atomic<uint64_t> numNonReclaimableAttempts_{0};
 };
 } // namespace facebook::velox::memory

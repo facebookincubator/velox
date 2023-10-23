@@ -42,7 +42,7 @@ jobs:
 
       - name: "Build"
         run: |
-          make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+          make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
           ccache -s
 
       - name: "Run Presto Fuzzer"
@@ -66,13 +66,14 @@ jobs:
           && echo -e "\n\nFuzzer run finished successfully."
 
       - name: Archive production artifacts
+        if: always()
         uses: actions/upload-artifact@v3
         with:
           name: presto-fuzzer-failure-artifacts
           path: |
             /tmp/fuzzer_repro
-            
-  
+
+
 
   linux-spark-fuzzer-run:
     runs-on: 8-core
@@ -93,7 +94,7 @@ jobs:
 
       - name: "Build"
         run: |
-          make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+          make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
           ccache -s
 
       - name: "Run Spark Fuzzer"
@@ -115,6 +116,7 @@ jobs:
             && echo -e "\n\nSpark Fuzzer run finished successfully."
 
       - name: Archive Spark production artifacts
+        if: always()
         uses: actions/upload-artifact@v3
         with:
           name: spark-fuzzer-failure-artifacts
@@ -132,8 +134,9 @@ jobs:
                 --minloglevel=0 \
                 --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro \
           && echo -e "\n\nSpark Aggregation Fuzzer run finished successfully."
-        
+
       - name: Archive Spark aggregate production artifacts
+        if: always()
         uses: actions/upload-artifact@v3
         with:
           name: spark-agg-fuzzer-failure-artifacts
@@ -160,7 +163,7 @@ jobs:
 
       - name: "Build"
         run: |
-          make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+          make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
           ccache -s
 
       - name: "Run Aggregate Fuzzer"
@@ -177,6 +180,7 @@ jobs:
             && echo -e "\n\nAggregation fuzzer run finished successfully."
 
       - name: Archive aggregate production artifacts
+        if: always()
         uses: actions/upload-artifact@v3
         with:
           name: aggregate-fuzzer-failure-artifacts
@@ -202,7 +206,7 @@ jobs:
 
       - name: "Build"
         run: |
-          make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+          make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
           ccache -s
 
       - name: "Run Aggregate Fuzzer"
@@ -218,6 +222,7 @@ jobs:
             && echo -e "\n\nAggregation fuzzer run finished successfully."
 
       - name: Archive aggregate production artifacts
+        if: always()
         uses: actions/upload-artifact@v3
         with:
           name: join-fuzzer-failure-artifacts

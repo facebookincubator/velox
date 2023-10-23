@@ -553,8 +553,8 @@ TEST_F(DriverTest, pause) {
   // Make sure CPU usage tracking is enabled.
   std::unordered_map<std::string, std::string> queryConfig{
       {core::QueryConfig::kOperatorTrackCpuUsage, "true"}};
-  params.queryCtx =
-      std::make_shared<core::QueryCtx>(executor_.get(), std::move(queryConfig));
+  params.queryCtx = std::make_shared<core::QueryCtx>(
+      executor_.get(), core::QueryConfig(std::move(queryConfig)));
   int32_t numRead = 0;
   readResults(params, ResultOperation::kPause, 370'000'000, &numRead);
   // Each thread will fully read the 1M rows in values.
@@ -1312,4 +1312,54 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionCalledFromOffThread) {
   }
   ASSERT_ANY_THROW(driver->task()->enterSuspended(driver->state()));
   ASSERT_ANY_THROW(driver->task()->leaveSuspended(driver->state()));
+}
+
+DEBUG_ONLY_TEST_F(DriverTest, driverThreadContext) {
+  ASSERT_TRUE(driverThreadContext() == nullptr);
+  std::thread nonDriverThread(
+      [&]() { ASSERT_TRUE(driverThreadContext() == nullptr); });
+  nonDriverThread.join();
+
+  std::atomic<Task*> capturedTask{nullptr};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(const exec::Values*)>([&](const exec::Values* values) {
+        ASSERT_TRUE(driverThreadContext() != nullptr);
+        capturedTask = driverThreadContext()->driverCtx.task.get();
+      }));
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 4; ++i) {
+    batches.push_back(
+        makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})}));
+  }
+  createDuckDbTable(batches);
+
+  auto plan = PlanBuilder().values(batches).planNode();
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .assertResults("SELECT * FROM tmp");
+  ASSERT_EQ(task.get(), capturedTask);
+}
+
+DEBUG_ONLY_TEST_F(DriverTest, nonReclaimableSection) {
+  // The driver framework will set non-reclaimable section flag when start
+  // executing operator method.
+  // Checks before getOutput method called.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(const exec::Values*)>([&](const exec::Values* values) {
+        ASSERT_FALSE(values->testingNonReclaimable());
+      }));
+  // Checks inside getOutput method execution.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(const exec::Values*)>([&](const exec::Values* values) {
+        ASSERT_TRUE(values->testingNonReclaimable());
+      }));
+
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 2; ++i) {
+    batches.push_back(makeRowVector({makeFlatVector<int32_t>({1, 2, 3})}));
+  }
+  auto plan = PlanBuilder().values(batches).planNode();
+  ASSERT_NO_THROW(AssertQueryBuilder(plan).copyResults(pool()));
 }

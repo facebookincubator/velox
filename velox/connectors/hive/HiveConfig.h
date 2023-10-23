@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include <folly/Optional.h>
+#include <optional>
 #include <string>
 
 namespace facebook::velox {
@@ -46,7 +46,8 @@ class HiveConfig {
 
   /// Whether new data can be inserted into an unpartition table.
   /// Velox currently does not support appending data to existing partitions.
-  static constexpr const char* kImmutablePartitions = "immutable_partitions";
+  static constexpr const char* kImmutablePartitions =
+      "hive.immutable-partitions";
 
   /// Virtual addressing is used for AWS S3 and is the default
   /// (path-style-access is false). Path access style is used for some on-prem
@@ -80,28 +81,48 @@ class HiveConfig {
   static constexpr const char* kS3IamRoleSessionName =
       "hive.s3.iam-role-session-name";
 
-  // The GCS storage endpoint server.
+  /// The GCS storage endpoint server.
   static constexpr const char* kGCSEndpoint = "hive.gcs.endpoint";
 
-  // The GCS storage scheme, https for default credentials.
+  /// The GCS storage scheme, https for default credentials.
   static constexpr const char* kGCSScheme = "hive.gcs.scheme";
 
-  // The GCS service account configuration as json string
+  /// The GCS service account configuration as json string
   static constexpr const char* kGCSCredentials = "hive.gcs.credentials";
 
-  // Read the source file column name as lower case.
+  /// Maps table field names to file field names using names, not indices.
+  static constexpr const char* kOrcUseColumnNames = "hive.orc.use-column-names";
+
+  /// Reads the source file column name as lower case.
   static constexpr const char* kFileColumnNamesReadAsLowerCase =
       "file_column_names_read_as_lower_case";
 
-  // Set the max coalesce bytes for a request.
+  /// Sets the max coalesce bytes for a request.
   static constexpr const char* kMaxCoalescedBytes = "max-coalesced-bytes";
 
-  // Set the max coalesce distance bytes for combining requests.
+  /// Sets the max coalesce distance bytes for combining requests.
   static constexpr const char* kMaxCoalescedDistanceBytes =
       "max-coalesced-distance-bytes";
 
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
+
+  /// The memory arbitrator might flush a file write to reclaim used memory if
+  /// its buffered data size is no less than this minimum threshold. The
+  /// buffered data size is measured by a file writer's memory footprint.
+  static constexpr const char* kFileWriterFlushThresholdBytes =
+      "file_writer_flush_threshold_bytes";
+
+  // TODO: Refactor and merge config and session property.
+  static constexpr const char* kOrcWriterMaxStripeSize =
+      "orc_optimized_writer_max_stripe_size";
+  static constexpr const char* kOrcWriterMaxStripeSizeConfig =
+      "hive.orc.writer.stripe-max-size";
+
+  static constexpr const char* kOrcWriterMaxDictionaryMemory =
+      "orc_optimized_writer_max_dictionary_memory";
+  static constexpr const char* kOrcWriterMaxDictionaryMemoryConfig =
+      "hive.orc.writer.dictionary-max-memory";
 
   static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* config);
@@ -134,6 +155,8 @@ class HiveConfig {
 
   static std::string gcsCredentials(const Config* config);
 
+  static bool isOrcUseColumnNames(const Config* config);
+
   static bool isFileColumnNamesReadAsLowerCase(const Config* config);
 
   static int64_t maxCoalescedBytes(const Config* config);
@@ -141,6 +164,16 @@ class HiveConfig {
   static int32_t maxCoalescedDistanceBytes(const Config* config);
 
   static int32_t numCacheFileHandles(const Config* config);
+
+  static uint64_t fileWriterFlushThresholdBytes(const Config* config);
+
+  static uint64_t getOrcWriterMaxStripeSize(
+      const Config* connectorQueryCtxConfig,
+      const Config* connectorPropertiesConfig);
+
+  static uint64_t getOrcWriterMaxDictionaryMemory(
+      const Config* connectorQueryCtxConfig,
+      const Config* connectorPropertiesConfig);
 };
 
 } // namespace facebook::velox::connector::hive

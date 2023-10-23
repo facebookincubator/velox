@@ -28,7 +28,9 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
       memory::MemoryPool& memPool,
       std::unique_ptr<Decompressor> decompressor,
       const dwio::common::encryption::Decrypter* decrypter,
-      const std::string& streamDebugInfo)
+      const std::string& streamDebugInfo,
+      bool useRawDecompression = false,
+      size_t compressedLength = 0)
       : input_(std::move(inStream)),
         pool_(memPool),
         inputBuffer_(pool_),
@@ -38,14 +40,26 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
     DWIO_ENSURE(
         decompressor_ || decrypter_,
         "one of decompressor or decryptor is required");
+    DWIO_ENSURE(
+        !useRawDecompression || compressedLength > 0,
+        "For raw decompression, compressedLength should be greater than zero");
+
+    if (useRawDecompression) {
+      state_ = State::START;
+      remainingLength_ = compressedLength;
+    }
   }
 
   bool Next(const void** data, int32_t* size) override;
   void BackUp(int32_t count) override;
+
+  // NOTE: This always returns true.
   bool Skip(int32_t count) override;
+
   google::protobuf::int64 ByteCount() const override {
-    return bytesReturned_;
+    return bytesReturned_ + pendingSkip_;
   }
+
   void seekToPosition(dwio::common::PositionProvider& position) override;
   std::string getName() const override {
     return folly::to<std::string>(
@@ -71,13 +85,24 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
   PagedInputStream(
       std::unique_ptr<SeekableInputStream> inStream,
       memory::MemoryPool& memPool,
-      const std::string& streamDebugInfo)
+      const std::string& streamDebugInfo,
+      bool useRawDecompression = false,
+      size_t compressedLength = 0)
       : input_(std::move(inStream)),
         pool_(memPool),
         inputBuffer_(pool_),
         decompressor_{nullptr},
         decrypter_{nullptr},
-        streamDebugInfo_{streamDebugInfo} {}
+        streamDebugInfo_{streamDebugInfo} {
+    DWIO_ENSURE(
+        !useRawDecompression || compressedLength > 0,
+        "For raw decompression, compressedLength should be greater than zero");
+
+    if (useRawDecompression) {
+      state_ = State::START;
+      remainingLength_ = compressedLength;
+    }
+  }
 
   void prepareOutputBuffer(uint64_t uncompressedLength);
 
@@ -93,6 +118,8 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
 
   // make sure input is contiguous for decompression/decryption
   const char* ensureInput(size_t availableInputBytes);
+
+  virtual bool readOrSkip(const void** data, int32_t* size);
 
   // input stream where to read compressed/encrypted data
   std::unique_ptr<SeekableInputStream> input_;
@@ -136,7 +163,7 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
   // The first byte after the last range returned by 'input_->Next()'.
   const char* inputBufferPtrEnd_{nullptr};
 
-  // bytes returned by this stream
+  // Bytes returned or skipped by this stream, not including pendingSkip_.
   uint64_t bytesReturned_{0};
 
   // Size returned by the previous call to Next().
@@ -148,7 +175,11 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
   // decrypter
   const dwio::common::encryption::Decrypter* decrypter_;
 
+  int64_t pendingSkip_{0};
+
  private:
+  bool skipAllPending();
+
   // Stream Debug Info
   const std::string streamDebugInfo_;
 };

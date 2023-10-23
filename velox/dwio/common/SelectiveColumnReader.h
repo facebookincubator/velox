@@ -529,6 +529,13 @@ class SelectiveColumnReader {
     }
   }
 
+  const BufferPtr& resultNulls() const {
+    static const BufferPtr kNullBuffer;
+    return !anyNulls_        ? kNullBuffer
+        : returnReaderNulls_ ? nullsInReadRange_
+                             : resultNulls_;
+  }
+
   memory::MemoryPool& memoryPool_;
 
   // The file data type
@@ -545,7 +552,8 @@ class SelectiveColumnReader {
   // The requested data type
   TypePtr requestedType_;
 
-  // Row number after last read row, relative to stripe start.
+  // Row number after last read row, relative to the ORC stripe or Parquet
+  // Rowgroup start.
   vector_size_t readOffset_ = 0;
 
   // Number of parent nulls between 'readOffset_' and 'parentNullsRecordedTo_'.

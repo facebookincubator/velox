@@ -24,10 +24,11 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/LocalPlanner.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
 #if CODEGEN_ENABLED == 1
 #include "velox/experimental/codegen/CodegenLogger.h"
@@ -260,19 +261,10 @@ Task::Task(
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
-      bufferManager_(PartitionedOutputBufferManager::getInstance()) {}
+      bufferManager_(OutputBufferManager::getInstance()) {}
 
 Task::~Task() {
-  try {
-    if (hasPartitionedOutput()) {
-      if (auto bufferManager = bufferManager_.lock()) {
-        bufferManager->removeTask(taskId_);
-      }
-    }
-  } catch (const std::exception& e) {
-    LOG(WARNING) << "Caught exception in Task " << taskId()
-                 << " destructor: " << e.what();
-  }
+  TestValue::adjust("facebook::velox::exec::Task::~Task", this);
 
   removeSpillDirectoryIfExists();
 }
@@ -345,7 +337,15 @@ std::unique_ptr<memory::MemoryReclaimer> Task::createNodeReclaimer(
   // Sets memory reclaimer for the parent node memory pool on the first child
   // operator construction which has set memory reclaimer.
   return isHashJoinNode ? HashJoinMemoryReclaimer::create()
-                        : memory::MemoryReclaimer::create();
+                        : exec::MemoryReclaimer::create();
+}
+
+std::unique_ptr<memory::MemoryReclaimer> Task::createExchangeClientReclaimer()
+    const {
+  if (pool()->reclaimer() == nullptr) {
+    return nullptr;
+  }
+  return exec::MemoryReclaimer::create();
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Task::createTaskReclaimer() {
@@ -393,8 +393,11 @@ velox::memory::MemoryPool* Task::addMergeSourcePool(
     uint32_t sourceId) {
   std::lock_guard<std::mutex> l(mutex_);
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addLeafChild(fmt::format(
-      "mergeExchangeClient.{}.{}.{}", planNodeId, pipelineId, sourceId)));
+  childPools_.push_back(nodePool->addLeafChild(
+      fmt::format(
+          "mergeExchangeClient.{}.{}.{}", planNodeId, pipelineId, sourceId),
+      true,
+      createExchangeClientReclaimer()));
   return childPools_.back().get();
 }
 
@@ -403,7 +406,9 @@ velox::memory::MemoryPool* Task::addExchangeClientPool(
     uint32_t pipelineId) {
   auto* nodePool = getOrAddNodePool(planNodeId);
   childPools_.push_back(nodePool->addLeafChild(
-      fmt::format("exchangeClient.{}.{}", planNodeId, pipelineId)));
+      fmt::format("exchangeClient.{}.{}", planNodeId, pipelineId),
+      true,
+      createExchangeClientReclaimer()));
   return childPools_.back().get();
 }
 
@@ -470,6 +475,12 @@ RowVectorPtr Task::next(ContinueFuture* future) {
     drivers.reserve(numDriversUngrouped_);
     createSplitGroupStateLocked(kUngroupedGroupId);
     createDriversLocked(self, kUngroupedGroupId, drivers);
+    if (self->pool_->stats().currentBytes != 0) {
+      VELOX_FAIL(
+          "Unexpected memory pool allocations during task[{}] driver initialization: {}",
+          self->taskId_,
+          self->pool_->treeMemoryUsage());
+    }
 
     drivers_ = std::move(drivers);
   }
@@ -540,7 +551,7 @@ void Task::start(
     uint32_t maxDrivers,
     uint32_t concurrentSplitGroups) {
   facebook::velox::process::ThreadDebugInfo threadDebugInfo{
-      self->queryCtx()->queryId(), self->taskId_};
+      self->queryCtx()->queryId(), self->taskId_, nullptr};
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
   try {
     VELOX_CHECK_GE(
@@ -614,7 +625,7 @@ void Task::start(
     VELOX_CHECK_NOT_NULL(
         bufferManager,
         "Unable to initialize task. "
-        "PartitionedOutputBufferManager was already destructed");
+        "OutputBufferManager was already destructed");
 
     // In this loop we prepare the global state of pipelines: partitioned output
     // buffer and exchange client(s).
@@ -665,6 +676,12 @@ void Task::start(
       drivers.reserve(self->numDriversUngrouped_);
       self->createSplitGroupStateLocked(kUngroupedGroupId);
       self->createDriversLocked(self, kUngroupedGroupId, drivers);
+      if (self->pool_->stats().currentBytes != 0) {
+        VELOX_FAIL(
+            "Unexpected memory pool allocations during task[{}] driver initialization: {}",
+            self->taskId_,
+            self->pool_->treeMemoryUsage());
+      }
 
       // Prevent the connecting structures from being cleaned up before all
       // split groups are finished during the grouped execution mode.
@@ -848,6 +865,7 @@ void Task::createDriversLocked(
     std::shared_ptr<Task>& self,
     uint32_t splitGroupId,
     std::vector<std::shared_ptr<Driver>>& out) {
+  TestValue::adjust("facebook::velox::exec::Task::createDriversLocked", this);
   const bool groupedExecutionDrivers = (splitGroupId != kUngroupedGroupId);
   auto& splitGroupState = self->splitGroupStates_[splitGroupId];
   const auto numPipelines = driverFactories_.size();
@@ -1358,7 +1376,7 @@ bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
   VELOX_CHECK_NOT_NULL(
       bufferManager,
       "Unable to initialize task. "
-      "PartitionedOutputBufferManager was already destructed");
+      "OutputBufferManager was already destructed");
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (noMoreOutputBuffers_) {
@@ -1748,7 +1766,13 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   for (auto& [planNodeId, splits] : remainingRemoteSplits) {
     auto client = getExchangeClient(planNodeId);
     for (auto& split : splits.first) {
-      addRemoteSplit(planNodeId, split);
+      try {
+        addRemoteSplit(planNodeId, split);
+      } catch (VeloxRuntimeError& ex) {
+        LOG(WARNING)
+            << "Failed to add remaining remote splits during task termination: "
+            << ex.what();
+      }
     }
     if (splits.second) {
       client->noMoreRemoteTasks();
@@ -1829,6 +1853,22 @@ TaskStats Task::taskStats() const {
     } else {
       ++taskStats.numBlockedDrivers[driver->blockingReason()];
     }
+    // Find the longest running operator.
+    auto ocs = driver->opCallStatus();
+    if (!ocs.empty()) {
+      const auto callDuration = ocs.callDuration();
+      if (callDuration > taskStats.longestRunningOpCallMs) {
+        taskStats.longestRunningOpCall =
+            ocs.formatCall(driver->findOperatorNoThrow(ocs.opId), ocs.method);
+        taskStats.longestRunningOpCallMs = callDuration;
+      }
+    }
+  }
+
+  // Don't bother with operator calls running under 30 seconds.
+  if (taskStats.longestRunningOpCallMs < 30000) {
+    taskStats.longestRunningOpCall.clear();
+    taskStats.longestRunningOpCallMs = 0;
   }
 
   auto bufferManager = bufferManager_.lock();
@@ -1929,6 +1969,21 @@ std::string Task::toString() const {
   return out.str();
 }
 
+std::string Task::toShortJsonString() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  folly::dynamic obj = folly::dynamic::object;
+  obj["shortId"] = shortId(taskId_);
+  obj["id"] = taskId_;
+  obj["state"] = taskStateString(state_);
+  obj["numRunningDrivers"] = numRunningDrivers_;
+  obj["numTotalDrivers_"] = numTotalDrivers_;
+  obj["numFinishedDrivers"] = numFinishedDrivers_;
+  obj["numThreads"] = numThreads_;
+  obj["terminateRequested_"] = std::to_string(terminateRequested_);
+  obj["pauseRequested_"] = std::to_string(pauseRequested_);
+  return folly::toPrettyJson(obj);
+}
+
 std::string Task::toJsonString() const {
   std::lock_guard<std::mutex> l(mutex_);
   folly::dynamic obj = folly::dynamic::object;
@@ -1961,7 +2016,8 @@ std::string Task::toJsonString() const {
   folly::dynamic driverObj = folly::dynamic::object;
   int index = 0;
   for (auto& driver : drivers_) {
-    driverObj[std::to_string(index++)] = driver ? driver->toString() : "null";
+    driverObj[std::to_string(index++)] =
+        driver ? driver->toJsonString() : "null";
   }
   obj["drivers"] = driverObj;
 
@@ -1973,7 +2029,7 @@ std::string Task::toJsonString() const {
 
   folly::dynamic exchangeClients = folly::dynamic::object;
   for (const auto& [id, client] : exchangeClientByPlanNode_) {
-    exchangeClients[id] = client->toString();
+    exchangeClients[id] = client->toJsonString();
   }
   obj["exchangeClientByPlanNode"] = exchangeClients;
 
@@ -2396,7 +2452,8 @@ std::unique_ptr<memory::MemoryReclaimer> Task::MemoryReclaimer::create(
 
 uint64_t Task::MemoryReclaimer::reclaim(
     memory::MemoryPool* pool,
-    uint64_t targetBytes) {
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
   auto task = ensureTask();
   if (FOLLY_UNLIKELY(task == nullptr)) {
     return 0;
@@ -2415,7 +2472,7 @@ uint64_t Task::MemoryReclaimer::reclaim(
   if (task->isCancelled()) {
     return 0;
   }
-  return memory::MemoryReclaimer::reclaim(pool, targetBytes);
+  return memory::MemoryReclaimer::reclaim(pool, targetBytes, stats);
 }
 
 void Task::MemoryReclaimer::abort(

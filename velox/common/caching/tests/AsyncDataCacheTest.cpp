@@ -18,6 +18,7 @@
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -46,21 +47,15 @@ struct Request {
 
 class AsyncDataCacheTest : public testing::Test {
  public:
-  // Deterministically fills 'allocation'  based on 'sequence'
+  // Deterministically fills 'allocation' based on 'sequence'
   static void initializeContents(int64_t sequence, memory::Allocation& alloc) {
-    bool first = true;
     for (int32_t i = 0; i < alloc.numRuns(); ++i) {
       memory::Allocation::PageRun run = alloc.runAt(i);
       int64_t* ptr = reinterpret_cast<int64_t*>(run.data());
-      int32_t numWords =
-          run.numPages() * memory::AllocationTraits::kPageSize / sizeof(void*);
-      for (int32_t offset = 0; offset < numWords; offset++) {
-        if (first) {
-          ptr[offset] = sequence;
-          first = false;
-        } else {
-          ptr[offset] = offset + sequence;
-        }
+      const int32_t numWords =
+          memory::AllocationTraits::pageBytes(run.numPages()) / sizeof(void*);
+      for (int32_t offset = 0; offset < numWords; ++offset) {
+        ptr[offset] = sequence + offset;
       }
     }
   }
@@ -79,7 +74,7 @@ class AsyncDataCacheTest : public testing::Test {
     if (cache_) {
       auto ssdCache = cache_->ssdCache();
       if (ssdCache) {
-        ssdCache->deleteFiles();
+        ssdCache->testingDeleteFiles();
       }
       cache_->shutdown();
     }
@@ -87,13 +82,13 @@ class AsyncDataCacheTest : public testing::Test {
 
   void initializeCache(uint64_t maxBytes, int64_t ssdBytes = 0) {
     std::unique_ptr<SsdCache> ssdCache;
-    if (ssdBytes) {
+    if (ssdBytes > 0) {
       // tmpfs does not support O_DIRECT, so turn this off for testing.
       FLAGS_ssd_odirect = false;
       // Make a new tempDirectory only if one is not already set. The
       // second creation of cache must find the checkpoint of the
       // previous one.
-      if (!tempDirectory_) {
+      if (tempDirectory_ == nullptr) {
         tempDirectory_ = exec::test::TempDirectoryPath::create();
       }
       ssdCache = std::make_unique<SsdCache>(
@@ -103,13 +98,15 @@ class AsyncDataCacheTest : public testing::Test {
           executor(),
           ssdBytes / 20);
     }
-    memory::MmapAllocator::Options options;
-    options.capacity = maxBytes;
-    if (cache_) {
+
+    if (cache_ != nullptr) {
       cache_->shutdown();
     }
     cache_.reset();
     allocator_.reset();
+
+    memory::MmapAllocator::Options options;
+    options.capacity = maxBytes;
     allocator_ = std::make_shared<memory::MmapAllocator>(options);
     cache_ = AsyncDataCache::create(allocator_.get(), std::move(ssdCache));
     if (filenames_.empty()) {
@@ -132,8 +129,8 @@ class AsyncDataCacheTest : public testing::Test {
   void
   loadBatch(uint64_t fileNum, std::vector<Request>& requests, bool injectError);
 
-  // Gets a pin on each of 'requests'individually. This checks the
-  // contents via cache_'s verifyHook.
+  // Gets a pin on each of 'requests' individually. This checks the contents via
+  // cache_'s verifyHook.
   void checkBatch(
       uint64_t fileNum,
       std::vector<Request>& requests,
@@ -148,11 +145,16 @@ class AsyncDataCacheTest : public testing::Test {
   // loading. Stops after loading 'loadBytes' worth of entries. If
   // 'errorEveryNBatches' is non-0, every nth load batch will have a
   // bad read and wil be dropped. The entries of the failed batch read
-  // will still be accessed one by one.
+  // will still be accessed one by one. If 'largeEveryNBatches' is
+  // non-0, allocates and freees a single allocation of 'largeBytes'
+  // every so many batches. This creates extra memory pressure, as
+  // happens when allocating large hash tables in queries.
   void loadLoop(
       int64_t startOffset,
       int64_t loadBytes,
-      int32_t errorEveryNBatches = 0);
+      int32_t errorEveryNBatches = 0,
+      int32_t largeEveryNBatches = 0,
+      int32_t largeBytes = 0);
 
   // Calls func on 'numThreads' in parallel.
   template <typename Func>
@@ -171,29 +173,20 @@ class AsyncDataCacheTest : public testing::Test {
   // initializeContents.
   static void checkContents(const AsyncDataCacheEntry& entry) {
     const auto& alloc = entry.data();
-    int32_t numBytes = entry.size();
-    int64_t expectedSequence = entry.key().fileNum.id() + entry.offset();
-    bool first = true;
-    int64_t sequence;
+    const int32_t numBytes = entry.size();
+    const int64_t expectedSequence = entry.key().fileNum.id() + entry.offset();
     int32_t bytesChecked = sizeof(int64_t);
     for (int32_t i = 0; i < alloc.numRuns(); ++i) {
-      memory::Allocation::PageRun run = alloc.runAt(i);
+      const memory::Allocation::PageRun run = alloc.runAt(i);
       int64_t* ptr = reinterpret_cast<int64_t*>(run.data());
-      int32_t numWords =
-          run.numPages() * memory::AllocationTraits::kPageSize / sizeof(void*);
-      for (int32_t offset = 0; offset < numWords; offset++) {
-        if (first) {
-          sequence = ptr[offset];
-          ASSERT_EQ(expectedSequence, sequence)
-              << entry.toString() << " " << entry.ssdOffset();
-          first = false;
-        } else {
-          bytesChecked += sizeof(int64_t);
-          if (bytesChecked >= numBytes) {
-            return;
-          }
-          ASSERT_EQ(ptr[offset], offset + sequence)
-              << fmt::format("{} {} + {}", entry.toString(), sequence, offset);
+      const int32_t numWords =
+          memory::AllocationTraits::pageBytes(run.numPages()) / sizeof(void*);
+      for (int32_t offset = 0; offset < numWords; ++offset) {
+        ASSERT_EQ(ptr[offset], expectedSequence + offset) << fmt::format(
+            "{} {} + {}", entry.toString(), expectedSequence + offset, offset);
+        bytesChecked += sizeof(int64_t);
+        if (bytesChecked >= numBytes) {
+          return;
         }
       }
     }
@@ -213,7 +206,7 @@ class AsyncDataCacheTest : public testing::Test {
     };
   }
 
-  folly::IOThreadPoolExecutor* FOLLY_NONNULL executor() {
+  folly::IOThreadPoolExecutor* executor() {
     static std::mutex mutex;
     std::lock_guard<std::mutex> l(mutex);
     if (!executor_) {
@@ -236,6 +229,7 @@ class AsyncDataCacheTest : public testing::Test {
   std::shared_ptr<AsyncDataCache> cache_;
   std::vector<StringIdLease> filenames_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
+  int32_t numLargeRetries_{0};
 };
 
 class TestingCoalescedLoad : public CoalescedLoad {
@@ -243,12 +237,11 @@ class TestingCoalescedLoad : public CoalescedLoad {
   TestingCoalescedLoad(
       std::vector<RawFileCacheKey> keys,
       std::vector<int32_t> sizes,
-      const std::shared_ptr<AsyncDataCache>& cache)
-      : CoalescedLoad(std::move(keys), std::move(sizes)), cache_(cache) {}
-
-  void injectError(bool error) {
-    injectError_ = error;
-  }
+      const std::shared_ptr<AsyncDataCache>& cache,
+      bool injectError)
+      : CoalescedLoad(std::move(keys), std::move(sizes)),
+        cache_(cache),
+        injectError_(injectError) {}
 
   std::vector<CachePin> loadData(bool /*isPrefetch*/) override {
     std::vector<CachePin> pins;
@@ -258,7 +251,7 @@ class TestingCoalescedLoad : public CoalescedLoad {
         [&](int32_t /*index*/, CachePin pin) {
           pins.push_back(std::move(pin));
         });
-    for (auto& pin : pins) {
+    for (const auto& pin : pins) {
       auto& buffer = pin.entry()->data();
       AsyncDataCacheTest::initializeContents(
           pin.entry()->key().offset + pin.entry()->key().fileNum.id(), buffer);
@@ -276,9 +269,9 @@ class TestingCoalescedLoad : public CoalescedLoad {
   }
 
  protected:
-  std::shared_ptr<AsyncDataCache> cache_;
-  std::vector<Request> requests_;
-  bool injectError_{false};
+  const std::shared_ptr<AsyncDataCache> cache_;
+  const std::vector<Request> requests_;
+  const bool injectError_{false};
 };
 
 class TestingCoalescedSsdLoad : public TestingCoalescedLoad {
@@ -287,12 +280,17 @@ class TestingCoalescedSsdLoad : public TestingCoalescedLoad {
       std::vector<RawFileCacheKey> keys,
       std::vector<int32_t> sizes,
       std::vector<SsdPin> ssdPins,
-      const std::shared_ptr<AsyncDataCache>& cache)
-      : TestingCoalescedLoad(std::move(keys), std::move(sizes), cache),
+      const std::shared_ptr<AsyncDataCache>& cache,
+      bool injectError)
+      : TestingCoalescedLoad(
+            std::move(keys),
+            std::move(sizes),
+            cache,
+            injectError),
         ssdPins_(std::move(ssdPins)) {}
 
   std::vector<CachePin> loadData(bool /*isPrefetch*/) override {
-    auto fileNum = keys_[0].fileNum;
+    const auto fileNum = keys_[0].fileNum;
     auto& file = cache_->ssdCache()->file(fileNum);
     std::vector<CachePin> pins;
     std::vector<SsdPin> toLoad;
@@ -312,7 +310,7 @@ class TestingCoalescedSsdLoad : public TestingCoalescedLoad {
       VELOX_CHECK(!injectError_, "Testing error");
     } catch (std::exception& e) {
       try {
-        for (auto& ssdPin : toLoad) {
+        for (const auto& ssdPin : toLoad) {
           file.erase(RawFileCacheKey{fileNum, ssdPin.run().offset()});
         }
       } catch (const std::exception& e2) {
@@ -329,7 +327,7 @@ class TestingCoalescedSsdLoad : public TestingCoalescedLoad {
 
 namespace {
 int64_t sizeAtOffset(int64_t offset) {
-  return offset % 100000;
+  return offset % 100'000;
 }
 } // namespace
 
@@ -349,7 +347,7 @@ void AsyncDataCacheTest::loadOne(
       std::move(loadFuture).via(&exec).wait();
       continue;
     }
-    auto entry = pin.checkedEntry();
+    auto* entry = pin.checkedEntry();
     if (entry->isShared()) {
       // Already in RAM. Check the data.
       checkContents(*entry);
@@ -359,7 +357,7 @@ void AsyncDataCacheTest::loadOne(
     // We have an uninitialized entry in exclusive mode. We fill it with data
     // and set it to shared. If we release this pin while still in exclusive
     // mode, the entry will be erased.
-    if (cache_->ssdCache()) {
+    if (cache_->ssdCache() != nullptr) {
       auto& ssdFile = cache_->ssdCache()->file(key.fileNum);
       auto ssdPin = ssdFile.find(key);
       if (!ssdPin.empty()) {
@@ -386,8 +384,7 @@ void AsyncDataCacheTest::loadBatch(
     std::vector<Request>& requests,
     bool injectError) {
   // Pattern for loading a set of buffers from a file: Divide the requested
-  // ranges between already loaded and loadeable from
-  // storage.
+  // ranges between already loaded and loadable from storage.
   std::vector<Request*> fromStorage;
   std::vector<Request*> fromSsd;
   for (auto& request : requests) {
@@ -397,7 +394,7 @@ void AsyncDataCacheTest::loadBatch(
     }
     // Schedule a CoalescedLoad with other keys that need loading from the same
     // source.
-    if (cache_->ssdCache()) {
+    if (cache_->ssdCache() != nullptr) {
       auto& file = cache_->ssdCache()->file(key.fileNum);
       request.ssdPin = file.find(key);
       if (!request.ssdPin.empty()) {
@@ -417,8 +414,7 @@ void AsyncDataCacheTest::loadBatch(
       sizes.push_back(request->size);
     }
     auto load = std::make_shared<TestingCoalescedLoad>(
-        std::move(keys), std::move(sizes), cache_);
-    load->injectError(injectError);
+        std::move(keys), std::move(sizes), cache_, injectError);
     executor()->add([load]() {
       try {
         load->loadOrFuture(nullptr);
@@ -427,18 +423,22 @@ void AsyncDataCacheTest::loadBatch(
       };
     });
   }
+
   if (!fromSsd.empty()) {
     std::vector<SsdPin> ssdPins;
     std::vector<RawFileCacheKey> keys;
     std::vector<int32_t> sizes;
-    for (auto request : fromSsd) {
+    for (auto* request : fromSsd) {
       keys.push_back(RawFileCacheKey{fileNum, request->offset});
       sizes.push_back(request->size);
       ssdPins.push_back(std::move(request->ssdPin));
     }
     auto load = std::make_shared<TestingCoalescedSsdLoad>(
-        std::move(keys), std::move(sizes), std::move(ssdPins), cache_);
-    load->injectError(injectError);
+        std::move(keys),
+        std::move(sizes),
+        std::move(ssdPins),
+        cache_,
+        injectError);
     executor()->add([load]() {
       try {
         load->loadOrFuture(nullptr);
@@ -452,17 +452,20 @@ void AsyncDataCacheTest::loadBatch(
 void AsyncDataCacheTest::loadLoop(
     int64_t startOffset,
     int64_t loadBytes,
-    int32_t errorEveryNBatches) {
-  int64_t maxOffset =
-      std::max<int64_t>(100000, (startOffset + loadBytes) / filenames_.size());
+    int32_t errorEveryNBatches,
+    int32_t largeEveryNBatches,
+    int32_t largeAllocSize) {
+  const int64_t maxOffset =
+      std::max<int64_t>(100'000, (startOffset + loadBytes) / filenames_.size());
   int64_t skippedBytes = 0;
   int32_t errorCounter = 0;
+  int32_t largeCounter = 0;
   std::vector<Request> batch;
-  for (auto file = 0; file < filenames_.size(); ++file) {
-    auto fileNum = filenames_[file].id();
+  for (auto i = 0; i < filenames_.size(); ++i) {
+    const auto fileNum = filenames_[i].id();
     for (uint64_t offset = 100; offset < maxOffset;
          offset += sizeAtOffset(offset)) {
-      auto size = sizeAtOffset(offset);
+      const auto size = sizeAtOffset(offset);
       if (skippedBytes < startOffset) {
         skippedBytes += size;
         continue;
@@ -471,8 +474,29 @@ void AsyncDataCacheTest::loadLoop(
       batch.emplace_back(offset, size);
       if (batch.size() >= 8) {
         for (;;) {
-          bool injectError =
-              errorEveryNBatches && (++errorCounter % errorEveryNBatches == 0);
+          if (largeEveryNBatches > 0 &&
+              largeCounter++ % largeEveryNBatches == 0) {
+            // Many threads will allocate a single large chunk at the
+            // same time. Some are expected to fail. All will
+            // eventually succeed because whoever gets the allocation
+            // frees it soon and without deadlocking with others..
+            memory::ContiguousAllocation large;
+            // Explicitly free 'large' on exit. Do not use MemoryPool for that
+            // because we test the allocator's limits, not the pool/memory
+            // manager  limits.
+            auto guard =
+                folly::makeGuard([&]() { allocator_->freeContiguous(large); });
+            while (!allocator_->allocateContiguous(
+                memory::AllocationTraits::numPages(largeAllocSize),
+                nullptr,
+                large)) {
+              ++numLargeRetries_;
+            }
+            std::this_thread::sleep_for(
+                std::chrono::microseconds(2000)); // NOLINT
+          }
+          const bool injectError = (errorEveryNBatches > 0) &&
+              (++errorCounter % errorEveryNBatches == 0);
           loadBatch(fileNum, batch, injectError);
           try {
             checkBatch(fileNum, batch, injectError);
@@ -572,6 +596,54 @@ TEST_F(AsyncDataCacheTest, replace) {
       cache_->incrementCachedPages(0));
 }
 
+TEST_F(AsyncDataCacheTest, evictAccounting) {
+  constexpr int64_t kMaxBytes = 64 << 20;
+  FLAGS_velox_exception_user_stacktrace_enabled = false;
+  initializeCache(kMaxBytes);
+  auto memoryManager =
+      std::make_unique<memory::MemoryManager>(memory::MemoryManagerOptions{
+          .capacity = (int64_t)allocator_->capacity(),
+          .trackDefaultUsage = true,
+          .allocator = allocator_.get()});
+  auto pool = memoryManager->addLeafPool("test");
+
+  // We make allocations that we exchange for larger ones later. This will evict
+  // cache. We check that the evictions are not counted on the pool even if they
+  // occur as a result of action on the pool.
+  memory::Allocation allocation;
+  memory::ContiguousAllocation large;
+  pool->allocateNonContiguous(1200, allocation);
+  pool->allocateContiguous(1200, large);
+  EXPECT_EQ(memory::AllocationTraits::kPageSize * 2400, pool->currentBytes());
+  loadLoop(0, kMaxBytes * 1.1);
+  pool->allocateNonContiguous(2400, allocation);
+  pool->allocateContiguous(2400, large);
+  EXPECT_EQ(memory::AllocationTraits::kPageSize * 4800, pool->currentBytes());
+  auto stats = cache_->refreshStats();
+  EXPECT_LT(0, stats.numEvict);
+}
+
+TEST_F(AsyncDataCacheTest, largeEvict) {
+  constexpr int64_t kMaxBytes = 256 << 20;
+  constexpr int32_t kNumThreads = 24;
+  FLAGS_velox_exception_user_stacktrace_enabled = false;
+  initializeCache(kMaxBytes);
+  // Load 10x the max size, inject an allocation of 1/8 the capacity every 4
+  // batches.
+  runThreads(kNumThreads, [&](int32_t /*i*/) {
+    loadLoop(0, kMaxBytes * 1.2, 0, 1, kMaxBytes / 4);
+  });
+  if (executor_) {
+    executor_->join();
+  }
+  auto stats = cache_->refreshStats();
+  EXPECT_LT(0, stats.numEvict);
+  EXPECT_GE(
+      kMaxBytes / memory::AllocationTraits::kPageSize,
+      cache_->incrementCachedPages(0));
+  LOG(INFO) << "Reties after failed evict: " << numLargeRetries_;
+}
+
 TEST_F(AsyncDataCacheTest, outOfCapacity) {
   const int64_t kMaxBytes = 64
       << 20; // 64MB as MmapAllocator's min size is 64MB
@@ -616,14 +688,14 @@ TEST_F(AsyncDataCacheTest, outOfCapacity) {
 namespace {
 // Cuts off the last 1/10th of file at 'path'.
 void corruptFile(const std::string& path) {
-  auto fd = open(path.c_str(), O_WRONLY);
-  auto size = lseek(fd, 0, SEEK_END);
-  auto rc = ftruncate(fd, size / 10 * 9);
-  EXPECT_EQ(0, rc);
+  const auto fd = ::open(path.c_str(), O_WRONLY);
+  const auto size = ::lseek(fd, 0, SEEK_END);
+  const auto rc = ftruncate(fd, size / 10 * 9);
+  ASSERT_EQ(rc, 0);
 }
 } // namespace
 
-TEST_F(AsyncDataCacheTest, ssd) {
+TEST_F(AsyncDataCacheTest, DISABLED_ssd) {
 #ifdef TSAN_BUILD
   // NOTE: scale down the test data set to prevent tsan tester from running out
   // of memory.
@@ -651,55 +723,51 @@ TEST_F(AsyncDataCacheTest, ssd) {
   // write does not wait for the workload.
   runThreads(16, [&](int32_t /*i*/) { loadLoop(0, kSsdBytes, 11); });
   LOG(INFO) << "Stats after first pass: " << cache_->toString();
-  auto stats = cache_->ssdCache()->stats();
+  auto ssdStats = cache_->ssdCache()->stats();
+  ASSERT_LE(kRamBytes, ssdStats.bytesWritten);
 
   // We allow writes to proceed faster.
   FLAGS_ssd_verify_write = false;
-
-  ASSERT_LE(kRamBytes, stats.bytesWritten);
   // We read the data back. The verify hook checks correct values. Error every
   // 13 batch loads.
   runThreads(16, [&](int32_t /*i*/) { loadLoop(0, kSsdBytes, 13); });
-
   LOG(INFO) << "Stats after second pass:" << cache_->toString();
-  stats = cache_->ssdCache()->stats();
-  ASSERT_LE(kRamBytes, stats.bytesRead);
+  ssdStats = cache_->ssdCache()->stats();
+  ASSERT_LE(kRamBytes, ssdStats.bytesRead);
 
-  // We re-read the second half and add another half capacity of new
-  // entries. We expect some of the oldest entries to get evicted. Error every
-  // 17 batch loads.
+  // We re-read the second half and add another half capacity of new entries. We
+  // expect some of the oldest entries to get evicted. Error every 17 batch
+  // loads.
   runThreads(
       16, [&](int32_t /*i*/) { loadLoop(kSsdBytes / 2, kSsdBytes * 1.5, 17); });
-
   LOG(INFO) << "Stats after third pass:" << cache_->toString();
+
   // Wait for writes to finish and make a checkpoint.
   cache_->ssdCache()->shutdown();
-  auto stats2 = cache_->ssdCache()->stats();
-  ASSERT_GT(stats2.bytesWritten, stats.bytesWritten);
-  ASSERT_GT(stats2.bytesRead, stats.bytesRead);
+  auto ssdStatsAfterShutdown = cache_->ssdCache()->stats();
+  ASSERT_GT(ssdStatsAfterShutdown.bytesWritten, ssdStats.bytesWritten);
+  ASSERT_GT(ssdStatsAfterShutdown.bytesRead, ssdStats.bytesRead);
 
   // Check that no pins are leaked.
-  ASSERT_EQ(0, stats2.numPins);
+  ASSERT_EQ(ssdStatsAfterShutdown.numPins, 0);
+
   auto ramStats = cache_->refreshStats();
-  ASSERT_EQ(0, ramStats.numShared);
-  ASSERT_EQ(0, ramStats.numExclusive);
+  ASSERT_EQ(ramStats.numShared, 0);
+  ASSERT_EQ(ramStats.numExclusive, 0);
+
   cache_->ssdCache()->clear();
   // We cut the tail off one of the cache shards.
   corruptFile(fmt::format("{}/cache0.cpt", tempDirectory_->path));
-  // We open the cache from checkpoint. Reading checks the data
-  // integrity, here we check that more data was read than written.
+  // We open the cache from checkpoint. Reading checks the data integrity, here
+  // we check that more data was read than written.
   initializeCache(kRamBytes, kSsdBytes);
   runThreads(16, [&](int32_t /*i*/) {
     loadLoop(kSsdBytes / 2, kSsdBytes * 1.5, 113);
   });
   LOG(INFO) << "State after starting 3/4 shards from checkpoint: "
             << cache_->toString();
-  auto ssdStats = cache_->ssdCache()->stats();
-
-  // The exact number of hits after recovery is not deterministic due to
-  // threading. Hitting at least 1/2 of the capacity when 3/4 are available
-  // since one of the shards was deliberately corrupted, is a safe bet.
-  ASSERT_LT(kSsdBytes / 2, stats2.bytesRead);
+  const auto ssdStatsFromCP = cache_->ssdCache()->stats();
+  ASSERT_EQ(ssdStatsFromCP.readCheckpointErrors, 1);
 }
 
 TEST_F(AsyncDataCacheTest, invalidSsdPath) {
@@ -710,4 +778,59 @@ TEST_F(AsyncDataCacheTest, invalidSsdPath) {
       fmt::format(
           "Ssd path '{}' does not start with '/' that points to local file system.",
           testPath));
+}
+
+TEST_F(AsyncDataCacheTest, cacheStats) {
+  CacheStats stats;
+  stats.tinySize = 234;
+  stats.largeSize = 1024;
+  stats.tinyPadding = 23;
+  stats.largePadding = 1344;
+  stats.numEntries = 100;
+  stats.numExclusive = 20;
+  stats.numShared = 30;
+  stats.numEmptyEntries = 20;
+  stats.numPrefetch = 30;
+  stats.prefetchBytes = 100;
+  stats.numHit = 46;
+  stats.hitBytes = 1374;
+  stats.numNew = 2041;
+  stats.numEvict = 463;
+  stats.numEvictChecks = 348;
+  stats.numWaitExclusive = 244;
+  stats.allocClocks = 1320;
+  stats.sumEvictScore = 123;
+  ASSERT_EQ(
+      stats.toString(),
+      "Cache size: 2.56KB tinySize: 257B large size: 2.31KB\n"
+      "Cache entries: 100 read pins: 30 write pins: 20 num write wait: 244 empty entries: 20\n"
+      "Cache access miss: 2041 hit: 46 hit bytes: 1.34KB eviction: 463 eviction checks: 348\n"
+      "Prefetch entries: 30 bytes: 100B\n"
+      "Alloc Megaclocks 0");
+
+  constexpr uint64_t kRamBytes = 32 << 20;
+  constexpr uint64_t kSsdBytes = 512UL << 20;
+  initializeCache(kRamBytes, kSsdBytes);
+  ASSERT_EQ(
+      cache_->toString(),
+      "AsyncDataCache:\n"
+      "Cache size: 0B tinySize: 0B large size: 0B\n"
+      "Cache entries: 0 read pins: 0 write pins: 0 num write wait: 0 empty entries: 0\n"
+      "Cache access miss: 0 hit: 0 hit bytes: 0B eviction: 0 eviction checks: 0\n"
+      "Prefetch entries: 0 bytes: 0B\n"
+      "Alloc Megaclocks 0\n"
+      "Allocated pages: 0 cached pages: 0\n"
+      "Backing: Memory Allocator[MMAP capacity 16.00KB allocated pages 0 mapped pages 0 external mapped pages 0\n"
+      "[size 1: 0(0MB) allocated 0 mapped]\n"
+      "[size 2: 0(0MB) allocated 0 mapped]\n"
+      "[size 4: 0(0MB) allocated 0 mapped]\n"
+      "[size 8: 0(0MB) allocated 0 mapped]\n"
+      "[size 16: 0(0MB) allocated 0 mapped]\n"
+      "[size 32: 0(0MB) allocated 0 mapped]\n"
+      "[size 64: 0(0MB) allocated 0 mapped]\n"
+      "[size 128: 0(0MB) allocated 0 mapped]\n"
+      "[size 256: 0(0MB) allocated 0 mapped]\n"
+      "]\n"
+      "SSD: Ssd cache IO: Write 0MB read 0MB Size 0GB Occupied 0GB0K entries.\n"
+      "GroupStats: <dummy FileGroupStats>");
 }

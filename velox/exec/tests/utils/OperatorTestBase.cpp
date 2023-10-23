@@ -17,10 +17,11 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/dwio/common/DataSink.h"
+#include "velox/dwio/common/FileSink.h"
 #include "velox/exec/Exchange.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -30,6 +31,8 @@
 #include "velox/serializers/PrestoSerializer.h"
 
 using namespace facebook::velox::common::testutil;
+
+DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
 
 namespace facebook::velox::exec::test {
 
@@ -49,6 +52,7 @@ OperatorTestBase::~OperatorTestBase() {
 }
 
 void OperatorTestBase::SetUpTestCase() {
+  FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
   memory::MemoryArbitrator::registerAllFactories();
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
@@ -66,7 +70,7 @@ void OperatorTestBase::SetUp() {
   }
   driverExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(3);
   ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
-  allocator_ = memory::MemoryAllocator::createDefaultInstance();
+  allocator_ = std::make_shared<memory::MallocAllocator>(8L << 30);
   if (!asyncDataCache_) {
     asyncDataCache_ = cache::AsyncDataCache::create(allocator_.get());
     cache::AsyncDataCache::setInstance(asyncDataCache_.get());

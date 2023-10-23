@@ -36,7 +36,7 @@ class VectorCompareTest : public testing::Test,
       bool expectNull,
       bool equalsOnly = false) {
     CompareFlags testFlags;
-    testFlags.stopAtNull = true;
+    testFlags.nullHandlingMode = CompareFlags::NullHandlingMode::StopAtNull;
     testFlags.equalsOnly = equalsOnly;
 
     ASSERT_EQ(
@@ -55,6 +55,41 @@ TEST_F(VectorCompareTest, compareStopAtNullFlat) {
   testCompareWithStopAtNull(flatVector, 0, 1, kExpectNull);
   testCompareWithStopAtNull(flatVector, 1, 0, kExpectNull);
   testCompareWithStopAtNull(flatVector, 1, 1, kExpectNull);
+}
+
+// Test SimpleVector<ComplexType>::compare()
+TEST_F(VectorCompareTest, compareStopAtNullSimpleComplex) {
+  CompareFlags testFlags;
+  testFlags.nullHandlingMode = CompareFlags::NullHandlingMode::StopAtNull;
+
+  auto flatVector =
+      vectorMaker_.arrayVectorNullable<int32_t>({{{1, 2, 3}}, std::nullopt});
+  // Test constant.
+  auto constantVectorNull = BaseVector::wrapInConstant(2, 1, flatVector);
+  auto constantVectorNotNull = BaseVector::wrapInConstant(2, 0, flatVector);
+
+  EXPECT_FALSE(
+      constantVectorNull->compare(constantVectorNull.get(), 0, 1, testFlags)
+          .has_value());
+  EXPECT_TRUE(constantVectorNotNull
+                  ->compare(constantVectorNotNull.get(), 0, 1, testFlags)
+                  .has_value());
+  EXPECT_FALSE(
+      constantVectorNull->compare(constantVectorNotNull.get(), 0, 1, testFlags)
+          .has_value());
+  EXPECT_FALSE(
+      constantVectorNotNull->compare(constantVectorNull.get(), 0, 1, testFlags)
+          .has_value());
+  // Test dictionary.
+  auto indices = makeIndicesInReverse(2);
+  auto dictionary =
+      BaseVector::wrapInDictionary(nullptr, indices, 2, flatVector);
+  EXPECT_FALSE(
+      dictionary->compare(dictionary.get(), 0, 1, testFlags).has_value());
+  EXPECT_FALSE(
+      dictionary->compare(dictionary.get(), 0, 0, testFlags).has_value());
+  EXPECT_TRUE(
+      dictionary->compare(dictionary.get(), 1, 1, testFlags).has_value());
 }
 
 TEST_F(VectorCompareTest, compareStopAtNullArray) {

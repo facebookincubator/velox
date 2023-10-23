@@ -17,7 +17,7 @@
 
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/CheckedArithmetic.h"
+#include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/type/Conversions.h"
 
 namespace facebook::velox::functions {
@@ -25,6 +25,8 @@ namespace facebook::velox::functions {
 template <typename TExecCtx, bool isMax>
 struct ArrayMinMaxFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
 
   template <typename T>
   void update(T& currentValue, const T& candidateValue) {
@@ -45,11 +47,60 @@ struct ArrayMinMaxFunction {
   }
 
   void assign(out_type<Varchar>& out, const arg_type<Varchar>& value) {
-    // TODO: reuse strings once support landed.
-    out.resize(value.size());
-    if (value.size() != 0) {
-      std::memcpy(out.data(), value.data(), value.size());
+    out.setNoCopy(value);
+  }
+
+  template <typename TReturn, typename TInput>
+  bool callForFloatOrDouble(TReturn& out, const TInput& array) {
+    bool hasNull = false;
+    auto it = array.begin();
+
+    // Find the first non-null item (if any)
+    while (it != array.end()) {
+      if (it->has_value()) {
+        break;
+      }
+
+      hasNull = true;
+      ++it;
     }
+
+    // Return false if end of array is reached without finding a non-null item.
+    if (it == array.end()) {
+      return false;
+    }
+
+    // If first non-null item is NAN, return immediately.
+    auto currentValue = it->value();
+    if (std::isnan(currentValue)) {
+      assign(out, currentValue);
+      return true;
+    }
+
+    ++it;
+    while (it != array.end()) {
+      if (it->has_value()) {
+        auto newValue = it->value();
+        if (std::isnan(newValue)) {
+          assign(out, newValue);
+          return true;
+        }
+        update(currentValue, newValue);
+      } else {
+        hasNull = true;
+      }
+      ++it;
+    }
+
+    // If we found a null, return false. Note that, if we found
+    // a NAN, the function will return at earlier stage as soon as
+    // a NAN is observed.
+    if (hasNull) {
+      return false;
+    }
+
+    assign(out, currentValue);
+    return true;
   }
 
   template <typename TReturn, typename TInput>
@@ -57,6 +108,11 @@ struct ArrayMinMaxFunction {
     // Result is null if array is empty.
     if (array.size() == 0) {
       return false;
+    }
+
+    if constexpr (
+        std::is_same_v<TReturn, float> || std::is_same_v<TReturn, double>) {
+      return callForFloatOrDouble(out, array);
     }
 
     if (!array.mayHaveNulls()) {
@@ -167,8 +223,7 @@ struct CombinationsFunction {
 
   static constexpr int32_t kMaxCombinationSize = 5;
   static constexpr int64_t kMaxNumberOfCombinations = 100000;
-  /// TODO: Add ability to re-use strings once reuse_strings_from_arg supports
-  /// reusing strings nested within complex types.
+  static constexpr int32_t reuse_strings_from_arg = 0;
 
   int64_t calculateCombinationCount(
       int64_t inputArraySize,
@@ -613,6 +668,53 @@ struct ArrayTrimFunctionString {
   }
 };
 
+template <typename T>
+struct ArrayRemoveNullFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Fast path for primitives.
+  template <typename Out, typename In>
+  FOLLY_ALWAYS_INLINE void call(Out& out, const In& inputArray) {
+    for (int i = 0; i < inputArray.size(); ++i) {
+      if (inputArray[i].has_value()) {
+        auto& newItem = out.add_item();
+        newItem = inputArray[i].value();
+      }
+    }
+  }
+
+  // Generic implementation.
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Array<Generic<T1>>>& out,
+      const arg_type<Array<Generic<T1>>>& inputArray) {
+    for (int i = 0; i < inputArray.size(); ++i) {
+      if (inputArray[i].has_value()) {
+        auto& newItem = out.add_item();
+        newItem.copy_from(inputArray[i].value());
+      }
+    }
+  }
+};
+
+template <typename T>
+struct ArrayRemoveNullFunctionString {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // String version that avoids copy of strings.
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Array<Varchar>>& out,
+      const arg_type<Array<Varchar>>& inputArray) {
+    for (int i = 0; i < inputArray.size(); ++i) {
+      if (inputArray[i].has_value()) {
+        auto& newItem = out.add_item();
+        newItem.setNoCopy(inputArray[i].value());
+      }
+    }
+  }
+};
+
 /// This class implements the array flatten function.
 ///
 /// DEFINITION:
@@ -697,4 +799,85 @@ struct ArrayUnionFunction {
   }
 };
 
+/// This class implements the array_remove function.
+///
+/// DEFINITION:
+/// array_remove(x, element) -> array
+/// Remove all elements that equal element from array x.
+template <typename T>
+struct ArrayRemoveFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Fast path for primitives.
+  template <typename Out, typename In, typename E>
+  void call(Out& out, const In& inputArray, E element) {
+    for (const auto& item : inputArray) {
+      if (item.has_value()) {
+        if (element != item.value()) {
+          auto& newItem = out.add_item();
+          newItem = item.value();
+        }
+      } else {
+        out.add_null();
+      }
+    }
+  }
+
+  // Generic implementation.
+  void call(
+      out_type<Array<Generic<T1>>>& out,
+      const arg_type<Array<Generic<T1>>>& array,
+      const arg_type<Generic<T1>>& element) {
+    static constexpr CompareFlags kFlags = {
+        false, false, true, CompareFlags::NullHandlingMode::StopAtNull};
+    std::vector<std::optional<exec::GenericView>> toCopyItems;
+    for (const auto& item : array) {
+      if (item.has_value()) {
+        auto result = element.compare(item.value(), kFlags);
+        VELOX_USER_CHECK(
+            result.has_value(),
+            "array_remove does not support arrays with elements that are null or contain null")
+        if (result.value()) {
+          toCopyItems.push_back(item.value());
+        }
+      } else {
+        toCopyItems.push_back(std::nullopt);
+      }
+    }
+
+    for (const auto& item : toCopyItems) {
+      if (item.has_value()) {
+        auto& newItem = out.add_item();
+        newItem.copy_from(item.value());
+      } else {
+        out.add_null();
+      }
+    }
+  }
+};
+
+template <typename T>
+struct ArrayRemoveFunctionString {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // String version that avoids copy of strings.
+  void call(
+      out_type<Array<Varchar>>& out,
+      const arg_type<Array<Varchar>>& inputArray,
+      const arg_type<Varchar>& element) {
+    for (const auto& item : inputArray) {
+      if (item.has_value()) {
+        auto result = element.compare(item.value());
+        if (result) {
+          auto& newItem = out.add_item();
+          newItem.setNoCopy(item.value());
+        }
+      } else {
+        out.add_null();
+      }
+    }
+  }
+};
 } // namespace facebook::velox::functions

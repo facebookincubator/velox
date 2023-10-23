@@ -18,10 +18,10 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/dwio/common/DataSink.h"
+#include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Exchange.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -49,6 +49,10 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     return fmt::format("local://{}-{}", prefix, num);
   }
 
+  static std::string makeBadTaskId(const std::string& prefix, int num) {
+    return fmt::format("bad://{}-{}", prefix, num);
+  }
+
   static exec::Consumer noopConsumer() {
     return [](RowVectorPtr, ContinueFuture*) {
       return BlockingReason::kNotBlocked;
@@ -63,7 +67,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       int64_t maxMemory = memory::kMaxMemory) {
     auto configCopy = configSettings_;
     auto queryCtx = std::make_shared<core::QueryCtx>(
-        executor_.get(), std::move(configCopy));
+        executor_.get(), core::QueryConfig(std::move(configCopy)));
     queryCtx->testingOverrideMemoryPool(
         memory::defaultMemoryManager().addRootPool(
             queryCtx->queryId(), maxMemory));
@@ -146,12 +150,20 @@ class MultiFragmentTest : public HiveConnectorTestBase {
 
   void verifyExchangeStats(
       const std::shared_ptr<Task>& task,
-      int32_t expectedCount) const {
+      int32_t expectedNumPagesCount,
+      int32_t expectedBackgroundCpuCount) const {
     auto exchangeStats =
         task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
     ASSERT_EQ(1, exchangeStats.count("localExchangeSource.numPages"));
     ASSERT_EQ(
-        expectedCount, exchangeStats.at("localExchangeSource.numPages").count);
+        expectedNumPagesCount,
+        exchangeStats.at("localExchangeSource.numPages").count);
+    ASSERT_EQ(
+        expectedBackgroundCpuCount,
+        exchangeStats.at(ExchangeClient::kBackgroundCpuTimeMs).count);
+    auto cpuBackgroundTimeMs =
+        task->taskStats().pipelineStats[0].operatorStats[0].backgroundTiming;
+    ASSERT_EQ(expectedBackgroundCpuCount, cpuBackgroundTimeMs.count);
   }
 
   RowTypePtr rowType_{
@@ -186,7 +198,7 @@ TEST_F(MultiFragmentTest, aggregationSingleKey) {
   for (int i = 0; i < 3; i++) {
     finalAggPlan = PlanBuilder()
                        .exchange(partialAggPlan->outputType())
-                       .finalAggregation({"c0"}, {"sum(a0)"}, {BIGINT()})
+                       .finalAggregation({"c0"}, {"sum(a0)"}, {{BIGINT()}})
                        .partitionedOutput({}, 1)
                        .planNode();
 
@@ -271,11 +283,12 @@ TEST_F(MultiFragmentTest, aggregationMultiKey) {
   core::PlanNodePtr finalAggPlan;
   std::vector<std::string> finalAggTaskIds;
   for (int i = 0; i < 3; i++) {
-    finalAggPlan = PlanBuilder()
-                       .exchange(partialAggPlan->outputType())
-                       .finalAggregation({"c0", "c1"}, {"sum(a0)"}, {BIGINT()})
-                       .partitionedOutput({}, 1)
-                       .planNode();
+    finalAggPlan =
+        PlanBuilder()
+            .exchange(partialAggPlan->outputType())
+            .finalAggregation({"c0", "c1"}, {"sum(a0)"}, {{BIGINT()}})
+            .partitionedOutput({}, 1)
+            .planNode();
 
     finalAggTaskIds.push_back(makeTaskId("final-agg", i));
     auto task = makeTask(finalAggTaskIds.back(), finalAggPlan, i);
@@ -316,7 +329,7 @@ TEST_F(MultiFragmentTest, distributedTableScan) {
     auto task =
         assertQuery(op, {leafTaskId}, "SELECT c2, c1 % 2, c0 % 10 FROM tmp");
 
-    verifyExchangeStats(task, 1);
+    verifyExchangeStats(task, 1, 1);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -464,7 +477,7 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
     auto task =
         assertQuery(op, intermediateTaskIds, "SELECT c3, c0, c2 FROM tmp");
 
-    verifyExchangeStats(task, kFanout);
+    verifyExchangeStats(task, kFanout, kFanout);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -510,11 +523,83 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
                         .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
     Task::start(leafTask, 4);
-    auto bufferMgr = PartitionedOutputBufferManager::getInstance().lock();
+    auto bufferMgr = OutputBufferManager::getInstance().lock();
     // Delete the results asynchronously to simulate abort from downstream.
     bufferMgr->deleteResults(leafTaskId, 0);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+  }
+}
+
+TEST_F(MultiFragmentTest, partitionedOutputWithLargeInput) {
+  // Verify that partitionedOutput operator is able to split a single input
+  // vector if it hits memory or row limits.
+  // We create a large vector that hits the row limit (70% - 120% of 10,000)
+  // which would hit a task level memory limit of 1MB unless its split up.
+  // This test exercises splitting up the input both from the edges and the
+  // middle as it ends up splitting it in ~ 10 splits.
+  setupSources(1, 100'000);
+  const int64_t kRootMemoryLimit = 1 << 20; // 1MB
+  // Single Partition
+  {
+    auto leafTaskId = makeTaskId("leaf", 0);
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput({}, 1, {"c0", "c1", "c2", "c3", "c4"})
+            .planNode();
+    auto leafTask =
+        makeTask(leafTaskId, leafPlan, 0, nullptr, kRootMemoryLimit);
+    Task::start(leafTask, 1);
+    auto op = PlanBuilder().exchange(leafPlan->outputType()).planNode();
+
+    auto task =
+        assertQuery(op, {leafTaskId}, "SELECT c0, c1, c2, c3, c4 FROM tmp");
+    auto exchangeStats = task->taskStats().pipelineStats[0].operatorStats[0];
+    ASSERT_GT(exchangeStats.inputVectors, 2);
+    ASSERT_TRUE(waitForTaskCompletion(leafTask.get()))
+        << leafTask->taskId() << "state: " << leafTask->state();
+  }
+
+  // Multiple partitions but round-robin.
+  {
+    constexpr int32_t kFanout = 2;
+    auto leafTaskId = makeTaskId("leaf", 0);
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput(
+                {},
+                kFanout,
+                false,
+                std::make_shared<exec::RoundRobinPartitionFunctionSpec>(),
+                {"c0", "c1", "c2", "c3", "c4"})
+            .planNode();
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+    Task::start(leafTask, 1);
+
+    auto intermediatePlan =
+        PlanBuilder()
+            .exchange(leafPlan->outputType())
+            .partitionedOutput({}, 1, {"c0", "c1", "c2", "c3", "c4"})
+            .planNode();
+    std::vector<std::string> intermediateTaskIds;
+    for (auto i = 0; i < kFanout; ++i) {
+      intermediateTaskIds.push_back(makeTaskId("intermediate", i));
+      auto intermediateTask =
+          makeTask(intermediateTaskIds.back(), intermediatePlan, i);
+      Task::start(intermediateTask, 1);
+      addRemoteSplits(intermediateTask, {leafTaskId});
+    }
+
+    auto op = PlanBuilder().exchange(intermediatePlan->outputType()).planNode();
+
+    auto task = assertQuery(
+        op, intermediateTaskIds, "SELECT c0, c1, c2, c3, c4 FROM tmp");
+    auto exchangeStats = task->taskStats().pipelineStats[0].operatorStats[0];
+    ASSERT_GT(exchangeStats.inputVectors, 2);
+    ASSERT_TRUE(waitForTaskCompletion(leafTask.get()))
+        << "state: " << leafTask->state();
   }
 }
 
@@ -670,11 +755,11 @@ TEST_F(MultiFragmentTest, replicateNullsAndAny) {
 
   // Collect results and verify number of nulls is 3 times larger than in the
   // original data.
-  auto op =
-      PlanBuilder()
-          .exchange(finalAggPlan->outputType())
-          .finalAggregation({}, {"sum(a0)", "sum(a1)"}, {BIGINT(), BIGINT()})
-          .planNode();
+  auto op = PlanBuilder()
+                .exchange(finalAggPlan->outputType())
+                .finalAggregation(
+                    {}, {"sum(a0)", "sum(a1)"}, {{BIGINT()}, {BIGINT()}})
+                .planNode();
 
   assertQuery(
       op,
@@ -1305,7 +1390,7 @@ DEBUG_ONLY_TEST_F(
       })));
   auto rootPlan = PlanBuilder()
                       .exchange(leafPlan->outputType())
-                      .finalAggregation({"c0"}, {"count(c1)"}, {BIGINT()})
+                      .finalAggregation({"c0"}, {"count(c1)"}, {{BIGINT()}})
                       .planNode();
 
   const int64_t kRootMemoryLimit = 1 << 20;
@@ -1337,7 +1422,7 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   Task::start(task, 1);
   addHiveSplits(task, filePaths_);
 
-  auto bufferManager = PartitionedOutputBufferManager::getInstance().lock();
+  auto bufferManager = OutputBufferManager::getInstance().lock();
   const uint64_t maxBytes = std::numeric_limits<uint64_t>::max();
   const int destination = 0;
   std::vector<std::unique_ptr<folly::IOBuf>> receivedIobufs;
@@ -1390,6 +1475,55 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   receivedIobufs.clear();
   ASSERT_EQ(task.use_count(), 1);
   task.reset();
+}
+
+TEST_F(MultiFragmentTest, taskTerminateWithProblematicRemainingRemoteSplits) {
+  // Start the task with 2 drivers.
+  auto probeData =
+      makeRowVector({"p_c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId exchangeNodeId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeData}, true)
+                  .hashJoin(
+                      {"p_c0"},
+                      {"c0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .exchange(rowType_)
+                          .capturePlanNodeId(exchangeNodeId)
+                          .planNode(),
+                      "",
+                      {"c0"})
+                  .partitionedOutput({}, 1)
+                  .planNode();
+  auto taskId = makeTaskId("final", 0);
+  auto task = makeTask(taskId, plan, 0);
+  Task::start(task, 2);
+
+  // Wait for all drivers to be blocked, so that the promises will be made.
+  bool allDriversBlocked = false;
+  while (!allDriversBlocked) {
+    allDriversBlocked = true;
+    task->testingVisitDrivers([&](Driver* driver) {
+      if (driver->isOnThread() ||
+          (driver->blockingReason() != BlockingReason::kWaitForSplit &&
+           driver->blockingReason() != BlockingReason::kWaitForProducer &&
+           driver->blockingReason() != BlockingReason::kWaitForJoinBuild)) {
+        allDriversBlocked = false;
+      }
+    });
+  }
+
+  // Add one bad remote split and trigger Task::terminate.
+  task->addSplit(exchangeNodeId, remoteSplit(makeBadTaskId("leaf", 0)));
+
+  // Add one more bad split, making sure `remainingRemoteSplits` is not empty
+  // and processing it would cause an exception.
+  task->addSplit(exchangeNodeId, remoteSplit(makeBadTaskId("leaf", 1)));
+
+  // Wait for the task to fail, and make sure the task has been deleted instead
+  // of hanging as a zombie task.
+  ASSERT_TRUE(waitForTaskFailure(task.get(), 3'000'000)) << task->taskId();
 }
 
 DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
@@ -1485,8 +1619,8 @@ class DataFetcher {
  private:
   static constexpr int64_t kInitialSequence = 0;
 
-  std::shared_ptr<PartitionedOutputBufferManager> bufferManager() {
-    return PartitionedOutputBufferManager::getInstance().lock();
+  std::shared_ptr<OutputBufferManager> bufferManager() {
+    return OutputBufferManager::getInstance().lock();
   }
 
   void doFetch(int64_t sequence) {
@@ -1546,9 +1680,12 @@ class DataFetcher {
 /// sizes to no more than 1MB give and take 30%.
 TEST_F(MultiFragmentTest, maxBytes) {
   std::string s(25, 'x');
+  // Keep the row count under 7000 to avoid hitting the row limit in the
+  // operator instead.
   auto data = makeRowVector({
-      makeFlatVector<int64_t>(10'000, [](auto row) { return row; }),
-      makeConstant(StringView(s), 10'000),
+      makeFlatVector<int64_t>(5'000, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(5'000, [](auto row) { return row; }),
+      makeConstant(StringView(s), 5'000),
   });
 
   auto plan = PlanBuilder()

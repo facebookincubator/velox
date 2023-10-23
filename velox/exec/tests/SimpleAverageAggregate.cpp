@@ -42,6 +42,13 @@ class AverageAggregate {
   using OutputType =
       std::conditional_t<std::is_same_v<T, float>, float, double>;
 
+  static bool toIntermediate(
+      exec::out_type<Row<double, int64_t>>& out,
+      exec::arg_type<T> in) {
+    out.copy_from(std::make_tuple(static_cast<double>(in), 1));
+    return true;
+  }
+
   struct AccumulatorType {
     double sum_;
     int64_t count_;
@@ -58,7 +65,7 @@ class AverageAggregate {
     // wrapped in InputType.
     void addInput(HashStringAllocator* /*allocator*/, exec::arg_type<T> data) {
       sum_ += data;
-      count_++;
+      count_ = checkedPlus<int64_t>(count_, 1);
     }
 
     // combine expects one parameter of exec::arg_type<IntermediateType>.
@@ -71,7 +78,7 @@ class AverageAggregate {
       VELOX_CHECK(other.at<0>().has_value());
       VELOX_CHECK(other.at<1>().has_value());
       sum_ += other.at<0>().value();
-      count_ += other.at<1>().value();
+      count_ = checkedPlus<int64_t>(count_, other.at<1>().value());
     }
 
     bool writeFinalResult(exec::out_type<OutputType>& out) {

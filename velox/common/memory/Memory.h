@@ -42,6 +42,7 @@
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_memory_pool_debug_enabled);
+DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
 
 namespace facebook::velox::memory {
 #define VELOX_MEM_LOG_PREFIX "[MEM] "
@@ -64,7 +65,22 @@ struct MemoryManagerOptions {
 
   /// Specifies the max memory capacity in bytes. MemoryManager will not
   /// enforce capacity. This will be used by MemoryArbitrator
-  int64_t capacity{kMaxMemory};
+  int64_t capacity{MemoryAllocator::kDefaultCapacityBytes};
+
+  /// Memory capacity for query/task memory pools. This capacity setting should
+  /// be equal or smaller than 'capacity'. The difference between 'capacity' and
+  /// 'queryMemoryCapacity' is reserved for system usage such as cache and
+  /// spilling.
+  ///
+  /// NOTE:
+  /// - if 'queryMemoryCapacity' is greater than 'capacity', the behavior
+  /// will be equivalent to as if they are equal, meaning no reservation
+  /// capacity for system usage.
+  int64_t queryMemoryCapacity{kMaxMemory};
+
+  /// If true, enable memory usage tracking in the default memory pool.
+  bool trackDefaultUsage{
+      FLAGS_velox_enable_memory_usage_track_in_default_memory_pool};
 
   /// If true, check the memory pool and usage leaks on destruction.
   ///
@@ -95,13 +111,13 @@ struct MemoryManagerOptions {
   /// during the memory arbitration.
   uint64_t memoryPoolTransferCapacity{32 << 20};
 
-  /// If true, handle the memory arbitration failure by aborting the memory
-  /// pool with most capacity and retry the memory arbitration, otherwise we
-  /// simply fails the memory arbitration requestor itself. This helps the
-  /// distributed query execution use case such as Prestissimo that fail the
-  /// same query on all the workers instead of a random victim query which
-  /// happens to trigger the failed memory arbitration.
-  bool retryArbitrationFailure{true};
+  /// Provided by the query system to validate the state after a memory pool
+  /// enters arbitration if not null. For instance, Prestissimo provides
+  /// callback to check if a memory arbitration request is issued from a driver
+  /// thread, then the driver should be put in suspended state to avoid the
+  /// potential deadlock when reclaim memory from the task of the request memory
+  /// pool.
+  MemoryArbitrationStateCheckCB arbitrationStateCheckCb{nullptr};
 };
 
 /// 'MemoryManager' is responsible for managing the memory pools. For now, users
@@ -116,17 +132,8 @@ class MemoryManager {
 
   /// Tries to get the singleton memory manager. If not previously initialized,
   /// the process singleton manager will be initialized.
-  // TODO(jtan6): remove 'ensureCapacity' in a compatible way as we always
-  //  want to ensureCapacity after cap checks completely responsible by
-  //  allocators
   FOLLY_EXPORT static MemoryManager& getInstance(
       const MemoryManagerOptions& options = MemoryManagerOptions{});
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  FOLLY_EXPORT static MemoryManager& getInstance(
-      const MemoryManagerOptions& options,
-      bool ensureCapacity);
-#endif
 
   /// Returns the memory capacity of this memory manager which puts a hard cap
   /// on memory usage, and any allocation that exceeds this capacity throws.
@@ -243,6 +250,12 @@ std::shared_ptr<MemoryPool> addDefaultLeafMemoryPool(
 /// TODO: deprecate this API after all the use cases are able to manage the
 /// lifecycle of the allocated memory pools properly.
 MemoryPool& deprecatedSharedLeafPool();
+
+/// Returns the system-wide memory pool for spilling memory usage.
+memory::MemoryPool* spillMemoryPool();
+
+/// Returns true if the provided 'pool' is the spilling memory pool.
+bool isSpillMemoryPool(memory::MemoryPool* pool);
 
 FOLLY_ALWAYS_INLINE int32_t alignmentPadding(void* address, int32_t alignment) {
   auto extra = reinterpret_cast<uintptr_t>(address) % alignment;
