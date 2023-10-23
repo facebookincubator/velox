@@ -34,14 +34,21 @@ DEFINE_bool(
     false,
     "if to use qat for zstd compression");
 
+<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
 DEFINE_bool(VELOX_ENABLE_QAT_ZSTD, false, "if to use qat for zstd compression");
 
+=======
+>>>>>>> de1d550b7 (add fallback flag):velox/dwio/dwrf/common/Compression.cpp
 DEFINE_int32(
     ENABLE_QAT_ZSTD_FALLBACK,
     0,
     "if to allow qat to fall back on sw when qat devices are not functional");
 
+<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
 namespace facebook::velox::dwio::common::compression {
+=======
+namespace facebook::velox::dwrf {
+>>>>>>> de1d550b7 (add fallback flag):velox/dwio/dwrf/common/Compression.cpp
 
 using dwio::common::encryption::Decrypter;
 using dwio::common::encryption::Encrypter;
