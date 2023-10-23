@@ -23,7 +23,6 @@
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
-
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
@@ -42,7 +41,6 @@ const uint32_t kNumRowsPerBatch = 60000;
 const uint32_t kNumBatches = 50;
 const uint32_t kNumRowsPerRowGroup = 10000;
 const double kFilterErrorMargin = 0.2;
-
 
 class ParquetWriterBenchmark {
  public:
