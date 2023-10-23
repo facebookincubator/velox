@@ -81,7 +81,6 @@ option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
-option(VELOX_ENABLE_QAT_ZSTD_OT "User QAT OT driver for compression" OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
@@ -432,12 +431,9 @@ endif()
 set_source(simdjson)
 resolve_dependency(simdjson 3.1.5)
 
-if(${VELOX_ENABLE_QAT_ZSTD_OT})
-  set_source(qatzstd)
-  resolve_dependency(qatzstd)
-  include_directories(${qatzstd_INCLUDE_DIRS})
-  add_definitions(-DVELOX_ENABLE_QAT_ZSTD_OT)
-endif()
+set_source(qatzstd)
+resolve_dependency(qatzstd)
+include_directories(${qatzstd_INCLUDE_DIRS})
 
 # Locate or build folly.
 add_compile_definitions(FOLLY_HAVE_INT128_T=1)

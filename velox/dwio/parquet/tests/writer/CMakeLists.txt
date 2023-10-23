@@ -30,11 +30,7 @@ target_link_libraries(
   Boost::regex
   velox_link_libs
   Folly::folly
-<<<<<<< HEAD
   ${TEST_LINK_LIBS}
   gtest
   fmt::fmt)
 
-=======
-  ${FOLLY_BENCHMARK})
->>>>>>> b97bad335 (format fix)

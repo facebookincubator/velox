@@ -28,11 +28,19 @@
 #include <zstd.h>
 #include <zstd_errors.h>
 <<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
+<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
 =======
 #ifdef VELOX_ENABLE_QAT_ZSTD_OT
 #include <qatseqprod.h>
 #endif
 >>>>>>> dcd4a5e6e (fix build error):velox/dwio/dwrf/common/Compression.cpp
+=======
+
+DEFINE_bool(
+    VELOX_ENABLE_QAT_ZSTD_OT,
+    true,
+    "if to use qat for zstd compression");
+>>>>>>> c5224428f (flags):velox/dwio/dwrf/common/Compression.cpp
 
 DEFINE_bool(VELOX_ENABLE_QAT_ZSTD, false, "if to use qat for zstd compression");
 
@@ -71,7 +79,6 @@ ZstdCompressor::compress(const void* src, void* dest, uint64_t length) {
   return ret;
 }
 
-#ifdef VELOX_ENABLE_QAT_ZSTD_OT
 class ZstdQatCompressor : public Compressor {
  public:
   explicit ZstdQatCompressor(int32_t level) : Compressor{level} {
@@ -82,6 +89,7 @@ class ZstdQatCompressor : public Compressor {
 <<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
     ZSTD_registerSequenceProducer(
         zc, sequenceProducerState, qatSequenceProducer);
+<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
     ZSTD_CCtx_setParameter(
         zc, ZSTD_c_enableSeqProducerFallback, FLAGS_ENABLE_QAT_ZSTD_FALLBACK);
     ZSTD_CCtx_setParameter(zc, ZSTD_c_compressionLevel, level);
@@ -104,6 +112,9 @@ class ZstdQatCompressor : public Compressor {
 >>>>>>> 61b3e358d (gen test data):velox/dwio/dwrf/common/Compression.cpp
     ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, 1);
 >>>>>>> 714f09ad8 (fix format):velox/dwio/dwrf/common/Compression.cpp
+=======
+    ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, level);
+>>>>>>> c5224428f (flags):velox/dwio/dwrf/common/Compression.cpp
   }
 
   ZSTD_CCtx* zc;
@@ -138,7 +149,6 @@ ZstdQatCompressor::compress(const void* src, void* dest, uint64_t length) {
   }
   return ret;
 }
-#endif
 
 class ZlibCompressor : public Compressor {
  public:
@@ -579,6 +589,7 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
 =======
     case common::CompressionKind_ZSTD: {
       int32_t zstdCompressionLevel = config.get(Config::ZSTD_COMPRESSION_LEVEL);
+<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
       compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
 <<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
       #ifdef VELOX_ENABLE_QAT_ZSTD_OT
@@ -590,6 +601,12 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
       compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
 #endif
 >>>>>>> 714f09ad8 (fix format):velox/dwio/dwrf/common/Compression.cpp
+=======
+      if (FLAGS_VELOX_ENABLE_QAT_ZSTD_OT)
+        compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
+      else
+        compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
+>>>>>>> c5224428f (flags):velox/dwio/dwrf/common/Compression.cpp
       XLOG_FIRST_N(INFO, 1) << fmt::format(
           "Initialized zstd compressor with compression level {}",
           options.format.zstd.compressionLevel);

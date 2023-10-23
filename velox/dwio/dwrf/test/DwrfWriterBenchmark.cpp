@@ -32,10 +32,6 @@
 #include "velox/tpch/gen/TpchGen.h"
 
 DEFINE_string(table_name, "lineitem", "table name");
-DEFINE_bool(
-    VELOX_ENABLE_QAT_ZSTD_OT,
-    true,
-    "if to use qat for zstd compression");
 const double scale_factor = 10;
 using std::chrono::system_clock;
 
