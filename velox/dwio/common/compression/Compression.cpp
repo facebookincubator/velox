@@ -28,7 +28,6 @@
 #include <zstd.h>
 #include <zstd_errors.h>
 
-
 DEFINE_bool(
     VELOX_ENABLE_QAT_ZSTD_OT,
     false,
@@ -560,24 +559,25 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
 <<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
       compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
 <<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
-      #ifdef VELOX_ENABLE_QAT_ZSTD_OT
-        compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
-      #endif
->>>>>>> efc7d1f96 (fix typo):velox/dwio/dwrf/common/Compression.cpp
+#ifdef VELOX_ENABLE_QAT_ZSTD_OT
+      compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
+#endif
+      >>>>>>> efc7d1f96 (fix typo):velox/dwio/dwrf/common/Compression.cpp
 =======
 #ifdef VELOX_ENABLE_QAT_ZSTD_OT
       compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
 #endif
->>>>>>> 714f09ad8 (fix format):velox/dwio/dwrf/common/Compression.cpp
+      >>>>>>> 714f09ad8 (fix format):velox/dwio/dwrf/common/Compression.cpp
 =======
       if (FLAGS_VELOX_ENABLE_QAT_ZSTD_OT)
         compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
       else
         compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
 >>>>>>> c5224428f (flags):velox/dwio/dwrf/common/Compression.cpp
-      XLOG_FIRST_N(INFO, 1) << fmt::format(
-          "Initialized zstd compressor with compression level {}",
-          options.format.zstd.compressionLevel);
+          XLOG_FIRST_N(INFO, 1)
+          << fmt::format(
+                 "Initialized zstd compressor with compression level {}",
+                 options.format.zstd.compressionLevel);
       break;
     }
     case CompressionKind::CompressionKind_SNAPPY:
