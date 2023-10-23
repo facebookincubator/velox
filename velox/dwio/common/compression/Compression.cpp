@@ -27,20 +27,12 @@
 #include <zlib.h>
 #include <zstd.h>
 #include <zstd_errors.h>
-<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
-<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
-=======
-#ifdef VELOX_ENABLE_QAT_ZSTD_OT
-#include <qatseqprod.h>
-#endif
->>>>>>> dcd4a5e6e (fix build error):velox/dwio/dwrf/common/Compression.cpp
-=======
+
 
 DEFINE_bool(
     VELOX_ENABLE_QAT_ZSTD_OT,
     false,
     "if to use qat for zstd compression");
->>>>>>> c5224428f (flags):velox/dwio/dwrf/common/Compression.cpp
 
 DEFINE_bool(VELOX_ENABLE_QAT_ZSTD, false, "if to use qat for zstd compression");
 
