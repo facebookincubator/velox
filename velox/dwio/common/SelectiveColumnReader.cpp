@@ -373,8 +373,7 @@ void SelectiveColumnReader::addSkippedParentNulls(
     vector_size_t to,
     int32_t numNulls) {
   auto rowsPerRowGroup = formatData_->rowsPerRowGroup();
-  if (rowsPerRowGroup.has_value() &&
-      rowsPerRowGroup.value() > 0 &&
+  if (rowsPerRowGroup.has_value() && rowsPerRowGroup.value() > 0 &&
       from / rowsPerRowGroup.value() >
           parentNullsRecordedTo_ / rowsPerRowGroup.value()) {
     // the new nulls are in a different row group than the last.
