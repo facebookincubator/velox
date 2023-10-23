@@ -47,7 +47,7 @@ namespace {
 class ZstdCompressor : public Compressor {
  public:
   explicit ZstdCompressor(int32_t level) : Compressor{level} {}
-
+  
   uint64_t compress(const void* src, void* dest, uint64_t length) override;
 };
 
@@ -533,6 +533,7 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
           options.format.zlib.compressionLevel);
       break;
     }
+<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
     case CompressionKind::CompressionKind_ZSTD: {
       if (FLAGS_VELOX_ENABLE_QAT_ZSTD)
         compressor = std::make_unique<ZstdQatCompressor>(
@@ -540,6 +541,14 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
       else
         compressor = std::make_unique<ZstdCompressor>(
             options.format.zstd.compressionLevel);
+=======
+    case common::CompressionKind_ZSTD: {
+      int32_t zstdCompressionLevel = config.get(Config::ZSTD_COMPRESSION_LEVEL);
+      compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
+      #ifdef VELOX_ENABLE_QAT_OT
+        compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
+      #endif
+>>>>>>> efc7d1f96 (fix typo):velox/dwio/dwrf/common/Compression.cpp
       XLOG_FIRST_N(INFO, 1) << fmt::format(
           "Initialized zstd compressor with compression level {}",
           options.format.zstd.compressionLevel);
