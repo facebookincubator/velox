@@ -60,6 +60,19 @@ class TestBufferPool : public CompressionBufferPool {
   std::unique_ptr<DataBuffer<char>> buffer_;
 };
 
+void generateRandomData(char* data, size_t size, bool letter) {
+  for (size_t i = 0; i < size; ++i) {
+    if (letter) {
+      bool capitalized = folly::Random::rand32() % 2 == 0;
+      data[i] = capitalized
+          ? static_cast<char>('A' + folly::Random::rand32() % 26)
+          : static_cast<char>('a' + folly::Random::rand32() % 26);
+    } else {
+      data[i] = static_cast<char>(folly::Random::rand32() % 256);
+    }
+  }
+}
+
 void benchmarkCompress(
     CompressionKind kind,
     DataSink& sink,
@@ -99,10 +112,11 @@ void benchmarkCompress(
 BENCHMARK(compressZstd) {
   auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
-
-  uint64_t block = 128;
-
-  char testData[] = "hello world!";
+  uint64_t block = 1024 * 4;
+  auto dataSize = 1 * 1024 * 1024 * 1024; 
+  // auto dataSize = 1 * 1024 * 1024; 
+  char testData[dataSize];
+  generateRandomData(testData, dataSize, true);
   benchmarkCompress(
       CompressionKind_ZSTD,
       memSink,
