@@ -79,6 +79,7 @@ class ZstdQatCompressor : public Compressor {
     QZSTD_startQatDevice();
     sequenceProducerState = QZSTD_createSeqProdState();
 <<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
+<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
     ZSTD_registerSequenceProducer(
         zc, sequenceProducerState, qatSequenceProducer);
     ZSTD_CCtx_setParameter(
@@ -93,6 +94,10 @@ class ZstdQatCompressor : public Compressor {
     }
 =======
     ZSTD_registerSequenceProducer(zc, sequenceProducerState, qatSequenceProducer);
+=======
+    ZSTD_registerSequenceProducer(
+      zc, sequenceProducerState, qatSequenceProducer);
+>>>>>>> e1806c43f (fix benchmark build error):velox/dwio/dwrf/common/Compression.cpp
     ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, 1);
 >>>>>>> 714f09ad8 (fix format):velox/dwio/dwrf/common/Compression.cpp
   }
@@ -116,8 +121,12 @@ ZstdQatCompressor::compress(const void* src, void* dest, uint64_t length) {
     DWIO_RAISE("ZSTD QAT returned an error: ", ZSTD_getErrorName(ret));
 =======
   if ((int)ret <= 0) {        
+<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
       DWIO_RAISE("ZSTD QAT returned an error: ", ZSTD_getErrorName(ret));
 >>>>>>> 714f09ad8 (fix format):velox/dwio/dwrf/common/Compression.cpp
+=======
+    DWIO_RAISE("ZSTD QAT returned an error: ", ZSTD_getErrorName(ret));
+>>>>>>> e1806c43f (fix benchmark build error):velox/dwio/dwrf/common/Compression.cpp
   }
   return ret;
 }
