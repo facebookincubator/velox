@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/logging/xlog.h>
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -25,7 +26,6 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
-#include <folly/logging/xlog.h>
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
@@ -34,10 +34,7 @@
 #include <unistd.h> // for syscall()
 #include "velox/tpch/gen/TpchGen.h"
 
-DEFINE_int32(
-    SCALE_FACTOR,
-    10,
-    "scale factor");
+DEFINE_int32(SCALE_FACTOR, 10, "scale factor");
 
 using std::chrono::system_clock;
 
@@ -47,8 +44,8 @@ using namespace facebook::velox::test;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox;
 using namespace facebook::velox::tpch;
-using facebook::velox::memory::MemoryPool;
 using facebook::velox::common::CompressionKind;
+using facebook::velox::memory::MemoryPool;
 
 class DwrfWriterBenchmark {
  public:
@@ -57,7 +54,8 @@ class DwrfWriterBenchmark {
     leafPool_ = rootPool_->addLeafChild("leaf");
 
     auto config = std::make_shared<dwrf::Config>();
-    config->set(dwrf::Config::COMPRESSION, CompressionKind::CompressionKind_ZSTD);
+    config->set(
+        dwrf::Config::COMPRESSION, CompressionKind::CompressionKind_ZSTD);
 
     int id = syscall(SYS_gettid);
     auto path = "/tmp/zstd_compressed_" + std::to_string(id) + ".orc";
@@ -80,19 +78,21 @@ class DwrfWriterBenchmark {
     RowVectorPtr rowVector1;
     int base_scale_factor = 1;
     int total_writes = FLAGS_SCALE_FACTOR / base_scale_factor;
-    XLOG_FIRST_N(INFO, 1) << fmt::format("scale factor: ") << FLAGS_SCALE_FACTOR;
-    XLOG_FIRST_N(INFO, 1) << fmt::format("base scale factor: ") << base_scale_factor;
+    XLOG_FIRST_N(INFO, 1) << fmt::format("scale factor: ")
+                          << FLAGS_SCALE_FACTOR;
+    XLOG_FIRST_N(INFO, 1) << fmt::format("base scale factor: ")
+                          << base_scale_factor;
     XLOG_FIRST_N(INFO, 1) << fmt::format("total writes: ") << total_writes;
 
     folly::BenchmarkSuspender suspender;
     rowVector1 = facebook::velox::tpch::genTpchLineItem(
-          leafPool_.get(), 600000, 0, base_scale_factor);
+        leafPool_.get(), 600000, 0, base_scale_factor);
 
     suspender.dismiss();
 
     for (int i = 0; i < total_writes; i++) {
       XLOG(INFO) << "i: " << i << ", num row: " << rowVector1->size()
-                << std::endl;
+                 << std::endl;
       writer_->write(rowVector1);
     }
 
