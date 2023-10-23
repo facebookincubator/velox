@@ -29,6 +29,8 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
+#include <sys/syscall.h>
+#include <unistd.h> // for syscall()
 #include "velox/tpch/gen/TpchGen.h"
 
 DEFINE_string(table_name, "lineitem", "table name");
@@ -54,8 +56,14 @@ class DwrfWriterBenchmark {
     // seems like default is ZSTD compression
     config->set(Config::COMPRESSION, common::CompressionKind_ZSTD);
 
-    auto sink = std::make_unique<MemorySink>(*leafPool_, 800 * 1024 * 1024);
-    auto sinkPtr = sink.get();
+    // auto sink = std::make_unique<MemorySink>(*leafPool_, 800 * 1024 * 1024);
+    // auto sinkPtr = sink.get();
+
+    int id = syscall(SYS_gettid);
+    auto path = "/tmp/zstd_compressed_" + std::to_string(id) + ".orc";
+    auto localWriteFile = std::make_unique<LocalWriteFile>(path, true, false);
+    auto sink =
+        std::make_unique<WriteFileDataSink>(std::move(localWriteFile), path);
 
     dwrf::WriterOptions options;
     options.config = config;
