@@ -27,6 +27,12 @@
 #include <zlib.h>
 #include <zstd.h>
 #include <zstd_errors.h>
+<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
+=======
+#ifdef VELOX_ENABLE_QAT_ZSTD_OT
+  #include <qatseqprod.h>
+#endif
+>>>>>>> dcd4a5e6e (fix build error):velox/dwio/dwrf/common/Compression.cpp
 
 DEFINE_bool(VELOX_ENABLE_QAT_ZSTD, false, "if to use qat for zstd compression");
 
@@ -65,6 +71,7 @@ ZstdCompressor::compress(const void* src, void* dest, uint64_t length) {
   return ret;
 }
 
+#ifdef VELOX_ENABLE_QAT_ZSTD_OT
 class ZstdQatCompressor : public Compressor {
  public:
   explicit ZstdQatCompressor(int32_t level) : Compressor{level} {
@@ -104,6 +111,7 @@ ZstdQatCompressor::compress(const void* src, void* dest, uint64_t length) {
   }
   return ret;
 }
+#endif
 
 class ZlibCompressor : public Compressor {
  public:
@@ -545,7 +553,7 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
     case common::CompressionKind_ZSTD: {
       int32_t zstdCompressionLevel = config.get(Config::ZSTD_COMPRESSION_LEVEL);
       compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
-      #ifdef VELOX_ENABLE_QAT_OT
+      #ifdef VELOX_ENABLE_QAT_ZSTD_OT
         compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
       #endif
 >>>>>>> efc7d1f96 (fix typo):velox/dwio/dwrf/common/Compression.cpp
