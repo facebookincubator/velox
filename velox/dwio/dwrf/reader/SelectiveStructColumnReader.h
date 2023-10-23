@@ -66,6 +66,7 @@ class SelectiveStructColumnReaderBase
     if (!reader->isTopLevel() || rowsPerRowGroup_ <= 0) {
       return;
     }
+
     auto rowGroup = reader->readOffset() / rowsPerRowGroup_;
     auto nextRowGroup = offset / rowsPerRowGroup_;
     if (nextRowGroup > rowGroup) {
