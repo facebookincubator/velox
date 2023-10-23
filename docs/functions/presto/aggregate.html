@@ -221,10 +221,19 @@ The final state is returned. Throws an error if <code class="docutils literal no
 <p>Take care when designing <code class="docutils literal notranslate"><span class="pre">initialState</span></code>, <code class="docutils literal notranslate"><span class="pre">inputFunction</span></code> and <code class="docutils literal notranslate"><span class="pre">combineFunction</span></code>.
 These need to support evaluating aggregation in a distributed manner using partial
 aggregation on many nodes, followed by shuffle over group-by keys, followed by
-final aggregation. Make sure that</p>
+final aggregation. Given a set of all possible values of state, make sure that
+combineFunction is <a class="reference external" href="https://en.wikipedia.org/wiki/Commutative_property">commutative</a>
+and <a class="reference external" href="https://en.wikipedia.org/wiki/Associative_property">associative</a>
+operation with initialState as the
+<a class="reference external" href="https://en.wikipedia.org/wiki/Identity_element">identity</a> value.</p>
 <blockquote>
-<div><p>combineFunction(s1, s2) = combineFunction(s2, s1) for any s1 and s2;</p>
-<p>inputFunction(inputFunction(initialState, x), y) = combineFunction(inputFunction(initialState, x), inputFunction(initialState, y)) for any x and y</p>
+<div><p>combineFunction(s, initialState) = s for any s</p>
+<p>combineFunction(s1, s2) = combineFunction(s2, s1) for any s1 and s2</p>
+<p>combineFunction(s1, combineFunction(s2, s3)) = combineFunction(combineFunction(s1, s2), s3) for any s1, s2, s3</p>
+</div></blockquote>
+<p>In addition, make sure that the following holds for the inputFunction:</p>
+<blockquote>
+<div><p>inputFunction(inputFunction(initialState, x), y) = combineFunction(inputFunction(initialState, x), inputFunction(initialState, y)) for any x and y</p>
 </div></blockquote>
 <p>Check out <a class="reference external" href="https://velox-lib.io/blog/reduce-agg">blog post about reduce_agg</a> for more context.</p>
 <p>Note that reduce_agg doesn’t support evaluation over sorted inputs.:</p>
