@@ -28,26 +28,14 @@
 #include <zstd.h>
 #include <zstd_errors.h>
 
-DEFINE_bool(
-    VELOX_ENABLE_QAT_ZSTD_OT,
-    false,
-    "if to use qat for zstd compression");
-
-<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
 DEFINE_bool(VELOX_ENABLE_QAT_ZSTD, false, "if to use qat for zstd compression");
 
-=======
->>>>>>> de1d550b7 (add fallback flag):velox/dwio/dwrf/common/Compression.cpp
 DEFINE_int32(
     ENABLE_QAT_ZSTD_FALLBACK,
     0,
     "if to allow qat to fall back on sw when qat devices are not functional");
 
-<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
 namespace facebook::velox::dwio::common::compression {
-=======
-namespace facebook::velox::dwrf {
->>>>>>> de1d550b7 (add fallback flag):velox/dwio/dwrf/common/Compression.cpp
 
 using dwio::common::encryption::Decrypter;
 using dwio::common::encryption::Encrypter;
@@ -545,7 +533,6 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
           options.format.zlib.compressionLevel);
       break;
     }
-<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
     case CompressionKind::CompressionKind_ZSTD: {
       if (FLAGS_VELOX_ENABLE_QAT_ZSTD)
         compressor = std::make_unique<ZstdQatCompressor>(
@@ -553,31 +540,9 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
       else
         compressor = std::make_unique<ZstdCompressor>(
             options.format.zstd.compressionLevel);
-=======
-    case common::CompressionKind_ZSTD: {
-      int32_t zstdCompressionLevel = config.get(Config::ZSTD_COMPRESSION_LEVEL);
-<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
-      compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
-<<<<<<< HEAD:velox/dwio/common/compression/Compression.cpp
-#ifdef VELOX_ENABLE_QAT_ZSTD_OT
-      compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
-#endif
-      >>>>>>> efc7d1f96 (fix typo):velox/dwio/dwrf/common/Compression.cpp
-=======
-#ifdef VELOX_ENABLE_QAT_ZSTD_OT
-      compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
-#endif
-      >>>>>>> 714f09ad8 (fix format):velox/dwio/dwrf/common/Compression.cpp
-=======
-      if (FLAGS_VELOX_ENABLE_QAT_ZSTD_OT)
-        compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
-      else
-        compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
->>>>>>> c5224428f (flags):velox/dwio/dwrf/common/Compression.cpp
-          XLOG_FIRST_N(INFO, 1)
-          << fmt::format(
-                 "Initialized zstd compressor with compression level {}",
-                 options.format.zstd.compressionLevel);
+      XLOG_FIRST_N(INFO, 1) << fmt::format(
+          "Initialized zstd compressor with compression level {}",
+          options.format.zstd.compressionLevel);
       break;
     }
     case CompressionKind::CompressionKind_SNAPPY:
