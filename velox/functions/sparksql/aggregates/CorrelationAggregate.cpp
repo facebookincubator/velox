@@ -19,34 +19,21 @@
 
 using namespace facebook::velox::functions::aggregate;
 
-namespace facebook::velox::aggregate::prestosql {
+namespace facebook::velox::functions::aggregate::sparksql {
+namespace {
+struct SparkCorrResultAccessor : public CorrResultAccessor {
+  static double result(const CorrAccumulator& accumulator) {
+    // Modify the calculation order to maintain the same accuracy with spark.
+    return accumulator.c2() / std::sqrt(accumulator.m2X() * accumulator.m2Y());
+  }
+};
+} // namespace
 
-void registerCovarianceAggregates(const std::string& prefix) {
-  registerCovariance<
-      CovarAccumulator,
-      CovarIntermediateInput,
-      CovarIntermediateResult,
-      CovarPopResultAccessor>(prefix + kCovarPop);
-  registerCovariance<
-      CovarAccumulator,
-      CovarIntermediateInput,
-      CovarIntermediateResult,
-      CovarSampResultAccessor>(prefix + kCovarSamp);
+void registerCorrelationAggregate(const std::string& prefix) {
   registerCovariance<
       CorrAccumulator,
       CorrIntermediateInput,
       CorrIntermediateResult,
-      CorrResultAccessor>(prefix + kCorr);
-  registerCovariance<
-      RegrAccumulator,
-      RegrIntermediateInput,
-      RegrIntermediateResult,
-      RegrInterceptResultAccessor>(prefix + kRegrIntercept);
-  registerCovariance<
-      RegrAccumulator,
-      RegrIntermediateInput,
-      RegrIntermediateResult,
-      RegrSlopeResultAccessor>(prefix + kRegrSlop);
+      SparkCorrResultAccessor>(prefix + facebook::velox::aggregate::kCorr);
 }
-
-} // namespace facebook::velox::aggregate::prestosql
+} // namespace facebook::velox::functions::aggregate::sparksql

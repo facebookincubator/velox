@@ -19,12 +19,14 @@
 #include "velox/functions/sparksql/aggregates/AverageAggregate.h"
 #include "velox/functions/sparksql/aggregates/BitwiseXorAggregate.h"
 #include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
+#include "velox/functions/sparksql/aggregates/CorrelationAggregate.cpp"
 #include "velox/functions/sparksql/aggregates/SumAggregate.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
 extern void registerFirstLastAggregates(const std::string& prefix);
 extern void registerMinMaxByAggregates(const std::string& prefix);
+extern void registerCorrelationAggregate(const std::string& prefix);
 
 void registerAggregateFunctions(const std::string& prefix) {
   registerFirstLastAggregates(prefix);
@@ -33,5 +35,6 @@ void registerAggregateFunctions(const std::string& prefix) {
   registerBloomFilterAggAggregate(prefix + "bloom_filter_agg");
   registerAverage(prefix + "avg");
   registerSum(prefix + "sum");
+  registerCorrelationAggregate(prefix);
 }
 } // namespace facebook::velox::functions::aggregate::sparksql
