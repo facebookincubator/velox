@@ -63,7 +63,7 @@ class SelectiveStructColumnReaderBase
   /// calling seekToRowGroup.
   void advanceFieldReader(SelectiveColumnReader* reader, vector_size_t offset)
       override {
-    if (!reader->isTopLevel()) {
+    if (!reader->isTopLevel() || rowsPerRowGroup_ <= 0) {
       return;
     }
     auto rowGroup = reader->readOffset() / rowsPerRowGroup_;
