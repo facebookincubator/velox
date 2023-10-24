@@ -141,7 +141,7 @@ at the expense of reducing the amount of memory available for other usage.</p></
 <td><p>integer</p></td>
 <td><p>32MB</p></td>
 <td><p>The target size for a Task’s buffered output. The producer Drivers are blocked when the buffered size exceeds this.
-The Drivers are resumed when the buffered size goes below PartitionedOutputBufferManager::kContinuePct (90)% of this.</p></td>
+The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.</p></td>
 </tr>
 <tr class="row-even"><td><p>min_table_rows_for_parallel_join_build</p></td>
 <td><p>integer</p></td>
