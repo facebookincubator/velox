@@ -22,7 +22,7 @@
 #include "velox/dwio/common/tests/Lemire/bmipacking32.h"
 #endif
 
-#include "velox/dwio/common/tests/duckdb/FastpforLib.h"
+#include "velox/dwio/common/tests/Lemire/FastPFor/bitpackinghelpers.h"
 
 #include <arrow/util/rle_encoding.h>
 #include <folly/Benchmark.h>
@@ -290,7 +290,7 @@ void fastpforlib(uint8_t bitWidth, T* result) {
   auto inputBuffer = reinterpret_cast<const T*>(bitPackedData[bitWidth].data());
   for (auto i = 0; i < numBatches; i++) {
     // Read 4 bytes and unpack 32 values
-    duckdb_fastpforlib::fastunpack(
+    velox::fastpforlib::fastunpack(
         inputBuffer + i * 4, result + i * 32, bitWidth);
   }
 }
