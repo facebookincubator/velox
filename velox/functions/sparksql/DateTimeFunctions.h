@@ -350,7 +350,7 @@ struct AddMonthsFunction {
 
     // Similar to handling number in base 12. Here, month - 1 makes it in
     // [0, 11] range.
-    int64_t monthAdded = month - 1 + numMonths;
+    int64_t monthAdded = (int64_t)month - 1 + numMonths;
     // Used to adjust month/year when monthAdded is not in [0, 11] range.
     int64_t yearOffset = (monthAdded >= 0 ? monthAdded : monthAdded - 11) / 12;
     // Adjusts monthAdded to natural month number in [1, 12] range.
