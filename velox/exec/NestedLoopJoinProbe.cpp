@@ -55,7 +55,7 @@ NestedLoopJoinProbe::NestedLoopJoinProbe(
           joinNode->id(),
           "NestedLoopJoinProbe"),
       outputBatchSize_{outputBatchRows()},
-      joinNode_(std::move(joinNode)),
+      joinNode_(joinNode),
       joinType_(joinNode_->joinType()) {
   auto probeType = joinNode_->sources()[0]->outputType();
   auto buildType = joinNode_->sources()[1]->outputType();
