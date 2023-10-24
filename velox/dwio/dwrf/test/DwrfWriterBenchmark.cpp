@@ -35,6 +35,8 @@
 #include "velox/tpch/gen/TpchGen.h"
 
 DEFINE_int32(SCALE_FACTOR, 10, "scale factor");
+DEFINE_int32(MAX_ORDER_ROWS, 6000000, "max order rows");
+DEFINE_int32(BASE_SCALE_FACTOR, 1, "scale factor used in tpchgen");
 
 using std::chrono::system_clock;
 
@@ -76,17 +78,17 @@ class DwrfWriterBenchmark {
 
   void writeToFile() {
     RowVectorPtr rowVector1;
-    int base_scale_factor = 1;
-    int total_writes = FLAGS_SCALE_FACTOR / base_scale_factor;
+    int total_writes = FLAGS_SCALE_FACTOR / FLAGS_BASE_SCALE_FACTOR;
     XLOG_FIRST_N(INFO, 1) << fmt::format("scale factor: ")
                           << FLAGS_SCALE_FACTOR;
     XLOG_FIRST_N(INFO, 1) << fmt::format("base scale factor: ")
-                          << base_scale_factor;
+                          << FLAGS_BASE_SCALE_FACTOR;
+    XLOG_FIRST_N(INFO, 1) << fmt::format("FLAGS_MAX_ORDER_ROWS: ") << FLAGS_MAX_ORDER_ROWS;
     XLOG_FIRST_N(INFO, 1) << fmt::format("total writes: ") << total_writes;
 
     folly::BenchmarkSuspender suspender;
     rowVector1 = facebook::velox::tpch::genTpchLineItem(
-        leafPool_.get(), 600000, 0, base_scale_factor);
+        leafPool_.get(), FLAGS_MAX_ORDER_ROWS, 0, FLAGS_BASE_SCALE_FACTOR);
 
     suspender.dismiss();
 
