@@ -62,7 +62,7 @@ function install_gcs-sdk-cpp {
 }
 
 function install_azure-storage-sdk-cpp {
-  github_checkout azure/azure-sdk-for-cpp azure-storage-blobs_12.8.0
+  github_checkout azure/azure-sdk-for-cpp azure-storage-files-datalake_12.8.0
 
   cd sdk/core/azure-core
   if ! grep -q "baseline" vcpkg.json; then
@@ -84,6 +84,14 @@ function install_azure-storage-sdk-cpp {
   cd -
   # install azure-storage-blobs
   cd sdk/storage/azure-storage-blobs
+  if ! grep -q "baseline" vcpkg.json; then
+    sed -i 's/"version-semver"/"builtin-baseline": "dafef74af53669ef1cc9015f55e0ce809ead62aa","version-semver"/' vcpkg.json
+  fi
+  cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+
+  cd -
+  # install azure-storage-files-datalake
+  cd sdk/storage/azure-storage-files-datalake
   if ! grep -q "baseline" vcpkg.json; then
     sed -i 's/"version-semver"/"builtin-baseline": "dafef74af53669ef1cc9015f55e0ce809ead62aa","version-semver"/' vcpkg.json
   fi

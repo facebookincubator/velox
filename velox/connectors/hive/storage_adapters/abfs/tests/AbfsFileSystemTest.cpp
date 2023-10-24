@@ -15,6 +15,8 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
+#include <azure/storage/files/datalake.hpp>
+#include <gmock/gmock.h>
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
@@ -22,21 +24,77 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
 #include "velox/exec/tests/utils/PortUtil.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
 #include <atomic>
+#include <filesystem>
 #include <random>
 
 using namespace facebook::velox;
-
+using namespace facebook::velox::filesystems::abfs;
+using namespace Azure::Storage::Files::DataLake;
 using ::facebook::velox::common::Region;
 
 constexpr int kOneMB = 1 << 20;
 static const std::string filePath = "test_file.txt";
 static const std::string fullFilePath =
     facebook::velox::filesystems::test::AzuriteABFSEndpoint + filePath;
+
+// A mocked blob storage file client backend with local file store.
+class MockBlobStorageFileClient : public IBlobStorageFileClient {
+ public:
+  MockBlobStorageFileClient() {
+    char tempFileName[] = "/tmp/velox_abfs_test_XXXXXX";
+    int fd = mkstemp(tempFileName);
+    if (fd == -1) {
+      throw std::logic_error(
+          "[MockBlobStorageFileClient] Failed to create a temporary file");
+    }
+    filePath_ = tempFileName;
+    std::fclose(fdopen(fd, "w"));
+    std::remove(tempFileName);
+  }
+
+  void Create() override {
+    fileStream_ = std::ofstream(
+        filePath_,
+        std::ios_base::out | std::ios_base::binary | std::ios_base::app);
+  }
+
+  PathProperties GetProperties() override {
+    if (!std::filesystem::exists(filePath_)) {
+      Azure::Storage::StorageException exp(filePath_ + "doesn't exists");
+      exp.StatusCode = Azure::Core::Http::HttpStatusCode::NotFound;
+      throw exp;
+    }
+    std::ifstream file(filePath_, std::ios::binary | std::ios::ate);
+    uint64_t size = static_cast<uint64_t>(file.tellg());
+    PathProperties ret;
+    ret.FileSize = size;
+    return ret;
+  }
+
+  void Append(const uint8_t* buffer, size_t size, uint64_t offset) override {
+    fileStream_.seekp(offset);
+    fileStream_.write(reinterpret_cast<const char*>(buffer), size);
+  }
+
+  void Flush(uint64_t position) override {
+    fileStream_.flush();
+  }
+
+  void Close() override {
+    fileStream_.flush();
+    fileStream_.close();
+  }
+
+ private:
+  std::string filePath_;
+  std::ofstream fileStream_;
+};
 
 class AbfsFileSystemTest : public testing::Test {
  public:
@@ -72,13 +130,51 @@ class AbfsFileSystemTest : public testing::Test {
     azuriteServer->stop();
   }
 
+  std::unique_ptr<WriteFile> openFileForWrite(
+      std::string_view path,
+      std::shared_ptr<MockBlobStorageFileClient> client) {
+    auto abfsfile =
+        std::make_unique<facebook::velox::filesystems::abfs::AbfsWriteFile>(
+            std::string(path), azuriteServer->connectionStr());
+    abfsfile->setFileClient(client);
+    abfsfile->initialize();
+    return abfsfile;
+  }
+
+  static std::string generateRandomData(int size) {
+    static const char charset[] =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    std::string data(size, ' ');
+
+    for (int i = 0; i < size; ++i) {
+      int index = rand() % (sizeof(charset) - 1);
+      data[i] = charset[index];
+    }
+
+    return data;
+  }
+
  private:
-  static std::shared_ptr<::exec::test::TempFilePath> createFile() {
+  static std::shared_ptr<::exec::test::TempFilePath> createFile(
+      uint64_t size = -1) {
     auto tempFile = ::exec::test::TempFilePath::create();
-    tempFile->append("aaaaa");
-    tempFile->append("bbbbb");
-    tempFile->append(std::string(kOneMB, 'c'));
-    tempFile->append("ddddd");
+    if (size == -1) {
+      tempFile->append("aaaaa");
+      tempFile->append("bbbbb");
+      tempFile->append(std::string(kOneMB, 'c'));
+      tempFile->append("ddddd");
+    } else {
+      const uint64_t totalSize = size * 1024 * 1024;
+      const uint64_t chunkSize = 5 * 1024 * 1024;
+      uint64_t remainingSize = totalSize;
+      while (remainingSize > 0) {
+        uint64_t dataSize = std::min(remainingSize, chunkSize);
+        std::string randomData = generateRandomData(dataSize);
+        tempFile->append(randomData);
+        remainingSize -= dataSize;
+      }
+    }
     return tempFile;
   }
 };
@@ -185,13 +281,41 @@ TEST_F(AbfsFileSystemTest, missingFile) {
   }
 }
 
-TEST_F(AbfsFileSystemTest, openFileForWriteNotImplemented) {
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
-      {{"fs.azure.account.key.test.dfs.core.windows.net",
-        azuriteServer->connectionStr()}});
-  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
+TEST_F(AbfsFileSystemTest, OpenFileForWriteTest) {
+  const std::string abfsFile =
+      facebook::velox::filesystems::test::AzuriteABFSEndpoint + "writetest.txt";
+  auto mockClient =
+      std::make_shared<MockBlobStorageFileClient>(MockBlobStorageFileClient());
+  auto abfsWriteFile = openFileForWrite(abfsFile, mockClient);
+  EXPECT_EQ(abfsWriteFile->size(), 0);
+  uint64_t totalSize = 0;
+  std::string randomData =
+      AbfsFileSystemTest::generateRandomData(1 * 1024 * 1024);
+  abfsWriteFile->append(randomData);
+  abfsWriteFile->append(randomData);
+  abfsWriteFile->append(randomData);
+  abfsWriteFile->append(randomData);
+  abfsWriteFile->append(randomData);
+  abfsWriteFile->append(randomData);
+  abfsWriteFile->append(randomData);
+  abfsWriteFile->append(randomData);
+  totalSize = randomData.size() * 8;
+  abfsWriteFile->flush();
+  EXPECT_EQ(abfsWriteFile->size(), totalSize);
+
+  randomData = AbfsFileSystemTest::generateRandomData(9 * 1024 * 1024);
+  abfsWriteFile->append(randomData);
+  totalSize += randomData.size();
+  randomData = AbfsFileSystemTest::generateRandomData(2 * 1024 * 1024);
+  totalSize += randomData.size();
+  abfsWriteFile->append(randomData);
+  abfsWriteFile->flush();
+  EXPECT_EQ(abfsWriteFile->size(), totalSize);
+  abfsWriteFile->flush();
+  abfsWriteFile->close();
+  VELOX_ASSERT_THROW(abfsWriteFile->append("abc"), "File is not open");
   VELOX_ASSERT_THROW(
-      abfs->openFileForWrite(fullFilePath), "write for abfs not implemented");
+      openFileForWrite(abfsFile, mockClient), "File already exists");
 }
 
 TEST_F(AbfsFileSystemTest, renameNotImplemented) {

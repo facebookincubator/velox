@@ -25,6 +25,7 @@ if(VELOX_ENABLE_ABFS)
            velox_hive_connector
            velox_dwio_common_exception
            Azure::azure-storage-blobs
+           Azure::azure-storage-files-datalake
            Folly::folly
            glog::glog
            fmt::fmt)
