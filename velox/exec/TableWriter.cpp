@@ -30,7 +30,7 @@ TableWriter::TableWriter(
           tableWriteNode->outputType(),
           operatorId,
           tableWriteNode->id(),
-          "TableWrite",
+          "TableWriter",
           tableWriteNode->canSpill(driverCtx->queryConfig())
               ? driverCtx->makeSpillConfig(operatorId)
               : std::nullopt),

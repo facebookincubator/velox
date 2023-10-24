@@ -135,6 +135,11 @@ class TableWriter : public Operator {
     return false;
   }
 
+  /// TableWriter uses connectorPool_ to manage its memory usage.
+  velox::memory::MemoryPool* memStatsPool() const {
+    return connectorPool_;
+  }
+
  private:
   // The memory reclaimer customized for connector which interface with the
   // memory arbitrator to reclaim memory from the file writers created within
