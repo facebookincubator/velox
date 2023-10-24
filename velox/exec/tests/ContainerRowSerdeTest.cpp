@@ -109,7 +109,7 @@ class ContainerRowSerdeTest : public testing::Test,
       const std::vector<HashStringAllocator::Position>& leftPositions,
       const std::vector<HashStringAllocator::Position>& rightPositions,
       const std::vector<std::optional<int32_t>>& expected,
-      const TypePtr& typePtr,
+      const TypePtr& type,
       bool equalsOnly,
       CompareFlags::NullHandlingMode mode) {
     CompareFlags compareFlags{
@@ -127,7 +127,7 @@ class ContainerRowSerdeTest : public testing::Test,
       ASSERT_EQ(
           expected.at(i),
           ContainerRowSerde::compareWithNulls(
-              leftStream, rightStream, typePtr.get(), compareFlags));
+              leftStream, rightStream, type.get(), compareFlags));
     }
   }
 
