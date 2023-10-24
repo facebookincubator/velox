@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
@@ -27,11 +27,8 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <ctime>
-#include <iostream>
 
 using namespace ::testing;
-using namespace facebook::velox;
 using namespace facebook::velox::common;
 using namespace facebook::velox::dwio;
 using namespace facebook::velox::dwio::common;
@@ -39,8 +36,8 @@ using namespace facebook::velox::dwio::common::encryption;
 using namespace facebook::velox::dwio::common::encryption::test;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::memory;
-using namespace std;
 using namespace folly;
+using facebook::velox::VeloxException;
 
 const int32_t DEFAULT_MEM_STREAM_SIZE = 1024 * 1024 * 2; // 2M
 
@@ -52,10 +49,13 @@ class TestBufferPool : public CompressionBufferPool {
             blockSize + PAGE_HEADER_SIZE)} {}
 
   std::unique_ptr<DataBuffer<char>> getBuffer(uint64_t /* unused */) override {
+    VELOX_CHECK_NOT_NULL(buffer_);
     return std::move(buffer_);
   }
 
   void returnBuffer(std::unique_ptr<DataBuffer<char>> buffer) override {
+    VELOX_CHECK_NULL(buffer_);
+    VELOX_CHECK_NOT_NULL(buffer);
     buffer_ = std::move(buffer);
   }
 
@@ -64,11 +64,6 @@ class TestBufferPool : public CompressionBufferPool {
 };
 
 void generateRandomData(char* data, size_t size, bool letter) {
-  // facebook::velox::VectorFuzzer::Options options;
-  // options.vectorSize = size;
-  // VectorFuzzer fuzzer(options, NULL, size);
-  // fuzzer.fuzzArray(data, size);
-
   for (size_t i = 0; i < size; ++i) {
     if (letter) {
       bool capitalized = folly::Random::rand32() % 2 == 0;
@@ -81,9 +76,9 @@ void generateRandomData(char* data, size_t size, bool letter) {
   }
 }
 
-void benchmarkCompress(
+void compress(
     CompressionKind kind,
-    DataSink& sink,
+    FileSink& sink,
     uint64_t block,
     MemoryPool& pool,
     const char* data,
@@ -96,6 +91,7 @@ void benchmarkCompress(
   config.set<uint32_t>(Config::COMPRESSION_THRESHOLD, 128);
   std::unique_ptr<BufferedOutputStream> compressStream =
       createCompressor(kind, bufferPool, holder, config, encrypter);
+
   size_t pos = 0;
   char* compressBuffer;
   int32_t compressBufferSize = 0;
@@ -114,6 +110,7 @@ void benchmarkCompress(
     pos += copy_size;
     dataSize -= copy_size;
   }
+
   compressStream->flush();
 }
 
@@ -121,16 +118,16 @@ BENCHMARK(compressZstd) {
   folly::BenchmarkSuspender suspender;
 
   auto pool = addDefaultLeafMemoryPool();
-  MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
+  MemorySink memSink(DEFAULT_MEM_STREAM_SIZE, {.pool = pool.get()});
+
   uint64_t block = 1024 * 4;
-  // auto dataSize = 1 * 1024 * 1024 * 1024;
   auto dataSize = 1 * 1024 * 1024;
   char testData[dataSize];
   generateRandomData(testData, dataSize, true);
 
   suspender.dismiss();
 
-  benchmarkCompress(
+  compress(
       CompressionKind_ZSTD,
       memSink,
       block,
