@@ -86,14 +86,22 @@ average row size is known and preferred_output_batch_bytes is used to compute th
 <tr class="row-even"><td><p>abandon_partial_aggregation_min_rows</p></td>
 <td><p>integer</p></td>
 <td><p>100,000</p></td>
-<td><p>Min number of rows when we check if a partial aggregation is not reducing the cardinality well and might be
-a subject to being abandoned.</p></td>
+<td><p>Number of input rows to receive before starting to check whether to abandon partial aggregation.</p></td>
 </tr>
 <tr class="row-odd"><td><p>abandon_partial_aggregation_min_pct</p></td>
 <td><p>integer</p></td>
 <td><p>80</p></td>
-<td><p>If a partial aggregation’s number of output rows constitues this or highler percentage of the number of input rows,
-then this partial aggregation will be a subject to being abandoned.</p></td>
+<td><p>Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.</p></td>
+</tr>
+<tr class="row-even"><td><p>abandon_partial_topn_row_number_min_rows</p></td>
+<td><p>integer</p></td>
+<td><p>100,000</p></td>
+<td><p>Number of input rows to receive before starting to check whether to abandon partial TopNRowNumber.</p></td>
+</tr>
+<tr class="row-odd"><td><p>abandon_partial_topn_row_number_min_pct</p></td>
+<td><p>integer</p></td>
+<td><p>80</p></td>
+<td><p>Abandons partial TopNRowNumber if number of output rows equals or exceeds this percentage of the number of input rows.</p></td>
 </tr>
 <tr class="row-even"><td><p>session_timezone</p></td>
 <td><p>string</p></td>
