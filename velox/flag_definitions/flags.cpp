@@ -105,3 +105,10 @@ DEFINE_bool(
     "exception. This is only used by test to control the test error output size");
 
 DEFINE_bool(velox_memory_use_hugepages, true, "Use explicit huge pages");
+
+// Used in velox/dwio/parquet/writer/arrow/ThriftInternal.h
+
+DEFINE_int32(
+    velox_arrow_parquet_writer_thrift_serialized_buffer_size,
+    1024,
+    "Size of the serialized buffer for Arrow Parquet writer in MB");

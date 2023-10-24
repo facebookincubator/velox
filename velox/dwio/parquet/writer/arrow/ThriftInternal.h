@@ -27,6 +27,8 @@
 #include <utility>
 #include <vector>
 
+#include <gflags/gflags.h>
+
 // TCompactProtocol requires some #defines to work right.
 #define SIGNED_RIGHT_SHIFT_IS 1
 #define ARITHMETIC_RIGHT_SHIFT 1
@@ -45,6 +47,8 @@
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/generated/parquet_types.h"
+
+DECLARE_int32(velox_arrow_parquet_writer_thrift_serialized_buffer_size);
 
 namespace facebook::velox::parquet::arrow {
 
@@ -506,7 +510,9 @@ class ThriftDeserializer {
 /// to treat it as a string.
 class ThriftSerializer {
  public:
-  explicit ThriftSerializer(int initial_buffer_size = 1024)
+  explicit ThriftSerializer(
+      int initial_buffer_size =
+          FLAGS_velox_arrow_parquet_writer_thrift_serialized_buffer_size)
       : mem_buffer_(new ThriftBuffer(initial_buffer_size)) {
     apache::thrift::protocol::TCompactProtocolFactoryT<ThriftBuffer> factory;
     protocol_ = factory.getProtocol(mem_buffer_);
