@@ -291,14 +291,9 @@ TEST_F(AbfsFileSystemTest, OpenFileForWriteTest) {
   uint64_t totalSize = 0;
   std::string randomData =
       AbfsFileSystemTest::generateRandomData(1 * 1024 * 1024);
-  abfsWriteFile->append(randomData);
-  abfsWriteFile->append(randomData);
-  abfsWriteFile->append(randomData);
-  abfsWriteFile->append(randomData);
-  abfsWriteFile->append(randomData);
-  abfsWriteFile->append(randomData);
-  abfsWriteFile->append(randomData);
-  abfsWriteFile->append(randomData);
+  for (int i = 0; i < 8; ++i) {
+    abfsWriteFile->append(randomData);
+  }
   totalSize = randomData.size() * 8;
   abfsWriteFile->flush();
   EXPECT_EQ(abfsWriteFile->size(), totalSize);
