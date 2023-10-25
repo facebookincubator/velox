@@ -558,6 +558,76 @@ TEST_F(ArraySortTest, failOnMapTypeSort) {
   testFail("array_sort_desc");
 }
 
+TEST_F(ArraySortTest, failOnArrayNullCompare) {
+  auto baseVector = makeArrayVectorFromJson<int32_t>({
+      "[null, 1]",
+      "[1, 1]",
+      "[2, 2]",
+      "[2, null]",
+      "[4, 4]",
+      "[5, null]",
+      "null",
+  });
+
+  for (const auto& name : {"array_sort", "array_sort_desc"}) {
+    // [2, null] vs [4, 4], [5, null] vs null no throw.
+    const auto noNullCompareBatch = makeRowVector({
+        makeArrayVector({3, 5}, baseVector),
+    });
+    evaluate(fmt::format("{}(c0)", name), noNullCompareBatch);
+
+    // [null, 1] vs [1, 1] throws.
+    auto nullCompareBatch = makeRowVector({
+        makeArrayVector({0, 3, 5}, baseVector),
+    });
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch),
+        "ARRAY comparison not supported for values that contain null");
+
+    // [2, 2] vs [2, null] throws.
+    nullCompareBatch = makeRowVector({
+        makeArrayVector({1, 4}, baseVector),
+    });
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch),
+        "ARRAY comparison not supported for values that contain null");
+  }
+}
+
+TEST_F(ArraySortTest, failOnRowNullCompare) {
+  auto baseVector = makeRowVector(
+      {
+          makeNullableFlatVector<int32_t>({std::nullopt, 1, 2, 2, 4, 5, 0}),
+          makeNullableFlatVector<int32_t>(
+              {1, 1, 2, std::nullopt, 4, std::nullopt, 0}),
+      },
+      [](vector_size_t index) { return index == 6; });
+
+  for (const auto& name : {"array_sort", "array_sort_desc"}) {
+    // (2, null) vs (4, 4), (5, null) vs null no throw.
+    const auto noNullCompareBatch = makeRowVector({
+        makeArrayVector({3, 5}, baseVector),
+    });
+    evaluate(fmt::format("{}(c0)", name), noNullCompareBatch);
+
+    // (null, 1) vs (1, 1) throws.
+    auto nullCompareBatch = makeRowVector({
+        makeArrayVector({0, 3, 5}, baseVector),
+    });
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch),
+        "ROW comparison not supported for values that contain null");
+
+    // (2, 2) vs (2, null) throws.
+    nullCompareBatch = makeRowVector({
+        makeArrayVector({1, 4}, baseVector),
+    });
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch),
+        "ROW comparison not supported for values that contain null");
+  }
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     ArraySortTest,
     ArraySortTest,
