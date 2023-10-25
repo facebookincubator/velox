@@ -148,19 +148,24 @@ Array Functions
 
     Returns an array which has the sorted order of the input array x. E must be
     an orderable type. Null elements will be placed at the end of the returned array.
-    Throws if compare nested null elements of complex type. ::
+    May throw if E is and ARRAY or ROW type and input values contain nested nulls.
+    Throws if deciding the order of elements would require comparing nested null values. ::
 
         SELECT array_sort(ARRAY [1, 2, 3]); -- [1, 2, 3]
         SELECT array_sort(ARRAY [3, 2, 1]); -- [1, 2, 3]
         SELECT array_sort(ARRAY [2, 1, NULL]; -- [1, 2, NULL]
         SELECT array_sort(ARRAY [NULL, 1, NULL]); -- [1, NULL, NULL]
         SELECT array_sort(ARRAY [NULL, 2, 1]); -- [1, 2, NULL]
+        SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [2, null]]); -- [[1, 2], [2, null]]
+        SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [1, null]]); -- failed: array_sort contains nested nulls not supported for comparison
 
 .. function:: array_sort(array(T), function(T,U)) -> array(T)
 
     Returns the array sorted by values computed using specified lambda in ascending
     order. U must be an orderable type. Null elements will be placed at the end of
-    the returned array. Throws if compare nested null elements of complex type. ::
+    the returned array. May throw if E is and ARRAY or ROW type and input values contain
+    nested nulls. Throws if deciding the order of elements would require comparing nested
+    null values. ::
 
         SELECT array_sort(ARRAY ['cat', 'leopard', 'mouse'], x -> length(x)); -- ['cat', 'mouse', 'leopard']
 
@@ -168,19 +173,24 @@ Array Functions
 
     Returns the array sorted in the descending order. E must be an orderable type.
     Null elements will be placed at the end of the returned array.
-    Throws if compare nested null elements of complex type. ::
+    May throw if E is and ARRAY or ROW type and input values contain nested nulls.
+    Throws if deciding the order of elements would require comparing nested null values. ::
 
         SELECT array_sort_desc(ARRAY [1, 2, 3]); -- [3, 2, 1]
         SELECT array_sort_desc(ARRAY [3, 2, 1]); -- [3, 2, 1]
         SELECT array_sort_desc(ARRAY [2, 1, NULL]; -- [2, 1, NULL]
         SELECT array_sort_desc(ARRAY [NULL, 1, NULL]); -- [1, NULL, NULL]
         SELECT array_sort_desc(ARRAY [NULL, 2, 1]); -- [2, 1, NULL]
+        SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [2, null]]); -- [[1, 2], [2, null]]
+        SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [1, null]]); -- failed: array_sort contains nested nulls not supported for comparison
 
 .. function:: array_sort_desc(array(T), function(T,U)) -> array(T)
 
     Returns the array sorted by values computed using specified lambda in descending
     order. U must be an orderable type. Null elements will be placed at the end of
-    the returned array. Throws if compare nested null elements of complex type. ::
+    the returned array. May throw if E is and ARRAY or ROW type and input values contain
+    nested nulls. Throws if deciding the order of elements would require comparing nested
+    null values. ::
 
         SELECT array_sort_desc(ARRAY ['cat', 'leopard', 'mouse'], x -> length(x)); -- ['leopard', 'mouse', 'cat']
 

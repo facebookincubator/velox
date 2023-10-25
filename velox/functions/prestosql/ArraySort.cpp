@@ -49,14 +49,14 @@ BufferPtr sortElements(
   }
 
   auto decodedIndices = decodedElements->indices();
-
-  rows.applyToSelected([&](vector_size_t row) {
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
     const auto size = inputArray.sizeAt(row);
     const auto offset = inputArray.offsetAt(row);
 
     for (auto i = offset; i < offset + size; ++i) {
       rawIndices[i] = i;
     }
+
     std::sort(
         rawIndices + offset,
         rawIndices + offset + size,
@@ -73,10 +73,10 @@ BufferPtr sortElements(
           std::optional<int32_t> result = baseElementsVector->compare(
               baseElementsVector, decodedIndices[a], decodedIndices[b], flags);
 
-          VELOX_USER_CHECK(
-              result.has_value(),
-              "{} comparison not supported for values that contain nulls",
-              mapTypeKindToName(baseElementsVector->typeKind()));
+          if (!result.has_value()) {
+            VELOX_USER_FAIL(
+                "array_sort contains nested nulls not supported for comparison");
+          }
 
           return result.value() < 0;
         });

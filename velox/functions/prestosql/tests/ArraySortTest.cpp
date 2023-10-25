@@ -568,63 +568,96 @@ TEST_F(ArraySortTest, failOnArrayNullCompare) {
       "[5, null]",
       "null",
   });
+  static const std::string kErrorMessage =
+      "array_sort contains nested nulls not supported for comparison";
+
+  // [2, null] vs [4, 4], [5, null] vs null no throw.
+  const auto noNullCompareBatch = makeRowVector({
+      makeArrayVector({3, 5}, baseVector),
+  });
+
+  // [null, 1] vs [1, 1] throws.
+  auto nullCompareBatch1 = makeRowVector({
+      makeArrayVector({0, 3, 5}, baseVector),
+  });
+
+  // [2, 2] vs [2, null] throws.
+  auto nullCompareBatch2 = makeRowVector({
+      makeArrayVector({1, 4}, baseVector),
+  });
 
   for (const auto& name : {"array_sort", "array_sort_desc"}) {
-    // [2, null] vs [4, 4], [5, null] vs null no throw.
-    const auto noNullCompareBatch = makeRowVector({
-        makeArrayVector({3, 5}, baseVector),
-    });
     evaluate(fmt::format("{}(c0)", name), noNullCompareBatch);
-
-    // [null, 1] vs [1, 1] throws.
-    auto nullCompareBatch = makeRowVector({
-        makeArrayVector({0, 3, 5}, baseVector),
-    });
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0)", name), nullCompareBatch),
-        "ARRAY comparison not supported for values that contain null");
-
-    // [2, 2] vs [2, null] throws.
-    nullCompareBatch = makeRowVector({
-        makeArrayVector({1, 4}, baseVector),
-    });
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch1),
+        kErrorMessage);
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0)", name), nullCompareBatch),
-        "ARRAY comparison not supported for values that contain null");
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch2),
+        kErrorMessage);
+  }
+
+  {
+    auto expected = makeArrayVector({2, 3, 5}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch1));
+  }
+
+  {
+    auto expected = makeArrayVector({3, 4}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch2));
   }
 }
 
 TEST_F(ArraySortTest, failOnRowNullCompare) {
-  auto baseVector = makeRowVector(
-      {
-          makeNullableFlatVector<int32_t>({std::nullopt, 1, 2, 2, 4, 5, 0}),
-          makeNullableFlatVector<int32_t>(
-              {1, 1, 2, std::nullopt, 4, std::nullopt, 0}),
-      },
-      [](vector_size_t index) { return index == 6; });
+  auto baseVector = makeRowVector({
+      makeNullableFlatVector<int32_t>({std::nullopt, 1, 2, 2, 4, 5, 0}),
+      makeNullableFlatVector<int32_t>(
+          {1, 1, 2, std::nullopt, 4, std::nullopt, 0}),
+  });
+  baseVector->setNull(6, true);
+  static const std::string kErrorMessage =
+      "array_sort contains nested nulls not supported for comparison";
+
+  // (2, null) vs (4, 4), (5, null) vs null no throw.
+  const auto noNullCompareBatch = makeRowVector({
+      makeArrayVector({3, 5}, baseVector),
+  });
+
+  // (null, 1) vs (1, 1) throws.
+  auto nullCompareBatch1 = makeRowVector({
+      makeArrayVector({0, 3, 5}, baseVector),
+  });
+
+  // (2, 2) vs (2, null) throws.
+  auto nullCompareBatch2 = makeRowVector({
+      makeArrayVector({1, 4}, baseVector),
+  });
 
   for (const auto& name : {"array_sort", "array_sort_desc"}) {
-    // (2, null) vs (4, 4), (5, null) vs null no throw.
-    const auto noNullCompareBatch = makeRowVector({
-        makeArrayVector({3, 5}, baseVector),
-    });
     evaluate(fmt::format("{}(c0)", name), noNullCompareBatch);
-
-    // (null, 1) vs (1, 1) throws.
-    auto nullCompareBatch = makeRowVector({
-        makeArrayVector({0, 3, 5}, baseVector),
-    });
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0)", name), nullCompareBatch),
-        "ROW comparison not supported for values that contain null");
-
-    // (2, 2) vs (2, null) throws.
-    nullCompareBatch = makeRowVector({
-        makeArrayVector({1, 4}, baseVector),
-    });
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch1),
+        kErrorMessage);
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0)", name), nullCompareBatch),
-        "ROW comparison not supported for values that contain null");
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch2),
+        kErrorMessage);
+  }
+
+  {
+    auto expected = makeArrayVector({2, 3, 5}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch1));
+  }
+
+  {
+    auto expected = makeArrayVector({3, 4}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch2));
   }
 }
 
