@@ -729,7 +729,6 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
 }
 
 TEST_F(SharedArbitrationTest, reclaimFromCompletedOrderBy) {
-  GTEST_SKIP() << "https://github.com/facebookincubator/velox/issues/7154";
   const int numVectors = 2;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -2863,6 +2862,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, arbitrationFromTableWriter) {
 
     ASSERT_EQ(arbitrator_->stats().numFailures, writerSpillEnabled ? 0 : 1);
     ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 0);
+    waitForAllTasksToBeDeleted(3'000'000);
   }
 }
 
@@ -2950,6 +2950,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, writerFlushThreshold) {
     ASSERT_EQ(
         arbitrator_->stats().numNonReclaimableAttempts,
         writerFlushThreshold == 0 ? 0 : 1);
+    waitForAllTasksToBeDeleted(3'000'000);
   }
 }
 
