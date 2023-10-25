@@ -17,8 +17,11 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
+#include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/external/timsort/TimSort.hpp"
+#include "velox/type/StringView.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/tests/VectorTestUtils.h"
@@ -26,22 +29,61 @@
 
 namespace facebook::velox::test {
 namespace {
+std::string getExampleFilePath(const std::string& fileName) {
+  return test::getDataFilePath(
+      "velox/dwio/parquet/tests/reader", "../examples/" + fileName);
+}
 
-template <typename T>
-VectorGeneratedData<T>
-testData(size_t length, size_t cardinality, bool sequences, size_t iteration) {
-  int32_t seqCount =
-      sequences ? std::max(2, (int32_t)(length / cardinality)) : 0;
-  int32_t seqLength = sequences ? std::max(2, (int32_t)(length / seqCount)) : 0;
-  return genTestDataWithSequences<T>(
-      length,
-      cardinality,
-      false /* isSorted */,
-      true /* includeNulls */,
-      seqCount,
-      seqLength,
-      false /* useFullTypeRange */,
-      length + iteration /* seed */);
+dwio::common::RowReaderOptions getReaderOpts(
+    const RowTypePtr& rowType,
+    bool fileColumnNamesReadAsLowerCase = false) {
+  dwio::common::RowReaderOptions rowReaderOpts;
+  rowReaderOpts.select(
+      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
+          rowType, rowType->names(), nullptr, fileColumnNamesReadAsLowerCase));
+  return rowReaderOpts;
+}
+
+std::shared_ptr<velox::common::ScanSpec> makeScanSpec(
+    const RowTypePtr& rowType) {
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
+  scanSpec->addAllChildFields(*rowType);
+  return scanSpec;
+}
+
+facebook::velox::parquet::ParquetReader createReader(
+    const std::string& path,
+    const facebook::velox::dwio::common::ReaderOptions& opts) {
+  return facebook::velox::parquet::ParquetReader(
+      std::make_unique<facebook::velox::dwio::common::BufferedInput>(
+          std::make_shared<LocalReadFile>(path), opts.getMemoryPool()),
+      opts);
+}
+
+std::vector<std::optional<StringView>> getDataFromFile() {
+  const std::string sample(getExampleFilePath("str_sort.parquet"));
+  auto rowType = ROW({"query_sig", "result_sig"}, {VARCHAR(), VARCHAR()});
+  auto pool = memory::addDefaultLeafMemoryPool();
+  facebook::velox::dwio::common::ReaderOptions readerOptions{pool.get()};
+  facebook::velox::parquet::ParquetReader reader =
+      createReader(sample, readerOptions);
+  auto rowReaderOpts = getReaderOpts(rowType);
+  auto scanSpec = makeScanSpec(rowType);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto data = BaseVector::create(rowType, 50000, pool.get());
+  rowReader->next(50000, data);
+  auto querySigCol =
+      data->as<RowVector>()->childAt(0)->asFlatVector<StringView>();
+  auto resSigCol =
+      data->as<RowVector>()->childAt(1)->asFlatVector<StringView>();
+  std::vector<std::optional<StringView>> stdVector(querySigCol->size());
+  for (int i = 0; i < querySigCol->size(); i++) {
+    auto merge =
+        querySigCol->valueAt(i).getString() + resSigCol->valueAt(i).getString();
+    stdVector[i] = StringView(merge);
+  }
+  return stdVector;
 }
 
 std::vector<char*> store(
@@ -57,23 +99,21 @@ std::vector<char*> store(
 }
 
 template <typename T>
-void rowContainerStdSortBenchmark(
-    uint32_t iterations,
-    size_t length,
-    size_t cardinality,
-    bool sequences) {
+void rowContainerStdSortBenchmark(uint32_t iterations, size_t cardinality) {
   folly::BenchmarkSuspender suspender;
   auto pool = memory::addDefaultLeafMemoryPool();
   VectorMaker vectorMaker(pool.get());
 
   for (size_t k = 0; k < iterations; ++k) {
-    auto data = testData<T>(length, cardinality, sequences, k);
+    // Use std::nullopt for seed to generate unpredictable pseudo-random for
+    // benchmark.
+    auto data =
+        genTestData<T>(cardinality, CppToType<T>::create(), true, false, false);
     auto vector =
         vectorMaker.encodedVector<T>(VectorEncoding::Simple::FLAT, data.data());
     DecodedVector decoded(*vector);
     // Create row container.
     std::vector<TypePtr> types{vector->type()};
-
     // Store the vector in the rowContainer.
     auto rowContainer =
         std::make_unique<velox::exec::RowContainer>(types, pool.get());
@@ -89,23 +129,19 @@ void rowContainerStdSortBenchmark(
 }
 
 template <typename T>
-void rowContainerTimSortBenchmark(
-    uint32_t iterations,
-    size_t length,
-    size_t cardinality,
-    bool sequences) {
+void rowContainerTimSortBenchmark(uint32_t iterations, size_t cardinality) {
   folly::BenchmarkSuspender suspender;
   auto pool = memory::addDefaultLeafMemoryPool();
   VectorMaker vectorMaker(pool.get());
 
   for (size_t k = 0; k < iterations; ++k) {
-    auto data = testData<T>(length, cardinality, sequences, k);
+    auto data =
+        genTestData<T>(cardinality, CppToType<T>::create(), true, false, false);
     auto vector =
         vectorMaker.encodedVector<T>(VectorEncoding::Simple::FLAT, data.data());
     DecodedVector decoded(*vector);
     // Create row container.
     std::vector<TypePtr> types{vector->type()};
-
     // Store the vector in the rowContainer.
     auto rowContainer =
         std::make_unique<velox::exec::RowContainer>(types, pool.get());
@@ -120,240 +156,80 @@ void rowContainerTimSortBenchmark(
   }
 }
 
-void BM_Int64_stdSort(
-    uint32_t iterations,
-    size_t numRows,
-    size_t cardinality,
-    bool sequences) {
-  rowContainerStdSortBenchmark<int64_t>(
-      iterations, numRows, cardinality, sequences);
+void BM_Int64_stdSort(uint32_t iterations, size_t cardinality) {
+  rowContainerStdSortBenchmark<int64_t>(iterations, cardinality);
 }
 
-void BM_Int64_timSort(
-    uint32_t iterations,
-    size_t numRows,
-    size_t cardinality,
-    bool sequences) {
-  rowContainerTimSortBenchmark<int64_t>(
-      iterations, numRows, cardinality, sequences);
+void BM_Int64_timSort(uint32_t iterations, size_t cardinality) {
+  rowContainerTimSortBenchmark<int64_t>(iterations, cardinality);
+}
+
+void BM_STR_stdSort(uint32_t iterations) {
+  folly::BenchmarkSuspender suspender;
+  auto pool = memory::addDefaultLeafMemoryPool();
+  VectorMaker vectorMaker(pool.get());
+  auto data = getDataFromFile();
+  auto vector =
+      vectorMaker.encodedVector<StringView>(VectorEncoding::Simple::FLAT, data);
+  DecodedVector decoded(*vector);
+  // Create row container.
+  std::vector<TypePtr> types{vector->type()};
+  // Store the vector in the rowContainer.
+  auto rowContainer =
+      std::make_unique<velox::exec::RowContainer>(types, pool.get());
+  int size = data.size();
+  auto rows = store(*rowContainer, decoded, size);
+  for (size_t k = 0; k < iterations; ++k) {
+    suspender.dismiss();
+    std::sort(
+        rows.begin(), rows.end(), [&](const char* left, const char* right) {
+          return rowContainer->compareRows(left, right) < 0;
+        });
+    suspender.rehire();
+  }
+}
+
+void BM_STR_timSort(uint32_t iterations) {
+  folly::BenchmarkSuspender suspender;
+  auto pool = memory::addDefaultLeafMemoryPool();
+  VectorMaker vectorMaker(pool.get());
+  auto data = getDataFromFile();
+  auto vector =
+      vectorMaker.encodedVector<StringView>(VectorEncoding::Simple::FLAT, data);
+  DecodedVector decoded(*vector);
+  // Create row container.
+  std::vector<TypePtr> types{vector->type()};
+  // Store the vector in the rowContainer.
+  auto rowContainer =
+      std::make_unique<velox::exec::RowContainer>(types, pool.get());
+  int size = vector->size();
+  auto rows = store(*rowContainer, decoded, size);
+  for (size_t k = 0; k < iterations; ++k) {
+    suspender.dismiss();
+    gfx::timsort(
+        rows.begin(), rows.end(), [&](const char* left, const char* right) {
+          return rowContainer->compareRows(left, right) < 0;
+        });
+    suspender.rehire();
+  }
 }
 } // namespace
 
-// 100k rows===============
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    100k_rows_100k_uni_noseq,
-    100000,
-    100000,
-    false);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    100k_rows_100k_uni_noseq,
-    100000,
-    100000,
-    false);
+BENCHMARK_NAMED_PARAM(BM_Int64_stdSort, 100k_uni_noseq, 100000);
+BENCHMARK_RELATIVE_NAMED_PARAM(BM_Int64_timSort, 100k_uni_noseq, 100000);
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    100k_rows_10k_uni_noseq,
-    100000,
-    10000,
-    false);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    100k_rows_10k_uni_noseq,
-    100000,
-    10000,
-    false);
+BENCHMARK_NAMED_PARAM(BM_Int64_stdSort, 10k_uni_noseq, 10000);
+BENCHMARK_RELATIVE_NAMED_PARAM(BM_Int64_timSort, 10k_uni_noseq, 10000);
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    100k_rows_1k_uni_noseq,
-    100000,
-    1000,
-    false);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    100k_rows_1k_uni_noseq,
-    100000,
-    1000,
-    false);
+BENCHMARK_NAMED_PARAM(BM_Int64_stdSort, 1k_uni_noseq, 1000);
+BENCHMARK_RELATIVE_NAMED_PARAM(BM_Int64_timSort, 1k_uni_noseq, 1000);
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    100k_rows_10k_uni_seq,
-    100000,
-    10000,
-    true);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    100k_rows_10k_uni_seq,
-    100000,
-    10000,
-    true);
-
+BENCHMARK_NAMED_PARAM(BM_STR_stdSort, RealWorldData_stdSort);
+BENCHMARK_RELATIVE_NAMED_PARAM(BM_STR_timSort, RealWorldData_timSort);
 BENCHMARK_DRAW_LINE();
-
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    100k_rows_1k_uni_seq,
-    100000,
-    1000,
-    true);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    100k_rows_1k_uni_seq,
-    100000,
-    1000,
-    true);
-
-BENCHMARK_DRAW_LINE();
-
-// 1M rows===============
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    1M_rows_10k_uni_noseq,
-    1000000,
-    10000,
-    false);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    1M_rows_10k_uni_noseq,
-    1000000,
-    10000,
-    false);
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    1M_rows_1k_uni_noseq,
-    1000000,
-    1000,
-    false);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    1M_rows_1k_uni_noseq,
-    1000000,
-    1000,
-    false);
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    1M_rows_10k_uni_seq,
-    1000000,
-    10000,
-    true);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    1M_rows_10k_uni_seq,
-    1000000,
-    10000,
-    true);
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    1M_rows_1k_uni_seq,
-    1000000,
-    1000,
-    true);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    1M_rows_1k_uni_seq,
-    1000000,
-    1000,
-    true);
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    1M_rows_100_uni_seq,
-    1000000,
-    100,
-    true);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    1M_rows_100_uni_seq,
-    1000000,
-    100,
-    true);
-BENCHMARK_DRAW_LINE();
-
-// 2M rows===============
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    2M_rows_10k_uni_noseq,
-    2000000,
-    10000,
-    false);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    2M_rows_10k_uni_noseq,
-    2000000,
-    10000,
-    false);
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    2M_rows_1k_uni_noseq,
-    2000000,
-    1000,
-    false);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    2M_rows_1k_uni_noseq,
-    2000000,
-    1000,
-    false);
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    2M_rows_10k_uni_seq,
-    2000000,
-    10000,
-    true);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    2M_rows_10k_uni_seq,
-    2000000,
-    10000,
-    true);
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    2M_rows_1k_uni_seq,
-    2000000,
-    1000,
-    true);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    2M_rows_1k_uni_seq,
-    2000000,
-    1000,
-    true);
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK_NAMED_PARAM(
-    BM_Int64_stdSort,
-    2M_rows_100_uni_seq,
-    2000000,
-    100,
-    true);
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    BM_Int64_timSort,
-    2M_rows_100_uni_seq,
-    2000000,
-    100,
-    true);
-BENCHMARK_DRAW_LINE();
-
 } // namespace facebook::velox::test
 
 int main(int argc, char** argv) {

@@ -84,10 +84,6 @@ target_link_libraries(
   velox_link_libs
   ${TEST_LINK_LIBS})
 
-add_executable(velox_str_sort_benchmark StringSortBenchmark.cpp)
-target_link_libraries(velox_str_sort_benchmark velox_exec velox_exec_test_lib
-                      velox_vector_test_lib ${FOLLY_BENCHMARK})
-
 if(${VELOX_ENABLE_ARROW})
 
   add_executable(velox_dwio_parquet_rlebp_decoder_test RleBpDecoderTest.cpp)
