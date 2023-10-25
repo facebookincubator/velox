@@ -22,6 +22,7 @@ namespace detail {
 
 DEFINE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
 DEFINE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError);
+DEFINE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxPersistentUserError);
 
 } // namespace detail
 } // namespace velox

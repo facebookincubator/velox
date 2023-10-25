@@ -772,7 +772,7 @@ void castFromJson(
         try {
           castFromJsonTyped<kind>(object, writer.current());
         } catch (const VeloxException& ve) {
-          if (!ve.isUserError()) {
+          if (!ve.suppressedByTry()) {
             throw;
           }
           writer.commitNull();

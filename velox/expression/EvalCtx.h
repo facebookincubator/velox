@@ -104,11 +104,12 @@ class EvalCtx {
       try {
         func(row);
       } catch (const VeloxException& e) {
-        if (!e.isUserError()) {
+        if (!e.suppressedByTry()) {
           throw;
         }
         // Avoid double throwing.
         setVeloxExceptionError(row, std::current_exception());
+
       } catch (const std::exception& e) {
         setError(row, std::current_exception());
       }

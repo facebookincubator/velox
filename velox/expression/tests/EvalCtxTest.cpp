@@ -221,3 +221,23 @@ TEST_F(EvalCtxTest, localSingleRow) {
     }
   }
 }
+
+TEST_F(EvalCtxTest, applyToSelectedNoThrow) {
+  EvalCtx context(&execCtx_);
+  *context.mutableThrowOnError() = true;
+  EXPECT_THROW(
+      (context.applyToSelectedNoThrow(
+          SelectivityVector(10), [&](auto row) { VELOX_USER_FAIL("fail"); })),
+      VeloxUserError);
+  *context.mutableThrowOnError() = false;
+  EXPECT_NO_THROW((context.applyToSelectedNoThrow(
+      SelectivityVector(10), [&](auto row) { VELOX_USER_FAIL("fail"); })));
+  EXPECT_THROW(
+      (context.applyToSelectedNoThrow(
+          SelectivityVector(10), [&](auto row) { VELOX_USER_ABORT("fail"); })),
+      VeloxPersistentUserError);
+  EXPECT_THROW(
+      (context.applyToSelectedNoThrow(
+          SelectivityVector(10), [&](auto row) { VELOX_FAIL("fail"); })),
+      VeloxRuntimeError);
+}

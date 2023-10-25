@@ -120,7 +120,8 @@ class VeloxException : public std::exception {
       std::string_view errorCode,
       bool isRetriable,
       Type exceptionType = Type::kSystem,
-      std::string_view exceptionName = "VeloxException");
+      std::string_view exceptionName = "VeloxException",
+      bool suppressedByTry = false);
 
   /// Wrap an std::exception.
   VeloxException(
@@ -130,7 +131,8 @@ class VeloxException : public std::exception {
       std::string_view errorCode,
       bool isRetriable,
       Type exceptionType = Type::kSystem,
-      std::string_view exceptionName = "VeloxException");
+      std::string_view exceptionName = "VeloxException",
+      bool suppressedByTry = false);
 
   VeloxException(
       const std::exception_ptr& e,
@@ -138,7 +140,8 @@ class VeloxException : public std::exception {
       std::string_view errorSource,
       bool isRetriable,
       Type exceptionType = Type::kSystem,
-      std::string_view exceptionName = "VeloxException")
+      std::string_view exceptionName = "VeloxException",
+      bool suppressedByTry = false)
       : VeloxException(
             e,
             message,
@@ -146,7 +149,8 @@ class VeloxException : public std::exception {
             "",
             isRetriable,
             exceptionType,
-            exceptionName) {}
+            exceptionName,
+            suppressedByTry) {}
 
   // Inherited
   const char* what() const noexcept override {
@@ -157,18 +161,23 @@ class VeloxException : public std::exception {
   const process::StackTrace* stackTrace() const {
     return state_->stackTrace.get();
   }
+
   const char* file() const {
     return state_->file;
   }
+
   size_t line() const {
     return state_->line;
   }
+
   const char* function() const {
     return state_->function;
   }
+
   const std::string& failingExpression() const {
     return state_->failingExpression;
   }
+
   const std::string& message() const {
     return state_->message;
   }
@@ -209,6 +218,10 @@ class VeloxException : public std::exception {
     return state_->wrappedException;
   }
 
+  bool suppressedByTry() const {
+    return suppressedByTry_;
+  }
+
  private:
   struct State {
     std::unique_ptr<process::StackTrace> stackTrace;
@@ -247,10 +260,57 @@ class VeloxException : public std::exception {
     const char* what() const noexcept;
   };
 
-  explicit VeloxException(std::shared_ptr<State const> state) noexcept
-      : state_(std::move(state)) {}
+  explicit VeloxException(
+      std::shared_ptr<State const> state,
+      bool suppressedByTry) noexcept
+      : state_(std::move(state)), suppressedByTry_(suppressedByTry) {}
 
   const std::shared_ptr<const State> state_;
+
+  bool suppressedByTry_ = false;
+};
+
+// A user error that is not suppressed by try.
+class VeloxPersistentUserError : public VeloxException {
+ public:
+  VeloxPersistentUserError(
+      const char* file,
+      size_t line,
+      const char* function,
+      std::string_view expression,
+      std::string_view message,
+      std::string_view /* errorSource */,
+      std::string_view errorCode,
+      bool isRetriable,
+      std::string_view exceptionName = "VeloxPersistentUserError")
+      : VeloxException(
+            file,
+            line,
+            function,
+            expression,
+            message,
+            error_source::kErrorSourceUser,
+            errorCode,
+            isRetriable,
+            Type::kUser,
+            exceptionName,
+            false) {}
+
+  /// Wrap an std::exception.
+  VeloxPersistentUserError(
+      const std::exception_ptr& e,
+      std::string_view message,
+      bool isRetriable,
+      std::string_view exceptionName = "VeloxPersistentUserError")
+      : VeloxException(
+            e,
+            message,
+            error_source::kErrorSourceUser,
+            error_code::kInvalidArgument,
+            isRetriable,
+            Type::kUser,
+            exceptionName,
+            false) {}
 };
 
 class VeloxUserError : public VeloxException {
@@ -275,7 +335,8 @@ class VeloxUserError : public VeloxException {
             errorCode,
             isRetriable,
             Type::kUser,
-            exceptionName) {}
+            exceptionName,
+            true) {}
 
   /// Wrap an std::exception.
   VeloxUserError(
@@ -290,7 +351,8 @@ class VeloxUserError : public VeloxException {
             error_code::kInvalidArgument,
             isRetriable,
             Type::kUser,
-            exceptionName) {}
+            exceptionName,
+            true) {}
 };
 
 class VeloxRuntimeError final : public VeloxException {
@@ -315,7 +377,8 @@ class VeloxRuntimeError final : public VeloxException {
             errorCode,
             isRetriable,
             Type::kSystem,
-            exceptionName) {}
+            exceptionName,
+            false) {}
 
   /// Wrap an std::exception.
   VeloxRuntimeError(
@@ -329,7 +392,8 @@ class VeloxRuntimeError final : public VeloxException {
             error_source::kErrorSourceRuntime,
             isRetriable,
             Type::kSystem,
-            exceptionName) {}
+            exceptionName,
+            false) {}
 };
 
 /// Returns a reference to a thread level counter of Velox error throws.

@@ -868,3 +868,63 @@ TEST(ExceptionTest, exceptionMacroInlining) {
     ASSERT_TRUE(folly::StringPiece{e.what()}.startsWith("argument not found"));
   }
 }
+
+namespace {
+template <typename Func>
+void testSuppressedByTry(
+    Func&& func,
+    bool suppressedByTry,
+    bool isUserError = true) {
+  try {
+    func();
+    VELOX_UNREACHABLE();
+  } catch (VeloxException& e) {
+    VELOX_CHECK_EQ(e.suppressedByTry(), suppressedByTry);
+    VELOX_CHECK_EQ(e.isUserError(), isUserError);
+  }
+}
+
+} // namespace
+
+TEST(ExceptionTest, suppressedByTry) {
+  testSuppressedByTry([&]() { VELOX_USER_FAIL("fail") }, true);
+  testSuppressedByTry([&]() { VELOX_USER_CHECK(false) }, true);
+  testSuppressedByTry([&]() { VELOX_USER_CHECK_GT(1, 10) }, true);
+  testSuppressedByTry([&]() { VELOX_USER_CHECK_GT(1, 10) }, true);
+  testSuppressedByTry([&]() { VELOX_USER_CHECK_GE(1, 10) }, true);
+  testSuppressedByTry([&]() { VELOX_USER_CHECK_LT(10, 1) }, true);
+  testSuppressedByTry([&]() { VELOX_USER_CHECK_LE(10, 1) }, true);
+  testSuppressedByTry([&]() { VELOX_USER_CHECK_EQ(1, 10) }, true);
+  testSuppressedByTry([&]() { VELOX_USER_CHECK_NE(1, 1) }, true);
+  testSuppressedByTry([&]() { VELOX_USER_CHECK_NULL(this) }, true);
+  testSuppressedByTry([&]() { VELOX_USER_CHECK_NOT_NULL(nullptr) }, true);
+  testSuppressedByTry([&]() { VELOX_UNSUPPORTED("fail") }, true);
+  testSuppressedByTry([&]() { VELOX_SCHEMA_MISMATCH_ERROR("fail") }, true);
+
+  testSuppressedByTry([&]() { VELOX_USER_ABORT("fail") }, false);
+  testSuppressedByTry([&]() { VELOX_USER_ABORT_CHECK(false) }, false);
+  testSuppressedByTry([&]() { VELOX_USER_ABORT_CHECK_GT(1, 10) }, false);
+  testSuppressedByTry([&]() { VELOX_USER_ABORT_CHECK_GT(1, 10) }, false);
+  testSuppressedByTry([&]() { VELOX_USER_ABORT_CHECK_GE(1, 10) }, false);
+  testSuppressedByTry([&]() { VELOX_USER_ABORT_CHECK_LT(10, 1) }, false);
+  testSuppressedByTry([&]() { VELOX_USER_ABORT_CHECK_LE(10, 1) }, false);
+  testSuppressedByTry([&]() { VELOX_USER_ABORT_CHECK_EQ(1, 10) }, false);
+  testSuppressedByTry([&]() { VELOX_USER_ABORT_CHECK_NE(1, 1) }, false);
+  testSuppressedByTry([&]() { VELOX_USER_ABORT_CHECK_NULL(this) }, false);
+  testSuppressedByTry(
+      [&]() { VELOX_USER_ABORT_CHECK_NOT_NULL(nullptr) }, false);
+
+  // Not user errors.
+  testSuppressedByTry([&]() { VELOX_UNREACHABLE("fail") }, false, false);
+  testSuppressedByTry([&]() { VELOX_FAIL("fail") }, false, false);
+  testSuppressedByTry([&]() { VELOX_CHECK(false) }, false, false);
+  testSuppressedByTry([&]() { VELOX_CHECK_GT(1, 10) }, false, false);
+  testSuppressedByTry([&]() { VELOX_CHECK_GT(1, 10) }, false, false);
+  testSuppressedByTry([&]() { VELOX_CHECK_GE(1, 10) }, false, false);
+  testSuppressedByTry([&]() { VELOX_CHECK_LT(10, 1) }, false, false);
+  testSuppressedByTry([&]() { VELOX_CHECK_LE(10, 1) }, false, false);
+  testSuppressedByTry([&]() { VELOX_CHECK_EQ(1, 10) }, false, false);
+  testSuppressedByTry([&]() { VELOX_CHECK_NE(1, 1) }, false, false);
+  testSuppressedByTry([&]() { VELOX_CHECK_NULL(this) }, false, false);
+  testSuppressedByTry([&]() { VELOX_CHECK_NOT_NULL(nullptr) }, false, false);
+}

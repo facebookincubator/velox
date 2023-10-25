@@ -65,6 +65,7 @@ template <typename Exception, typename StringType>
   static_assert(
       !std::is_same_v<StringType, std::string>,
       "BUG: we should not pass std::string by value to veloxCheckFail");
+
   if constexpr (!std::is_same_v<Exception, VeloxUserError>) {
     LOG(ERROR) << "Line: " << args.file << ":" << args.line
                << ", Function:" << args.function
@@ -72,8 +73,8 @@ template <typename Exception, typename StringType>
                << ", Source: " << args.errorSource
                << ", ErrorCode: " << args.errorCode;
   }
-
   ++threadNumVeloxThrow();
+
   throw Exception(
       args.file,
       args.line,
@@ -245,6 +246,20 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
       /* isRetriable */ false,                                   \
       ##__VA_ARGS__)
 
+#define _VELOX_USER_ABORT_CHECK_IMPL(expr, expr_str, ...)        \
+  _VELOX_CHECK_AND_THROW_IMPL(                                   \
+      expr,                                                      \
+      expr_str,                                                  \
+      ::facebook::velox::VeloxPersistentUserError,               \
+      ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
+      ::facebook::velox::error_code::kInvalidArgument.c_str(),   \
+      /* isRetriable */ false,                                   \
+      ##__VA_ARGS__)
+
+#define _VELOX_USER_ABORT_CHECK_OP(expr1, expr2, op, ...) \
+  _VELOX_CHECK_OP_HELPER(                                 \
+      _VELOX_USER_ABORT_CHECK_IMPL, expr1, expr2, op, ##__VA_ARGS__)
+
 #define _VELOX_USER_CHECK_OP(expr1, expr2, op, ...) \
   _VELOX_CHECK_OP_HELPER(                           \
       _VELOX_USER_CHECK_IMPL, expr1, expr2, op, ##__VA_ARGS__)
@@ -345,6 +360,26 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError);
 #define VELOX_USER_CHECK_NOT_NULL(e, ...) \
   VELOX_USER_CHECK(e != nullptr, ##__VA_ARGS__)
 
+// Persistent errors are not suppressed by try.
+#define VELOX_USER_ABORT_CHECK(expr, ...) \
+  _VELOX_USER_ABORT_CHECK_IMPL(expr, #expr, ##__VA_ARGS__)
+#define VELOX_USER_ABORT_CHECK_GT(e1, e2, ...) \
+  _VELOX_USER_ABORT_CHECK_OP(e1, e2, >, ##__VA_ARGS__)
+#define VELOX_USER_ABORT_CHECK_GE(e1, e2, ...) \
+  _VELOX_USER_ABORT_CHECK_OP(e1, e2, >=, ##__VA_ARGS__)
+#define VELOX_USER_ABORT_CHECK_LT(e1, e2, ...) \
+  _VELOX_USER_ABORT_CHECK_OP(e1, e2, <, ##__VA_ARGS__)
+#define VELOX_USER_ABORT_CHECK_LE(e1, e2, ...) \
+  _VELOX_USER_ABORT_CHECK_OP(e1, e2, <=, ##__VA_ARGS__)
+#define VELOX_USER_ABORT_CHECK_EQ(e1, e2, ...) \
+  _VELOX_USER_ABORT_CHECK_OP(e1, e2, ==, ##__VA_ARGS__)
+#define VELOX_USER_ABORT_CHECK_NE(e1, e2, ...) \
+  _VELOX_USER_ABORT_CHECK_OP(e1, e2, !=, ##__VA_ARGS__)
+#define VELOX_USER_ABORT_CHECK_NULL(e, ...) \
+  VELOX_USER_ABORT_CHECK(e == nullptr, ##__VA_ARGS__)
+#define VELOX_USER_ABORT_CHECK_NOT_NULL(e, ...) \
+  VELOX_USER_ABORT_CHECK(e != nullptr, ##__VA_ARGS__)
+
 #ifndef NDEBUG
 #define VELOX_USER_DCHECK(expr, ...) VELOX_USER_CHECK(expr, ##__VA_ARGS__)
 #define VELOX_USER_DCHECK_GT(e1, e2, ...) \
@@ -374,9 +409,19 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError);
 #define VELOX_USER_DCHECK_NOT_NULL(e, ...) VELOX_USER_CHECK(true)
 #endif
 
+// This can be suppressed by try.
 #define VELOX_USER_FAIL(...)                                     \
   _VELOX_THROW(                                                  \
       ::facebook::velox::VeloxUserError,                         \
+      ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
+      ::facebook::velox::error_code::kInvalidArgument.c_str(),   \
+      /* isRetriable */ false,                                   \
+      ##__VA_ARGS__)
+
+// This is not suppressed by try.
+#define VELOX_USER_ABORT(...)                                    \
+  _VELOX_THROW(                                                  \
+      ::facebook::velox::VeloxPersistentUserError,               \
       ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
       ::facebook::velox::error_code::kInvalidArgument.c_str(),   \
       /* isRetriable */ false,                                   \

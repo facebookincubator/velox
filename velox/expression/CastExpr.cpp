@@ -53,7 +53,7 @@ VectorPtr CastExpr::castFromDate(
           std::memcpy(writer.data(), output.data(), output.size());
           writer.finalize();
         } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
+          if (!ue.suppressedByTry()) {
             throw;
           }
           VELOX_USER_FAIL(
