@@ -16,7 +16,6 @@
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 #include <azure/storage/files/datalake.hpp>
-#include <gmock/gmock.h>
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
