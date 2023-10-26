@@ -68,14 +68,13 @@ void setThreadLocalRunTimeStatWriter(BaseRuntimeStatWriter* writer) {
   localRuntimeStatWriter = writer;
 }
 
-BaseRuntimeStatWriter* getThreadLocalRunTimeStatWriter() {
-  return localRuntimeStatWriter;
-}
-
 void addThreadLocalRuntimeStat(
     const std::string& name,
     const RuntimeCounter& value) {
-  if (localRuntimeStatWriter) {
+  if (localRuntimeStatWriter == nullptr) {
+    LOG(ERROR) << "Add runtime stats " << name << ":" << value.value
+               << " when localRuntimeStatWriter is null";
+  } else {
     localRuntimeStatWriter->addRuntimeStat(name, value);
   }
 }

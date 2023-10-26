@@ -85,9 +85,6 @@ class BaseRuntimeStatWriter {
 void setThreadLocalRunTimeStatWriter(
     BaseRuntimeStatWriter* FOLLY_NULLABLE writer);
 
-/// Retrives the current runtime stats writer.
-BaseRuntimeStatWriter* FOLLY_NULLABLE getThreadLocalRunTimeStatWriter();
-
 /// Writes runtime counter to the current Operator running on that thread.
 void addThreadLocalRuntimeStat(
     const std::string& name,
@@ -96,18 +93,13 @@ void addThreadLocalRuntimeStat(
 /// Scope guard to conveniently set and revert back the current stat writer.
 class RuntimeStatWriterScopeGuard {
  public:
-  explicit RuntimeStatWriterScopeGuard(
-      BaseRuntimeStatWriter* FOLLY_NULLABLE writer)
-      : prevWriter_(getThreadLocalRunTimeStatWriter()) {
+  RuntimeStatWriterScopeGuard(BaseRuntimeStatWriter* FOLLY_NULLABLE writer) {
     setThreadLocalRunTimeStatWriter(writer);
   }
 
   ~RuntimeStatWriterScopeGuard() {
-    setThreadLocalRunTimeStatWriter(prevWriter_);
+    setThreadLocalRunTimeStatWriter(nullptr);
   }
-
- private:
-  BaseRuntimeStatWriter* const FOLLY_NULLABLE prevWriter_;
 };
 
 } // namespace facebook::velox
