@@ -126,24 +126,59 @@ But Spark allows for changing the defaults while Velox does not.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="max_by">
-<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#max_by" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#max_by" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the value of <cite>x</cite> associated with the maximum value of <cite>y</cite>.
-Note: Spark provides a non-strictly comparator which is greater than or equals to.
-Eg. SELECT max_by(x, y) FROM VALUES ((‘a’, 10)), ((‘b’, 50)), ((‘c’, 50)) AS tab(x, y);</p>
-<blockquote>
-<div><p>&gt; c</p>
-</div></blockquote>
+Note: Spark provides a non-strictly comparator which is greater than or equals to.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">max_by</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+<span class="n">FROM</span> <span class="p">(</span>
+    <span class="n">VALUES</span>
+        <span class="p">(</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span>
+        <span class="p">(</span><span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="mi">50</span><span class="p">),</span>
+        <span class="p">(</span><span class="s1">&#39;c&#39;</span><span class="p">,</span> <span class="mi">50</span><span class="p">)</span>
+<span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Returns c</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="min_by">
-<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#min_by" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#min_by" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the value of <cite>x</cite> associated with the minimum value of <cite>y</cite>.
-Note: Spark provides a non-strictly comparator which is less than or equals to.
-Eg. SELECT min_by(x, y) FROM VALUES ((‘a’, 10)), ((‘b’, 10)), ((‘c’, 50)) AS tab(x, y);</p>
-<blockquote>
-<div><p>&gt; b</p>
-</div></blockquote>
+Note: Spark provides a non-strictly comparator which is less than or equals to.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">min_by</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+<span class="n">FROM</span> <span class="p">(</span>
+    <span class="n">VALUES</span>
+        <span class="p">(</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span>
+        <span class="p">(</span><span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span>
+        <span class="p">(</span><span class="s1">&#39;c&#39;</span><span class="p">,</span> <span class="mi">50</span><span class="p">)</span>
+<span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Returns b</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="sum">
+<span class="sig-name descname"><span class="pre">sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">double</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">real</span></span></span><a class="headerlink" href="#sum" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the sum of <cite>x</cite>.</p>
+<p>Supported types are TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.</p>
+<p>When x is of type DOUBLE, the result type is DOUBLE.
+When x is of type REAL, the result type is REAL.
+For all other input types, the result type is BIGINT.</p>
+<p>Note: When the sum of BIGINT values exceeds its limit, it cycles to the overflowed value rather than raising an error.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+<span class="n">FROM</span> <span class="p">(</span>
+    <span class="n">VALUES</span>
+        <span class="p">(</span><span class="mi">9223372036854775807</span><span class="n">L</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">1</span><span class="n">L</span><span class="p">)</span>
+<span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Returns -9223372036854775808</p>
 </dd></dl>
 
 </section>
