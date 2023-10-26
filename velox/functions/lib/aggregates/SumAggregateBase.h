@@ -26,7 +26,7 @@ template <
     typename TInput,
     typename TAccumulator,
     typename ResultType,
-    bool Overflow = false>
+    bool Overflow>
 class SumAggregateBase
     : public SimpleNumericAggregate<TInput, TAccumulator, ResultType> {
   using BaseAggregate =
