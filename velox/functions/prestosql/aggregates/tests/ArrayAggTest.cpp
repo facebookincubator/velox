@@ -13,10 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/common/tests/utils/BatchMaker.h"
+
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -36,9 +35,9 @@ class ArrayAggTest : public AggregationTestBase {
     registerSimpleArrayAggAggregate("simple_array_agg");
   }
 
-  RowVectorPtr fuzzFlatBatch(const RowTypePtr& rowType) {
+  RowVectorPtr fuzzFlat(const RowTypePtr& rowType, size_t size) {
     VectorFuzzer::Options options;
-    options.vectorSize = 1'00;
+    options.vectorSize = size;
     VectorFuzzer fuzzer(options, pool());
     return fuzzer.fuzzInputFlatRow(rowType);
   }
@@ -62,7 +61,7 @@ TEST_F(ArrayAggTest, groupBy) {
     // elements with, for key k, batch[k[, batch[k + 10], ... batch[k +
     // 90], repeated 10 times.
     batches.push_back(
-        fuzzFlatBatch(ROW({"c0", "a"}, {INTEGER(), ARRAY(VARCHAR())})));
+        fuzzFlat(ROW({"c0", "a"}, {INTEGER(), ARRAY(VARCHAR())}), 100));
     // We divide the rows into 10 groups.
     auto keys = batches[0]->childAt(0)->as<FlatVector<int32_t>>();
     auto values = batches[0]->childAt(1)->as<ArrayVector>();
