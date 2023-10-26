@@ -61,6 +61,10 @@ BufferPtr sortElements(
         rawIndices + offset,
         rawIndices + offset + size,
         [&](vector_size_t& a, vector_size_t& b) {
+          if (a == b) {
+            return false;
+          }
+
           bool aNull = decodedElements->isNullAt(a);
           bool bNull = decodedElements->isNullAt(b);
           if (aNull) {
