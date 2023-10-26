@@ -130,19 +130,33 @@ Returns the value at the specified offset from the beginning of the window. Offs
 can be any scalar expression. If the offset is null or greater than the number of values in the window, null is
 returned. It is an error for the offset to be zero or negative.
 
-.. function:: lag(x[, offset [, default_value]]) -> [same as input]
+.. function:: lag(x[, offset[, default_value]] [IGNORE NULLS]) -> [same as input]
 
-Returns the value at ``offset`` rows before the current row in the partition. If
-there is no such row, the ``default_value`` is returned, or if it is not
-specified ``null`` is returned. Offsets start at ``0``, which is the current
-row. The default ``offset`` is ``1``.
+Returns the value at ``offset`` rows before the current row in the window partition.
+Offsets start at ``0``, which is the current row. The default ``offset`` is ``1``.
+The offset can be any scalar expression. If the offset is ``null``, ``null`` is
+returned. If the offset refers to a row that is not within the partition, the
+``default_value`` is returned, or if ``default_value`` is not specified ``null``
+is returned.
 
-.. function:: lead(x[, offset [, default_value]]) -> [same as input]
+An optional ``IGNORE NULLS`` suffix can be specified after all the params, if
+``IGNORE NULLS`` is specified, ``null`` values are ignored during offset counting.
+If not enough non-null values are found during offset counting, ``default_value``
+is returned.
 
-Returns the value at ``offset`` rows after the current row in the partition. If
-there is no such row, the ``default_value`` is returned, or if it is not
-specified ``null`` is returned. Offsets start at ``0``, which is the current
-row. The default ``offset`` is ``1``.
+.. function:: lead(x[, offset[, default_value]] [IGNORE NULLS]) -> [same as input]
+
+Returns the value at ``offset`` rows after the current row in the window partition.
+Offsets start at ``0``, which is the current row. The default ``offset`` is ``1``.
+The offset can be any scalar expression. If the offset is ``null``, ``null`` is
+returned. If the offset refers to a row that is not within the partition, the
+``default_value`` is returned, or if ``default_value`` is not specified ``null``
+is returned.
+
+An optional ``IGNORE NULLS`` suffix can be specified after all the params, if
+``IGNORE NULLS`` is specified, ``null`` values are ignored during offset counting.
+If not enough non-null values are found during offset counting, ``default_value``
+is returned.
 
 Aggregate functions
 ___________________
