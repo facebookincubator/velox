@@ -14,13 +14,28 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
+#include "velox/dwio/common/exception/Exception.h"
 
 using namespace ::testing;
 using namespace ::facebook::velox::dwio::common;
+
+namespace {
+
+class MockExecutor : public folly::Executor {
+ public:
+  ~MockExecutor() override = default;
+
+  MOCK_METHOD(void, add, (folly::Func func), (override));
+  MOCK_METHOD(void, addWithPriority, (folly::Func, int8_t), (override));
+  MOCK_METHOD(uint8_t, getNumPriorities, (), (const, override));
+};
+
+} // namespace
 
 TEST(ExecutorBarrierTest, GetNumPriorities) {
   const uint8_t kNumPriorities = 5;
@@ -37,6 +52,19 @@ TEST(ExecutorBarrierTest, CanOwn) {
     EXPECT_EQ(executor.use_count(), 2);
   }
   EXPECT_EQ(executor.use_count(), 1);
+}
+
+TEST(ExecutorBarrierTest, ThrowsIfLambdaNotExecuted) {
+  MockExecutor mockExecutor;
+  auto barrier = std::make_shared<ExecutorBarrier>(mockExecutor);
+  // Do nothing on call, so the lambda will never be executed.
+  EXPECT_CALL(mockExecutor, add(_)).Times(1);
+  std::atomic<bool> executed{false};
+  barrier->add([&executed]() { executed = true; });
+  EXPECT_THROW(
+      barrier->waitAll(),
+      facebook::velox::dwio::common::exception::LoggedException);
+  EXPECT_FALSE(executed);
 }
 
 TEST(ExecutorBarrierTest, CanAwaitMultipleTimes) {

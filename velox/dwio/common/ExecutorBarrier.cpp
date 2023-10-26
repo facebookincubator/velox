@@ -15,6 +15,8 @@
  */
 
 #include "velox/dwio/common/ExecutorBarrier.h"
+#include "folly/ExceptionWrapper.h"
+#include "velox/dwio/common/exception/Exception.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -22,14 +24,26 @@ namespace {
 
 class BarrierElement {
  public:
-  BarrierElement(size_t& count, std::mutex& mutex, std::condition_variable& cv)
-      : count_{count}, mutex_{&mutex}, cv_{cv} {
+  BarrierElement(
+      size_t& count,
+      std::mutex& mutex,
+      std::condition_variable& cv,
+      folly::exception_wrapper& exception)
+      : count_{count},
+        mutex_{&mutex},
+        cv_{cv},
+        exception_{exception},
+        executed_{false} {
     std::lock_guard lock{*mutex_};
     ++count_;
   }
 
   BarrierElement(BarrierElement&& other) noexcept
-      : count_{other.count_}, mutex_{other.mutex_}, cv_{other.cv_} {
+      : count_{other.count_},
+        mutex_{other.mutex_},
+        cv_{other.cv_},
+        exception_{other.exception_},
+        executed_{other.executed_} {
     // Move away
     other.mutex_ = nullptr;
   }
@@ -42,16 +56,29 @@ class BarrierElement {
     // If this object wasn't moved away
     if (mutex_) {
       std::lock_guard lock{*mutex_};
+      if (!executed_) {
+        if (!exception_.has_exception_ptr()) {
+          exception_ =
+              facebook::velox::dwio::common::exception::LoggedException(
+                  "Function scheduled in executor was never invoked.");
+        }
+      }
       if (--count_ == 0) {
         cv_.notify_all();
       }
     }
   }
 
+  void executed() {
+    executed_ = true;
+  }
+
  private:
   size_t& count_;
   std::mutex* mutex_;
   std::condition_variable& cv_;
+  folly::exception_wrapper& exception_;
+  bool executed_{false};
 };
 
 } // namespace
@@ -59,8 +86,10 @@ class BarrierElement {
 auto ExecutorBarrier::wrapMethod(folly::Func f) {
   return [f = std::move(f),
           this,
-          barrierElement = BarrierElement(count_, mutex_, cv_)]() mutable {
+          barrierElement =
+              BarrierElement(count_, mutex_, cv_, exception_)]() mutable {
     try {
+      barrierElement.executed();
       f();
     } catch (const std::exception& e) {
       std::lock_guard lock{mutex_};
