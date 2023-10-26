@@ -35,6 +35,7 @@ dependencies:
   - sysroot_linux-64=2.17
 # dependencies
   - aws-sdk-cpp
+  - azure-storage-blob
   - boost-cpp
   - bzip2
   - double-conversion
