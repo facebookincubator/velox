@@ -30,13 +30,18 @@ dependencies:
   - ccache
   - flex
   - make
+  - minio-server
   - ninja
+  - nodejs
+  - openjdk=8.*
+  - python=3.8
   - sysroot_linux-64=2.17
 # dependencies
   - aws-sdk-cpp
   - azure-storage-blob
   - boost-cpp
   - bzip2
+  - crc32c
   - double-conversion
   - fmt=8.0.*
   - gflags=2.2.2
@@ -44,6 +49,7 @@ dependencies:
   - gmock=1.13
   - google-cloud-cpp
   - gtest=1.13
+  - hdfs3
   - libdwarf-dev
   - libevent
   - libprotobuf=3.21
@@ -54,6 +60,7 @@ dependencies:
   - openssl=1.1.*
   - re2
   - snappy
+  - simdjson
   - xz
   - zlib
   - zstd

@@ -31,7 +31,11 @@ dependencies:
   - flex
   - gxx=12 # has to be installed to get clang to work...
   - make
+  - minio-server
   - ninja
+  - nodejs
+  - openjdk=8.*
+  - python=3.8
   - sysroot_linux-64=2.17
 # dependencies
   - aws-sdk-cpp
@@ -45,6 +49,7 @@ dependencies:
   - gmock=1.13
   - google-cloud-cpp
   - gtest=1.13
+  - hdfs3
   - libaio
   - libdwarf-dev
   - libevent
@@ -56,6 +61,7 @@ dependencies:
   - lzo
   - openssl=1.1.*
   - re2
+  - simdjson
   - snappy
   - xz
   - zlib
