@@ -302,57 +302,59 @@ value of <cite>max_partial_aggregation_memory</cite>. Specify higher value for <
 <tr class="row-odd"><td><p>aggregation_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
-<td><p>When <cite>spill_enabled</cite> is true, determines whether HashAggregation operator can spill to disk under memory pressure.
-memory limits for the query.</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether HashAggregation operator can spill to disk under memory pressure.</p></td>
 </tr>
 <tr class="row-even"><td><p>join_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
-<td><p>When <cite>spill_enabled</cite> is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.
-limits for the query.</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.</p></td>
 </tr>
 <tr class="row-odd"><td><p>order_by_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
-<td><p>When <cite>spill_enabled</cite> is true, determines whether OrderBy operator can spill to disk under memory pressure.
-limits for the query.</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether OrderBy operator can spill to disk under memory pressure.</p></td>
 </tr>
-<tr class="row-even"><td><p>row_number_spill_enabled</p></td>
+<tr class="row-even"><td><p>window_spill_enabled</p></td>
+<td><p>boolean</p></td>
+<td><p>true</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether Window operator can spill to disk under memory pressure.</p></td>
+</tr>
+<tr class="row-odd"><td><p>row_number_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether RowNumber operator can spill to disk under memory pressure.</p></td>
 </tr>
-<tr class="row-odd"><td><p>topn_row_number_spill_enabled</p></td>
+<tr class="row-even"><td><p>topn_row_number_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether TopNRowNumber operator can spill to disk under memory pressure.</p></td>
 </tr>
-<tr class="row-even"><td><p>writer_spill_enabled</p></td>
+<tr class="row-odd"><td><p>writer_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
 <td><p>When <cite>writer_spill_enabled</cite> is true, determines whether TableWriter operator can spill to disk under memory pressure.</p></td>
 </tr>
-<tr class="row-odd"><td><p>aggregation_spill_memory_threshold</p></td>
+<tr class="row-even"><td><p>aggregation_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum amount of memory in bytes that a final aggregation can use before spilling. 0 means unlimited.</p></td>
 </tr>
-<tr class="row-even"><td><p>aggregation_spill_all</p></td>
+<tr class="row-odd"><td><p>aggregation_spill_all</p></td>
 <td><p>boolean</p></td>
 <td><p>false</p></td>
 <td><p>If true and spilling has been triggered during the input processing, the spiller will spill all the remaining in-memory state to disk before output processing. This is to simplify the aggregation query OOM prevention in output processing stage.</p></td>
 </tr>
-<tr class="row-odd"><td><p>join_spill_memory_threshold</p></td>
+<tr class="row-even"><td><p>join_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum amount of memory in bytes that a hash join build side can use before spilling. 0 means unlimited.</p></td>
 </tr>
-<tr class="row-even"><td><p>order_by_spill_memory_threshold</p></td>
+<tr class="row-odd"><td><p>order_by_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum amount of memory in bytes that an order by can use before spilling. 0 means unlimited.</p></td>
 </tr>
-<tr class="row-odd"><td><p>min_spillable_reservation_pct</p></td>
+<tr class="row-even"><td><p>min_spillable_reservation_pct</p></td>
 <td><p>integer</p></td>
 <td><p>5</p></td>
 <td><p>The minimal available spillable memory reservation in percentage of the current memory usage. Suppose the current
@@ -361,7 +363,7 @@ if M * P / 100 &gt; N, then spiller operator needs to grow the memory reservatio
 ‘spillable_reservation_growth_pct’ (see below). This ensures we have sufficient amount of memory reservation to
 process the large input outlier.</p></td>
 </tr>
-<tr class="row-even"><td><p>spillable_reservation_growth_pct</p></td>
+<tr class="row-odd"><td><p>spillable_reservation_growth_pct</p></td>
 <td><p>integer</p></td>
 <td><p>10</p></td>
 <td><p>The spillable memory reservation growth percentage of the current memory usage. Suppose a growth percentage of N
@@ -369,7 +371,7 @@ and the current memory usage size of M, the next memory reservation size will be
 the memory reservation K times, the memory reservation size will be M * (1 + N / 100) ^ K. Hence the memory
 reservation grows along a series of powers of (1 + N / 100). If the memory reservation fails, it starts spilling.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max_spill_level</p></td>
+<tr class="row-even"><td><p>max_spill_level</p></td>
 <td><p>integer</p></td>
 <td><p>4</p></td>
 <td><p>The maximum allowed spilling level with zero being the initial spilling level. Applies to hash join build
@@ -377,18 +379,18 @@ spilling which might use recursive spilling when the build table is very large. 
 In this case an extremely large query might run out of spilling partition bits. The max spill level
 can be used to prevent a query from using too much io and cpu resources.</p></td>
 </tr>
-<tr class="row-even"><td><p>max_spill_file_size</p></td>
+<tr class="row-odd"><td><p>max_spill_file_size</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>The maximum allowed spill file size. Zero means unlimited.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_write_buffer_size</p></td>
+<tr class="row-even"><td><p>spill_write_buffer_size</p></td>
 <td><p>integer</p></td>
 <td><p>4MB</p></td>
 <td><p>The maximum size in bytes to buffer the serialized spill data before write to disk for IO efficiency.
 If set to zero, buffering is disabled.</p></td>
 </tr>
-<tr class="row-even"><td><p>min_spill_run_size</p></td>
+<tr class="row-odd"><td><p>min_spill_run_size</p></td>
 <td><p>integer</p></td>
 <td><p>256MB</p></td>
 <td><p>The minimum spill run size (bytes) limit used to select partitions for spilling. The spiller tries to spill a
@@ -397,31 +399,31 @@ If the limit is zero, then the spiller always spills a previously spilled partit
 to avoid spill from a partition with a small amount of data which might result in generating too many small
 spilled files.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_compression_codec</p></td>
+<tr class="row-even"><td><p>spill_compression_codec</p></td>
 <td><p>string</p></td>
 <td><p>none</p></td>
 <td><p>Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
 efficiency. The supported compression codecs are: ZLIB, SNAPPY, LZO, ZSTD, LZ4 and GZIP.
 NONE means no compression.</p></td>
 </tr>
-<tr class="row-even"><td><p>spiller_start_partition_bit</p></td>
+<tr class="row-odd"><td><p>spiller_start_partition_bit</p></td>
 <td><p>integer</p></td>
 <td><p>29</p></td>
 <td><p>The start partition bit which is used with <cite>spiller_partition_bits</cite> together to calculate the spilling partition number.</p></td>
 </tr>
-<tr class="row-odd"><td><p>join_spiller_partition_bits</p></td>
+<tr class="row-even"><td><p>join_spiller_partition_bits</p></td>
 <td><p>integer</p></td>
 <td><p>2</p></td>
 <td><p>The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
 value is 3, meaning we only support up to 8-way spill partitioning.</p></td>
 </tr>
-<tr class="row-even"><td><p>aggregation_spiller_partition_bits</p></td>
+<tr class="row-odd"><td><p>aggregation_spiller_partition_bits</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>The number of bits (N) used to calculate the spilling partition number for hash aggregation: 2 ^ N. At the moment the
 maximum value is 3, meaning we only support up to 8-way spill partitioning.</p></td>
 </tr>
-<tr class="row-odd"><td><p>testing.spill_pct</p></td>
+<tr class="row-even"><td><p>testing.spill_pct</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.</p></td>
