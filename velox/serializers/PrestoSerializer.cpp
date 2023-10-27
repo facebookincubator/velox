@@ -836,12 +836,13 @@ void checkTypeEncoding(std::string_view encoding, const TypePtr& type) {
       encoding);
 }
 
-void readColumns(
+const std::function<void(
     ByteStream* source,
+    std::shared_ptr<const Type> type,
     velox::memory::MemoryPool* pool,
-    const std::vector<TypePtr>& types,
-    std::vector<VectorPtr>& results,
-    bool useLosslessTimestamp) {
+    VectorPtr& result,
+    bool useLosslessTimestamp)>&
+getReader(const TypePtr& type) {
   static const std::unordered_map<
       TypeKind,
       std::function<void(
@@ -867,25 +868,46 @@ void readColumns(
           {TypeKind::ROW, &readRowVector},
           {TypeKind::UNKNOWN, &read<UnknownValue>}};
 
+  const auto it = readers.find(type->kind());
+  VELOX_CHECK(
+      it != readers.end(),
+      "Column reader for type {} is missing",
+      type->kindName());
+  return it->second;
+}
+
+void readColumnWithEncoding(
+    std::string_view encoding,
+    ByteStream* source,
+    velox::memory::MemoryPool* pool,
+    const TypePtr& type,
+    VectorPtr& result,
+    bool useLosslessTimestamp) {
+  if (encoding == kRLE) {
+    readConstantVector(source, type, pool, result, useLosslessTimestamp);
+  } else if (encoding == kDictionary) {
+    readDictionaryVector(source, type, pool, result, useLosslessTimestamp);
+  } else {
+    checkTypeEncoding(encoding, type);
+    const auto& reader = getReader(type);
+    reader(source, type, pool, result, useLosslessTimestamp);
+  }
+}
+
+void readColumns(
+    ByteStream* source,
+    velox::memory::MemoryPool* pool,
+    const std::vector<TypePtr>& types,
+    std::vector<VectorPtr>& results,
+    bool useLosslessTimestamp) {
   for (int32_t i = 0; i < types.size(); ++i) {
-    const auto& type = types[i];
-    auto& result = results[i];
-
-    const auto encoding = readLengthPrefixedString(source);
-    if (encoding == kRLE) {
-      readConstantVector(source, type, pool, result, useLosslessTimestamp);
-    } else if (encoding == kDictionary) {
-      readDictionaryVector(source, type, pool, result, useLosslessTimestamp);
-    } else {
-      checkTypeEncoding(encoding, type);
-      const auto it = readers.find(type->kind());
-      VELOX_CHECK(
-          it != readers.end(),
-          "Column reader for type {} is missing",
-          type->kindName());
-
-      it->second(source, type, pool, result, useLosslessTimestamp);
-    }
+    readColumnWithEncoding(
+        readLengthPrefixedString(source),
+        source,
+        pool,
+        types[i],
+        results[i],
+        useLosslessTimestamp);
   }
 }
 
