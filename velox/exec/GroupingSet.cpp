@@ -66,7 +66,7 @@ GroupingSet::GroupingSet(
       isGlobal_(hashers_.empty()),
       isPartial_(isPartial),
       isRawInput_(isRawInput),
-      queryConfig_(&operatorCtx->task()->queryCtx()->queryConfig()),
+      queryConfig_(operatorCtx->task()->queryCtx()->queryConfig()),
       aggregates_(std::move(aggregates)),
       masks_(maskChannels(aggregates_)),
       ignoreNullKeys_(ignoreNullKeys),
@@ -78,7 +78,7 @@ GroupingSet::GroupingSet(
       nonReclaimableSection_(nonReclaimableSection),
       stringAllocator_(operatorCtx->pool()),
       rows_(operatorCtx->pool()),
-      isAdaptive_(queryConfig_->hashAdaptivityEnabled()),
+      isAdaptive_(queryConfig_.hashAdaptivityEnabled()),
       pool_(*operatorCtx->pool()) {
   VELOX_CHECK_NOT_NULL(nonReclaimableSection_);
   VELOX_CHECK(pool_.trackUsage());
@@ -245,14 +245,6 @@ void GroupingSet::addInputForActiveRows(
     createHashTable();
   }
   ensureInputFits(input);
-
-  // Prevents the memory arbitrator to reclaim memory from this grouping set
-  // during the execution below.
-  //
-  // NOTE: 'nonReclaimableSection_' points to the corresponding flag in the
-  // associated aggregation operator.
-  auto guard = folly::makeGuard([this]() { *nonReclaimableSection_ = false; });
-  *nonReclaimableSection_ = true;
 
   TestValue::adjust(
       "facebook::velox::exec::GroupingSet::addInputForActiveRows", this);
@@ -567,11 +559,8 @@ void GroupingSet::addGlobalAggregationInput(
 }
 
 bool GroupingSet::getGlobalAggregationOutput(
-    int32_t batchSize,
-    bool isPartial,
     RowContainerIterator& iterator,
     RowVectorPtr& result) {
-  VELOX_CHECK_EQ(batchSize, 1);
   if (iterator.allocationIndex != 0) {
     return false;
   }
@@ -585,7 +574,7 @@ bool GroupingSet::getGlobalAggregationOutput(
     }
 
     auto& function = aggregates_[i].function;
-    if (isPartial) {
+    if (isPartial_) {
       function->extractAccumulators(groups, 1, &result->childAt(i));
     } else {
       function->extractValues(groups, 1, &result->childAt(i));
@@ -654,14 +643,10 @@ bool GroupingSet::getOutput(
     int32_t maxOutputBytes,
     RowContainerIterator& iterator,
     RowVectorPtr& result) {
-  auto guard = folly::makeGuard([this]() { *nonReclaimableSection_ = false; });
-  *nonReclaimableSection_ = true;
-
   TestValue::adjust("facebook::velox::exec::GroupingSet::getOutput", this);
 
   if (isGlobal_) {
-    return getGlobalAggregationOutput(
-        maxOutputRows, isPartial_, iterator, result);
+    return getGlobalAggregationOutput(iterator, result);
   }
   if (hasSpilled()) {
     return getOutputWithSpill(maxOutputRows, maxOutputBytes, result);
@@ -767,6 +752,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   if (isPartial_ || spillConfig_ == nullptr) {
     return;
   }
+
   const auto numDistinct = table_->numDistinct();
   if (numDistinct == 0) {
     // Table is empty. Nothing to spill.
@@ -841,8 +827,11 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   const auto targetIncrementBytes = std::max<int64_t>(
       incrementBytes * 2,
       currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
-  if (pool_.maybeReserve(targetIncrementBytes)) {
-    return;
+  {
+    ReclaimableSectionGuard guard(nonReclaimableSection_);
+    if (pool_.maybeReserve(targetIncrementBytes)) {
+      return;
+    }
   }
 
   // NOTE: disk spilling use the system disk spilling memory pool instead of
@@ -873,9 +862,12 @@ void GroupingSet::ensureOutputFits() {
   }
 
   const uint64_t outputBufferSizeToReserve =
-      queryConfig_->preferredOutputBatchBytes() * 1.2;
-  if (pool_.maybeReserve(outputBufferSizeToReserve)) {
-    return;
+      queryConfig_.preferredOutputBatchBytes() * 1.2;
+  {
+    ReclaimableSectionGuard guard(nonReclaimableSection_);
+    if (pool_.maybeReserve(outputBufferSizeToReserve)) {
+      return;
+    }
   }
   spill(RowContainerIterator{});
 }
@@ -1130,6 +1122,22 @@ void GroupingSet::abandonPartialAggregation() {
   table_.reset();
 }
 
+namespace {
+// Recursive resize all children.
+
+void recursiveResizeChildren(VectorPtr& vector, vector_size_t newSize) {
+  VELOX_CHECK(vector.unique());
+  if (vector->typeKind() == TypeKind::ROW) {
+    auto rowVector = vector->asUnchecked<RowVector>();
+    for (auto& child : rowVector->children()) {
+      recursiveResizeChildren(child, newSize);
+    }
+  }
+  vector->resize(newSize);
+}
+
+} // namespace
+
 void GroupingSet::toIntermediate(
     const RowVectorPtr& input,
     RowVectorPtr& result) {
@@ -1162,8 +1170,7 @@ void GroupingSet::toIntermediate(
   for (auto i = 0; i < aggregates_.size(); ++i) {
     auto& function = aggregates_[i].function;
     auto& aggregateVector = result->childAt(i + keyChannels_.size());
-    VELOX_CHECK(aggregateVector.unique());
-    aggregateVector->resize(input->size());
+    recursiveResizeChildren(aggregateVector, input->size());
     const auto& rows = getSelectivityVector(i);
 
     if (function->supportsToIntermediate()) {

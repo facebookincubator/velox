@@ -1237,7 +1237,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, spillWithEmptyPartition) {
 
 TEST_F(AggregationTest, spillWithNonSpillingPartition) {
   constexpr int32_t kNumDistinct = 100'000;
-  constexpr int64_t kMaxBytes = 20LL << 20; // 20 MB
+  constexpr int64_t kMaxBytes = 32 << 20; // 32 MB
   rowType_ = ROW({"c0", "a"}, {INTEGER(), VARCHAR()});
   // Used to calculate the aggregation spilling partition number.
   const int kPartitionsBits = 2;
@@ -1337,7 +1337,7 @@ TEST_F(AggregationTest, spillWithNonSpillingPartition) {
               std::to_string(kPartitionsBits))
           // Set to increase the hash table a little bit to only trigger spill
           // on the partition with most spillable data.
-          .config(QueryConfig::kSpillableReservationGrowthPct, "25")
+          .config(QueryConfig::kSpillableReservationGrowthPct, "5")
           .config(QueryConfig::kPreferredOutputBatchBytes, "1024")
           .assertResults(results);
 
@@ -1423,11 +1423,9 @@ TEST_F(AggregationTest, memoryAllocations) {
 
   auto task = assertQuery(plan, "SELECT sum(c0 + c1) FROM tmp");
 
-  // Verify memory allocations. Project operator should allocate a single vector
-  // and re-use it. Aggregation should make 2 allocations: 1 for the
+  // Verify memory allocations. Aggregation should make 2 allocations: 1 for the
   // RowContainer holding single accumulator and 1 for the result.
   auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(1, planStats.at(projectNodeId).numMemoryAllocations);
   ASSERT_EQ(2, planStats.at(aggNodeId).numMemoryAllocations);
 
   plan = PlanBuilder()
@@ -1440,12 +1438,10 @@ TEST_F(AggregationTest, memoryAllocations) {
 
   task = assertQuery(plan, "SELECT c0, sum(c0 + c1) FROM tmp GROUP BY 1");
 
-  // Verify memory allocations. Project operator should allocate a single vector
-  // and re-use it. Aggregation should make 5 allocations: 1 for the hash table,
-  // 1 for the RowContainer holding accumulators, 3 for results (2 for values
-  // and nulls buffers of the grouping key column, 1 for sum column).
+  // Verify memory allocations. Aggregation should make 5 allocations: 1 for the
+  // hash table, 1 for the RowContainer holding accumulators, 3 for results (2
+  // for values and nulls buffers of the grouping key column, 1 for sum column).
   planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(1, planStats.at(projectNodeId).numMemoryAllocations);
   ASSERT_EQ(5, planStats.at(aggNodeId).numMemoryAllocations);
 }
 
@@ -2381,20 +2377,14 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
 
     if (enableSpilling) {
       ASSERT_GT(reclaimableBytes, 0);
-      const auto usedMemory = op->pool()->currentBytes();
-      op->reclaim(
-          folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
-          reclaimerStats_);
-      // No reclaim as the operator is under non-reclaimable section.
-      ASSERT_EQ(usedMemory, op->pool()->currentBytes());
     } else {
       ASSERT_EQ(reclaimableBytes, 0);
-      VELOX_ASSERT_THROW(
-          op->reclaim(
-              folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
-              reclaimerStats_),
-          "");
     }
+    VELOX_ASSERT_THROW(
+        op->reclaim(
+            folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
+            reclaimerStats_),
+        "");
 
     driverWait.notify();
     Task::resume(task);
@@ -2406,7 +2396,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
     ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 0);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
-  ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{1});
+  ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{0});
 }
 
 DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
@@ -2688,20 +2678,15 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
     ASSERT_EQ(reclaimable, testData.enableSpilling);
     if (testData.enableSpilling) {
       ASSERT_GT(reclaimableBytes, 0);
-      const auto usedMemory = op->pool()->currentBytes();
-      op->reclaim(
-          folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
-          reclaimerStats_);
-      ASSERT_EQ(usedMemory, op->pool()->currentBytes());
-      ASSERT_EQ(reclaimerStats_.numNonReclaimableAttempts, 1);
     } else {
       ASSERT_EQ(reclaimableBytes, 0);
-      VELOX_ASSERT_THROW(
-          op->reclaim(
-              folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
-              reclaimerStats_),
-          "");
     }
+    VELOX_ASSERT_THROW(
+        op->reclaim(
+            folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
+            reclaimerStats_),
+        "");
+    ASSERT_EQ(reclaimerStats_.numNonReclaimableAttempts, 0);
 
     driverWaitFlag = false;
     driverWait.notifyAll();
@@ -3053,5 +3038,26 @@ TEST_F(AggregationTest, noAggregationsNoGroupingKeys) {
   ASSERT_EQ(result->size(), 1);
   // Zero columns.
   ASSERT_EQ(result->type()->size(), 0);
+}
+
+// Trigger memory pool allocation at HashAggregation::populateAggregateInputs by
+// aggregating null constant. Ensure the allocation happens outside of
+// HashAggregation's constructor.
+TEST_F(AggregationTest, memoryPoolAllocationAtInit) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+  });
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .aggregation(
+                      {"c0"},
+                      {"sum(cast(NULL as INT))"},
+                      {},
+                      core::AggregationNode::Step::kPartial,
+                      false)
+                  .planNode();
+
+  assertQuery(plan, "SELECT c0, cast(NULL as INT) FROM tmp GROUP BY c0");
 }
 } // namespace facebook::velox::exec::test

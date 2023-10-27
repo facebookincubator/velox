@@ -213,6 +213,7 @@ bool PagedInputStream::readOrSkip(const void** data, int32_t* size) {
 }
 
 void PagedInputStream::BackUp(int32_t count) {
+  VELOX_CHECK_GE(count, 0);
   if (pendingSkip_ > 0) {
     auto len = std::min<int64_t>(count, pendingSkip_);
     pendingSkip_ -= len;
@@ -257,7 +258,8 @@ bool PagedInputStream::skipAllPending() {
   return true;
 }
 
-bool PagedInputStream::Skip(int32_t count) {
+bool PagedInputStream::SkipInt64(int64_t count) {
+  VELOX_CHECK_GE(count, 0);
   pendingSkip_ += count;
   // We never use the return value of this function so this is OK.
   return true;

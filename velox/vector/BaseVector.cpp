@@ -249,6 +249,25 @@ VectorPtr BaseVector::wrapInConstant(
       addConstant, kind, length, index, std::move(vector), copyBase);
 }
 
+std::optional<bool> BaseVector::equalValueAt(
+    const BaseVector* other,
+    vector_size_t index,
+    vector_size_t otherIndex,
+    CompareFlags::NullHandlingMode nullHandlingMode) const {
+  const CompareFlags compareFlags = {
+      .nullsFirst = false,
+      .ascending = false,
+      .equalsOnly = true,
+      .nullHandlingMode = nullHandlingMode};
+  std::optional<int32_t> result =
+      compare(other, index, otherIndex, compareFlags);
+  if (result.has_value()) {
+    return result.value() == 0;
+  }
+
+  return std::nullopt;
+}
+
 template <TypeKind kind>
 static VectorPtr createEmpty(
     vector_size_t size,
@@ -284,10 +303,9 @@ VectorPtr BaseVector::createInternal(
     case TypeKind::ROW: {
       std::vector<VectorPtr> children;
       auto rowType = type->as<TypeKind::ROW>();
-      // Children are reserved the parent size but are set to 0 elements.
+      // Children are reserved the parent size and accessible for those rows.
       for (int32_t i = 0; i < rowType.size(); ++i) {
         children.push_back(create(rowType.childAt(i), size, pool));
-        children.back()->resize(0);
       }
       return std::make_shared<RowVector>(
           pool, type, nullptr, size, std::move(children));

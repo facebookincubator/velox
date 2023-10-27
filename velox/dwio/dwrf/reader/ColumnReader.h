@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "folly/Executor.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/TypeWithId.h"
@@ -38,7 +39,7 @@ class ColumnReader {
       memory::MemoryPool& memoryPool,
       const std::shared_ptr<const dwio::common::TypeWithId>& type)
       : notNullDecoder_{},
-        nodeType_{type},
+        fileType_{type},
         memoryPool_{memoryPool},
         flatMapContext_{} {}
 
@@ -60,7 +61,7 @@ class ColumnReader {
       const uint64_t* incomingNulls);
 
   std::unique_ptr<ByteRleDecoder> notNullDecoder_;
-  const std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
+  const std::shared_ptr<const dwio::common::TypeWithId> fileType_;
   memory::MemoryPool& memoryPool_;
   FlatMapContext flatMapContext_;
 
@@ -111,9 +112,10 @@ class ColumnReader {
    */
   static std::unique_ptr<ColumnReader> build(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
+      folly::Executor* FOLLY_NULLABLE executor,
       FlatMapContext flatMapContext = {});
 };
 
@@ -122,15 +124,17 @@ class ColumnReaderFactory {
   virtual ~ColumnReaderFactory() = default;
   virtual std::unique_ptr<ColumnReader> build(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
+      folly::Executor* FOLLY_NULLABLE executor,
       FlatMapContext flatMapContext = {}) {
     return ColumnReader::build(
         requestedType,
-        dataType,
+        fileType,
         stripe,
         streamLabels,
+        executor,
         std::move(flatMapContext));
   }
 

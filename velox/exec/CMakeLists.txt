@@ -53,12 +53,13 @@ add_library(
   OperatorUtils.cpp
   OrderBy.cpp
   PartitionedOutput.cpp
-  PartitionedOutputBuffer.cpp
-  PartitionedOutputBufferManager.cpp
+  OutputBuffer.cpp
+  OutputBufferManager.cpp
   PlanNodeStats.cpp
   ProbeOperatorState.cpp
   RowContainer.cpp
   RowNumber.cpp
+  SharedArbitrator.cpp
   SortBuffer.cpp
   SortedAggregations.cpp
   SortWindowBuild.cpp

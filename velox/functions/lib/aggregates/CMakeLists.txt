@@ -20,4 +20,6 @@ target_link_libraries(velox_functions_aggregates velox_exec
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
+elseif(${VELOX_BUILD_TEST_UTILS})
+  add_subdirectory(tests/utils)
 endif()

@@ -53,11 +53,15 @@ Accumulator::Accumulator(Aggregate* aggregate)
       fixedSize_{aggregate->accumulatorFixedWidthSize()},
       usesExternalMemory_{aggregate->accumulatorUsesExternalMemory()},
       alignment_{aggregate->accumulatorAlignmentSize()},
+      extractFunction_{
+          [aggregate](folly::Range<char**> groups, VectorPtr& result) {
+            aggregate->extractAccumulators(
+                groups.data(), groups.size(), &result);
+          }},
       destroyFunction_{[aggregate](folly::Range<char**> groups) {
         aggregate->destroy(groups);
-      }},
-      aggregate_{aggregate} {
-  VELOX_CHECK_NOT_NULL(aggregate_);
+      }} {
+  VELOX_CHECK_NOT_NULL(aggregate);
 }
 
 Accumulator::Accumulator(
@@ -65,11 +69,14 @@ Accumulator::Accumulator(
     int32_t fixedSize,
     bool usesExternalMemory,
     int32_t alignment,
+    std::function<void(folly::Range<char**> groups, VectorPtr& result)>
+        extractFunction,
     std::function<void(folly::Range<char**> groups)> destroyFunction)
     : isFixedSize_{isFixedSize},
       fixedSize_{fixedSize},
       usesExternalMemory_{usesExternalMemory},
       alignment_{alignment},
+      extractFunction_{extractFunction},
       destroyFunction_{destroyFunction} {}
 
 bool Accumulator::isFixedSize() const {
@@ -90,6 +97,12 @@ int32_t Accumulator::alignment() const {
 
 void Accumulator::destroy(folly::Range<char**> groups) {
   destroyFunction_(groups);
+}
+
+void Accumulator::extractForSpill(
+    folly::Range<char**> groups,
+    VectorPtr& result) const {
+  extractFunction_(groups, result);
 }
 
 // static
@@ -825,6 +838,46 @@ int32_t RowContainer::listPartitionRows(
     }
   }
   return numResults;
+}
+
+std::string RowContainer::toString() const {
+  std::stringstream out;
+  out << "Keys: ";
+  for (auto i = 0; i < keyTypes_.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << keyTypes_[i]->toString();
+  }
+
+  if (types_.size() > keyTypes_.size()) {
+    out << " Dependents: ";
+    for (auto i = keyTypes_.size(); i < types_.size(); ++i) {
+      if (i > keyTypes_.size()) {
+        out << ", ";
+      }
+      out << types_[i]->toString();
+    }
+  }
+
+  if (!accumulators_.empty()) {
+    out << " Num accumulators: " << accumulators_.size();
+  }
+
+  out << " Num rows: " << numRows_;
+  return out.str();
+}
+
+std::string RowContainer::toString(const char* row) const {
+  auto types = types_;
+  auto rowType = ROW(std::move(types));
+  auto vector = BaseVector::create<RowVector>(rowType, 1, pool());
+
+  for (auto i = 0; i < rowType->size(); ++i) {
+    extractColumn(&row, 1, columnAt(i), 0, vector->childAt(i));
+  }
+
+  return vector->toString(0);
 }
 
 RowPartitions::RowPartitions(int32_t numRows, memory::MemoryPool& pool)

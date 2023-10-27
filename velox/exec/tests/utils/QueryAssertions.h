@@ -18,7 +18,6 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/external/duckdb/duckdb.hpp"
-#include "velox/external/duckdb/tpch/include/tpch-extension.hpp"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec::test {
@@ -202,7 +201,8 @@ bool assertEqualResults(
     const std::vector<RowVectorPtr>& actual);
 
 bool assertEqualResults(
-    const MaterializedRowMultiset& expected,
+    const MaterializedRowMultiset& expectedRows,
+    const TypePtr& expectedRowType,
     const std::vector<RowVectorPtr>& actual);
 
 /// Ensure both datasets have the same type and number of rows.

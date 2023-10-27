@@ -19,6 +19,7 @@
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/external/timsort/TimSort.hpp"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -173,7 +174,8 @@ Spiller::Spiller(
 
 void Spiller::extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr) {
   if (!resultPtr) {
-    resultPtr = BaseVector::create<RowVector>(rowType_, rows.size(), pool());
+    resultPtr = BaseVector::create<RowVector>(
+        rowType_, rows.size(), memory::spillMemoryPool());
   } else {
     resultPtr->prepareForReuse();
     resultPtr->resize(rows.size());
@@ -188,8 +190,7 @@ void Spiller::extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr) {
 
   auto numKeys = types.size();
   for (auto i = 0; i < accumulators.size(); ++i) {
-    accumulators[i].aggregateForSpill()->extractAccumulators(
-        rows.data(), rows.size(), &result->childAt(i + numKeys));
+    accumulators[i].extractForSpill(rows, result->childAt(i + numKeys));
   }
 }
 
@@ -301,7 +302,7 @@ void Spiller::ensureSorted(SpillRun& run) {
   uint64_t sortTimeUs{0};
   if (!run.sorted && needSort()) {
     MicrosecondTimer timer(&sortTimeUs);
-    std::sort(
+    gfx::timsort(
         run.rows.begin(),
         run.rows.end(),
         [&](const char* left, const char* right) {
@@ -557,7 +558,7 @@ int32_t Spiller::pickNextPartitionToSpill() {
   // Sort the partitions based on spiller type to pick.
   std::vector<int32_t> partitionIndices(spillRuns_.size());
   std::iota(partitionIndices.begin(), partitionIndices.end(), 0);
-  std::sort(
+  gfx::timsort(
       partitionIndices.begin(),
       partitionIndices.end(),
       [&](int32_t lhs, int32_t rhs) {
@@ -768,10 +769,5 @@ void Spiller::fillSpillRuns(std::vector<SpillableStats>& statsList) {
 
 SpillStats Spiller::stats() const {
   return stats_.copy();
-}
-
-// static
-memory::MemoryPool* Spiller::pool() {
-  return memory::spillMemoryPool();
 }
 } // namespace facebook::velox::exec

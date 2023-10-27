@@ -152,8 +152,6 @@ class GroupingSet {
   void addGlobalAggregationInput(const RowVectorPtr& input, bool mayPushdown);
 
   bool getGlobalAggregationOutput(
-      int32_t batchSize,
-      bool isPartial,
       RowContainerIterator& iterator,
       RowVectorPtr& result);
 
@@ -243,7 +241,7 @@ class GroupingSet {
   const bool isGlobal_;
   const bool isPartial_;
   const bool isRawInput_;
-  const core::QueryConfig* const queryConfig_;
+  const core::QueryConfig& queryConfig_;
 
   std::vector<AggregateInfo> aggregates_;
   AggregationMasks masks_;
@@ -305,7 +303,7 @@ class GroupingSet {
   // The row with the current merge state, allocated from 'mergeRow_'.
   char* mergeState_ = nullptr;
 
-  // The currently running spill partition in producing spilld output.
+  // The currently running spill partition in producing spilled output.
   int32_t outputPartition_{-1};
 
   // Intermediate vector for passing arguments to aggregate in merging spill.
@@ -334,7 +332,7 @@ class GroupingSet {
   std::unique_ptr<RowContainer> nonSpilledRowContainer_;
 
   // Counts input batches and triggers spilling if folly hash of this % 100 <=
-  // 'testSpillPct_';.
+  // 'spillConfig_->testSpillPct'.
   uint64_t spillTestCounter_{0};
 
   // True if partial aggregation has been given up as non-productive.

@@ -21,7 +21,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/exec/Exchange.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -53,7 +53,6 @@ OperatorTestBase::~OperatorTestBase() {
 
 void OperatorTestBase::SetUpTestCase() {
   FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
-  memory::MemoryArbitrator::registerAllFactories();
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   TestValue::enable();
@@ -61,7 +60,6 @@ void OperatorTestBase::SetUpTestCase() {
 
 void OperatorTestBase::TearDownTestCase() {
   waitForAllTasksToBeDeleted();
-  memory::MemoryArbitrator::unregisterAllFactories();
 }
 
 void OperatorTestBase::SetUp() {

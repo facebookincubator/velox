@@ -24,6 +24,7 @@
 namespace facebook::velox::dwrf {
 
 using dwio::common::ColumnSelector;
+using dwio::common::ExecutorBarrier;
 using dwio::common::FileFormat;
 using dwio::common::InputStream;
 using dwio::common::ReaderOptions;
@@ -34,6 +35,10 @@ DwrfRowReader::DwrfRowReader(
     const RowReaderOptions& opts)
     : StripeReaderBase(reader),
       options_(opts),
+      executorBarrier_{
+          options_.getDecodingExecutor() ? std::make_unique<ExecutorBarrier>(
+                                               options_.getDecodingExecutor())
+                                         : nullptr},
       columnSelector_{std::make_shared<ColumnSelector>(
           ColumnSelector::apply(opts.getSelector(), reader->getSchema()))} {
   auto& footer = getReader().getFooter();
@@ -259,6 +264,9 @@ void DwrfRowReader::readNext(
         mutation == nullptr,
         "Mutation pushdown is only supported in selective reader");
     columnReader_->next(rowsToRead, result);
+    if (executorBarrier_) {
+      executorBarrier_->waitAll();
+    }
     return;
   }
   if (!options_.getAppendRowNumberColumn()) {
@@ -482,7 +490,7 @@ DwrfRowReader::FetchResult DwrfRowReader::fetch(uint32_t stripeIndex) {
 
   auto scanSpec = options_.getScanSpec().get();
   auto requestedType = getColumnSelector().getSchemaWithId();
-  auto dataType = getReader().getSchemaWithId();
+  auto fileType = getReader().getSchemaWithId();
   FlatMapContext flatMapContext;
   flatMapContext.keySelectionCallback = options_.getKeySelectionCallback();
   memory::AllocationPool pool(&getReader().getMemoryPool());
@@ -492,7 +500,7 @@ DwrfRowReader::FetchResult DwrfRowReader::fetch(uint32_t stripeIndex) {
   if (scanSpec) {
     stripeState.selectiveColumnReader = SelectiveDwrfReader::build(
         requestedType,
-        dataType,
+        fileType,
         stripeStreams,
         streamLabels,
         columnReaderStatistics_,
@@ -503,9 +511,10 @@ DwrfRowReader::FetchResult DwrfRowReader::fetch(uint32_t stripeIndex) {
   } else {
     stripeState.columnReader = ColumnReader::build( // enqueue streams
         requestedType,
-        dataType,
+        fileType,
         stripeStreams,
         streamLabels,
+        executorBarrier_.get(),
         flatMapContext);
   }
   DWIO_ENSURE(
@@ -550,15 +559,34 @@ DwrfRowReader::FetchResult DwrfRowReader::prefetch(uint32_t stripeToFetch) {
 
 // Guarantee stripe we are currently on is available and loaded
 void DwrfRowReader::safeFetchNextStripe() {
+  auto startTime = std::chrono::high_resolution_clock::now();
+  auto fetchResult = fetch(currentStripe);
+  // If result is fetched by this thread or in progress in another thread,
+  // record time spent in this function as time blocked on IO.
+  bool shouldRecordTimeBlocked = fetchResult != FetchResult::kAlreadyFetched;
+
   // Check result of fetch to avoid synchronization if we fetched on this
   // thread.
-  if (fetch(currentStripe) != FetchResult::kFetched) {
+  if (fetchResult != FetchResult::kFetched) {
     // Now we know the stripe was or is being loaded on another thread,
     // Await the baton for this stripe before we return to ensure load is done.
     VLOG(1) << "Waiting on baton for stripe: " << currentStripe;
     stripeLoadBatons_[currentStripe]->wait();
     VLOG(1) << "Acquired baton for stripe " << currentStripe;
   }
+  auto reportBlockedOnIoMetric = options_.getBlockedOnIoCallback();
+  if (reportBlockedOnIoMetric) {
+    if (shouldRecordTimeBlocked) {
+      auto timeBlockedOnIo =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::high_resolution_clock::now() - startTime);
+      reportBlockedOnIoMetric(timeBlockedOnIo.count());
+    } else {
+      // We still want to populate stat if we are not blocking on IO.
+      reportBlockedOnIoMetric(0);
+    };
+  }
+
   DWIO_ENSURE(prefetchedStripeStates_.rlock()->contains(currentStripe));
 }
 

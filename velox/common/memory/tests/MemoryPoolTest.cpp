@@ -73,7 +73,6 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
  protected:
   static constexpr uint64_t kDefaultCapacity = 8 * GB; // 8GB
   static void SetUpTestCase() {
-    MemoryArbitrator::registerAllFactories();
     FLAGS_velox_memory_leak_check_enabled = true;
     TestValue::enable();
   }
@@ -3561,6 +3560,27 @@ TEST_P(MemoryPoolTest, abort) {
       ASSERT_EQ(leafPool->capacity(), capacity);
     }
   }
+}
+
+TEST_P(MemoryPoolTest, overuseUnderArbitration) {
+  constexpr int64_t kMaxSize = 128 * MB; // 1GB
+  setupMemory({.capacity = kMaxSize, .arbitratorKind = "SHARED"});
+  MemoryManager& manager = *getMemoryManager();
+  auto root = manager.addRootPool(
+      "overuseUnderArbitration", kMaxSize, MemoryReclaimer::create());
+  auto child = root->addLeafChild("overuseUnderArbitration");
+  // maybeReserve returns false if reservation fails.
+  ASSERT_FALSE(child->maybeReserve(2 * kMaxSize));
+  ASSERT_EQ(child->currentBytes(), 0);
+  ASSERT_EQ(child->reservedBytes(), 0);
+  ScopedMemoryArbitrationContext scopedMemoryArbitration(*child);
+  ASSERT_TRUE(underMemoryArbitration());
+  ASSERT_TRUE(child->maybeReserve(2 * kMaxSize));
+  ASSERT_EQ(child->currentBytes(), 0);
+  ASSERT_EQ(child->reservedBytes(), 2 * kMaxSize);
+  child->release();
+  ASSERT_EQ(child->currentBytes(), 0);
+  ASSERT_EQ(child->reservedBytes(), 0);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

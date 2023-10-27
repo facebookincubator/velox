@@ -385,55 +385,7 @@ RowTypePtr getGroupIdOutputType(
   return ROW(std::move(names), std::move(types));
 }
 
-std::vector<std::vector<std::string>> getGroupingSets(
-    const std::vector<std::vector<FieldAccessTypedExprPtr>>& groupingSetFields,
-    const std::vector<GroupIdNode::GroupingKeyInfo>& groupingKeyInfos) {
-  std::unordered_map<std::string, std::string> inputToOutputGroupingKeyMap;
-  for (const auto& groupKeyInfo : groupingKeyInfos) {
-    inputToOutputGroupingKeyMap[groupKeyInfo.input->name()] =
-        groupKeyInfo.output;
-  }
-
-  // Prestissimo passes grouping keys with their input column name to Velox.
-  // But Velox expects the output column name for the grouping key.
-  std::vector<std::vector<std::string>> groupingSets;
-  groupingSets.reserve(groupingSetFields.size());
-  for (const auto& groupFields : groupingSetFields) {
-    std::vector<std::string> groupingKeys;
-    groupingKeys.reserve(groupFields.size());
-    for (const auto& groupingField : groupFields) {
-      groupingKeys.push_back(
-          inputToOutputGroupingKeyMap[groupingField->name()]);
-    }
-    groupingSets.push_back(groupingKeys);
-  }
-  return groupingSets;
-}
-
 } // namespace
-
-GroupIdNode::GroupIdNode(
-    PlanNodeId id,
-    std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-    std::vector<GroupIdNode::GroupingKeyInfo> groupingKeyInfos,
-    std::vector<FieldAccessTypedExprPtr> aggregationInputs,
-    std::string groupIdName,
-    PlanNodePtr source)
-    : PlanNode(std::move(id)),
-      sources_{source},
-      outputType_(getGroupIdOutputType(
-          groupingKeyInfos,
-          aggregationInputs,
-          groupIdName)),
-      groupingSets_(getGroupingSets(groupingSets, groupingKeyInfos)),
-      groupingKeyInfos_(std::move(groupingKeyInfos)),
-      aggregationInputs_(std::move(aggregationInputs)),
-      groupIdName_(std::move(groupIdName)) {
-  VELOX_USER_CHECK_GE(
-      groupingSets_.size(),
-      2,
-      "GroupIdNode requires two or more grouping sets.");
-}
 
 GroupIdNode::GroupIdNode(
     PlanNodeId id,
@@ -1190,6 +1142,21 @@ WindowNode::WindowNode(
       sortingKeys_.size(),
       sortingOrders_.size(),
       "Number of sorting keys must be equal to the number of sorting orders");
+
+  std::unordered_set<std::string> keyNames;
+  for (const auto& key : partitionKeys_) {
+    VELOX_USER_CHECK(
+        keyNames.insert(key->name()).second,
+        "Partitioning keys must be unique. Found duplicate key: {}",
+        key->name());
+  }
+
+  for (const auto& key : sortingKeys_) {
+    VELOX_USER_CHECK(
+        keyNames.insert(key->name()).second,
+        "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: {}",
+        key->name());
+  }
 }
 
 void WindowNode::addDetails(std::stringstream& stream) const {
@@ -1521,6 +1488,23 @@ TopNRowNumberNode::TopNRowNumberNode(
       sortingKeys_.size(),
       0,
       "Number of sorting keys must be greater than zero");
+
+  VELOX_USER_CHECK_GT(limit, 0, "Limit must be greater than zero");
+
+  std::unordered_set<std::string> keyNames;
+  for (const auto& key : partitionKeys_) {
+    VELOX_USER_CHECK(
+        keyNames.insert(key->name()).second,
+        "Partitioning keys must be unique. Found duplicate key: {}",
+        key->name());
+  }
+
+  for (const auto& key : sortingKeys_) {
+    VELOX_USER_CHECK(
+        keyNames.insert(key->name()).second,
+        "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: {}",
+        key->name());
+  }
 }
 
 void TopNRowNumberNode::addDetails(std::stringstream& stream) const {

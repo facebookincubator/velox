@@ -16,7 +16,7 @@
 #include <velox/type/Timestamp.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -120,7 +120,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
   VELOX_ASSERT_THROW(
-      task->start(task, 3, 1),
+      task->start(3, 1),
       "groupedExecutionLeafNodeIds must be empty in ungrouped execution mode");
 
   // Check grouped execution without supplied leaf node ids.
@@ -129,7 +129,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
   VELOX_ASSERT_THROW(
-      task->start(task, 3, 1),
+      task->start(3, 1),
       "groupedExecutionLeafNodeIds must not be empty in "
       "grouped execution mode");
 
@@ -140,7 +140,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
   VELOX_ASSERT_THROW(
-      task->start(task, 3, 1),
+      task->start(3, 1),
       fmt::format(
           "Grouped execution leaf node {} is not a leaf node in any pipeline",
           projectNodeId));
@@ -153,7 +153,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
   VELOX_ASSERT_THROW(
-      task->start(task, 3, 1),
+      task->start(3, 1),
       fmt::format(
           "Grouped execution leaf node {} is not a leaf node in any pipeline",
           projectNodeId));
@@ -166,7 +166,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
   VELOX_ASSERT_THROW(
-      task->start(task, 3, 1),
+      task->start(3, 1),
       fmt::format(
           "Grouped execution leaf node {} not found or it is not a leaf node",
           localPartitionNodeId));
@@ -203,7 +203,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
   auto task =
       exec::Task::create("0", std::move(planFragment), 0, std::move(queryCtx));
   // 3 drivers max and 1 concurrent split group.
-  task->start(task, 3, 1);
+  task->start(3, 1);
 
   // All pipelines run grouped execution, so no drivers should be running.
   EXPECT_EQ(0, task->numRunningDrivers());
@@ -256,8 +256,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
 
   // 'Delete results' from output buffer triggers 'set all output consumed',
   // which should finish the task.
-  auto outputBufferManager =
-      exec::PartitionedOutputBufferManager::getInstance().lock();
+  auto outputBufferManager = exec::OutputBufferManager::getInstance().lock();
   outputBufferManager->deleteResults(task->taskId(), 0);
 
   // Task must be finished at this stage.
@@ -341,7 +340,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
     auto task = exec::Task::create(
         "0", std::move(planFragment), 0, std::move(queryCtx));
     // 3 drivers max and 1 concurrent split group.
-    task->start(task, 3, 1);
+    task->start(3, 1);
 
     // Build pipeline runs ungrouped execution, so it should have drivers
     // running.
@@ -410,8 +409,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
 
     // 'Delete results' from output buffer triggers 'set all output consumed',
     // which should finish the task.
-    auto outputBufferManager =
-        exec::PartitionedOutputBufferManager::getInstance().lock();
+    auto outputBufferManager = exec::OutputBufferManager::getInstance().lock();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
     // Task must be finished at this stage.

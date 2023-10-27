@@ -33,11 +33,9 @@ const std::unordered_set<TypeKind> kSupportedTypes = {
     TypeKind::REAL,
     TypeKind::DOUBLE,
     TypeKind::VARCHAR,
-    TypeKind::MAP,
     TypeKind::ARRAY,
     TypeKind::ROW};
 
-using TestMapType = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
 using TestArrayType = std::vector<std::optional<StringView>>;
 using TestRowType = variant;
 
@@ -61,10 +59,6 @@ class ArraySortTest : public FunctionBaseTest,
         ->template asFlatVector<T>();
   }
 
-  const MapVector* getMapVector() {
-    return dynamic_cast<MapVector*>(dataVectorsByType_[TypeKind::MAP].get());
-  }
-
   template <typename T>
   T dataAt(vector_size_t index) {
     EXPECT_LT(index, numValues_);
@@ -79,14 +73,6 @@ class ArraySortTest : public FunctionBaseTest,
       inputVectors.push_back(inputValues);
     }
     return makeNullableArrayVector<T>(inputVectors);
-  }
-
-  MapVectorPtr buildMapVector() {
-    return makeMapVector<int32_t, int32_t>(
-        numValues_,
-        [&](vector_size_t /*row*/) { return 1; },
-        [&](vector_size_t row) { return row; },
-        [&](vector_size_t row) { return row; });
   }
 
   template <typename T>
@@ -192,12 +178,10 @@ class ArraySortTest : public FunctionBaseTest,
     };
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
-      auto actualResult =
-          evaluate<ArrayVector>("array_sort(c0)", testData.inputVector);
+      auto actualResult = evaluate("array_sort(c0)", testData.inputVector);
       assertEqualVectors(testData.expectedResult, actualResult);
 
-      auto descResult =
-          evaluate<ArrayVector>("array_sort_desc(c0)", testData.inputVector);
+      auto descResult = evaluate("array_sort_desc(c0)", testData.inputVector);
       assertEqualVectors(testData.expectedDescResult, descResult);
     }
   }
@@ -227,9 +211,6 @@ class ArraySortTest : public FunctionBaseTest,
         break;
       case TypeKind::VARCHAR:
         test<StringView>();
-        break;
-      case TypeKind::MAP:
-        test<TestMapType>();
         break;
       case TypeKind::ARRAY:
         test<TestArrayType>();
@@ -274,16 +255,6 @@ FlatVectorPtr<bool> ArraySortTest::buildScalarVector() {
 }
 
 template <>
-TestMapType ArraySortTest::dataAt<TestMapType>(vector_size_t index) {
-  EXPECT_LT(index, numValues_);
-  const int32_t key =
-      getMapVector()->mapKeys()->asFlatVector<int32_t>()->valueAt(index);
-  const std::optional<int32_t> value =
-      getMapVector()->mapValues()->asFlatVector<int32_t>()->valueAt(index);
-  return TestMapType({std::pair{key, value}});
-}
-
-template <>
 TestArrayType ArraySortTest::dataAt<TestArrayType>(vector_size_t index) {
   EXPECT_LT(index, numValues_);
   TestArrayType array;
@@ -298,17 +269,6 @@ template <>
 TestRowType ArraySortTest::dataAt<TestRowType>(vector_size_t index) {
   EXPECT_LT(index, numValues_);
   return variant::row({getScalarVector<double>()->valueAt(index)});
-}
-
-template <>
-ArrayVectorPtr ArraySortTest::arrayVector<TestMapType>(
-    const std::vector<std::optional<TestMapType>>& inputValues) {
-  std::vector<std::vector<std::optional<TestMapType>>> inputVectors;
-  inputVectors.reserve(numVectors_);
-  for (int i = 0; i < numVectors_; ++i) {
-    inputVectors.push_back(inputValues);
-  }
-  return makeArrayOfMapVector<int32_t, int32_t>(inputVectors);
 }
 
 template <>
@@ -372,9 +332,6 @@ void ArraySortTest::SetUp() {
         break;
       case TypeKind::VARCHAR:
         dataVectorsByType_.emplace(type, buildScalarVector<StringView>());
-        break;
-      case TypeKind::MAP:
-        dataVectorsByType_.emplace(type, buildMapVector());
         break;
       case TypeKind::ARRAY:
       case TypeKind::ROW:
@@ -581,6 +538,125 @@ TEST_F(ArraySortTest, lambda) {
   testDesc(
       "array_sort",
       "(x, y) -> if(length(x) < length(y), 1, if(length(x) = length(y), 0, -1))");
+}
+
+TEST_F(ArraySortTest, failOnMapTypeSort) {
+  static const std::string kErrorMessage =
+      "Scalar function signature is not supported"_sv;
+  auto data = makeRowVector({BaseVector::createNullConstant(
+      ARRAY(MAP(BIGINT(), VARCHAR())), 8, pool())});
+  auto testFail = [&](const std::string& name) {
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0, x -> x)", name), data), kErrorMessage);
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), data), kErrorMessage);
+  };
+
+  testFail("array_sort");
+  testFail("array_sort_desc");
+}
+
+TEST_F(ArraySortTest, failOnArrayNullCompare) {
+  auto baseVector = makeArrayVectorFromJson<int32_t>({
+      "[null, 1]",
+      "[1, 1]",
+      "[2, 2]",
+      "[2, null]",
+      "[4, 4]",
+      "[5, null]",
+      "null",
+  });
+  static const std::string kErrorMessage =
+      "array_sort contains nested nulls not supported for comparison";
+
+  // [2, null] vs [4, 4], [5, null] vs null no throw.
+  const auto noNullCompareBatch = makeRowVector({
+      makeArrayVector({3, 5}, baseVector),
+  });
+
+  // [null, 1] vs [1, 1] throws.
+  auto nullCompareBatch1 = makeRowVector({
+      makeArrayVector({0, 3, 5}, baseVector),
+  });
+
+  // [2, 2] vs [2, null] throws.
+  auto nullCompareBatch2 = makeRowVector({
+      makeArrayVector({1, 4}, baseVector),
+  });
+
+  for (const auto& name : {"array_sort", "array_sort_desc"}) {
+    evaluate(fmt::format("{}(c0)", name), noNullCompareBatch);
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch1),
+        kErrorMessage);
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch2),
+        kErrorMessage);
+  }
+
+  {
+    auto expected = makeArrayVector({2, 3, 5}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch1));
+  }
+
+  {
+    auto expected = makeArrayVector({3, 4}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch2));
+  }
+}
+
+TEST_F(ArraySortTest, failOnRowNullCompare) {
+  auto baseVector = makeRowVector({
+      makeNullableFlatVector<int32_t>({std::nullopt, 1, 2, 2, 4, 5, 0}),
+      makeNullableFlatVector<int32_t>(
+          {1, 1, 2, std::nullopt, 4, std::nullopt, 0}),
+  });
+  baseVector->setNull(6, true);
+  static const std::string kErrorMessage =
+      "array_sort contains nested nulls not supported for comparison";
+
+  // (2, null) vs (4, 4), (5, null) vs null no throw.
+  const auto noNullCompareBatch = makeRowVector({
+      makeArrayVector({3, 5}, baseVector),
+  });
+
+  // (null, 1) vs (1, 1) throws.
+  auto nullCompareBatch1 = makeRowVector({
+      makeArrayVector({0, 3, 5}, baseVector),
+  });
+
+  // (2, 2) vs (2, null) throws.
+  auto nullCompareBatch2 = makeRowVector({
+      makeArrayVector({1, 4}, baseVector),
+  });
+
+  for (const auto& name : {"array_sort", "array_sort_desc"}) {
+    evaluate(fmt::format("{}(c0)", name), noNullCompareBatch);
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch1),
+        kErrorMessage);
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("{}(c0)", name), nullCompareBatch2),
+        kErrorMessage);
+  }
+
+  {
+    auto expected = makeArrayVector({2, 3, 5}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch1));
+  }
+
+  {
+    auto expected = makeArrayVector({3, 4}, baseVector);
+    expected->setNull(0, true);
+    assertEqualVectors(
+        expected, evaluate("try(array_sort(c0))", nullCompareBatch2));
+  }
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

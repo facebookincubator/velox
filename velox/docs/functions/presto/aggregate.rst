@@ -82,15 +82,16 @@ General Aggregate Functions
     each input value occurs. Supports integral, floating-point,
     boolean, timestamp, and date input types.
 
-.. function:: geometric_mean(x) -> double
+.. function:: geometric_mean(bigint) -> double
+              geometric_mean(double) -> double
+              geometric_mean(real) -> real
 
     Returns the `geometric mean <https://en.wikipedia.org/wiki/Geometric_mean>`_ of all input values.
-
-    Supported types are BIGINT and DOUBLE.
 
 .. function:: max_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
+    ``y`` must be an orderable type.
 
 .. function:: max_by(x, y, n) -> array([same as x])
     :noindex:
@@ -100,6 +101,7 @@ General Aggregate Functions
 .. function:: min_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the minimum value of ``y`` over all input values.
+    ``y`` must be an orderable type.
 
 .. function:: min_by(x, y, n) -> array([same as x])
     :noindex:
@@ -110,6 +112,7 @@ General Aggregate Functions
 
     Returns the maximum value of all input values.
     ``x`` must not contain nulls when it is complex type.
+    ``x`` must be an orderable type.
 
 .. function:: max(x, n) -> array<[same as x]>
     :noindex:
@@ -121,6 +124,7 @@ General Aggregate Functions
 
     Returns the minimum value of all input values.
     ``x`` must not contain nulls when it is complex type.
+    ``x`` must be an orderable type.
 
 .. function:: min(x, n) -> array<[same as x]>
     :noindex:
@@ -142,6 +146,27 @@ General Aggregate Functions
     ``combineFunction`` will be invoked to combine two states into a new state.
     The final state is returned. Throws an error if ``initialState`` is NULL or
     ``inputFunction`` or ``combineFunction`` returns a NULL.
+
+    Take care when designing ``initialState``, ``inputFunction`` and ``combineFunction``.
+    These need to support evaluating aggregation in a distributed manner using partial
+    aggregation on many nodes, followed by shuffle over group-by keys, followed by
+    final aggregation. Given a set of all possible values of state, make sure that
+    combineFunction is `commutative <https://en.wikipedia.org/wiki/Commutative_property>`_
+    and `associative <https://en.wikipedia.org/wiki/Associative_property>`_
+    operation with initialState as the
+    `identity <https://en.wikipedia.org/wiki/Identity_element>`_ value.
+
+     combineFunction(s, initialState) = s for any s
+
+     combineFunction(s1, s2) = combineFunction(s2, s1) for any s1 and s2
+
+     combineFunction(s1, combineFunction(s2, s3)) = combineFunction(combineFunction(s1, s2), s3) for any s1, s2, s3
+
+    In addition, make sure that the following holds for the inputFunction:
+
+     inputFunction(inputFunction(initialState, x), y) = combineFunction(inputFunction(initialState, x), inputFunction(initialState, y)) for any x and y
+
+    Check out `blog post about reduce_agg <https://velox-lib.io/blog/reduce-agg>`_ for more context.
 
     Note that reduce_agg doesn't support evaluation over sorted inputs.::
 

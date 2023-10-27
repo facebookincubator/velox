@@ -19,22 +19,21 @@
 #include <utility>
 
 #include "velox/common/memory/Memory.h"
-#include "velox/common/memory/SharedArbitrator.h"
 
 namespace facebook::velox::memory {
 
 namespace {
 class FactoryRegistry {
  public:
-  void registerFactory(
+  bool registerFactory(
       const std::string& kind,
       MemoryArbitrator::Factory factory) {
     std::lock_guard<std::mutex> l(mutex_);
-    VELOX_USER_CHECK(
-        map_.find(kind) == map_.end(),
-        "Arbitrator factory for kind {} already registered",
-        kind)
+    if (map_.find(kind) != map_.end()) {
+      return false;
+    }
     map_[kind] = std::move(factory);
+    return true;
   }
 
   MemoryArbitrator::Factory& getFactory(const std::string& kind) {
@@ -144,22 +143,14 @@ std::unique_ptr<MemoryArbitrator> MemoryArbitrator::create(
   return factory(config);
 }
 
-void MemoryArbitrator::registerFactory(
+bool MemoryArbitrator::registerFactory(
     const std::string& kind,
     MemoryArbitrator::Factory factory) {
-  arbitratorFactories().registerFactory(kind, std::move(factory));
+  return arbitratorFactories().registerFactory(kind, std::move(factory));
 }
 
 void MemoryArbitrator::unregisterFactory(const std::string& kind) {
   arbitratorFactories().unregisterFactory(kind);
-}
-
-void MemoryArbitrator::registerAllFactories() {
-  SharedArbitrator::registerFactory();
-}
-
-void MemoryArbitrator::unregisterAllFactories() {
-  SharedArbitrator::unregisterFactory();
 }
 
 std::unique_ptr<MemoryReclaimer> MemoryReclaimer::create() {
@@ -197,12 +188,15 @@ MemoryReclaimer::reclaim(MemoryPool* pool, uint64_t targetBytes, Stats& stats) {
     int64_t reservedBytes;
   };
   std::vector<Candidate> candidates;
-  candidates.reserve(pool->children_.size());
-  for (auto& entry : pool->children_) {
-    auto child = entry.second.lock();
-    if (child != nullptr) {
-      const int64_t reservedBytes = child->reservedBytes();
-      candidates.push_back(Candidate{std::move(child), reservedBytes});
+  {
+    folly::SharedMutex::ReadHolder guard{pool->poolMutex_};
+    candidates.reserve(pool->children_.size());
+    for (auto& entry : pool->children_) {
+      auto child = entry.second.lock();
+      if (child != nullptr) {
+        const int64_t reservedBytes = child->reservedBytes();
+        candidates.push_back(Candidate{std::move(child), reservedBytes});
+      }
     }
   }
 

@@ -47,7 +47,7 @@ void FlatVector<bool>::set(vector_size_t idx, bool value) {
 }
 
 template <>
-Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size) {
+Buffer* FlatVector<StringView>::getBufferWithSpace(int32_t size) {
   VELOX_DCHECK_GE(stringBuffers_.size(), stringBufferSet_.size());
 
   // Check if the last buffer is uniquely referenced and has enough space.
@@ -67,7 +67,7 @@ Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size) {
 }
 
 template <>
-char* FlatVector<StringView>::getRawStringBufferWithSpace(vector_size_t size) {
+char* FlatVector<StringView>::getRawStringBufferWithSpace(int32_t size) {
   Buffer* buffer = getBufferWithSpace(size);
   char* rawBuffer = buffer->asMutable<char>() + buffer->size();
   buffer->setSize(buffer->size() + size);
@@ -296,7 +296,7 @@ void FlatVector<StringView>::copy(
       setIsAscii(ascii.value(), rows);
     } else {
       // ASCII-ness for the 'rows' is not known.
-      ensureIsAsciiCapacity(rows.end());
+      ensureIsAsciiCapacity();
       // If we arent All ascii, then invalidate
       // because the remaining selected rows might be ascii
       if (!asciiInfo.isAllAscii()) {
