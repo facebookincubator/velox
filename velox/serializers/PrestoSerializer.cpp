@@ -826,7 +826,7 @@ std::string readLengthPrefixedString(ByteStream* source) {
   return value;
 }
 
-void checkTypeEncoding(std::string encoding, TypePtr type) {
+void checkTypeEncoding(std::string_view encoding, const TypePtr& type) {
   auto kindEncoding = typeToEncodingName(type);
   VELOX_CHECK(
       encoding == kindEncoding,
