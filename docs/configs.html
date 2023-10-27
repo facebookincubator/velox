@@ -332,7 +332,8 @@ value of <cite>max_partial_aggregation_memory</cite>. Specify higher value for <
 <tr class="row-odd"><td><p>writer_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
-<td><p>When <cite>writer_spill_enabled</cite> is true, determines whether TableWriter operator can spill to disk under memory pressure.</p></td>
+<td><p>When <cite>writer_spill_enabled</cite> is true, determines whether TableWriter operator can flush the buffered data to disk
+under memory pressure.</p></td>
 </tr>
 <tr class="row-even"><td><p>aggregation_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
@@ -342,7 +343,9 @@ value of <cite>max_partial_aggregation_memory</cite>. Specify higher value for <
 <tr class="row-odd"><td><p>aggregation_spill_all</p></td>
 <td><p>boolean</p></td>
 <td><p>false</p></td>
-<td><p>If true and spilling has been triggered during the input processing, the spiller will spill all the remaining in-memory state to disk before output processing. This is to simplify the aggregation query OOM prevention in output processing stage.</p></td>
+<td><p>If true and spilling has been triggered during the input processing, the spiller will spill all the remaining
+in-memory state to disk before output processing. This is to simplify the aggregation query OOM prevention in
+output processing stage.</p></td>
 </tr>
 <tr class="row-even"><td><p>join_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
