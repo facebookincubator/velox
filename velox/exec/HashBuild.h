@@ -326,7 +326,7 @@ class HashBuild final : public Operator {
   // Indices of dependent columns used by the filter in 'decoders_'.
   std::vector<column_index_t> dependentFilterChannels_;
 
-  // Maps from key channel in 'input_' to channel in key.
+  // Maps key channel in 'input_' to channel in key.
   folly::F14FastMap<column_index_t, column_index_t> keyChannelMap_;
 };
 
