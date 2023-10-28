@@ -1548,3 +1548,27 @@ TEST_F(RowContainerTest, toString) {
       rowContainer->toString(rows[2]),
       "{3, winter, 12, 123.00299835205078, null}");
 }
+
+TEST_F(RowContainerTest, initializeRowForReuseStringView) {
+  std::vector<TypePtr> keyTypes = {BIGINT(), VARCHAR()};
+  auto rowContainer = std::make_unique<RowContainer>(keyTypes, pool_.get());
+
+  auto intVector = makeFlatVector<int64_t>({10, 20});
+  auto strVector = makeFlatVector<std::string>(
+      {"non-inline string", "another non-inline string"});
+
+  DecodedVector decodedInt(*intVector);
+  DecodedVector decodedString(*strVector);
+
+  auto row = rowContainer->newRow();
+  // store both fields
+  rowContainer->store(decodedInt, 0, row, 0);
+  rowContainer->store(decodedString, 0, row, 1);
+
+  // initializeRow for reuse, and don't store to the varchar field
+  rowContainer->initializeRow(row, true);
+  rowContainer->store(decodedInt, 0, row, 0);
+
+  // initializeRow for reuse again, should not double free the varchar field
+  rowContainer->initializeRow(row, true);
+}
