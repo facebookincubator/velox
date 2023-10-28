@@ -16,12 +16,14 @@
 
 #include <gflags/gflags.h>
 #include <deque>
+#include "velox/serializers/PrestoSerializer.h"
+
 #include "velox/exec/tests/SpillerJoinInputBenchmarkTest.h"
 
 DEFINE_string(
-    spiller_benchmark_path,
-    "",
-    "The file directory path for spilling");
+    spiller_benchmark_name,
+    "JoinSpillInputBenchmarkTest",
+    "The name of this benchmark");
 DEFINE_uint64(
     spiller_benchmark_max_spill_file_size,
     1 << 30,
@@ -46,10 +48,6 @@ DEFINE_string(
     spiller_benchmark_compression_kind,
     "none",
     "The compression kind to compress spill rows before write to disk");
-DEFINE_uint32(
-    spiller_benchmark_spill_executor_size,
-    std::thread::hardware_concurrency(),
-    "The spiller executor size in number of threads");
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
@@ -58,48 +56,17 @@ using namespace facebook::velox::exec;
 
 namespace facebook::velox::exec::test {
 namespace {
-static const int kNumSampleVectors = 100;
-}
+const int numSampleVectors = 100;
+} // namespace
 
 void JoinSpillInputBenchmarkTest::setUp() {
-  rootPool_ = defaultMemoryManager().addRootPool("JoinSpillInputTest");
-  pool_ = rootPool_->addLeafChild("JoinSpillInputTest");
-
-  rowType_ =
-      ROW({"c0", "c1", "c2", "c3", "c4"},
-          {INTEGER(), BIGINT(), VARCHAR(), VARBINARY(), DOUBLE()});
-
-  numInputVectors_ = FLAGS_spiller_benchmark_num_spill_vectors;
-  inputVectorSize_ = FLAGS_spiller_benchmark_spill_vector_size;
-  {
-    VectorFuzzer::Options options;
-    options.vectorSize = inputVectorSize_;
-    vectorFuzzer_ = std::make_unique<VectorFuzzer>(options, pool_.get());
-  }
-  rowVectors_.reserve(kNumSampleVectors);
-  for (int i = 0; i < kNumSampleVectors; ++i) {
-    rowVectors_.push_back(vectorFuzzer_->fuzzRow(rowType_));
-  }
-
-  if (FLAGS_spiller_benchmark_spill_executor_size != 0) {
-    executor_ = std::make_unique<folly::IOThreadPoolExecutor>(
-        FLAGS_spiller_benchmark_spill_executor_size,
-        std::make_shared<folly::NamedThreadFactory>("Spiller"));
-  }
-  if (FLAGS_spiller_benchmark_path.empty()) {
-    tempDir_ = exec::test::TempDirectoryPath::create();
-    spillDir_ = tempDir_->path;
-  } else {
-    spillDir_ = FLAGS_spiller_benchmark_path;
-  }
-  fs_ = filesystems::getFileSystem(spillDir_, {});
-  fs_->mkdir(spillDir_);
+  SpillerBenchmarkBase::setUp();
 
   spiller_ = std::make_unique<Spiller>(
       exec::Spiller::Type::kHashJoinProbe,
       rowType_,
       HashBitRange{29, 29},
-      fmt::format("{}/{}", spillDir_, "JoinSpillInputTest"),
+      fmt::format("{}/{}", spillDir_, FLAGS_spiller_benchmark_name),
       FLAGS_spiller_benchmark_max_spill_file_size,
       FLAGS_spiller_benchmark_write_buffer_size,
       FLAGS_spiller_benchmark_min_spill_run_size,
@@ -112,7 +79,7 @@ void JoinSpillInputBenchmarkTest::setUp() {
 void JoinSpillInputBenchmarkTest::run() {
   MicrosecondTimer timer(&executionTimeUs_);
   for (auto i = 0; i < numInputVectors_; ++i) {
-    spiller_->spill(0, rowVectors_[i % kNumSampleVectors]);
+    spiller_->spill(0, rowVectors_[i % numSampleVectors]);
   }
 }
 } // namespace facebook::velox::exec::test
@@ -121,8 +88,8 @@ int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   serializer::presto::PrestoVectorSerde::registerVectorSerde();
   filesystems::registerLocalFileSystem();
-  auto test =
-      std::make_unique<facebook::velox::exec::test::JoinSpillInputBenchmarkTest>();
+  auto test = std::make_unique<
+      facebook::velox::exec::test::JoinSpillInputBenchmarkTest>();
   test->setUp();
   test->run();
   test->printStats();
