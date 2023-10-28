@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/SpillerBenchmarkBase.h"
+#include <gflags/gflags.h>
+#include <deque>
+#include "velox/exec/tests/SpillerJoinInputBenchmarkTest.h"
 
 DEFINE_string(
     spiller_benchmark_path,
@@ -59,7 +61,7 @@ namespace {
 static const int kNumSampleVectors = 100;
 }
 
-void JoinSpillInputTest::setUp() {
+void JoinSpillInputBenchmarkTest::setUp() {
   rootPool_ = defaultMemoryManager().addRootPool("JoinSpillInputTest");
   pool_ = rootPool_->addLeafChild("JoinSpillInputTest");
 
@@ -107,36 +109,23 @@ void JoinSpillInputTest::setUp() {
   spiller_->setPartitionsSpilled({0});
 }
 
-void JoinSpillInputTest::run() {
+void JoinSpillInputBenchmarkTest::run() {
   MicrosecondTimer timer(&executionTimeUs_);
   for (auto i = 0; i < numInputVectors_; ++i) {
     spiller_->spill(0, rowVectors_[i % kNumSampleVectors]);
   }
 }
-
-void JoinSpillInputTest::printStats() {
-  LOG(INFO) << "total execution time: " << succinctMicros(executionTimeUs_);
-  LOG(INFO) << numInputVectors_ << " vectors each with " << inputVectorSize_
-            << " rows have been processed";
-  const auto memStats = pool_->stats();
-  LOG(INFO) << "peak memory usage[" << succinctBytes(memStats.peakBytes)
-            << "] cumulative memory usage["
-            << succinctBytes(memStats.cumulativeBytes) << "]";
-  LOG(INFO) << spiller_->stats().toString();
-  // List files under file path.
-  SpillPartitionSet partitionSet;
-  spiller_->finishSpill(partitionSet);
-  VELOX_CHECK_EQ(partitionSet.size(), 1);
-  const auto files = fs_->list(spillDir_);
-  for (const auto& file : files) {
-    auto rfile = fs_->openFileForRead(file);
-    LOG(INFO) << "spilled file " << file << " size "
-              << succinctBytes(rfile->size());
-  }
-}
-
-void JoinSpillInputTest::cleanup() {
-  LOG(INFO) << "Remove spill dir: " << spillDir_;
-  fs_->rmdir(spillDir_);
-}
 } // namespace facebook::velox::exec::test
+
+int main(int argc, char* argv[]) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  serializer::presto::PrestoVectorSerde::registerVectorSerde();
+  filesystems::registerLocalFileSystem();
+  auto test =
+      std::make_unique<facebook::velox::exec::test::JoinSpillInputBenchmarkTest>();
+  test->setUp();
+  test->run();
+  test->printStats();
+  test->cleanup();
+  return 0;
+}

@@ -14,24 +14,18 @@
  * limitations under the License.
  */
 
-#include <gflags/gflags.h>
-#include <deque>
-
 #include "velox/exec/tests/SpillerBenchmarkBase.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::common;
-using namespace facebook::velox::exec;
+namespace facebook::velox::exec::test {
+// This test measures the spill input overhead in spill join & probe.
+class JoinSpillInputBenchmarkTest : public SpillerBenchmarkBase {
+ public:
+  JoinSpillInputBenchmarkTest() = default;
 
-int main(int argc, char* argv[]) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  serializer::presto::PrestoVectorSerde::registerVectorSerde();
-  filesystems::registerLocalFileSystem();
-  auto test =
-      std::make_unique<facebook::velox::exec::test::JoinSpillInputTest>();
-  test->setUp();
-  test->run();
-  test->printStats();
-  test->cleanup();
-  return 0;
-}
+  /// Sets up the test.
+  void setUp() override;
+
+  /// Runs the test.
+  void run() override;
+};
+} // namespace facebook::velox::exec::test

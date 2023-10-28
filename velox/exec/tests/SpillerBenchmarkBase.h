@@ -40,32 +40,51 @@ DECLARE_uint32(spiller_benchmark_input_vector_size);
 DECLARE_string(spiller_benchmark_compression_kind);
 DECLARE_uint32(spiller_benchmark_spill_executor_size);
 
-using namespace facebook::velox;
-using namespace facebook::velox::common;
-using namespace facebook::velox::memory;
-using namespace facebook::velox::exec;
-
 namespace facebook::velox::exec::test {
 // This test measures the spill input overhead in spill join & probe.
-class JoinSpillInputTest {
+class SpillerBenchmarkBase {
  public:
-  JoinSpillInputTest() = default;
+  SpillerBenchmarkBase() = default;
+
+  virtual ~SpillerBenchmarkBase() = default;
 
   /// Sets up the test.
-  void setUp();
+  virtual void setUp() = 0;
 
   /// Runs the test.
-  void run();
+  virtual void run() = 0;
 
   /// Prints out the measured test stats.
-  void printStats();
+  virtual void printStats() {
+    LOG(INFO) << "total execution time: " << succinctMicros(executionTimeUs_);
+    LOG(INFO) << numInputVectors_ << " vectors each with " << inputVectorSize_
+              << " rows have been processed";
+    const auto memStats = pool_->stats();
+    LOG(INFO) << "peak memory usage[" << succinctBytes(memStats.peakBytes)
+              << "] cumulative memory usage["
+              << succinctBytes(memStats.cumulativeBytes) << "]";
+    LOG(INFO) << spiller_->stats().toString();
+    // List files under file path.
+    SpillPartitionSet partitionSet;
+    spiller_->finishSpill(partitionSet);
+    VELOX_CHECK_EQ(partitionSet.size(), 1);
+    const auto files = fs_->list(spillDir_);
+    for (const auto& file : files) {
+      auto rfile = fs_->openFileForRead(file);
+      LOG(INFO) << "spilled file " << file << " size "
+                << succinctBytes(rfile->size());
+    }
+  }
 
   /// Cleans up the test.
-  void cleanup();
+  virtual void cleanup() {
+    LOG(INFO) << "Remove spill dir: " << spillDir_;
+    fs_->rmdir(spillDir_);
+  }
 
- private:
-  std::shared_ptr<MemoryPool> rootPool_;
-  std::shared_ptr<MemoryPool> pool_;
+ protected:
+  std::shared_ptr<velox::memory::MemoryPool> rootPool_;
+  std::shared_ptr<velox::memory::MemoryPool> pool_;
   RowTypePtr rowType_;
   uint32_t numInputVectors_;
   uint32_t inputVectorSize_;
