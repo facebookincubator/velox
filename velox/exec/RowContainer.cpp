@@ -277,7 +277,7 @@ char* RowContainer::newRow() {
 char* RowContainer::initializeRow(char* row, bool reuse) {
   if (reuse) {
     auto rows = folly::Range<char**>(&row, 1);
-    freeVariableWidthFields(rows);
+    freeVariableWidthFields(rows, true);
     freeAggregates(rows);
   } else if (rowSizeOffset_ != 0 && checkFree_) {
     // zero out string views so that clear() will not hit uninited data. The
@@ -353,7 +353,9 @@ int32_t RowContainer::findRows(folly::Range<char**> rows, char** result) {
   return numRows;
 }
 
-void RowContainer::freeVariableWidthFields(folly::Range<char**> rows) {
+void RowContainer::freeVariableWidthFields(
+    folly::Range<char**> rows,
+    bool resetFields) {
   for (auto i = 0; i < types_.size(); ++i) {
     switch (typeKinds_[i]) {
       case TypeKind::VARCHAR:
@@ -368,7 +370,7 @@ void RowContainer::freeVariableWidthFields(folly::Range<char**> rows) {
             if (!view.isInline()) {
               stringAllocator_->free(
                   HashStringAllocator::headerOf(view.data()));
-              if (checkFree_) {
+              if (checkFree_ || resetFields) {
                 valueAt<StringView>(row, column.offset()) = StringView();
               }
             }
