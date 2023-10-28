@@ -20,9 +20,9 @@ using namespace facebook::velox::test;
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
-class DecimalVectorFunctionlTest : public SparkFunctionBaseTest {};
+class UnscaledValueFunctionTest : public SparkFunctionBaseTest {};
 
-TEST_F(DecimalVectorFunctionlTest, unscaledValue) {
+TEST_F(UnscaledValueFunctionTest, unscaledValue) {
   auto testUnscaledValue = [&](const std::vector<int64_t>& unscaledValue,
                                const TypePtr& decimalType) {
     auto input = makeFlatVector<int64_t>(unscaledValue, decimalType);

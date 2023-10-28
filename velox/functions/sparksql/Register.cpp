@@ -26,7 +26,6 @@
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
-#include "velox/functions/sparksql/DecimalVectorFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
@@ -36,6 +35,7 @@
 #include "velox/functions/sparksql/RegisterCompare.h"
 #include "velox/functions/sparksql/Size.h"
 #include "velox/functions/sparksql/String.h"
+#include "velox/functions/sparksql/UnscaledValueFunction.h"
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
@@ -74,13 +74,6 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 }
 
 namespace sparksql {
-
-void registerDecimalVectorFunctions(const std::string& prefix) {
-  exec::registerVectorFunction(
-      prefix + "unscaled_value",
-      unscaledValueSignatures(),
-      makeUnscaledValue());
-}
 
 void registerAllSpecialFormGeneralFunctions() {
   exec::registerFunctionCallToSpecialForms();
@@ -279,7 +272,10 @@ void registerFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions(prefix);
 
   // Register decimal vector functions.
-  registerDecimalVectorFunctions(prefix);
+  exec::registerVectorFunction(
+      prefix + "unscaled_value",
+      unscaledValueSignatures(),
+      makeUnscaledValue());
 }
 
 } // namespace sparksql
