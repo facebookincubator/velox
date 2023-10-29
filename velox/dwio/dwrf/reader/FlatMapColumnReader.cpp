@@ -155,6 +155,7 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesFiltered(
             dataValueType,
             stripe,
             labels,
+            nullptr,
             FlatMapContext{
                 .sequence = sequence,
                 .inMapDecoder = inMapDecoder.get(),
@@ -327,6 +328,9 @@ void FlatMapColumnReader<T>::next(
   std::vector<const BaseVector*> nodeBatches;
   size_t totalChildren = 0;
   if (nonNullMaps > 0) {
+    auto keyNodes_sz = keyNodes_.size();
+    nodeBatches.reserve(keyNodes_sz);
+    nodes.reserve(keyNodes_sz);
     for (auto& node : keyNodes_) {
       // if the node has value filled into key-value batch
       // future optimization - enable batch to be sortable on row index
@@ -601,6 +605,7 @@ FlatMapStructEncodingColumnReader<T>::FlatMapStructEncodingColumnReader(
     const std::shared_ptr<const TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
+    folly::Executor* executor,
     FlatMapContext flatMapContext)
     : ColumnReader(
           requestedType,
@@ -617,7 +622,8 @@ FlatMapStructEncodingColumnReader<T>::FlatMapStructEncodingColumnReader(
           flatMapContext_)},
       nullColumnReader_{std::make_unique<NullColumnReader>(
           stripe,
-          requestedType_->type()->asMap().valueType())} {
+          requestedType_->type()->asMap().valueType())},
+      executor_{executor} {
   DWIO_ENSURE_EQ(fileType_->id(), fileType->id());
   DWIO_ENSURE(!keyNodes_.empty()); // "For struct encoding, keys to project must
                                    // be configured.";
@@ -665,26 +671,10 @@ void FlatMapStructEncodingColumnReader<T>::next(
     // children vectors.
     childrenPtr = &rowVector->children();
     children.clear();
-  } else {
-    children.resize(keyNodes_.size());
-    childrenPtr = &children;
-  }
-
-  for (size_t i = 0; i < keyNodes_.size(); ++i) {
-    auto& node = keyNodes_[i];
-    auto& child = (*childrenPtr)[i];
-
-    if (node) {
-      node->loadAsChild(child, numValues, mergedNulls_, nonNullMaps, nullsPtr);
-    } else {
-      nullColumnReader_->next(numValues, child, nullsPtr);
-    }
-  }
-
-  if (result) {
     result->setNullCount(nullCount);
   } else {
-    result = std::make_shared<RowVector>(
+    children.resize(keyNodes_.size());
+    auto rowResult = std::make_shared<RowVector>(
         &memoryPool_,
         ROW(std::vector<std::string>(keyNodes_.size()),
             std::vector<std::shared_ptr<const Type>>(
@@ -693,6 +683,28 @@ void FlatMapStructEncodingColumnReader<T>::next(
         numValues,
         std::move(children),
         nullCount);
+    childrenPtr = &rowResult->children();
+    result = std::move(rowResult);
+  }
+
+  for (size_t i = 0; i < keyNodes_.size(); ++i) {
+    auto& node = keyNodes_[i];
+    auto& child = (*childrenPtr)[i];
+
+    if (node) {
+      if (executor_) {
+        executor_->add([&node, &child, numValues, nonNullMaps, nullsPtr]() {
+          BufferPtr mergedNulls;
+          node->loadAsChild(
+              child, numValues, mergedNulls, nonNullMaps, nullsPtr);
+        });
+      } else {
+        node->loadAsChild(
+            child, numValues, mergedNulls_, nonNullMaps, nullsPtr);
+      }
+    } else {
+      nullColumnReader_->next(numValues, child, nullsPtr);
+    }
   }
 }
 
@@ -708,6 +720,7 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
+    folly::Executor* FOLLY_NULLABLE executor,
     FlatMapContext flatMapContext) {
   if (isRequiringStructEncoding(requestedType, stripe.getRowReaderOptions())) {
     return std::make_unique<FlatMapStructEncodingColumnReader<T>>(
@@ -715,6 +728,7 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
         fileType,
         stripe,
         streamLabels,
+        executor,
         std::move(flatMapContext));
   } else {
     return std::make_unique<FlatMapColumnReader<T>>(
@@ -731,6 +745,7 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
+    folly::Executor* executor,
     FlatMapContext flatMapContext) {
   // create flat map column reader based on key type
   const auto kind = fileType->childAt(0)->type()->kind();
@@ -742,6 +757,7 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
           fileType,
           stripe,
           streamLabels,
+          executor,
           std::move(flatMapContext));
     case TypeKind::SMALLINT:
       return createFlatMapColumnReader<int16_t>(
@@ -749,6 +765,7 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
           fileType,
           stripe,
           streamLabels,
+          executor,
           std::move(flatMapContext));
     case TypeKind::INTEGER:
       return createFlatMapColumnReader<int32_t>(
@@ -756,6 +773,7 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
           fileType,
           stripe,
           streamLabels,
+          executor,
           std::move(flatMapContext));
     case TypeKind::BIGINT:
       return createFlatMapColumnReader<int64_t>(
@@ -763,6 +781,7 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
           fileType,
           stripe,
           streamLabels,
+          executor,
           std::move(flatMapContext));
     case TypeKind::VARBINARY:
     case TypeKind::VARCHAR:
@@ -771,6 +790,7 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
           fileType,
           stripe,
           streamLabels,
+          executor,
           std::move(flatMapContext));
     default:
       DWIO_RAISE("Not supported key type: ", kind);

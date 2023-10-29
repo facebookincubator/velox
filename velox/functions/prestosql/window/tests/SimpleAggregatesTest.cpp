@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
@@ -113,7 +117,14 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     SimpleAggregatesTest,
     testing::ValuesIn(getAggregateTestParams()));
 
-class WindowTest : public WindowTestBase {};
+class WindowTest : public WindowTestBase {
+ protected:
+  void SetUp() override {
+    WindowTestBase::SetUp();
+    window::prestosql::registerAllWindowFunctions();
+    filesystems::registerLocalFileSystem();
+  }
+};
 
 // Test for an aggregate function with strings that needs out of line storage.
 TEST_F(WindowTest, variableWidthAggregate) {
@@ -127,6 +138,48 @@ TEST_F(WindowTest, variableWidthAggregate) {
 
   testWindowFunction(input, "min(c2)", kOverClauses);
   testWindowFunction(input, "max(c2)", kOverClauses);
+}
+
+TEST_F(WindowTest, spill) {
+  const vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p order by s)"})
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kTestingSpillPct, "100")
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .spillDirectory(spillDirectory->path)
+          .assertResults(
+              "SELECT *, row_number() over (partition by p order by s) FROM tmp");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& stats = taskStats.at(windowId);
+
+  ASSERT_GT(stats.spilledBytes, 0);
+  ASSERT_GT(stats.spilledRows, 0);
+  ASSERT_GT(stats.spilledFiles, 0);
+  ASSERT_GT(stats.spilledPartitions, 0);
 }
 
 TEST_F(WindowTest, missingFunctionSignature) {
@@ -187,6 +240,48 @@ TEST_F(WindowTest, missingFunctionSignature) {
   VELOX_ASSERT_THROW(
       runWindow(callExpr),
       "Unexpected return type for window function sum(BIGINT). Expected BIGINT. Got VARCHAR.");
+}
+
+TEST_F(WindowTest, duplicateOrOverlappingKeys) {
+  auto data = makeRowVector(
+      ROW({"a", "b", "c", "d", "e"},
+          {
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+          }),
+      10);
+
+  auto plan = [&](const std::vector<std::string>& partitionKeys,
+                  const std::vector<std::string>& sortingKeys) {
+    std::ostringstream sql;
+    sql << "row_number() over (";
+    if (!partitionKeys.empty()) {
+      sql << " partition by ";
+      sql << folly::join(", ", partitionKeys);
+    }
+    if (!sortingKeys.empty()) {
+      sql << " order by ";
+      sql << folly::join(", ", sortingKeys);
+    }
+    sql << ")";
+
+    PlanBuilder().values({data}).window({sql.str()}).planNode();
+  };
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "a"}, {"b"}),
+      "Partitioning keys must be unique. Found duplicate key: a");
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "b"}, {"c", "d", "c"}),
+      "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: c");
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "b"}, {"c", "b"}),
+      "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: b");
 }
 
 class AggregateEmptyFramesTest : public WindowTestBase {};

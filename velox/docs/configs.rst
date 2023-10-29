@@ -34,13 +34,19 @@ Generic Configuration
    * - abandon_partial_aggregation_min_rows
      - integer
      - 100,000
-     - Min number of rows when we check if a partial aggregation is not reducing the cardinality well and might be
-       a subject to being abandoned.
+     - Number of input rows to receive before starting to check whether to abandon partial aggregation.
    * - abandon_partial_aggregation_min_pct
      - integer
      - 80
-     - If a partial aggregation's number of output rows constitues this or highler percentage of the number of input rows,
-       then this partial aggregation will be a subject to being abandoned.
+     - Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.
+   * - abandon_partial_topn_row_number_min_rows
+     - integer
+     - 100,000
+     - Number of input rows to receive before starting to check whether to abandon partial TopNRowNumber.
+   * - abandon_partial_topn_row_number_min_pct
+     - integer
+     - 80
+     - Abandons partial TopNRowNumber if number of output rows equals or exceeds this percentage of the number of input rows.
    * - session_timezone
      - string
      -
@@ -188,17 +194,18 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether HashAggregation operator can spill to disk under memory pressure.
-       memory limits for the query.
    * - join_spill_enabled
      - boolean
      - true
      - When `spill_enabled` is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.
-       limits for the query.
    * - order_by_spill_enabled
      - boolean
      - true
      - When `spill_enabled` is true, determines whether OrderBy operator can spill to disk under memory pressure.
-       limits for the query.
+   * - window_spill_enabled
+     - boolean
+     - true
+     - When `spill_enabled` is true, determines whether Window operator can spill to disk under memory pressure.
    * - row_number_spill_enabled
      - boolean
      - true
@@ -210,7 +217,8 @@ Spilling
    * - writer_spill_enabled
      - boolean
      - true
-     - When `writer_spill_enabled` is true, determines whether TableWriter operator can spill to disk under memory pressure.
+     - When `writer_spill_enabled` is true, determines whether TableWriter operator can flush the buffered data to disk
+       under memory pressure.
    * - aggregation_spill_memory_threshold
      - integer
      - 0
@@ -218,7 +226,9 @@ Spilling
    * - aggregation_spill_all
      - boolean
      - false
-     - If true and spilling has been triggered during the input processing, the spiller will spill all the remaining in-memory state to disk before output processing. This is to simplify the aggregation query OOM prevention in output processing stage.
+     - If true and spilling has been triggered during the input processing, the spiller will spill all the remaining
+       in-memory state to disk before output processing. This is to simplify the aggregation query OOM prevention in
+       output processing stage.
    * - join_spill_memory_threshold
      - integer
      - 0

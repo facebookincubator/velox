@@ -2091,6 +2091,11 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
                 testData.maxStripeSize)
             .assertResults("SELECT count(*) FROM tmp");
     auto stats = task->taskStats().pipelineStats.front().operatorStats;
+    if (testData.maxStripeSize == "1GB") {
+      ASSERT_GT(
+          stats[1].memoryStats.peakTotalMemoryReservation,
+          testData.numInputVectors * options.stringLength);
+    }
     ASSERT_EQ(
         stats[1].runtimeStats["stripeSize"].count, testData.expectedNumStripes);
     ASSERT_EQ(stats[1].runtimeStats["numWrittenFiles"].sum, 1);
@@ -2245,6 +2250,39 @@ TEST_P(BucketedTableOnlyWriteTest, mismatchedBucketTypes) {
           bucketProperty_->bucketedBy()[0],
           oldType->toString(),
           bucketProperty_->bucketedTypes()[0]));
+}
+
+DEBUG_ONLY_TEST_P(BucketedTableOnlyWriteTest, spillingCheck) {
+  if (!testParam_.bucketSort()) {
+    // This test only applies for bucket sort.
+    return;
+  }
+  SCOPED_TRACE(testParam_.toString());
+  auto input = makeVectors(10, 100);
+  createDuckDbTable(input);
+
+  for (const auto& writerSpillEnabled : {false, true}) {
+    SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
+    auto outputDirectory = TempDirectoryPath::create();
+    auto plan = createInsertPlan(
+        PlanBuilder().values({input}),
+        rowType_,
+        outputDirectory->path,
+        partitionedBy_,
+        bucketProperty_,
+        compressionKind_,
+        getNumWriters(),
+        connector::hive::LocationHandle::TableType::kNew,
+        commitStrategy_);
+    std::atomic<bool> memoryReserved{false};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
+        std::function<void(memory::MemoryPool*)>(
+            [&](memory::MemoryPool* pool) { memoryReserved = true; }));
+    assertQueryWithWriterConfigs(plan, "SELECT count(*) FROM tmp");
+    // We don't expect memory reservation to be triggered.
+    ASSERT_FALSE(memoryReserved);
+  }
 }
 
 TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
@@ -2907,6 +2945,48 @@ DEBUG_ONLY_TEST_P(
   VELOX_ASSERT_THROW(
       assertQuery(op, fmt::format("SELECT {}", numRows)),
       "Aborted for external error");
+}
+
+DEBUG_ONLY_TEST_P(UnpartitionedTableWriterTest, dataSinkAbortError) {
+  if (fileFormat_ != FileFormat::DWRF) {
+    // NOTE: only test on dwrf writer format as we inject write error in dwrf
+    // writer.
+    return;
+  }
+  VectorFuzzer::Options options;
+  const int batchSize = 100;
+  options.vectorSize = batchSize;
+  VectorFuzzer fuzzer(options, pool());
+  auto vector = fuzzer.fuzzInputRow(rowType_);
+
+  std::atomic<bool> triggerWriterErrorOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::dwrf::Writer::write",
+      std::function<void(dwrf::Writer*)>([&](dwrf::Writer* /*unused*/) {
+        if (!triggerWriterErrorOnce.exchange(false)) {
+          return;
+        }
+        VELOX_FAIL("inject writer error");
+      }));
+
+  std::atomic<bool> triggerCloseErrorOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::connector::hive::HiveDataSink::close",
+      std::function<void(const HiveDataSink*)>(
+          [&](const HiveDataSink* /*unused*/) {
+            if (!triggerCloseErrorOnce.exchange(false)) {
+              return;
+            }
+            VELOX_FAIL("inject close error");
+          }));
+
+  auto outputDirectory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values({vector})
+                  .tableWrite(outputDirectory->path, fileFormat_)
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()), "inject writer error");
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

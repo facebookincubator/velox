@@ -63,6 +63,7 @@ add_executable(
   RowContainerTest.cpp
   RowNumberTest.cpp
   MarkDistinctTest.cpp
+  SharedArbitratorTest.cpp
   SpillTest.cpp
   SpillOperatorGroupTest.cpp
   SpillerTest.cpp
@@ -72,6 +73,7 @@ add_executable(
   TableScanTest.cpp
   TableWriteTest.cpp
   TaskListenerTest.cpp
+  ThreadDebugInfoTest.cpp
   TopNTest.cpp
   TopNRowNumberTest.cpp
   UnorderedStreamReaderTest.cpp

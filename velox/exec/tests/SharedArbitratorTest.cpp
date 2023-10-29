@@ -25,13 +25,14 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/core/PlanNode.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashBuild.h"
+#include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/SharedArbitrator.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -48,7 +49,7 @@ using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
-namespace facebook::velox::memory {
+namespace facebook::velox::exec::test {
 constexpr int64_t KB = 1024L;
 constexpr int64_t MB = 1024L * KB;
 
@@ -573,70 +574,6 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromEmptyOrderBy) {
   waitForAllTasksToBeDeleted();
 }
 
-class TestMemoryReclaimer : public MemoryReclaimer {
- public:
-  TestMemoryReclaimer(std::function<void(MemoryPool*)> reclaimCb)
-      : reclaimCb_(std::move(reclaimCb)) {}
-
-  uint64_t reclaim(MemoryPool* pool, uint64_t targetBytes, Stats& stats)
-      override {
-    if (pool->kind() == MemoryPool::Kind::kLeaf) {
-      return 0;
-    }
-    std::vector<std::shared_ptr<MemoryPool>> children;
-    {
-      children.reserve(pool->children_.size());
-      for (auto& entry : pool->children_) {
-        auto child = entry.second.lock();
-        if (child != nullptr) {
-          children.push_back(std::move(child));
-        }
-      }
-    }
-
-    std::vector<ArbitrationCandidate> candidates(children.size());
-    for (uint32_t i = 0; i < children.size(); ++i) {
-      candidates[i].pool = children[i].get();
-      children[i]->reclaimableBytes(candidates[i].reclaimableBytes);
-    }
-    sortCandidatesByReclaimableMemoryAsc(candidates);
-
-    uint64_t reclaimedBytes{0};
-    for (const auto& candidate : candidates) {
-      const auto bytes = candidate.pool->reclaim(targetBytes, stats);
-      if (reclaimCb_ != nullptr) {
-        reclaimCb_(candidate.pool);
-      }
-      reclaimedBytes += bytes;
-      if (targetBytes != 0) {
-        if (bytes >= targetBytes) {
-          break;
-        }
-        targetBytes -= bytes;
-      }
-    }
-    return reclaimedBytes;
-  }
-
- private:
-  struct ArbitrationCandidate {
-    uint64_t reclaimableBytes{0};
-    MemoryPool* pool{nullptr};
-  };
-
-  void sortCandidatesByReclaimableMemoryAsc(
-      std::vector<ArbitrationCandidate>& candidates) {
-    std::sort(
-        candidates.begin(),
-        candidates.end(),
-        [](const ArbitrationCandidate& lhs, const ArbitrationCandidate& rhs) {
-          return lhs.reclaimableBytes < rhs.reclaimableBytes;
-        });
-  }
-
-  std::function<void(MemoryPool*)> reclaimCb_{nullptr};
-};
-
 DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
@@ -729,7 +666,6 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
 }
 
 TEST_F(SharedArbitrationTest, reclaimFromCompletedOrderBy) {
-  GTEST_SKIP() << "https://github.com/facebookincubator/velox/issues/7154";
   const int numVectors = 2;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -1823,7 +1759,7 @@ DEBUG_ONLY_TEST_F(
   // We only expect to reclaim from one hash build operator once.
   ASSERT_EQ(numHashBuildReclaims, 1);
   waitForAllTasksToBeDeleted();
-  ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 1);
+  ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 2);
 }
 
 DEBUG_ONLY_TEST_F(
@@ -2240,59 +2176,6 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, driverInitTriggeredArbitration) {
                 .project({"1+1+4 as t0", "1+3+3 as t1"})
                 .planNode())
       .assertResults(expectedVector);
-}
-
-DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimerStats) {
-  std::vector<RowVectorPtr> vectors;
-  const int vectorSize = 100;
-  fuzzerOpts_.vectorSize = vectorSize;
-  vectors.push_back(newVector());
-
-  createDuckDbTable(vectors);
-  setupMemory(32 * MB, 0);
-  std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(32 * MB);
-  ASSERT_EQ(queryCtx->pool()->capacity(), 0);
-  ASSERT_EQ(queryCtx->pool()->maxCapacity(), 32 * MB);
-  auto additionalCtxLeafPool = queryCtx->pool()->addLeafChild("ctx_leaf");
-  TestAllocation outerAlloc;
-  outerAlloc.buffer = additionalCtxLeafPool->allocate(8 * MB);
-  outerAlloc.pool = additionalCtxLeafPool.get();
-  outerAlloc.size = 8 * MB;
-  fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
-    TestAllocation allocation0;
-    TestAllocation allocation1;
-    auto guard = folly::makeGuard([&]() {
-      allocation0.free();
-      allocation1.free();
-    });
-    allocation0.buffer = op->pool()->allocate(16 * MB);
-    allocation0.pool = op->pool();
-    allocation0.size = 16 * MB;
-
-    allocation1.buffer = op->pool()->allocate(16 * MB);
-    allocation1.pool = op->pool();
-    allocation1.size = 16 * MB;
-
-    return TestAllocation{};
-  });
-  fakeOperatorFactory_->setReclaimCallback([&](MemoryPool* /*unused*/,
-                                               uint64_t /*unused*/,
-                                               MemoryReclaimer::Stats& stats) {
-    ++stats.numNonReclaimableAttempts;
-    outerAlloc.free();
-    return true;
-  });
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  AssertQueryBuilder(duckDbQueryRunner_)
-      .queryCtx(queryCtx)
-      .plan(PlanBuilder(planNodeIdGenerator, pool())
-                .values(vectors)
-                .addNode([&](std::string id, core::PlanNodePtr input) {
-                  return std::make_shared<FakeMemoryNode>(id, input);
-                })
-                .planNode())
-      .assertResults(vectors);
-  ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 1);
 }
 
 DEBUG_ONLY_TEST_F(
@@ -2863,6 +2746,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, arbitrationFromTableWriter) {
 
     ASSERT_EQ(arbitrator_->stats().numFailures, writerSpillEnabled ? 0 : 1);
     ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 0);
+    waitForAllTasksToBeDeleted(3'000'000);
   }
 }
 
@@ -2950,6 +2834,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, writerFlushThreshold) {
     ASSERT_EQ(
         arbitrator_->stats().numNonReclaimableAttempts,
         writerFlushThreshold == 0 ? 0 : 1);
+    waitForAllTasksToBeDeleted(3'000'000);
   }
 }
 
@@ -3133,7 +3018,6 @@ DEBUG_ONLY_TEST_F(
 // reclaim from a set of hash build operators in which the last hash build
 // operator has finished.
 DEBUG_ONLY_TEST_F(SharedArbitrationTest, raceBetweenRaclaimAndJoinFinish) {
-  GTEST_SKIP() << "https://github.com/facebookincubator/velox/issues/7154";
   const int kMemoryCapacity = 512 << 20;
   setupMemory(kMemoryCapacity, 0);
 
@@ -3168,10 +3052,24 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, raceBetweenRaclaimAndJoinFinish) {
   folly::EventCount waitForBuildFinishEvent;
   std::atomic<Driver*> lastBuildDriver{nullptr};
   std::atomic<Task*> task{nullptr};
+  std::atomic<bool> isLastBuildFirstChildPool{false};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::HashBuild::finishHashBuild",
       std::function<void(exec::HashBuild*)>([&](exec::HashBuild* buildOp) {
         lastBuildDriver = buildOp->testingOperatorCtx()->driver();
+        // Checks if the last build memory pool is the first build pool in its
+        // parent node pool. It is used to check the test result.
+        int buildPoolIndex{0};
+        buildOp->pool()->parent()->visitChildren([&](memory::MemoryPool* pool) {
+          if (pool == buildOp->pool()) {
+            return false;
+          }
+          if (isHashBuildMemoryPool(*pool)) {
+            ++buildPoolIndex;
+          }
+          return true;
+        });
+        isLastBuildFirstChildPool = (buildPoolIndex == 0);
         task = lastBuildDriver.load()->task().get();
         waitForBuildFinishFlag = false;
         waitForBuildFinishEvent.notifyAll();
@@ -3246,7 +3144,16 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, raceBetweenRaclaimAndJoinFinish) {
   memory::MemoryReclaimer::Stats stats;
   const uint64_t oldCapacity = joinQueryCtx->pool()->capacity();
   task.load()->pool()->reclaim(1'000, stats);
-  ASSERT_EQ(stats.numNonReclaimableAttempts, 1);
+  // If the last build memory pool is first child of its parent memory pool,
+  // then memory arbitration (or join node memory pool) will reclaim from the
+  // last build operator first which simply quits as the driver has gone. If
+  // not, we expect to get numNonReclaimableAttempts from any one of the
+  // remaining hash build operator.
+  if (isLastBuildFirstChildPool) {
+    ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
+  } else {
+    ASSERT_EQ(stats.numNonReclaimableAttempts, 1);
+  }
   // Make sure we don't leak memory capacity since we reclaim from task pool
   // directly.
   static_cast<MemoryPoolImpl*>(task.load()->pool())
@@ -3531,14 +3438,4 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
   }
   controlThread.join();
 }
-
-// TODO: add more tests.
-
-} // namespace facebook::velox::memory
-
-int main(int argc, char** argv) {
-  folly::SingletonVault::singleton()->registrationComplete();
-  testing::InitGoogleTest(&argc, argv);
-
-  return RUN_ALL_TESTS();
-}
+} // namespace facebook::velox::exec::test

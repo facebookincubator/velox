@@ -140,6 +140,12 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialAggregationMinPct =
       "abandon_partial_aggregation_min_pct";
 
+  static constexpr const char* kAbandonPartialTopNRowNumberMinRows =
+      "abandon_partial_topn_row_number_min_rows";
+
+  static constexpr const char* kAbandonPartialTopNRowNumberMinPct =
+      "abandon_partial_topn_row_number_min_pct";
+
   static constexpr const char* kMaxPartitionedOutputBufferSize =
       "max_page_partitioning_buffer_size";
 
@@ -190,6 +196,9 @@ class QueryConfig {
 
   /// OrderBy spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kOrderBySpillEnabled = "order_by_spill_enabled";
+
+  /// Window spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kWindowSpillEnabled = "window_spill_enabled";
 
   /// If true, the memory arbitrator will reclaim memory from table writer by
   /// flushing its buffered data to disk.
@@ -349,6 +358,14 @@ class QueryConfig {
     return get<int32_t>(kAbandonPartialAggregationMinPct, 80);
   }
 
+  int32_t abandonPartialTopNRowNumberMinRows() const {
+    return get<int32_t>(kAbandonPartialTopNRowNumberMinRows, 100'000);
+  }
+
+  int32_t abandonPartialTopNRowNumberMinPct() const {
+    return get<int32_t>(kAbandonPartialTopNRowNumberMinPct, 80);
+  }
+
   uint64_t aggregationSpillMemoryThreshold() const {
     static constexpr uint64_t kDefault = 0;
     return get<uint64_t>(kAggregationSpillMemoryThreshold, kDefault);
@@ -475,6 +492,12 @@ class QueryConfig {
   /// spillEnabled()!
   bool orderBySpillEnabled() const {
     return get<bool>(kOrderBySpillEnabled, true);
+  }
+
+  /// Returns true if spilling is enabled for Window operator. Must also
+  /// check the spillEnabled()!
+  bool windowSpillEnabled() const {
+    return get<bool>(kWindowSpillEnabled, true);
   }
 
   /// Returns 'is writer spilling enabled' flag. Must also check the
