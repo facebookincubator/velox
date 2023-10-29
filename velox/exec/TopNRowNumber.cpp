@@ -14,8 +14,92 @@
  * limitations under the License.
  */
 #include "velox/exec/TopNRowNumber.h"
+#include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::exec {
+
+namespace {
+
+std::vector<column_index_t> reorderInputChannels(
+    const RowTypePtr& inputType,
+    const std::vector<core::FieldAccessTypedExprPtr>& partitionKeys,
+    const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys) {
+  const auto size = inputType->size();
+
+  std::vector<column_index_t> channels;
+  channels.reserve(size);
+
+  std::unordered_set<std::string> keyNames;
+
+  for (const auto& key : partitionKeys) {
+    channels.push_back(exprToChannel(key.get(), inputType));
+    keyNames.insert(key->name());
+  }
+
+  for (const auto& key : sortingKeys) {
+    channels.push_back(exprToChannel(key.get(), inputType));
+    keyNames.insert(key->name());
+  }
+
+  for (auto i = 0; i < size; ++i) {
+    if (keyNames.count(inputType->nameOf(i)) == 0) {
+      channels.push_back(i);
+    }
+  }
+
+  return channels;
+}
+
+RowTypePtr reorderInputType(
+    const RowTypePtr& inputType,
+    const std::vector<column_index_t>& channels) {
+  const auto size = inputType->size();
+
+  VELOX_CHECK_EQ(size, channels.size());
+
+  std::vector<std::string> names;
+  names.reserve(size);
+
+  std::vector<TypePtr> types;
+  types.reserve(size);
+
+  for (auto channel : channels) {
+    names.push_back(inputType->nameOf(channel));
+    types.push_back(inputType->childAt(channel));
+  }
+
+  return ROW(std::move(names), std::move(types));
+}
+
+std::vector<CompareFlags> makeSpillCompareFlags(
+    int32_t numPartitionKeys,
+    const std::vector<core::SortOrder>& sortingOrders) {
+  std::vector<CompareFlags> compareFlags;
+  compareFlags.reserve(numPartitionKeys + sortingOrders.size());
+
+  for (auto i = 0; i < numPartitionKeys; ++i) {
+    compareFlags.push_back({});
+  }
+
+  for (const auto& order : sortingOrders) {
+    compareFlags.push_back(
+        {order.isNullsFirst(), order.isAscending(), false /*equalsOnly*/});
+  }
+
+  return compareFlags;
+}
+
+// Returns a [start, end) slice of the 'types' vector.
+std::vector<TypePtr>
+slice(const std::vector<TypePtr>& types, int32_t start, int32_t end) {
+  std::vector<TypePtr> result;
+  result.reserve(end - start);
+  for (auto i = start; i < end; ++i) {
+    result.push_back(types[i]);
+  }
+  return result;
+}
+} // namespace
 
 TopNRowNumber::TopNRowNumber(
     int32_t operatorId,
@@ -26,25 +110,47 @@ TopNRowNumber::TopNRowNumber(
           node->outputType(),
           operatorId,
           node->id(),
-          "TopNRowNumber"),
+          "TopNRowNumber",
+          node->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(operatorId)
+              : std::nullopt),
       limit_{node->limit()},
       generateRowNumber_{node->generateRowNumber()},
-      inputType_{node->sources()[0]->outputType()},
-      data_(std::make_unique<RowContainer>(inputType_->children(), pool())),
+      numPartitionKeys_{node->partitionKeys().size()},
+      inputChannels_{reorderInputChannels(
+          node->inputType(),
+          node->partitionKeys(),
+          node->sortingKeys())},
+      inputType_{reorderInputType(node->inputType(), inputChannels_)},
+      spillCompareFlags_{
+          makeSpillCompareFlags(numPartitionKeys_, node->sortingOrders())},
+      data_(std::make_unique<RowContainer>(
+          slice(inputType_->children(), 0, spillCompareFlags_.size()),
+          slice(
+              inputType_->children(),
+              spillCompareFlags_.size(),
+              inputType_->size()),
+          pool())),
       comparator_(
           inputType_,
           node->sortingKeys(),
           node->sortingOrders(),
           data_.get()),
-      decodedVectors_(inputType_->children().size()) {
+      decodedVectors_(inputType_->size()) {
   const auto& keys = node->partitionKeys();
   const auto numKeys = keys.size();
 
   if (numKeys > 0) {
-    Accumulator accumulator{true, sizeof(TopRows), false, 1, [](auto) {}};
+    Accumulator accumulator{
+        true,
+        sizeof(TopRows),
+        false,
+        1,
+        [](auto, auto) { VELOX_UNREACHABLE(); },
+        [](auto) {}};
 
     table_ = std::make_unique<HashTable<false>>(
-        createVectorHashers(inputType_, keys),
+        createVectorHashers(node->inputType(), keys),
         std::vector<Accumulator>{accumulator},
         std::vector<TypePtr>{},
         false, // allowDuplicates
@@ -59,13 +165,7 @@ TopNRowNumber::TopNRowNumber(
     singlePartition_ = std::make_unique<TopRows>(allocator_.get(), comparator_);
   }
 
-  identityProjections_.reserve(inputType_->size());
-  for (auto i = 0; i < inputType_->size(); ++i) {
-    identityProjections_.emplace_back(i, i);
-  }
-
   if (generateRowNumber_) {
-    resultProjections_.emplace_back(0, inputType_->size());
     results_.resize(1);
   }
 }
@@ -73,11 +173,13 @@ TopNRowNumber::TopNRowNumber(
 void TopNRowNumber::addInput(RowVectorPtr input) {
   const auto numInput = input->size();
 
-  for (auto i = 0; i < inputType_->size(); ++i) {
-    decodedVectors_[i].decode(*input->childAt(i));
+  for (auto i = 0; i < inputChannels_.size(); ++i) {
+    decodedVectors_[i].decode(*input->childAt(inputChannels_[i]));
   }
 
   if (table_) {
+    ensureInputFits(input);
+
     SelectivityVector rows(numInput);
     table_->prepareForProbe(*lookup_, input, rows, false);
     table_->groupProbe(*lookup_);
@@ -90,11 +192,11 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
     // if row should replace an existing row or be discarded.
     for (auto i = 0; i < numInput; ++i) {
       auto& partition = partitionAt(lookup_->hits[i]);
-      processInputRow(input, i, partition);
+      processInputRow(i, partition);
     }
   } else {
     for (auto i = 0; i < numInput; ++i) {
-      processInputRow(input, i, *singlePartition_);
+      processInputRow(i, *singlePartition_);
     }
   }
 }
@@ -106,10 +208,7 @@ void TopNRowNumber::initializeNewPartitions() {
   }
 }
 
-void TopNRowNumber::processInputRow(
-    const RowVectorPtr& input,
-    vector_size_t index,
-    TopRows& partition) {
+void TopNRowNumber::processInputRow(vector_size_t index, TopRows& partition) {
   auto& topRows = partition.rows;
 
   char* newRow = nullptr;
@@ -130,7 +229,7 @@ void TopNRowNumber::processInputRow(
     newRow = data_->initializeRow(topRow, true /* reuse */);
   }
 
-  for (auto col = 0; col < input->childrenSize(); ++col) {
+  for (auto col = 0; col < decodedVectors_.size(); ++col) {
     data_->store(decodedVectors_[col], index, newRow, col);
   }
 
@@ -140,13 +239,41 @@ void TopNRowNumber::processInputRow(
 void TopNRowNumber::noMoreInput() {
   Operator::noMoreInput();
 
-  auto rowSize = data_->estimateRowSize();
-  if (rowSize && generateRowNumber_) {
-    rowSize.value() += sizeof(int64_t);
+  updateEstimatedOutputRowSize();
+
+  outputBatchSize_ = outputBatchRows(estimatedOutputRowSize_);
+
+  if (spiller_ != nullptr) {
+    // Spill remaining data to avoid running out of memory while sort-merging
+    // spilled data.
+    spill();
+
+    spiller_->finishSpill();
+    recordSpillStats(spiller_->stats());
+
+    merge_ = spiller_->startMerge(0);
+  } else {
+    outputRows_.resize(outputBatchSize_);
+  }
+}
+
+void TopNRowNumber::updateEstimatedOutputRowSize() {
+  const auto optionalRowSize = data_->estimateRowSize();
+  if (!optionalRowSize.has_value()) {
+    return;
   }
 
-  outputBatchSize_ = outputBatchRows(rowSize);
-  outputRows_.resize(outputBatchSize_);
+  auto rowSize = optionalRowSize.value();
+
+  if (rowSize && generateRowNumber_) {
+    rowSize += sizeof(int64_t);
+  }
+
+  if (!estimatedOutputRowSize_.has_value()) {
+    estimatedOutputRowSize_ = rowSize;
+  } else if (rowSize > estimatedOutputRowSize_.value()) {
+    estimatedOutputRowSize_ = rowSize;
+  }
 }
 
 TopNRowNumber::TopRows* TopNRowNumber::nextPartition() {
@@ -214,13 +341,20 @@ RowVectorPtr TopNRowNumber::getOutput() {
     return nullptr;
   }
 
+  if (merge_ != nullptr) {
+    return getOutputFromSpill();
+  }
+
+  return getOutputFromMemory();
+}
+
+RowVectorPtr TopNRowNumber::getOutputFromMemory() {
   // Loop over partitions and emit sorted rows along with row numbers.
   auto output =
       BaseVector::create<RowVector>(outputType_, outputBatchSize_, pool());
   FlatVector<int64_t>* rowNumbers = nullptr;
   if (generateRowNumber_) {
     rowNumbers = output->children().back()->as<FlatVector<int64_t>>();
-    rowNumbers->resize(outputBatchSize_);
   }
 
   vector_size_t offset = 0;
@@ -267,10 +401,137 @@ RowVectorPtr TopNRowNumber::getOutput() {
   }
   output->resize(offset);
 
-  for (int i = 0; i < inputType_->size(); ++i) {
-    data_->extractColumn(outputRows_.data(), offset, i, output->childAt(i));
+  for (int i = 0; i < inputChannels_.size(); ++i) {
+    data_->extractColumn(
+        outputRows_.data(), offset, i, output->childAt(inputChannels_[i]));
   }
 
+  return output;
+}
+
+bool TopNRowNumber::isNewPartition(
+    const RowVectorPtr& output,
+    vector_size_t index,
+    SpillMergeStream* next) {
+  VELOX_CHECK_GT(index, 0);
+
+  for (auto i = 0; i < numPartitionKeys_; ++i) {
+    if (!output->childAt(inputChannels_[i])
+             ->equalValueAt(
+                 next->current().childAt(i).get(),
+                 index - 1,
+                 next->currentIndex())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void TopNRowNumber::setupNextOutput(
+    const RowVectorPtr& output,
+    int32_t rowNumber) {
+  nextRowNumber_ = rowNumber;
+
+  auto lookAhead = merge_->next();
+  if (lookAhead == nullptr) {
+    nextRowNumber_ = 0;
+    return;
+  }
+
+  if (isNewPartition(output, output->size(), lookAhead)) {
+    nextRowNumber_ = 0;
+    return;
+  }
+
+  if (nextRowNumber_ < limit_) {
+    return;
+  }
+
+  // Skip remaining rows for this partition.
+  lookAhead->pop();
+
+  while (auto next = merge_->next()) {
+    if (isNewPartition(output, output->size(), next)) {
+      nextRowNumber_ = 0;
+      return;
+    }
+    next->pop();
+  }
+}
+
+RowVectorPtr TopNRowNumber::getOutputFromSpill() {
+  VELOX_CHECK_NOT_NULL(merge_);
+
+  // merge_->next() produces data sorted by partition keys, then sorting keys.
+  // All rows from the same partition will appear together.
+  // We'll identify partition boundaries by comparing partition keys of the
+  // current row with the previous row. When new partition starts, we'll reset
+  // row number to zero. Once row number reaches the 'limit_', we'll start
+  // dropping rows until the next partition starts.
+  // We'll emit output every time we accumulate 'outputBatchSize_' rows.
+
+  auto output =
+      BaseVector::create<RowVector>(outputType_, outputBatchSize_, pool());
+  FlatVector<int64_t>* rowNumbers = nullptr;
+  if (generateRowNumber_) {
+    rowNumbers = output->children().back()->as<FlatVector<int64_t>>();
+  }
+
+  // Index of the next row to append to output.
+  vector_size_t index = 0;
+
+  // Row number of the next row in the current partition.
+  vector_size_t rowNumber = nextRowNumber_;
+  VELOX_CHECK_LT(rowNumber, limit_);
+  for (;;) {
+    auto next = merge_->next();
+    if (next == nullptr) {
+      break;
+    }
+
+    // Check if this row comes from a new partition.
+    if (index > 0 && isNewPartition(output, index, next)) {
+      rowNumber = 0;
+    }
+
+    if (rowNumber < limit_) {
+      for (auto i = 0; i < inputChannels_.size(); ++i) {
+        output->childAt(inputChannels_[i])
+            ->copy(
+                next->current().childAt(i).get(),
+                index,
+                next->currentIndex(),
+                1);
+      }
+      if (rowNumbers) {
+        // Row numbers start with 1.
+        rowNumbers->set(index, rowNumber + 1);
+      }
+      ++index;
+    } else {
+      // Drop the row.
+    }
+
+    ++rowNumber;
+    next->pop();
+
+    if (index == outputBatchSize_) {
+      // Check if next row is from a new partition. Reset 'nextRowNumber_' if
+      // so. Check if next row is from the current partition, but we have
+      // reached the 'limit_'. Skip to the start of the next partition if so.
+      setupNextOutput(output, rowNumber);
+
+      return output;
+    }
+  }
+
+  if (index > 0) {
+    output->resize(index);
+  } else {
+    output = nullptr;
+  }
+
+  finished_ = true;
   return output;
 }
 
@@ -279,6 +540,8 @@ bool TopNRowNumber::isFinished() {
 }
 
 void TopNRowNumber::close() {
+  Operator::close();
+
   if (table_) {
     partitionIt_.reset();
     partitions_.resize(1000);
@@ -295,4 +558,119 @@ void TopNRowNumber::close() {
   }
 }
 
+void TopNRowNumber::reclaim(
+    uint64_t /*targetBytes*/,
+    memory::MemoryReclaimer::Stats& stats) {
+  if (data_->numRows() == 0) {
+    // Nothing to spill.
+    return;
+  }
+
+  if (nonReclaimableSection_) {
+    ++stats.numNonReclaimableAttempts;
+    return;
+  }
+
+  if (noMoreInput_) {
+    // TODO Add support for spilling after noMoreInput().
+    return;
+  }
+
+  spill();
+}
+
+void TopNRowNumber::ensureInputFits(const RowVectorPtr& input) {
+  if (!spillEnabled()) {
+    // Spilling is disabled.
+    return;
+  }
+
+  if (data_->numRows() == 0) {
+    // Nothing to spill.
+    return;
+  }
+
+  // Test-only spill path.
+  if (spillConfig_->testSpillPct > 0) {
+    spill();
+    return;
+  }
+
+  auto [freeRows, outOfLineFreeBytes] = data_->freeSpace();
+  const auto outOfLineBytes =
+      data_->stringAllocator().retainedSize() - outOfLineFreeBytes;
+  const auto outOfLineBytesPerRow = outOfLineBytes / data_->numRows();
+
+  const auto currentUsage = pool()->currentBytes();
+  const auto minReservationBytes =
+      currentUsage * spillConfig_->minSpillableReservationPct / 100;
+  const auto availableReservationBytes = pool()->availableReservation();
+  const auto tableIncrementBytes = table_->hashTableSizeIncrease(input->size());
+  const auto incrementBytes =
+      data_->sizeIncrement(
+          input->size(), outOfLineBytesPerRow * input->size()) +
+      tableIncrementBytes;
+
+  // First to check if we have sufficient minimal memory reservation.
+  if (availableReservationBytes >= minReservationBytes) {
+    if ((tableIncrementBytes == 0) && (freeRows > input->size()) &&
+        (outOfLineBytes == 0 ||
+         outOfLineFreeBytes >= outOfLineBytesPerRow * input->size())) {
+      // Enough free rows for input rows and enough variable length free space.
+      return;
+    }
+  }
+
+  // Check if we can increase reservation. The increment is the largest of twice
+  // the maximum increment from this input and 'spillableReservationGrowthPct_'
+  // of the current memory usage.
+  const auto targetIncrementBytes = std::max<int64_t>(
+      incrementBytes * 2,
+      currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
+  {
+    ReclaimableSectionGuard guard(this);
+    if (pool()->maybeReserve(targetIncrementBytes)) {
+      return;
+    }
+  }
+
+  spill();
+}
+
+void TopNRowNumber::spill() {
+  if (spiller_ == nullptr) {
+    setupSpiller();
+  }
+
+  updateEstimatedOutputRowSize();
+
+  spiller_->spill(0, 0);
+  table_->clear();
+  data_->clear();
+  pool()->release();
+}
+
+void TopNRowNumber::setupSpiller() {
+  VELOX_CHECK_NULL(spiller_);
+
+  spiller_ = std::make_unique<Spiller>(
+      // TODO Replace Spiller::Type::kOrderBy.
+      Spiller::Type::kOrderBy,
+      data_.get(),
+      [&](folly::Range<char**> rows) {
+        // TODO Fix Spiller to allow spilling the whole container and not
+        // require erasing rows one at a time.
+        data_->eraseRows(rows);
+      },
+      inputType_,
+      spillCompareFlags_.size(),
+      spillCompareFlags_,
+      spillConfig_->filePath,
+      std::numeric_limits<uint64_t>::max(),
+      spillConfig_->writeBufferSize,
+      spillConfig_->minSpillRunSize,
+      spillConfig_->compressionKind,
+      memory::spillMemoryPool(),
+      spillConfig_->executor);
+}
 } // namespace facebook::velox::exec

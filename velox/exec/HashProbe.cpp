@@ -259,7 +259,7 @@ void HashProbe::maybeSetupSpillInput(
       spillConfig.writeBufferSize,
       spillConfig.minSpillRunSize,
       spillConfig.compressionKind,
-      Spiller::pool(),
+      memory::spillMemoryPool(),
       spillConfig.executor);
   // Set the spill partitions to the corresponding ones at the build side. The
   // hash probe operator itself won't trigger any spilling.
@@ -411,8 +411,8 @@ void HashProbe::spillInput(RowVectorPtr& input) {
   }
 
   // Ensure vector are lazy loaded before spilling.
-  for (int32_t i = 0; i < input_->childrenSize(); ++i) {
-    input_->childAt(i)->loadedVector();
+  for (int32_t i = 0; i < input->childrenSize(); ++i) {
+    input->childAt(i)->loadedVector();
   }
 
   for (int32_t partition = 0; partition < numSpillInputs_.size(); ++partition) {

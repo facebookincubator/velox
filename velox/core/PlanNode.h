@@ -500,8 +500,6 @@ class AggregationNode : public PlanNode {
     /// Raw input types used to properly identify aggregate function. These
     /// might be different from the input types specified in 'call' when
     /// aggregation step is kIntermediate or kFinal.
-    ///
-    /// Note: not used yet.
     std::vector<TypePtr> rawInputTypes;
 
     /// Optional name of input column to use as a mask. Column type must be
@@ -699,6 +697,10 @@ class TableWriteNode : public PlanNode {
     return aggregationNode_;
   }
 
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return queryConfig.writerSpillEnabled();
+  }
+
   std::string_view name() const override {
     return "TableWrite";
   }
@@ -780,25 +782,6 @@ class GroupIdNode : public PlanNode {
 
     folly::dynamic serialize() const;
   };
-
-  /// @param id Plan node ID.
-  /// @param groupingSets A list of grouping key sets. Grouping keys within the
-  /// set must be unique, but grouping keys across sets may repeat.
-  /// @param groupingKeyInfos The names and order of the grouping keys in the
-  /// output.
-  /// @param aggregationInputs Columns that contain inputs to the aggregate
-  /// functions.
-  /// @param groupIdName Name of the column that will contain the grouping set
-  /// ID (a zero based integer).
-  /// @param source Input plan node.
-  /// NOTE: THIS FUNCTION IS DEPRECATED. PLEASE DO NOT USE.
-  GroupIdNode(
-      PlanNodeId id,
-      std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-      std::vector<GroupingKeyInfo> groupingKeyInfos,
-      std::vector<FieldAccessTypedExprPtr> aggregationInputs,
-      std::string groupIdName,
-      PlanNodePtr source);
 
   /// @param id Plan node ID.
   /// @param groupingSets A list of grouping key sets. Grouping keys within the
@@ -2165,6 +2148,10 @@ class RowNumberNode : public PlanNode {
     return outputType_;
   }
 
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return !partitionKeys_.empty() && queryConfig.rowNumberSpillEnabled();
+  }
+
   const std::vector<FieldAccessTypedExprPtr>& partitionKeys() const {
     return partitionKeys_;
   }
@@ -2254,6 +2241,9 @@ class MarkDistinctNode : public PlanNode {
 class TopNRowNumberNode : public PlanNode {
  public:
   /// @param partitionKeys Partitioning keys. May be empty.
+  /// @param sortingKeys Sorting keys. May not be empty and may not intersect
+  /// with 'partitionKeys'.
+  /// @param sortingOrders Sorting orders, one per sorting key.
   /// @param rowNumberColumnName Optional name of the column containing row
   /// numbers. If not specified, the output doesn't include 'row number' column.
   /// This is used when computing partial results.
@@ -2275,6 +2265,14 @@ class TopNRowNumberNode : public PlanNode {
 
   const RowTypePtr& outputType() const override {
     return outputType_;
+  }
+
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return !partitionKeys_.empty() && queryConfig.topNRowNumberSpillEnabled();
+  }
+
+  const RowTypePtr& inputType() const {
+    return sources_[0]->outputType();
   }
 
   const std::vector<FieldAccessTypedExprPtr>& partitionKeys() const {

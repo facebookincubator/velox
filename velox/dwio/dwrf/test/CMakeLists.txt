@@ -163,7 +163,7 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
-add_executable(velox_dwio_dwrf_writer_context_test TestWriterContext.cpp)
+add_executable(velox_dwio_dwrf_writer_context_test WriterContextTest.cpp)
 add_test(velox_dwio_dwrf_writer_context_test
          velox_dwio_dwrf_writer_context_test)
 
@@ -348,6 +348,7 @@ target_link_libraries(
   velox_dwrf_e2e_filter_test
   velox_e2e_filter_test_base
   velox_link_libs
+  velox_test_util
   Folly::folly
   fmt::fmt
   lz4::lz4
@@ -411,7 +412,7 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
-add_executable(velox_dwrf_e2e_writer_test E2EWriterTests.cpp)
+add_executable(velox_dwrf_e2e_writer_test E2EWriterTest.cpp)
 add_test(velox_dwrf_e2e_writer_test velox_dwrf_e2e_writer_test)
 
 target_link_libraries(

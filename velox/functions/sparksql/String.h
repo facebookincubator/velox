@@ -20,6 +20,9 @@
 #include "folly/ssl/OpenSSLHash.h"
 #pragma GCC diagnostic pop
 
+#include <boost/locale.hpp>
+#include <codecvt>
+#include <string>
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/UDFOutputString.h"
@@ -280,6 +283,60 @@ struct EndsWithFunction {
           str1.substr(str1.length() - str2.length(), str2.length()) == str2;
     }
     return true;
+  }
+};
+
+/// Returns the substring from str before count occurrences of the delimiter
+/// delim. If count is positive, everything to the left of the final delimiter
+/// (counting from the left) is returned. If count is negative, everything to
+/// the right of the final delimiter (counting from the right) is returned. The
+/// function substring_index performs a case-sensitive match when searching for
+/// delim.
+template <typename T>
+struct SubstringIndexFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& str,
+      const arg_type<Varchar>& delim,
+      const int32_t& count) {
+    if (count == 0) {
+      result.setEmpty();
+      return;
+    }
+
+    int64_t index;
+    if (count > 0) {
+      index = stringImpl::stringPosition<true, true>(str, delim, count);
+    } else {
+      index = stringImpl::stringPosition<true, false>(str, delim, -count);
+    }
+
+    // If 'delim' is not found or found fewer than 'count' times,
+    // return the input string directly.
+    if (index == 0) {
+      result.setNoCopy(str);
+      return;
+    }
+
+    auto start = 0;
+    auto length = str.size();
+    const auto delimLength = delim.size();
+    if (count > 0) {
+      length = index - 1;
+    } else {
+      start = index + delimLength - 1;
+      length -= start;
+    }
+
+    result.setNoCopy(StringView(str.data() + start, length));
   }
 };
 
@@ -842,6 +899,146 @@ struct TranslateFunction {
       }
     }
     result.resize(i);
+  }
+};
+
+template <typename T>
+struct ConvFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr bool is_default_ascii_behavior = true;
+
+  static const uint64_t kMaxUnsignedInt64_ = 0xFFFFFFFFFFFFFFFF;
+  static const int kMinBase = 2;
+  static const int kMaxBase = 36;
+
+  static bool checkInput(StringView input, int32_t fromBase, int32_t toBase) {
+    if (input.empty()) {
+      return false;
+    }
+    // Consistent with spark, only supports fromBase belonging to [2, 36]
+    // and toBase belonging to [2, 36] or [-36, -2].
+    if (fromBase < kMinBase || fromBase > kMaxBase ||
+        std::abs(toBase) < kMinBase || std::abs(toBase) > kMaxBase) {
+      return false;
+    }
+    return true;
+  }
+
+  static int32_t skipLeadingSpaces(StringView input) {
+    // Ignore leading spaces.
+    int i = 0;
+    for (; i < input.size(); i++) {
+      if (input.data()[i] != ' ') {
+        break;
+      }
+    }
+    return i;
+  }
+
+  static uint64_t
+  toUnsigned(StringView input, int32_t start, int32_t fromBase) {
+    uint64_t unsignedValue;
+    auto fromStatus = std::from_chars(
+        input.data() + start,
+        input.data() + input.size(),
+        unsignedValue,
+        fromBase);
+    if (fromStatus.ec == std::errc::invalid_argument) {
+      return 0;
+    }
+    if (fromStatus.ec == std::errc::result_out_of_range) {
+      return kMaxUnsignedInt64_;
+    }
+    return unsignedValue;
+  }
+
+  static void toUpper(char* buffer, const int32_t size) {
+    for (int i = 0; i < size; i++) {
+      buffer[i] = std::toupper(buffer[i]);
+    }
+  }
+
+  // For signed value, toBase is negative.
+  static void
+  toChars(out_type<Varchar>& result, int64_t signedValue, int32_t toBase) {
+    int32_t resultSize =
+        (int32_t)std::floor(
+            std::log(std::abs(signedValue)) / std::log(-toBase)) +
+        1;
+    // Negative symbol is considered.
+    if (signedValue < 0) {
+      ++resultSize;
+    }
+    result.resize(resultSize);
+    auto toStatus = std::to_chars(
+        result.data(), result.data() + result.size(), signedValue, -toBase);
+    result.resize(toStatus.ptr - result.data());
+  }
+
+  // For unsigned value, toBase is positive.
+  static void
+  toChars(out_type<Varchar>& result, uint64_t unsignedValue, int32_t toBase) {
+    int32_t resultSize =
+        (int32_t)std::floor(std::log(unsignedValue) / std::log(toBase)) + 1;
+    result.resize(resultSize);
+    auto toStatus = std::to_chars(
+        result.data(),
+        result.data() + result.size(),
+        unsignedValue,
+        std::abs(toBase));
+    result.resize(toStatus.ptr - result.data());
+  }
+
+  bool call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t fromBase,
+      int32_t toBase) {
+    if (!checkInput(input, fromBase, toBase)) {
+      return false;
+    }
+
+    auto i = skipLeadingSpaces(input);
+    // All are spaces.
+    if (i == input.size()) {
+      return false;
+    }
+    const bool isNegativeInput = (input.data()[i] == '-');
+    // Skips negative symbol.
+    if (isNegativeInput) {
+      ++i;
+    }
+
+    uint64_t unsignedValue = toUnsigned(input, i, fromBase);
+    if (unsignedValue == 0) {
+      result.append("0");
+      return true;
+    }
+
+    // When toBase is negative, converts to signed value. Otherwise, converts to
+    // unsigned value. Overflow is allowed, consistent with Spark.
+    if (toBase < 0) {
+      int64_t signedValue;
+      if (isNegativeInput) {
+        signedValue = -std::abs((int64_t)unsignedValue);
+      } else {
+        signedValue = (int64_t)unsignedValue;
+      }
+      toChars(result, signedValue, toBase);
+    } else {
+      if (isNegativeInput) {
+        int64_t negativeInput = -std::abs((int64_t)unsignedValue);
+        unsignedValue = (uint64_t)negativeInput;
+      } // Here directly use unsignedValue if isNegativeInput = false.
+      toChars(result, unsignedValue, toBase);
+    }
+
+    // Converts to uppper case, consistent with Spark.
+    if (std::abs(toBase) > 10) {
+      toUpper(result.data(), result.size());
+    }
+    return true;
   }
 };
 

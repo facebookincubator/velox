@@ -49,7 +49,7 @@ inline void registerArrayCombinationsFunctions(const std::string& prefix) {
       ParameterBinder<CombinationsFunction, T>,
       Array<Array<T>>,
       Array<T>,
-      int64_t>({prefix + "combinations"});
+      int32_t>({prefix + "combinations"});
 }
 
 template <typename T>
@@ -84,6 +84,12 @@ inline void registerArrayTrimFunctions(const std::string& prefix) {
 }
 
 template <typename T>
+inline void registerArrayRemoveNullFunctions(const std::string& prefix) {
+  registerFunction<ArrayRemoveNullFunction, Array<T>, Array<T>>(
+      {prefix + "remove_nulls"});
+}
+
+template <typename T>
 inline void registerArrayUnionFunctions(const std::string& prefix) {
   registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
       {prefix + "array_union"});
@@ -93,6 +99,11 @@ template <typename T>
 inline void registerArrayRemoveFunctions(const std::string& prefix) {
   registerFunction<ArrayRemoveFunction, Array<T>, Array<T>, T>(
       {prefix + "array_remove"});
+}
+
+void registerInternalArrayFunctions() {
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_$internal$canonicalize, "$internal$canonicalize");
 }
 
 void registerArrayFunctions(const std::string& prefix) {
@@ -227,6 +238,26 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Array<Generic<T1>>,
       int64_t>({prefix + "trim_array"});
+
+  registerArrayRemoveNullFunctions<int8_t>(prefix);
+  registerArrayRemoveNullFunctions<int16_t>(prefix);
+  registerArrayRemoveNullFunctions<int32_t>(prefix);
+  registerArrayRemoveNullFunctions<int64_t>(prefix);
+  registerArrayRemoveNullFunctions<int128_t>(prefix);
+  registerArrayRemoveNullFunctions<float>(prefix);
+  registerArrayRemoveNullFunctions<double>(prefix);
+  registerArrayRemoveNullFunctions<bool>(prefix);
+  registerArrayRemoveNullFunctions<Timestamp>(prefix);
+  registerArrayRemoveNullFunctions<Date>(prefix);
+  registerArrayRemoveNullFunctions<Varbinary>(prefix);
+  registerFunction<
+      ArrayRemoveNullFunctionString,
+      Array<Varchar>,
+      Array<Varchar>>({prefix + "remove_nulls"});
+  registerFunction<
+      ArrayRemoveNullFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>>({prefix + "remove_nulls"});
 
   registerArrayUnionFunctions<int8_t>(prefix);
   registerArrayUnionFunctions<int16_t>(prefix);

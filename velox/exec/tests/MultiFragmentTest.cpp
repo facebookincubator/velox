@@ -21,7 +21,7 @@
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Exchange.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -523,11 +523,83 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
                         .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
     Task::start(leafTask, 4);
-    auto bufferMgr = PartitionedOutputBufferManager::getInstance().lock();
+    auto bufferMgr = OutputBufferManager::getInstance().lock();
     // Delete the results asynchronously to simulate abort from downstream.
     bufferMgr->deleteResults(leafTaskId, 0);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+  }
+}
+
+TEST_F(MultiFragmentTest, partitionedOutputWithLargeInput) {
+  // Verify that partitionedOutput operator is able to split a single input
+  // vector if it hits memory or row limits.
+  // We create a large vector that hits the row limit (70% - 120% of 10,000)
+  // which would hit a task level memory limit of 1MB unless its split up.
+  // This test exercises splitting up the input both from the edges and the
+  // middle as it ends up splitting it in ~ 10 splits.
+  setupSources(1, 100'000);
+  const int64_t kRootMemoryLimit = 1 << 20; // 1MB
+  // Single Partition
+  {
+    auto leafTaskId = makeTaskId("leaf", 0);
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput({}, 1, {"c0", "c1", "c2", "c3", "c4"})
+            .planNode();
+    auto leafTask =
+        makeTask(leafTaskId, leafPlan, 0, nullptr, kRootMemoryLimit);
+    Task::start(leafTask, 1);
+    auto op = PlanBuilder().exchange(leafPlan->outputType()).planNode();
+
+    auto task =
+        assertQuery(op, {leafTaskId}, "SELECT c0, c1, c2, c3, c4 FROM tmp");
+    auto exchangeStats = task->taskStats().pipelineStats[0].operatorStats[0];
+    ASSERT_GT(exchangeStats.inputVectors, 2);
+    ASSERT_TRUE(waitForTaskCompletion(leafTask.get()))
+        << leafTask->taskId() << "state: " << leafTask->state();
+  }
+
+  // Multiple partitions but round-robin.
+  {
+    constexpr int32_t kFanout = 2;
+    auto leafTaskId = makeTaskId("leaf", 0);
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput(
+                {},
+                kFanout,
+                false,
+                std::make_shared<exec::RoundRobinPartitionFunctionSpec>(),
+                {"c0", "c1", "c2", "c3", "c4"})
+            .planNode();
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+    Task::start(leafTask, 1);
+
+    auto intermediatePlan =
+        PlanBuilder()
+            .exchange(leafPlan->outputType())
+            .partitionedOutput({}, 1, {"c0", "c1", "c2", "c3", "c4"})
+            .planNode();
+    std::vector<std::string> intermediateTaskIds;
+    for (auto i = 0; i < kFanout; ++i) {
+      intermediateTaskIds.push_back(makeTaskId("intermediate", i));
+      auto intermediateTask =
+          makeTask(intermediateTaskIds.back(), intermediatePlan, i);
+      Task::start(intermediateTask, 1);
+      addRemoteSplits(intermediateTask, {leafTaskId});
+    }
+
+    auto op = PlanBuilder().exchange(intermediatePlan->outputType()).planNode();
+
+    auto task = assertQuery(
+        op, intermediateTaskIds, "SELECT c0, c1, c2, c3, c4 FROM tmp");
+    auto exchangeStats = task->taskStats().pipelineStats[0].operatorStats[0];
+    ASSERT_GT(exchangeStats.inputVectors, 2);
+    ASSERT_TRUE(waitForTaskCompletion(leafTask.get()))
+        << "state: " << leafTask->state();
   }
 }
 
@@ -1350,7 +1422,7 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   Task::start(task, 1);
   addHiveSplits(task, filePaths_);
 
-  auto bufferManager = PartitionedOutputBufferManager::getInstance().lock();
+  auto bufferManager = OutputBufferManager::getInstance().lock();
   const uint64_t maxBytes = std::numeric_limits<uint64_t>::max();
   const int destination = 0;
   std::vector<std::unique_ptr<folly::IOBuf>> receivedIobufs;
@@ -1547,8 +1619,8 @@ class DataFetcher {
  private:
   static constexpr int64_t kInitialSequence = 0;
 
-  std::shared_ptr<PartitionedOutputBufferManager> bufferManager() {
-    return PartitionedOutputBufferManager::getInstance().lock();
+  std::shared_ptr<OutputBufferManager> bufferManager() {
+    return OutputBufferManager::getInstance().lock();
   }
 
   void doFetch(int64_t sequence) {
@@ -1608,9 +1680,12 @@ class DataFetcher {
 /// sizes to no more than 1MB give and take 30%.
 TEST_F(MultiFragmentTest, maxBytes) {
   std::string s(25, 'x');
+  // Keep the row count under 7000 to avoid hitting the row limit in the
+  // operator instead.
   auto data = makeRowVector({
-      makeFlatVector<int64_t>(10'000, [](auto row) { return row; }),
-      makeConstant(StringView(s), 10'000),
+      makeFlatVector<int64_t>(5'000, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(5'000, [](auto row) { return row; }),
+      makeConstant(StringView(s), 5'000),
   });
 
   auto plan = PlanBuilder()

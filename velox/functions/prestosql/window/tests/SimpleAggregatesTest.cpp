@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
@@ -93,7 +94,6 @@ TEST_P(SimpleAggregatesTest, basic) {
 TEST_P(SimpleAggregatesTest, singlePartition) {
   auto input = {makeSinglePartitionVector(50), makeSinglePartitionVector(40)};
   testWindowFunction(input);
-  testWindowFunction(input, kEmptyFrameClauses);
 }
 
 // Tests function with a dataset where all partitions have a single row.
@@ -113,10 +113,10 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     SimpleAggregatesTest,
     testing::ValuesIn(getAggregateTestParams()));
 
-class StringAggregatesTest : public WindowTestBase {};
+class WindowTest : public WindowTestBase {};
 
 // Test for an aggregate function with strings that needs out of line storage.
-TEST_F(StringAggregatesTest, nonFixedWidthAggregate) {
+TEST_F(WindowTest, variableWidthAggregate) {
   auto size = 10;
   auto input = {makeRowVector({
       makeRandomInputVector(BIGINT(), size, 0.2),
@@ -129,5 +129,98 @@ TEST_F(StringAggregatesTest, nonFixedWidthAggregate) {
   testWindowFunction(input, "max(c2)", kOverClauses);
 }
 
+TEST_F(WindowTest, missingFunctionSignature) {
+  auto input = {makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatVector<std::string>({"A", "B", "C"}),
+      makeFlatVector<int64_t>({10, 20, 30}),
+  })};
+
+  auto runWindow = [&](const core::CallTypedExprPtr& callExpr) {
+    core::WindowNode::Frame frame{
+        core::WindowNode::WindowType::kRows,
+        core::WindowNode::BoundType::kUnboundedPreceding,
+        nullptr,
+        core::WindowNode::BoundType::kUnboundedFollowing,
+        nullptr};
+
+    core::WindowNode::Function windowFunction{callExpr, frame, false};
+
+    CursorParameters params;
+    params.planNode =
+        PlanBuilder()
+            .values(input)
+            .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
+              return std::make_shared<core::WindowNode>(
+                  nodeId,
+                  std::vector<core::FieldAccessTypedExprPtr>{
+                      std::make_shared<core::FieldAccessTypedExpr>(
+                          BIGINT(), "c0")},
+                  std::vector<core::FieldAccessTypedExprPtr>{}, // sortingKeys
+                  std::vector<core::SortOrder>{}, // sortingOrders
+                  std::vector<std::string>{"w"},
+                  std::vector<core::WindowNode::Function>{windowFunction},
+                  false,
+                  source);
+            })
+            .planNode();
+
+    readCursor(params, [](auto*) {});
+  };
+
+  auto callExpr = std::make_shared<core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1")},
+      "sum");
+
+  VELOX_ASSERT_THROW(
+      runWindow(callExpr),
+      "Window function signature is not supported: sum(VARCHAR). Supported signatures:");
+
+  callExpr = std::make_shared<core::CallTypedExpr>(
+      VARCHAR(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c2")},
+      "sum");
+
+  VELOX_ASSERT_THROW(
+      runWindow(callExpr),
+      "Unexpected return type for window function sum(BIGINT). Expected BIGINT. Got VARCHAR.");
+}
+
+class AggregateEmptyFramesTest : public WindowTestBase {};
+
+// Test for aggregates that return NULL as the default value for empty frames
+// against DuckDb.
+TEST_F(AggregateEmptyFramesTest, nullEmptyResult) {
+  auto input = {makeSinglePartitionVector(50), makeSinglePartitionVector(40)};
+  auto aggregateFunctions = kAggregateFunctions;
+  aggregateFunctions.erase(
+      std::remove(
+          aggregateFunctions.begin(), aggregateFunctions.end(), "count(c2)"),
+      aggregateFunctions.end());
+  for (const auto& function : aggregateFunctions) {
+    testWindowFunction(input, function, kOverClauses, kEmptyFrameClauses);
+  }
+}
+
+// Test for count aggregate with empty frames against expectedResult and not
+// DuckDb, since DuckDb returns NULL instead of 0 for such queries.
+TEST_F(AggregateEmptyFramesTest, nonNullEmptyResult) {
+  auto c0 = makeFlatVector<int64_t>({-1, -1, -1, -1, -1, -1, 2, 2, 2, 2});
+  auto c1 = makeFlatVector<double>({-1, -2, -3, -4, -5, -6, -7, -8, -9, -10});
+  auto input = makeRowVector({c0, c1});
+
+  auto expected = makeRowVector(
+      {c0, c1, makeFlatVector<int64_t>({0, 0, 0, 1, 2, 3, 0, 0, 0, 1})});
+  std::string overClause = "partition by c0 order by c1 desc";
+  std::string frameClause = "rows between 6 preceding and 3 preceding";
+  testWindowFunction({input}, "count(c1)", overClause, frameClause, expected);
+
+  expected = makeRowVector({c0, c1, makeConstant<int64_t>(0, c0->size())});
+  frameClause = "rows between 6 following and unbounded following";
+  testWindowFunction({input}, "count(c1)", overClause, frameClause, expected);
+}
 }; // namespace
 }; // namespace facebook::velox::window::test

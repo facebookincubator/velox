@@ -18,27 +18,20 @@
 
 #include <folly/ScopeGuard.h>
 
+#include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/LayoutPlanner.h"
+#include "velox/exec/MemoryReclaimer.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::dwrf {
 
 namespace {
-// We currently use previous stripe raw size as the proxy for the expected
-// stripe raw size. For the first stripe, we are more conservative about
-// flush overhead memory unless we know otherwise, e.g. perhaps from
-// encoding DB work.
-// This can be fitted linearly just like flush overhead or perhaps
-// figured out from the schema.
-// This can be simplified with Slice::estimateMemory().
-size_t estimateNextWriteSize(const WriterContext& context, size_t numRows) {
-  // This is 0 for first slice. We are assuming reasonable input for now.
-  return folly::to<size_t>(ceil(context.getAverageRowSize() * numRows));
-}
-
 dwio::common::StripeProgress getStripeProgress(const WriterContext& context) {
   return dwio::common::StripeProgress{
       .stripeIndex = context.stripeIndex(),
@@ -53,6 +46,16 @@ dwio::common::StripeProgress getStripeProgress(const WriterContext& context) {
           context.stripeIndex() == 0 ? context.getEstimatedOutputStreamSize()
                                      : 0)};
 }
+
+#define RETURN_IF_CLOSED() \
+  do {                     \
+    if (closed_) {         \
+      return;              \
+    }                      \
+  } while (0)
+
+#define CHECK_NOT_CLOSED() \
+  VELOX_CHECK(!closed_, "{} not allowed on a closed writer", __FUNCTION__);
 } // namespace
 
 Writer::Writer(
@@ -60,25 +63,18 @@ Writer::Writer(
     const WriterOptions& options,
     std::shared_ptr<memory::MemoryPool> pool)
     : writerBase_(std::make_unique<WriterBase>(std::move(sink))),
-      schema_{dwio::common::TypeWithId::create(options.schema)} {
-  VELOX_CHECK(
-      !pool->isLeaf(),
-      "Memory pool {} for DWRF writer can't be leaf",
-      pool->name());
-  if (options.setMemoryReclaimer != nullptr) {
-    options.setMemoryReclaimer(pool.get());
-  }
+      schema_{dwio::common::TypeWithId::create(options.schema)},
+      spillConfig_{options.spillConfig} {
+  // Prevent the memory reclaim during writer initialization.
+  exec::NonReclaimableSectionGuard guard(&nonReclaimableSection_);
+  setMemoryReclaimer(pool);
   auto handler =
       (options.encryptionSpec ? encryption::EncryptionHandler::create(
                                     schema_,
                                     *options.encryptionSpec,
                                     options.encrypterFactory.get())
                               : nullptr);
-  writerBase_->initContext(
-      options.config,
-      std::move(pool),
-      options.setMemoryReclaimer,
-      std::move(handler));
+  writerBase_->initContext(options.config, pool, std::move(handler));
   auto& context = writerBase_->getContext();
   context.buildPhysicalSizeAggregators(*schema_);
   if (options.flushPolicyFactory == nullptr) {
@@ -109,10 +105,28 @@ Writer::Writer(
           std::move(sink),
           options,
           options.memoryPool->addAggregateChild(fmt::format(
-              "writer_node_{}",
+              "{}.dwrf.{}",
+              options.memoryPool->name(),
               folly::to<std::string>(folly::Random::rand64())))} {}
 
+void Writer::setMemoryReclaimer(
+    const std::shared_ptr<memory::MemoryPool>& pool) {
+  VELOX_CHECK(
+      !pool->isLeaf(),
+      "The root memory pool for dwrf writer can't be leaf: {}",
+      pool->name());
+  VELOX_CHECK_NULL(pool->reclaimer());
+
+  if ((pool->parent() == nullptr) || (pool->parent()->reclaimer() == nullptr)) {
+    return;
+  }
+  pool->setReclaimer(MemoryReclaimer::create(this));
+}
+
 void Writer::write(const VectorPtr& input) {
+  CHECK_NOT_CLOSED();
+  exec::NonReclaimableSectionGuard reclaimGuard(&nonReclaimableSection_);
+
   auto& context = writerBase_->getContext();
   // Calculate length increment based on linear projection of micro batch size.
   // Total length is capped later.
@@ -135,6 +149,7 @@ void Writer::write(const VectorPtr& input) {
         estimatedInputMemoryBytes,
         context.rawDataSizePerBatch());
   }
+
   size_t rowOffset = 0;
   while (rowOffset < inputRowCount) {
     size_t numRowsToWrite = writeBatchSize;
@@ -146,6 +161,13 @@ void Writer::write(const VectorPtr& input) {
 
     numRowsToWrite = std::min(numRowsToWrite, inputRowCount - rowOffset);
     VELOX_CHECK_GT(numRowsToWrite, 0);
+
+    ensureWriteFits(
+        estimatedInputMemoryBytes * numRowsToWrite / inputRowCount,
+        numRowsToWrite);
+
+    TestValue::adjust("facebook::velox::dwrf::Writer::write", this);
+
     bool doFlush = shouldFlush(context, numRowsToWrite);
     if (doFlush) {
       // Try abandoning inefficiency dictionary encodings early and see if we
@@ -170,6 +192,107 @@ void Writer::write(const VectorPtr& input) {
   }
 }
 
+bool Writer::canReclaim() const {
+  return spillConfig_ != nullptr;
+}
+
+void Writer::ensureWriteFits(size_t appendBytes, size_t appendRows) {
+  if (!canReclaim()) {
+    return;
+  }
+
+  auto& context = getContext();
+  const uint64_t totalMemoryUsage = context.getTotalMemoryUsage();
+  if (totalMemoryUsage == 0) {
+    return;
+  }
+
+  // Allows the memory arbitrator to reclaim memory from this file writer if the
+  // memory reservation below has triggered memory arbitration.
+  exec::ReclaimableSectionGuard reclaimGuard(&nonReclaimableSection_);
+
+  const size_t estimatedAppendMemoryBytes =
+      std::max(appendBytes, context.estimateNextWriteSize(appendRows));
+  const double estimatedMemoryGrowthRatio =
+      estimatedAppendMemoryBytes / totalMemoryUsage;
+  if (!maybeReserveMemory(
+          MemoryUsageCategory::GENERAL, estimatedMemoryGrowthRatio)) {
+    return;
+  }
+  if (!maybeReserveMemory(
+          MemoryUsageCategory::DICTIONARY, estimatedMemoryGrowthRatio)) {
+    return;
+  }
+  if (!maybeReserveMemory(
+          MemoryUsageCategory::OUTPUT_STREAM, estimatedMemoryGrowthRatio)) {
+    return;
+  }
+}
+
+void Writer::ensureStripeFlushFits() {
+  if (!canReclaim()) {
+    return;
+  }
+  if (memory::underMemoryArbitration()) {
+    // NOTE: we skip memory reservation if the stripe flush is triggered by
+    // memory arbitration.
+    return;
+  }
+
+  // Allows the memory arbitrator to reclaim memory from this file writer if the
+  // memory reservation below has triggered memory arbitration.
+  exec::ReclaimableSectionGuard reclaimGuard(&nonReclaimableSection_);
+
+  auto& context = getContext();
+  const size_t estimateFlushMemoryBytes =
+      context.getEstimatedFlushOverhead(context.stripeRawSize());
+  const uint64_t outputMemoryUsage =
+      context.getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM);
+  if (outputMemoryUsage == 0) {
+    const uint64_t outputMemoryToReserve = estimateFlushMemoryBytes +
+        estimateFlushMemoryBytes * spillConfig_->spillableReservationGrowthPct /
+            100;
+    context.getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM)
+        .maybeReserve(outputMemoryToReserve);
+  } else {
+    const double estimatedMemoryGrowthRatio =
+        estimateFlushMemoryBytes / outputMemoryUsage;
+    maybeReserveMemory(
+        MemoryUsageCategory::OUTPUT_STREAM, estimatedMemoryGrowthRatio);
+  }
+}
+
+bool Writer::maybeReserveMemory(
+    MemoryUsageCategory memoryUsageCategory,
+    double estimatedMemoryGrowthRatio) {
+  VELOX_CHECK(!nonReclaimableSection_);
+  VELOX_CHECK(canReclaim());
+  auto& context = getContext();
+  auto& pool = context.getMemoryPool(memoryUsageCategory);
+  const uint64_t availableReservation = pool.availableReservation();
+  const uint64_t usedReservationBytes = pool.currentBytes();
+  const uint64_t minReservationBytes =
+      usedReservationBytes * spillConfig_->minSpillableReservationPct / 100;
+  const uint64_t estimatedIncrementBytes =
+      usedReservationBytes * estimatedMemoryGrowthRatio;
+  if ((availableReservation > minReservationBytes) &&
+      (availableReservation > 2 * estimatedIncrementBytes)) {
+    return true;
+  }
+
+  const uint64_t bytesToReserve = std::max(
+      estimatedIncrementBytes * 2,
+      usedReservationBytes * spillConfig_->spillableReservationGrowthPct / 100);
+  return pool.maybeReserve(bytesToReserve);
+}
+
+void Writer::releaseMemory() {
+  if (!canReclaim()) {
+    return;
+  }
+  getContext().releaseMemoryReservation();
+}
+
 uint64_t Writer::flushTimeMemoryUsageEstimate(
     const WriterContext& context,
     size_t nextWriteSize) const {
@@ -183,7 +306,7 @@ bool Writer::overMemoryBudget(const WriterContext& context, size_t numRows)
     const {
   // Flush if we cannot take one additional slice/stride based on current stripe
   // raw size.
-  const size_t nextWriteSize = estimateNextWriteSize(context, numRows);
+  const size_t nextWriteSize = context.estimateNextWriteSize(numRows);
   return flushTimeMemoryUsageEstimate(context, nextWriteSize) >
       context.getMemoryBudget();
 }
@@ -263,6 +386,15 @@ void Writer::flushStripe(bool close) {
   }
 
   const auto preFlushMem = context.getTotalMemoryUsage();
+  ensureStripeFlushFits();
+  // NOTE: ensureStripeFlushFits() might trigger memory arbitration that have
+  // flushed the current stripe.
+  if (context.stripeRowCount() == 0) {
+    VELOX_CHECK(canReclaim());
+    return;
+  }
+
+  TestValue::adjust("facebook::velox::dwrf::Writer::flushStripe", this);
 
   const auto& handler = context.getEncryptionHandler();
   EncodingManager encodingManager{handler};
@@ -406,6 +538,9 @@ void Writer::flushStripe(bool close) {
       preFlushMem,
       postFlushMem,
       metrics.close);
+  addThreadLocalRuntimeStat(
+      "stripeSize",
+      RuntimeCounter(metrics.stripeSize, RuntimeCounter::Unit::kBytes));
   // Add flush overhead and other ratio logging.
   context.metricLogger()->logStripeFlush(metrics);
 
@@ -415,6 +550,8 @@ void Writer::flushStripe(bool close) {
 }
 
 void Writer::flushInternal(bool close) {
+  auto exitGuard = folly::makeGuard([this]() { releaseMemory(); });
+
   auto& context = writerBase_->getContext();
   auto& footer = writerBase_->getFooter();
   auto& sink = writerBase_->getSink();
@@ -523,20 +660,73 @@ void Writer::flushInternal(bool close) {
 }
 
 void Writer::flush() {
+  CHECK_NOT_CLOSED();
+  TestValue::adjust("facebook::velox::dwrf::Writer::flush", this);
+  exec::NonReclaimableSectionGuard reclaimGuard(&nonReclaimableSection_);
   flushInternal(false);
 }
 
 void Writer::close() {
-  auto exitGuard = folly::makeGuard([this]() { flushPolicy_->onClose(); });
+  RETURN_IF_CLOSED();
+  exec::NonReclaimableSectionGuard reclaimGuard(&nonReclaimableSection_);
+  auto exitGuard = folly::makeGuard([this]() {
+    flushPolicy_->onClose();
+    closed_ = true;
+  });
   flushInternal(true);
   writerBase_->close();
 }
 
 void Writer::abort() {
+  RETURN_IF_CLOSED();
+  exec::NonReclaimableSectionGuard reclaimGuard(&nonReclaimableSection_);
+  auto exitGuard = folly::makeGuard([this]() { closed_ = true; });
   // NOTE: we need to reset column writer as all its dependent objects (e.g.
   // writer context) will be reset by writer base abort.
   writer_.reset();
   writerBase_->abort();
+}
+
+std::unique_ptr<memory::MemoryReclaimer> Writer::MemoryReclaimer::create(
+    Writer* writer) {
+  return std::unique_ptr<memory::MemoryReclaimer>(
+      new Writer::MemoryReclaimer(writer));
+}
+
+bool Writer::MemoryReclaimer::reclaimableBytes(
+    const memory::MemoryPool& /*unused*/,
+    uint64_t& reclaimableBytes) const {
+  if (!writer_->canReclaim()) {
+    reclaimableBytes = 0;
+    return false;
+  }
+  reclaimableBytes = writer_->getContext().getTotalMemoryUsage();
+  return true;
+}
+
+uint64_t Writer::MemoryReclaimer::reclaim(
+    memory::MemoryPool* pool,
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
+  if (!writer_->canReclaim()) {
+    return 0;
+  }
+
+  if (writer_->nonReclaimableSection_) {
+    LOG(WARNING)
+        << "Can't reclaim from dwrf writer which is under non-reclaimable section: "
+        << pool->name();
+    ++stats.numNonReclaimableAttempts;
+    return 0;
+  }
+  if (writer_->closed_) {
+    LOG(WARNING) << "Can't reclaim from a closed or aborted dwrf writer: "
+                 << pool->name();
+    ++stats.numNonReclaimableAttempts;
+    return 0;
+  }
+  writer_->flush();
+  return pool->shrink(targetBytes);
 }
 
 dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
@@ -561,7 +751,7 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
   dwrfOptions.config = Config::fromMap(configs);
   dwrfOptions.schema = options.schema;
   dwrfOptions.memoryPool = options.memoryPool;
-  dwrfOptions.setMemoryReclaimer = options.setMemoryReclaimer;
+  dwrfOptions.spillConfig = options.spillConfig;
   return dwrfOptions;
 }
 

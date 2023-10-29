@@ -146,6 +146,8 @@ void registerFunctions(const std::string& prefix) {
       prefix + "instr", instrSignatures(), makeInstr);
   exec::registerStatefulVectorFunction(
       prefix + "length", lengthSignatures(), makeLength);
+  registerFunction<SubstringIndexFunction, Varchar, Varchar, Varchar, int32_t>(
+      {prefix + "substring_index"});
 
   registerFunction<Md5Function, Varchar, Varbinary>({prefix + "md5"});
   registerFunction<Sha1HexStringFunction, Varchar, Varbinary>(
@@ -208,6 +210,9 @@ void registerFunctions(const std::string& prefix) {
 
   registerFunction<TranslateFunction, Varchar, Varchar, Varchar, Varchar>(
       {prefix + "translate"});
+
+  registerFunction<ConvFunction, Varchar, Varchar, int32_t, int32_t>(
+      {prefix + "conv"});
 
   // Register array sort functions.
   exec::registerStatefulVectorFunction(

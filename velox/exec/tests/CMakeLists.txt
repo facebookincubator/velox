@@ -54,7 +54,7 @@ add_executable(
   MultiFragmentTest.cpp
   NestedLoopJoinTest.cpp
   OrderByTest.cpp
-  PartitionedOutputBufferManagerTest.cpp
+  OutputBufferManagerTest.cpp
   PlanNodeSerdeTest.cpp
   PlanNodeToStringTest.cpp
   PrintPlanWithStatsTest.cpp
@@ -237,7 +237,8 @@ add_library(velox_simple_aggregate SimpleAverageAggregate.cpp
 target_link_libraries(velox_simple_aggregate velox_exec velox_expression
                       velox_expression_functions velox_aggregates)
 
-add_executable(velox_simple_aggregate_test SimpleAggregateAdapterTest.cpp)
+add_executable(velox_simple_aggregate_test SimpleAggregateAdapterTest.cpp
+                                           Main.cpp)
 
 target_link_libraries(
   velox_simple_aggregate_test velox_simple_aggregate velox_exec

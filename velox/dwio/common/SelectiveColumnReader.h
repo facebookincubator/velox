@@ -124,9 +124,9 @@ class SelectiveColumnReader {
 
   SelectiveColumnReader(
       const TypePtr& requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       dwio::common::FormatParams& params,
-      velox::common::ScanSpec& scanSpec,
-      std::shared_ptr<const dwio::common::TypeWithId> type);
+      velox::common::ScanSpec& scanSpec);
 
   virtual ~SelectiveColumnReader() = default;
 
@@ -546,6 +546,9 @@ class SelectiveColumnReader {
 
   memory::MemoryPool& memoryPool_;
 
+  // The requested data type
+  TypePtr requestedType_;
+
   // The file data type
   std::shared_ptr<const dwio::common::TypeWithId> fileType_;
 
@@ -556,9 +559,6 @@ class SelectiveColumnReader {
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* FOLLY_NONNULL scanSpec_;
-
-  // The requested data type
-  TypePtr requestedType_;
 
   // Row number after last read row, relative to the ORC stripe or Parquet
   // Rowgroup start.

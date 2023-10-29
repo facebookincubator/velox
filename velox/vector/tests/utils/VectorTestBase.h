@@ -127,27 +127,14 @@ class VectorTestBase {
     return vectorMaker_.rowVector(rowType, size);
   }
 
-  /// Splits input vector into 2. First half of rows goes to first vector, the
-  /// rest to the second vector. Input vector must have at least 2 rows.
-  /// @return 2 vectors
-  std::vector<RowVectorPtr> split(const RowVectorPtr& vector);
+  /// Splits input vector into 'n' vectors evenly. Input vector must have at
+  /// least 'n' rows.
+  /// @return 'n' vectors
+  std::vector<RowVectorPtr> split(const RowVectorPtr& vector, int32_t n = 2);
 
-  // Returns a one element ArrayVector with 'vector' as elements of array at 0.
-  VectorPtr asArray(VectorPtr vector) {
-    BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(
-        1, vector->pool(), vector->size());
-    BufferPtr offsets =
-        AlignedBuffer::allocate<vector_size_t>(1, vector->pool(), 0);
-    return std::make_shared<ArrayVector>(
-        vector->pool(),
-        ARRAY(vector->type()),
-        BufferPtr(nullptr),
-        1,
-        offsets,
-        sizes,
-        vector,
-        0);
-  }
+  /// Returns a one element ArrayVector with 'elements' as elements of array at
+  /// 0.
+  VectorPtr asArray(VectorPtr elements);
 
   template <typename T>
   FlatVectorPtr<EvalType<T>> makeFlatVector(
