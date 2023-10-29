@@ -130,6 +130,7 @@ class RowReaderOptions {
   // (in dwrf row reader). todo: encapsulate this and keySelectionCallBack_ in a
   // struct
   std::function<void(uint64_t)> blockedOnIoCallback_;
+  std::function<void(uint64_t)> decodingTimeMsCallback_;
   bool eagerFirstStripeLoad = true;
   uint64_t skipRows_ = 0;
 
@@ -343,6 +344,14 @@ class RowReaderOptions {
     return blockedOnIoCallback_;
   }
 
+  void setDecodingTimeMsCallback(std::function<void(int64_t)> decodingTimeMs) {
+    decodingTimeMsCallback_ = std::move(decodingTimeMs);
+  }
+
+  const std::function<void(int64_t)> getDecodingTimeMsCallback() const {
+    return decodingTimeMsCallback_;
+  }
+
   void setSkipRows(uint64_t skipRows) {
     skipRows_ = skipRows;
   }
@@ -544,6 +553,7 @@ struct WriterOptions {
   std::optional<velox::common::CompressionKind> compressionKind;
   std::optional<uint64_t> maxStripeSize{std::nullopt};
   std::optional<uint64_t> maxDictionaryMemory{std::nullopt};
+  std::map<std::string, std::string> serdeParameters;
 };
 
 } // namespace facebook::velox::dwio::common
