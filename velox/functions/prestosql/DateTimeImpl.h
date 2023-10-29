@@ -60,6 +60,11 @@ FOLLY_ALWAYS_INLINE std::optional<Timestamp> fromUnixtime(double unixtime) {
 
   auto seconds = std::floor(unixtime);
   auto milliseconds = std::llround((unixtime - seconds) * kMillisInSecond);
+  VELOX_CHECK_LE(milliseconds, kMillisInSecond);
+  if (milliseconds == kMillisInSecond) {
+    ++seconds;
+    milliseconds = 0;
+  }
   return Timestamp(seconds, milliseconds * kNanosecondsInMillisecond);
 }
 

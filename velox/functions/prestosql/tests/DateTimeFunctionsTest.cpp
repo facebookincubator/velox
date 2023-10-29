@@ -3685,7 +3685,11 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeDouble) {
        1623748303.123,
        1623748304.009,
        1623748304.001,
-       1623748304.999});
+       1623748304.999,
+       1623748304.001290,
+       1623748304.001890,
+       1623748304.999390,
+       1623748304.999590});
   auto actual =
       evaluate("cast(from_unixtime(c0) as varchar)", makeRowVector({input}));
   auto expected = makeFlatVector<StringView>({
@@ -3697,6 +3701,10 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeDouble) {
       "2021-06-15T09:11:44.009",
       "2021-06-15T09:11:44.001",
       "2021-06-15T09:11:44.999",
+      "2021-06-15T09:11:44.001",
+      "2021-06-15T09:11:44.002",
+      "2021-06-15T09:11:44.999",
+      "2021-06-15T09:11:45.000",
   });
   assertEqualVectors(expected, actual);
 }
