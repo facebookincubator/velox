@@ -138,7 +138,8 @@ class ParquetTestBase : public testing::Test, public test::VectorTestBase {
     auto rowReaderOpts = getReaderOpts(fileSchema);
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
-    assertReadWithReaderAndExpected(fileSchema, *rowReader, expected, *pool_);
+    assertReadWithReaderAndExpected(
+        fileSchema, *rowReader, expected, *leafPool_);
   }
 
   std::unique_ptr<dwio::common::FileSink> createSink(

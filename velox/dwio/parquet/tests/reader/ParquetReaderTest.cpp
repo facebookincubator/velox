@@ -97,7 +97,8 @@ TEST_F(ParquetReaderTest, parseSample) {
       makeFlatVector<double>(20, [](auto row) { return row + 1; }),
   });
 
-  assertReadWithReaderAndExpected(sampleSchema(), *rowReader, expected, *leafPool_);
+  assertReadWithReaderAndExpected(
+      sampleSchema(), *rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseSampleRange1) {
@@ -115,7 +116,8 @@ TEST_F(ParquetReaderTest, parseSampleRange1) {
       makeFlatVector<int64_t>(10, [](auto row) { return row + 1; }),
       makeFlatVector<double>(10, [](auto row) { return row + 1; }),
   });
-  assertReadWithReaderAndExpected(sampleSchema(), *rowReader, expected, *leafPool_);
+  assertReadWithReaderAndExpected(
+      sampleSchema(), *rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseSampleRange2) {
@@ -133,7 +135,8 @@ TEST_F(ParquetReaderTest, parseSampleRange2) {
       makeFlatVector<int64_t>(10, [](auto row) { return row + 11; }),
       makeFlatVector<double>(10, [](auto row) { return row + 11; }),
   });
-  assertReadWithReaderAndExpected(sampleSchema(), *rowReader, expected, *leafPool_);
+  assertReadWithReaderAndExpected(
+      sampleSchema(), *rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseSampleEmptyRange) {
@@ -277,7 +280,8 @@ TEST_F(ParquetReaderTest, parseInt) {
       makeFlatVector<int32_t>(10, [](auto row) { return row + 100; }),
       makeFlatVector<int64_t>(10, [](auto row) { return row + 1000; }),
   });
-  assertReadWithReaderAndExpected(intSchema(), *rowReader, expected, *leafPool_);
+  assertReadWithReaderAndExpected(
+      intSchema(), *rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseUnsignedInt1) {
@@ -412,7 +416,8 @@ TEST_F(ParquetReaderTest, parseDate) {
   auto expected = makeRowVector({
       makeFlatVector<int32_t>(25, [](auto row) { return row - 5; }),
   });
-  assertReadWithReaderAndExpected(dateSchema(), *rowReader, expected, *leafPool_);
+  assertReadWithReaderAndExpected(
+      dateSchema(), *rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseRowMapArray) {
