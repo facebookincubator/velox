@@ -116,10 +116,26 @@ Supported types are: BIGINT and DOUBLE.</p>
 <dt class="sig sig-object spark" id="divide">
 <span class="sig-name descname"><span class="pre">divide</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#divide" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the results of dividing x by y. Performs floating point division.
+Supported type is DOUBLE.
 Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">/</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="mi">3</span> <span class="o">/</span> <span class="mi">2</span><span class="p">;</span> <span class="o">--</span> <span class="mf">1.5</span>
 <span class="n">SELECT</span> <span class="mi">2</span><span class="n">L</span> <span class="o">/</span> <span class="mi">2</span><span class="n">L</span><span class="p">;</span> <span class="o">--</span> <span class="mf">1.0</span>
 <span class="n">SELECT</span> <span class="mi">3</span> <span class="o">/</span> <span class="mi">0</span><span class="p">;</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="id0">
+<span class="sig-name descname"><span class="pre">divide</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the results of dividing x by y.
+Supported type is DECIMAL which can be different precision and scale.
+Performs floating point division.
+The result type depends on the precision and scale of x and y.
+Overflow results return null. Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">/</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">17</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="o">/</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">2</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">17</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mf">0.500000000000000000000</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="o">/</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">20</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mf">0.0500000000000000000</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="o">/</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">0</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="n">NULL</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -170,6 +186,20 @@ For integral types, overflow results in an error. Corresponds to Spark’s opera
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="id3">
+<span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="p"><span class="pre">[</span></span><span class="pre">decimal</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#id3" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the result of multiplying x by y. The types of x and y must be decimal which can be different precision and scale.
+The result type depends on the precision and scale of x and y.
+Overflow results return null. Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">*</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">17</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="o">*</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">2</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">17</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mf">2.000000</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="o">*</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">20</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mf">20.00000</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="o">*</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">0</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mf">0.000000</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mf">201e-38</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">38</span><span class="p">))</span> <span class="o">*</span> <span class="n">CAST</span><span class="p">(</span><span class="mf">301e-38</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">38</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="mf">0.0000000000000000000000000000000000000</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="not">
 <span class="sig-name descname"><span class="pre">not</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#not" title="Permalink to this definition">¶</a></dt>
 <dd><p>Logical not.</p>
@@ -203,8 +233,8 @@ Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT and DOUBLE.</p>
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="id0">
-<span class="sig-name descname"><span class="pre">rand</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partitionIndex</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object spark" id="id4">
+<span class="sig-name descname"><span class="pre">rand</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partitionIndex</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id4" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns a random value with uniformly distributed values in [0, 1) using a seed formed
 by combining user-specified <code class="docutils literal notranslate"><span class="pre">seed</span></code> and framework provided <code class="docutils literal notranslate"><span class="pre">partitionIndex</span></code>. The
 framework is responsible for deterministic partitioning of the data and assigning unique
@@ -224,8 +254,8 @@ cannot be NULL.</p>
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="id3">
-<span class="sig-name descname"><span class="pre">random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partitionIndex</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id3" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object spark" id="id5">
+<span class="sig-name descname"><span class="pre">random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partitionIndex</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id5" title="Permalink to this definition">¶</a></dt>
 <dd><p>An alias for <code class="docutils literal notranslate"><span class="pre">rand(seed,</span> <span class="pre">partitionIndex)</span></code>.</p>
 </dd></dl>
 
