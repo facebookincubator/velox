@@ -329,7 +329,12 @@ T must be coercible to double. Returns bigint if T is coercible to bigint. Other
 <dl class="py function">
 <dt class="sig sig-object py" id="contains">
 <span class="sig-name descname"><span class="pre">contains</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">element</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#contains" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns true if the array <code class="docutils literal notranslate"><span class="pre">x</span></code> contains the <code class="docutils literal notranslate"><span class="pre">element</span></code>.</p>
+<dd><p>Returns true if the array <code class="docutils literal notranslate"><span class="pre">x</span></code> contains the <code class="docutils literal notranslate"><span class="pre">element</span></code>.
+When ‘element’ is of complex type, throws if ‘x’ or ‘element’ contains nested nulls
+and these need to be compared to produce a result.</p>
+<p>SELECT contains(ARRAY[ARRAY[1, 3]], ARRAY[2, null]); – false.
+SELECT contains(ARRAY[ARRAY[2, 3]], ARRAY[2, null]); – failed: contains does not support arrays with elements that are null or contain null
+SELECT contains(ARRAY[ARRAY[2, null]], ARRAY[2, 1]); – failed: contains does not support arrays with elements that are null or contain null</p>
 </dd></dl>
 
 <dl class="py function">
