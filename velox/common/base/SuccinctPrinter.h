@@ -15,6 +15,7 @@
  */
 
 #pragma once
+#include <cinttypes>
 #include <string>
 
 namespace facebook::velox {
