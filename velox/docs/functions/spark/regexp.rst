@@ -38,7 +38,7 @@ See https://github.com/google/re2/wiki/Syntax for more information.
 .. spark:function:: regex_replace(string, pattern, overwrite) -> varchar
 
     Replaces all substrings in ``string`` that match the regular expression ``pattern`` with the string ``overwrite``. If no match is found, the original string is returned as is.
-    There is a limit to the number of unique regexes to be compiled per function call (kMaxCompiledRegexes defined in velox/functions/lib/Re2Functions.h and is set to 20).
+    There is a limit to the number of unique regexes to be compiled per function call, which is 20.
 
     Parameters:
 
@@ -57,7 +57,8 @@ See https://github.com/google/re2/wiki/Syntax for more information.
 .. spark:function:: regex_replace(string, pattern, overwrite, position) -> varchar
     :noindex:
 
-    Replaces all substrings in ``string`` that match the regular expression ``pattern`` with the string ``overwrite`` starting from the specified ``position``. If the ``position`` is less than one, the function returns the original ``string`` without any modifications. If ``position`` is greater than the length of ``string``, the function returns an error.
+    Replaces all substrings in ``string`` that match the regular expression ``pattern`` with the string ``overwrite`` starting from the specified ``position``. If the ``position`` is less than one, the function returns an error. If ``position`` is greater than the length of ``string``, the function returns the original ``string`` without any modifications.
+    There is a limit to the number of unique regexes to be compiled per function call, which is 20.
 
     This function is 1-indexed, meaning the position of the first character is 1.
     Parameters:
@@ -65,7 +66,7 @@ See https://github.com/google/re2/wiki/Syntax for more information.
     - **string**: The string to be searched.
     - **pattern**: The regular expression pattern that is searched for in the string.
     - **overwrite**: The string that replaces the substrings in ``string`` that match the ``pattern``.
-    - **position**: The position to start from in terms of number of characters. 1 means to start from the beginning of the string. 3 means to start from the 3rd character. Positions less than or equal to zero throw an error.
+    - **position**: The position to start from in terms of number of characters. 1 means to start from the beginning of the string. 3 means to start from the 3rd character. Positions less than one, the function will throw an error. If ``position`` is greater than the length of ``string``, the function returns the original ``string`` without any modifications.
 
     Examples:
 

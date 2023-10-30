@@ -14,10 +14,7 @@
  * limitations under the License.
  */
 #include <folly/container/F14Map.h>
-#include <re2/stringpiece.h>
-#include "velox/common/base/Exceptions.h"
 #include "velox/functions/lib/Re2Functions.h"
-#include "velox/functions/lib/RegistrationHelpers.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -35,29 +32,29 @@ void checkForBadPattern(const RE2& re) {
   }
 }
 
-/// Validates the provided regex pattern to ensure its compatibility with the
-/// system. The function checks if the pattern uses features like character
-/// class union, intersection, or difference which are not supported in C++ RE2
-/// library but are supported in Java regex.
-///
-/// This function should be called on the indivdual patterns of a decoded
-/// vector. That way when a single pattern in a vector is invalid, we can still
-/// operate on the remaining rows.
-///
-/// @param pattern The regex pattern string to validate.
-/// @param functionName (Optional) Name of the calling function to include in
-/// error messages.
-///
-/// @throws VELOX_USER_FAIL If the pattern is found to use unsupported features.
-/// @note  Default functionName is "regex_replace" because it uses non-constant
-/// patterns so it cannot be checked with "ensureRegexIsCompatible". No
-/// other functions work with non-constant patterns, but they may in the future.
-///
-/// @note Leaving functionName as an optional parameter makes room for
-/// other functions to enable non-constant patterns in the future.
+// Validates the provided regex pattern to ensure its compatibility with the
+// system. The function checks if the pattern uses features like character
+// class union, intersection, or difference which are not supported in C++ RE2
+// library but are supported in Java regex.
+//
+// This function should be called on the individual patterns of a decoded
+// vector. That way when a single pattern in a vector is invalid, we can still
+// operate on the remaining rows.
+//
+// @param pattern The regex pattern string to validate.
+// @param functionName (Optional) Name of the calling function to include in
+// error messages.
+//
+// @throws VELOX_USER_FAIL If the pattern is found to use unsupported features.
+// @note  Default functionName is "REGEX_REPLACE" because it uses non-constant
+// patterns so it cannot be checked with "ensureRegexIsCompatible". No
+// other functions work with non-constant patterns, but they may in the future.
+//
+// @note Leaving functionName as an optional parameter makes room for
+// other functions to enable non-constant patterns in the future.
 void checkForCompatiblePattern(
     const std::string& pattern,
-    const char* functionName = "regex_replace") {
+    const char* functionName) {
   // If in a character class, points to the [ at the beginning of that class.
   const char* charClassStart = nullptr;
   // This minimal regex parser looks just for the class begin/end markers.
@@ -87,8 +84,7 @@ void checkForCompatiblePattern(
 void ensureRegexIsConstantAndCompatible(
     const char* functionName,
     const VectorPtr& patternVector) {
-  if (!patternVector ||
-      patternVector->encoding() != VectorEncoding::Simple::CONSTANT) {
+  if (!patternVector || !patternVector->isConstantEncoding()) {
     VELOX_USER_FAIL("{} requires a constant pattern.", functionName);
   }
   if (patternVector->isNullAt(0)) {
@@ -96,23 +92,20 @@ void ensureRegexIsConstantAndCompatible(
   }
   const StringView pattern =
       patternVector->as<ConstantVector<StringView>>()->valueAt(0);
-  // Call the factored out function to check the pattern.
   checkForCompatiblePattern(
       std::string(pattern.data(), pattern.size()), functionName);
 }
 
-/// Full implementation of RegexReplace found in SparkSQL only,
-/// due to semantic mismatches betweeen Spark and Presto
-/// regex_replace(string, pattern, overwrite) → string
-/// regex_replace(string, pattern, overwrite, position) → string
-///
-/// If a string has a substring that matches the given pattern, replace
-/// the match in the string wither overwrite and return the string. If
-/// optional paramter position is provided, only make replacements
-/// after that positon in the string (1 indexed).
-///
-/// If position <= 0, throw error.
-/// If position > length string, return string.
+// REGEX_REPLACE(string, pattern, overwrite) → string
+// REGEX_REPLACE(string, pattern, overwrite, position) → string
+//
+// If a string has a substring that matches the given pattern, replace
+// the match in the string wither overwrite and return the string. If
+// optional paramter position is provided, only make replacements
+// after that positon in the string (1 indexed).
+//
+// If position <= 0, throw error.
+// If position > length string, return string.
 template <typename T>
 struct RegexReplaceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -122,8 +115,6 @@ struct RegexReplaceFunction {
       const arg_type<Varchar>& stringInput,
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace) {
-    checkForCompatiblePattern(pattern);
-
     re2::RE2* patternRegex = getCachedRegex(pattern.str());
     re2::StringPiece replaceStringPiece = toStringPiece(replace);
 
@@ -133,6 +124,8 @@ struct RegexReplaceFunction {
     if (string.size()) {
       result.resize(string.size());
       std::memcpy(result.data(), string.data(), string.size());
+    } else {
+      result.resize(0);
     }
   }
 
@@ -142,20 +135,41 @@ struct RegexReplaceFunction {
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace,
       const arg_type<int64_t>& position) {
-    VELOX_USER_CHECK_LT(-1, position - 1);
-    checkForCompatiblePattern(pattern);
+    VELOX_USER_CHECK_GE(position, 1, "regex_replace requires a position >= 1");
 
     re2::RE2* patternRegex = getCachedRegex(pattern.str());
     re2::StringPiece replaceStringPiece = toStringPiece(replace);
-    re2::StringPiece inputStringPiece(stringInput.data(), stringInput.size());
+    re2::StringPiece inputStringPiece = toStringPiece(stringInput);
 
-    const char* prefixEnd = inputStringPiece.data() +
-        std::min(stringInput.size(), static_cast<size_t>(position - 1));
-    re2::StringPiece prefix(
-        inputStringPiece.data(), prefixEnd - inputStringPiece.data());
+    if (position > stringInput.size() + 1) {
+      result.resize(inputStringPiece.size());
+      std::memcpy(
+          result.data(), inputStringPiece.data(), inputStringPiece.size());
+      return;
+    }
 
+    // Adjust the position for UTF-8 by counting the code points.
+    size_t utf8Position = 0;
+    size_t numCodePoints = 0;
+    while (numCodePoints < position - 1 && utf8Position <= stringInput.size()) {
+      int charLength =
+          utf8proc_char_length(inputStringPiece.data() + utf8Position);
+      VELOX_USER_CHECK_GT(
+          charLength, 0, "regex_replace encountered invalid UTF-8 character");
+      ++numCodePoints;
+      utf8Position += charLength;
+    }
+    if (utf8Position > stringInput.size() + 1) {
+      result.resize(inputStringPiece.size());
+      std::memcpy(
+          result.data(), inputStringPiece.data(), inputStringPiece.size());
+      return;
+    }
+
+    re2::StringPiece prefix(inputStringPiece.data(), utf8Position);
     re2::StringPiece targetStringPiece(
-        prefixEnd, inputStringPiece.end() - prefixEnd);
+        inputStringPiece.data() + utf8Position,
+        inputStringPiece.size() - utf8Position);
 
     std::string targetString(
         targetStringPiece.data(), targetStringPiece.size());
@@ -168,6 +182,8 @@ struct RegexReplaceFunction {
           result.data() + prefix.size(),
           targetString.data(),
           targetString.size());
+    } else {
+      result.resize(0);
     }
   }
 
@@ -182,6 +198,7 @@ struct RegexReplaceFunction {
         kMaxCompiledRegexes,
         "regex_replace hit the maximum number of unique regexes: {}",
         kMaxCompiledRegexes);
+    checkForCompatiblePattern(pattern, "regex_replace");
     auto patternRegex = std::make_unique<re2::RE2>(pattern);
     auto* rawPatternRegex = patternRegex.get();
     checkForBadPattern(*rawPatternRegex);
@@ -221,14 +238,14 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
 
 void registerRegexReplace(const std::string& prefix) {
   registerFunction<RegexReplaceFunction, Varchar, Varchar, Varchar, Varchar>(
-      {prefix + "regex_replace"});
+      {prefix + "REGEX_REPLACE"});
   registerFunction<
       RegexReplaceFunction,
       Varchar,
       Varchar,
       Varchar,
       Varchar,
-      int64_t>({prefix, "regex_replace"});
+      int64_t>({prefix + "REGEX_REPLACE"});
 }
 
 } // namespace facebook::velox::functions::sparksql
