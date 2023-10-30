@@ -88,6 +88,7 @@ TypeKind TypeWrapper::kind() const {
     }
     case proto::orc::Type_Kind_STRUCT:
       return TypeKind::ROW;
+    case proto::orc::Type_Kind_CHAR:
     case proto::orc::Type_Kind_VARCHAR:
       return TypeKind::VARCHAR;
     // Date is a logical type of INTEGER (for the number of days since EPOCH).
@@ -100,11 +101,10 @@ TypeKind TypeWrapper::kind() const {
         return TypeKind::HUGEINT;
       }
     }
-    case proto::orc::Type_Kind_CHAR:
     case proto::orc::Type_Kind_TIMESTAMP_INSTANT:
-      DWIO_RAISE(
+      VELOX_FAIL(fmt::format(
           "{} not supported yet.",
-          proto::orc::Type_Kind_Name(orcPtr()->kind()));
+          proto::orc::Type_Kind_Name(orcPtr()->kind())));
     default:
       VELOX_FAIL("Unknown type kind: {}", Type_Kind_Name(orcPtr()->kind()));
   }
