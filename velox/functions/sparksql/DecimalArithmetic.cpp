@@ -22,6 +22,17 @@
 
 namespace facebook::velox::functions::sparksql {
 namespace {
+inline static std::pair<uint8_t, uint8_t> adjustPrecisionScale(
+    const uint8_t rPrecision,
+    const uint8_t rScale) {
+  if (rPrecision <= 38) {
+    return {rPrecision, rScale};
+  } else {
+    int32_t minScale = std::min(static_cast<int32_t>(rScale), 6);
+    int32_t delta = rPrecision - 38;
+    return {38, std::max(rScale - delta, minScale)};
+  }
+}
 
 std::string getResultScale(std::string precision, std::string scale) {
   return fmt::format(
@@ -31,6 +42,135 @@ std::string getResultScale(std::string precision, std::string scale) {
       scale,
       precision,
       scale);
+}
+
+template <typename A>
+inline static void
+getWholeAndFraction(const A& value, uint32_t scale, A& whole, A& fraction) {
+  whole = A(value / velox::DecimalUtil::kPowersOfTen[scale]);
+  fraction = A(value - whole * velox::DecimalUtil::kPowersOfTen[scale]);
+}
+
+template <typename A>
+inline static int128_t checkAndIncreaseScale(const A& in, int16_t delta) {
+  return (delta <= 0) ? in : in * velox::DecimalUtil::kPowersOfTen[delta];
+}
+
+template <typename A>
+inline static A checkAndReduceScale(const A& in, int32_t delta) {
+  if (delta <= 0) {
+    return in;
+  } else {
+    A r;
+    bool overflow;
+    DecimalUtil::divideWithRoundUp<A, A, A>(
+        r, in, A(velox::DecimalUtil::kPowersOfTen[delta]), 0, overflow);
+    VELOX_DCHECK(!overflow);
+    return r;
+  }
+}
+
+// Both x_value and y_value must be >= 0.
+template <typename R, typename A, typename B>
+inline static R addLargePositive(
+    const A& a,
+    const B& b,
+    uint8_t aScale,
+    uint8_t bScale,
+    uint8_t rScale) {
+  VELOX_DCHECK_GE(a, 0);
+  VELOX_DCHECK_GE(b, 0);
+
+  // Separate out whole/fractions.
+  A aLeft, aRight;
+  B bLeft, bRight;
+  getWholeAndFraction<A>(a, aScale, aLeft, aRight);
+  getWholeAndFraction<B>(b, bScale, bLeft, bRight);
+
+  // Adjust fractional parts to higher scale.
+  auto higherScale = std::max(aScale, bScale);
+  int128_t aRightScaled =
+      checkAndIncreaseScale<A>(aRight, higherScale - aScale);
+  int128_t bRightScaled =
+      checkAndIncreaseScale<B>(bRight, higherScale - bScale);
+
+  R right;
+  int64_t carryToLeft;
+  auto multiplier = velox::DecimalUtil::kPowersOfTen[higherScale];
+  if (aRightScaled >= multiplier - bRightScaled) {
+    right = R(aRightScaled - (multiplier - bRightScaled));
+    carryToLeft = 1;
+  } else {
+    right = R(aRightScaled + bRightScaled);
+    carryToLeft = 0;
+  }
+  right = checkAndReduceScale<R>(R(right), higherScale - rScale);
+
+  auto left = R(aLeft) + R(bLeft) + R(carryToLeft);
+  return R(left * velox::DecimalUtil::kPowersOfTen[rScale]) + R(right);
+}
+
+/// A and b cannot be 0, and one must be positive and the other
+/// negative.
+template <typename R, typename A, typename B>
+inline static R addLargeNegative(
+    const A& a,
+    const B& b,
+    uint8_t aScale,
+    uint8_t bScale,
+    int32_t rScale) {
+  VELOX_DCHECK_NE(a, 0);
+  VELOX_DCHECK_NE(b, 0);
+  VELOX_DCHECK((a < 0 && b > 0) || (a > 0 && b < 0));
+
+  // Separate out whole/fractions.
+  A aLeft, aRight;
+  B bLeft, bRight;
+  getWholeAndFraction<A>(a, aScale, aLeft, aRight);
+  getWholeAndFraction<B>(b, bScale, bLeft, bRight);
+
+  // Adjust fractional parts to higher scale.
+  auto higherScale = std::max(aScale, bScale);
+  int128_t aRightScaled =
+      checkAndIncreaseScale<A>(aRight, higherScale - aScale);
+  int128_t bRightScaled =
+      checkAndIncreaseScale<B>(bRight, higherScale - bScale);
+
+  // Overflow not possible because one is +ve and the other is -ve.
+  int128_t left = static_cast<int128_t>(aLeft) + static_cast<int128_t>(bLeft);
+  auto right = aRightScaled + bRightScaled;
+
+  // If the whole and fractional parts have different signs, then we need to
+  // make the fractional part have the same sign as the whole part. If either
+  // left or right is zero, then nothing needs to be done.
+  if (left < 0 && right > 0) {
+    left += 1;
+    right -= velox::DecimalUtil::kPowersOfTen[higherScale];
+  } else if (left > 0 && right < 0) {
+    left -= 1;
+    right += velox::DecimalUtil::kPowersOfTen[higherScale];
+  }
+  right = checkAndReduceScale(R(right), higherScale - rScale);
+  return R((left * velox::DecimalUtil::kPowersOfTen[rScale]) + right);
+}
+
+template <typename R, typename A, typename B>
+inline static R addLarge(
+    const A& a,
+    const B& b,
+    uint8_t aScale,
+    uint8_t bScale,
+    int32_t rScale) {
+  if (a >= 0 && b >= 0) {
+    // Both positive or 0.
+    return addLargePositive<R, A, B>(a, b, aScale, bScale, rScale);
+  } else if (a <= 0 && b <= 0) {
+    // Both negative or 0.
+    return R(-addLargePositive<R, A, B>(A(-a), B(-b), aScale, bScale, rScale));
+  } else {
+    // One positive and the other negative.
+    return addLargeNegative<R, A, B>(a, b, aScale, bScale, rScale);
+  }
 }
 
 template <
@@ -195,6 +335,117 @@ class DecimalBaseFunction : public exec::VectorFunction {
   const uint8_t rScale_;
 };
 
+class Addition {
+ public:
+  template <typename R, typename A, typename B>
+  inline static void apply(
+      R& r,
+      const A& a,
+      const B& b,
+      uint8_t aRescale,
+      uint8_t bRescale,
+      uint8_t /* aPrecision */,
+      uint8_t aScale,
+      uint8_t /* bPrecision */,
+      uint8_t bScale,
+      uint8_t rPrecision,
+      uint8_t rScale,
+      bool& /*overflow*/)
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+  {
+    if (rPrecision < LongDecimalType::kMaxPrecision) {
+      int128_t aRescaled = a * velox::DecimalUtil::kPowersOfTen[aRescale];
+      int128_t bRescaled = b * velox::DecimalUtil::kPowersOfTen[bRescale];
+      r = R(aRescaled + bRescaled);
+    } else {
+      int32_t minLz = DecimalUtil::minLeadingZeros<A, B>(a, b, aScale, bScale);
+      if (minLz >= 3) {
+        // If both numbers have at least MIN_LZ leading zeros, we can add them
+        // directly without the risk of overflow. We want the result to have at
+        // least 2 leading zeros, which ensures that it fits into the maximum
+        // decimal because 2^126 - 1 < 10^38 - 1. If both x and y have at least
+        // 3 leading zeros, then we are guaranteed that the result will have at
+        // lest 2 leading zeros.
+        int128_t aRescaled = a * velox::DecimalUtil::kPowersOfTen[aRescale];
+        int128_t bRescaled = b * velox::DecimalUtil::kPowersOfTen[bRescale];
+        auto higherScale = std::max(aScale, bScale);
+        int128_t sum = aRescaled + bRescaled;
+        r = checkAndReduceScale<R>(R(sum), higherScale - rScale);
+      } else {
+        // Slower-version: add whole/fraction parts separately, and then
+        // combine.
+        r = addLarge<R, A, B>(a, b, aScale, bScale, rScale);
+      }
+    }
+  }
+
+  inline static uint8_t
+  computeRescaleFactor(uint8_t fromScale, uint8_t toScale, uint8_t rScale = 0) {
+    return std::max(0, toScale - fromScale);
+  }
+
+  inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
+      const uint8_t aPrecision,
+      const uint8_t aScale,
+      const uint8_t bPrecision,
+      const uint8_t bScale) {
+    auto precision = std::max(aPrecision - aScale, bPrecision - bScale) +
+        std::max(aScale, bScale) + 1;
+    auto scale = std::max(aScale, bScale);
+    return adjustPrecisionScale(precision, scale);
+  }
+};
+
+class Subtraction {
+ public:
+  template <typename R, typename A, typename B>
+  inline static void apply(
+      R& r,
+      const A& a,
+      const B& b,
+      uint8_t aRescale,
+      uint8_t bRescale,
+      uint8_t aPrecision,
+      uint8_t aScale,
+      uint8_t bPrecision,
+      uint8_t bScale,
+      uint8_t rPrecision,
+      uint8_t rScale,
+      bool& overflow) {
+    Addition::apply<R, A, B>(
+        r,
+        a,
+        B(-b),
+        aRescale,
+        bRescale,
+        aPrecision,
+        aScale,
+        bPrecision,
+        bScale,
+        rPrecision,
+        rScale,
+        overflow);
+  }
+
+  inline static uint8_t
+  computeRescaleFactor(uint8_t fromScale, uint8_t toScale, uint8_t rScale = 0) {
+    return std::max(0, toScale - fromScale);
+  }
+
+  inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
+      const uint8_t aPrecision,
+      const uint8_t aScale,
+      const uint8_t bPrecision,
+      const uint8_t bScale) {
+    return Addition::computeResultPrecisionScale(
+        aPrecision, aScale, bPrecision, bScale);
+  }
+};
+
 class Multiply {
  public:
   // Derive from Arrow.
@@ -349,6 +600,28 @@ class Divide {
 };
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>
+decimalAddSubtractSignature() {
+  return {
+      exec::FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .integerVariable("b_precision")
+          .integerVariable("b_scale")
+          .integerVariable(
+              "r_precision",
+              "min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)")
+          .integerVariable(
+              "r_scale",
+              getResultScale(
+                  "max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1",
+                  "max(a_scale, b_scale)"))
+          .returnType("DECIMAL(r_precision, r_scale)")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .argumentType("DECIMAL(b_precision, b_scale)")
+          .build()};
+}
+
+std::vector<std::shared_ptr<exec::FunctionSignature>>
 decimalMultiplySignature() {
   return {exec::FunctionSignatureBuilder()
               .integerVariable("a_precision")
@@ -481,6 +754,16 @@ std::shared_ptr<exec::VectorFunction> createDecimalFunction(
   VELOX_UNSUPPORTED();
 }
 }; // namespace
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_add,
+    decimalAddSubtractSignature(),
+    createDecimalFunction<Addition>);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_sub,
+    decimalAddSubtractSignature(),
+    createDecimalFunction<Subtraction>);
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_mul,

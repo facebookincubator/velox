@@ -59,6 +59,75 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
   }
 }; // namespace
 
+TEST_F(DecimalArithmeticTest, add) {
+  // The result can be obtained by Spark unit test
+  //       test("add") {
+  //     val l1 = Literal.create(
+  //       Decimal(BigDecimal(1), 17, 3),
+  //       DecimalType(17, 3))
+  //     val l2 = Literal.create(
+  //       Decimal(BigDecimal(1), 17, 3),
+  //       DecimalType(17, 3))
+  //     checkEvaluation(Add(l1, l2), null)
+  //   }
+
+  // Precision < 38.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeFlatVector(std::vector<int128_t>{502}, DECIMAL(31, 3)),
+      "add(c0, c1)",
+      {makeFlatVector(std::vector<int128_t>{201}, DECIMAL(30, 3)),
+       makeFlatVector(std::vector<int128_t>{301}, DECIMAL(30, 3))});
+
+  // Min leading zero >= 3.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeFlatVector(std::vector<int128_t>{2123210}, DECIMAL(38, 6)),
+      "add(c0, c1)",
+      {makeFlatVector(std::vector<int128_t>{11232100}, DECIMAL(38, 7)),
+       makeFlatVector(std::vector<int64_t>{1}, DECIMAL(10, 0))});
+
+  // Carry to left 0.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeLongDecimalVector({"99999999999999999999999999999990000010"}, 38, 6),
+      "add(c0, c1)",
+      {makeLongDecimalVector({"9999999999999999999999999999999000000"}, 38, 5),
+       makeFlatVector(std::vector<int128_t>{100}, DECIMAL(38, 7))});
+
+  // Carry to left 1.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeLongDecimalVector({"99999999999999999999999999999991500000"}, 38, 6),
+      "add(c0, c1)",
+      {makeLongDecimalVector({"9999999999999999999999999999999070000"}, 38, 5),
+       makeFlatVector(std::vector<int128_t>{8000000}, DECIMAL(38, 7))});
+
+  // Both -ve.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeFlatVector(std::vector<int128_t>{-3211}, DECIMAL(32, 3)),
+      "add(c0, c1)",
+      {makeFlatVector(std::vector<int128_t>{-201}, DECIMAL(30, 3)),
+       makeFlatVector(std::vector<int128_t>{-301}, DECIMAL(30, 2))});
+
+  // -Ve and max precision.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeLongDecimalVector({"-99999999999999999999999999999990000010"}, 38, 6),
+      "add(c0, c1)",
+      {makeLongDecimalVector(
+           {"-09999999999999999999999999999999000000"}, 38, 5),
+       makeFlatVector(std::vector<int128_t>{-100}, DECIMAL(38, 7))});
+  // Ve and -ve.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeLongDecimalVector({"99999999999999999999999999999989999990"}, 38, 6),
+      "add(c0, c1)",
+      {makeLongDecimalVector({"9999999999999999999999999999999000000"}, 38, 5),
+       makeFlatVector(std::vector<int128_t>{-100}, DECIMAL(38, 7))});
+  // -Ve and ve.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeLongDecimalVector({"99999999999999999999999999999989999990"}, 38, 6),
+      "add(c0, c1)",
+      {makeFlatVector(std::vector<int128_t>{-100}, DECIMAL(38, 7)),
+       makeLongDecimalVector(
+           {"9999999999999999999999999999999000000"}, 38, 5)});
+}
+
 TEST_F(DecimalArithmeticTest, multiply) {
   // The result can be obtained by Spark unit test
   //       test("multiply") {

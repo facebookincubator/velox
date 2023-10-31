@@ -109,6 +109,21 @@ class DecimalUtil {
     return value;
   }
 
+  template <typename A, typename B>
+  inline static int32_t
+  minLeadingZeros(const A& a, const B& b, uint8_t aScale, uint8_t bScale) {
+    int32_t aLeadingZeros = bits::countLeadingZeros(absValue<A>(a));
+    int32_t bLeadingZeros = bits::countLeadingZeros(absValue<B>(b));
+    if (aScale < bScale) {
+      aLeadingZeros =
+          minLeadingZerosAfterScaling(aLeadingZeros, bScale - aScale);
+    } else if (aScale > bScale) {
+      bLeadingZeros =
+          minLeadingZerosAfterScaling(bLeadingZeros, aScale - bScale);
+    }
+    return std::min(aLeadingZeros, bLeadingZeros);
+  }
+
   /// Derives from Arrow BasicDecimal128 Divide.
   /// https://github.com/apache/arrow/blob/release-12.0.1-rc1/cpp/src/gandiva/precompiled/decimal_ops.cc#L350
   ///
@@ -210,6 +225,17 @@ class DecimalUtil {
     auto valueAbs = absValue<A>(num);
     int32_t numOccupied = sizeof(A) * 8 - bits::countLeadingZeros(valueAbs);
     return numOccupied + kMaxBitsRequiredIncreaseAfterScaling[aRescale];
+  }
+
+  /// If we have a number with 'numLeadingZeros' leading zeros, and we scale it
+  /// up by 10^scale_by, this function returns the minimum number of leading
+  /// zeros the result can have.
+  inline static int32_t minLeadingZerosAfterScaling(
+      int32_t numLeadingZeros,
+      int32_t scaleBy) {
+    int32_t result =
+        numLeadingZeros - kMaxBitsRequiredIncreaseAfterScaling[scaleBy];
+    return result;
   }
 };
 } // namespace facebook::velox::functions::sparksql
