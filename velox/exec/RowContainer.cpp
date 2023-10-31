@@ -132,17 +132,17 @@ RowContainer::RowContainer(
       stringAllocator_(
           stringAllocator ? stringAllocator
                           : std::make_shared<HashStringAllocator>(pool)) {
-  // Compute the layout of the payload row.  The row has keys, null
-  // flags, accumulators, dependent fields. All fields are fixed
-  // width. If variable width data is referenced, this is done with
-  // StringView(for VARCHAR) and std::string_view(ARRAY, MAP and ROW) that
-  // inlines or points to the data.  The number of bytes used by each key is
-  // determined by keyTypes[i].  Null flags are one bit per field. If
-  // nullableKeys is true there is a null flag for each key. A null bit for each
-  // accumulator and dependent field follows.  If hasProbedFlag is true, there
-  // is an extra bit to track if the row has been selected by a hash join probe.
-  // This is followed by a free bit which is set if the row is in a free list.
-  // The accumulators come next, with size given by
+  // Compute the layout of the payload row.  The row has keys, null flags,
+  // accumulators, dependent fields. All fields are fixed width. If variable
+  // width data is referenced, this is done with StringView(for VARCHAR) and
+  // std::string_view(for ARRAY, MAP and ROW) pointing to the data (StringView
+  // might inline the data if it's sufficiently small). The number of bytes used
+  // by each key is determined by keyTypes[i]. Null flags are one bit per field.
+  // If nullableKeys is true there is a null flag for each key. A null bit for
+  // each accumulator and dependent field follows.  If hasProbedFlag is true,
+  // there is an extra bit to track if the row has been selected by a hash join
+  // probe. This is followed by a free bit which is set if the row is in a free
+  // list. The accumulators come next, with size given by
   // Aggregate::accumulatorFixedWidthSize(). Dependent fields follow. These are
   // non-key columns for hash join or order by. If there are variable length
   // columns or accumulators, i.e. ones that allocate extra space, this space is
