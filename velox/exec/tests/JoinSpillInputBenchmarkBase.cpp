@@ -14,24 +14,10 @@
  * limitations under the License.
  */
 
-#include <gflags/gflags.h>
 #include <deque>
 #include "velox/serializers/PrestoSerializer.h"
 
 #include "velox/exec/tests/JoinSpillInputBenchmarkBase.h"
-
-DEFINE_string(
-    spiller_benchmark_name,
-    "JoinSpillInputBenchmarkTest",
-    "The name of this benchmark");
-DEFINE_uint32(
-    spiller_benchmark_spill_vector_size,
-    1'000,
-    "The number of rows per each spill vector");
-DEFINE_uint64(
-    spiller_benchmark_max_spill_file_size,
-    1 << 30,
-    "The max spill file size");
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;

@@ -19,23 +19,6 @@
 #include <gflags/gflags.h>
 #include <deque>
 
-DEFINE_string(
-    spiller_benchmark_name,
-    "SpillerAggregateBenchmarkTest",
-    "The name of this benchmark");
-DEFINE_uint64(
-    spiller_benchmark_max_spill_file_size,
-    2 << 30,
-    "The max spill file size");
-DEFINE_uint32(
-    spiller_benchmark_spill_vector_size,
-    100,
-    "The number of rows per each spill vector");
-DEFINE_uint32(
-    spiller_benchmark_spill_dependent_key_num,
-    2,
-    "The number of aggregation dependent key");
-
 using namespace facebook::velox;
 using namespace facebook::velox::common;
 using namespace facebook::velox::memory;
@@ -46,8 +29,8 @@ namespace facebook::velox::exec::test {
 void AggregateSpillBenchmarkBase::setUp() {
   SpillerBenchmarkBase::setUp();
 
-  rowContainer_ = setupSpillContainer(
-      rowType_, FLAGS_spiller_benchmark_spill_dependent_key_num);
+  rowContainer_ =
+      setupSpillContainer(rowType_, FLAGS_spiller_benchmark_num_key_columns);
   spiller_ = std::make_unique<Spiller>(
       exec::Spiller::Type::kAggregateInput,
       rowContainer_.get(),
