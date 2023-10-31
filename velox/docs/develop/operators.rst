@@ -204,7 +204,7 @@ accumulators. This requires more memory as compared to when inputs do not need
 to be de-duplicated.
 
 Furthermore, many aggregate functions produce same results on sorted and
-unsorted inputs, e.g. func:`min`, func:`max`, :func:`count`, :func:`sum`.
+unsorted inputs, e.g. :func:`min`, :func:`max`, :func:`count`, :func:`sum`.
 The query planner should avoid generating plans that request sorted inputs
 for such aggregate functions. Some examples of aggregate functions that are
 sensitive to the order of inputs include :func:`array_agg` and :func:`min_by`
