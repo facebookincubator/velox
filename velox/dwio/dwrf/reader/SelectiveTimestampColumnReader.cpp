@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveTimestampColumnReader.h"
+#include <ctime>
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
 
@@ -46,6 +47,7 @@ SelectiveTimestampColumnReader::SelectiveTimestampColumnReader(
       memoryPool_,
       nanoVInts,
       LONG_BYTE_SIZE);
+  tzset();
 }
 
 uint64_t SelectiveTimestampColumnReader::skip(uint64_t numValues) {
@@ -144,7 +146,8 @@ void SelectiveTimestampColumnReader::readHelper(
           nanos *= 10;
         }
       }
-      auto seconds = secondsData[i] + EPOCH_OFFSET;
+      auto seconds = secondsData[i] + UTC_EPOCH_OFFSET + timezone -
+          SECONDS_PER_HOUR * daylight;
       if (seconds < 0 && nanos != 0) {
         seconds -= 1;
       }
