@@ -32,11 +32,26 @@ DEFINE_uint32(
     spiller_benchmark_spill_executor_size,
     std::thread::hardware_concurrency(),
     "The spiller executor size in number of threads");
-
 DEFINE_string(
     spiller_benchmark_path,
     "",
     "The file directory path for spilling");
+DEFINE_uint64(
+    spiller_benchmark_min_spill_run_size,
+    1 << 30,
+    "The minimum spiller run size");
+DEFINE_uint64(
+    spiller_benchmark_write_buffer_size,
+    1 << 20,
+    "The spill write buffer size");
+DEFINE_uint32(
+    spiller_benchmark_num_spill_vectors,
+    10'000,
+    "The number of vectors for spilling");
+DEFINE_string(
+    spiller_benchmark_compression_kind,
+    "none",
+    "The compression kind to compress spill rows before write to disk");
 
 using namespace facebook::velox::memory;
 

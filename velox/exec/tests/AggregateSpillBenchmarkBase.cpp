@@ -14,40 +14,23 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/SpillerAggregateInputBenchmarkTest.h"
-#include "velox/serializers/PrestoSerializer.h"
+#include "velox/exec/tests/AggregateSpillBenchmarkBase.h"
 
 #include <gflags/gflags.h>
 #include <deque>
 
 DEFINE_string(
     spiller_benchmark_name,
-    "SpillerAggregateInputBenchmarkTest",
+    "SpillerAggregateBenchmarkTest",
     "The name of this benchmark");
 DEFINE_uint64(
     spiller_benchmark_max_spill_file_size,
     2 << 30,
     "The max spill file size");
-DEFINE_uint64(
-    spiller_benchmark_write_buffer_size,
-    0,
-    "The spill write buffer size");
-DEFINE_uint64(
-    spiller_benchmark_min_spill_run_size,
-    1 << 30,
-    "The file directory path for spiller benchmark");
-DEFINE_uint32(
-    spiller_benchmark_num_spill_vectors,
-    1'000,
-    "The number of vectors for spilling");
 DEFINE_uint32(
     spiller_benchmark_spill_vector_size,
-    500,
+    100,
     "The number of rows per each spill vector");
-DEFINE_string(
-    spiller_benchmark_compression_kind,
-    "none",
-    "The compression kind to compress spill rows before write to disk");
 DEFINE_uint32(
     spiller_benchmark_spill_dependent_key_num,
     2,
@@ -60,7 +43,7 @@ using namespace facebook::velox::exec;
 
 namespace facebook::velox::exec::test {
 
-void SpillerAggregateInputBenchmarkTest::setUp() {
+void AggregateSpillBenchmarkBase::setUp() {
   SpillerBenchmarkBase::setUp();
 
   rowContainer_ = setupSpillContainer(
@@ -80,16 +63,15 @@ void SpillerAggregateInputBenchmarkTest::setUp() {
       stringToCompressionKind(FLAGS_spiller_benchmark_compression_kind),
       memory::spillMemoryPool(),
       executor_.get());
-  spiller_->setPartitionsSpilled({0});
   writeSpillData();
 }
 
-void SpillerAggregateInputBenchmarkTest::run() {
+void AggregateSpillBenchmarkBase::run() {
   MicrosecondTimer timer(&executionTimeUs_);
   spiller_->spill(0, 0);
 }
 
-void SpillerAggregateInputBenchmarkTest::writeSpillData() {
+void AggregateSpillBenchmarkBase::writeSpillData() {
   vector_size_t numRows = 0;
   for (const auto& rowVector : rowVectors_) {
     numRows += rowVector->size();
@@ -113,8 +95,7 @@ void SpillerAggregateInputBenchmarkTest::writeSpillData() {
   }
 }
 
-std::unique_ptr<RowContainer>
-SpillerAggregateInputBenchmarkTest::makeRowContainer(
+std::unique_ptr<RowContainer> AggregateSpillBenchmarkBase::makeRowContainer(
     const std::vector<TypePtr>& keyTypes,
     const std::vector<TypePtr>& dependentTypes) const {
   auto container = std::make_unique<RowContainer>(
@@ -130,8 +111,7 @@ SpillerAggregateInputBenchmarkTest::makeRowContainer(
   return container;
 }
 
-std::unique_ptr<RowContainer>
-SpillerAggregateInputBenchmarkTest::setupSpillContainer(
+std::unique_ptr<RowContainer> AggregateSpillBenchmarkBase::setupSpillContainer(
     const RowTypePtr& rowType,
     uint32_t numKeys) const {
   const auto& childTypes = rowType->children();
@@ -144,16 +124,3 @@ SpillerAggregateInputBenchmarkTest::setupSpillContainer(
   return makeRowContainer(keys, dependents);
 }
 } // namespace facebook::velox::exec::test
-
-int main(int argc, char* argv[]) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  serializer::presto::PrestoVectorSerde::registerVectorSerde();
-  filesystems::registerLocalFileSystem();
-  auto test = std::make_unique<
-      facebook::velox::exec::test::SpillerAggregateInputBenchmarkTest>();
-  test->setUp();
-  test->run();
-  test->printStats();
-  test->cleanup();
-  return 0;
-}

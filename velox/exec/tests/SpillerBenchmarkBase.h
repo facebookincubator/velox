@@ -34,6 +34,7 @@ DECLARE_string(spiller_benchmark_compression_kind);
 DECLARE_uint32(spiller_benchmark_spill_executor_size);
 DECLARE_uint32(spiller_benchmark_num_spill_vectors);
 DECLARE_uint32(spiller_benchmark_spill_vector_size);
+DECLARE_uint64(spiller_benchmark_write_buffer_size);
 
 namespace facebook::velox::exec::test {
 // This test measures the spill input overhead in spill join & probe.

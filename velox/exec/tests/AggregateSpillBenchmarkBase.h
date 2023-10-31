@@ -17,10 +17,9 @@
 #include "velox/exec/tests/SpillerBenchmarkBase.h"
 
 namespace facebook::velox::exec::test {
-// This test measures the spill input overhead in spill join & probe.
-class SpillerAggregateInputBenchmarkTest : public SpillerBenchmarkBase {
+class AggregateSpillBenchmarkBase : public SpillerBenchmarkBase {
  public:
-  SpillerAggregateInputBenchmarkTest() = default;
+  AggregateSpillBenchmarkBase() = default;
 
   /// Sets up the test.
   void setUp() override;
