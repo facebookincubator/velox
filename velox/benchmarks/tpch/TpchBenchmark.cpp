@@ -270,7 +270,9 @@ class TpchBenchmark {
   }
 
   void shutdown() {
-    cache_->shutdown();
+    if (cache_) {
+      cache_->shutdown();
+    }
   }
 
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> run(
