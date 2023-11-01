@@ -53,6 +53,11 @@ struct EvalTypeHelper<uint64_t> {
   using Type = uint64_t;
 };
 
+template <>
+struct EvalTypeHelper<uint128_t> {
+  using Type = uint128_t;
+};
+
 template <typename T>
 using EvalType = typename EvalTypeHelper<T>::Type;
 
