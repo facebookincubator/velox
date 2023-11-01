@@ -352,22 +352,6 @@ class TestVeloxVector(unittest.TestCase):
                 for i in range(0, len(data)):
                     self.assertEqual(velox_vector[i], data[i])
 
-    def test_row_vector_basic(self):
-        vals = pv.from_list([10, 20, 30])
-        expected_vectors = [
-            vals,
-        ]
-
-        rw = pv.row_vector(["a"], [vals])
-
-        for i in range(len(rw)):
-            vec = rw[i]
-            N = len(vec)
-            for j in range(N):
-                assert vec[j] == expected_vectors[i][j]
-
-        assert not rw.may_have_nulls()
-
     def test_row_vector_with_nulls(self):
         vals = [
             pv.from_list([1, 2, 3, 1, 2]),
@@ -408,7 +392,11 @@ class TestVeloxVector(unittest.TestCase):
         v_rw = pv.row_vector(u_names, v)
         w_rw = pv.row_vector(w_names, w)
         y_rw = pv.row_vector(u_names, u)
+        x1_rw = pv.row_vector(u_names, u, {0: True, 2: True})
+        x2_rw = pv.row_vector(u_names, u, {0: True, 2: True})
 
         assert u_rw != w_rw  # num of children doesn't match
         assert u_rw != v_rw  # data doesn't match
         assert u_rw == y_rw  # data match
+        assert x1_rw == x2_rw  # with null
+        assert x1_rw != u_rw  # with and without null

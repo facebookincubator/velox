@@ -117,16 +117,9 @@ inline void checkRowVectorBounds(const RowVectorPtr& v, vector_size_t idx) {
   }
 }
 
-inline VectorPtr getVectorFromRowVectorPtr(
-    const RowVectorPtr& vector,
-    vector_size_t idx) {
-  checkRowVectorBounds(vector, idx);
-  return vector->childAt(idx);
-}
-
 inline bool compareRowVector(const RowVectorPtr& u, const RowVectorPtr& v) {
   CompareFlags compFlags;
-  compFlags.nullHandlingMode = CompareFlags::NullHandlingMode::StopAtNull;
+  compFlags.nullHandlingMode = CompareFlags::NullHandlingMode::NoStop;
   compFlags.equalsOnly = true;
   if (u->size() != v->size()) {
     return false;
@@ -562,9 +555,7 @@ static void addVectorBindings(
         if (nullabilityDict.has_value()) {
           auto nullabilityValues = nullabilityDict.value();
           nullabilityBuffer = AlignedBuffer::allocate<bool>(
-              values.size(),
-              PyVeloxContext::getSingletonInstance().pool(),
-              true);
+              vectorSize, PyVeloxContext::getSingletonInstance().pool(), true);
           for (const auto&& item : nullabilityValues) {
             auto row = item.first;
             auto nullability = item.second;
@@ -601,11 +592,6 @@ static void addVectorBindings(
             return v->childrenSize() > 0 ? v->childAt(0)->size() : 0;
           })
       .def("__str__", [](RowVectorPtr& v) { return rowVectorToString(v); })
-      .def(
-          "__getitem__",
-          [](RowVectorPtr& v, vector_size_t idx) {
-            return getVectorFromRowVectorPtr(v, idx);
-          })
       .def("__eq__", [](RowVectorPtr& u, RowVectorPtr& v) {
         return compareRowVector(u, v);
       });
