@@ -1837,5 +1837,38 @@ TEST_F(MultiFragmentTest, earlyTaskFailure) {
         << partialSortTask->taskId();
   }
 }
+
+TEST_F(MultiFragmentTest, partialLimit) {
+  std::vector<RowVectorPtr> singleRows;
+  for (auto i = 0; i < 100; ++i) {
+    singleRows.push_back(makeRowVector({makeFlatVector<int32_t>({1})}));
+  }
+  auto leafTaskId = makeTaskId("leaf", 0);
+  core::PlanNodePtr leafPlan;
+
+  leafPlan = PlanBuilder()
+                 .values(singleRows)
+                 .limit(0, 10000, true)
+                 .partitionedOutput({}, 1)
+                 .planNode();
+
+  auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+  leafTask->start(1);
+
+  auto rootPlan = PlanBuilder()
+                      .exchange(leafPlan->outputType())
+                      .limit(0, 100000, false)
+                      .planNode();
+
+  auto rootTask = AssertQueryBuilder(rootPlan)
+                      .split(remoteSplit(leafTaskId))
+                      .assertResults(singleRows);
+
+  auto stats = rootTask->taskStats();
+  // We check that the PartitionedOutput does not merge the input vectors before
+  // sending.
+  EXPECT_EQ(100, stats.pipelineStats[0].operatorStats[1].inputVectors);
+}
+
 } // namespace
 } // namespace facebook::velox::exec

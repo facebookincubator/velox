@@ -381,6 +381,16 @@ void LocalPlanner::markMixedJoinBridges(
   }
 }
 
+bool containsPartialLimit(const core::PlanNode& node) {
+  if (auto* limit = dynamic_cast<const core::LimitNode*>(&node)) {
+    return limit->isPartial();
+  }
+  if (auto* project = dynamic_cast<const core::ProjectNode*>(&node)) {
+    return containsPartialLimit(*node.sources()[0]);
+  }
+  return false;
+}
+
 std::shared_ptr<Driver> DriverFactory::createDriver(
     std::unique_ptr<DriverCtx> ctx,
     std::shared_ptr<ExchangeClient> exchangeClient,
@@ -456,8 +466,9 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto partitionedOutputNode =
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
                 planNode)) {
+      bool hasPartialLimit = containsPartialLimit(*planNode->sources()[0]);
       operators.push_back(std::make_unique<PartitionedOutput>(
-          id, ctx.get(), partitionedOutputNode));
+          id, ctx.get(), partitionedOutputNode, hasPartialLimit));
     } else if (
         auto joinNode =
             std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
