@@ -51,7 +51,6 @@
 <li><p>Add blog post about <a class="reference external" href="https://velox-lib.io/blog/reduce-agg">reduce_agg</a> lambda aggregate function.</p></li>
 <li><p>Extend documentation for datetime Presto functions to explain handling of <a class="reference internal" href="../functions/presto/datetime.html#presto-time-zones"><span class="std std-ref">time zones</span></a>.</p></li>
 <li><p>Extend documentation for <a class="reference internal" href="../functions/presto/aggregate.html#reduce_agg" title="reduce_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">reduce_agg()</span></code></a> Presto lambda aggregate function.</p></li>
-<li><p>Fix Unnest operator to honor <cite>preferred_output_batch_rows</cite> configuration property and avoid producing huge vectors. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7051">#7051</a></p></li>
 </ul>
 </section>
 <section id="core-library">
@@ -64,6 +63,7 @@
 <li><p>Add optimized version of Window operator for the case when inputs are already partitioned and sorted. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/5437">#5437</a></p></li>
 <li><p>Add support for order-able and comparable arguments to function signatures.</p></li>
 <li><p>Add support for order-able and comparable arguments to the Simple Function interface. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7293">#7293</a></p></li>
+<li><p>Fix Unnest operator to honor <cite>preferred_output_batch_rows</cite> configuration property and avoid producing huge vectors. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7051">#7051</a></p></li>
 </ul>
 </section>
 <section id="presto-functions">
