@@ -117,19 +117,22 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.checkUsageLeak = checkUsageLeak_;
   options.debugEnabled = debugEnabled_;
 
-  folly::SharedMutex::WriteHolder guard{mutex_};
-  if (pools_.find(poolName) != pools_.end()) {
-    VELOX_FAIL("Duplicate root pool name found: {}", poolName);
+  std::shared_ptr<MemoryPool> pool;
+  {
+    folly::SharedMutex::WriteHolder guard{mutex_};
+    if (pools_.find(poolName) != pools_.end()) {
+      VELOX_FAIL("Duplicate root pool name found: {}", poolName);
+    }
+    pool = std::make_shared<MemoryPoolImpl>(
+        this,
+        poolName,
+        MemoryPool::Kind::kAggregate,
+        nullptr,
+        std::move(reclaimer),
+        poolDestructionCb_,
+        options);
+    pools_.emplace(poolName, pool);
   }
-  auto pool = std::make_shared<MemoryPoolImpl>(
-      this,
-      poolName,
-      MemoryPool::Kind::kAggregate,
-      nullptr,
-      std::move(reclaimer),
-      poolDestructionCb_,
-      options);
-  pools_.emplace(poolName, pool);
   VELOX_CHECK_EQ(pool->capacity(), 0);
   arbitrator_->reserveMemory(pool.get(), capacity);
   return pool;
