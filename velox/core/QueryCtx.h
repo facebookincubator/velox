@@ -67,11 +67,13 @@ class QueryCtx {
     return cache_;
   }
 
-  folly::Executor* executor() const {
-    if (executor_ != nullptr) {
-      return executor_;
-    }
-    auto executor = executorKeepalive_.get();
+  bool isExecutorSupplied() const {
+    auto executor = executor0();
+    return executor != nullptr;
+  }
+
+  folly::Executor* FOLLY_NONNULL executor() const {
+    auto executor = executor0();
     VELOX_CHECK(executor, "Executor was not supplied.");
     return executor;
   }
@@ -128,6 +130,14 @@ class QueryCtx {
       pool_ = memory::defaultMemoryManager().addRootPool(
           QueryCtx::generatePoolName(queryId));
     }
+  }
+
+  folly::Executor* executor0() const {
+    if (executor_ != nullptr) {
+      return executor_;
+    }
+    auto executor = executorKeepalive_.get();
+    return executor;
   }
 
   const std::string queryId_;
