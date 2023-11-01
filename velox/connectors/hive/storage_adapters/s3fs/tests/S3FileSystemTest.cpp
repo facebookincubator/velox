@@ -22,25 +22,15 @@
 
 using namespace facebook::velox;
 
-static constexpr std::string_view kMinioConnectionString = "127.0.0.1:9000";
-
 class S3FileSystemTest : public S3Test {
  protected:
-  static void SetUpTestSuite() {
-    memory::MemoryManager::testingSetInstance({});
-    if (minioServer_ == nullptr) {
-      minioServer_ = std::make_shared<MinioServer>(kMinioConnectionString);
-      minioServer_->start();
-    }
+  void SetUp() override {
+    S3Test::SetUp();
     auto hiveConfig = minioServer_->hiveConfig({{"hive.s3.log-level", "Info"}});
     filesystems::initializeS3(hiveConfig.get());
   }
 
   static void TearDownTestSuite() {
-    if (minioServer_ != nullptr) {
-      minioServer_->stop();
-      minioServer_ = nullptr;
-    }
     filesystems::finalizeS3();
   }
 };

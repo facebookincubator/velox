@@ -19,24 +19,14 @@
 
 using namespace facebook::velox;
 
-static constexpr std::string_view kMinioConnectionString = "127.0.0.1:8000";
-
 class S3FileSystemRegistrationTest : public S3Test {
  protected:
   static void SetUpTestSuite() {
-    if (minioServer_ == nullptr) {
-      minioServer_ = std::make_shared<MinioServer>(kMinioConnectionString);
-      minioServer_->start();
-    }
     filesystems::registerS3FileSystem();
   }
 
   static void TearDownTestSuite() {
     filesystems::finalizeS3FileSystem();
-    if (minioServer_ != nullptr) {
-      minioServer_->stop();
-      minioServer_ = nullptr;
-    }
   }
 };
 
