@@ -918,6 +918,7 @@ TEST_F(MockSharedArbitrationTest, singlePoolGrowCapacityWithArbitration) {
 }
 
 TEST_F(MockSharedArbitrationTest, arbitrateWithCapacityShrink) {
+  // Fixing this test
   std::vector<bool> isLeafReclaimables = {true, false};
   for (const auto isLeafReclaimable : isLeafReclaimables) {
     SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable));
