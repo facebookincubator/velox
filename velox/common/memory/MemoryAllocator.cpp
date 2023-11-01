@@ -327,13 +327,9 @@ std::string Stats::toString() const {
   return out.str();
 }
 
-void MemoryAllocator::useHugePages(
-    const ContiguousAllocation& data,
-    bool enable) {
+// static
+void MemoryAllocator::useHugePages(ContiguousAllocation& data, bool enable) {
 #ifdef linux
-  if (!FLAGS_velox_memory_use_hugepages) {
-    return;
-  }
   auto maybeRange = data.hugePageRange();
   if (!maybeRange.has_value()) {
     return;
@@ -342,6 +338,7 @@ void MemoryAllocator::useHugePages(
       maybeRange.value().data(),
       maybeRange.value().size(),
       enable ? MADV_HUGEPAGE : MADV_NOHUGEPAGE);
+  data.isHugePages_ = enable;
   if (rc != 0) {
     VELOX_MEM_LOG(WARNING) << "madvise hugepage errno="
                            << folly ::errnoStr(errno);

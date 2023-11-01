@@ -25,6 +25,8 @@
 
 using facebook::velox::common::testutil::TestValue;
 
+DECLARE_bool(velox_memory_use_hugepages_for_containers);
+
 namespace facebook::velox::exec {
 // static
 std::string BaseHashTable::modeString(HashMode mode) {
@@ -695,6 +697,9 @@ void HashTable<ignoreNullKeys>::allocateTables(uint64_t size) {
   const auto numPages =
       memory::AllocationTraits::numPages(size * tableSlotSize());
   rows_->pool()->allocateContiguous(numPages, tableAllocation_);
+  if (FLAGS_velox_memory_use_hugepages_for_containers) {
+    tableAllocation_.useHugePages();
+  }
   table_ = tableAllocation_.data<char*>();
   memset(table_, 0, capacity_ * sizeof(char*));
 }
@@ -1230,6 +1235,9 @@ void HashTable<ignoreNullKeys>::setHashMode(HashMode mode, int32_t numNew) {
     const auto bytes = capacity_ * tableSlotSize();
     const auto numPages = memory::AllocationTraits::numPages(bytes);
     rows_->pool()->allocateContiguous(numPages, tableAllocation_);
+    if (FLAGS_velox_memory_use_hugepages_for_containers) {
+      tableAllocation_.useHugePages();
+    }
     table_ = tableAllocation_.data<char*>();
     memset(table_, 0, bytes);
     hashMode_ = HashMode::kArray;

@@ -387,6 +387,10 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     isPersistentFailureInjection_ = false;
   }
 
+  /// If 'data' is sufficiently large, enables/disables adaptive  huge pages for
+  /// the address range. Sets 'isHugePages_' in 'data'.
+  static void useHugePages(ContiguousAllocation& data, bool enable);
+
  protected:
   explicit MemoryAllocator() = default;
 
@@ -456,10 +460,6 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     }
     return true;
   }
-
-  // If 'data' is sufficiently large, enables/disables adaptive  huge pages for
-  // the address raneg.
-  void useHugePages(const ContiguousAllocation& data, bool enable);
 
   // The machine page counts corresponding to different sizes in order
   // of increasing size.

@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/common/memory/Allocation.h"
-
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MemoryAllocator.h"
 
 namespace facebook::velox::memory {
 
@@ -98,6 +97,7 @@ void ContiguousAllocation::grow(MachinePageCount increment) {
 void ContiguousAllocation::clear() {
   pool_ = nullptr;
   set(nullptr, 0);
+  isHugePages_ = false;
 }
 
 MachinePageCount ContiguousAllocation::numPages() const {
@@ -114,6 +114,17 @@ std::optional<folly::Range<char*>> ContiguousAllocation::hugePageRange() const {
   }
   return folly::Range<char*>(
       reinterpret_cast<char*>(roundedBegin), roundedEnd - roundedBegin);
+}
+void ContiguousAllocation::useHugePages() {
+  if (!isHugePages_) {
+    MemoryAllocator::useHugePages(*this, true);
+  }
+}
+
+void ContiguousAllocation::revertHugePages() {
+  if (isHugePages_) {
+    MemoryAllocator::useHugePages(*this, false);
+  }
 }
 
 std::string ContiguousAllocation::toString() const {

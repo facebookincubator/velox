@@ -19,6 +19,8 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/MemoryAllocator.h"
 
+DECLARE_bool(velox_memory_use_hugepages_for_containers);
+
 namespace facebook::velox::memory {
 
 folly::Range<char*> AllocationPool::rangeAt(int32_t index) const {
@@ -120,7 +122,9 @@ void AllocationPool::newRunImpl(MachinePageCount numPages) {
         AllocationTraits::numPagesInHugePage();
     pool_->allocateContiguous(
         pagesToAlloc, largeAlloc, AllocationTraits::numPages(nextSize));
-
+    if (FLAGS_velox_memory_use_hugepages_for_containers) {
+      largeAlloc.useHugePages();
+    }
     auto range = largeAlloc.hugePageRange().value();
     startOfRun_ = range.data();
     bytesInRun_ = range.size();

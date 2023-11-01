@@ -207,6 +207,7 @@ class ContiguousAllocation {
     pool_ = other.pool_;
     data_ = other.data_;
     size_ = other.size_;
+    isHugePages_ = other.isHugePages_;
     maxSize_ = other.maxSize_;
     other.clear();
     sanityCheck();
@@ -217,6 +218,7 @@ class ContiguousAllocation {
     pool_ = other.pool_;
     data_ = other.data_;
     size_ = other.size_;
+    isHugePages_ = other.isHugePages_;
     maxSize_ = other.maxSize_;
     other.clear();
     sanityCheck();
@@ -275,6 +277,17 @@ class ContiguousAllocation {
     return maxSize_;
   }
 
+  /// Requests huge pages if size is large enough.
+  void useHugePages();
+
+  /// Changes the backing memory to regular pages if huge pages are being used.
+  /// Called before unmapping.
+  void revertHugePages();
+
+  bool isHugePages() const {
+    return isHugePages_;
+  }
+
   std::string toString() const;
 
  private:
@@ -291,5 +304,11 @@ class ContiguousAllocation {
 
   // Offset of first byte after the mmap of 'data'.
   uint64_t maxSize_{0};
+
+  // True if huge pages madvise should be turned off before unmap.
+  bool isHugePages_{false};
+
+  friend class MemoryAllocator;
+  friend class MmapAllocator;
 };
 } // namespace facebook::velox::memory
