@@ -173,7 +173,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
-<td></td>
+<td><p>Y</p></td>
 </tr>
 <tr class="row-odd"><td><p>real</p></td>
 <td><p>Y</p></td>
@@ -633,9 +633,19 @@ in the input is ignored.</p>
 </section>
 <section id="cast-to-decimal">
 <h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Permalink to this heading">¶</a></h2>
+<section id="from-boolean-type">
+<h3>From boolean type<a class="headerlink" href="#from-boolean-type" title="Permalink to this heading">¶</a></h3>
+<p>Casting a boolean number to decimal of given precision and scale is allowed.
+True value is converted to 1 and false to 0.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">true</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;1.00&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">false</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0&#39;</span>
+</pre></div>
+</div>
+</section>
 <section id="id8">
 <h3>From integral types<a class="headerlink" href="#id8" title="Permalink to this heading">¶</a></h3>
-<p>Casting an integral numberto a decimal of given precision and scale is allowed
+<p>Casting an integral number to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. Casting from
 invalid input values throws.</p>
 <p>Valid examples</p>
@@ -717,6 +727,7 @@ the fraction part is rounded.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
+<li><a class="reference internal" href="#from-boolean-type">From boolean type</a></li>
 <li><a class="reference internal" href="#id8">From integral types</a></li>
 <li><a class="reference internal" href="#id9">From decimal</a></li>
 </ul>
