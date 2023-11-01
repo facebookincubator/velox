@@ -378,29 +378,37 @@ class TestVeloxVector(unittest.TestCase):
 
         col_names = ["a", "b", "c", "d"]
         rw = pv.row_vector(col_names, vals, {0: True, 2: True})
-        print(rw)
+        rw_str = str(rw)
+        expected_str = (
+            "0: null\n1: {2, 5, 8, 11}\n2: null\n3: {1, 4, 7, 10}\n4: {2, 5, 8, 11}"
+        )
+        assert expected_str == rw_str
 
-        for i in range(len(rw)):
-            vec = rw[i]
-            str1 = ""
-            for j in range(len(vec)):
-                assert vec[j] == vals[i][j]
+    def test_row_vector_comparison(self):
+        u = [
+            pv.from_list([1, 2, 3]),
+            pv.from_list([7, 4, 9]),
+            pv.from_list([10, 11, 12]),
+        ]
 
-        assert rw.may_have_nulls()
+        v = [
+            pv.from_list([1, 2, 3]),
+            pv.from_list([7, 8, 9]),
+            pv.from_list([10, 11, 12]),
+        ]
 
-    def test_row_vector_with_variable_child_size(self):
-        v1 = pv.from_list([10, 20, 30])
-        v2 = pv.from_list([10, 20, 30, 40])
-        v3 = pv.from_list([10])
+        w = [
+            pv.from_list([1, 2, 3]),
+            pv.from_list([7, 8, 9]),
+        ]
 
-        expected_vectors = [v1, v2, v3]
+        u_names = ["a", "b", "c"]
+        w_names = ["x", "y"]
+        u_rw = pv.row_vector(u_names, u)
+        v_rw = pv.row_vector(u_names, v)
+        w_rw = pv.row_vector(w_names, w)
+        y_rw = pv.row_vector(u_names, u)
 
-        col_names = ["a", "b", "c"]
-
-        rw = pv.row_vector(col_names, [v1, v2, v3])
-
-        for i in range(len(rw)):
-            vec = rw[i]
-            N = len(vec)
-            for j in range(N):
-                assert vec[j] == expected_vectors[i][j]
+        assert u_rw != w_rw  # num of children doesn't match
+        assert u_rw != v_rw  # data doesn't match
+        assert u_rw == y_rw  # data match

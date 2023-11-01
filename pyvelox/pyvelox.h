@@ -124,6 +124,22 @@ inline VectorPtr getVectorFromRowVectorPtr(
   return vector->childAt(idx);
 }
 
+inline bool compareRowVector(const RowVectorPtr& u, const RowVectorPtr& v) {
+  CompareFlags compFlags;
+  compFlags.nullHandlingMode = CompareFlags::NullHandlingMode::StopAtNull;
+  compFlags.equalsOnly = true;
+  if(u->size() != v->size()) {
+    return false;
+  }
+  for(size_t i=0; i < u->size(); i++) {
+    if(u->compare(v.get(), i, i, compFlags) != 0) {
+      return false;
+    }
+  }
+  
+  return true;
+}
+
 inline std::string rowVectorToString(const RowVectorPtr& vector) {
   return vector->toString(0, vector->size());
 }
@@ -534,8 +550,11 @@ static void addVectorBindings(
         size_t vectorSize = values.size() > 0 ? values[0]->size() : 0;
         for (int i = 0; i < values.size(); i++) {
           // choose child with smallest size to calculate the vector size
-          if (i > 0 && values[i]->size() < vectorSize) {
-            vectorSize = values[i]->size();
+          if (i > 0 && values[i]->size() != vectorSize) {
+            PyErr_SetString(
+              PyExc_ValueError,
+              "Each child must have same");
+            throw py::error_already_set();
           }
           childTypes.push_back(values[i]->type());
         }
@@ -578,11 +597,13 @@ static void addVectorBindings(
 
   py::class_<RowVector, BaseVector, RowVectorPtr>(
       m, "RowVector", py::module_local(asModuleLocalDefinitions))
-      .def("__len__", &RowVector::childrenSize)
+      .def("__len__", [](RowVectorPtr& v) { return v->childrenSize() > 0 ? v->childAt(0)->size() : 0;})
       .def("__str__", [](RowVectorPtr& v) { return rowVectorToString(v); })
-      .def("may_have_nulls", &RowVector::mayHaveNulls)
       .def("__getitem__", [](RowVectorPtr& v, vector_size_t idx) {
         return getVectorFromRowVectorPtr(v, idx);
+      })
+      .def("__eq__", [](RowVectorPtr& u, RowVectorPtr& v) {
+        return compareRowVector(u, v);
       });
 }
 
