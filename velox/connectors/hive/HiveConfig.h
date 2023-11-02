@@ -17,6 +17,7 @@
 
 #include <optional>
 #include <string>
+#include <cstdint>
 
 namespace facebook::velox {
 class Config;
