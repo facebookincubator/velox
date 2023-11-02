@@ -1551,11 +1551,11 @@ TEST_F(RowContainerTest, toString) {
 
 TEST_F(RowContainerTest, partialWriteComplexTypedRow) {
   auto data = makeRowVector(
-      {makeFlatVector<int64_t>({10}),
+      {makeFlatVector<int64_t>(1, [](auto row) { return row; }),
        makeFlatVector<std::string>({"non-inline string"}),
        makeArrayVector<int64_t>({{1, 2, 3, 4, 5}}),
        makeMapVector<int64_t, int64_t>({{{4, 41}}}),
-       makeRowVector({makeFlatVector<int64_t>({10})})});
+       makeRowVector({makeFlatVector<std::string>({"non-inline string"})})});
 
   auto rowContainer = std::make_unique<RowContainer>(
       data->type()->asRow().children(), pool_.get());

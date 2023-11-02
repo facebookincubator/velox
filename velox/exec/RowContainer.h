@@ -263,14 +263,13 @@ class RowContainer {
   /// Initialize row. 'reuse' specifies whether the 'row' is reused or not. If
   /// it is reused, it will free memory associated with the row elsewhere (such
   /// as in HashStringAllocator).
-  /// Note: Fields of the row is not zero-initialized. If the row contains
-  /// variable-width fields and the caller does not intend to write to those
-  /// fields(via store()), the caller should call 'initializeFields' to zero out
-  /// all the fields to prevent issues when freeing memory.
-  char* FOLLY_NONNULL initializeRow(char* FOLLY_NONNULL row, bool reuse);
+  /// Note: Fields of the row are not zero-initialized. If the row contains
+  /// variable-width fields, the caller must populate these fields by calling
+  /// 'store' or initialize them to zero by calling 'initializeFields'.
+  char* initializeRow(char* row, bool reuse);
 
   /// Zero out all the fields of the 'row'.
-  void initializeFields(char* FOLLY_NONNULL row) {
+  void initializeFields(char* row) {
     ::memset(row, 0, fixedRowSize_);
   }
 
