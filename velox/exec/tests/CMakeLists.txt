@@ -287,5 +287,4 @@ add_test(
   NAME cpr_http_client_test
   COMMAND cpr_http_client_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(cpr_http_client_test cpr::cpr Folly::folly gtest
-                      gtest_main)
+target_link_libraries(cpr_http_client_test cpr::cpr gtest gtest_main)

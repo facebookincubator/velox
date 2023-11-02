@@ -14,14 +14,10 @@
  * limitations under the License.
  */
 
-#include "folly/json.h"
-#include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
 #include <cpr/cpr.h>
 #include <map>
-#include <string>
-#include <thread>
 
 class CprHttpClientTest : public testing::Test {};
 
