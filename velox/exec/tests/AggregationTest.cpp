@@ -1085,7 +1085,7 @@ TEST_F(AggregationTest, spillWithMemoryLimit) {
       ASSERT_GT(stats.spilledInputBytes, 0);
       ASSERT_GT(stats.spilledBytes, 0);
       ASSERT_GT(stats.spilledPartitions, 0);
-      ASSERT_GT(stats.spilledFiles, 0);
+      ASSERT_EQ(stats.spilledFiles, batches.size());
       ASSERT_GT(stats.runtimeStats["spillRuns"].sum, 0);
       ASSERT_GT(stats.runtimeStats["spillFillTime"].sum, 0);
       ASSERT_GT(stats.runtimeStats["spillSortTime"].sum, 0);
@@ -1423,11 +1423,9 @@ TEST_F(AggregationTest, memoryAllocations) {
 
   auto task = assertQuery(plan, "SELECT sum(c0 + c1) FROM tmp");
 
-  // Verify memory allocations. Project operator should allocate a single vector
-  // and re-use it. Aggregation should make 2 allocations: 1 for the
+  // Verify memory allocations. Aggregation should make 2 allocations: 1 for the
   // RowContainer holding single accumulator and 1 for the result.
   auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(1, planStats.at(projectNodeId).numMemoryAllocations);
   ASSERT_EQ(2, planStats.at(aggNodeId).numMemoryAllocations);
 
   plan = PlanBuilder()
@@ -1440,12 +1438,10 @@ TEST_F(AggregationTest, memoryAllocations) {
 
   task = assertQuery(plan, "SELECT c0, sum(c0 + c1) FROM tmp GROUP BY 1");
 
-  // Verify memory allocations. Project operator should allocate a single vector
-  // and re-use it. Aggregation should make 5 allocations: 1 for the hash table,
-  // 1 for the RowContainer holding accumulators, 3 for results (2 for values
-  // and nulls buffers of the grouping key column, 1 for sum column).
+  // Verify memory allocations. Aggregation should make 5 allocations: 1 for the
+  // hash table, 1 for the RowContainer holding accumulators, 3 for results (2
+  // for values and nulls buffers of the grouping key column, 1 for sum column).
   planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(1, planStats.at(projectNodeId).numMemoryAllocations);
   ASSERT_EQ(5, planStats.at(aggNodeId).numMemoryAllocations);
 }
 

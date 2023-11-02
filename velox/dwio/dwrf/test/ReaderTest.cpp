@@ -31,6 +31,7 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <fmt/core.h>
 #include <array>
@@ -1010,6 +1011,139 @@ TEST(TestReader, testStatsCallbackFiredWithFiltering) {
   // Features were projected, so we expect selected keys > total keys
   EXPECT_EQ(totalKeyStreamsAggregate, 16);
   EXPECT_EQ(selectedKeyStreamsAggregate, 4);
+}
+
+TEST(TestReader, testBlockedIoCallbackFiredBlocking) {
+  RowReaderOptions rowReaderOpts;
+  std::optional<uint64_t> metricToIncrement;
+
+  rowReaderOpts.setBlockedOnIoCallback(
+      [&metricToIncrement](uint64_t blockedTimeMs) {
+        if (metricToIncrement) {
+          *metricToIncrement += blockedTimeMs;
+        } else {
+          metricToIncrement = blockedTimeMs;
+        }
+      });
+  rowReaderOpts.setEagerFirstStripeLoad(false);
+
+  dwio::common::ReaderOptions readerOpts{getDefaultPool().get()};
+
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(getFMLargeFile(), readerOpts.getMemoryPool()),
+      readerOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  // We didn't preload first stripe, so we expect metric to not be populated yet
+  EXPECT_EQ(metricToIncrement, std::nullopt);
+  VectorPtr batch;
+
+  auto lastMetric = metricToIncrement;
+  do {
+    bool result = rowReader->next(1000, batch);
+    // Stripes in fm_large are 1000 rows, so we expect reading 1000 rows to load
+    // a new stripe and increment the metric
+    EXPECT_GE(metricToIncrement, lastMetric);
+    lastMetric = metricToIncrement;
+    if (!result) {
+      break;
+    }
+  } while (true);
+
+  // Reading stripes that were prefetched should not affect metric
+  EXPECT_GE(metricToIncrement, 0);
+}
+
+TEST(TestReader, testBlockedIoCallbackFiredNonBlocking) {
+  RowReaderOptions rowReaderOpts;
+  std::optional<uint64_t> metricToIncrement;
+
+  rowReaderOpts.setBlockedOnIoCallback(
+      [&metricToIncrement](uint64_t blockedTimeMs) {
+        if (metricToIncrement) {
+          *metricToIncrement += blockedTimeMs;
+        } else {
+          metricToIncrement = blockedTimeMs;
+        }
+      });
+  rowReaderOpts.setEagerFirstStripeLoad(false);
+
+  dwio::common::ReaderOptions readerOpts{getDefaultPool().get()};
+
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(getFMLargeFile(), readerOpts.getMemoryPool()),
+      readerOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  EXPECT_EQ(metricToIncrement, std::nullopt);
+  VectorPtr batch;
+
+  auto units = rowReader->prefetchUnits().value();
+
+  // Blocking prefetch all stripes
+  for (auto& unit : units) {
+    unit.prefetch();
+    // Since these are not blocking a read, metric should not be incremented.
+    EXPECT_EQ(metricToIncrement, std::nullopt);
+  }
+
+  do {
+    bool result = rowReader->next(1000, batch);
+    if (!result) {
+      break;
+    }
+  } while (true);
+
+  // Reading prefetched stripes should not increment metric, but it should set
+  // the metric from nullopt to 0, indicating we've hit the read path
+  EXPECT_EQ(metricToIncrement, 0);
+}
+
+TEST(TestReader, testBlockedIoCallbackFiredWithFirstStripeLoad) {
+  RowReaderOptions rowReaderOpts;
+  std::optional<uint64_t> metricToIncrement;
+
+  rowReaderOpts.setBlockedOnIoCallback(
+      [&metricToIncrement](uint64_t blockedTimeMs) {
+        if (metricToIncrement) {
+          *metricToIncrement += blockedTimeMs;
+        } else {
+          metricToIncrement = blockedTimeMs;
+        }
+      });
+
+  rowReaderOpts.setEagerFirstStripeLoad(true);
+
+  dwio::common::ReaderOptions readerOpts{getDefaultPool().get()};
+
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(getFMLargeFile(), readerOpts.getMemoryPool()),
+      readerOpts);
+  EXPECT_EQ(metricToIncrement, std::nullopt);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  // Expect metric has now been populated, due to the initial blocking IO of
+  // startNextStripe()
+  EXPECT_GE(metricToIncrement, 0);
+  auto metricAfterFirstStripe = metricToIncrement;
+  VectorPtr batch;
+
+  auto units = rowReader->prefetchUnits().value();
+  EXPECT_EQ(metricToIncrement, metricAfterFirstStripe);
+
+  // Blocking prefetch all stripes
+  for (auto& unit : units) {
+    unit.prefetch();
+    // Since these are not blocking a read, metric should not be incremented
+    EXPECT_EQ(metricToIncrement, metricAfterFirstStripe);
+  }
+
+  do {
+    bool result = rowReader->next(1000, batch);
+    if (!result) {
+      break;
+    }
+  } while (true);
+
+  // Reading prefetched stripes should not affect metric
+  EXPECT_EQ(metricToIncrement, metricAfterFirstStripe);
 }
 
 TEST(TestReader, testEstimatedSize) {
@@ -2715,4 +2849,34 @@ TEST(TestReader, readStringDictionaryAsFlat) {
   stats = {};
   rowReader->updateRuntimeStats(stats);
   ASSERT_EQ(stats.columnReaderStatistics.flattenStringDictionaryValues, 1);
+}
+
+// A primitive subfield is missing in file, and result is not reused.
+TEST(TestReader, missingSubfieldsNoResultReusing) {
+  constexpr int kSize = 10;
+  auto* pool = getDefaultPool().get();
+  VectorMaker maker(pool);
+  auto batch = maker.rowVector({
+      maker.rowVector({
+          maker.flatVector<int64_t>(kSize, folly::identity),
+      }),
+  });
+  auto [writer, reader] = createWriterReader({batch}, *pool);
+  auto schema = ROW({{"c0", ROW({{"c0", BIGINT()}, {"c1", VARCHAR()}})}});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto actual = BaseVector::create(schema, 0, pool);
+  // Hold a second reference to result so it cannot be reused.
+  auto actual2 = actual;
+  ASSERT_EQ(rowReader->next(1024, actual), 10);
+  auto expected = maker.rowVector({
+      maker.rowVector({
+          maker.flatVector<int64_t>(kSize, folly::identity),
+          BaseVector::createNullConstant(VARCHAR(), kSize, pool),
+      }),
+  });
+  assertEqualVectors(expected, actual);
 }

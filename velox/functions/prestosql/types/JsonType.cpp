@@ -44,7 +44,13 @@ void generateJsonTyped(
   auto value = input.valueAt(row);
 
   if constexpr (std::is_same_v<T, StringView>) {
-    folly::json::escapeString(value, result, folly::json::serialization_opts{});
+    // TODO Presto escapes Unicode characters using uppercase hex:
+    //  SELECT cast(U&'\+01F64F' as json); -- "\uD83D\uDE4F"
+    //  Folly uses lowercase hex digits: "\ud83d\ude4f".
+    // Figure out how to produce uppercase digits.
+    folly::json::serialization_opts opts;
+    opts.encode_non_ascii = true;
+    folly::json::escapeString(value, result, opts);
   } else if constexpr (std::is_same_v<T, UnknownValue>) {
     VELOX_FAIL(
         "Casting UNKNOWN to JSON: Vectors of UNKNOWN type should not contain non-null rows");
@@ -163,13 +169,14 @@ struct AsJson {
       const BufferPtr& elementToTopLevelRows,
       bool isMapKey = false)
       : decoded_(context) {
+    VELOX_CHECK(rows.hasSelections());
+
     ErrorVectorPtr oldErrors;
     context.swapErrors(oldErrors);
     if (isJsonType(input->type())) {
       json_ = input;
     } else {
-      if (!exec::PeeledEncoding::isPeelable(input->encoding()) ||
-          !rows.hasSelections()) {
+      if (!exec::PeeledEncoding::isPeelable(input->encoding())) {
         doCast(context, input, rows, isMapKey, json_);
       } else {
         exec::ScopedContextSaver saver;
@@ -286,6 +293,22 @@ void castToJsonFromArray(
   auto elements = inputArray->elements();
   auto elementsRows =
       functions::toElementRows(elements->size(), rows, inputArray);
+  if (!elementsRows.hasSelections()) {
+    // All arrays are null or empty.
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      if (inputArray->isNullAt(row)) {
+        flatResult.set(row, "null");
+      } else {
+        VELOX_CHECK_EQ(
+            inputArray->sizeAt(row),
+            0,
+            "All arrays are expected to be null or empty");
+        flatResult.set(row, "[]");
+      }
+    });
+    return;
+  }
+
   auto elementToTopLevelRows = functions::getElementToTopLevelRows(
       elements->size(), rows, inputArray, context.pool());
   AsJson elementsAsJson{context, elements, elementsRows, elementToTopLevelRows};
@@ -348,6 +371,22 @@ void castToJsonFromMap(
   auto mapKeys = inputMap->mapKeys();
   auto mapValues = inputMap->mapValues();
   auto elementsRows = functions::toElementRows(mapKeys->size(), rows, inputMap);
+  if (!elementsRows.hasSelections()) {
+    // All maps are null or empty.
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      if (inputMap->isNullAt(row)) {
+        flatResult.set(row, "null");
+      } else {
+        VELOX_CHECK_EQ(
+            inputMap->sizeAt(row),
+            0,
+            "All maps are expected to be null or empty");
+        flatResult.set(row, "{}");
+      }
+    });
+    return;
+  }
+
   auto elementToTopLevelRows = functions::getElementToTopLevelRows(
       mapKeys->size(), rows, inputMap, context.pool());
   // Maps with unsupported key types should have already been rejected by
@@ -421,6 +460,7 @@ void castToJsonFromRow(
     const SelectivityVector& rows,
     FlatVector<StringView>& flatResult) {
   // input is guaranteed to be in flat encoding when passed in.
+  VELOX_CHECK_EQ(input.encoding(), VectorEncoding::Simple::ROW);
   auto inputRow = input.as<RowVector>();
   auto childrenSize = inputRow->childrenSize();
 
@@ -668,17 +708,30 @@ FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::ROW>(
   } else {
     auto rowType = writer.type()->asRow();
     column_index_t fieldCount = rowType.size();
-    auto notFound = object.items().end();
+
+    folly::F14FastMap<std::string, const folly::dynamic*> lowerCaseKeys;
+    lowerCaseKeys.reserve(object.size());
+
+    for (const auto& [key, value] : object.items()) {
+      // Skip null values.
+      if (!value.isNull()) {
+        const auto lowerCaseKey =
+            boost::algorithm::to_lower_copy(key.asString());
+        lowerCaseKeys.insert({lowerCaseKey, &value});
+      }
+    }
 
     for (column_index_t i = 0; i < fieldCount; ++i) {
-      auto it = object.find(rowType.nameOf(i));
-      if (it == notFound || it->second.isNull()) {
+      const auto lowerCaseName =
+          boost::algorithm::to_lower_copy(rowType.nameOf(i));
+      auto it = lowerCaseKeys.find(lowerCaseName);
+      if (it == lowerCaseKeys.end()) {
         writerTyped.set_null_at(i);
       } else {
         VELOX_DYNAMIC_TYPE_DISPATCH(
             castFromJsonTyped,
             rowType.childAt(i)->kind(),
-            it->second,
+            *(it->second),
             writerTyped.get_writer_at(i));
       }
     }

@@ -140,6 +140,14 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<std::string>("left(c0, c1)", str, length);
   }
 
+  std::optional<std::string> substringIndex(
+      const std::string& str,
+      const std::string& delim,
+      int32_t count) {
+    return evaluateOnce<std::string, std::string, std::string, int32_t>(
+        "substring_index(c0, c1, c2)", str, delim, count);
+  }
+
   std::optional<std::string> overlay(
       std::optional<std::string> input,
       std::optional<std::string> replace,
@@ -189,6 +197,13 @@ class StringTest : public SparkFunctionBaseTest {
       std::optional<std::string> string,
       std::optional<int32_t> size) {
     return evaluateOnce<std::string>("lpad(c0, c1)", string, size);
+  }
+
+  std::optional<std::string> conv(
+      std::optional<std::string> str,
+      std::optional<int32_t> fromBase,
+      std::optional<int32_t> toBase) {
+    return evaluateOnce<std::string>("conv(c0, c1, c2)", str, fromBase, toBase);
   }
 };
 
@@ -368,6 +383,37 @@ TEST_F(StringTest, endsWith) {
   EXPECT_EQ(endsWith("-- hello there!", "hello there"), false);
   EXPECT_EQ(endsWith("-- hello there!", std::nullopt), std::nullopt);
   EXPECT_EQ(endsWith(std::nullopt, "abc"), std::nullopt);
+}
+
+TEST_F(StringTest, substringIndex) {
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 3), "www.apache.org");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 2), "www.apache");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 1), "www");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 0), "");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", -1), "org");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", -2), "apache.org");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", -3), "www.apache.org");
+  // Str is empty string.
+  EXPECT_EQ(substringIndex("", ".", 1), "");
+  // Empty string delim.
+  EXPECT_EQ(substringIndex("www.apache.org", "", 1), "");
+  // Delim does not exist in str.
+  EXPECT_EQ(substringIndex("www.apache.org", "#", 2), "www.apache.org");
+  EXPECT_EQ(substringIndex("www.apache.org", "WW", 1), "www.apache.org");
+  // Delim is 2 chars.
+  EXPECT_EQ(substringIndex("www||apache||org", "||", 2), "www||apache");
+  EXPECT_EQ(substringIndex("www||apache||org", "||", -2), "apache||org");
+  // Non ascii chars.
+  EXPECT_EQ(substringIndex("大千世界大千世界", "千", 2), "大千世界大");
+
+  // Overlapped delim.
+  EXPECT_EQ(substringIndex("||||||", "|||", 3), "||");
+  EXPECT_EQ(substringIndex("||||||", "|||", -4), "|||");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", 2), "a");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", -4), "aaa");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", 0), "");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", 5), "aaaaa");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", -5), "aaaaa");
 }
 
 TEST_F(StringTest, trim) {
@@ -681,6 +727,50 @@ TEST_F(StringTest, translateNonconstantMatch) {
   replace = makeFlatVector<std::string>({"åa", "cç"});
   expected = makeFlatVector<std::string>({"åbaæçè", "åæcèaç"});
   testTranslate({input, match, replace}, expected);
+}
+
+TEST_F(StringTest, conv) {
+  EXPECT_EQ(conv("4", 10, 2), "100");
+  EXPECT_EQ(conv("110", 2, 10), "6");
+  EXPECT_EQ(conv("15", 10, 16), "F");
+  EXPECT_EQ(conv("15", 10, -16), "F");
+  EXPECT_EQ(conv("big", 36, 16), "3A48");
+  EXPECT_EQ(conv("-15", 10, -16), "-F");
+  EXPECT_EQ(conv("-10", 16, -10), "-16");
+
+  // Overflow case.
+  EXPECT_EQ(conv("-1", 10, 16), "FFFFFFFFFFFFFFFF");
+  EXPECT_EQ(conv("FFFFFFFFFFFFFFFF", 16, -10), "-1");
+  EXPECT_EQ(conv("-FFFFFFFFFFFFFFFF", 16, -10), "-1");
+  EXPECT_EQ(conv("-FFFFFFFFFFFFFFFF", 16, 10), "18446744073709551615");
+  EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
+  EXPECT_EQ(conv("9223372036854775807", 36, 16), "FFFFFFFFFFFFFFFF");
+
+  // Leading and trailing spaces.
+  EXPECT_EQ(conv("15 ", 10, 16), "F");
+  EXPECT_EQ(conv(" 15 ", 10, 16), "F");
+
+  // Invalid characters.
+  // Only converts "11".
+  EXPECT_EQ(conv("11abc", 10, 16), "B");
+  // Only converts "F".
+  EXPECT_EQ(conv("FH", 16, 10), "15");
+  // Discards followed invalid character even though converting to same base.
+  EXPECT_EQ(conv("11abc", 10, 10), "11");
+  EXPECT_EQ(conv("FH", 16, 16), "F");
+  // Begins with invalid character.
+  EXPECT_EQ(conv("HF", 16, 10), "0");
+  // All are invalid for binary base.
+  EXPECT_EQ(conv("2345", 2, 10), "0");
+
+  // Negative symbol only.
+  EXPECT_EQ(conv("-", 10, 16), "0");
+
+  // Null result.
+  EXPECT_EQ(conv("", 10, 16), std::nullopt);
+  EXPECT_EQ(conv(" ", 10, 16), std::nullopt);
+  EXPECT_EQ(conv("", std::nullopt, 16), std::nullopt);
+  EXPECT_EQ(conv("", 10, std::nullopt), std::nullopt);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

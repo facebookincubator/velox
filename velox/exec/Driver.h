@@ -162,6 +162,10 @@ enum class BlockingReason {
   /// Build operator is blocked waiting for all its peers to stop to run group
   /// spill on all of them.
   kWaitForSpill,
+  /// Some operators (like Table Scan) may run long loops and can 'voluntarily'
+  /// exit them because Task requested to yield or stop or after a certain time.
+  /// This is the blocking reason used in such cases.
+  kYield,
 };
 
 std::string blockingReasonToString(BlockingReason reason);
@@ -227,7 +231,7 @@ struct DriverCtx {
   Driver* driver;
   facebook::velox::process::ThreadDebugInfo threadDebugInfo;
 
-  explicit DriverCtx(
+  DriverCtx(
       std::shared_ptr<Task> _task,
       int _driverId,
       int _pipelineId,
@@ -242,6 +246,57 @@ struct DriverCtx {
 
   /// Builds the spill config for the operator with specified 'operatorId'.
   std::optional<common::SpillConfig> makeSpillConfig(int32_t operatorId) const;
+};
+
+constexpr const char* kOpMethodNone = "";
+constexpr const char* kOpMethodIsBlocked = "isBlocked";
+constexpr const char* kOpMethodNeedsInput = "needsInput";
+constexpr const char* kOpMethodGetOutput = "getOutput";
+constexpr const char* kOpMethodAddInput = "addInput";
+constexpr const char* kOpMethodNoMoreInput = "noMoreInput";
+constexpr const char* kOpMethodIsFinished = "isFinished";
+
+/// Same as the structure below, but does not have atomic members.
+/// Used to return the status from the struct with atomics.
+struct OpCallStatusRaw {
+  /// Time (ms) when the operator call started.
+  size_t timeStartMs{0};
+  /// Id of the operator, method of which is currently running. It is index into
+  /// the vector of Driver's operators.
+  int32_t opId{0};
+  /// Method of the operator, which is currently running.
+  const char* method{kOpMethodNone};
+
+  bool empty() const {
+    return timeStartMs == 0;
+  }
+
+  static std::string formatCall(Operator* op, const char* operatorMethod);
+  size_t callDuration() const;
+};
+
+/// Structure holds the information about the current operator call the driver
+/// is in. Can be used to detect deadlocks and otherwise blocked calls.
+/// If timeStartMs is zero, then we aren't in an operator call.
+struct OpCallStatus {
+  OpCallStatus() {}
+
+  /// The status accessor.
+  OpCallStatusRaw operator()() const {
+    return OpCallStatusRaw{timeStartMs, opId, method};
+  }
+
+  void start(int32_t operatorId, const char* operatorMethod);
+  void stop();
+
+ private:
+  /// Time (ms) when the operator call started.
+  std::atomic_size_t timeStartMs{0};
+  /// Id of the operator, method of which is currently running. It is index into
+  /// the vector of Driver's operators.
+  std::atomic_int32_t opId{0};
+  /// Method of the operator, which is currently running.
+  std::atomic<const char*> method{kOpMethodNone};
 };
 
 class Driver : public std::enable_shared_from_this<Driver> {
@@ -297,8 +352,13 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// example, hash join probe accesses the corresponding build by id.
   Operator* findOperator(std::string_view planNodeId) const;
 
-  /// Returns the Operator with 'operatorId' or nullptr if not found.
+  /// Returns the Operator with 'operatorId' (basically by index) or throws if
+  /// not found.
   Operator* findOperator(int32_t operatorId) const;
+
+  /// Returns the Operator with 'operatorId' (basically by index) or nullptr if
+  /// not found.
+  Operator* findOperatorNoThrow(int32_t operatorId) const;
 
   /// Returns a list of all operators.
   std::vector<Operator*> operators() const;
@@ -306,6 +366,10 @@ class Driver : public std::enable_shared_from_this<Driver> {
   std::string toString() const;
 
   std::string toJsonString() const;
+
+  OpCallStatusRaw opCallStatus() const {
+    return opCallStatus_();
+  }
 
   DriverCtx* driverCtx() const {
     return ctx_.get();
@@ -380,15 +444,17 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   std::atomic_bool closed_{false};
 
+  OpCallStatus opCallStatus_;
+
   // Set via Task and serialized by Task's mutex.
   ThreadState state_;
 
   // Timer used to track down the time we are sitting in the driver queue.
   size_t queueTimeStartMicros_{0};
-  // Index of the current operator to run (or the 1st one if we haven't
-  // started yet). Used to determine which operator's queueTime we should
-  // update.
-  size_t curOpIndex_{0};
+  // Id (index in the vector) of the current operator to run (or the 1st one if
+  // we haven't started yet). Used to determine which operator's queueTime we
+  // should update.
+  size_t curOperatorId_{0};
 
   std::vector<std::unique_ptr<Operator>> operators_;
 

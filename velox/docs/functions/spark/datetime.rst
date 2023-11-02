@@ -13,6 +13,14 @@ These functions support TIMESTAMP and DATE input types.
     If num_days is a negative value then these amount of days will be
     deducted from start_date.
 
+.. spark:function:: datediff(endDate, startDate) -> integer
+
+    Returns the number of days from startDate to endDate. Only DATE type is allowed
+    for input. ::
+
+        SELECT datediff('2009-07-31', '2009-07-30'); -- 1
+        SELECT datediff('2009-07-30', '2009-07-31'); -- -1
+
 .. spark:function:: date_sub(start_date, num_days) -> date
 
     Returns the date that is num_days before start_date. According to the inputs,
@@ -26,21 +34,21 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns Returns the day of year of the date/timestamp. ::
 
-    SELECT dayofyear('2016-04-09'); -- 100
+        SELECT dayofyear('2016-04-09'); -- 100
 
 .. spark:function:: dayofmonth(date) -> integer
 
     Returns the day of month of the date/timestamp. ::
 
-    SELECT dayofmonth('2009-07-30'); -- 30
+        SELECT dayofmonth('2009-07-30'); -- 30
 
 .. spark:function:: dayofweek(date/timestamp) -> integer
 
     Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
     We can use `dow` as alias for ::
 
-    SELECT dayofweek('2009-07-30'); -- 5
-    SELECT dayofweek('2023-08-22 11:23:00.100'); -- 3
+        SELECT dayofweek('2009-07-30'); -- 5
+        SELECT dayofweek('2023-08-22 11:23:00.100'); -- 3
 
 .. function:: dow(x) -> integer
 

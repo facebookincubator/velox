@@ -412,40 +412,14 @@ HiveDataSource::HiveDataSource(
   }
 
   SubfieldFilters filters;
-  core::TypedExprPtr remainingFilter;
-  if (hiveTableHandle_->isFilterPushdownEnabled()) {
-    for (auto& [k, v] : hiveTableHandle_->subfieldFilters()) {
-      filters.emplace(k.clone(), v->clone());
-    }
-    remainingFilter = extractFiltersFromRemainingFilter(
-        hiveTableHandle_->remainingFilter(),
-        expressionEvaluator_,
-        false,
-        filters);
-  } else {
-    for (auto& [field, _] : hiveTableHandle_->subfieldFilters()) {
-      VELOX_USER_CHECK_EQ(
-          field.path().size(),
-          1,
-          "Unexpected filter on table {}, field {}",
-          hiveTableHandle_->tableName(),
-          field.toString());
-      auto* nestedField = dynamic_cast<const common::Subfield::NestedField*>(
-          field.path()[0].get());
-      VELOX_USER_CHECK_NOT_NULL(
-          nestedField,
-          "Unexpected filter on table {}, field {}",
-          hiveTableHandle_->tableName(),
-          field.toString());
-      VELOX_USER_CHECK_GT(
-          partitionKeys_.count(nestedField->name()),
-          0,
-          "Unexpected filter on table {}, field {}",
-          hiveTableHandle_->tableName(),
-          field.toString());
-    }
-    remainingFilter = hiveTableHandle_->remainingFilter();
+  for (auto& [k, v] : hiveTableHandle_->subfieldFilters()) {
+    filters.emplace(k.clone(), v->clone());
   }
+  auto remainingFilter = extractFiltersFromRemainingFilter(
+      hiveTableHandle_->remainingFilter(),
+      expressionEvaluator_,
+      false,
+      filters);
 
   std::vector<common::Subfield> remainingFilterSubfields;
   if (remainingFilter) {
@@ -488,6 +462,7 @@ HiveDataSource::HiveDataSource(
       subfields,
       filters,
       hiveTableHandle_->dataColumns(),
+      partitionKeys_,
       pool_);
   if (remainingFilter) {
     metadataFilter_ = std::make_shared<common::MetadataFilter>(
@@ -738,13 +713,16 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
         outputSubfields,
     const SubfieldFilters& filters,
     const RowTypePtr& dataColumns,
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
+        partitionKeys,
     memory::MemoryPool* pool) {
   auto spec = std::make_shared<common::ScanSpec>("root");
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       filterSubfields;
   std::vector<SubfieldSpec> subfieldSpecs;
   for (auto& [subfield, _] : filters) {
-    if (auto name = subfield.toString(); name != kPath && name != kBucket) {
+    if (auto name = subfield.toString();
+        name != kPath && name != kBucket && partitionKeys.count(name) == 0) {
       filterSubfields[getColumnName(subfield)].push_back(&subfield);
     }
   }

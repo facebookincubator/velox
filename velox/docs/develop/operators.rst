@@ -233,8 +233,7 @@ followed by the group ID column. The type of group ID column is BIGINT.
    * - Property
      - Description
    * - groupingSets
-     - List of grouping key sets. Keys within each set must be unique, but keys can repeat across the sets.
-     - Grouping keys are specified with their output names.
+     - List of grouping key sets. Keys within each set must be unique, but keys can repeat across the sets. Grouping keys are specified with their output names.
    * - groupingKeyInfos
      - The names and order of the grouping key columns in the output.
    * - aggregationInputs
@@ -752,9 +751,9 @@ FilterNode(row_number <= limit), but it uses less memory and CPU.
   * - Property
     - Description
   * - partitionKeys
-    - Partition by columns for the window functions.
+    - Partition by columns for the window functions. May be empty.
   * - sortingKeys
-    - Order by columns for the window functions.
+    - Order by columns for the window functions. Cannot be empty and cannot overlap with 'partitionKeys'.
   * - sortingOrders
     - Sorting order for each sorting key above. The supported sort orders are asc nulls first, asc nulls last, desc nulls first and desc nulls last.
   * - rowNumberColumnName

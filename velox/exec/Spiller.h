@@ -210,11 +210,12 @@ class Spiller {
     }
   }
 
-  SpillStats stats() const;
+  /// Indicates if this spiller has finalized or not.
+  bool finalized() const {
+    return finalized_;
+  }
 
-  /// Global memory pool for spill intermediates. ~1MB per spill executor thread
-  /// is the expected peak utilization.
-  static memory::MemoryPool* pool();
+  SpillStats stats() const;
 
   std::string toString() const;
 
