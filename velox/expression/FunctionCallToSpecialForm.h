@@ -30,17 +30,6 @@ class FunctionCallToSpecialForm {
   /// arguments, e.g. Try.
   virtual TypePtr resolveType(const std::vector<TypePtr>& argTypes) = 0;
 
-  /// Returns the output Type of the SpecialForm given the input argument Types.
-  /// Return nullptr if the input Types do not match what's expected for the
-  /// SpecialForm or if the SpecialForm can infer the return Type based on the
-  /// input arguments `std::vector<TypePtr>& argTypes`, e.g. coalesce. Custom
-  /// registered SpecialForm may need to evaluate the input argument to get the
-  /// output type, e.g. decimal_round.
-  virtual TypePtr resolveType(
-      const std::vector<std::shared_ptr<const core::ITypedExpr>>& inputs) {
-    return nullptr;
-  }
-
   /// Given the output Type, the child expresssions, and whether or not to track
   /// CPU usage, returns the SpecialForm.
   virtual ExprPtr constructSpecialForm(
@@ -53,22 +42,10 @@ class FunctionCallToSpecialForm {
 /// Returns the output Type of the SpecialForm associated with the functionName
 /// given the input argument Types. If functionName is not the name of a known
 /// SpecialForm, returns nullptr. Note that some SpecialForms may throw on
-/// invalid arguments or if they don't support type resolution, e.g. Try. Some
-/// SpecialForms may return null if they should resolve type by `ITypedExpr
-/// inputs`
+/// invalid arguments or if they don't support type resolution, e.g. Try.
 TypePtr resolveTypeForSpecialForm(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
-
-/// Returns the output Type of the SpecialForm associated with the functionName
-/// given the input argument Types. If functionName is not the name of a known
-/// SpecialForm, returns nullptr. Note that most of SpecialForms may return
-/// nullptr if they don't support this type resolution, e.g. coalesce. Custom
-/// registered SpecialForm may need to evaluate the input argument to get the
-/// output type, e.g. decimal_round.
-TypePtr resolveTypeForSpecialForm(
-    const std::string& functionName,
-    const std::vector<std::shared_ptr<const core::ITypedExpr>>& inputs);
 
 /// Returns the SpeicalForm associated with the functionName.  If functionName
 /// is not the name of a known SpecialForm, returns nulltpr.

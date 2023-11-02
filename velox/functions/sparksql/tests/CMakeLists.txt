@@ -23,9 +23,9 @@ add_executable(
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
   DecimalCompareTest.cpp
+  DecimalRoundTest.cpp
   DecimalUtilTest.cpp
   MakeDecimalTest.cpp
-  DecimalVectorFunctionsTest.cpp
   ElementAtTest.cpp
   HashTest.cpp
   InTest.cpp

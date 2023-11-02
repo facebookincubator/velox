@@ -37,8 +37,8 @@
 #include "velox/functions/sparksql/Size.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/UnscaledValueFunction.h"
-#include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
+#include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
@@ -198,7 +198,6 @@ void registerFunctions(const std::string& prefix) {
   // VELOX_REGISTER_VECTOR_FUNCTION macro, which must be invoked in the same
   // namespace as the function definition.
   workAroundRegistrationMacro(prefix);
-  registerAllSpecialFormGeneralFunctions();
 
   // These groups of functions involve instantiating many templates. They're
   // broken out into a separate compilation unit to improve build latency.

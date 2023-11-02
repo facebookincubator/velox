@@ -31,16 +31,6 @@ TypePtr resolveTypeForSpecialForm(
   return specialForm->resolveType(argTypes);
 }
 
-TypePtr resolveTypeForSpecialForm(
-    const std::string& functionName,
-    const std::vector<std::shared_ptr<const core::ITypedExpr>>& inputs) {
-  auto specialForm = specialFormRegistry().getSpecialForm(functionName);
-  if (specialForm == nullptr) {
-    return nullptr;
-  }
-  return specialForm->resolveType(inputs);
-}
-
 ExprPtr constructSpecialForm(
     const std::string& functionName,
     const TypePtr& type,

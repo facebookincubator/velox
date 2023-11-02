@@ -65,10 +65,6 @@ TypePtr resolveType(
   if (auto resolvedType = exec::resolveTypeForSpecialForm(
           expr->getFunctionName(), inputTypes)) {
     return resolvedType;
-  } else if (
-      auto resolvedType =
-          exec::resolveTypeForSpecialForm(expr->getFunctionName(), inputs)) {
-    return resolvedType;
   }
 
   return resolveScalarFunctionType(

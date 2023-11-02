@@ -61,9 +61,7 @@ TEST_F(FunctionCallToSpecialFormTest, andCall) {
 TEST_F(FunctionCallToSpecialFormTest, castCall) {
   ASSERT_TRUE(isFunctionCallToSpecialFormRegistered("cast"));
 
-  ASSERT_THROW(
-      resolveTypeForSpecialForm("cast", std::vector<TypePtr>({})),
-      VeloxRuntimeError);
+  ASSERT_THROW(resolveTypeForSpecialForm("cast", {}), VeloxRuntimeError);
 
   auto specialForm = constructSpecialForm(
       "cast",

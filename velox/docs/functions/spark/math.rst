@@ -48,18 +48,6 @@ Mathematical Functions
 
     Returns the cosecant of ``x``.
 
-.. spark:function:: decimal_round(decimal, scale) -> [decimal]
-
-    The decimal places ``d`` of result depends on precision and scale of ``decimal`` and ``scale`` value.
-    Returns ``decimal`` rounded to ``d`` decimal places using HALF_UP rounding mode. 
-    In HALF_UP rounding, the digit 5 is rounded up.
-
-    Implementation matches Spark 3.3.
-
-.. spark:function:: decimal_round(decimal) -> [decimal]
-
-    A version of ``decimal_round`` that uses 0 as ``scale``.
-
 .. spark:function:: divide(x, y) -> double
 
     Returns the results of dividing x by y. Performs floating point division.
@@ -176,7 +164,7 @@ Mathematical Functions
 
     Returns ``x`` rounded to ``d`` decimal places using HALF_UP rounding mode. 
     In HALF_UP rounding, the digit 5 is rounded up.
-    Use ``decimal_round`` for DECIMAL type.
+    Supported types for ``x`` are integral and floating point types.
 
 .. spark:function:: sec(x) -> double
 
