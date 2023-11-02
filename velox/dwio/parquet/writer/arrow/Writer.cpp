@@ -43,8 +43,6 @@
 #include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
 #include "velox/dwio/parquet/writer/arrow/PathInternal.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
 
 using arrow::Array;
 using arrow::BinaryArray;

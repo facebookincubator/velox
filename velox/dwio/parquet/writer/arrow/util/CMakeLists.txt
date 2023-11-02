@@ -24,6 +24,7 @@ add_library(
 
 target_link_libraries(
   velox_dwio_arrow_parquet_writer_util_lib
+  velox_dwio_parquet_arrow
   parquet
   arrow
   Snappy::snappy

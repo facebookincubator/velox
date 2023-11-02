@@ -22,10 +22,10 @@
 #include <memory>
 #include <utility>
 
+#include "velox/dwio/parquet/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Properties.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
 
 namespace facebook::velox::parquet::arrow {
 

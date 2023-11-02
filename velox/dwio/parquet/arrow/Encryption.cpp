@@ -16,7 +16,7 @@
 
 // Adapted from Apache Arrow.
 
-#include "velox/dwio/parquet/writer/arrow/Encryption.h"
+#include "Encryption.h"
 
 #include <string.h>
 

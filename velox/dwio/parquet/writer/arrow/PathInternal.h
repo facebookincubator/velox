@@ -26,7 +26,7 @@
 #include "arrow/result.h"
 #include "arrow/status.h"
 
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Platform.h"
 
 namespace arrow {
 

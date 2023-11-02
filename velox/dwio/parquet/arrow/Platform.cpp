@@ -16,7 +16,7 @@
 
 // Adapted from Apache Arrow.
 
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
+#include "Platform.h"
 
 #include <cstdint>
 #include <memory>

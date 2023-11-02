@@ -44,13 +44,8 @@ target_link_libraries(
 
 add_library(
   velox_dwio_arrow_parquet_writer_test_lib
-  BloomFilter.cpp
-  BloomFilterReader.cpp
-  ColumnReader.cpp
-  ColumnScanner.cpp
-  FileReader.cpp
-  TestUtil.cpp
-  XxHasher.cpp)
+  BloomFilter.cpp BloomFilterReader.cpp ColumnReader.cpp ColumnScanner.cpp
+  FileReader.cpp TestUtil.cpp)
 
 target_link_libraries(velox_dwio_arrow_parquet_writer_test_lib
                       velox_dwio_arrow_parquet_writer_lib parquet arrow gtest)

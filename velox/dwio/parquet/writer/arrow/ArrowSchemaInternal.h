@@ -19,7 +19,7 @@
 #pragma once
 
 #include "arrow/result.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
 
 namespace arrow {
 class DataType;

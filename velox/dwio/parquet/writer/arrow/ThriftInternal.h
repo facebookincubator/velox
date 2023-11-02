@@ -37,14 +37,13 @@
 #include "arrow/util/logging.h"
 
 #include "parquet/exception.h"
+#include "velox/dwio/parquet/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Properties.h"
+#include "velox/dwio/parquet/arrow/Types.h"
+#include "velox/dwio/parquet/arrow/generated/parquet_types.h"
 #include "velox/dwio/parquet/writer/arrow/FileDecryptorInternal.h"
 #include "velox/dwio/parquet/writer/arrow/FileEncryptorInternal.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
-
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
-#include "velox/dwio/parquet/writer/arrow/generated/parquet_types.h"
 
 namespace facebook::velox::parquet::arrow {
 
@@ -580,3 +579,5 @@ class ThriftSerializer {
 };
 
 } // namespace facebook::velox::parquet::arrow
+
+#include "velox/dwio/parquet/arrow/generated/parquet_types.h"

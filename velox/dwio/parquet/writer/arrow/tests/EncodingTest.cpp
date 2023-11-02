@@ -48,9 +48,9 @@
 #include "arrow/visit_data_inline.h"
 
 #include "parquet/exception.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
+#include "velox/dwio/parquet/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
+#include "velox/dwio/parquet/arrow/Types.h"
 
 namespace bit_util = arrow::bit_util;
 

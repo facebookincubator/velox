@@ -25,10 +25,10 @@
 #include "arrow/util/macros.h"
 
 #include "parquet/exception.h"
+#include "velox/dwio/parquet/arrow/XxHasher.h"
+#include "velox/dwio/parquet/arrow/generated/parquet_types.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
-#include "velox/dwio/parquet/writer/arrow/generated/parquet_types.h"
 #include "velox/dwio/parquet/writer/arrow/tests/BloomFilter.h"
-#include "velox/dwio/parquet/writer/arrow/tests/XxHasher.h"
 
 namespace facebook::velox::parquet::arrow {
 

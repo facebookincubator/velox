@@ -114,7 +114,7 @@
 #include "arrow/util/macros.h"
 #include "arrow/visit_array_inline.h"
 
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
+#include "velox/dwio/parquet/arrow/Properties.h"
 
 namespace facebook::velox::parquet::arrow::arrow {
 

@@ -17,7 +17,7 @@
 // Adapted from Apache Arrow.
 
 #include "velox/dwio/parquet/writer/arrow/FileEncryptorInternal.h"
-#include "velox/dwio/parquet/writer/arrow/Encryption.h"
+#include "velox/dwio/parquet/arrow/Encryption.h"
 #include "velox/dwio/parquet/writer/arrow/EncryptionInternal.h"
 
 namespace facebook::velox::parquet::arrow {

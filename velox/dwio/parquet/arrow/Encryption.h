@@ -24,8 +24,8 @@
 #include <utility>
 
 #include "parquet/exception.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
+#include "Schema.h"
+#include "Types.h"
 
 using ::parquet::ParquetException;
 

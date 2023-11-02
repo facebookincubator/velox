@@ -21,8 +21,8 @@
 #include <cstdint>
 
 #include "arrow/util/endian.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
 
 namespace facebook::velox::parquet::arrow {
 

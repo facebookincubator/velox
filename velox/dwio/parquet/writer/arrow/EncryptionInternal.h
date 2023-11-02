@@ -22,8 +22,8 @@
 #include <string>
 #include <vector>
 
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
+#include "velox/dwio/parquet/arrow/Properties.h"
+#include "velox/dwio/parquet/arrow/Types.h"
 
 using facebook::velox::parquet::arrow::ParquetCipher;
 

@@ -23,9 +23,9 @@
 #include <memory>
 #include <vector>
 
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
+#include "velox/dwio/parquet/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
+#include "velox/dwio/parquet/arrow/Types.h"
 
 namespace facebook::velox::parquet::arrow {
 

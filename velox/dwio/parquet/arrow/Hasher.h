@@ -19,7 +19,7 @@
 #pragma once
 
 #include <cstdint>
-#include "velox/dwio/parquet/writer/arrow/Types.h"
+#include "Types.h"
 
 namespace facebook::velox::parquet::arrow {
 

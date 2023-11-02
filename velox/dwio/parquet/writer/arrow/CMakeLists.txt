@@ -13,7 +13,6 @@
 # limitations under the License.
 
 add_subdirectory(util)
-add_subdirectory(generated)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
@@ -25,7 +24,6 @@ add_library(
   ArrowSchemaInternal.cpp
   ColumnWriter.cpp
   Encoding.cpp
-  Encryption.cpp
   EncryptionInternal.cpp
   FileEncryptorInternal.cpp
   FileDecryptorInternal.cpp
@@ -36,18 +34,14 @@ add_library(
   Metadata.cpp
   PageIndex.cpp
   PathInternal.cpp
-  Platform.cpp
-  Properties.cpp
-  Schema.cpp
   Statistics.cpp
-  Types.cpp
   Writer.cpp)
 
 target_link_libraries(
   velox_dwio_arrow_parquet_writer_lib
   velox_dwio_arrow_parquet_writer_util_lib
-  velox_dwio_arrow_parquet_writer_thrift_lib
   velox_dwio_common
+  velox_dwio_parquet_arrow
   velox_arrow_bridge
   parquet
   arrow

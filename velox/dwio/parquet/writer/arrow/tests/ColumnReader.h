@@ -24,11 +24,11 @@
 #include <vector>
 
 #include "parquet/exception.h"
+#include "velox/dwio/parquet/arrow/Properties.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
+#include "velox/dwio/parquet/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
 
 namespace arrow {
 

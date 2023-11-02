@@ -19,7 +19,7 @@
 #pragma once
 
 #include "arrow/io/interfaces.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
+#include "velox/dwio/parquet/arrow/Types.h"
 
 #include <optional>
 #include <vector>

@@ -23,7 +23,7 @@
 #include "arrow/buffer.h"
 #include "arrow/io/memory.h"
 
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
+#include "velox/dwio/parquet/arrow/Properties.h"
 
 namespace facebook::velox::parquet::arrow {
 

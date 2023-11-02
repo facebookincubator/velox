@@ -20,8 +20,8 @@
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
 
+#include "velox/dwio/parquet/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/Writer.h"
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 
 namespace facebook::velox::parquet {

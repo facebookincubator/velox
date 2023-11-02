@@ -21,7 +21,7 @@
 #include <string>
 
 #include "arrow/util/endian.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
+#include "velox/dwio/parquet/arrow/Types.h"
 
 namespace facebook::velox::parquet::arrow {
 

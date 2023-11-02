@@ -16,10 +16,10 @@
 
 // Adapted from Apache Arrow.
 
-#include "velox/dwio/parquet/writer/arrow/tests/XxHasher.h"
+#include "XxHasher.h"
 
 #define XXH_INLINE_ALL
-#include <xxhash.h>
+#include <external/xxhash/xxhash.h>
 
 namespace facebook::velox::parquet::arrow {
 

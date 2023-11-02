@@ -31,10 +31,10 @@
 #include "arrow/io/memory.h"
 #include "arrow/testing/util.h"
 
+#include "velox/dwio/parquet/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnPage.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
 
 // https://github.com/google/googletest/pull/2904 might not be available

@@ -35,10 +35,9 @@
 #include "arrow/util/value_parsing.h"
 
 #include "parquet/exception.h"
+#include "velox/dwio/parquet/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/ArrowSchemaInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
 
 using arrow::DecimalType;
 using arrow::Field;

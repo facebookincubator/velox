@@ -20,9 +20,9 @@
 
 #include <cstdint>
 
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
-#include "velox/dwio/parquet/writer/arrow/tests/Hasher.h"
+#include "Platform.h"
+#include "Types.h"
+#include "Hasher.h"
 
 namespace facebook::velox::parquet::arrow {
 
@@ -32,9 +32,9 @@ class PARQUET_EXPORT XxHasher : public Hasher {
   uint64_t Hash(int64_t value) const override;
   uint64_t Hash(float value) const override;
   uint64_t Hash(double value) const override;
-  uint64_t Hash(const Int96* value) const override;
-  uint64_t Hash(const ByteArray* value) const override;
-  uint64_t Hash(const FLBA* val, uint32_t len) const override;
+  uint64_t Hash(const arrow::Int96* value) const override;
+  uint64_t Hash(const arrow::ByteArray* value) const override;
+  uint64_t Hash(const arrow::FLBA* val, uint32_t len) const override;
 
   void Hashes(const int32_t* values, int num_values, uint64_t* hashes)
       const override;
@@ -44,7 +44,7 @@ class PARQUET_EXPORT XxHasher : public Hasher {
       const override;
   void Hashes(const double* values, int num_values, uint64_t* hashes)
       const override;
-  void Hashes(const Int96* values, int num_values, uint64_t* hashes)
+  void Hashes(const arrow::Int96* values, int num_values, uint64_t* hashes)
       const override;
   void Hashes(const ByteArray* values, int num_values, uint64_t* hashes)
       const override;

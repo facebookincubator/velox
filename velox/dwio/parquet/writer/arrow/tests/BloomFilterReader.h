@@ -19,7 +19,7 @@
 #pragma once
 
 #include "arrow/io/interfaces.h"
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
+#include "velox/dwio/parquet/arrow/Properties.h"
 
 namespace facebook::velox::parquet::arrow {
 

@@ -19,7 +19,7 @@
 #include <sstream>
 #include <utility>
 
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
+#include "Properties.h"
 
 #include "arrow/io/buffered.h"
 #include "arrow/io/memory.h"

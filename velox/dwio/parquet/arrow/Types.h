@@ -27,8 +27,8 @@
 #include <string>
 #include <string_view>
 
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/util/Compression.h"
+#include "Platform.h"
+#include "Compression.h"
 
 namespace facebook::velox::parquet::arrow::util {
 

@@ -28,11 +28,11 @@
 #include "arrow/type.h"
 #include "arrow/util/type_fwd.h"
 #include "parquet/exception.h"
-#include "velox/dwio/parquet/writer/arrow/Encryption.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
-#include "velox/dwio/parquet/writer/arrow/util/Compression.h"
+#include "Encryption.h"
+#include "Platform.h"
+#include "Schema.h"
+#include "Types.h"
+#include "Compression.h"
 
 // Define the parquet created by version.
 #define CREATED_BY_VERSION "parquet-cpp-velox"

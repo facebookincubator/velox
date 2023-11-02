@@ -30,9 +30,9 @@
 #include "arrow/util/key_value_metadata.h"
 #include "arrow/util/logging.h"
 #include "parquet/exception.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/EncryptionInternal.h"
 #include "velox/dwio/parquet/writer/arrow/FileDecryptorInternal.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/SchemaInternal.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 

@@ -33,11 +33,11 @@
 #include "arrow/testing/random.h"
 
 #include "parquet/exception.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
+#include "velox/dwio/parquet/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Types.h"
+#include "velox/dwio/parquet/arrow/XxHasher.h"
 #include "velox/dwio/parquet/writer/arrow/tests/BloomFilter.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
-#include "velox/dwio/parquet/writer/arrow/tests/XxHasher.h"
 
 namespace facebook::velox::parquet::arrow {
 namespace test {

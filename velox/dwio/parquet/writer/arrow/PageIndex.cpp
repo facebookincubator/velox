@@ -19,9 +19,9 @@
 #include "velox/dwio/parquet/writer/arrow/PageIndex.h"
 
 #include "parquet/exception.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 #include "velox/dwio/parquet/writer/arrow/util/OverflowUtilInternal.h"

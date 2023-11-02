@@ -21,11 +21,11 @@
 #include <gtest/gtest.h>
 
 #include "arrow/util/key_value_metadata.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
+#include "velox/dwio/parquet/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 

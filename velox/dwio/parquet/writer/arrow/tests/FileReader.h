@@ -25,9 +25,9 @@
 
 #include "arrow/io/caching.h"
 #include "arrow/util/type_fwd.h"
+#include "velox/dwio/parquet/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
 
 namespace facebook::velox::parquet::arrow {
 

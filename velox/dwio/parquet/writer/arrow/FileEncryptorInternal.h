@@ -23,8 +23,8 @@
 #include <string>
 #include <vector>
 
-#include "velox/dwio/parquet/writer/arrow/Encryption.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/arrow/Encryption.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
 
 namespace facebook::velox::parquet::arrow {
 

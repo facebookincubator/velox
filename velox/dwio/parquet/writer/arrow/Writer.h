@@ -21,8 +21,8 @@
 #include <cstdint>
 #include <memory>
 
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
+#include "velox/dwio/parquet/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Properties.h"
 
 namespace arrow {
 

@@ -16,7 +16,7 @@
 
 // Adapted from Apache Arrow.
 
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "Schema.h"
 #include "velox/dwio/parquet/writer/arrow/SchemaInternal.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 

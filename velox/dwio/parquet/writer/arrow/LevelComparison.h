@@ -21,7 +21,7 @@
 #include <algorithm>
 #include <cstdint>
 
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Platform.h"
 
 namespace facebook::velox::parquet::arrow::internal {
 

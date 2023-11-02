@@ -28,10 +28,10 @@
 
 #include "arrow/util/checked_cast.h"
 #include "parquet/exception.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
+#include "velox/dwio/parquet/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/SchemaInternal.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
 
 using ::arrow::internal::checked_cast;
 

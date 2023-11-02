@@ -27,10 +27,10 @@
 #include <utility>
 #include <vector>
 
+#include "velox/dwio/parquet/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnPage.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
 
 namespace facebook::velox::parquet::arrow {

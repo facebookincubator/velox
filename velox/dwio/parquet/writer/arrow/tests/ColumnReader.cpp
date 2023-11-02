@@ -49,9 +49,6 @@
 #include "velox/dwio/parquet/writer/arrow/EncryptionInternal.h"
 #include "velox/dwio/parquet/writer/arrow/FileDecryptorInternal.h"
 #include "velox/dwio/parquet/writer/arrow/LevelComparison.h"
-#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
-#include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 
 using arrow::MemoryPool;

@@ -28,8 +28,8 @@
 #include <optional>
 #include <string>
 
+#include "velox/dwio/parquet/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
 
 namespace facebook::velox::parquet::arrow {
 

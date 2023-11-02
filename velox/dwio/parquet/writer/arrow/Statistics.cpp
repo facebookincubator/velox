@@ -35,9 +35,9 @@
 #include "arrow/util/ubsan.h"
 #include "arrow/visit_data_inline.h"
 #include "parquet/exception.h"
+#include "velox/dwio/parquet/arrow/Platform.h"
+#include "velox/dwio/parquet/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
 
 using arrow::default_memory_pool;
 using arrow::MemoryPool;

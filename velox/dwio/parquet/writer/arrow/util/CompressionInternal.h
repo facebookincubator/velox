@@ -20,7 +20,7 @@
 
 #include <memory>
 
-#include "velox/dwio/parquet/writer/arrow/util/Compression.h"
+#include "velox/dwio/parquet/arrow/Compression.h"
 
 namespace facebook::velox::parquet::arrow::util {
 

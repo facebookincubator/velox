@@ -16,7 +16,7 @@
 
 // Adapted from Apache Arrow.
 
-#include "velox/dwio/parquet/writer/arrow/util/Compression.h"
+#include "velox/dwio/parquet/arrow/Compression.h"
 
 #include <memory>
 #include <string>
