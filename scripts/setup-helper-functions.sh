@@ -103,7 +103,8 @@ function get_cxx_flags {
     ;;
 
     "avx")
-      echo -n "-mavx2 -mfma -mavx -mf16c -mlzcnt -std=c++17 -mbmi2 $ADDITIONAL_FLAGS"
+      echo -n "-mavx2 -mfma -mavx -mf16c -mlzcnt -mno-avx512bw -mno-avx512cd \
+               -mno-avx512dq -mno-avx512f -std=c++17 -mbmi2 $ADDITIONAL_FLAGS"
     ;;
 
     "sse")
