@@ -117,7 +117,7 @@ inline void checkRowVectorBounds(const RowVectorPtr& v, vector_size_t idx) {
   }
 }
 
-inline bool compareRowVector(const RowVectorPtr& u, const RowVectorPtr& v) {
+bool compareRowVector(const RowVectorPtr& u, const RowVectorPtr& v) {
   CompareFlags compFlags;
   compFlags.nullHandlingMode = CompareFlags::NullHandlingMode::NoStop;
   compFlags.equalsOnly = true;
@@ -535,21 +535,24 @@ static void addVectorBindings(
 
   m.def(
       "row_vector",
-      [](std::vector<std::string>& children,
-         std::vector<VectorPtr>& values,
+      [](std::vector<std::string>& names,
+         std::vector<VectorPtr>& children,
          const std::optional<py::dict>& nullabilityDict) {
+        if (children.size() == 0 || names.size() == 0) {
+          throw py::value_error("RowVector must have children.");
+        }
         std::vector<std::shared_ptr<const Type>> childTypes;
-        childTypes.reserve(values.size());
-        size_t vectorSize = values.size() > 0 ? values[0]->size() : 0;
-        for (int i = 0; i < values.size(); i++) {
+        childTypes.reserve(children.size());
+        size_t vectorSize = children.size() > 0 ? children[0]->size() : 0;
+        for (int i = 0; i < children.size(); i++) {
           // choose child with smallest size to calculate the vector size
-          if (i > 0 && values[i]->size() != vectorSize) {
+          if (i > 0 && children[i]->size() != vectorSize) {
             PyErr_SetString(PyExc_ValueError, "Each child must have same");
             throw py::error_already_set();
           }
-          childTypes.push_back(values[i]->type());
+          childTypes.push_back(children[i]->type());
         }
-        auto rowType = ROW(std::move(children), std::move(childTypes));
+        auto rowType = ROW(std::move(names), std::move(childTypes));
 
         BufferPtr nullabilityBuffer = nullptr;
         if (nullabilityDict.has_value()) {
@@ -562,9 +565,12 @@ static void addVectorBindings(
             if (!py::isinstance<py::int_>(row) ||
                 !py::isinstance<py::bool_>(nullability)) {
               throw py::type_error(
-                  "nullability must be a dictionary, rowId in int and nullability in boolean");
+                  "Nullability must be a dictionary, rowId in int and nullability in boolean.");
             }
             int rowId = py::cast<int>(row);
+            if (!(rowId >= 0 && rowId < vectorSize)) {
+              throw py::type_error("Nullability index out of bounds.");
+            }
             bool nullabilityVal = py::cast<bool>(nullability);
             bits::setBit(
                 nullabilityBuffer->asMutable<uint64_t>(),
@@ -578,10 +584,10 @@ static void addVectorBindings(
             rowType,
             nullabilityBuffer,
             vectorSize,
-            values);
+            children);
       },
+      py::arg("names"),
       py::arg("children"),
-      py::arg("values"),
       py::arg("nulls") = std::nullopt);
 
   py::class_<RowVector, BaseVector, RowVectorPtr>(
