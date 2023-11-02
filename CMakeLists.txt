@@ -436,6 +436,9 @@ endif()
 set_source(simdjson)
 resolve_dependency(simdjson 3.1.5)
 
+set_source(cpr)
+resolve_dependency(cpr)
+
 # Locate or build folly.
 add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
