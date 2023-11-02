@@ -21,7 +21,10 @@
 
 class CprHttpClientTest : public testing::Test {};
 
-TEST_F(CprHttpClientTest, basic) {
+// This test requires open access to internet and most places test runners might
+// be closed off from the general internet. And this test case is just an
+// illustration of how to use cpr, so disable it by default.
+TEST_F(CprHttpClientTest, DISABLED_basic) {
   auto response = cpr::Get(
       cpr::Url{"https://facebookincubator.github.io/velox/"},
       cpr::Timeout{std::chrono::seconds{3}});

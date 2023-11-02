@@ -282,6 +282,9 @@ target_link_libraries(
   velox_spiller_aggregate_benchmark velox_exec velox_exec_test_lib
   velox_spiller_aggregate_benchmark_base)
 
+set(cpr_SOURCE BUNDLED)
+resolve_dependency(cpr)
+
 add_executable(cpr_http_client_test CprHttpClientTest.cpp)
 add_test(
   NAME cpr_http_client_test
