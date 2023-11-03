@@ -13,8 +13,6 @@
 # limitations under the License.
 #
 # This can be removed once we upgrade to curl >= 7.68.0
-diff --git a/cpr/multiperform.cpp b/cpr/multiperform.cpp
-index e9e3f00..f6c7847 100644
 --- a/cpr/multiperform.cpp
 +++ b/cpr/multiperform.cpp
 @@ -97,9 +97,9 @@ void MultiPerform::DoMultiPerform() {
@@ -29,8 +27,7 @@ index e9e3f00..f6c7847 100644
                  break;
              }
          }
-diff --git a/include/cpr/util.h b/include/cpr/util.h
-index d851e23..b491eab 100644
+
 --- a/include/cpr/util.h
 +++ b/include/cpr/util.h
 @@ -23,7 +23,7 @@ size_t writeUserFunction(char* ptr, size_t size, size_t nmemb, const WriteCallba
