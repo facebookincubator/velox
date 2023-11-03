@@ -202,7 +202,10 @@ TEST_F(TopNTest, varchar) {
           return StringView::makeInline(std::to_string(row));
         },
         nullEvery(31));
-    vectors.push_back(makeRowVector({c0, c1, c2}));
+    auto c3 = makeFlatVector<std::string>(batchSize, [](vector_size_t row) {
+      return "non inline string " + std::to_string(row);
+    });
+    vectors.push_back(makeRowVector({c0, c1, c2, c3}));
   }
   createDuckDbTable(vectors);
 
@@ -256,6 +259,24 @@ TEST_F(TopNTest, lowCardinality) {
     auto c1 = makeFlatVector<int32_t>(size, [](auto /*row*/) { return 10; });
     auto c2 = makeFlatVector<double>(size, [](auto /*row*/) { return 12.5; });
     vectors.push_back(makeRowVector({c0, c1, c2}));
+  }
+  createDuckDbTable(vectors);
+
+  testTwoKeys(vectors, "c0", "c1", 200);
+}
+
+// All columns are sorting keys.
+TEST_F(TopNTest, onlyKeys) {
+  vector_size_t batchSize = 1000;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t i = 0; i < 2; ++i) {
+    auto c0 = makeFlatVector<int64_t>(
+        batchSize,
+        [](vector_size_t row) { return row % 20; },
+        nullEvery(31, 1));
+    auto c1 = makeFlatVector<int32_t>(
+        batchSize, [](vector_size_t row) { return row; }, nullEvery(17));
+    vectors.push_back(makeRowVector({c0, c1}));
   }
   createDuckDbTable(vectors);
 

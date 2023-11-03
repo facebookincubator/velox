@@ -36,14 +36,30 @@ TopN::TopN(
           topNNode->sortingOrders(),
           data_.get()),
       topRows_(comparator_),
-      decodedVectors_(outputType_->children().size()) {}
+      decodedVectors_(outputType_->children().size()) {
+  sortingKeyColumns_.reserve(topNNode->sortingKeys().size());
+  const auto columnCount{outputType_->children().size()};
+  std::vector<bool> isSortingKey(columnCount);
+  for (const auto& key : topNNode->sortingKeys()) {
+    sortingKeyColumns_.emplace_back(exprToChannel(key.get(), outputType_));
+    isSortingKey[sortingKeyColumns_.back()] = true;
+  }
+  nonKeyColumns_.reserve(columnCount - sortingKeyColumns_.size());
+  for (column_index_t i = 0; i < columnCount; ++i) {
+    if (!isSortingKey[i]) {
+      nonKeyColumns_.emplace_back(i);
+    }
+  }
+}
 
 void TopN::addInput(RowVectorPtr input) {
-  // TODO Decode keys first, then decode the rest only for passing positions
-  for (auto col = 0; col < input->childrenSize(); ++col) {
+  for (const auto col : sortingKeyColumns_) {
     decodedVectors_[col].decode(*input->childAt(col));
   }
 
+  // Maps passed rows of 'data_' to the corresponding input row number. These
+  // input rows of non-key columns are later decoded and stored into data_.
+  std::unordered_map<char*, size_t> passedRows;
   for (auto row = 0; row < input->size(); ++row) {
     char* newRow = nullptr;
     if (topRows_.size() < count_) {
@@ -59,11 +75,27 @@ void TopN::addInput(RowVectorPtr input) {
       newRow = data_->initializeRow(topRow, true /* reuse */);
     }
 
-    for (auto col = 0; col < input->childrenSize(); ++col) {
+    data_->initializeFields(newRow);
+    for (const auto col : sortingKeyColumns_) {
       data_->store(decodedVectors_[col], row, newRow, col);
     }
 
+    passedRows[newRow] = row;
     topRows_.push(newRow);
+  }
+
+  if (!passedRows.empty() && !nonKeyColumns_.empty()) {
+    SelectivityVector needsDecode(input->size(), false);
+    for (const auto [_, row] : passedRows) {
+      needsDecode.setValid(row, true);
+    }
+
+    for (const auto col : nonKeyColumns_) {
+      decodedVectors_[col].decode(*input->childAt(col), needsDecode);
+      for (const auto [dataRow, inputRow] : passedRows) {
+        data_->store(decodedVectors_[col], inputRow, dataRow, col);
+      }
+    }
   }
 }
 
