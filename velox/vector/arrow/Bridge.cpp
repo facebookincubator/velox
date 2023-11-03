@@ -464,25 +464,52 @@ VectorPtr createStringFlatVector(
       optionalNullCount(nullCount));
 }
 
-void exportNulls(
+// Returns how many nulls are present in vec, according to the rows defined in
+// `rows`.
+size_t getNullCount(const BaseVector& vec, const Selection& rows) {
+  if (!vec.mayHaveNulls() || !vec.nulls()) {
+    return 0;
+  }
+
+  // If there is no filter (we are exporting every single row).
+  if (!rows.changed()) {
+    if (vec.getNullCount() != std::nullopt) {
+      return *vec.getNullCount();
+    }
+    return BaseVector::countNulls(vec.nulls(), vec.size());
+  }
+  // Otherwise, count nulls based on filter.
+  else {
+    const auto* rawNulls = vec.rawNulls();
+    size_t nullCount = 0;
+
+    rows.apply([&](vector_size_t i) {
+      if (bits::isBitNull(rawNulls, i)) {
+        ++nullCount;
+      }
+    });
+    return nullCount;
+  }
+}
+
+void exportValidityBitmap(
     const BaseVector& vec,
+    size_t nullCount,
     const Selection& rows,
     ArrowArray& out,
     memory::MemoryPool* pool,
     VeloxToArrowBridgeHolder& holder) {
-  if (!vec.nulls()) {
-    out.null_count = 0;
-    return;
+  out.null_count = nullCount;
+
+  if (vec.nulls() && (nullCount > 0)) {
+    if (!rows.changed()) {
+      holder.setBuffer(0, vec.nulls());
+    } else {
+      auto nulls = AlignedBuffer::allocate<bool>(out.length, pool);
+      gatherFromBuffer(*BOOLEAN(), *vec.nulls(), rows, *nulls);
+      holder.setBuffer(0, nulls);
+    }
   }
-  if (!rows.changed()) {
-    holder.setBuffer(0, vec.nulls());
-    out.null_count = vec.getNullCount().value_or(-1);
-    return;
-  }
-  auto nulls = AlignedBuffer::allocate<bool>(out.length, pool);
-  gatherFromBuffer(*BOOLEAN(), *vec.nulls(), rows, *nulls);
-  holder.setBuffer(0, nulls);
-  out.null_count = -1;
 }
 
 void exportValues(
@@ -806,36 +833,44 @@ void exportToArrowImpl(
     const Selection& rows,
     ArrowArray& out,
     memory::MemoryPool* pool) {
-  auto holder = std::make_unique<VeloxToArrowBridgeHolder>();
-  out.buffers = holder->getArrowBuffers();
-  out.length = rows.count();
-  out.offset = 0;
-  out.dictionary = nullptr;
-  exportNulls(vec, rows, out, pool, *holder);
+  const size_t nullCount = getNullCount(vec, rows);
 
-  switch (vec.encoding()) {
-    case VectorEncoding::Simple::FLAT:
-      exportFlat(vec, rows, out, pool, *holder);
-      break;
-    case VectorEncoding::Simple::ROW:
-      exportRows(*vec.asUnchecked<RowVector>(), rows, out, pool, *holder);
-      break;
-    case VectorEncoding::Simple::ARRAY:
-      exportArrays(*vec.asUnchecked<ArrayVector>(), rows, out, pool, *holder);
-      break;
-    case VectorEncoding::Simple::MAP:
-      exportMaps(*vec.asUnchecked<MapVector>(), rows, out, pool, *holder);
-      break;
-    case VectorEncoding::Simple::DICTIONARY:
-      exportDictionary(vec, rows, out, pool, *holder);
-      break;
-    case VectorEncoding::Simple::CONSTANT:
-      exportConstant(vec, rows, out, pool, *holder);
-      break;
-    default:
-      VELOX_NYI("{} cannot be exported to Arrow yet.", vec.encoding());
+  // If all rows are null, use Arrow's Null Layout:
+  //  https://arrow.apache.org/docs/dev/format/Columnar.html#null-layout
+  if (nullCount == rows.count()) {
+    setNullArray(out, nullCount);
+  } else {
+    auto holder = std::make_unique<VeloxToArrowBridgeHolder>();
+    out.buffers = holder->getArrowBuffers();
+    out.length = rows.count();
+    out.offset = 0;
+    out.dictionary = nullptr;
+    exportValidityBitmap(vec, nullCount, rows, out, pool, *holder);
+
+    switch (vec.encoding()) {
+      case VectorEncoding::Simple::FLAT:
+        exportFlat(vec, rows, out, pool, *holder);
+        break;
+      case VectorEncoding::Simple::ROW:
+        exportRows(*vec.asUnchecked<RowVector>(), rows, out, pool, *holder);
+        break;
+      case VectorEncoding::Simple::ARRAY:
+        exportArrays(*vec.asUnchecked<ArrayVector>(), rows, out, pool, *holder);
+        break;
+      case VectorEncoding::Simple::MAP:
+        exportMaps(*vec.asUnchecked<MapVector>(), rows, out, pool, *holder);
+        break;
+      case VectorEncoding::Simple::DICTIONARY:
+        exportDictionary(vec, rows, out, pool, *holder);
+        break;
+      case VectorEncoding::Simple::CONSTANT:
+        exportConstant(vec, rows, out, pool, *holder);
+        break;
+      default:
+        VELOX_NYI("{} cannot be exported to Arrow yet.", vec.encoding());
+    }
+    out.private_data = holder.release();
   }
-  out.private_data = holder.release();
   out.release = releaseArrowArray;
 }
 

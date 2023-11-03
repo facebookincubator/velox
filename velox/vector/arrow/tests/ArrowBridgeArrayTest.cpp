@@ -79,6 +79,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const TInput& input) {
     ArrowArray arrowArray;
     velox::exportToArrow(constantVector, arrowArray, pool_.get());
+
     validateConstant<isScalar, T>(
         input,
         constantVector->size(),
@@ -107,8 +108,10 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     EXPECT_EQ(nullptr, arrowArray.dictionary);
     EXPECT_NE(nullptr, arrowArray.release);
 
-    bool isNullLayout = validateNulls(inputData, arrowArray);
-    if (isNullLayout) {
+    validateNulls(inputData, arrowArray);
+
+    // This uses null layout, nothing more to validate.
+    if (arrowArray.null_count == arrowArray.length) {
       return;
     }
 
@@ -185,32 +188,39 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
   // Validate nulls and returns whether this array uses Arrow's Null Layout.
   template <typename T>
-  bool validateNulls(
+  void validateNulls(
       const std::vector<std::optional<T>>& inputData,
       const ArrowArray& arrowArray) {
     size_t nullCount =
         std::count(inputData.begin(), inputData.end(), std::nullopt);
-    if (arrowArray.null_count != -1) {
-      EXPECT_EQ(nullCount, arrowArray.null_count);
-    }
 
-    // If every element is null, check if it's using arrow's Null Layout.
-    if (!inputData.empty() && (nullCount == inputData.size())) {
-      // TODO: FlatVectors containing only null values are not generating Null
-      // Layout today. Need to fix that before uncommenting these checks.
-      // EXPECT_EQ(arrowArray.buffers, nullptr);
-      // EXPECT_EQ(arrowArray.children, nullptr);
-      // EXPECT_EQ(arrowArray.n_buffers, 0);
-      // EXPECT_EQ(arrowArray.n_children, 0);
-      return true;
-    }
-
-    if (arrowArray.null_count == 0) {
+    // If every element is null, it should use arrow's Null Layout.
+    if (nullCount == inputData.size()) {
+      validateNullLayout(arrowArray, inputData.size());
+    } else if (arrowArray.null_count == 0) {
       EXPECT_EQ(arrowArray.buffers[0], nullptr);
     } else {
       EXPECT_NE(arrowArray.buffers[0], nullptr);
+      EXPECT_EQ(
+          arrowArray.null_count,
+          bits::countNulls(
+              static_cast<const uint64_t*>(arrowArray.buffers[0]),
+              0,
+              inputData.size()));
     }
-    return false;
+  }
+
+  // Validates that an array is following the Null Layout.
+  void validateNullLayout(const ArrowArray& arrowArray, size_t length) {
+    EXPECT_EQ(arrowArray.length, length);
+    EXPECT_EQ(arrowArray.null_count, length);
+
+    EXPECT_EQ(arrowArray.offset, 0);
+    EXPECT_EQ(arrowArray.n_buffers, 0);
+    EXPECT_EQ(arrowArray.n_children, 0);
+    EXPECT_EQ(arrowArray.buffers, nullptr);
+    EXPECT_EQ(arrowArray.children, nullptr);
+    EXPECT_EQ(arrowArray.dictionary, nullptr);
   }
 
   template <typename T>
@@ -268,13 +278,15 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const ArrowArray& arrowArray) {
     using TRunEnds = int32_t;
 
+    // Null constant uses Null Layout, not REE.
+    if (isNullConstant) {
+      validateNullLayout(arrowArray, vectorSize);
+      return;
+    }
+
     // Validate base REE array.
     EXPECT_EQ(vectorSize, arrowArray.length);
-    if (isNullConstant) {
-      EXPECT_EQ(vectorSize, arrowArray.null_count);
-    } else {
-      EXPECT_EQ(0, arrowArray.null_count);
-    }
+    EXPECT_EQ(0, arrowArray.null_count);
     EXPECT_EQ(0, arrowArray.offset);
     EXPECT_EQ(0, arrowArray.n_buffers);
     EXPECT_EQ(nullptr, arrowArray.buffers);
@@ -577,7 +589,8 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorNullable) {
 
 TEST_F(ArrowBridgeArrayExportTest, rowVectorEmpty) {
   ArrowArray arrowArray;
-  velox::exportToArrow(vectorMaker_.rowVector({}), arrowArray, pool_.get());
+  velox::exportToArrow(
+      vectorMaker_.rowVector(ROW({}), 10), arrowArray, pool_.get());
   EXPECT_EQ(0, arrowArray.n_children);
   EXPECT_EQ(1, arrowArray.n_buffers);
   EXPECT_EQ(nullptr, arrowArray.children);
@@ -864,7 +877,7 @@ TEST_F(ArrowBridgeArrayExportTest, unsupported) {
   VectorPtr vector;
 
   // Timestamps.
-  vector = vectorMaker_.flatVectorNullable<Timestamp>({});
+  vector = vectorMaker_.flatVectorNullable<Timestamp>({Timestamp{0, 0}});
   EXPECT_THROW(
       velox::exportToArrow(vector, arrowArray, pool_.get()), VeloxException);
 }
