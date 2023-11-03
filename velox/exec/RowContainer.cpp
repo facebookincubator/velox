@@ -836,7 +836,7 @@ std::string RowContainer::toString() const {
   }
 
   if (types_.size() > keyTypes_.size()) {
-    out << " Dependents: ";
+    out << ", Dependents: ";
     for (auto i = keyTypes_.size(); i < types_.size(); ++i) {
       if (i > keyTypes_.size()) {
         out << ", ";
@@ -846,10 +846,10 @@ std::string RowContainer::toString() const {
   }
 
   if (!accumulators_.empty()) {
-    out << " Num accumulators: " << accumulators_.size();
+    out << ", Num accumulators: " << accumulators_.size();
   }
 
-  out << " Num rows: " << numRows_;
+  out << ", Num rows: " << numRows_;
   return out.str();
 }
 

@@ -165,6 +165,15 @@ Spiller::Spiller(
       "facebook::velox::exec::Spiller", const_cast<HashBitRange*>(&bits_));
 
   VELOX_CHECK_EQ(container_ == nullptr, type_ == Type::kHashJoinProbe);
+  if (container_ != nullptr) {
+    VELOX_CHECK_GE(
+        rowType_->size(),
+        container_->columnTypes().size(),
+        "RowType has different number of children than the container. "
+        "Spiller: {}",
+        toString());
+  }
+
   // kOrderBy spiller type must only have one partition.
   VELOX_CHECK(
       (type_ != Type::kOrderBy && type_ != Type::kAggregateInput &&
@@ -183,6 +192,13 @@ void Spiller::extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr) {
   } else {
     resultPtr->prepareForReuse();
     resultPtr->resize(rows.size());
+    VELOX_CHECK_GE(
+        resultPtr->childrenSize(),
+        container_->columnTypes().size(),
+        "Result vector has different number of children than the container. "
+        "Result vector: {}, Spiller: {}",
+        resultPtr->type()->toString(),
+        toString());
   }
   auto result = resultPtr.get();
   auto& types = container_->columnTypes();
@@ -732,10 +748,12 @@ void Spiller::clearNonSpillingRuns() {
 }
 
 std::string Spiller::toString() const {
+  std::string containerStr;
   return fmt::format(
-      "{}\t{}\tMAX_PARTITIONS:{}\tFINALIZED:{}",
+      "{}, ROW_TYPE:{}, CONTAINER:<{}>, MAX_PARTITIONS:{}, FINALIZED:{}",
       typeName(type_),
       rowType_->toString(),
+      container_ ? container_->toString() : "null",
       state_.maxPartitions(),
       finalized_);
 }
