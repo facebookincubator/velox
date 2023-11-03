@@ -159,11 +159,6 @@ AggregationNode::AggregationNode(
         "GroupId key {} must have global grouping sets",
         groupId_.value()->name());
   }
-
-  if (!globalGroupingSets_.empty()) {
-    VELOX_USER_CHECK(
-        groupId_.has_value(), "Global grouping sets require GroupId key");
-  }
 }
 
 AggregationNode::AggregationNode(
