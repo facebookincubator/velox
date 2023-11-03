@@ -147,6 +147,14 @@ class QueryCtx {
     }
   }
 
+  folly::Executor* executor0() const {
+    if (executor_ != nullptr) {
+      return executor_;
+    }
+    auto executor = executorKeepalive_.get();
+    return executor;
+  }
+
   const std::string queryId_;
   folly::Executor* const executor_{nullptr};
   folly::Executor* const spillExecutor_{nullptr};
