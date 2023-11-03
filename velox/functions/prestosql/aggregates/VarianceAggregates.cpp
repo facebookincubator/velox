@@ -459,7 +459,10 @@ void checkSumCountRowType(
 }
 
 template <template <typename TInput> class TClass>
-exec::AggregateRegistrationResult registerVariance(const std::string& name) {
+exec::AggregateRegistrationResult registerVariance(
+    const std::string& name,
+    bool registerCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> inputTypes = {
       "smallint", "integer", "bigint", "real", "double"};
@@ -508,18 +511,29 @@ exec::AggregateRegistrationResult registerVariance(const std::string& name) {
               "(count:bigint, mean:double, m2:double) struct");
           return std::make_unique<TClass<int64_t>>(resultType);
         }
-      });
+      },
+      registerCompanionFunctions,
+      overwrite);
 }
 
 } // namespace
 
-void registerVarianceAggregates(const std::string& prefix) {
-  registerVariance<StdDevSampAggregate>(prefix + kStdDev);
-  registerVariance<StdDevPopAggregate>(prefix + kStdDevPop);
-  registerVariance<StdDevSampAggregate>(prefix + kStdDevSamp);
-  registerVariance<VarSampAggregate>(prefix + kVariance);
-  registerVariance<VarPopAggregate>(prefix + kVarPop);
-  registerVariance<VarSampAggregate>(prefix + kVarSamp);
+void registerVarianceAggregates(
+    const std::string& prefix,
+    bool registerCompanionFunctions,
+    bool overwrite) {
+  registerVariance<StdDevSampAggregate>(
+      prefix + kStdDev, registerCompanionFunctions, overwrite);
+  registerVariance<StdDevPopAggregate>(
+      prefix + kStdDevPop, registerCompanionFunctions, overwrite);
+  registerVariance<StdDevSampAggregate>(
+      prefix + kStdDevSamp, registerCompanionFunctions, overwrite);
+  registerVariance<VarSampAggregate>(
+      prefix + kVariance, registerCompanionFunctions, overwrite);
+  registerVariance<VarPopAggregate>(
+      prefix + kVarPop, registerCompanionFunctions, overwrite);
+  registerVariance<VarSampAggregate>(
+      prefix + kVarSamp, registerCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

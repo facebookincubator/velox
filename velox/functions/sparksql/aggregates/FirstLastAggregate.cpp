@@ -429,7 +429,10 @@ class LastAggregate : public FirstLastAggregateBase<numeric, TData> {
 } // namespace
 
 template <template <bool B1, typename T, bool B2> class TClass, bool ignoreNull>
-AggregateRegistrationResult registerFirstLast(const std::string& name) {
+AggregateRegistrationResult registerFirstLast(
+    const std::string& name,
+    bool registerCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures = {
       AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -499,14 +502,23 @@ AggregateRegistrationResult registerFirstLast(const std::string& name) {
                 name,
                 inputType->toString());
         }
-      });
+      },
+      registerCompanionFunctions,
+      overwrite);
 }
 
-void registerFirstLastAggregates(const std::string& prefix) {
-  registerFirstLast<FirstAggregate, false>(prefix + "first");
-  registerFirstLast<FirstAggregate, true>(prefix + "first_ignore_null");
-  registerFirstLast<LastAggregate, false>(prefix + "last");
-  registerFirstLast<LastAggregate, true>(prefix + "last_ignore_null");
+void registerFirstLastAggregates(
+    const std::string& prefix,
+    bool registerCompanionFunctions,
+    bool overwrite) {
+  registerFirstLast<FirstAggregate, false>(
+      prefix + "first", registerCompanionFunctions, overwrite);
+  registerFirstLast<FirstAggregate, true>(
+      prefix + "first_ignore_null", registerCompanionFunctions, overwrite);
+  registerFirstLast<LastAggregate, false>(
+      prefix + "last", registerCompanionFunctions, overwrite);
+  registerFirstLast<LastAggregate, true>(
+      prefix + "last_ignore_null", registerCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql

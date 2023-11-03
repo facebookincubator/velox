@@ -558,7 +558,10 @@ template <
     typename TIntermediateInput,
     typename TIntermediateResult,
     typename TResultAccessor>
-exec::AggregateRegistrationResult registerCovariance(const std::string& name) {
+exec::AggregateRegistrationResult registerCovariance(
+    const std::string& name,
+    bool registerCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       // (double, double) -> double
       exec::AggregateFunctionSignatureBuilder()
@@ -607,37 +610,47 @@ exec::AggregateRegistrationResult registerCovariance(const std::string& name) {
                 "Unsupported raw input type: {}. Expected DOUBLE or REAL.",
                 rawInputType->toString())
         }
-      });
+      },
+      registerCompanionFunctions,
+      overwrite);
 }
 
 } // namespace
 
-void registerCovarianceAggregates(const std::string& prefix) {
+void registerCovarianceAggregates(
+    const std::string& prefix,
+    bool registerCompanionFunctions,
+    bool overwrite) {
   registerCovariance<
       CovarAccumulator,
       CovarIntermediateInput,
       CovarIntermediateResult,
-      CovarPopResultAccessor>(prefix + kCovarPop);
+      CovarPopResultAccessor>(
+      prefix + kCovarPop, registerCompanionFunctions, overwrite);
   registerCovariance<
       CovarAccumulator,
       CovarIntermediateInput,
       CovarIntermediateResult,
-      CovarSampResultAccessor>(prefix + kCovarSamp);
+      CovarSampResultAccessor>(
+      prefix + kCovarSamp, registerCompanionFunctions, overwrite);
   registerCovariance<
       CorrAccumulator,
       CorrIntermediateInput,
       CorrIntermediateResult,
-      CorrResultAccessor>(prefix + kCorr);
+      CorrResultAccessor>(
+      prefix + kCorr, registerCompanionFunctions, overwrite);
   registerCovariance<
       RegrAccumulator,
       RegrIntermediateInput,
       RegrIntermediateResult,
-      RegrInterceptResultAccessor>(prefix + kRegrIntercept);
+      RegrInterceptResultAccessor>(
+      prefix + kRegrIntercept, registerCompanionFunctions, overwrite);
   registerCovariance<
       RegrAccumulator,
       RegrIntermediateInput,
       RegrIntermediateResult,
-      RegrSlopeResultAccessor>(prefix + kRegrSlop);
+      RegrSlopeResultAccessor>(
+      prefix + kRegrSlop, registerCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
