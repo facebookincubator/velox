@@ -352,6 +352,19 @@ class TestVeloxVector(unittest.TestCase):
                 for i in range(0, len(data)):
                     self.assertEqual(velox_vector[i], data[i])
 
+    def test_row_vector_basic(self):
+        vals = [
+            pv.from_list([1, 2, 3]),
+            pv.from_list([4.0, 5.0, 6.0]),
+            pv.from_list(["a", "b", "c"]),
+        ]
+
+        col_names = ["x", "y", "z"]
+        rw = pv.row_vector(col_names, vals)
+        rw_str = str(rw)
+        expected_str = "0: {1, 4, a}\n1: {2, 5, b}\n2: {3, 6, c}"
+        assert expected_str == rw_str
+
     def test_row_vector_with_nulls(self):
         vals = [
             pv.from_list([1, 2, 3, 1, 2]),

@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <cassert>
+
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -543,9 +545,9 @@ static void addVectorBindings(
         }
         std::vector<std::shared_ptr<const Type>> childTypes;
         childTypes.reserve(children.size());
-        size_t vectorSize = children.size() > 0 ? children[0]->size() : 0;
+
+        size_t vectorSize = children[0]->size();
         for (int i = 0; i < children.size(); i++) {
-          // choose child with smallest size to calculate the vector size
           if (i > 0 && children[i]->size() != vectorSize) {
             PyErr_SetString(PyExc_ValueError, "Each child must have same");
             throw py::error_already_set();
