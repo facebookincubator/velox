@@ -18,18 +18,27 @@
 #include "complex.h"
 #include "velox/vector/ComplexVector.h"
 
+#include <functional>
 
 namespace facebook::velox::py {
 
 using namespace velox;
 namespace py = pybind11;
 
-struct Counter {
-  TypePtr type = createType(TypeKind::UNKNOWN, {});
+struct ElementCounter {
   vector_size_t insertedElements=0; // to track the elements already in the vector
   vector_size_t totalElements=0;  
-  std::vector<Counter> children;
+  std::vector<ElementCounter> children;
 };
+
+
+void checkOrAssignType(TypePtr& type, const std::function<TypePtr()>& func) {
+    if (type->kind() == TypeKind::UNKNOWN) {
+        type = func();
+    } else if (!(type->kindEquals(func()))) {
+        throw py::type_error("Cannot construct type tree, invalid variant for complex type");
+    }
+}
 
 template <TypeKind Kind>
 void setElementInFlatVector(
@@ -41,12 +50,12 @@ void setElementInFlatVector(
   asFlat->set(idx, NativeType{v.value<NativeType>()});
 }
 
-void constructType(TypePtr& type, const variant& v, Counter& counter){
+void constructType(TypePtr& type, const variant& v, ElementCounter& counter){
     ++counter.totalElements;
     
     if (v.isNull()) {
       if (v.kind() != TypeKind::UNKNOWN && v.kind() != TypeKind::INVALID &&
-          v.kind() != counter.type->kind()) {
+          v.kind() != type->kind()) {
         throw std::invalid_argument("Variant was of an unexpected kind");
       }
       return;
@@ -60,38 +69,31 @@ void constructType(TypePtr& type, const variant& v, Counter& counter){
         case TypeKind::ARRAY : {
           counter.children.resize(1);
             auto asArray = v.array();
-            TypePtr children;
+            TypePtr children = createType(TypeKind::UNKNOWN, {});
             for(const auto& element:asArray){
               constructType(children, element, counter.children[0]);
             }
-            type = createType<TypeKind::ARRAY>({children});
+            checkOrAssignType(type, [&children](){ return createType<TypeKind::ARRAY>({children});});
             break;
         }
 
         default:{
-            type = createScalarType(v.kind());
+            checkOrAssignType(type, [&v]() { return createScalarType(v.kind());});
             break;
         }
     }
-
-    if (counter.type->kind() == TypeKind::UNKNOWN) {
-        counter.type = type;
-    } else if (!(counter.type->kindEquals(type))){
-     throw py::type_error("Cannot construct type tree, invalid variant for complex type"); 
-    }
-
     }
 }
 
 static void insertVariantIntoVector(
-    TypeKind& type,
+    TypeKind& typeKind,
     const variant& v,
     VectorPtr& vector,
-    Counter& counter) {
+    ElementCounter& counter) {
   if (v.isNull()) {
     vector->setNull(counter.insertedElements, true);
   } else {
-    switch (type) {
+    switch (typeKind) {
       case TypeKind::ARRAY: {
         auto asArray = vector->as<ArrayVector>();
         asArray->elements()->resize(counter.children[0].totalElements);
@@ -114,7 +116,7 @@ static void insertVariantIntoVector(
       default: {
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             setElementInFlatVector,
-            type,
+            typeKind,
             counter.insertedElements,
             v,
             vector);
@@ -129,15 +131,15 @@ static void insertVariantIntoVector(
 VectorPtr variantsToVector(
     const std::vector<variant>& variants,
     velox::memory::MemoryPool* pool) {
-  Counter counter;
-  TypePtr type;
+  ElementCounter counter;
+  TypePtr type = createType(TypeKind::UNKNOWN, {});
   for(const auto& variant: variants){
     constructType(type, variant, counter);
   }
   VectorPtr resultVector = BaseVector::create(std::move(type), variants.size(), pool);
   for (const variant& v : variants) {
-    auto type = v.kind();
-    insertVariantIntoVector(type, v, resultVector, counter);
+    auto typeKind = v.kind();
+    insertVariantIntoVector(typeKind, v, resultVector, counter);
   }
   return resultVector;
 }

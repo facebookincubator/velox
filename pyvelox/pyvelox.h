@@ -74,7 +74,8 @@ inline velox::variant pyToVariant(const py::handle& obj) {
     std::vector<velox::variant> result;
     for (auto& item : objAsList) {
       result.push_back(pyToVariant(item));
-      if ((result.front().kind() != result.back().kind()) && !(item.is_none())) {
+      if ((result.front().kind() != result.back().kind()) &&
+          !(item.is_none())) {
         throw py::type_error("Array must consist of elements of only one kind");
       }
     }

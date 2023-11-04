@@ -21,7 +21,7 @@
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::py {
-    
+
 VectorPtr variantsToVector(
     const std::vector<variant>& variants,
     velox::memory::MemoryPool* pool);
