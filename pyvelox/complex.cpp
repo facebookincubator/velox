@@ -54,12 +54,17 @@ void constructType(TypePtr& type, const variant& v, ElementCounter& counter) {
   ++counter.totalElements;
 
   if (v.isNull()) {
+    // since the variant is NULL, we can't infer the data type
+    // of it's infer, thus it maybe UNKNOWN or INVALID at this stage
+    // which implies further investigation is required
     if (v.kind() != TypeKind::UNKNOWN && v.kind() != TypeKind::INVALID &&
         v.kind() != type->kind()) {
       throw std::invalid_argument("Variant was of an unexpected kind");
     }
     return;
   } else {
+    // if a Non-Null variant's type is unknown or not one of the valid
+    // types which are supported then the Type tree cannot be constructed
     if (v.kind() == TypeKind::UNKNOWN || v.kind() == TypeKind::INVALID) {
       throw std::invalid_argument(
           "Non-null variant has unknown or invalid kind");
