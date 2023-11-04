@@ -79,7 +79,7 @@ void constructType(TypePtr& type, const variant& v, ElementCounter& counter) {
           constructType(childType, element, counter.children[0]);
         }
 
-        // if child's types still remains Unknown, implies all the
+        // if child's type still remains Unknown, implies all the
         // elements in the array are actually NULL
         if (childType->kind() == TypeKind::UNKNOWN) {
           throw py::value_error("Cannot construct array with all None values");
