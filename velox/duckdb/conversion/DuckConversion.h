@@ -215,4 +215,52 @@ std::string makeCreateTableSql(
     const std::string& tableName,
     const RowType& rowType);
 
+/// Velox has a different declaration way of complex type with DuckDB, say
+/// 'row(bigint,double)' in Velox must be changed to
+/// 'struct(c0 bigint, c1 double)' to be parsed by the DuckDB parser.
+/// This method does this kind of transformation on a Velox-type JSON object
+/// making the output can be parsed by the DuckDB parser.
+/// For example, the following JSON string is a result columns return a
+/// PrestoQueryRunner, its velox type string is
+/// 'row(array(map(varchar,bigint)),array(array(bigint)))', it would be
+/// transformed to struct(s0 map(varchar,bigint)[],s1 bigint[][]).
+/// {
+///   "rawType":"row",
+///   "typeArguments":[
+///     {
+///       "rawType":"array",
+///       "typeArguments":[
+///         {
+///           "rawType":"map",
+///           "typeArguments":[
+///             {
+///               "rawType":"varchar",
+///               "typeArguments":[]
+///             },
+///             {
+///               "rawType":"bigint",
+///               "typeArguments":[]
+///             }
+///           ]
+///         }
+///       ]
+///     },
+///     {
+///       "rawType":"array",
+///       "typeArguments":[
+///         {
+///           "rawType":"array",
+///           "typeArguments":[
+///             {
+///               "rawType":"bigint",
+///               "typeArguments":[]
+///             }
+///           ]
+///         }
+///       ]
+///     }
+///   ]
+/// }
+std::string toDuckTypeString(const folly::dynamic& veloxTypeJsonObject);
+
 } // namespace facebook::velox::duckdb

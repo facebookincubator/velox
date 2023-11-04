@@ -18,6 +18,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "velox/type/Type.h"
 
 namespace facebook::velox::core {
 class IExpr;
@@ -44,6 +45,9 @@ struct ParseOptions {
 // are lower-cased, what prevents you to use functions and column names
 // containing upper case letters (e.g: "concatRow" will be parsed as
 // "concatrow").
+
+TypePtr parseType(const std::string& typeString);
+
 std::shared_ptr<const core::IExpr> parseExpr(
     const std::string& exprString,
     const ParseOptions& options);

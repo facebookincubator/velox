@@ -233,4 +233,49 @@ std::string makeCreateTableSql(
   return sql.str();
 }
 
+namespace {
+struct TypeArgument {
+  std::string rawType;
+  std::vector<TypeArgument> typeArguments;
+
+  explicit TypeArgument(const folly::dynamic& typeJsonObject) {
+    rawType = typeJsonObject["rawType"].asString();
+    for (const auto& item : typeJsonObject["typeArguments"]) {
+      typeArguments.emplace_back(item);
+    }
+  }
+
+  std::string toDuckTypeString() {
+    std::ostringstream result;
+    if (typeArguments.empty()) {
+      result << rawType;
+    } else if (rawType == "row") {
+      result << "struct(";
+      bool isFirst = true;
+      for (size_t i = 0; i < typeArguments.size(); ++i) {
+        auto argument = typeArguments.at(i).toDuckTypeString();
+        if (isFirst) {
+          result << "s" << i << " " << argument;
+          isFirst = false;
+        } else {
+          result << ",s" << i << " " << argument;
+        }
+      }
+      result << ")";
+    } else if (rawType == "array") {
+      result << typeArguments.front().toDuckTypeString() << "[]";
+    } else { // map
+      result << "map(" << typeArguments.at(0).toDuckTypeString() << ","
+             << typeArguments.at(1).toDuckTypeString() << ")";
+    }
+
+    return result.str();
+  }
+};
+} // namespace
+
+std::string toDuckTypeString(const folly::dynamic& veloxTypeJsonObject) {
+  return TypeArgument(veloxTypeJsonObject).toDuckTypeString();
+}
+
 } // namespace facebook::velox::duckdb

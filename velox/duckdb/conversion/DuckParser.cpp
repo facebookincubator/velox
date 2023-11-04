@@ -26,6 +26,7 @@ namespace facebook::velox::duckdb {
 using ::duckdb::BetweenExpression;
 using ::duckdb::CaseExpression;
 using ::duckdb::CastExpression;
+using ::duckdb::ColumnDefinition;
 using ::duckdb::ColumnRefExpression;
 using ::duckdb::ComparisonExpression;
 using ::duckdb::ConjunctionExpression;
@@ -33,6 +34,7 @@ using ::duckdb::ConstantExpression;
 using ::duckdb::ExpressionClass;
 using ::duckdb::ExpressionType;
 using ::duckdb::FunctionExpression;
+using ::duckdb::LogicalType;
 using ::duckdb::LogicalTypeId;
 using ::duckdb::LogicalTypeIdToString;
 using ::duckdb::OperatorExpression;
@@ -648,7 +650,21 @@ std::unique_ptr<::duckdb::ParsedExpression> parseSingleExpression(
       1, parsed.size(), "Expected exactly one expression: {}.", exprString);
   return std::move(parsed.front());
 }
+
+std::vector<::duckdb::LogicalType> ParseColumns(const std::string& columns) {
+  auto parsedColumns = Parser::ParseColumnList(columns);
+  std::vector<::duckdb::LogicalType> types;
+  types.reserve(columns.size());
+  for (const auto& column : parsedColumns) {
+    types.emplace_back(column.Type());
+  }
+  return types;
+}
 } // namespace
+
+TypePtr parseType(const std::string& typeString) {
+  return toVeloxType(ParseColumns(fmt::format("col {}", typeString)).front());
+}
 
 std::shared_ptr<const core::IExpr> parseExpr(
     const std::string& exprString,

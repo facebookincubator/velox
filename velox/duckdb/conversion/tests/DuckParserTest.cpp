@@ -746,3 +746,25 @@ TEST(DuckParserTest, lambda) {
       parseExpr("filter(a, if (b > 0, x -> (x = 10), x -> (x = 20)))")
           ->toString());
 }
+
+TEST(DuckParserTest, type) {
+  EXPECT_EQ(SMALLINT(), parseType("smallint"));
+  EXPECT_EQ(INTEGER(), parseType("integer"));
+  EXPECT_EQ(BIGINT(), parseType("bigint"));
+  EXPECT_EQ(DOUBLE(), parseType("double"));
+  EXPECT_EQ(REAL(), parseType("float"));
+  EXPECT_EQ(BOOLEAN(), parseType("bool"));
+
+  EXPECT_NE(BIGINT(), parseType("integer"));
+  EXPECT_NE(BIGINT(), parseType("double"));
+  EXPECT_NE(BOOLEAN(), parseType("integer"));
+
+  EXPECT_TRUE(DECIMAL(32, 8)->equivalent(*parseType("decimal(32, 8)")));
+  EXPECT_TRUE(ARRAY(BIGINT())->equivalent(*parseType("bigint[]")));
+  EXPECT_TRUE(MAP(BIGINT(), ARRAY(ROW({VARCHAR(), DOUBLE()})))
+                  ->equivalent(*parseType(
+                      "map(bigint, struct(r0 varchar, r1 double)[])")));
+  EXPECT_TRUE(ROW({ARRAY(MAP(VARCHAR(), BIGINT())), ARRAY(ARRAY(BIGINT()))})
+                  ->equivalent(*parseType(
+                      "struct(s0 map(varchar,bigint)[],s1 bigint[][])")));
+}
