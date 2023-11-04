@@ -175,14 +175,14 @@ class TestVeloxVector(unittest.TestCase):
         for i in range(len(expected_flat)):
             self.assertEqual(expected_flat[i], v2.elements()[i])
 
-        doubleNested = pv.from_list([[[1, 2], [3, 4]], [[1], [2]]])
+        doubleNested = pv.from_list([[[1, 2], [3, None]], [[1], [2]]])
         self.assertTrue(isinstance(doubleNested, pv.ArrayVector))
         self.assertTrue(isinstance(doubleNested.elements(), pv.ArrayVector))
         self.assertEqual(len(doubleNested), 2)
         elements = doubleNested.elements().elements()
         self.assertTrue(isinstance(elements, pv.FlatVector_BIGINT))
         self.assertEqual(len(elements), 6)
-        expected_firstElements = [1, 2, 3, 4, 1, 2]
+        expected_firstElements = [1, 2, 3, None, 1, 2]
         self.assertEqual(len(elements), len(expected_firstElements))
         for i in range(len(expected_firstElements)):
             self.assertEqual(expected_firstElements[i], elements[i])
@@ -190,8 +190,11 @@ class TestVeloxVector(unittest.TestCase):
         with self.assertRaises(TypeError):
             a = pv.from_list([[[1, 2], [3, 4]], [[1.1], [2.3]]])
 
-        # with self.assertRaises(RuntimeError):
-        #     v = pv.from_list([[None], [None, None, None]])
+        with self.assertRaises(ValueError):
+            v = pv.from_list([[None], [None, None, None]])
+
+        with self.assertRaises(TypeError):
+            a = pv.from_list([[[1, 2], [3, 4]], [["hello"], ["world"]]])
 
     def test_to_string(self):
         self.assertEqual(

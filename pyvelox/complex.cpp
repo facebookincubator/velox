@@ -69,12 +69,18 @@ void constructType(TypePtr& type, const variant& v, ElementCounter& counter) {
       case TypeKind::ARRAY: {
         counter.children.resize(1);
         auto asArray = v.array();
-        TypePtr children = createType(TypeKind::UNKNOWN, {});
+        TypePtr childType = createType(TypeKind::UNKNOWN, {});
         for (const auto& element : asArray) {
-          constructType(children, element, counter.children[0]);
+          constructType(childType, element, counter.children[0]);
         }
-        checkOrAssignType(type, [&children]() {
-          return createType<TypeKind::ARRAY>({children});
+
+        // if child's types still remains Unknown, implies all the
+        // elements in the array are actually NULL
+        if (childType->kind() == TypeKind::UNKNOWN) {
+          throw py::value_error("Cannot construct array with all None values");
+        }
+        checkOrAssignType(type, [&childType]() {
+          return createType<TypeKind::ARRAY>({childType});
         });
         break;
       }
@@ -125,8 +131,8 @@ static void insertVariantIntoVector(
         break;
       }
     }
-    counter.insertedElements += 1;
   }
+  counter.insertedElements += 1;
 }
 
 VectorPtr variantsToVector(
