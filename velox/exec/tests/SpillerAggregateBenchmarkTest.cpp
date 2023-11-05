@@ -20,15 +20,19 @@
 #include <gflags/gflags.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::exec;
 
 int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   serializer::presto::PrestoVectorSerde::registerVectorSerde();
   filesystems::registerLocalFileSystem();
-  auto test = std::make_unique<exec::test::AggregateSpillBenchmarkBase>();
-  test->setUp();
-  test->run();
-  test->printStats();
-  test->cleanup();
+  for (const auto type :
+       {Spiller::Type::kAggregateInput, Spiller::Type::kAggregateOutput}) {
+    auto test = std::make_unique<exec::test::AggregateSpillBenchmarkBase>(type);
+    test->setUp();
+    test->run();
+    test->printStats();
+    test->cleanup();
+  }
   return 0;
 }
