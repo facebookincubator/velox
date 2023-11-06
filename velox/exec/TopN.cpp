@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/TopN.h"
+#include <folly/container/F14Map.h>
+
 #include "velox/exec/ContainerRowSerde.h"
+#include "velox/exec/TopN.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
@@ -37,17 +39,20 @@ TopN::TopN(
           data_.get()),
       topRows_(comparator_),
       decodedVectors_(outputType_->children().size()) {
-  sortingKeyColumns_.reserve(topNNode->sortingKeys().size());
-  const auto columnCount{outputType_->children().size()};
-  std::vector<bool> isSortingKey(columnCount);
+  const auto numColumns{outputType_->children().size()};
+  const auto numSortingKeys{topNNode->sortingKeys().size()};
+  sortingKeyColumns_.reserve(numSortingKeys);
+  std::vector<bool> isSortingKey(numColumns);
   for (const auto& key : topNNode->sortingKeys()) {
     sortingKeyColumns_.emplace_back(exprToChannel(key.get(), outputType_));
     isSortingKey[sortingKeyColumns_.back()] = true;
   }
-  nonKeyColumns_.reserve(columnCount - sortingKeyColumns_.size());
-  for (column_index_t i = 0; i < columnCount; ++i) {
-    if (!isSortingKey[i]) {
-      nonKeyColumns_.emplace_back(i);
+  if (numColumns > numSortingKeys) {
+    nonKeyColumns_.reserve(numColumns - numSortingKeys);
+    for (column_index_t i = 0; i < numColumns; ++i) {
+      if (!isSortingKey[i]) {
+        nonKeyColumns_.emplace_back(i);
+      }
     }
   }
 }
@@ -58,8 +63,9 @@ void TopN::addInput(RowVectorPtr input) {
   }
 
   // Maps passed rows of 'data_' to the corresponding input row number. These
-  // input rows of non-key columns are later decoded and stored into data_.
-  std::unordered_map<char*, size_t> passedRows;
+  // input rows of non-key columns are later stored into data_.
+  const bool hasNonKeyColumn{!nonKeyColumns_.empty()};
+  folly::F14FastMap<void*, size_t> passedRows;
   for (auto row = 0; row < input->size(); ++row) {
     char* newRow = nullptr;
     if (topRows_.size() < count_) {
@@ -80,20 +86,21 @@ void TopN::addInput(RowVectorPtr input) {
       data_->store(decodedVectors_[col], row, newRow, col);
     }
 
-    passedRows[newRow] = row;
     topRows_.push(newRow);
+    if (hasNonKeyColumn) {
+      passedRows[newRow] = row;
+    }
   }
 
-  if (!passedRows.empty() && !nonKeyColumns_.empty()) {
-    SelectivityVector needsDecode(input->size(), false);
-    for (const auto [_, row] : passedRows) {
-      needsDecode.setValid(row, true);
-    }
-
+  if (hasNonKeyColumn && !passedRows.empty()) {
     for (const auto col : nonKeyColumns_) {
-      decodedVectors_[col].decode(*input->childAt(col), needsDecode);
+      decodedVectors_[col].decode(*input->childAt(col));
       for (const auto [dataRow, inputRow] : passedRows) {
-        data_->store(decodedVectors_[col], inputRow, dataRow, col);
+        data_->store(
+            decodedVectors_[col],
+            inputRow,
+            reinterpret_cast<char*>(dataRow),
+            col);
       }
     }
   }

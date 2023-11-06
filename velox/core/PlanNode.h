@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/container/F14Set.h>
+
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
@@ -1751,6 +1753,14 @@ class TopNNode : public PlanNode {
         "Number of sorting keys and sorting orders in TopN must be the same");
     VELOX_USER_CHECK_GT(
         count, 0, "TopN must specify greater than zero number of rows to keep");
+    folly::F14FastSet<std::string> sortingKeyNameSet;
+    for (const auto& sortingKey : sortingKeys_) {
+      const auto& keyName = sortingKey->name();
+      if (sortingKeyNameSet.contains(keyName)) {
+        VELOX_USER_FAIL("Duplicated sorting key {}", keyName);
+      }
+      sortingKeyNameSet.insert(keyName);
+    }
   }
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
