@@ -26,13 +26,24 @@ int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   serializer::presto::PrestoVectorSerde::registerVectorSerde();
   filesystems::registerLocalFileSystem();
-  for (const auto type :
-       {Spiller::Type::kAggregateInput, Spiller::Type::kAggregateOutput}) {
-    auto test = std::make_unique<exec::test::AggregateSpillBenchmarkBase>(type);
-    test->setUp();
-    test->run();
-    test->printStats();
-    test->cleanup();
+
+  auto spillerTypeName = FLAGS_spiller_benchmark_spiller_type;
+  Spiller::Type spillerType;
+  if (spillerTypeName == Spiller::typeName(Spiller::Type::kAggregateInput)) {
+    spillerType = Spiller::Type::kAggregateInput;
+  } else if (
+      spillerTypeName == Spiller::typeName(Spiller::Type::kAggregateOutput)) {
+    spillerType = Spiller::Type::kAggregateOutput;
+  } else {
+    VELOX_UNSUPPORTED(
+        "Not support {} spiller type in Aggregate spiller benchmark",
+        spillerTypeName);
   }
+  auto test = std::make_unique<test::AggregateSpillBenchmarkBase>(spillerType);
+  test->setUp();
+  test->run();
+  test->printStats();
+  test->cleanup();
+
   return 0;
 }
