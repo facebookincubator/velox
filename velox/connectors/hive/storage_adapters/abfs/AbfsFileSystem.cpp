@@ -221,24 +221,24 @@ class BlobStorageFileClient final : public IBlobStorageFileClient {
   BlobStorageFileClient(const DataLakeFileClient client)
       : client_(std::make_unique<DataLakeFileClient>(client)) {}
 
-  void Create() override {
+  void create() override {
     client_->Create();
   }
 
-  PathProperties GetProperties() override {
+  PathProperties getProperties() override {
     return client_->GetProperties().Value;
   }
 
-  void Append(const uint8_t* buffer, size_t size, uint64_t offset) override {
+  void append(const uint8_t* buffer, size_t size, uint64_t offset) override {
     auto bodyStream = Azure::Core::IO::MemoryBodyStream(buffer, size);
     client_->Append(bodyStream, offset);
   }
 
-  void Flush(uint64_t position) override {
+  void flush(uint64_t position) override {
     client_->Flush(position);
   }
 
-  void Close() override {
+  void close() override {
     // do nothing.
   }
 

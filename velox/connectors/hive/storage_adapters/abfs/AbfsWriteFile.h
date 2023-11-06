@@ -48,11 +48,11 @@ using namespace Azure::Storage::Files::DataLake::Models;
  */
 class IBlobStorageFileClient {
  public:
-  virtual void Create() = 0;
-  virtual PathProperties GetProperties() = 0;
-  virtual void Append(const uint8_t* buffer, size_t size, uint64_t offset) = 0;
-  virtual void Flush(uint64_t position) = 0;
-  virtual void Close() = 0;
+  virtual void create() = 0;
+  virtual PathProperties getProperties() = 0;
+  virtual void append(const uint8_t* buffer, size_t size, uint64_t offset) = 0;
+  virtual void flush(uint64_t position) = 0;
+  virtual void close() = 0;
 };
 
 /// Implementation of abfs write file. Nothing written to the file should be

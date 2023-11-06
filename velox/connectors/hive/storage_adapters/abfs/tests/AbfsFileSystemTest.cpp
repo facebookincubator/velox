@@ -57,13 +57,13 @@ class MockBlobStorageFileClient : public IBlobStorageFileClient {
     std::remove(tempFileName);
   }
 
-  void Create() override {
+  void create() override {
     fileStream_ = std::ofstream(
         filePath_,
         std::ios_base::out | std::ios_base::binary | std::ios_base::app);
   }
 
-  PathProperties GetProperties() override {
+  PathProperties getProperties() override {
     if (!std::filesystem::exists(filePath_)) {
       Azure::Storage::StorageException exp(filePath_ + "doesn't exists");
       exp.StatusCode = Azure::Core::Http::HttpStatusCode::NotFound;
@@ -76,16 +76,16 @@ class MockBlobStorageFileClient : public IBlobStorageFileClient {
     return ret;
   }
 
-  void Append(const uint8_t* buffer, size_t size, uint64_t offset) override {
+  void append(const uint8_t* buffer, size_t size, uint64_t offset) override {
     fileStream_.seekp(offset);
     fileStream_.write(reinterpret_cast<const char*>(buffer), size);
   }
 
-  void Flush(uint64_t position) override {
+  void flush(uint64_t position) override {
     fileStream_.flush();
   }
 
-  void Close() override {
+  void close() override {
     fileStream_.flush();
     fileStream_.close();
   }
