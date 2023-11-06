@@ -86,20 +86,7 @@ bool CachedBufferedInput::shouldPreload(int32_t numPages) {
                     memory::AllocationTraits::kPageSize) /
         memory::AllocationTraits::kPageSize;
   }
-  auto cachePages = cache_->incrementCachedPages(0);
-  auto allocator = cache_->allocator();
-  auto maxPages = memory::AllocationTraits::numPages(allocator->capacity());
-  auto allocatedPages = allocator->numAllocated();
-  if (numPages < maxPages - allocatedPages) {
-    // There is free space for the read-ahead.
-    return true;
-  }
-  auto prefetchPages = cache_->incrementPrefetchPages(0);
-  if (numPages + prefetchPages < cachePages / 2) {
-    // The planned prefetch plus other prefetches are under half the cache.
-    return true;
-  }
-  return false;
+  return cache_->mayPrefetch(numPages);
 }
 
 namespace {
@@ -219,6 +206,11 @@ void CachedBufferedInput::makeLoads(
   }
   bool isSsd = !requests[0]->ssdPin.empty();
   int32_t maxDistance = isSsd ? 20000 : options_.maxCoalesceDistance();
+  // If reading densely accessed, coalesce into large for best throughput, if
+  // for sparse, coalesce to quantum to reduce overread. Not all sparse access
+  // is correlated.
+  const auto maxCoalesceBytes =
+      prefetch ? options_.maxCoalesceBytes() : options_.loadQuantum();
   std::sort(
       requests.begin(),
       requests.end(),
@@ -248,7 +240,7 @@ void CachedBufferedInput::makeLoads(
         return size;
       },
       [&](int32_t index) {
-        if (coalescedBytes > options_.maxCoalesceBytes()) {
+        if (coalescedBytes > maxCoalesceBytes) {
           coalescedBytes = 0;
           return kNoCoalesce;
         }
@@ -314,6 +306,10 @@ class DwioCoalescedLoadBase : public cache::CoalescedLoad {
 
   int64_t size() const override {
     return size_;
+  }
+
+  bool mayPrefetchLocked() override {
+    return cache_.mayPrefetch(memory::AllocationTraits::numPages(size()));
   }
 
   std::string toString() const override {
@@ -404,7 +400,7 @@ class DwioCoalescedLoad : public DwioCoalescedLoadBase {
     auto stats = cache::readPins(
         pins,
         maxCoalesceDistance_,
-        1000,
+        1000, // Limit coalesce by size, not count.
         [&](int32_t i) { return pins[i].entry()->offset(); },
         [&](const std::vector<CachePin>& /*pins*/,
             int32_t /*begin*/,

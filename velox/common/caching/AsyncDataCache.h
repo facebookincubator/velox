@@ -441,6 +441,14 @@ class CoalescedLoad {
   }
 
  protected:
+  // Return false if a prefetch should not be started because of low
+  // memory or too many already outstanding prefetches. If this
+  // returns false, a call to loadOrFuture(nullptr) returns without
+  // changing the state of 'this'.
+  virtual bool mayPrefetchLocked() {
+    return true;
+  }
+
   // Makes entries for 'keys_' and loads their content. Elements of
   // 'keys_' that are already loaded or loading are expected to be left
   // out. The returned pins are expected to be exclusive with data
@@ -763,6 +771,10 @@ class AsyncDataCache : public memory::Cache {
   tsan_atomic<int32_t>& numSkippedSaves() {
     return numSkippedSaves_;
   }
+
+  /// Returns true if it is reasonable to prefetch 'numPages' more of prefetched
+  /// data.
+  bool mayPrefetch(memory::MachinePageCount numPages);
 
  private:
   static constexpr int32_t kNumShards = 4; // Must be power of 2.
