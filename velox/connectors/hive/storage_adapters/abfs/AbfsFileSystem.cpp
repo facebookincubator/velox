@@ -267,7 +267,7 @@ class AbfsWriteFile::Impl {
     }
 
     VELOX_CHECK(!exist(), "File already exists");
-    blobStorageFileClient_->Create();
+    blobStorageFileClient_->create();
   }
 
   /// mainly for test purpose.
@@ -278,7 +278,7 @@ class AbfsWriteFile::Impl {
 
   bool exist() {
     try {
-      blobStorageFileClient_->GetProperties();
+      blobStorageFileClient_->getProperties();
       return true;
     } catch (Azure::Storage::StorageException& e) {
       if (e.StatusCode == Azure::Core::Http::HttpStatusCode::NotFound) {
@@ -292,14 +292,14 @@ class AbfsWriteFile::Impl {
   void close() {
     if (!closed_) {
       flush();
-      blobStorageFileClient_->Close();
+      blobStorageFileClient_->close();
       closed_ = true;
     }
   }
 
   void flush() {
     if (!closed_) {
-      blobStorageFileClient_->Flush(position_);
+      blobStorageFileClient_->flush(position_);
     }
   }
 
@@ -312,14 +312,14 @@ class AbfsWriteFile::Impl {
   }
 
   uint64_t size() const {
-    auto properties = blobStorageFileClient_->GetProperties();
+    auto properties = blobStorageFileClient_->getProperties();
     return properties.FileSize;
   }
 
   void append(const char* buffer, size_t size) {
     auto offset = position_;
     position_ += size;
-    blobStorageFileClient_->Append(
+    blobStorageFileClient_->append(
         reinterpret_cast<const uint8_t*>(buffer), size, offset);
   }
 
