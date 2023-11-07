@@ -62,10 +62,10 @@ void TopN::addInput(RowVectorPtr input) {
     decodedVectors_[col].decode(*input->childAt(col));
   }
 
+  const bool hasNonKeyColumn{!nonKeyColumns_.empty()};
   // Maps passed rows of 'data_' to the corresponding input row number. These
   // input rows of non-key columns are later stored into data_.
-  const bool hasNonKeyColumn{!nonKeyColumns_.empty()};
-  folly::F14FastMap<void*, size_t> passedRows;
+  folly::F14FastMap<void*, vector_size_t> passedRows;
   for (auto row = 0; row < input->size(); ++row) {
     char* newRow = nullptr;
     if (topRows_.size() < count_) {

@@ -302,5 +302,6 @@ TEST_F(TopNTest, planNodeValidation) {
       plan({"a"}, 0),
       "TopN must specify greater than zero number of rows to keep");
   VELOX_ASSERT_THROW(
-      plan({"a", "b", "a"}), "TopNNode doesn't allow duplicate sorting key: a");
+      plan({"a", "b", "a"}),
+      "TopN must specify unique sorting keys. Found duplicate key: a");
 }

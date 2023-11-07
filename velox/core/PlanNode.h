@@ -15,8 +15,6 @@
  */
 #pragma once
 
-#include <folly/container/F14Set.h>
-
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
