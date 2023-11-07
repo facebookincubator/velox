@@ -41,6 +41,9 @@ dnf_install autoconf automake libtool bison flex python3 libsodium-devel
 
 dnf_install conda
 
+# Required for Antlr4
+dnf install -y libuuid-devel
+
 # install sphinx for doc gen
 pip3 install sphinx sphinx-tabs breathe sphinx_rtd_theme
 
@@ -105,6 +108,15 @@ cp -a hadoop /usr/local/
   ./configure --prefix=/usr
   make "-j${NPROC}"
   make install
+  ldconfig
+)
+
+(
+  wget https://www.antlr.org/download/antlr4-cpp-runtime-4.9.3-source.zip &&
+  mkdir antlr4-cpp-runtime-4.9.3-source &&
+  cd antlr4-cpp-runtime-4.9.3-source &&
+  unzip ../antlr4-cpp-runtime-4.9.3-source.zip &&
+  cmake_install antlr4 -DBUILD_SHARED_LIBS=ON
   ldconfig
 )
 

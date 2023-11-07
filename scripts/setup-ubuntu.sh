@@ -117,6 +117,18 @@ function install_conda {
   bash Miniconda3-latest-Linux-x86_64.sh -b -p $MINICONDA_PATH
 }
 
+function install_antlr4 {
+    cd "${DEPENDENCY_DIR}"
+      if [ -d "antlr4-cpp-runtime-4.9.3-source" ]; then
+        rm -rf antlr4-cpp-runtime-4.9.3-source
+      fi
+    wget https://www.antlr.org/download/antlr4-cpp-runtime-4.9.3-source.zip -O antlr4-cpp-runtime-4.9.3-source.zip
+    mkdir antlr4-cpp-runtime-4.9.3-source && cd antlr4-cpp-runtime-4.9.3-source
+    unzip ../antlr4-cpp-runtime-4.9.3-source.zip
+    mkdir build && mkdir run && cd build
+    cmake .. && make "-j${NPROC}" install
+}
+
 function install_velox_deps {
   run_and_time install_fmt
   run_and_time install_folly
@@ -124,6 +136,7 @@ function install_velox_deps {
   run_and_time install_wangle
   run_and_time install_fbthrift
   run_and_time install_conda
+  run_and_time install_antlr4
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

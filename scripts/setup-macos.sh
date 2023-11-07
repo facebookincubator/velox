@@ -113,6 +113,12 @@ function install_re2 {
   cmake_install -DRE2_BUILD_TESTING=OFF
 }
 
+function install_antlr {
+  github_checkout antlr/antlr4 "4.9.3"
+  cd runtime/Cpp
+  cmake_install -DBUILD_TESTS=OFF
+}
+
 function install_velox_deps {
   if [ "${INSTALL_PREREQUISITES:-Y}" == "Y" ]; then
     run_and_time install_build_prerequisites
@@ -121,6 +127,8 @@ function install_velox_deps {
   run_and_time install_fmt
   run_and_time install_double_conversion
   run_and_time install_re2
+  run_and_time install_antlr
+
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

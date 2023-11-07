@@ -44,6 +44,9 @@ dnf_install curl-devel c-ares-devel
 
 dnf_install conda
 
+# Required for Antlr4
+dnf install -y libuuid-devel
+
 # Activate gcc9; enable errors on unset variables afterwards.
 source /opt/rh/gcc-toolset-9/enable || exit 1
 set -u
@@ -84,6 +87,15 @@ wait  # For cmake and source downloads to complete.
   cd boost
   ./bootstrap.sh --prefix=/usr/local
   ./b2 "-j$(nproc)" -d0 install threading=multi
+)
+
+(
+  wget https://www.antlr.org/download/antlr4-cpp-runtime-4.9.3-source.zip &&
+  mkdir antlr4-cpp-runtime-4.9.3-source &&
+  cd antlr4-cpp-runtime-4.9.3-source &&
+  unzip ../antlr4-cpp-runtime-4.9.3-source.zip &&
+  cmake_install_deps antlr4 -DBUILD_SHARED_LIBS=ON
+  ldconfig
 )
 
 cmake_install_deps gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64 -DCMAKE_INSTALL_PREFIX:PATH=/usr
