@@ -49,10 +49,10 @@ class UnscaledValueFunction final : public exec::VectorFunction {
 std::vector<std::shared_ptr<exec::FunctionSignature>>
 unscaledValueSignatures() {
   return {exec::FunctionSignatureBuilder()
-              .integerVariable("a_precision")
-              .integerVariable("a_scale")
+              .integerVariable("precision")
+              .integerVariable("scale")
               .returnType("bigint")
-              .argumentType("DECIMAL(a_precision, a_scale)")
+              .argumentType("DECIMAL(precision, scale)")
               .build()};
 }
 
