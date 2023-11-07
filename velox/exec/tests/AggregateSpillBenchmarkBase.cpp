@@ -31,7 +31,7 @@ std::unique_ptr<RowContainer> makeRowContainer(
     const std::vector<TypePtr>& keyTypes,
     const std::vector<TypePtr>& dependentTypes,
     std::shared_ptr<velox::memory::MemoryPool>& pool) {
-  auto container = std::make_unique<RowContainer>(
+  return std::make_unique<RowContainer>(
       keyTypes,
       true, // nullableKeys
       std::vector<Accumulator>{},
@@ -41,7 +41,6 @@ std::unique_ptr<RowContainer> makeRowContainer(
       false, // hasProbedFlag
       false, // hasNormalizedKey
       pool.get());
-  return container;
 }
 
 std::unique_ptr<RowContainer> setupSpillContainer(

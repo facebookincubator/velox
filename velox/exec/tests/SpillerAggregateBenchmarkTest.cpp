@@ -28,6 +28,11 @@ int main(int argc, char* argv[]) {
   filesystems::registerLocalFileSystem();
 
   auto spillerTypeName = FLAGS_spiller_benchmark_spiller_type;
+  std::transform(
+      spillerTypeName.begin(),
+      spillerTypeName.end(),
+      spillerTypeName.begin(),
+      [](unsigned char c) { return std::toupper(c); });
   Spiller::Type spillerType;
   if (spillerTypeName == Spiller::typeName(Spiller::Type::kAggregateInput)) {
     spillerType = Spiller::Type::kAggregateInput;
@@ -36,7 +41,7 @@ int main(int argc, char* argv[]) {
     spillerType = Spiller::Type::kAggregateOutput;
   } else {
     VELOX_UNSUPPORTED(
-        "Not support {} spiller type in Aggregate spiller benchmark",
+        "The spiller type {} is not one of [AGGREGATE_INPUT, AGGREGATE_OUTPUT], the aggregate spiller dose not support it.",
         spillerTypeName);
   }
   auto test = std::make_unique<test::AggregateSpillBenchmarkBase>(spillerType);

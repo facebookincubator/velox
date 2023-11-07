@@ -34,7 +34,7 @@ class AggregateSpillBenchmarkBase : public SpillerBenchmarkBase {
   void writeSpillData();
   std::unique_ptr<Spiller> makeSpiller() const;
 
-  Spiller::Type spillerType_;
+  const Spiller::Type spillerType_;
   std::unique_ptr<RowContainer> rowContainer_;
   std::shared_ptr<velox::memory::MemoryPool> spillerPool_;
 };

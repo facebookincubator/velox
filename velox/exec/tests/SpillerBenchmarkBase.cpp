@@ -43,7 +43,7 @@ DEFINE_string(
 DEFINE_string(
     spiller_benchmark_spiller_type,
     "AGGREGATE_INPUT",
-    "The spiller type name, must be in all uppercase");
+    "The spiller type name.");
 DEFINE_uint32(
     spiller_benchmark_num_spill_vectors,
     10'000,
