@@ -19,7 +19,6 @@ add_library(
   Comparisons.cpp
   DecimalArithmetic.cpp
   DecimalCompare.cpp
-  DecimalVectorFunctions.cpp
   Hash.cpp
   In.cpp
   LeastGreatest.cpp
