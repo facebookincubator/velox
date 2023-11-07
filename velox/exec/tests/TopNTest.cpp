@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -281,4 +282,25 @@ TEST_F(TopNTest, onlyKeys) {
   createDuckDbTable(vectors);
 
   testTwoKeys(vectors, "c0", "c1", 200);
+}
+
+TEST_F(TopNTest, planNodeValidation) {
+  auto data = makeRowVector(
+      ROW({"a", "b"},
+          {
+              BIGINT(),
+              BIGINT(),
+          }),
+      10);
+  auto plan = [&](const std::vector<std::string>& sortingKeys,
+                  int32_t count = 10) {
+    PlanBuilder().values({data}).topN(sortingKeys, count, false).planNode();
+  };
+
+  VELOX_ASSERT_THROW(plan({}), "TopN must specify sorting keys");
+  VELOX_ASSERT_THROW(
+      plan({"a"}, 0),
+      "TopN must specify greater than zero number of rows to keep");
+  VELOX_ASSERT_THROW(
+      plan({"a", "b", "a"}), "TopNNode doesn't allow duplicate sorting key: a");
 }

@@ -1739,29 +1739,7 @@ class TopNNode : public PlanNode {
       const std::vector<SortOrder>& sortingOrders,
       int32_t count,
       bool isPartial,
-      const PlanNodePtr& source)
-      : PlanNode(id),
-        sortingKeys_(sortingKeys),
-        sortingOrders_(sortingOrders),
-        count_(count),
-        isPartial_(isPartial),
-        sources_{source} {
-    VELOX_USER_CHECK(!sortingKeys.empty(), "TopN must specify sorting keys");
-    VELOX_USER_CHECK_EQ(
-        sortingKeys.size(),
-        sortingOrders.size(),
-        "Number of sorting keys and sorting orders in TopN must be the same");
-    VELOX_USER_CHECK_GT(
-        count, 0, "TopN must specify greater than zero number of rows to keep");
-    folly::F14FastSet<std::string> sortingKeyNameSet;
-    for (const auto& sortingKey : sortingKeys_) {
-      const auto& keyName = sortingKey->name();
-      if (sortingKeyNameSet.contains(keyName)) {
-        VELOX_USER_FAIL("Duplicated sorting key {}", keyName);
-      }
-      sortingKeyNameSet.insert(keyName);
-    }
-  }
+      const PlanNodePtr& source);
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;

@@ -483,7 +483,7 @@ operations.
    * - Property
      - Description
    * - sortingKeys
-     - List of one of more input columns to sort by.
+     - List of one of more input columns to sort by. Cannot be empty and cannot duplicate.
    * - sortingOrders
      - Sorting order for each of the soring keys. See OrderBy for the list of supported orders.
    * - count
