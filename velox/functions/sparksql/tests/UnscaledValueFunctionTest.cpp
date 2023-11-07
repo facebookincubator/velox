@@ -30,7 +30,9 @@ TEST_F(UnscaledValueFunctionTest, unscaledValue) {
     auto result = evaluate("unscaled_value(c0)", makeRowVector({input}));
     assertEqualVectors(expected, result);
   };
+
   testUnscaledValue({1000, 2000, -3000, -4000}, DECIMAL(18, 3));
+
   VELOX_ASSERT_THROW(
       testUnscaledValue({1000, 2000, -3000, -4000}, DECIMAL(20, 3)),
       "ShortDecimal type is required");
