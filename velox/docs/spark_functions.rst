@@ -1,4 +1,4 @@
-i***********************
+***********************
 Spark Functions
 ***********************
 
@@ -7,6 +7,7 @@ Spark Functions
 
     functions/spark/math
     functions/spark/bitwise
+    functions/spark/decimal
     functions/spark/comparison
     functions/spark/string
     functions/spark/datetime
@@ -17,7 +18,6 @@ Spark Functions
     functions/spark/json
     functions/spark/aggregate
     functions/spark/window
-    functions/spark/decimal
 
 Here is a list of all scalar and aggregate Spark functions available in Velox.
 Function names link to function descriptions. Check out coverage maps

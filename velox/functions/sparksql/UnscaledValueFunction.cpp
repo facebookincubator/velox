@@ -29,7 +29,10 @@ class UnscaledValueFunction final : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const final {
-    VELOX_USER_CHECK(args[0]->type()->isShortDecimal());
+    VELOX_USER_CHECK(
+        args[0]->type()->isShortDecimal(),
+        "Expect short decimal type, but got: {}",
+        args[0]->type());
     exec::DecodedArgs decodedArgs(rows, args, context);
     auto decimalVector = decodedArgs.at(0);
     context.ensureWritable(rows, BIGINT(), result);
