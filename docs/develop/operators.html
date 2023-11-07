@@ -634,7 +634,7 @@ operations.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>sortingKeys</p></td>
-<td><p>List of one of more input columns to sort by.</p></td>
+<td><p>List of one of more input columns to sort by. Must not be empty and must not contain duplicates.</p></td>
 </tr>
 <tr class="row-odd"><td><p>sortingOrders</p></td>
 <td><p>Sorting order for each of the soring keys. See OrderBy for the list of supported orders.</p></td>
@@ -1070,7 +1070,7 @@ FilterNode(row_number &lt;= limit), but it uses less memory and CPU.</p>
 <td><p>Partition by columns for the window functions. May be empty.</p></td>
 </tr>
 <tr class="row-odd"><td><p>sortingKeys</p></td>
-<td><p>Order by columns for the window functions. Cannot be empty and cannot overlap with ‘partitionKeys’.</p></td>
+<td><p>Order by columns for the window functions. Must not be empty and must not overlap with ‘partitionKeys’.</p></td>
 </tr>
 <tr class="row-even"><td><p>sortingOrders</p></td>
 <td><p>Sorting order for each sorting key above. The supported sort orders are asc nulls first, asc nulls last, desc nulls first and desc nulls last.</p></td>
