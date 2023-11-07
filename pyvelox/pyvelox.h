@@ -549,7 +549,7 @@ static void addVectorBindings(
         size_t vectorSize = children[0]->size();
         for (int i = 0; i < children.size(); i++) {
           if (i > 0 && children[i]->size() != vectorSize) {
-            PyErr_SetString(PyExc_ValueError, "Each child must have same");
+            PyErr_SetString(PyExc_ValueError, "Each child must have same size");
             throw py::error_already_set();
           }
           childTypes.push_back(children[i]->type());
@@ -590,7 +590,7 @@ static void addVectorBindings(
       },
       py::arg("names"),
       py::arg("children"),
-      py::arg("nulls") = std::nullopt);
+      py::arg("nullability") = std::nullopt);
 
   py::class_<RowVector, BaseVector, RowVectorPtr>(
       m, "RowVector", py::module_local(asModuleLocalDefinitions))
