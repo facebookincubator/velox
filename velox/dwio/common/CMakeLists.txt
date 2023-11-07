@@ -78,3 +78,9 @@ target_link_libraries(
   Boost::regex
   Folly::folly
   glog::glog)
+
+if(VELOX_ENABLE_INTEL_IAA)
+  add_library(velox_dwio_qpl QplJobPool.cpp)
+  target_link_libraries(velox_dwio_qpl iaa::iaa Folly::folly)
+  target_link_libraries(velox_dwio_common velox_dwio_qpl)
+endif()

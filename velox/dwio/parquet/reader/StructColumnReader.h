@@ -49,6 +49,8 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       uint32_t index,
       const std::shared_ptr<dwio::common::BufferedInput>& input);
 
+  bool preDecompRowGroup(uint32_t index);
+
   // No-op in Parquet. All readers switch row groups at the same time, there is
   // no on-demand skipping to a new row group.
   void advanceFieldReader(
@@ -93,6 +95,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   // The level information for extracting nulls for 'this' from the
   // repdefs in a leaf PageReader.
   arrow::LevelInfo levelInfo_;
+  bool needPreDecomp = true;
 };
 
 } // namespace facebook::velox::parquet

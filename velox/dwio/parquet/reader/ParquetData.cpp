@@ -18,6 +18,9 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/parquet/reader/Statistics.h"
+#ifdef VELOX_ENABLE_INTEL_IAA
+#include "velox/dwio/common/QplJobPool.h"
+#endif
 
 namespace facebook::velox::parquet {
 
@@ -81,6 +84,33 @@ bool ParquetData::rowGroupMatches(
   return true;
 }
 
+bool ParquetData::preDecompRowGroup(uint32_t index) {
+#ifdef VELOX_ENABLE_INTEL_IAA
+  if (!dwio::common::QplJobHWPool::getInstance().job_ready()) {
+    return false;
+  }
+#else
+  return false;
+#endif
+  auto& metaData = rowGroups_[index].columns[type_->column()].meta_data;
+  if (metaData.codec != thrift::CompressionCodec::GZIP || !needPreDecomp) {
+    LOG(WARNING) << "QPL Job not ready or zlib window size(" << needPreDecomp
+                 << ") is not 4KB";
+    return false;
+  }
+
+  pageReaders_.resize(rowGroups_.size());
+  auto iaaPageReader = std::make_unique<PageReader>(
+      std::move(streams_[index]),
+      pool_,
+      type_,
+      metaData.codec,
+      metaData.total_compressed_size);
+  iaaPageReader->preDecompressPage(needPreDecomp, metaData.num_values);
+  pageReaders_[index] = std::move(iaaPageReader);
+  return needPreDecomp;
+}
+
 void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
@@ -113,6 +143,12 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(uint32_t index) {
   VELOX_CHECK_LT(index, streams_.size());
   VELOX_CHECK(streams_[index], "Stream not enqueued for column");
   auto metadata = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
+  auto& metadata = rowGroups_[index].columns[type_->column()].meta_data;
+  if (metadata.codec == thrift::CompressionCodec::GZIP &&
+      pageReaders_.size() > index && pageReaders_[index] != nullptr) {
+    reader_ = std::move(pageReaders_[index]);
+    return dwio::common::PositionProvider(empty);
+  }
   reader_ = std::make_unique<PageReader>(
       std::move(streams_[index]),
       pool_,

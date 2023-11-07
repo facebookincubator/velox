@@ -62,6 +62,9 @@ class ParquetData : public dwio::common::FormatData {
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
 
+  /// pre-decompress data for the 'index'th row group
+  bool preDecompRowGroup(uint32_t index);
+
   /// Positions 'this' at 'index'th row group. loadRowGroup must be called
   /// first. The returned PositionProvider is empty and should not be used.
   /// Other formats may use it.
@@ -203,7 +206,8 @@ class ParquetData : public dwio::common::FormatData {
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
   std::unique_ptr<PageReader> reader_;
-
+  std::vector<std::unique_ptr<PageReader>> pageReaders_;
+  bool needPreDecomp = true;
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;
 

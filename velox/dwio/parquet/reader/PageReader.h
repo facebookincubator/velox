@@ -31,6 +31,15 @@
 
 namespace facebook::velox::parquet {
 
+struct PreDecompPageInfo {
+  int64_t numValues; // Number of values in this row group
+  int64_t visitedRows; // rows already read
+  uint64_t pageStart{0};
+  thrift::PageHeader dataPageHeader;
+  const char* FOLLY_NULLABLE dataPageData{nullptr};
+  BufferPtr uncompressedDataV1Data;
+};
+
 /// Manages access to pages inside a ColumnChunk. Interprets page headers and
 /// encodings and presents the combination of pages and encoded values as a
 /// continuous stream accessible via readWithVisitor().
@@ -52,6 +61,10 @@ class PageReader {
         chunkSize_(chunkSize),
         nullConcatenation_(pool_) {
     type_->makeLevelInfo(leafInfo_);
+    dict_qpl_job_id = 0;
+    data_qpl_job_id = 0;
+    uncompressedDictData_ = nullptr;
+    uncompressedDataV1Data_ = nullptr;
   }
 
   // This PageReader constructor is for unit test only.
@@ -68,9 +81,25 @@ class PageReader {
         codec_(codec),
         chunkSize_(chunkSize),
         nullConcatenation_(pool_) {}
+  ~PageReader();
 
   /// Advances 'numRows' top level rows.
   void skip(int64_t numRows);
+
+  /// Pre-decompress GZIP page with IAA
+  void preDecompressPage(bool& need_pre_decompress, int64_t numValues);
+  void prefetchDataPageV1(const thrift::PageHeader& pageHeader);
+  void prefetchDataPageV2(const thrift::PageHeader& pageHeader);
+  void prefetchDictionary(const thrift::PageHeader& pageHeader);
+  const bool getDecompRes(int job_id);
+  void prefetchNextPage();
+  bool seekToPreDecompPage(int64_t row);
+  const bool iaaDecompressGzip(
+      const char* FOLLY_NONNULL pageData,
+      uint32_t compressedSize,
+      uint32_t uncompressedSize,
+      BufferPtr& uncompressedData,
+      int& qpl_job_id);
 
   /// Decodes repdefs for 'numTopLevelRows'. Use getLengthsAndNulls()
   /// to access the lengths and nulls for the different nesting
@@ -188,9 +217,14 @@ class PageReader {
   // next page.
   void updateRowInfoAfterPageSkipped();
 
-  void prepareDataPageV1(const thrift::PageHeader& pageHeader, int64_t row);
+  void prepareDataPageV1(
+      const thrift::PageHeader& pageHeader,
+      int64_t row,
+      bool job_success = false);
   void prepareDataPageV2(const thrift::PageHeader& pageHeader, int64_t row);
-  void prepareDictionary(const thrift::PageHeader& pageHeader);
+  void prepareDictionary(
+      const thrift::PageHeader& pageHeader,
+      bool job_success = false);
   void makeDecoder();
 
   // For a non-top level leaf, reads the defs and sets 'leafNulls_' and
@@ -204,12 +238,12 @@ class PageReader {
   const char* FOLLY_NONNULL readBytes(int32_t size, BufferPtr& copy);
 
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
-  // producing up to 'uncompressedSize' bytes. The start of the decoding
+  // producing up to 'decompressedSize' bytes. The The start of the decoding
   // result is returned. an intermediate copy may be made in 'decompresseddata_'
   const char* FOLLY_NONNULL decompressData(
       const char* FOLLY_NONNULL pageData,
       uint32_t compressedSize,
-      uint32_t uncompressedSize);
+      uint32_t decompressedSize);
 
   template <typename T>
   T readField(const char* FOLLY_NONNULL& ptr) {
@@ -486,6 +520,23 @@ class PageReader {
   std::unique_ptr<BooleanDecoder> booleanDecoder_;
   std::unique_ptr<DeltaBpDecoder> deltaBpDecoder_;
   // Add decoders for other encodings here.
+  // Used for pre-decompress
+  BufferPtr uncompressedDictData_;
+  BufferPtr uncompressedDataV1Data_;
+  thrift::PageHeader dictPageHeader_;
+  const char* FOLLY_NULLABLE dictPageData_{nullptr};
+  bool needUncompressDict;
+
+  thrift::PageHeader dataPageHeader_;
+  const char* FOLLY_NULLABLE dataPageData_{nullptr};
+
+  int dict_qpl_job_id;
+  int data_qpl_job_id;
+
+  bool pre_decompress_dict = false;
+  bool pre_decompress_data = false;
+  bool isWinSizeFit = false;
+  PreDecompPageInfo rowGroupPageInfo_;
 };
 
 FOLLY_ALWAYS_INLINE dwio::common::compression::CompressionOptions
