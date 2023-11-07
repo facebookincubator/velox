@@ -181,7 +181,7 @@ TEST_F(MultiFragmentTest, aggregationSingleKey) {
   core::PlanNodePtr partialAggPlan;
   {
     partialAggPlan = PlanBuilder()
-                         .tableScan(rowType_)
+                         .hiveTableScan(rowType_)
                          .project({"c0 % 10 AS c0", "c1"})
                          .partialAggregation({"c0"}, {"sum(c1)"})
                          .partitionedOutput({"c0"}, 3)
@@ -268,7 +268,7 @@ TEST_F(MultiFragmentTest, aggregationMultiKey) {
   core::PlanNodePtr partialAggPlan;
   {
     partialAggPlan = PlanBuilder()
-                         .tableScan(rowType_)
+                         .hiveTableScan(rowType_)
                          .project({"c0 % 10 AS c0", "c1 % 2 AS c1", "c2"})
                          .partialAggregation({"c0", "c1"}, {"sum(c2)"})
                          .partitionedOutput({"c0", "c1"}, 3)
@@ -316,7 +316,7 @@ TEST_F(MultiFragmentTest, distributedTableScan) {
     auto leafTaskId = makeTaskId("leaf", 0);
 
     auto leafPlan = PlanBuilder()
-                        .tableScan(rowType_)
+                        .hiveTableScan(rowType_)
                         .project({"c0 % 10", "c1 % 2", "c2"})
                         .partitionedOutput({}, 1, {"c2", "p1", "p0"})
                         .planNode();
@@ -360,7 +360,7 @@ TEST_F(MultiFragmentTest, mergeExchange) {
                                .localMerge(
                                    {"c0"},
                                    {PlanBuilder(planNodeIdGenerator)
-                                        .tableScan(rowType_)
+                                        .hiveTableScan(rowType_)
                                         .orderBy({"c0"}, true)
                                         .planNode()})
                                .partitionedOutput({}, 1)
@@ -783,7 +783,7 @@ TEST_F(MultiFragmentTest, limit) {
   auto leafTaskId = makeTaskId("leaf", 0);
   auto leafPlan =
       PlanBuilder()
-          .tableScan(std::dynamic_pointer_cast<const RowType>(data->type()))
+          .hiveTableScan(std::dynamic_pointer_cast<const RowType>(data->type()))
           .limit(0, 10, true)
           .partitionedOutput({}, 1)
           .planNode();
@@ -1170,7 +1170,7 @@ TEST_F(MultiFragmentTest, exchangeDestruction) {
   core::PlanNodePtr leafPlan;
 
   leafPlan = PlanBuilder()
-                 .tableScan(rowType_)
+                 .hiveTableScan(rowType_)
                  .project({"c0 % 10 AS c0", "c1"})
                  .partitionedOutput({}, 1)
                  .planNode();
@@ -1206,7 +1206,7 @@ TEST_F(MultiFragmentTest, exchangeDestruction) {
 TEST_F(MultiFragmentTest, cancelledExchange) {
   // Create a source fragment borrow the output type from it.
   auto planFragment = exec::test::PlanBuilder()
-                          .tableScan(rowType_)
+                          .hiveTableScan(rowType_)
                           .filter("c0 % 5 = 1")
                           .partitionedOutput({}, 1, {"c0", "c1"})
                           .planFragment();
@@ -1354,7 +1354,7 @@ DEBUG_ONLY_TEST_F(
   setupSources(10, 1000);
   auto leafTaskId = makeTaskId("leaf", 0);
   core::PlanNodePtr leafPlan = PlanBuilder()
-                                   .tableScan(rowType_)
+                                   .hiveTableScan(rowType_)
                                    .project({"c0 % 10 AS c0", "c1"})
                                    .partitionedOutput({}, 1)
                                    .planNode();
@@ -1416,7 +1416,7 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   auto taskId = makeTaskId("task", 0);
   core::PlanNodePtr leafPlan;
   leafPlan =
-      PlanBuilder().tableScan(rowType_).partitionedOutput({}, 1).planNode();
+      PlanBuilder().hiveTableScan(rowType_).partitionedOutput({}, 1).planNode();
 
   auto task = makeTask(taskId, leafPlan, 0);
   task->start(1);
@@ -1540,7 +1540,7 @@ DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
                              .localMerge(
                                  {"c0"},
                                  {PlanBuilder(planNodeIdGenerator)
-                                      .tableScan(rowType_)
+                                      .hiveTableScan(rowType_)
                                       .orderBy({"c0"}, true)
                                       .planNode()})
                              .partitionedOutput({}, 1)
@@ -1792,7 +1792,7 @@ TEST_F(MultiFragmentTest, earlyTaskFailure) {
                              .localMerge(
                                  {"c0"},
                                  {PlanBuilder(planNodeIdGenerator)
-                                      .tableScan(rowType_)
+                                      .hiveTableScan(rowType_)
                                       .orderBy({"c0"}, true)
                                       .planNode()})
                              .partitionedOutput({}, 1)

@@ -50,7 +50,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
       const std::string& sql) {
     auto rowType = getRowType(std::move(outputColumnNames));
 
-    auto plan = PlanBuilder().tableScan(rowType).planNode();
+    auto plan = PlanBuilder().hiveTableScan(rowType).planNode();
 
     assertQuery(plan, splits_, sql);
   }
@@ -66,7 +66,11 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
 
     auto plan = PlanBuilder(pool_.get())
                     .setParseOptions(options)
-                    .tableScan(rowType, subfieldFilters, remainingFilter)
+                    .startTableScan()
+                    .outputType(rowType)
+                    .subfieldFilters(subfieldFilters)
+                    .remainingFilter(remainingFilter)
+                    .endTableScan()
                     .planNode();
 
     assertQuery(plan, splits_, sql);
@@ -80,7 +84,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     auto rowType = getRowType(std::move(outputColumnNames));
 
     auto plan = PlanBuilder()
-                    .tableScan(rowType)
+                    .hiveTableScan(rowType)
                     .singleAggregation(groupingKeys, aggregates)
                     .planNode();
 
@@ -96,7 +100,10 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     auto rowType = getRowType(std::move(outputColumnNames));
 
     auto plan = PlanBuilder()
-                    .tableScan(rowType, filters)
+                    .startTableScan()
+                    .outputType(rowType)
+                    .subfieldFilters(filters)
+                    .endTableScan()
                     .singleAggregation(groupingKeys, aggregates)
                     .planNode();
 
@@ -221,7 +228,7 @@ TEST_F(ParquetTableScanTest, countStar) {
   // Output type does not have any columns.
   auto rowType = ROW({}, {});
   auto plan = PlanBuilder()
-                  .tableScan(rowType)
+                  .hiveTableScan(rowType)
                   .singleAggregation({}, {"count(0)"})
                   .planNode();
 
@@ -403,9 +410,8 @@ TEST_F(ParquetTableScanTest, DISABLED_reqArrayLegacy) {
 }
 
 TEST_F(ParquetTableScanTest, readAsLowerCase) {
-  auto plan = PlanBuilder(pool_.get())
-                  .tableScan(ROW({"a"}, {BIGINT()}), {}, "")
-                  .planNode();
+  auto plan =
+      PlanBuilder(pool_.get()).hiveTableScan(ROW({"a"}, {BIGINT()})).planNode();
   CursorParameters params;
   std::shared_ptr<folly::Executor> executor =
       std::make_shared<folly::CPUThreadPoolExecutor>(

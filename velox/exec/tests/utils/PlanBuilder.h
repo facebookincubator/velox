@@ -99,31 +99,6 @@ class PlanBuilder {
   ///
   /// @param outputType List of column names and types to read from the table.
   /// @param subfieldFilters A list of SQL expressions for the range filters to
-  /// apply to individual columns. Supported filters are: column <= value,
-  /// column < value, column >= value, column > value, column = value, column IN
-  /// (v1, v2,.. vN), column < v1 OR column >= v2.
-  /// @param remainingFilter SQL expression for the additional conjunct. May
-  /// include multiple columns and SQL functions. The remainingFilter is AND'ed
-  /// with all the subfieldFilters.
-  /// @param dataColumns can be different from 'outputType' for the purposes
-  /// of testing queries using missing columns. It is used, if specified, for
-  /// parseExpr call and as 'dataColumns' for the TableHandle. You supply more
-  /// types (for all columns) in this argument as opposed to 'outputType', where
-  /// you define the output types only. See 'missingColumns' test in
-  /// 'TableScanTest'.
-  PlanBuilder& tableScan(
-      const RowTypePtr& outputType,
-      const std::vector<std::string>& subfieldFilters = {},
-      const std::string& remainingFilter = "",
-      const RowTypePtr& dataColumns = nullptr);
-
-  /// Add a TableScanNode to scan a Hive table.
-  ///
-  /// @param tableName The name of the table to scan.
-  /// @param outputType List of column names and types to read from the table.
-  /// @param columnAliases Optional aliases for the column names. The key is the
-  /// alias (name in 'outputType'), value is the name in the files.
-  /// @param subfieldFilters A list of SQL expressions for the range filters to
   /// apply to individual columns. Should use column name aliases, not column
   /// names in the files. Supported filters are: column <= value, column <
   /// value, column >= value, column > value, column = value, column IN (v1,
@@ -132,33 +107,15 @@ class PlanBuilder {
   /// include multiple columns and SQL functions. Should use column name
   /// aliases, not column names in the files. The remainingFilter is AND'ed
   /// with all the subfieldFilters.
-  /// @param dataColumns can be different from 'outputType' for the purposes
-  /// of testing queries using missing columns. It is used, if specified, for
-  /// parseExpr call and as 'dataColumns' for the TableHandle. You supply more
-  /// types (for all columns) in this argument as opposed to 'outputType', where
-  /// you define the output types only. See 'missingColumns' test in
-  /// 'TableScanTest'.
-  PlanBuilder& tableScan(
-      const std::string& tableName,
+  /// @param tableName The name of the table to scan.
+  /// @param columnAliases Optional aliases for the column names. The key is the
+  /// alias (name in 'outputType'), value is the name in the files.
+  PlanBuilder& hiveTableScan(
       const RowTypePtr& outputType,
-      const std::unordered_map<std::string, std::string>& columnAliases = {},
       const std::vector<std::string>& subfieldFilters = {},
       const std::string& remainingFilter = "",
-      const RowTypePtr& dataColumns = nullptr);
-
-  /// Add a TableScanNode using a connector-specific table handle and
-  /// assignments. Supports any connector, not just Hive connector.
-  ///
-  /// @param outputType List of column names and types to project out. Column
-  /// names should match the keys in the 'assignments' map. The 'assignments'
-  /// map may contain more columns then 'outputType' if some columns are only
-  /// used by pushed-down filters.
-  PlanBuilder& tableScan(
-      const RowTypePtr& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& assignments);
+      const std::string& tableName = "hive_table",
+      const std::unordered_map<std::string, std::string>& columnAliases = {});
 
   /// Add a TableScanNode to scan a TPC-H table.
   ///
@@ -166,10 +123,122 @@ class PlanBuilder {
   /// and scale factor.
   /// @param columnNames The columns to be returned from that table.
   /// @param scaleFactor The TPC-H scale factor.
-  PlanBuilder& tableScan(
+  PlanBuilder& tpchTableScan(
       tpch::Table table,
       std::vector<std::string>&& columnNames,
       double scaleFactor = 1);
+
+  /// Helper class to build a custom TableScanNode.
+  /// Uses a planBuilder instance to get the next plan id, memory pool, and
+  /// parse options.
+  class TableScanBuilder {
+   public:
+    TableScanBuilder(PlanBuilder& builder)
+        : planBuilder_(builder), id_(builder.nextPlanNodeId()) {}
+
+    /// @param tableName The name of the table to scan.
+    TableScanBuilder& tableName(const std::string& tableName) {
+      tableName_ = tableName;
+      return *this;
+    }
+
+    /// @param connectorId The id of the connector to scan.
+    TableScanBuilder& connectorId(const std::string& connectorId) {
+      connectorId_ = connectorId;
+      return *this;
+    }
+
+    /// @param outputType List of column names and types to read from the table.
+    TableScanBuilder& outputType(const RowTypePtr outputType) {
+      outputType_ = outputType;
+      return *this;
+    }
+
+    /// @param subfieldFilters A list of SQL expressions for the range filters
+    /// to apply to individual columns. Supported filters are: column <= value,
+    /// column < value, column >= value, column > value, column = value, column
+    /// IN (v1, v2,.. vN), column < v1 OR column >= v2.
+    TableScanBuilder& subfieldFilters(
+        const std::vector<std::string>& subfieldFilters) {
+      subfieldFilters_ = subfieldFilters;
+      return *this;
+    }
+
+    /// @param remainingFilter SQL expression for the additional conjunct. May
+    /// include multiple columns and SQL functions. The remainingFilter is
+    /// AND'ed with all the subfieldFilters.
+    TableScanBuilder& remainingFilter(const std::string& remainingFilter) {
+      remainingFilter_ = remainingFilter;
+      return *this;
+    }
+
+    /// @param dataColumns can be different from 'outputType' for the purposes
+    /// of testing queries using missing columns. It is used, if specified, for
+    /// parseExpr call and as 'dataColumns' for the TableHandle. You supply more
+    /// types (for all columns) in this argument as opposed to 'outputType',
+    /// where you define the output types only. See 'missingColumns' test in
+    /// 'TableScanTest'.
+    TableScanBuilder& dataColumns(const RowTypePtr& dataColumns) {
+      dataColumns_ = dataColumns;
+      return *this;
+    }
+
+    /// @param columnAliases Optional aliases for the column names. The key is
+    /// the alias (name in 'outputType'), value is the name in the files.
+    TableScanBuilder& columnAliases(
+        const std::unordered_map<std::string, std::string>& columnAliases) {
+      columnAliases_ = columnAliases;
+      return *this;
+    }
+
+    /// @param tableHandle
+    TableScanBuilder& tableHandle(
+        const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle) {
+      tableHandle_ = tableHandle;
+      return *this;
+    }
+
+    /// @param assignments
+    /// outputType names should match the keys in the 'assignments' map. The
+    /// 'assignments' map may contain more columns than 'outputType' if some
+    /// columns are only used by pushed-down filters.
+    TableScanBuilder& assignments(
+        const std::unordered_map<
+            std::string,
+            std::shared_ptr<connector::ColumnHandle>>& assignments) {
+      assignments_ = assignments;
+      return *this;
+    }
+
+    /// Stop the TableScanBuilder.
+    PlanBuilder& endTableScan() {
+      planBuilder_.planNode_ = build();
+      return planBuilder_;
+    }
+
+    /// Build the plan node TableScanNode.
+    core::PlanNodePtr build();
+
+   private:
+    PlanBuilder& planBuilder_;
+    core::PlanNodeId id_;
+    std::string tableName_{"hive_table"};
+    std::string connectorId_{"test-hive"};
+    RowTypePtr outputType_;
+    std::vector<std::string> subfieldFilters_;
+    std::string remainingFilter_;
+    RowTypePtr dataColumns_;
+    std::unordered_map<std::string, std::string> columnAliases_;
+    std::shared_ptr<connector::ConnectorTableHandle> tableHandle_;
+    std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+        assignments_;
+  };
+
+  /// Start a TableScanBuilder.
+  TableScanBuilder& startTableScan() {
+    tableScanBuilder_.reset(new TableScanBuilder(*this));
+    return *tableScanBuilder_;
+  }
 
   /// Add a ValuesNode using specified data.
   ///
@@ -924,6 +993,7 @@ class PlanBuilder {
  protected:
   core::PlanNodePtr planNode_;
   parse::ParseOptions options_;
+  std::shared_ptr<TableScanBuilder> tableScanBuilder_;
 
  private:
   std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;

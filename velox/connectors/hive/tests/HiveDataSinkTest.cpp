@@ -157,7 +157,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     const std::vector<std::string> filePaths = listFiles(dirPath);
     ASSERT_EQ(filePaths.size(), 1);
     HiveConnectorTestBase::assertQuery(
-        PlanBuilder().tableScan(rowType_).planNode(),
+        PlanBuilder().hiveTableScan(rowType_).planNode(),
         {makeHiveConnectorSplit(filePaths[0])},
         fmt::format("SELECT * FROM tmp"));
   }

@@ -822,7 +822,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       const std::vector<std::filesystem::path>& filePaths,
       const std::filesystem::path& dirPath) {
     HiveConnectorTestBase::assertQuery(
-        PlanBuilder().tableScan(rowType_).planNode(),
+        PlanBuilder().hiveTableScan(rowType_).planNode(),
         {makeHiveConnectorSplits(filePaths)},
         fmt::format(
             "SELECT * FROM tmp WHERE {}",
@@ -861,7 +861,7 @@ class TableWriteTest : public HiveConnectorTestBase {
     // Read data from bucketed file on disk into 'rowVector'.
     core::PlanNodeId scanNodeId;
     auto plan = PlanBuilder()
-                    .tableScan(outputFileType, {}, "", outputFileType)
+                    .hiveTableScan(outputFileType)
                     .capturePlanNodeId(scanNodeId)
                     .planNode();
     const auto resultVector =
@@ -1023,7 +1023,7 @@ TEST_F(BasicTableWriteTest, roundTrip) {
 
   auto rowType = asRowType(data->type());
   auto plan = PlanBuilder()
-                  .tableScan(rowType)
+                  .hiveTableScan(rowType)
                   .tableWrite(targetDirectoryPath->path)
                   .planNode();
 
@@ -1054,7 +1054,7 @@ TEST_F(BasicTableWriteTest, roundTrip) {
   auto writeFileName = fileWriteInfos[0]["writeFileName"].asString();
 
   // Read from 'writeFileName' and verify the data matches the original.
-  plan = PlanBuilder().tableScan(rowType).planNode();
+  plan = PlanBuilder().hiveTableScan(rowType).planNode();
 
   auto copy = AssertQueryBuilder(plan)
                   .split(makeHiveConnectorSplit(fmt::format(
@@ -1443,7 +1443,7 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
   auto outputDirectory = TempDirectoryPath::create();
 
   auto planBuilder = PlanBuilder();
-  auto project = planBuilder.tableScan(rowType_).filter("c2 <> 0").project(
+  auto project = planBuilder.hiveTableScan(rowType_).filter("c2 <> 0").project(
       {"c0", "c1", "c3", "c5", "c2 + c3", "substr(c5, 1, 1)"});
 
   auto intputTypes = project.planNode()->outputType()->children();
@@ -1470,7 +1470,7 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
   // We create a new plan that only read that file and then
   // compare that against a duckDB query that runs the whole query.
   assertQuery(
-      PlanBuilder().tableScan(outputType).planNode(),
+      PlanBuilder().hiveTableScan(outputType).planNode(),
       makeHiveConnectorSplits(outputDirectory),
       "SELECT c0, c1, c3, c5, c2 + c3, substr(c5, 1, 1) FROM tmp WHERE c2 <> 0");
 
@@ -1510,7 +1510,7 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
           {SMALLINT(), VARCHAR(), DOUBLE(), INTEGER(), BIGINT(), REAL()}));
 
   auto plan = createInsertPlan(
-      PlanBuilder().tableScan(rowType_),
+      PlanBuilder().hiveTableScan(rowType_),
       inputRowType,
       tableSchema_,
       outputDirectory->path,
@@ -1524,7 +1524,7 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
   assertQueryWithWriterConfigs(plan, filePaths, "SELECT count(*) FROM tmp");
 
   HiveConnectorTestBase::assertQuery(
-      PlanBuilder().tableScan(tableSchema_).planNode(),
+      PlanBuilder().hiveTableScan(tableSchema_).planNode(),
       makeHiveConnectorSplits(outputDirectory),
       "SELECT c2, c5, c4, c1, c0, c3 FROM tmp");
 
@@ -1543,7 +1543,7 @@ TEST_P(AllTableWriterTest, directReadWrite) {
 
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = createInsertPlan(
-      PlanBuilder().tableScan(rowType_),
+      PlanBuilder().hiveTableScan(rowType_),
       rowType_,
       outputDirectory->path,
       partitionedBy_,
@@ -1560,7 +1560,7 @@ TEST_P(AllTableWriterTest, directReadWrite) {
   // compare that against a duckDB query that runs the whole query.
 
   assertQuery(
-      PlanBuilder().tableScan(rowType_).planNode(),
+      PlanBuilder().hiveTableScan(rowType_).planNode(),
       makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
 
@@ -1591,7 +1591,7 @@ TEST_P(AllTableWriterTest, constantVectors) {
   assertQuery(op, fmt::format("SELECT {}", size));
 
   assertQuery(
-      PlanBuilder().tableScan(rowType_).planNode(),
+      PlanBuilder().hiveTableScan(rowType_).planNode(),
       makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
 
@@ -1640,7 +1640,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
     assertQuery(plan, "SELECT count(*) FROM tmp");
 
     assertQuery(
-        PlanBuilder().tableScan(rowType_).planNode(),
+        PlanBuilder().hiveTableScan(rowType_).planNode(),
         makeHiveConnectorSplits(outputDirectory),
         "SELECT * FROM tmp");
     verifyTableWriterOutput(outputDirectory->path, rowType_);
@@ -1664,7 +1664,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
     assertQuery(plan, "SELECT count(*) FROM tmp");
 
     assertQuery(
-        PlanBuilder().tableScan(rowType_).planNode(),
+        PlanBuilder().hiveTableScan(rowType_).planNode(),
         makeHiveConnectorSplits(outputDirectory),
         "SELECT * FROM tmp");
     verifyTableWriterOutput(outputDirectory->path, rowType_);
@@ -1734,7 +1734,7 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
 
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = createInsertPlan(
-      PlanBuilder().tableScan(rowType),
+      PlanBuilder().hiveTableScan(rowType),
       rowType,
       outputDirectory->path,
       partitionKeys,
@@ -1820,7 +1820,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
 
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = createInsertPlan(
-      PlanBuilder().tableScan(rowType),
+      PlanBuilder().hiveTableScan(rowType),
       rowType,
       outputDirectory->path,
       partitionKeys,
@@ -1851,7 +1851,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
   auto iterPartitionName = partitionNames.begin();
   while (iterPartitionDirectory != actualPartitionDirectories.end()) {
     assertQuery(
-        PlanBuilder().tableScan(rowType).planNode(),
+        PlanBuilder().hiveTableScan(rowType).planNode(),
         makeHiveConnectorSplits(*iterPartitionDirectory),
         fmt::format(
             "SELECT * FROM tmp WHERE {}",
@@ -1900,7 +1900,7 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
   auto outputDirectory = TempDirectoryPath::create();
   const int numWriters = getNumWriters();
   auto plan = createInsertPlan(
-      PlanBuilder().tableScan(rowType),
+      PlanBuilder().hiveTableScan(rowType),
       rowType,
       outputDirectory->path,
       partitionKeys,
@@ -1924,7 +1924,7 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
 
   // Verify all data is written to the single partition directory.
   assertQuery(
-      PlanBuilder().tableScan(rowType).planNode(),
+      PlanBuilder().hiveTableScan(rowType).planNode(),
       makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
 
@@ -1970,7 +1970,7 @@ TEST_P(PartitionedWithoutBucketTableWriterTest, fromSinglePartitionToMultiple) {
   assertQueryWithWriterConfigs(plan, "SELECT count(*) FROM tmp");
 
   assertQuery(
-      PlanBuilder().tableScan(rowType).planNode(),
+      PlanBuilder().hiveTableScan(rowType).planNode(),
       makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
 }
@@ -2050,7 +2050,7 @@ TEST_P(PartitionedTableWriterTest, maxPartitions) {
 TEST_P(AllTableWriterTest, writeNoFile) {
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = createInsertPlan(
-      PlanBuilder().tableScan(rowType_).filter("false"),
+      PlanBuilder().hiveTableScan(rowType_).filter("false"),
       rowType_,
       outputDirectory->path);
 
@@ -2312,7 +2312,7 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
       assertQueryWithWriterConfigs(plan, "SELECT count(*) FROM tmp");
 
       assertQuery(
-          PlanBuilder().tableScan(rowType_).planNode(),
+          PlanBuilder().hiveTableScan(rowType_).planNode(),
           makeHiveConnectorSplits(outputDirectory),
           "SELECT * FROM tmp");
       verifyTableWriterOutput(outputDirectory->path, rowType_);
@@ -2917,7 +2917,7 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
   auto outputDirectory = TempDirectoryPath::create();
   const int numWriters = getNumWriters();
   auto plan = createInsertPlan(
-      PlanBuilder().tableScan(rowType),
+      PlanBuilder().hiveTableScan(rowType),
       rowType,
       outputDirectory->path,
       partitionKeys,

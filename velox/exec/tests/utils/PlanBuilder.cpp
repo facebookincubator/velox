@@ -90,65 +90,47 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
 }
 } // namespace
 
-PlanBuilder& PlanBuilder::tableScan(
-    const RowTypePtr& outputType,
-    const std::vector<std::string>& subfieldFilters,
-    const std::string& remainingFilter,
-    const RowTypePtr& dataColumns) {
-  return tableScan(
-      "hive_table",
-      outputType,
-      {},
-      subfieldFilters,
-      remainingFilter,
-      dataColumns);
-}
-
-PlanBuilder& PlanBuilder::tableScan(
-    const std::string& tableName,
-    const RowTypePtr& outputType,
-    const std::unordered_map<std::string, std::string>& columnAliases,
-    const std::vector<std::string>& subfieldFilters,
-    const std::string& remainingFilter,
-    const RowTypePtr& dataColumns) {
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      assignments;
+core::PlanNodePtr PlanBuilder::TableScanBuilder::build() {
   std::unordered_map<std::string, core::TypedExprPtr> typedMapping;
-  for (uint32_t i = 0; i < outputType->size(); ++i) {
-    const auto& name = outputType->nameOf(i);
-    const auto& type = outputType->childAt(i);
+  bool hasAssignments = !(assignments_.empty());
+  for (uint32_t i = 0; i < outputType_->size(); ++i) {
+    const auto& name = outputType_->nameOf(i);
+    const auto& type = outputType_->childAt(i);
 
     std::string hiveColumnName = name;
-    auto it = columnAliases.find(name);
-    if (it != columnAliases.end()) {
+    auto it = columnAliases_.find(name);
+    if (it != columnAliases_.end()) {
       hiveColumnName = it->second;
       typedMapping.emplace(
           name,
           std::make_shared<core::FieldAccessTypedExpr>(type, hiveColumnName));
     }
 
-    assignments.insert(
-        {name,
-         std::make_shared<HiveColumnHandle>(
-             hiveColumnName,
-             HiveColumnHandle::ColumnType::kRegular,
-             type,
-             type)});
+    if (!hasAssignments) {
+      assignments_.insert(
+          {name,
+           std::make_shared<HiveColumnHandle>(
+               hiveColumnName,
+               HiveColumnHandle::ColumnType::kRegular,
+               type,
+               type)});
+    }
   }
 
-  const RowTypePtr& parseType = dataColumns ? dataColumns : outputType;
+  const RowTypePtr& parseType = dataColumns_ ? dataColumns_ : outputType_;
 
   SubfieldFilters filters;
-  filters.reserve(subfieldFilters.size());
+  filters.reserve(subfieldFilters_.size());
   core::QueryCtx queryCtx;
-  exec::SimpleExpressionEvaluator evaluator(&queryCtx, pool_);
-  for (const auto& filter : subfieldFilters) {
-    auto filterExpr = parseExpr(filter, parseType, options_, pool_);
+  exec::SimpleExpressionEvaluator evaluator(&queryCtx, planBuilder_.pool_);
+  for (const auto& filter : subfieldFilters_) {
+    auto filterExpr =
+        parseExpr(filter, parseType, planBuilder_.options_, planBuilder_.pool_);
     auto [subfield, subfieldFilter] =
         exec::toSubfieldFilter(filterExpr, &evaluator);
 
-    auto it = columnAliases.find(subfield.toString());
-    if (it != columnAliases.end()) {
+    auto it = columnAliases_.find(subfield.toString());
+    if (it != columnAliases_.end()) {
       subfield = common::Subfield(it->second);
     }
 
@@ -162,33 +144,45 @@ PlanBuilder& PlanBuilder::tableScan(
   }
 
   core::TypedExprPtr remainingFilterExpr;
-  if (!remainingFilter.empty()) {
-    remainingFilterExpr = parseExpr(remainingFilter, parseType, options_, pool_)
+  if (!remainingFilter_.empty()) {
+    remainingFilterExpr = parseExpr(
+                              remainingFilter_,
+                              parseType,
+                              planBuilder_.options_,
+                              planBuilder_.pool_)
                               ->rewriteInputNames(typedMapping);
   }
 
-  auto tableHandle = std::make_shared<HiveTableHandle>(
-      kHiveConnectorId,
-      tableName,
-      true,
-      std::move(filters),
-      remainingFilterExpr,
-      dataColumns);
-  return tableScan(outputType, tableHandle, assignments);
+  if (!tableHandle_) {
+    tableHandle_ = std::make_shared<HiveTableHandle>(
+        connectorId_,
+        tableName_,
+        true,
+        std::move(filters),
+        remainingFilterExpr,
+        dataColumns_);
+  }
+  return std::make_shared<core::TableScanNode>(
+      id_, outputType_, tableHandle_, assignments_);
 }
 
-PlanBuilder& PlanBuilder::tableScan(
+PlanBuilder& PlanBuilder::hiveTableScan(
     const RowTypePtr& outputType,
-    const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& assignments) {
-  planNode_ = std::make_shared<core::TableScanNode>(
-      nextPlanNodeId(), outputType, tableHandle, assignments);
+    const std::vector<std::string>& subfieldFilters,
+    const std::string& remainingFilter,
+    const std::string& tableName,
+    const std::unordered_map<std::string, std::string>& columnAliases) {
+  planNode_ = TableScanBuilder(*this)
+                  .outputType(outputType)
+                  .subfieldFilters(subfieldFilters)
+                  .remainingFilter(remainingFilter)
+                  .tableName(tableName)
+                  .columnAliases(columnAliases)
+                  .build();
   return *this;
 }
 
-PlanBuilder& PlanBuilder::tableScan(
+PlanBuilder& PlanBuilder::tpchTableScan(
     tpch::Table table,
     std::vector<std::string>&& columnNames,
     double scaleFactor) {
@@ -206,11 +200,15 @@ PlanBuilder& PlanBuilder::tableScan(
     outputTypes.emplace_back(resolveTpchColumn(table, columnName));
   }
   auto rowType = ROW(std::move(columnNames), std::move(outputTypes));
-  return tableScan(
-      rowType,
-      std::make_shared<connector::tpch::TpchTableHandle>(
-          kTpchConnectorId, table, scaleFactor),
-      assignmentsMap);
+
+  planNode_ =
+      TableScanBuilder(*this)
+          .outputType(rowType)
+          .tableHandle(std::make_shared<connector::tpch::TpchTableHandle>(
+              kTpchConnectorId, table, scaleFactor))
+          .assignments(assignmentsMap)
+          .build();
+  return *this;
 }
 
 PlanBuilder& PlanBuilder::values(

@@ -1738,13 +1738,13 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
   core::PlanNodeId buildScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(probeVectors[0]->type()))
+                  .hiveTableScan(asRowType(probeVectors[0]->type()))
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"t0"},
                       {"u0"},
                       PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(buildVectors[0]->type()))
+                          .hiveTableScan(asRowType(buildVectors[0]->type()))
                           .capturePlanNodeId(buildScanId)
                           .planNode(),
                       "",
@@ -1774,13 +1774,13 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
   // With extra filter.
   planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   plan = PlanBuilder(planNodeIdGenerator)
-             .tableScan(asRowType(probeVectors[0]->type()))
+             .hiveTableScan(asRowType(probeVectors[0]->type()))
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  {"t0"},
                  {"u0"},
                  PlanBuilder(planNodeIdGenerator)
-                     .tableScan(asRowType(buildVectors[0]->type()))
+                     .hiveTableScan(asRowType(buildVectors[0]->type()))
                      .capturePlanNodeId(buildScanId)
                      .planNode(),
                  "(t1 + u1) % 3 = 0",
@@ -3693,13 +3693,13 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
   core::PlanNodeId buildScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(probeVectors[0]->type()))
+                  .hiveTableScan(asRowType(probeVectors[0]->type()))
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"t0"},
                       {"u0"},
                       PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(buildVectors[0]->type()))
+                          .hiveTableScan(asRowType(buildVectors[0]->type()))
                           .capturePlanNodeId(buildScanId)
                           .planNode(),
                       "",
@@ -3729,13 +3729,13 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
   // With extra filter.
   planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   plan = PlanBuilder(planNodeIdGenerator)
-             .tableScan(asRowType(probeVectors[0]->type()))
+             .hiveTableScan(asRowType(probeVectors[0]->type()))
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  {"t0"},
                  {"u0"},
                  PlanBuilder(planNodeIdGenerator)
-                     .tableScan(asRowType(buildVectors[0]->type()))
+                     .hiveTableScan(asRowType(buildVectors[0]->type()))
                      .capturePlanNodeId(buildScanId)
                      .planNode(),
                  "(t1 + u1) % 3 = 0",
@@ -3866,13 +3866,13 @@ TEST_F(HashJoinTest, lazyVectors) {
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
     auto op = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
+                  .hiveTableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"c0"},
                       {"c0"},
                       PlanBuilder(planNodeIdGenerator)
-                          .tableScan(ROW({"c0"}, {INTEGER()}))
+                          .hiveTableScan(ROW({"c0"}, {INTEGER()}))
                           .capturePlanNodeId(buildScanId)
                           .planNode(),
                       "",
@@ -3891,24 +3891,25 @@ TEST_F(HashJoinTest, lazyVectors) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(
-                      ROW({"c0", "c1", "c2", "c3"},
-                          {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
-                  .capturePlanNodeId(probeScanId)
-                  .filter("c2 < 29")
-                  .hashJoin(
-                      {"c0"},
-                      {"bc0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
-                          .capturePlanNodeId(buildScanId)
-                          .project({"c0 as bc0", "c1 as bc1"})
-                          .planNode(),
-                      "(c1 + bc1) % 33 < 27",
-                      {"c1", "bc1", "c3"})
-                  .project({"c1 + 1", "bc1", "length(c3)"})
-                  .planNode();
+    auto op =
+        PlanBuilder(planNodeIdGenerator)
+            .hiveTableScan(
+                ROW({"c0", "c1", "c2", "c3"},
+                    {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
+            .capturePlanNodeId(probeScanId)
+            .filter("c2 < 29")
+            .hashJoin(
+                {"c0"},
+                {"bc0"},
+                PlanBuilder(planNodeIdGenerator)
+                    .hiveTableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
+                    .capturePlanNodeId(buildScanId)
+                    .project({"c0 as bc0", "c1 as bc1"})
+                    .planNode(),
+                "(c1 + bc1) % 33 < 27",
+                {"c1", "bc1", "c3"})
+            .project({"c1 + 1", "bc1", "length(c3)"})
+            .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
@@ -3989,7 +3990,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
     // Inner join.
     core::PlanNodeId probeScanId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(probeType)
+                  .hiveTableScan(probeType)
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"c0"},
@@ -4025,7 +4026,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
 
     // Left semi join.
     op = PlanBuilder(planNodeIdGenerator, pool_.get())
-             .tableScan(probeType)
+             .hiveTableScan(probeType)
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  {"c0"},
@@ -4063,7 +4064,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
 
     // Right semi join.
     op = PlanBuilder(planNodeIdGenerator, pool_.get())
-             .tableScan(probeType)
+             .hiveTableScan(probeType)
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  {"c0"},
@@ -4109,16 +4110,17 @@ TEST_F(HashJoinTest, dynamicFilters) {
     assignments["b"] = regularColumn("c1", BIGINT());
 
     core::PlanNodeId probeScanId;
-    auto op =
-        PlanBuilder(planNodeIdGenerator, pool_.get())
-            .tableScan(
-                scanOutputType,
-                makeTableHandle(common::test::SubfieldFiltersBuilder().build()),
-                assignments)
-            .capturePlanNodeId(probeScanId)
-            .hashJoin({"a"}, {"u_c0"}, buildSide, "", {"a", "b", "u_c1"})
-            .project({"a", "b + 1", "b + u_c1"})
-            .planNode();
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .startTableScan()
+                  .outputType(scanOutputType)
+                  .tableHandle(makeTableHandle(
+                      common::test::SubfieldFiltersBuilder().build()))
+                  .assignments(assignments)
+                  .endTableScan()
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin({"a"}, {"u_c0"}, buildSide, "", {"a", "b", "u_c1"})
+                  .project({"a", "b + 1", "b + u_c1"})
+                  .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
@@ -4147,7 +4149,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
   {
     core::PlanNodeId probeScanId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(probeType, {"c0 < 500::INTEGER"})
+                  .hiveTableScan(probeType, {"c0 < 500::INTEGER"})
                   .capturePlanNodeId(probeScanId)
                   .hashJoin({"c0"}, {"u_c0"}, buildSide, "", {"c1", "u_c1"})
                   .project({"c1 + u_c1"})
@@ -4181,7 +4183,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
     core::PlanNodeId probeScanId;
     auto op =
         PlanBuilder(planNodeIdGenerator, pool_.get())
-            .tableScan(probeType)
+            .hiveTableScan(probeType)
             .capturePlanNodeId(probeScanId)
             .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c0", "c1"})
             .project({"c0", "c1 + 1"})
@@ -4216,7 +4218,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
   {
     core::PlanNodeId probeScanId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(probeType)
+                  .hiveTableScan(probeType)
                   .capturePlanNodeId(probeScanId)
                   .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c0"})
                   .planNode();
@@ -4249,7 +4251,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
   {
     core::PlanNodeId probeScanId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(probeType, {"c0 < 500::INTEGER"})
+                  .hiveTableScan(probeType, {"c0 < 500::INTEGER"})
                   .capturePlanNodeId(probeScanId)
                   .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c1"})
                   .project({"c1 + 1"})
@@ -4284,7 +4286,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
     core::PlanNodeId probeScanId;
     auto op =
         PlanBuilder(planNodeIdGenerator, pool_.get())
-            .tableScan(probeType, {"c0 < 200::INTEGER"})
+            .hiveTableScan(probeType, {"c0 < 200::INTEGER"})
             .capturePlanNodeId(probeScanId)
             .hashJoin(
                 {"c0"}, {"u_c0"}, buildSide, "", {"c1"}, core::JoinType::kInner)
@@ -4317,7 +4319,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
 
     // Left semi join.
     op = PlanBuilder(planNodeIdGenerator, pool_.get())
-             .tableScan(probeType, {"c0 < 200::INTEGER"})
+             .hiveTableScan(probeType, {"c0 < 200::INTEGER"})
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  {"c0"},
@@ -4355,7 +4357,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
 
     // Right semi join.
     op = PlanBuilder(planNodeIdGenerator, pool_.get())
-             .tableScan(probeType, {"c0 < 200::INTEGER"})
+             .hiveTableScan(probeType, {"c0 < 200::INTEGER"})
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  {"c0"},
@@ -4416,7 +4418,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
   {
     core::PlanNodeId probeScanId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(probeType)
+                  .hiveTableScan(probeType)
                   .capturePlanNodeId(probeScanId)
                   .project({"cast(c0 + 1 as integer) AS t_key", "c1"})
                   .hashJoin({"t_key"}, {"u_c0"}, buildSide, "", {"c1"})
@@ -4529,7 +4531,7 @@ TEST_F(HashJoinTest, dynamicFiltersWithSkippedSplits) {
     // Inner join.
     core::PlanNodeId probeScanId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(probeType, {"c2 > 0"})
+                  .hiveTableScan(probeType, {"c2 > 0"})
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"c0"},
@@ -4570,7 +4572,7 @@ TEST_F(HashJoinTest, dynamicFiltersWithSkippedSplits) {
 
     // Left semi join.
     op = PlanBuilder(planNodeIdGenerator, pool_.get())
-             .tableScan(probeType, {"c2 > 0"})
+             .hiveTableScan(probeType, {"c2 > 0"})
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  {"c0"},
@@ -4613,7 +4615,7 @@ TEST_F(HashJoinTest, dynamicFiltersWithSkippedSplits) {
 
     // Right semi join.
     op = PlanBuilder(planNodeIdGenerator, pool_.get())
-             .tableScan(probeType, {"c2 > 0"})
+             .hiveTableScan(probeType, {"c2 > 0"})
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  {"c0"},
@@ -4875,7 +4877,11 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto op =
       PlanBuilder(planNodeIdGenerator)
-          .tableScan(outputType, tableHandle, assignments)
+          .startTableScan()
+          .outputType(outputType)
+          .tableHandle(tableHandle)
+          .assignments(assignments)
+          .endTableScan()
           .capturePlanNodeId(probeScanId)
           .hashJoin(
               {"n1_1"},

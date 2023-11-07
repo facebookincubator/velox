@@ -112,7 +112,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
                        .planNode();
   core::PlanNodeId leftScanId;
   auto op = PlanBuilder(planNodeIdGenerator)
-                .tableScan(probeType)
+                .hiveTableScan(probeType)
                 .capturePlanNodeId(leftScanId)
                 .hashJoin(
                     {"c0"},
@@ -241,7 +241,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
 
     auto op =
         PlanBuilder()
-            .tableScan(rowType)
+            .hiveTableScan(rowType)
             .partialAggregation(
                 {"c5"}, {"max(c0)", "sum(c1)", "sum(c2)", "sum(c3)", "sum(c4)"})
             .planNode();

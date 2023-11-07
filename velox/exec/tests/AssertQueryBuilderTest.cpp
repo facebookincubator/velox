@@ -74,7 +74,7 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
 
   // Single leaf node.
   AssertQueryBuilder(
-      PlanBuilder().tableScan(asRowType(data->type())).planNode(),
+      PlanBuilder().hiveTableScan(asRowType(data->type())).planNode(),
       duckDbQueryRunner_)
       .split(makeHiveConnectorSplit(file->path))
       .assertResults("VALUES (1), (2), (3)");
@@ -86,10 +86,11 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
 
   AssertQueryBuilder(
       PlanBuilder()
-          .tableScan(
-              ROW({"c0", "ds"}, {INTEGER(), VARCHAR()}),
-              makeTableHandle(),
-              assignments)
+          .startTableScan()
+          .outputType(ROW({"c0", "ds"}, {INTEGER(), VARCHAR()}))
+          .tableHandle(makeTableHandle())
+          .assignments(assignments)
+          .endTableScan()
           .planNode(),
       duckDbQueryRunner_)
       .split(HiveConnectorSplitBuilder(file->path)
@@ -107,13 +108,13 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
   core::PlanNodeId probeScanId;
   core::PlanNodeId buildScanId;
   auto joinPlan = PlanBuilder(planNodeIdGenerator)
-                      .tableScan(asRowType(data->type()))
+                      .hiveTableScan(asRowType(data->type()))
                       .capturePlanNodeId(probeScanId)
                       .hashJoin(
                           {"c0"},
                           {"b_c0"},
                           PlanBuilder(planNodeIdGenerator)
-                              .tableScan(asRowType(data->type()))
+                              .hiveTableScan(asRowType(data->type()))
                               .capturePlanNodeId(buildScanId)
                               .project({"c0 as b_c0"})
                               .planNode(),

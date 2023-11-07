@@ -36,10 +36,11 @@ class PlanBuilderTest : public testing::Test,
 TEST_F(PlanBuilderTest, duplicateSubfield) {
   VELOX_ASSERT_THROW(
       PlanBuilder(pool_.get())
-          .tableScan(
-              ROW({"a", "b"}, {BIGINT(), BIGINT()}),
-              {"a < 5", "b = 7", "a > 0"},
-              "a + b < 100")
+          .startTableScan()
+          .outputType(ROW({"a", "b"}, {BIGINT(), BIGINT()}))
+          .subfieldFilters({"a < 5", "b = 7", "a > 0"})
+          .remainingFilter("a + b < 100")
+          .endTableScan()
           .planNode(),
       "Duplicate subfield: a");
 }
@@ -47,14 +48,14 @@ TEST_F(PlanBuilderTest, duplicateSubfield) {
 TEST_F(PlanBuilderTest, invalidScalarFunctionCall) {
   VELOX_ASSERT_THROW(
       PlanBuilder()
-          .tableScan(ROW({"a", "b"}, {BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b"}, {BIGINT(), BIGINT()}))
           .project({"to_unixtime(a)"})
           .planNode(),
       "Scalar function signature is not supported: to_unixtime(BIGINT).");
 
   VELOX_ASSERT_THROW(
       PlanBuilder()
-          .tableScan(ROW({"a", "b"}, {BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b"}, {BIGINT(), BIGINT()}))
           .project({"to_unitime(a)"})
           .planNode(),
       "Scalar function doesn't exist: to_unitime.");
@@ -63,14 +64,14 @@ TEST_F(PlanBuilderTest, invalidScalarFunctionCall) {
 TEST_F(PlanBuilderTest, invalidAggregateFunctionCall) {
   VELOX_ASSERT_THROW(
       PlanBuilder()
-          .tableScan(ROW({"a", "b"}, {VARCHAR(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b"}, {VARCHAR(), BIGINT()}))
           .partialAggregation({}, {"sum(a)"})
           .planNode(),
       "Aggregate function signature is not supported: sum(VARCHAR).");
 
   VELOX_ASSERT_THROW(
       PlanBuilder()
-          .tableScan(ROW({"a", "b"}, {VARCHAR(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b"}, {VARCHAR(), BIGINT()}))
           .partialAggregation({}, {"maxx(a)"})
           .planNode(),
       "Aggregate function doesn't exist: maxx.");
@@ -92,7 +93,7 @@ void registerWindowFunction() {
 TEST_F(PlanBuilderTest, windowFunctionCall) {
   VELOX_ASSERT_THROW(
       PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .window({"window1(c) over (partition by a order by b) as d"})
           .planNode(),
       "Window function doesn't exist: window1.");
@@ -101,7 +102,7 @@ TEST_F(PlanBuilderTest, windowFunctionCall) {
 
   VELOX_CHECK_EQ(
       PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .window({"window1(c) over (partition by a order by b) as d"})
           .planNode()
           ->toString(true, false),
@@ -111,7 +112,7 @@ TEST_F(PlanBuilderTest, windowFunctionCall) {
 
   VELOX_CHECK_EQ(
       PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .window({"window1(c) over (partition by a) as d"})
           .planNode()
           ->toString(true, false),
@@ -121,7 +122,7 @@ TEST_F(PlanBuilderTest, windowFunctionCall) {
 
   VELOX_CHECK_EQ(
       PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .window({"window1(c) over ()"})
           .planNode()
           ->toString(true, false),
@@ -131,14 +132,14 @@ TEST_F(PlanBuilderTest, windowFunctionCall) {
 
   VELOX_ASSERT_THROW(
       PlanBuilder()
-          .tableScan(ROW({"a", "b"}, {VARCHAR(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b"}, {VARCHAR(), BIGINT()}))
           .window({"window1(a) over (partition by a order by b) as d"})
           .planNode(),
       "Window function signature is not supported: window1(VARCHAR).");
 
   VELOX_ASSERT_THROW(
       PlanBuilder()
-          .tableScan(ROW({"a", "b"}, {VARCHAR(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b"}, {VARCHAR(), BIGINT()}))
           .window({"window2(a) over (partition by a order by b) as d"})
           .planNode(),
       "Window function doesn't exist: window2.");
@@ -151,7 +152,7 @@ TEST_F(PlanBuilderTest, windowFrame) {
   // partitioning and order can be executed in the same node.
   VELOX_CHECK_EQ(
       PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .window(
               {"window1(c) over (partition by a order by b rows between b preceding and current row) as d1",
                "window1(c) over (partition by a order by b range between b preceding and current row) as d2",
@@ -181,7 +182,7 @@ TEST_F(PlanBuilderTest, windowFrame) {
 
   VELOX_ASSERT_THROW(
       PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .window(
               {"window1(c) over (partition by a order by b rows between b preceding and current row) as d1",
                "window1(c) over (partition by a order by b range between b preceding and current row) as d2",
@@ -191,7 +192,7 @@ TEST_F(PlanBuilderTest, windowFrame) {
 
   VELOX_ASSERT_THROW(
       PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .window(
               {"window1(c) over (partition by a order by b rows between b preceding and current row) as d1",
                "window1(c) over (partition by a order by c rows between b preceding and current row) as d2"})
@@ -200,7 +201,7 @@ TEST_F(PlanBuilderTest, windowFrame) {
 
   VELOX_ASSERT_THROW(
       PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .window(
               {"window1(c) over (partition by a order by b rows between b preceding and current row) as d1",
                "window1(c) over (partition by a order by b desc rows between b preceding and current row) as d2"})

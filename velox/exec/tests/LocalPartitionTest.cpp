@@ -119,7 +119,8 @@ TEST_F(LocalPartitionTest, gather) {
   std::vector<core::PlanNodeId> scanNodeIds;
 
   auto tableScanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node =
+        PlanBuilder(planNodeIdGenerator).hiveTableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };
@@ -162,7 +163,7 @@ TEST_F(LocalPartitionTest, partition) {
 
   auto scanAggNode = [&]() {
     auto builder = PlanBuilder(planNodeIdGenerator);
-    auto scanNode = builder.tableScan(rowType).planNode();
+    auto scanNode = builder.hiveTableScan(rowType).planNode();
     scanNodeIds.push_back(scanNode->id());
     return builder.partialAggregation({"c0"}, {"count(1)"}).planNode();
   };
@@ -244,7 +245,8 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
   std::vector<core::PlanNodeId> scanNodeIds;
 
   auto scanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node =
+        PlanBuilder(planNodeIdGenerator).hiveTableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };
@@ -369,7 +371,8 @@ TEST_F(LocalPartitionTest, multipleExchanges) {
   std::vector<core::PlanNodeId> scanNodeIds;
 
   auto tableScanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node =
+        PlanBuilder(planNodeIdGenerator).hiveTableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };

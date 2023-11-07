@@ -926,7 +926,7 @@ void makeAlternativePlansWithTableScan(
     std::vector<core::PlanNodePtr>& plans) {
   // Partial -> final aggregation plan.
   plans.push_back(PlanBuilder()
-                      .tableScan(inputRowType)
+                      .hiveTableScan(inputRowType)
                       .partialAggregation(groupingKeys, aggregates, masks)
                       .localPartition(groupingKeys)
                       .finalAggregation()
@@ -935,7 +935,7 @@ void makeAlternativePlansWithTableScan(
 
   // Partial -> intermediate -> final aggregation plan.
   plans.push_back(PlanBuilder()
-                      .tableScan(inputRowType)
+                      .hiveTableScan(inputRowType)
                       .partialAggregation(groupingKeys, aggregates, masks)
                       .localPartition(groupingKeys)
                       .intermediateAggregation()
@@ -1018,7 +1018,7 @@ void makeStreamingPlansWithTableScan(
     std::vector<core::PlanNodePtr>& plans) {
   // Single aggregation.
   plans.push_back(PlanBuilder()
-                      .tableScan(inputRowType)
+                      .hiveTableScan(inputRowType)
                       .orderBy(groupingKeys, false)
                       .streamingAggregation(
                           groupingKeys,
@@ -1032,7 +1032,7 @@ void makeStreamingPlansWithTableScan(
   // Partial -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
-          .tableScan(inputRowType)
+          .hiveTableScan(inputRowType)
           .orderBy(groupingKeys, false)
           .partialStreamingAggregation(groupingKeys, aggregates, masks)
           .finalAggregation()
@@ -1042,7 +1042,7 @@ void makeStreamingPlansWithTableScan(
   // Partial -> intermediate -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
-          .tableScan(inputRowType)
+          .hiveTableScan(inputRowType)
           .orderBy(groupingKeys, false)
           .partialStreamingAggregation(groupingKeys, aggregates, masks)
           .intermediateAggregation()
@@ -1053,7 +1053,7 @@ void makeStreamingPlansWithTableScan(
   // Partial -> local merge -> final aggregation plan.
   plans.push_back(
       PlanBuilder()
-          .tableScan(inputRowType)
+          .hiveTableScan(inputRowType)
           .orderBy(groupingKeys, true)
           .partialStreamingAggregation(groupingKeys, aggregates, masks)
           .localMerge(groupingKeys)

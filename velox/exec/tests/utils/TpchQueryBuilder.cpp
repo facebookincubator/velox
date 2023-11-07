@@ -207,7 +207,8 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
 
   auto plan =
       PlanBuilder(pool_.get())
-          .tableScan(kLineitem, selectedRowType, fileColumnNames, {filter})
+          .hiveTableScan(
+              selectedRowType, {filter}, "", kLineitem, fileColumnNames)
           .capturePlanNodeId(lineitemPlanNodeId)
           .project(
               {"l_returnflag",
@@ -267,21 +268,23 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
   core::PlanNodeId customerPlanNodeId;
 
   auto customers = PlanBuilder(planNodeIdGenerator, pool_.get())
-                       .tableScan(
-                           kCustomer,
+                       .hiveTableScan(
                            customerSelectedRowType,
-                           customerFileColumns,
-                           {customerFilter})
+                           {customerFilter},
+                           "",
+                           kCustomer,
+                           customerFileColumns)
                        .capturePlanNodeId(customerPlanNodeId)
                        .planNode();
 
   auto custkeyJoinNode =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kOrders,
+          .hiveTableScan(
               ordersSelectedRowType,
-              ordersFileColumns,
-              {orderDateFilter})
+              {orderDateFilter},
+              "",
+              kOrders,
+              ordersFileColumns)
           .capturePlanNodeId(ordersPlanNodeId)
           .hashJoin(
               {"o_custkey"},
@@ -293,11 +296,12 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kLineitem,
+          .hiveTableScan(
               lineitemSelectedRowType,
-              lineitemFileColumns,
-              {shipDateFilter})
+              {shipDateFilter},
+              "",
+              kLineitem,
+              lineitemFileColumns)
           .capturePlanNodeId(lineitemPlanNodeId)
           .project(
               {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
@@ -365,32 +369,36 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
   core::PlanNodeId regionScanNodeId;
 
   auto region = PlanBuilder(planNodeIdGenerator, pool_.get())
-                    .tableScan(
-                        kRegion,
+                    .hiveTableScan(
                         regionSelectedRowType,
-                        regionFileColumns,
-                        {regionNameFilter})
+                        {regionNameFilter},
+                        "",
+                        kRegion,
+                        regionFileColumns)
                     .capturePlanNodeId(regionScanNodeId)
                     .planNode();
 
   auto orders = PlanBuilder(planNodeIdGenerator, pool_.get())
-                    .tableScan(
-                        kOrders,
+                    .hiveTableScan(
                         ordersSelectedRowType,
-                        ordersFileColumns,
-                        {orderDateFilter})
+                        {orderDateFilter},
+                        "",
+                        kOrders,
+                        ordersFileColumns)
                     .capturePlanNodeId(ordersScanNodeId)
                     .planNode();
 
   auto customer =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
+          .hiveTableScan(
+              customerSelectedRowType, {}, "", kCustomer, customerFileColumns)
           .capturePlanNodeId(customerScanNodeId)
           .planNode();
 
   auto nationJoinRegion =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kNation, nationSelectedRowType, nationFileColumns)
+          .hiveTableScan(
+              nationSelectedRowType, {}, "", kNation, nationFileColumns)
           .capturePlanNodeId(nationScanNodeId)
           .hashJoin(
               {"n_regionkey"},
@@ -402,7 +410,8 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
 
   auto supplierJoinNationRegion =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
+          .hiveTableScan(
+              supplierSelectedRowType, {}, "", kSupplier, supplierFileColumns)
           .capturePlanNodeId(supplierScanNodeId)
           .hashJoin(
               {"s_nationkey"},
@@ -414,7 +423,8 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .hiveTableScan(
+              lineitemSelectedRowType, {}, "", kLineitem, lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .project(
               {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
@@ -470,13 +480,14 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
 
   core::PlanNodeId lineitemPlanNodeId;
   auto plan = PlanBuilder(pool_.get())
-                  .tableScan(
-                      kLineitem,
+                  .hiveTableScan(
                       selectedRowType,
-                      fileColumnNames,
                       {shipDateFilter,
                        "l_discount between 0.05 and 0.07",
-                       "l_quantity < 24.0"})
+                       "l_quantity < 24.0"},
+                      "",
+                      kLineitem,
+                      fileColumnNames)
                   .capturePlanNodeId(lineitemPlanNodeId)
                   .project({"l_extendedprice * l_discount"})
                   .partialAggregation({}, {"sum(p0)"})
@@ -521,16 +532,20 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
   core::PlanNodeId suppNationScanNodeId;
   core::PlanNodeId custNationScanNodeId;
 
-  auto custNation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kNation, nationSelectedRowType, nationFileColumns, {nationFilter})
-          .capturePlanNodeId(custNationScanNodeId)
-          .planNode();
+  auto custNation = PlanBuilder(planNodeIdGenerator, pool_.get())
+                        .hiveTableScan(
+                            nationSelectedRowType,
+                            {nationFilter},
+                            "",
+                            kNation,
+                            nationFileColumns)
+                        .capturePlanNodeId(custNationScanNodeId)
+                        .planNode();
 
   auto customerJoinNation =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
+          .hiveTableScan(
+              customerSelectedRowType, {}, "", kCustomer, customerFileColumns)
           .capturePlanNodeId(customerScanNodeId)
           .hashJoin(
               {"c_nationkey"},
@@ -543,7 +558,8 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
 
   auto ordersJoinCustomer =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
+          .hiveTableScan(
+              ordersSelectedRowType, {}, "", kOrders, ordersFileColumns)
           .capturePlanNodeId(ordersScanNodeId)
           .hashJoin(
               {"o_custkey"},
@@ -553,16 +569,20 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
               {"cust_nation", "o_orderkey"})
           .planNode();
 
-  auto suppNation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kNation, nationSelectedRowType, nationFileColumns, {nationFilter})
-          .capturePlanNodeId(suppNationScanNodeId)
-          .planNode();
+  auto suppNation = PlanBuilder(planNodeIdGenerator, pool_.get())
+                        .hiveTableScan(
+                            nationSelectedRowType,
+                            {nationFilter},
+                            "",
+                            kNation,
+                            nationFileColumns)
+                        .capturePlanNodeId(suppNationScanNodeId)
+                        .planNode();
 
   auto supplierJoinNation =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
+          .hiveTableScan(
+              supplierSelectedRowType, {}, "", kSupplier, supplierFileColumns)
           .capturePlanNodeId(supplierScanNodeId)
           .hashJoin(
               {"s_nationkey"},
@@ -575,11 +595,12 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kLineitem,
+          .hiveTableScan(
               lineitemSelectedRowType,
-              lineitemFileColumns,
-              {shipDateFilter})
+              {shipDateFilter},
+              "",
+              kLineitem,
+              lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .hashJoin(
               {"l_suppkey"},
@@ -671,34 +692,40 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
   core::PlanNodeId nationScanNodeIdWithName;
   core::PlanNodeId regionScanNodeId;
 
-  auto nationWithName =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kNation, nationSelectedRowTypeWithName, nationFileColumnsWithName)
-          .capturePlanNodeId(nationScanNodeIdWithName)
-          .planNode();
+  auto nationWithName = PlanBuilder(planNodeIdGenerator, pool_.get())
+                            .hiveTableScan(
+                                nationSelectedRowTypeWithName,
+                                {},
+                                "",
+                                kNation,
+                                nationFileColumnsWithName)
+                            .capturePlanNodeId(nationScanNodeIdWithName)
+                            .planNode();
 
   auto region = PlanBuilder(planNodeIdGenerator, pool_.get())
-                    .tableScan(
-                        kRegion,
+                    .hiveTableScan(
                         regionSelectedRowType,
-                        regionFileColumns,
-                        {"r_name = 'AMERICA'"})
+                        {"r_name = 'AMERICA'"},
+                        "",
+                        kRegion,
+                        regionFileColumns)
                     .capturePlanNodeId(regionScanNodeId)
                     .planNode();
 
   auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(
-                      kPart,
+                  .hiveTableScan(
                       partSelectedRowType,
-                      partFileColumns,
-                      {"p_type = 'ECONOMY ANODIZED STEEL'"})
+                      {"p_type = 'ECONOMY ANODIZED STEEL'"},
+                      "",
+                      kPart,
+                      partFileColumns)
                   .capturePlanNodeId(partScanNodeId)
                   .planNode();
 
   auto nationJoinRegion =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kNation, nationSelectedRowType, nationFileColumns)
+          .hiveTableScan(
+              nationSelectedRowType, {}, "", kNation, nationFileColumns)
           .capturePlanNodeId(nationScanNodeId)
           .hashJoin(
               {"n_regionkey"}, {"r_regionkey"}, region, "", {"n_nationkey"})
@@ -706,7 +733,8 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
 
   auto customerJoinNationJoinRegion =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
+          .hiveTableScan(
+              customerSelectedRowType, {}, "", kCustomer, customerFileColumns)
           .capturePlanNodeId(customerScanNodeId)
           .hashJoin(
               {"c_nationkey"},
@@ -718,11 +746,12 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
 
   auto ordersJoinCustomerJoinNationJoinRegion =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kOrders,
+          .hiveTableScan(
               ordersSelectedRowType,
-              ordersFileColumns,
-              {orderDateFilter})
+              {orderDateFilter},
+              "",
+              kOrders,
+              ordersFileColumns)
           .capturePlanNodeId(ordersScanNodeId)
           .hashJoin(
               {"o_custkey"},
@@ -734,7 +763,8 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
 
   auto supplierJoinNation =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
+          .hiveTableScan(
+              supplierSelectedRowType, {}, "", kSupplier, supplierFileColumns)
           .capturePlanNodeId(supplierScanNodeId)
           .hashJoin(
               {"s_nationkey"},
@@ -746,7 +776,8 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .hiveTableScan(
+              lineitemSelectedRowType, {}, "", kLineitem, lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .hashJoin(
               {"l_orderkey"},
@@ -846,30 +877,33 @@ TpchPlan TpchQueryBuilder::getQ9Plan() const {
       "l_extendedprice", "l_discount", "l_quantity"};
 
   auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(
-                      kPart,
+                  .hiveTableScan(
                       partSelectedRowType,
-                      partFileColumns,
                       {},
-                      "p_name like '%green%'")
+                      "p_name like '%green%'",
+                      kPart,
+                      partFileColumns)
                   .capturePlanNodeId(partScanNodeId)
                   .planNode();
 
   auto supplier =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
+          .hiveTableScan(
+              supplierSelectedRowType, {}, "", kSupplier, supplierFileColumns)
           .capturePlanNodeId(supplierScanNodeId)
           .planNode();
 
   auto nation =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kNation, nationSelectedRowType, nationFileColumns)
+          .hiveTableScan(
+              nationSelectedRowType, {}, "", kNation, nationFileColumns)
           .capturePlanNodeId(nationScanNodeId)
           .planNode();
 
   auto lineitemJoinPartJoinSupplier =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .hiveTableScan(
+              lineitemSelectedRowType, {}, "", kLineitem, lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .hashJoin({"l_partkey"}, {"p_partkey"}, part, "", lineitemColumns)
           .hashJoin(
@@ -882,7 +916,8 @@ TpchPlan TpchQueryBuilder::getQ9Plan() const {
 
   auto partsuppJoinLineitemJoinPartJoinSupplier =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
+          .hiveTableScan(
+              partsuppSelectedRowType, {}, "", kPartsupp, partsuppFileColumns)
           .capturePlanNodeId(partsuppScanNodeId)
           .hashJoin(
               {"ps_partkey", "ps_suppkey"},
@@ -896,7 +931,8 @@ TpchPlan TpchQueryBuilder::getQ9Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
+          .hiveTableScan(
+              ordersSelectedRowType, {}, "", kOrders, ordersFileColumns)
           .capturePlanNodeId(ordersScanNodeId)
           .hashJoin(
               {"o_orderkey"},
@@ -977,22 +1013,25 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
 
   auto nation =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kNation, nationSelectedRowType, nationFileColumns)
+          .hiveTableScan(
+              nationSelectedRowType, {}, "", kNation, nationFileColumns)
           .capturePlanNodeId(nationScanNodeId)
           .planNode();
 
   auto orders = PlanBuilder(planNodeIdGenerator, pool_.get())
-                    .tableScan(
-                        kOrders,
+                    .hiveTableScan(
                         ordersSelectedRowType,
-                        ordersFileColumns,
-                        {orderDateFilter})
+                        {orderDateFilter},
+                        "",
+                        kOrders,
+                        ordersFileColumns)
                     .capturePlanNodeId(ordersScanNodeId)
                     .planNode();
 
   auto partialPlan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
+          .hiveTableScan(
+              customerSelectedRowType, {}, "", kCustomer, customerFileColumns)
           .capturePlanNodeId(customerScanNodeId)
           .hashJoin(
               {"c_custkey"},
@@ -1010,11 +1049,12 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
           .planNode();
 
   auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(
-                      kLineitem,
+                  .hiveTableScan(
                       lineitemSelectedRowType,
-                      lineitemFileColumns,
-                      {lineitemReturnFlagFilter})
+                      {lineitemReturnFlagFilter},
+                      "",
+                      kLineitem,
+                      lineitemFileColumns)
                   .capturePlanNodeId(lineitemScanNodeId)
                   .project(
                       {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
@@ -1086,22 +1126,23 @@ TpchPlan TpchQueryBuilder::getQ12Plan() const {
       "l_commitdate", lineitemSelectedRowType, "", "'1995-01-01'");
 
   auto lineitem = PlanBuilder(planNodeIdGenerator, pool_.get())
-                      .tableScan(
-                          kLineitem,
+                      .hiveTableScan(
                           lineitemSelectedRowType,
-                          lineitemFileColumns,
                           {receiptDateFilter,
                            "l_shipmode IN ('MAIL', 'SHIP')",
                            shipDateFilter,
                            commitDateFilter},
-                          "l_commitdate < l_receiptdate")
+                          "l_commitdate < l_receiptdate",
+                          kLineitem,
+                          lineitemFileColumns)
                       .capturePlanNodeId(lineitemScanNodeId)
                       .filter("l_shipdate < l_commitdate")
                       .planNode();
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns, {})
+          .hiveTableScan(
+              ordersSelectedRowType, {}, "", kOrders, ordersFileColumns)
           .capturePlanNodeId(ordersScanNodeId)
           .hashJoin(
               {"o_orderkey"},
@@ -1147,18 +1188,19 @@ TpchPlan TpchQueryBuilder::getQ13Plan() const {
 
   auto customers =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
+          .hiveTableScan(
+              customerSelectedRowType, {}, "", kCustomer, customerFileColumns)
           .capturePlanNodeId(customerScanNodeId)
           .planNode();
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kOrders,
+          .hiveTableScan(
               ordersSelectedRowType,
-              ordersFileColumns,
               {},
-              "o_comment not like '%special%requests%'")
+              "o_comment not like '%special%requests%'",
+              kOrders,
+              ordersFileColumns)
           .capturePlanNodeId(ordersScanNodeId)
           .hashJoin(
               {"o_custkey"},
@@ -1200,19 +1242,20 @@ TpchPlan TpchQueryBuilder::getQ14Plan() const {
   core::PlanNodeId lineitemScanNodeId;
   core::PlanNodeId partScanNodeId;
 
-  auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(kPart, partSelectedRowType, partFileColumns)
-                  .capturePlanNodeId(partScanNodeId)
-                  .planNode();
+  auto part =
+      PlanBuilder(planNodeIdGenerator, pool_.get())
+          .hiveTableScan(partSelectedRowType, {}, "", kPart, partFileColumns)
+          .capturePlanNodeId(partScanNodeId)
+          .planNode();
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kLineitem,
+          .hiveTableScan(
               lineitemSelectedRowType,
-              lineitemFileColumns,
               {},
-              shipDateFilter)
+              shipDateFilter,
+              kLineitem,
+              lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .project(
               {"l_extendedprice * (1.0 - l_discount) as part_revenue",
@@ -1266,11 +1309,12 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
 
   auto maxRevenue =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kLineitem,
+          .hiveTableScan(
               lineitemSelectedRowType,
-              lineitemFileColumns,
-              {shipDateFilter})
+              {shipDateFilter},
+              "",
+              kLineitem,
+              lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .project(
               {"l_suppkey",
@@ -1284,11 +1328,12 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
 
   auto supplierWithMaxRevenue =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kLineitem,
+          .hiveTableScan(
               lineitemSelectedRowType,
-              lineitemFileColumns,
-              {shipDateFilter})
+              {shipDateFilter},
+              "",
+              kLineitem,
+              lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeIdSubQuery)
           .project(
               {"l_suppkey as supplier_no",
@@ -1307,7 +1352,8 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
+          .hiveTableScan(
+              supplierSelectedRowType, {}, "", kSupplier, supplierFileColumns)
           .capturePlanNodeId(supplierScanNodeId)
           .hashJoin(
               {"s_suppkey"},
@@ -1346,31 +1392,32 @@ TpchPlan TpchQueryBuilder::getQ16Plan() const {
   core::PlanNodeId partsuppScanNodeId;
 
   auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(
-                      kPart,
+                  .hiveTableScan(
                       partSelectedRowType,
-                      partFileColumns,
                       {"p_size in (49, 14, 23, 45, 19, 3, 36, 9)"},
-                      "p_type NOT LIKE 'MEDIUM POLISHED%'")
+                      "p_type NOT LIKE 'MEDIUM POLISHED%'",
+                      kPart,
+                      partFileColumns)
                   .capturePlanNodeId(partScanNodeId)
-                  // Neq is unsupported as a tableScan subfield filter for
+                  // Neq is unsupported as a hiveTableScan subfield filter for
                   // Parquet source.
                   .filter("p_brand <> 'Brand#45'")
                   .planNode();
 
   auto supplier = PlanBuilder(planNodeIdGenerator, pool_.get())
-                      .tableScan(
-                          kSupplier,
+                      .hiveTableScan(
                           supplierSelectedRowType,
-                          supplierFileColumns,
                           {},
-                          "s_comment LIKE '%Customer%Complaints%'")
+                          "s_comment LIKE '%Customer%Complaints%'",
+                          kSupplier,
+                          supplierFileColumns)
                       .capturePlanNodeId(supplierScanNodeId)
                       .planNode();
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
+          .hiveTableScan(
+              partsuppSelectedRowType, {}, "", kPartsupp, partsuppFileColumns)
           .capturePlanNodeId(partsuppScanNodeId)
           .hashJoin(
               {"ps_partkey"},
@@ -1429,22 +1476,24 @@ TpchPlan TpchQueryBuilder::getQ17Plan() const {
   core::PlanNodeId partAggScanId;
 
   auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(
-                      kPart,
+                  .hiveTableScan(
                       partRowType,
-                      partFileColumns,
-                      {"p_brand = 'Brand#23'", "p_container = 'MED BOX'"})
+                      {"p_brand = 'Brand#23'", "p_container = 'MED BOX'"},
+                      "",
+                      kPart,
+                      partFileColumns)
                   .capturePlanNodeId(partScanId)
                   .planNode();
 
   auto partAgg = PlanBuilder(planNodeIdGenerator, pool_.get())
-                     .tableScan(kPart, partRowType, partFileColumns, {})
+                     .hiveTableScan(partRowType, {}, "", kPart, partFileColumns)
                      .capturePlanNodeId(partAggScanId)
                      .planNode();
 
   auto lineitemJoinPart =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kLineitem, lineitemRowType, lineitemFileColumns)
+          .hiveTableScan(
+              lineitemRowType, {}, "", kLineitem, lineitemFileColumns)
           .capturePlanNodeId(lineitemScanId)
           .hashJoin(
               {"l_partkey"},
@@ -1456,7 +1505,8 @@ TpchPlan TpchQueryBuilder::getQ17Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kLineitem, lineitemRowType, lineitemFileColumns)
+          .hiveTableScan(
+              lineitemRowType, {}, "", kLineitem, lineitemFileColumns)
           .capturePlanNodeId(lineitemAggScanId)
           .hashJoin(
               {"l_partkey"},
@@ -1511,7 +1561,8 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
 
   auto bigOrders =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .hiveTableScan(
+              lineitemSelectedRowType, {}, "", kLineitem, lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .partialAggregation({"l_orderkey"}, {"sum(l_quantity) AS quantity"})
           .localPartition({"l_orderkey"})
@@ -1519,40 +1570,44 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
           .filter("quantity > 300.0")
           .planNode();
 
-  auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
-          .capturePlanNodeId(ordersScanNodeId)
-          .hashJoin(
-              {"o_orderkey"},
-              {"l_orderkey"},
-              bigOrders,
-              "",
-              {"o_orderkey",
-               "o_custkey",
-               "o_orderdate",
-               "o_totalprice",
-               "l_orderkey",
-               "quantity"})
-          .hashJoin(
-              {"o_custkey"},
-              {"c_custkey"},
-              PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(
-                      kCustomer, customerSelectedRowType, customerFileColumns)
-                  .capturePlanNodeId(customerScanNodeId)
-                  .planNode(),
-              "",
-              {"c_name",
-               "c_custkey",
-               "o_orderkey",
-               "o_orderdate",
-               "o_totalprice",
-               "quantity"})
-          .localPartition(std::vector<std::string>{})
-          .orderBy({"o_totalprice DESC", "o_orderdate"}, false)
-          .limit(0, 100, false)
-          .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .hiveTableScan(
+                      ordersSelectedRowType, {}, "", kOrders, ordersFileColumns)
+                  .capturePlanNodeId(ordersScanNodeId)
+                  .hashJoin(
+                      {"o_orderkey"},
+                      {"l_orderkey"},
+                      bigOrders,
+                      "",
+                      {"o_orderkey",
+                       "o_custkey",
+                       "o_orderdate",
+                       "o_totalprice",
+                       "l_orderkey",
+                       "quantity"})
+                  .hashJoin(
+                      {"o_custkey"},
+                      {"c_custkey"},
+                      PlanBuilder(planNodeIdGenerator, pool_.get())
+                          .hiveTableScan(
+                              customerSelectedRowType,
+                              {},
+                              "",
+                              kCustomer,
+                              customerFileColumns)
+                          .capturePlanNodeId(customerScanNodeId)
+                          .planNode(),
+                      "",
+                      {"c_name",
+                       "c_custkey",
+                       "o_orderkey",
+                       "o_orderdate",
+                       "o_totalprice",
+                       "quantity"})
+                  .localPartition(std::vector<std::string>{})
+                  .orderBy({"o_totalprice DESC", "o_orderdate"}, false)
+                  .limit(0, 100, false)
+                  .planNode();
 
   TpchPlan context;
   context.plan = std::move(plan);
@@ -1600,17 +1655,19 @@ TpchPlan TpchQueryBuilder::getQ19Plan() const {
       "     AND (l_quantity between 20.0 and 30.0)"
       "     AND (p_size BETWEEN 1 AND 15))";
 
-  auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(kPart, partSelectedRowType, partFileColumns)
-                  .capturePlanNodeId(partScanNodeId)
-                  .planNode();
+  auto part =
+      PlanBuilder(planNodeIdGenerator, pool_.get())
+          .hiveTableScan(partSelectedRowType, {}, "", kPart, partFileColumns)
+          .capturePlanNodeId(partScanNodeId)
+          .planNode();
 
   auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(
-                      kLineitem,
+                  .hiveTableScan(
                       lineitemSelectedRowType,
-                      lineitemFileColumns,
-                      {shipModeFilter, shipInstructFilter})
+                      {shipModeFilter, shipInstructFilter},
+                      "",
+                      kLineitem,
+                      lineitemFileColumns)
                   .capturePlanNodeId(lineitemScanNodeId)
                   .project(
                       {"l_extendedprice * (1.0 - l_discount) as part_revenue",
@@ -1670,37 +1727,39 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
   core::PlanNodeId nationScanId;
 
   auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(
-                      kPart,
+                  .hiveTableScan(
                       partSelectedRowType,
-                      partFileColumns,
                       {},
-                      "p_name like 'forest%'")
+                      "p_name like 'forest%'",
+                      kPart,
+                      partFileColumns)
                   .capturePlanNodeId(partScanId)
                   .planNode();
 
   auto partAgg = PlanBuilder(planNodeIdGenerator, pool_.get())
-                     .tableScan(
-                         kPart,
+                     .hiveTableScan(
                          partSelectedRowType,
-                         partFileColumns,
                          {},
-                         "p_name like 'forest%'")
+                         "p_name like 'forest%'",
+                         kPart,
+                         partFileColumns)
                      .capturePlanNodeId(partAggScanId)
                      .planNode();
 
   auto nation = PlanBuilder(planNodeIdGenerator, pool_.get())
-                    .tableScan(
-                        kNation,
+                    .hiveTableScan(
                         nationSelectedRowType,
-                        nationFileColumns,
-                        {"n_name = 'CANADA'"})
+                        {"n_name = 'CANADA'"},
+                        "",
+                        kNation,
+                        nationFileColumns)
                     .capturePlanNodeId(nationScanId)
                     .planNode();
 
   auto partsuppJoinPart =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
+          .hiveTableScan(
+              partsuppSelectedRowType, {}, "", kPartsupp, partsuppFileColumns)
           .capturePlanNodeId(partsuppScanId)
           .hashJoin(
               {"ps_partkey"},
@@ -1713,7 +1772,8 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
 
   auto supplierJoinNation =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
+          .hiveTableScan(
+              supplierSelectedRowType, {}, "", kSupplier, supplierFileColumns)
           .capturePlanNodeId(supplierScanId)
           .hashJoin(
               {"s_nationkey"},
@@ -1725,11 +1785,12 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kLineitem,
+          .hiveTableScan(
               lineitemSelectedRowType,
-              lineitemFileColumns,
-              {shipDateFilter})
+              {shipDateFilter},
+              "",
+              kLineitem,
+              lineitemFileColumns)
           .capturePlanNodeId(lineitemScanId)
           .hashJoin(
               {"l_partkey"},
@@ -1803,28 +1864,30 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
 
   auto lineitem3 =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kLineitem,
+          .hiveTableScan(
               lineitem3RowType,
-              lineitem3FileColumns,
               {},
-              receiptCommitFilter)
+              receiptCommitFilter,
+              kLineitem,
+              lineitem3FileColumns)
           .capturePlanNodeId(lineitem3ScanNodeId)
           .project({"l_orderkey as l_orderkey_3", "l_suppkey as l_suppkey_3"})
           .planNode();
 
   auto nation = PlanBuilder(planNodeIdGenerator, pool_.get())
-                    .tableScan(
-                        kNation,
+                    .hiveTableScan(
                         nationRowType,
-                        nationFileColumns,
-                        {"n_name = 'SAUDI ARABIA'"})
+                        {"n_name = 'SAUDI ARABIA'"},
+                        "",
+                        kNation,
+                        nationFileColumns)
                     .capturePlanNodeId(nationScanNodeId)
                     .planNode();
 
   auto supplierJoinNation =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kSupplier, supplierRowType, supplierFileColumns)
+          .hiveTableScan(
+              supplierRowType, {}, "", kSupplier, supplierFileColumns)
           .capturePlanNodeId(supplierScanNodeId)
           .hashJoin(
               {"s_nationkey"},
@@ -1836,12 +1899,12 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
 
   auto lineitemJoinSupplier =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kLineitem,
+          .hiveTableScan(
               lineitem1RowType,
-              lineitem1FileColumns,
               {},
-              receiptCommitFilter)
+              receiptCommitFilter,
+              kLineitem,
+              lineitem1FileColumns)
           .capturePlanNodeId(lineitem1ScanNodeId)
           .project({"l_orderkey as l_orderkey_1", "l_suppkey as l_suppkey_1"})
           .hashJoin(
@@ -1854,11 +1917,12 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
 
   auto ordersJoinLineitem1 =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kOrders,
+          .hiveTableScan(
               ordersRowType,
-              ordersFileColumns,
-              {"o_orderstatus = 'F'"})
+              {"o_orderstatus = 'F'"},
+              "",
+              kOrders,
+              ordersFileColumns)
           .capturePlanNodeId(ordersScanNodeId)
           .hashJoin(
               {"o_orderkey"},
@@ -1870,7 +1934,8 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kLineitem, lineitem2RowType, lineitem2FileColumns)
+          .hiveTableScan(
+              lineitem2RowType, {}, "", kLineitem, lineitem2FileColumns)
           .capturePlanNodeId(lineitem2ScanNodeId)
           .project({"l_orderkey as l_orderkey_2", "l_suppkey as l_suppkey_2"})
           .hashJoin(
@@ -1931,18 +1996,19 @@ TpchPlan TpchQueryBuilder::getQ22Plan() const {
 
   auto orders =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
+          .hiveTableScan(
+              ordersSelectedRowType, {}, "", kOrders, ordersFileColumns)
           .capturePlanNodeId(ordersScanNodeId)
           .planNode();
 
   auto customerAvgAccountBalance =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kCustomer,
+          .hiveTableScan(
               customerSelectedRowType,
-              customerFileColumns,
               {"c_acctbal > 0.0"},
-              phoneFilter)
+              phoneFilter,
+              kCustomer,
+              customerFileColumns)
           .capturePlanNodeId(customerScanNodeId)
           .partialAggregation({}, {"avg(c_acctbal) as avg_acctbal"})
           .localPartition(std::vector<std::string>{})
@@ -1951,12 +2017,12 @@ TpchPlan TpchQueryBuilder::getQ22Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kCustomer,
+          .hiveTableScan(
               customerSelectedRowTypeWithKey,
-              customerFileColumnsWithKey,
               {},
-              phoneFilter)
+              phoneFilter,
+              kCustomer,
+              customerFileColumnsWithKey)
           .capturePlanNodeId(customerScanNodeIdWithKey)
           .nestedLoopJoin(
               customerAvgAccountBalance,
@@ -2023,14 +2089,15 @@ TpchPlan TpchQueryBuilder::getIoMeterPlan(int columnPct) const {
   for (auto& name : names) {
     aliases[name] = name;
   }
-  auto plan = PlanBuilder(pool_.get())
-                  .tableScan(kLineitem, selectedRowType, aliases, {filter})
-                  .capturePlanNodeId(lineitemPlanNodeId)
-                  .project(projectExprs)
-                  .partialAggregation({}, aggregates)
-                  .localPartition(std::vector<std::string>{})
-                  .finalAggregation()
-                  .planNode();
+  auto plan =
+      PlanBuilder(pool_.get())
+          .hiveTableScan(selectedRowType, {filter}, "", kLineitem, aliases)
+          .capturePlanNodeId(lineitemPlanNodeId)
+          .project(projectExprs)
+          .partialAggregation({}, aggregates)
+          .localPartition(std::vector<std::string>{})
+          .finalAggregation()
+          .planNode();
 
   TpchPlan context;
   context.plan = std::move(plan);

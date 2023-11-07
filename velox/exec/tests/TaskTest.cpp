@@ -509,7 +509,7 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
       100);
 
   auto plan = PlanBuilder()
-                  .tableScan(ROW({"a", "b"}, {INTEGER(), DOUBLE()}))
+                  .hiveTableScan(ROW({"a", "b"}, {INTEGER(), DOUBLE()}))
                   .project({"a * a", "b + b"})
                   .planFragment();
 
@@ -590,17 +590,18 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
 }
 
 TEST_F(TaskTest, duplicatePlanNodeIds) {
-  auto plan = PlanBuilder()
-                  .tableScan(ROW({"a", "b"}, {INTEGER(), DOUBLE()}))
-                  .hashJoin(
-                      {"a"},
-                      {"a1"},
-                      PlanBuilder()
-                          .tableScan(ROW({"a1", "b1"}, {INTEGER(), DOUBLE()}))
-                          .planNode(),
-                      "",
-                      {"b", "b1"})
-                  .planFragment();
+  auto plan =
+      PlanBuilder()
+          .hiveTableScan(ROW({"a", "b"}, {INTEGER(), DOUBLE()}))
+          .hashJoin(
+              {"a"},
+              {"a1"},
+              PlanBuilder()
+                  .hiveTableScan(ROW({"a1", "b1"}, {INTEGER(), DOUBLE()}))
+                  .planNode(),
+              "",
+              {"b", "b1"})
+          .planFragment();
 
   VELOX_ASSERT_THROW(
       Task::create(
@@ -738,7 +739,7 @@ TEST_F(TaskTest, singleThreadedExecution) {
 
   core::PlanNodeId scanId;
   plan = PlanBuilder()
-             .tableScan(asRowType(data->type()))
+             .hiveTableScan(asRowType(data->type()))
              .capturePlanNodeId(scanId)
              .project({"c0 % 5 as k", "c0"})
              .singleAggregation({"k"}, {"sum(c0)", "avg(c0)"})
@@ -777,13 +778,13 @@ TEST_F(TaskTest, singleThreadedHashJoin) {
   core::PlanNodeId leftScanId;
   core::PlanNodeId rightScanId;
   auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(left->type()))
+                  .hiveTableScan(asRowType(left->type()))
                   .capturePlanNodeId(leftScanId)
                   .hashJoin(
                       {"t_c0"},
                       {"u_c0"},
                       PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(right->type()))
+                          .hiveTableScan(asRowType(right->type()))
                           .capturePlanNodeId(rightScanId)
                           .planNode(),
                       "",
@@ -817,11 +818,11 @@ TEST_F(TaskTest, singleThreadedCrossJoin) {
   core::PlanNodeId leftScanId;
   core::PlanNodeId rightScanId;
   auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(left->type()))
+                  .hiveTableScan(asRowType(left->type()))
                   .capturePlanNodeId(leftScanId)
                   .nestedLoopJoin(
                       PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(right->type()))
+                          .hiveTableScan(asRowType(right->type()))
                           .capturePlanNodeId(rightScanId)
                           .planNode(),
                       {"t_c0", "u_c0"})
@@ -906,7 +907,7 @@ TEST_F(TaskTest, singleThreadedExecutionExternalBlockable) {
 
 TEST_F(TaskTest, supportsSingleThreadedExecution) {
   auto plan = PlanBuilder()
-                  .tableScan(ROW({"c0"}, {BIGINT()}))
+                  .hiveTableScan(ROW({"c0"}, {BIGINT()}))
                   .project({"c0 % 10"})
                   .partitionedOutput({}, 1, std::vector<std::string>{"p0"})
                   .planFragment();
@@ -920,7 +921,7 @@ TEST_F(TaskTest, supportsSingleThreadedExecution) {
 
 TEST_F(TaskTest, updateBroadCastOutputBuffers) {
   auto plan = PlanBuilder()
-                  .tableScan(ROW({"c0"}, {BIGINT()}))
+                  .hiveTableScan(ROW({"c0"}, {BIGINT()}))
                   .project({"c0 % 10"})
                   .partitionedOutputBroadcast({})
                   .planFragment();

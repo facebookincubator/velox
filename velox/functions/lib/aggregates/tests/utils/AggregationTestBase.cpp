@@ -573,7 +573,7 @@ void AggregationTestBase::testReadFromFiles(
   {
     ScopedChange<bool> disableTestStreaming(&testStreaming_, false);
     testAggregationsImpl(
-        [&](auto& builder) { builder.tableScan(asRowType(input->type())); },
+        [&](auto& builder) { builder.hiveTableScan(asRowType(input->type())); },
         groupingKeys,
         aggregates,
         postAggregationProjections,

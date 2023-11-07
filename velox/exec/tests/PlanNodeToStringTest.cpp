@@ -650,12 +650,14 @@ TEST_F(PlanNodeToStringTest, tableScan) {
           {DOUBLE(), DOUBLE(), VARCHAR(), VARCHAR()})};
   {
     auto plan = PlanBuilder(pool_.get())
-                    .tableScan(
-                        rowType,
+                    .startTableScan()
+                    .outputType(rowType)
+                    .subfieldFilters(
                         {"shipdate between '1994-01-01' and '1994-12-31'",
                          "discount between 0.05 and 0.07",
-                         "quantity < 24.0::DOUBLE"},
-                        "comment NOT LIKE '%special%request%'")
+                         "quantity < 24.0::DOUBLE"})
+                    .remainingFilter("comment NOT LIKE '%special%request%'")
+                    .endTableScan()
                     .planNode();
 
     ASSERT_EQ("-- TableScan\n", plan->toString());
@@ -669,10 +671,12 @@ TEST_F(PlanNodeToStringTest, tableScan) {
     ASSERT_EQ(output, plan->toString(true, false));
   }
   {
-    auto plan =
-        PlanBuilder(pool_.get())
-            .tableScan(rowType, {}, "comment NOT LIKE '%special%request%'")
-            .planNode();
+    auto plan = PlanBuilder(pool_.get())
+                    .startTableScan()
+                    .outputType(rowType)
+                    .remainingFilter("comment NOT LIKE '%special%request%'")
+                    .endTableScan()
+                    .planNode();
 
     ASSERT_EQ(
         "-- TableScan[table: hive_table, remaining filter: (not(like(ROW[\"comment\"],\"%special%request%\")))] "
@@ -687,7 +691,7 @@ TEST_F(PlanNodeToStringTest, decimalConstant) {
 
   auto plan = PlanBuilder()
                   .setParseOptions(options)
-                  .tableScan(ROW({"a"}, {VARCHAR()}))
+                  .hiveTableScan(ROW({"a"}, {VARCHAR()}))
                   .project({"a", "1.234"})
                   .planNode();
 
@@ -707,7 +711,7 @@ TEST_F(PlanNodeToStringTest, window) {
 
   auto plan =
       PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .window({"window1(c) over (partition by a order by b "
                    "range between 10 preceding and unbounded following) AS d"})
           .planNode();
@@ -718,11 +722,12 @@ TEST_F(PlanNodeToStringTest, window) {
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, d:BIGINT\n",
       plan->toString(true, false));
 
-  plan = PlanBuilder()
-             .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
-             .window({"window1(c) over (partition by a "
-                      "range between current row and b following)"})
-             .planNode();
+  plan =
+      PlanBuilder()
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .window({"window1(c) over (partition by a "
+                   "range between current row and b following)"})
+          .planNode();
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
       "-- Window[partition by [a] order by [] "
@@ -730,12 +735,13 @@ TEST_F(PlanNodeToStringTest, window) {
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, w0:BIGINT\n",
       plan->toString(true, false));
 
-  plan = PlanBuilder()
-             .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
-             .streamingWindow(
-                 {"window1(c) over (partition by a order by b "
-                  "range between 10 preceding and unbounded following) AS d"})
-             .planNode();
+  plan =
+      PlanBuilder()
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .streamingWindow(
+              {"window1(c) over (partition by a order by b "
+               "range between 10 preceding and unbounded following) AS d"})
+          .planNode();
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
       "-- Window[partition by [a] order by [b ASC NULLS LAST] "
@@ -743,11 +749,12 @@ TEST_F(PlanNodeToStringTest, window) {
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, d:BIGINT\n",
       plan->toString(true, false));
 
-  plan = PlanBuilder()
-             .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
-             .streamingWindow({"window1(c) over (partition by a "
-                               "range between current row and b following)"})
-             .planNode();
+  plan =
+      PlanBuilder()
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .streamingWindow({"window1(c) over (partition by a "
+                            "range between current row and b following)"})
+          .planNode();
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
       "-- Window[partition by [a] order by [] "
@@ -758,8 +765,10 @@ TEST_F(PlanNodeToStringTest, window) {
 
 TEST_F(PlanNodeToStringTest, rowNumber) {
   // Emit row number.
-  auto plan =
-      PlanBuilder().tableScan(ROW({"a"}, {VARCHAR()})).rowNumber({}).planNode();
+  auto plan = PlanBuilder()
+                  .hiveTableScan(ROW({"a"}, {VARCHAR()}))
+                  .rowNumber({})
+                  .planNode();
 
   ASSERT_EQ("-- RowNumber\n", plan->toString());
   ASSERT_EQ(
@@ -768,7 +777,7 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
 
   // Dont' emit row number.
   plan = PlanBuilder()
-             .tableScan(ROW({"a"}, {VARCHAR()}))
+             .hiveTableScan(ROW({"a"}, {VARCHAR()}))
              .rowNumber({}, std::nullopt, false)
              .planNode();
 
@@ -777,7 +786,7 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
 
   // Emit row number.
   plan = PlanBuilder()
-             .tableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
+             .hiveTableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
              .rowNumber({"a", "b"})
              .planNode();
 
@@ -788,7 +797,7 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
 
   // Don't emit row number.
   plan = PlanBuilder()
-             .tableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
+             .hiveTableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
              .rowNumber({"a", "b"}, std::nullopt, false)
              .planNode();
 
@@ -799,7 +808,7 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
 
   // Emit row number.
   plan = PlanBuilder()
-             .tableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
+             .hiveTableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
              .rowNumber({"b"}, 10)
              .planNode();
 
@@ -810,7 +819,7 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
 
   // Don't emit row number.
   plan = PlanBuilder()
-             .tableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
+             .hiveTableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
              .rowNumber({"b"}, 10, false)
              .planNode();
 
@@ -823,7 +832,7 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
 TEST_F(PlanNodeToStringTest, topNRowNumber) {
   auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
   auto plan = PlanBuilder()
-                  .tableScan(rowType)
+                  .hiveTableScan(rowType)
                   .topNRowNumber({}, {"a DESC"}, 10, false)
                   .planNode();
 
@@ -833,7 +842,7 @@ TEST_F(PlanNodeToStringTest, topNRowNumber) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .tableScan(rowType)
+             .hiveTableScan(rowType)
              .topNRowNumber({}, {"a DESC"}, 10, true)
              .planNode();
 
@@ -843,7 +852,7 @@ TEST_F(PlanNodeToStringTest, topNRowNumber) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .tableScan(rowType)
+             .hiveTableScan(rowType)
              .topNRowNumber({"a"}, {"b"}, 10, false)
              .planNode();
 
@@ -856,7 +865,7 @@ TEST_F(PlanNodeToStringTest, topNRowNumber) {
 TEST_F(PlanNodeToStringTest, markDistinct) {
   auto op =
       PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .hiveTableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .markDistinct("marker", {"a", "b"})
           .planNode();
   ASSERT_EQ("-- MarkDistinct\n", op->toString());

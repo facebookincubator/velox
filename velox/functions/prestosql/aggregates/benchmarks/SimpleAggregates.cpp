@@ -139,7 +139,7 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
     folly::BenchmarkSuspender suspender;
 
     auto plan = PlanBuilder()
-                    .tableScan(inputType_)
+                    .hiveTableScan(inputType_)
                     .partialAggregation({key}, {aggregate})
                     .finalAggregation()
                     .planFragment();

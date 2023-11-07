@@ -120,7 +120,7 @@ TEST_F(S3InsertTest, s3InsertTest) {
   auto writeFileName = fileWriteInfos[0]["writeFileName"].asString();
 
   // Read from 'writeFileName' and verify the data matches the original.
-  plan = PlanBuilder().tableScan(rowType).planNode();
+  plan = PlanBuilder().hiveTableScan(rowType).planNode();
 
   auto splits = HiveConnectorTestBase::makeHiveConnectorSplits(
       fmt::format("{}/{}", kOutputDirectory, writeFileName),

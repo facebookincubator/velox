@@ -52,7 +52,7 @@ class GroupedExecutionTest : public virtual HiveConnectorTestBase {
   }
 
   static core::PlanNodePtr tableScanNode(const RowTypePtr& outputType) {
-    return PlanBuilder().tableScan(outputType).planNode();
+    return PlanBuilder().hiveTableScan(outputType).planNode();
   }
 
   static std::unordered_set<int32_t> getCompletedSplitGroups(
@@ -95,13 +95,13 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
       PlanBuilder(planNodeIdGenerator)
           .localPartitionRoundRobin(
               {PlanBuilder(planNodeIdGenerator)
-                   .tableScan(rowType_)
+                   .hiveTableScan(rowType_)
                    .capturePlanNodeId(tableScanNodeId)
                    .project({"c0", "c1", "c2", "c3", "c4", "c5"})
                    .capturePlanNodeId(projectNodeId)
                    .planNode(),
                PlanBuilder(planNodeIdGenerator)
-                   .tableScan(rowType_)
+                   .hiveTableScan(rowType_)
                    .capturePlanNodeId(tableScanNodeId2)
                    .project({"c0", "c1", "c2", "c3", "c4", "c5"})
                    .planNode()})
@@ -188,7 +188,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
 
   auto planFragment =
       PlanBuilder(planNodeIdGenerator)
-          .tableScan(rowType_)
+          .hiveTableScan(rowType_)
           .capturePlanNodeId(tableScanNodeId)
           .project({"c3 as x", "c2 as y", "c1 as z", "c0 as w", "c4", "c5"})
           .localPartitionRoundRobinRow()
@@ -296,7 +296,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
     core::PlanNodeId buildScanNodeId;
 
     PlanBuilder planBuilder(planNodeIdGenerator, pool_.get());
-    planBuilder.tableScan(rowType_)
+    planBuilder.hiveTableScan(rowType_)
         .capturePlanNodeId(probeScanNodeId)
         .project({"c3 as x", "c2 as y", "c1 as z", "c0 as w", "c4", "c5"});
     // Hash or Nested Loop join.
@@ -306,7 +306,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
               {"w"},
               {"r"},
               PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(rowType_, {"c0 > 0"})
+                  .hiveTableScan(rowType_, {"c0 > 0"})
                   .capturePlanNodeId(buildScanNodeId)
                   .project({"c0 as r"})
                   .planNode(),
@@ -319,7 +319,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
       planBuilder
           .nestedLoopJoin(
               PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(rowType_, {"c0 > 0"})
+                  .hiveTableScan(rowType_, {"c0 > 0"})
                   .capturePlanNodeId(buildScanNodeId)
                   .project({"c0 as r"})
                   .planNode(),

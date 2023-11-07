@@ -101,7 +101,7 @@ TEST_F(InsertIntoHdfsTest, insertIntoHdfsTest) {
   auto writeFileName = fileWriteInfos[0]["writeFileName"].asString();
 
   // Read from 'writeFileName' and verify the data matches the original.
-  plan = PlanBuilder().tableScan(rowType_).planNode();
+  plan = PlanBuilder().hiveTableScan(rowType_).planNode();
 
   auto splits = HiveConnectorTestBase::makeHiveConnectorSplits(
       fmt::format("{}/{}", outputDirectory, writeFileName),

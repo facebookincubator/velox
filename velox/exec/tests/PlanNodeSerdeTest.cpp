@@ -487,13 +487,15 @@ TEST_F(PlanNodeSerdeTest, rowNumber) {
 }
 
 TEST_F(PlanNodeSerdeTest, scan) {
-  auto plan = PlanBuilder(pool_.get())
-                  .tableScan(
-                      ROW({"a", "b", "c", "d"},
-                          {BIGINT(), BIGINT(), BOOLEAN(), DOUBLE()}),
-                      {"a < 5", "b = 7", "c = true", "d > 0.01"},
-                      "a + b < 100")
-                  .planNode();
+  auto plan =
+      PlanBuilder(pool_.get())
+          .startTableScan()
+          .outputType(ROW(
+              {"a", "b", "c", "d"}, {BIGINT(), BIGINT(), BOOLEAN(), DOUBLE()}))
+          .subfieldFilters({"a < 5", "b = 7", "c = true", "d > 0.01"})
+          .remainingFilter("a + b < 100")
+          .endTableScan()
+          .planNode();
   testSerde(plan);
 }
 
@@ -519,16 +521,24 @@ TEST_F(PlanNodeSerdeTest, topNRowNumber) {
 
 TEST_F(PlanNodeSerdeTest, write) {
   auto rowTypePtr = ROW({"c0", "c1", "c2"}, {BIGINT(), BOOLEAN(), VARBINARY()});
-  auto planBuilder =
-      PlanBuilder(pool_.get()).tableScan(rowTypePtr, {"c1 = true"}, "c0 < 100");
+  auto planBuilder = PlanBuilder(pool_.get())
+                         .startTableScan()
+                         .outputType(rowTypePtr)
+                         .subfieldFilters({"c1 = true"})
+                         .remainingFilter("c0 < 100")
+                         .endTableScan();
   auto plan = planBuilder.tableWrite("targetDirectory").planNode();
   testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, tableWriteMerge) {
   auto rowTypePtr = ROW({"c0", "c1", "c2"}, {BIGINT(), BOOLEAN(), VARBINARY()});
-  auto planBuilder =
-      PlanBuilder(pool_.get()).tableScan(rowTypePtr, {"c1 = true"}, "c0 < 100");
+  auto planBuilder = PlanBuilder(pool_.get())
+                         .startTableScan()
+                         .outputType(rowTypePtr)
+                         .subfieldFilters({"c1 = true"})
+                         .remainingFilter("c0 < 100")
+                         .endTableScan();
   auto plan = planBuilder.tableWrite("targetDirectory")
                   .localPartition(std::vector<std::string>{})
                   .tableWriteMerge()
@@ -538,8 +548,12 @@ TEST_F(PlanNodeSerdeTest, tableWriteMerge) {
 
 TEST_F(PlanNodeSerdeTest, tableWriteWithStats) {
   auto rowTypePtr = ROW({"c0", "c1", "c2"}, {BIGINT(), BOOLEAN(), VARCHAR()});
-  auto planBuilder =
-      PlanBuilder(pool_.get()).tableScan(rowTypePtr, {"c1 = true"}, "c0 < 100");
+  auto planBuilder = PlanBuilder(pool_.get())
+                         .startTableScan()
+                         .outputType(rowTypePtr)
+                         .subfieldFilters({"c1 = true"})
+                         .remainingFilter("c0 < 100")
+                         .endTableScan();
   auto plan = planBuilder
                   .tableWrite(
                       "targetDirectory",

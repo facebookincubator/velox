@@ -475,21 +475,22 @@ TEST_F(MergeJoinTest, lazyVectors) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanId;
   core::PlanNodeId rightScanId;
-  auto op = PlanBuilder(planNodeIdGenerator)
-                .tableScan(
-                    ROW({"c0", "c1", "c2", "c3"},
-                        {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
-                .capturePlanNodeId(leftScanId)
-                .mergeJoin(
-                    {"c0"},
-                    {"rc0"},
-                    PlanBuilder(planNodeIdGenerator)
-                        .tableScan(ROW({"rc0", "rc1"}, {INTEGER(), BIGINT()}))
-                        .capturePlanNodeId(rightScanId)
-                        .planNode(),
-                    "c1 + rc1 < 30",
-                    {"c0", "rc0", "c1", "rc1", "c2", "c3"})
-                .planNode();
+  auto op =
+      PlanBuilder(planNodeIdGenerator)
+          .hiveTableScan(
+              ROW({"c0", "c1", "c2", "c3"},
+                  {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
+          .capturePlanNodeId(leftScanId)
+          .mergeJoin(
+              {"c0"},
+              {"rc0"},
+              PlanBuilder(planNodeIdGenerator)
+                  .hiveTableScan(ROW({"rc0", "rc1"}, {INTEGER(), BIGINT()}))
+                  .capturePlanNodeId(rightScanId)
+                  .planNode(),
+              "c1 + rc1 < 30",
+              {"c0", "rc0", "c1", "rc1", "c2", "c3"})
+          .planNode();
 
   AssertQueryBuilder(op, duckDbQueryRunner_)
       .split(rightScanId, makeHiveConnectorSplit(rightFile->path))

@@ -75,7 +75,7 @@ TEST_F(LimitTest, limitOverLocalExchange) {
 
   CursorParameters params;
   params.planNode = PlanBuilder()
-                        .tableScan(asRowType(data->type()))
+                        .hiveTableScan(asRowType(data->type()))
                         .capturePlanNodeId(scanNodeId)
                         .localPartition(std::vector<std::string>{})
                         .limit(0, 20, true)
