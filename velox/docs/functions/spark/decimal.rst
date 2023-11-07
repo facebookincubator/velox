@@ -13,7 +13,8 @@ Decimal Functions
 Decimal Special Forms
 ---------------------
 
-.. spark:function:: make_decimal(x, nullOnOverflow) -> decimal
+.. spark:function:: make_decimal(x[, nullOnOverflow]) -> decimal
 
-    Create ``decimal`` from an unscaled bigint value ``x``.
-    If overflows, return null when ``nullOnOverflow`` is true, otherwise throw exception.
+    Create ``decimal`` of requsted precision and scale from an unscaled bigint value ``x``.
+    By default, the value of ``nullOnOverflow`` is true, and null will be returned when ``x`` is too large for the result precision.
+    Otherwise, exception will be thrown when ``x`` overflows.
