@@ -23,11 +23,11 @@ class URLFunctionsTest : public functions::test::FunctionBaseTest {
  protected:
   void validate(
       const std::string& url,
-      const std::string& expectedProtocol,
-      const std::string& expectedHost,
-      const std::string& expectedPath,
-      const std::string& expectedFragment,
-      const std::string& expectedQuery,
+      const std::optional<std::string>& expectedProtocol,
+      const std::optional<std::string>& expectedHost,
+      const std::optional<std::string>& expectedPath,
+      const std::optional<std::string>& expectedFragment,
+      const std::optional<std::string>& expectedQuery,
       const std::optional<int32_t> expectedPort) {
     const auto extractFn = [&](const std::string& fn,
                                const std::optional<std::string>& a) {
@@ -38,8 +38,8 @@ class URLFunctionsTest : public functions::test::FunctionBaseTest {
     const auto extractPort = [&](const std::optional<std::string>& a) {
       return evaluateOnce<int64_t>("url_extract_port(c0)", a);
     };
-
-    EXPECT_EQ(extractFn("protocol", url), expectedProtocol);
+    auto protocol = extractFn("protocol", url);
+    EXPECT_EQ(protocol, expectedProtocol);
     EXPECT_EQ(extractFn("host", url).value(), expectedHost);
     EXPECT_EQ(extractFn("path", url), expectedPath);
     EXPECT_EQ(extractFn("fragment", url), expectedFragment);
@@ -97,7 +97,15 @@ TEST_F(URLFunctionsTest, validateURL) {
       "",
       "",
       std::nullopt);
+  validate("https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%",
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt);
   validate("foo", "", "", "", "", "", std::nullopt);
+
 }
 
 TEST_F(URLFunctionsTest, extractPath) {
@@ -109,6 +117,9 @@ TEST_F(URLFunctionsTest, extractPath) {
       "/media/set/Books and Magazines.php",
       extractPath(
           "https://www.cnn.com/media/set/Books%20and%20Magazines.php?foo=bar"));
+
+  ASSERT_EQ(std::nullopt, extractPath("BAD URL!"));
+  ASSERT_EQ(std::nullopt, extractPath("https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%"));
 }
 
 TEST_F(URLFunctionsTest, extractParameter) {

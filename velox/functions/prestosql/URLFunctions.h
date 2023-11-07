@@ -244,30 +244,38 @@ struct UrlExtractPathFunction {
 
   // Input is always ASCII, but result may or may not be ASCII.
 
-  FOLLY_ALWAYS_INLINE void call(
+  FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    boost::cmatch match;
-    if (!parse(url, match)) {
-      result.setEmpty();
-      return;
-    }
-
-    boost::cmatch authAndPathMatch;
-    boost::cmatch authorityMatch;
-    bool hasAuthority;
-
-    if (matchAuthorityAndPath(
-            match, authAndPathMatch, authorityMatch, hasAuthority)) {
-      StringView escapedPath;
-      if (hasAuthority) {
-        escapedPath = submatch(authAndPathMatch, 2);
-      } else {
-        escapedPath = submatch(match, 2);
+    try {
+      boost::cmatch match;
+      if (!parse(url, match)) {
+        result.setEmpty();
+        return false;
       }
-      urlUnescape(result, escapedPath);
+
+      boost::cmatch authAndPathMatch;
+      boost::cmatch authorityMatch;
+      bool hasAuthority;
+
+      if (matchAuthorityAndPath(
+              match, authAndPathMatch, authorityMatch, hasAuthority)) {
+        StringView escapedPath;
+        if (hasAuthority) {
+          escapedPath = submatch(authAndPathMatch, 2);
+        } else {
+          escapedPath = submatch(match, 2);
+        }
+        urlUnescape(result, escapedPath);
+      }
+    } catch (VeloxUserError const& ) {
+      result.setEmpty();
+      return false;
     }
+
+    return true;
   }
+
 };
 
 template <typename T>
