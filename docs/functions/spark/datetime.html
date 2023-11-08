@@ -158,6 +158,15 @@ days of <code class="docutils literal notranslate"><span class="pre">year-month-
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="month">
+<span class="sig-name descname"><span class="pre">month</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#month" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the month of <code class="docutils literal notranslate"><span class="pre">date</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">month</span><span class="p">(</span><span class="s1">&#39;2009-07-30&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">7</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="to_unix_timestamp">
 <span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#to_unix_timestamp" title="Permalink to this definition">¶</a></dt>
 <dd><p>Alias for <code class="docutils literal notranslate"><span class="pre">unix_timestamp(string)</span> <span class="pre">-&gt;</span> <span class="pre">integer</span></code>.</p>
