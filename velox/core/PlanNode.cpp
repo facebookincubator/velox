@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/core/PlanNode.h"
+#include <folly/container/F14Set.h>
+
 #include "velox/common/encode/Base64.h"
+#include "velox/core/PlanNode.h"
 #include "velox/vector/VectorSaver.h"
 
 namespace facebook::velox::core {
@@ -224,6 +226,21 @@ void addSortingKeys(
   }
 }
 } // namespace
+
+bool AggregationNode::canSpill(const QueryConfig& queryConfig) const {
+  // TODO: add spilling for aggregations with sorting or with distinct later:
+  // https://github.com/facebookincubator/velox/issues/7454
+  // https://github.com/facebookincubator/velox/issues/7455
+  for (const auto& aggregate : aggregates_) {
+    if (aggregate.distinct || !aggregate.sortingKeys.empty()) {
+      return false;
+    }
+  }
+  // TODO: add spilling for pre-grouped aggregation later:
+  // https://github.com/facebookincubator/velox/issues/3264
+  return (isFinal() || isSingle()) && preGroupedKeys().empty() &&
+      queryConfig.aggregationSpillEnabled();
+}
 
 void AggregationNode::addDetails(std::stringstream& stream) const {
   stream << stepName(step_) << " ";
@@ -1898,6 +1915,36 @@ PlanNodePtr PartitionedOutputNode::create(
           obj["partitionFunctionSpec"], context),
       deserializeRowType(obj["outputType"]),
       deserializeSingleSource(obj, context));
+}
+
+TopNNode::TopNNode(
+    const PlanNodeId& id,
+    const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
+    const std::vector<SortOrder>& sortingOrders,
+    int32_t count,
+    bool isPartial,
+    const PlanNodePtr& source)
+    : PlanNode(id),
+      sortingKeys_(sortingKeys),
+      sortingOrders_(sortingOrders),
+      count_(count),
+      isPartial_(isPartial),
+      sources_{source} {
+  VELOX_USER_CHECK(!sortingKeys.empty(), "TopN must specify sorting keys");
+  VELOX_USER_CHECK_EQ(
+      sortingKeys.size(),
+      sortingOrders.size(),
+      "Number of sorting keys and sorting orders in TopN must be the same");
+  VELOX_USER_CHECK_GT(
+      count, 0, "TopN must specify greater than zero number of rows to keep");
+  folly::F14FastSet<std::string> sortingKeyNames;
+  for (const auto& sortingKey : sortingKeys_) {
+    auto result = sortingKeyNames.insert(sortingKey->name());
+    VELOX_USER_CHECK(
+        result.second,
+        "TopN must specify unique sorting keys. Found duplicate key: {}",
+        *result.first);
+  }
 }
 
 void TopNNode::addDetails(std::stringstream& stream) const {

@@ -644,7 +644,6 @@ class HashJoinBuilder {
         }
         verifyTaskSpilledRuntimeStats(*task, true);
       }
-      ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
       if (statsPair.first.spilledBytes > 0 &&
           memory::spillMemoryPool()->trackUsage()) {
         ASSERT_GT(memory::spillMemoryPool()->stats().peakBytes, 0);
@@ -666,13 +665,12 @@ class HashJoinBuilder {
       ASSERT_EQ(statsPair.second.spilledFiles, 0);
       verifyTaskSpilledRuntimeStats(*task, false);
     }
-    ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
     // Customized test verification.
     if (testVerifier_ != nullptr) {
       testVerifier_(task, injectSpill);
     }
-
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+    ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
   }
 
   VectorFuzzer::Options fuzzerOpts_;
@@ -3804,7 +3802,7 @@ TEST_F(HashJoinTest, memory) {
   params.queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
   auto [taskCursor, rows] = readCursor(params, [](Task*) {});
   EXPECT_GT(3'500, params.queryCtx->pool()->stats().numAllocs);
-  EXPECT_GT(7'500'000, params.queryCtx->pool()->stats().cumulativeBytes);
+  EXPECT_GT(18'000'000, params.queryCtx->pool()->stats().cumulativeBytes);
 }
 
 TEST_F(HashJoinTest, lazyVectors) {

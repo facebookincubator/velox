@@ -1542,6 +1542,91 @@ TEST_F(VectorTest, wrapInConstantWithCopy) {
   }
 }
 
+TEST_F(VectorTest, rowResize) {
+  auto testRowResize = [&](const VectorPtr& vector, bool setNotNull) {
+    auto rowVector = vector->as<RowVector>();
+    for (auto& child : rowVector->children()) {
+      VELOX_CHECK(child.unique());
+    }
+    auto oldSize = rowVector->size();
+    auto newSize = oldSize * 2;
+
+    rowVector->resize(newSize, setNotNull);
+
+    EXPECT_EQ(rowVector->size(), newSize);
+
+    for (auto& child : rowVector->children()) {
+      EXPECT_EQ(child->size(), newSize);
+    }
+
+    if (setNotNull) {
+      for (int i = oldSize; i < newSize; i++) {
+        EXPECT_EQ(rowVector->isNullAt(i), !setNotNull);
+        for (auto& child : rowVector->children()) {
+          EXPECT_EQ(child->isNullAt(i), !setNotNull);
+        }
+      }
+    }
+  };
+
+  // FlatVectors.
+  auto rowVector =
+      makeRowVector({makeFlatVector<int32_t>(10), makeFlatVector<int64_t>(10)});
+  testRowResize(rowVector, bits::kNull);
+
+  rowVector =
+      makeRowVector({makeFlatVector<int32_t>(10), makeFlatVector<double>(10)});
+  testRowResize(rowVector, bits::kNotNull);
+
+  rowVector = makeRowVector({makeFlatVector<StringView>(10)});
+  testRowResize(rowVector, bits::kNotNull);
+  rowVector = makeRowVector({makeFlatVector<StringView>(10)});
+  testRowResize(rowVector, bits::kNull);
+
+  // Dictionaries.
+  rowVector = makeRowVector({BaseVector::wrapInDictionary(
+      nullptr,
+      makeIndices(10, [](auto row) { return row; }),
+      10,
+      BaseVector::wrapInDictionary(
+          nullptr,
+          makeIndices(10, [](auto row) { return row; }),
+          10,
+          makeFlatVector<int32_t>(10)))});
+  testRowResize(rowVector, bits::kNotNull);
+
+  // Constants.
+  rowVector = makeRowVector({BaseVector::wrapInConstant(
+      10,
+      5,
+      makeArrayVector<int32_t>(
+          10,
+          [](auto row) { return row % 5 + 1; },
+          [](auto row, auto index) { return row * 2 + index; }))});
+  testRowResize(rowVector, bits::kNotNull);
+
+  // Complex Types.
+  rowVector = makeRowVector(
+      {makeArrayVector<int32_t>(
+           10,
+           [](auto row) { return row % 5 + 1; },
+           [](auto row, auto index) { return row * 2 + index; }),
+       makeMapVector<int32_t, int64_t>(
+           10,
+           [](auto row) { return row % 5; },
+           [](auto row) { return row % 7; },
+           [](auto row) { return row % 5; },
+           nullEvery(9))});
+  testRowResize(rowVector, bits::kNotNull);
+
+  // Resize on lazy children will result in an exception.
+  auto rowWithLazyChild = makeRowVector({makeLazyFlatVector<int32_t>(
+      10,
+      [&](vector_size_t i) { return i % 5; },
+      [](vector_size_t i) { return i % 7 == 0; })});
+  EXPECT_THROW(rowWithLazyChild->resize(20), VeloxException);
+}
+
 TEST_F(VectorTest, wrapConstantInDictionary) {
   // Wrap Constant in Dictionary with no extra nulls. Expect Constant.
   auto indices = makeIndices(10, [](auto row) { return row % 2; });
@@ -1647,6 +1732,23 @@ TEST_F(VectorTest, resizeStringAsciiness) {
   ASSERT_TRUE(stringVector->isAscii(rows).value());
   stringVector->resize(2);
   ASSERT_FALSE(stringVector->isAscii(rows));
+}
+
+TEST_F(VectorTest, resizeZeroString) {
+  auto vector = makeFlatVector<std::string>(
+      {"This is a string",
+       "This is another string",
+       "This is the third string"});
+  ASSERT_EQ(1, vector->stringBuffers().size());
+  ASSERT_LT(0, vector->stringBuffers()[0]->size());
+
+  const auto capacity = vector->stringBuffers()[0]->capacity();
+  ASSERT_GT(capacity, 0);
+
+  vector->resize(0);
+  ASSERT_EQ(1, vector->stringBuffers().size());
+  ASSERT_EQ(0, vector->stringBuffers()[0]->size());
+  ASSERT_EQ(capacity, vector->stringBuffers()[0]->capacity());
 }
 
 TEST_F(VectorTest, copyNoRows) {
@@ -2795,6 +2897,26 @@ TEST_F(VectorTest, getRawStringBufferWithSpace) {
   auto expected = makeFlatVector<StringView>(
       {"ee", "I'm replace 123456789", "rryy", "12345678901234"});
   test::assertEqualVectors(expected, vector);
+
+  // Use up all but 5 bytes in the 'lastBuffer', then ask for buffer with at
+  // least 6 bytes of space. Expect a fairly large new buffer.
+  lastBuffer->setSize(lastBuffer->capacity() - 5);
+  rawBuffer = vector->getRawStringBufferWithSpace(6);
+  ASSERT_EQ(vector->stringBuffers().size(), 2);
+
+  lastBuffer = vector->stringBuffers().back();
+  ASSERT_EQ(6, lastBuffer->size());
+  ASSERT_EQ(49056, lastBuffer->capacity());
+
+  // Use up all bytes in 'lastBuffer, then ask for buffer with exactly one byte
+  // of space. Expect a small new buffer.
+  lastBuffer->setSize(lastBuffer->capacity());
+
+  rawBuffer = vector->getRawStringBufferWithSpace(1, true /*exactSize*/);
+  ASSERT_EQ(vector->stringBuffers().size(), 3);
+  lastBuffer = vector->stringBuffers().back();
+  ASSERT_EQ(1, lastBuffer->size());
+  ASSERT_EQ(32, lastBuffer->capacity());
 }
 
 TEST_F(VectorTest, getRawStringBufferWithSpaceNoExistingBuffer) {

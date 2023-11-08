@@ -257,7 +257,6 @@ void HashProbe::maybeSetupSpillInput(
       spillConfig.filePath,
       spillConfig.maxFileSize,
       spillConfig.writeBufferSize,
-      spillConfig.minSpillRunSize,
       spillConfig.compressionKind,
       memory::spillMemoryPool(),
       spillConfig.executor);
@@ -1448,6 +1447,7 @@ void HashProbe::abort() {
   output_.reset();
   nonSpillInputIndicesBuffer_.reset();
   spillInputIndicesBuffers_.clear();
+  spillInputReader_.reset();
 }
 
 } // namespace facebook::velox::exec

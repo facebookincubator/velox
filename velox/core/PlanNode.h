@@ -597,14 +597,7 @@ class AggregationNode : public PlanNode {
     return "Aggregation";
   }
 
-  bool canSpill(const QueryConfig& queryConfig) const override {
-    // NOTE: as for now, we don't allow spilling for distinct aggregation
-    // (https://github.com/facebookincubator/velox/issues/3263) and pre-grouped
-    // aggregation (https://github.com/facebookincubator/velox/issues/3264). We
-    // will add support later to re-enable.
-    return (isFinal() || isSingle()) && !(aggregates().empty()) &&
-        preGroupedKeys().empty() && queryConfig.aggregationSpillEnabled();
-  }
+  bool canSpill(const QueryConfig& queryConfig) const override;
 
   bool isFinal() const {
     return step_ == Step::kFinal;
@@ -1737,21 +1730,7 @@ class TopNNode : public PlanNode {
       const std::vector<SortOrder>& sortingOrders,
       int32_t count,
       bool isPartial,
-      const PlanNodePtr& source)
-      : PlanNode(id),
-        sortingKeys_(sortingKeys),
-        sortingOrders_(sortingOrders),
-        count_(count),
-        isPartial_(isPartial),
-        sources_{source} {
-    VELOX_USER_CHECK(!sortingKeys.empty(), "TopN must specify sorting keys");
-    VELOX_USER_CHECK_EQ(
-        sortingKeys.size(),
-        sortingOrders.size(),
-        "Number of sorting keys and sorting orders in TopN must be the same");
-    VELOX_USER_CHECK_GT(
-        count, 0, "TopN must specify greater than zero number of rows to keep");
-  }
+      const PlanNodePtr& source);
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;

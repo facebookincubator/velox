@@ -599,7 +599,7 @@ TEST_P(SpillTest, spillPartitionSet) {
     rng.seed(iter);
     int numBatches = 2 * (1 + folly::Random::rand32(rng) % 16);
     setupSpillState(
-        iter % 2 ? 1 : kGB, numPartitions, numBatches, numRowsPerBatch);
+        iter % 2 ? 1 : kGB, 0, numPartitions, numBatches, numRowsPerBatch);
     numBatchesPerPartition += numBatches;
     for (int i = 0; i < numPartitions; ++i) {
       const SpillPartitionId id(0, i);
@@ -660,7 +660,7 @@ TEST_P(SpillTest, spillPartitionSpilt) {
     batches.reserve(numBatches);
 
     const int numRowsPerBatch = 50;
-    setupSpillState(seed % 2 ? 1 : kGB, 1, numBatches, numRowsPerBatch);
+    setupSpillState(seed % 2 ? 1 : kGB, 0, 1, numBatches, numRowsPerBatch);
     const SpillPartitionId id(0, 0);
 
     auto spillPartition =
@@ -672,17 +672,27 @@ TEST_P(SpillTest, spillPartitionSpilt) {
 
     folly::Random::DefaultGenerator rng;
     rng.seed(seed);
-    const int32_t numSplits =
-        1 + folly::Random::rand32(spillPartition->numFiles() * 2 / 3);
-    auto spillPartitionSplits = spillPartition->split(numSplits);
-    for (const auto& partitionSplit : spillPartitionSplits) {
-      ASSERT_EQ(id, partitionSplit->id());
+    const auto totalNumFiles = spillPartition->numFiles();
+    const int32_t numShards = 1 + folly::Random::rand32(totalNumFiles * 2 / 3);
+    auto spillPartitionShards = spillPartition->split(numShards);
+    for (const auto& partitionShard : spillPartitionShards) {
+      ASSERT_EQ(id, partitionShard->id());
     }
+
+    // Even split distribution verification.
+    int minNumFiles = std::numeric_limits<int>::max();
+    int maxNumFiles = std::numeric_limits<int>::min();
+    for (uint32_t i = 0; i < numShards; i++) {
+      auto numFiles = spillPartitionShards[i]->numFiles();
+      minNumFiles = std::min(minNumFiles, numFiles);
+      maxNumFiles = std::max(maxNumFiles, numFiles);
+    }
+    ASSERT_LE(maxNumFiles - minNumFiles, 1);
 
     // Read verification.
     int batchIdx = 0;
-    for (int32_t i = 0; i < numSplits; ++i) {
-      auto reader = spillPartitionSplits[i]->createReader();
+    for (int32_t i = 0; i < numShards; ++i) {
+      auto reader = spillPartitionShards[i]->createReader();
       RowVectorPtr output;
       while (reader->nextBatch(output)) {
         for (int row = 0; row < numRowsPerBatch; ++row) {
@@ -701,7 +711,7 @@ TEST_P(SpillTest, spillPartitionSpilt) {
 TEST_P(SpillTest, nonExistSpillFileOnDeletion) {
   const int32_t numRowsPerBatch = 50;
   std::vector<RowVectorPtr> batches;
-  setupSpillState(kGB, 1, 2, numRowsPerBatch);
+  setupSpillState(kGB, 0, 1, 2, numRowsPerBatch);
   // Delete the tmp dir to verify the spill file deletion error won't fail the
   // test.
   tempDir_.reset();

@@ -66,11 +66,10 @@ struct RowPointers {
 SortedAggregations::SortedAggregations(
     std::vector<AggregateInfo*> aggregates,
     const RowTypePtr& inputType,
-    memory::MemoryPool* pool)
-    : aggregates_{std::move(aggregates)} {
+    memory::MemoryPool* pool) {
   // Collect inputs and sorting keys from all aggregates.
   std::unordered_set<column_index_t> allInputs;
-  for (const auto* aggregate : aggregates_) {
+  for (const auto* aggregate : aggregates) {
     for (auto i = 0; i < aggregate->inputs.size(); ++i) {
       auto input = aggregate->inputs[i];
       if (input != kConstantChannel) {
@@ -102,6 +101,24 @@ SortedAggregations::SortedAggregations(
 
   inputData_ = std::make_unique<RowContainer>(types, pool);
   decodedInputs_.resize(inputs_.size());
+
+  for (auto& aggregate : aggregates) {
+    auto it =
+        aggregates_
+            .emplace(toSortingSpec(*aggregate), std::vector<AggregateInfo*>{})
+            .first;
+    it->second.push_back(aggregate);
+  }
+}
+
+SortedAggregations::SortingSpec SortedAggregations::toSortingSpec(
+    const AggregateInfo& aggregate) const {
+  SortingSpec sortingSpec;
+  for (auto i = 0; i < aggregate.sortingKeys.size(); ++i) {
+    sortingSpec.push_back(
+        {inputMapping_[aggregate.sortingKeys[i]], aggregate.sortingOrders[i]});
+  }
+  return sortingSpec;
 }
 
 Accumulator SortedAggregations::accumulator() const {
@@ -129,9 +146,10 @@ void SortedAggregations::initializeNewGroups(
     new (groups[i] + offset_) RowPointers();
   }
 
-  for (auto i = 0; i < aggregates_.size(); ++i) {
-    const auto& aggregate = *aggregates_[i];
-    aggregate.function->initializeNewGroups(groups, indices);
+  for (const auto& [sortingSpec, aggregates] : aggregates_) {
+    for (const auto& aggregate : aggregates) {
+      aggregate->function->initializeNewGroups(groups, indices);
+    }
   }
 }
 
@@ -180,11 +198,11 @@ void SortedAggregations::addSingleGroupInput(
 bool SortedAggregations::compareRowsWithKeys(
     const char* lhs,
     const char* rhs,
-    const std::vector<std::pair<column_index_t, core::SortOrder>>& keys) {
+    const SortingSpec& sortingSpec) {
   if (lhs == rhs) {
     return false;
   }
-  for (auto& key : keys) {
+  for (auto& key : sortingSpec) {
     if (auto result = inputData_->compare(
             lhs,
             rhs,
@@ -200,58 +218,60 @@ void SortedAggregations::noMoreInput() {}
 
 void SortedAggregations::sortSingleGroup(
     std::vector<char*>& groupRows,
-    const AggregateInfo& aggregate) {
-  std::vector<std::pair<column_index_t, core::SortOrder>> keys;
-  for (auto i = 0; i < aggregate.sortingKeys.size(); ++i) {
-    keys.push_back(
-        {inputMapping_[aggregate.sortingKeys[i]], aggregate.sortingOrders[i]});
-  }
-
+    const SortingSpec& sortingSpec) {
   std::sort(
       groupRows.begin(),
       groupRows.end(),
       [&](const char* leftRow, const char* rightRow) {
-        return compareRowsWithKeys(leftRow, rightRow, keys);
+        return compareRowsWithKeys(leftRow, rightRow, sortingSpec);
       });
 }
 
-std::vector<VectorPtr> SortedAggregations::extractSingleGroup(
+vector_size_t SortedAggregations::extractSingleGroup(
     std::vector<char*>& groupRows,
-    const AggregateInfo& aggregate) {
-  const auto numGroups = groupRows.size();
+    const AggregateInfo& aggregate,
+    std::vector<VectorPtr>& inputVectors) {
+  const auto numGroupRows = groupRows.size();
 
   std::vector<vector_size_t> rowNumbers;
   if (aggregate.mask) {
     FlatVectorPtr<bool> mask = BaseVector::create<FlatVector<bool>>(
-        BOOLEAN(), numGroups, inputData_->pool());
+        BOOLEAN(), numGroupRows, inputData_->pool());
     inputData_->extractColumn(
         groupRows.data(),
-        numGroups,
+        numGroupRows,
         inputMapping_[aggregate.mask.value()],
         mask);
 
-    rowNumbers.reserve(numGroups);
-    for (auto i = 0; i < numGroups; ++i) {
+    rowNumbers.reserve(numGroupRows);
+    for (auto i = 0; i < numGroupRows; ++i) {
       if (!mask->isNullAt(i) && mask->valueAt(i)) {
         rowNumbers.push_back(i);
       }
     }
 
     if (rowNumbers.empty()) {
-      return {};
+      return 0;
     }
   }
 
   const auto numInputs = aggregate.inputs.size();
-  std::vector<VectorPtr> inputVectors(numInputs);
+  VELOX_CHECK_EQ(numInputs, inputVectors.size());
+
+  const auto numRows = aggregate.mask ? rowNumbers.size() : numGroupRows;
+
   for (auto i = 0; i < numInputs; ++i) {
     if (aggregate.inputs[i] == kConstantChannel) {
       inputVectors[i] = aggregate.constantInputs[i];
     } else {
       const auto columnIndex = inputMapping_[aggregate.inputs[i]];
-      const auto numRows = aggregate.mask ? rowNumbers.size() : numGroups;
-      inputVectors[i] = BaseVector::create(
-          inputData_->keyTypes()[columnIndex], numRows, inputData_->pool());
+      if (inputVectors[i] == nullptr) {
+        inputVectors[i] = BaseVector::create(
+            inputData_->keyTypes()[columnIndex], numRows, inputData_->pool());
+      } else {
+        BaseVector::prepareForReuse(inputVectors[i], numRows);
+      }
+
       if (aggregate.mask) {
         inputData_->extractColumn(
             groupRows.data(),
@@ -261,55 +281,78 @@ std::vector<VectorPtr> SortedAggregations::extractSingleGroup(
             inputVectors[i]);
       } else {
         inputData_->extractColumn(
-            groupRows.data(), numGroups, columnIndex, inputVectors[i]);
+            groupRows.data(), numRows, columnIndex, inputVectors[i]);
       }
     }
   }
 
-  return inputVectors;
+  return numRows;
 }
 
 void SortedAggregations::extractValues(
     folly::Range<char**> groups,
     const RowVectorPtr& result) {
-  // TODO Identify aggregates with same order by and sort once.
-
   raw_vector<int32_t> temp;
   SelectivityVector rows;
-  for (auto i = 0; i < aggregates_.size(); ++i) {
-    const auto& aggregate = *aggregates_[i];
+  for (const auto& [sortingSpec, aggregates] : aggregates_) {
+    std::vector<VectorPtr> inputVectors;
+    size_t numInputColumns = 0;
+    for (const auto& aggregate : aggregates) {
+      numInputColumns += aggregate->inputs.size();
+    }
+    inputVectors.resize(numInputColumns);
 
     // For each group, sort inputs, add them to aggregate.
     for (auto* group : groups) {
       auto groupRows =
           reinterpret_cast<RowPointers*>(group + offset_)->read(*allocator_);
 
-      sortSingleGroup(groupRows, aggregate);
+      sortSingleGroup(groupRows, sortingSpec);
 
-      // TODO Process group rows in batches to avoid creating very large input
-      // vectors.
-      auto inputVectors = extractSingleGroup(groupRows, aggregate);
-      if (inputVectors.empty()) {
-        // Mask must be false for all 'groupRows'.
-        continue;
+      size_t firstInputColumn = 0;
+      for (const auto& aggregate : aggregates) {
+        std::vector<VectorPtr> aggregateInputs;
+        aggregateInputs.reserve(aggregate->inputs.size());
+        for (auto i = 0; i < aggregate->inputs.size(); ++i) {
+          aggregateInputs.push_back(
+              std::move(inputVectors[firstInputColumn + i]));
+        }
+
+        // TODO Process group rows in batches to avoid creating very large input
+        // vectors.
+        const auto numRows =
+            extractSingleGroup(groupRows, *aggregate, aggregateInputs);
+        if (numRows == 0) {
+          // Mask must be false for all 'groupRows'.
+          continue;
+        }
+
+        rows.resize(numRows);
+        aggregate->function->addSingleGroupRawInput(
+            group, rows, aggregateInputs, false);
+
+        for (auto i = 0; i < aggregate->inputs.size(); ++i) {
+          inputVectors[firstInputColumn + i] = std::move(aggregateInputs[i]);
+        }
+
+        firstInputColumn += aggregateInputs.size();
       }
-
-      rows.resize(inputVectors[0]->size());
-      aggregate.function->addSingleGroupRawInput(
-          group, rows, inputVectors, false);
     }
 
-    aggregate.function->extractValues(
-        groups.data(), groups.size(), &result->childAt(aggregate.output));
+    for (const auto& aggregate : aggregates) {
+      aggregate->function->extractValues(
+          groups.data(), groups.size(), &result->childAt(aggregate->output));
 
-    // Release memory back to HashStringAllocator to allow next aggregate to
-    // re-use it.
-    aggregate.function->destroy(groups);
-    // Overwrite empty groups over the destructed groups to keep the container
-    // in a well formed state.
-    aggregate.function->initializeNewGroups(
-        groups.data(),
-        folly::Range<const int32_t*>(iota(groups.size(), temp), groups.size()));
+      // Release memory back to HashStringAllocator to allow next aggregate to
+      // re-use it.
+      aggregate->function->destroy(groups);
+      // Overwrite empty groups over the destructed groups to keep the container
+      // in a well formed state.
+      aggregate->function->initializeNewGroups(
+          groups.data(),
+          folly::Range<const int32_t*>(
+              iota(groups.size(), temp), groups.size()));
+    }
   }
 }
 

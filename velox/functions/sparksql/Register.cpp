@@ -35,6 +35,7 @@
 #include "velox/functions/sparksql/RegisterCompare.h"
 #include "velox/functions/sparksql/Size.h"
 #include "velox/functions/sparksql/String.h"
+#include "velox/functions/sparksql/UnscaledValueFunction.h"
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
@@ -264,11 +265,21 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<DayOfWeekFunction, int32_t, Date>(
       {prefix + "dow", prefix + "dayofweek"});
 
+  registerFunction<QuarterFunction, int32_t, Date>({prefix + "quarter"});
+
+  registerFunction<MonthFunction, int32_t, Date>({prefix + "month"});
+
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
       {prefix + "might_contain"});
 
   registerArrayMinMaxFunctions(prefix);
+
+  // Register decimal vector functions.
+  exec::registerVectorFunction(
+      prefix + "unscaled_value",
+      unscaledValueSignatures(),
+      makeUnscaledValue());
 }
 
 } // namespace sparksql
