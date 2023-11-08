@@ -79,6 +79,18 @@ when <code class="docutils literal notranslate"><span class="pre">low</span></co
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="cosine_similarity">
+<span class="sig-name descname"><span class="pre">cosine_similarity</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(varchar</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">double)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map(varchar</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#cosine_similarity" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Cosine_similarity">cosine similarity</a> between the vectors represented as map(varchar, double).
+If any input map is empty, the function returns NaN.</p>
+<blockquote>
+<div><p>SELECT cosine_similarity(MAP(ARRAY[‘a’], ARRAY[1.0]), MAP(ARRAY[‘a’], ARRAY[2.0])); – 1.0</p>
+<p>SELECT cosine_similarity(MAP(ARRAY[‘a’, ‘b’], ARRAY[1.0, 2.0]), MAP(ARRAY[‘a’, ‘b’], ARRAY[NULL, 3.0])); – NULL</p>
+<p>SELECT cosine_similarity(MAP(ARRAY[], ARRAY[]), MAP(ARRAY[‘a’, ‘b’], ARRAY[2, 3])); – NaN</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="degrees">
 <span class="sig-name descname"><span class="pre">degrees</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#degrees" title="Permalink to this definition">¶</a></dt>
 <dd><p>Converts angle x in radians to degrees.</p>
