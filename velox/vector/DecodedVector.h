@@ -292,6 +292,10 @@ class DecodedVector {
   /// Pre-allocated vector of 0, 1, 2,..
   static const std::vector<vector_size_t>& consecutiveIndices();
 
+  /// Resets all internal states of the DecodedVector and set its size to
+  /// `size`.
+  void reset(vector_size_t size);
+
  private:
   DecodedVector(
       const BaseVector& vector,
@@ -344,8 +348,6 @@ class DecodedVector {
   void setBaseDataForConstant(
       const BaseVector& vector,
       const SelectivityVector* rows);
-
-  void reset(vector_size_t size);
 
   // If `rows` is null applies the `func` to all rows in [0, size_)
   // otherwise, applies it to selected rows only.

@@ -105,8 +105,12 @@ void DecodedVector::makeIndices(
 
 void DecodedVector::reset(vector_size_t size) {
   if (!indicesNotCopied()) {
+    copiedIndices_.resize(size);
     // Init with default value to avoid invalid indices for unselected rows)
     std::fill(copiedIndices_.begin(), copiedIndices_.end(), 0);
+  }
+  if (!nullsNotCopied()) {
+    copiedNulls_.resize(bits::nwords(size));
   }
   size_ = size;
   indices_ = nullptr;

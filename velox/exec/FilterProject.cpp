@@ -153,24 +153,31 @@ RowVectorPtr FilterProject::getOutput() {
   numProcessedInputRows_ = size;
   if (numOut == 0) { // no rows passed the filer
     input_ = nullptr;
+    if (!operatorCtx_->execCtx()->exprEvalCacheEnabled()) {
+      filterEvalCtx_.reset();
+    }
     return nullptr;
   }
 
   bool allRowsSelected = (numOut == size);
 
   // evaluate projections (if present)
-  std::vector<VectorPtr> results;
+  std::vector<VectorPtr> projectionResults;
   if (!isIdentityProjection_) {
     if (!allRowsSelected) {
       rows->setFromBits(filterEvalCtx_.selectedBits->as<uint64_t>(), size);
     }
-    results = project(*rows, evalCtx);
+    projectionResults = project(*rows, evalCtx);
   }
 
-  return fillOutput(
+  auto result = fillOutput(
       numOut,
       allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices,
-      results);
+      projectionResults);
+  if (!operatorCtx_->execCtx()->exprEvalCacheEnabled()) {
+    filterEvalCtx_.reset();
+  }
+  return result;
 }
 
 std::vector<VectorPtr> FilterProject::project(

@@ -31,8 +31,8 @@ void deselectRowsWithNulls(
 // Reusable memory needed for processing filter results.
 struct FilterEvalCtx {
   DecodedVector decodedResult;
-  BufferPtr selectedIndices;
-  BufferPtr selectedBits;
+  BufferPtr selectedIndices = nullptr;
+  BufferPtr selectedBits = nullptr;
 
   // Make sure selectedBits has enough capacity to hold 'size' bits and return
   // raw pointer to the underlying buffer.
@@ -45,6 +45,12 @@ struct FilterEvalCtx {
   vector_size_t* FOLLY_NONNULL getRawSelectedIndices(
       vector_size_t size,
       memory::MemoryPool* FOLLY_NONNULL pool);
+
+  void reset() {
+    decodedResult.reset(0);
+    selectedIndices = nullptr;
+    selectedBits = nullptr;
+  }
 };
 
 // Convert the results of filter evaluation as a vector of booleans into indices

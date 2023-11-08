@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -26,14 +27,27 @@ using namespace facebook::velox::exec::test;
 
 using facebook::velox::test::BatchMaker;
 
-class FilterProjectTest : public OperatorTestBase {
+class FilterProjectTest : public OperatorTestBase,
+                          public testing::WithParamInterface<bool> {
+ public:
+  FilterProjectTest() {
+    std::unordered_map<std::string, std::string> configData(
+        {{core::QueryConfig::kEnableExpressionEvaluationCache,
+          GetParam() ? "true" : "false"}});
+    executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(
+        std::thread::hardware_concurrency());
+    queryCtx_ = std::make_shared<core::QueryCtx>(
+        executor_.get(), core::QueryConfig(std::move(configData)));
+  }
+
  protected:
   void assertFilter(
       const std::vector<RowVectorPtr>& vectors,
       const std::string& filter = "c1 % 10  > 0") {
     auto plan = PlanBuilder().values(vectors).filter(filter).planNode();
+    CursorParameters params({.planNode = plan, .queryCtx = queryCtx_});
 
-    assertQuery(plan, "SELECT * FROM tmp WHERE " + filter);
+    assertQuery(params, "SELECT * FROM tmp WHERE " + filter);
   }
 
   void assertProject(const std::vector<RowVectorPtr>& vectors) {
@@ -41,8 +55,9 @@ class FilterProjectTest : public OperatorTestBase {
                     .values(vectors)
                     .project({"c0", "c1", "c0 + c1"})
                     .planNode();
+    CursorParameters params({.planNode = plan, .queryCtx = queryCtx_});
 
-    auto task = assertQuery(plan, "SELECT c0, c1, c0 + c1 FROM tmp");
+    auto task = assertQuery(params, "SELECT c0, c1, c0 + c1 FROM tmp");
 
     // A quick sanity check for memory usage reporting. Check that peak total
     // memory usage for the project node is > 0.
@@ -56,9 +71,12 @@ class FilterProjectTest : public OperatorTestBase {
   std::shared_ptr<const RowType> rowType_{
       ROW({"c0", "c1", "c2", "c3"},
           {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()})};
+
+  std::shared_ptr<folly::Executor> executor_;
+  std::shared_ptr<core::QueryCtx> queryCtx_;
 };
 
-TEST_F(FilterProjectTest, filter) {
+TEST_P(FilterProjectTest, filter) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -70,7 +88,7 @@ TEST_F(FilterProjectTest, filter) {
   assertFilter(vectors);
 }
 
-TEST_F(FilterProjectTest, filterOverDictionary) {
+TEST_P(FilterProjectTest, filterOverDictionary) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -99,7 +117,7 @@ TEST_F(FilterProjectTest, filterOverDictionary) {
   assertFilter(vectors);
 }
 
-TEST_F(FilterProjectTest, filterOverConstant) {
+TEST_P(FilterProjectTest, filterOverConstant) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -121,7 +139,7 @@ TEST_F(FilterProjectTest, filterOverConstant) {
   assertFilter(vectors);
 }
 
-TEST_F(FilterProjectTest, project) {
+TEST_P(FilterProjectTest, project) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -133,7 +151,7 @@ TEST_F(FilterProjectTest, project) {
   assertProject(vectors);
 }
 
-TEST_F(FilterProjectTest, projectOverDictionary) {
+TEST_P(FilterProjectTest, projectOverDictionary) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -162,7 +180,7 @@ TEST_F(FilterProjectTest, projectOverDictionary) {
   assertProject(vectors);
 }
 
-TEST_F(FilterProjectTest, projectOverConstant) {
+TEST_P(FilterProjectTest, projectOverConstant) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -184,7 +202,7 @@ TEST_F(FilterProjectTest, projectOverConstant) {
   assertProject(vectors);
 }
 
-TEST_F(FilterProjectTest, projectOverLazy) {
+TEST_P(FilterProjectTest, projectOverLazy) {
   vector_size_t size = 1'000;
   auto valueAtC0 = [](auto row) -> int32_t {
     return row % 2 == 0 ? row : -row;
@@ -208,10 +226,11 @@ TEST_F(FilterProjectTest, projectOverLazy) {
                   .values({lazyVectors})
                   .project({"c0 > 0 AND c1 > 0.0", "c1 + 5.2"})
                   .planNode();
-  assertQuery(plan, "SELECT c0 > 0 AND c1 > 0, c1 + 5.2 FROM tmp");
+  CursorParameters params({.planNode = plan, .queryCtx = queryCtx_});
+  assertQuery(params, "SELECT c0 > 0 AND c1 > 0, c1 + 5.2 FROM tmp");
 }
 
-TEST_F(FilterProjectTest, filterProject) {
+TEST_P(FilterProjectTest, filterProject) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -225,11 +244,12 @@ TEST_F(FilterProjectTest, filterProject) {
                   .filter("c1 % 10  > 0")
                   .project({"c0", "c1", "c0 + c1"})
                   .planNode();
+  CursorParameters params({.planNode = plan, .queryCtx = queryCtx_});
 
-  assertQuery(plan, "SELECT c0, c1, c0 + c1 FROM tmp WHERE c1 % 10 > 0");
+  assertQuery(params, "SELECT c0, c1, c0 + c1 FROM tmp WHERE c1 % 10 > 0");
 }
 
-TEST_F(FilterProjectTest, dereference) {
+TEST_P(FilterProjectTest, dereference) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -243,7 +263,8 @@ TEST_F(FilterProjectTest, dereference) {
                   .project({"row_constructor(c1, c2) AS c1_c2"})
                   .project({"c1_c2.c1", "c1_c2.c2"})
                   .planNode();
-  assertQuery(plan, "SELECT c1, c2 FROM tmp");
+  CursorParameters params({.planNode = plan, .queryCtx = queryCtx_});
+  assertQuery(params, "SELECT c1, c2 FROM tmp");
 
   plan = PlanBuilder()
              .values(vectors)
@@ -251,10 +272,11 @@ TEST_F(FilterProjectTest, dereference) {
              .filter("c1_c2.c1 % 10 = 5")
              .project({"c1_c2.c1", "c1_c2.c2"})
              .planNode();
-  assertQuery(plan, "SELECT c1, c2 FROM tmp WHERE c1 % 10 = 5");
+  params.planNode = plan;
+  assertQuery(params, "SELECT c1, c2 FROM tmp WHERE c1 % 10 = 5");
 }
 
-TEST_F(FilterProjectTest, allFailedOrPassed) {
+TEST_P(FilterProjectTest, allFailedOrPassed) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     // We alternate between a batch where all pass and a batch where
@@ -276,7 +298,7 @@ TEST_F(FilterProjectTest, allFailedOrPassed) {
 }
 
 // Tests fusing of consecutive filters and projects.
-TEST_F(FilterProjectTest, filterProjectFused) {
+TEST_P(FilterProjectTest, filterProjectFused) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -294,13 +316,14 @@ TEST_F(FilterProjectTest, filterProjectFused) {
                   .filter("c0 % 10 < 5")
                   .project({"c0", "c1", "e1", "e2"})
                   .planNode();
+  CursorParameters params({.planNode = plan, .queryCtx = queryCtx_});
 
   assertQuery(
-      plan,
+      params,
       "SELECT c0, c1, c0 %100 + c1 % 50, c0 % 100 FROM tmp WHERE c0 % 10 < 5");
 }
 
-TEST_F(FilterProjectTest, projectAndIdentityOverLazy) {
+TEST_P(FilterProjectTest, projectAndIdentityOverLazy) {
   // Verify that a lazy column which is a part of both an identity projection
   // and a regular projection is loaded correctly. This is done by running a
   // projection that only operates over a subset of the rows of the lazy vector.
@@ -322,7 +345,8 @@ TEST_F(FilterProjectTest, projectAndIdentityOverLazy) {
                   .values({lazyVectors})
                   .project({"c0 < 10 AND c1 < 10", "c1"})
                   .planNode();
-  assertQuery(plan, "SELECT c0 < 10 AND c1 < 10, c1 FROM tmp");
+  CursorParameters params({.planNode = plan, .queryCtx = queryCtx_});
+  assertQuery(params, "SELECT c0 < 10 AND c1 < 10, c1 FROM tmp");
 }
 
 // Verify that nulls on nested parent are propagated to child without copying
@@ -330,7 +354,7 @@ TEST_F(FilterProjectTest, projectAndIdentityOverLazy) {
 // Expr::evalWithNulls; this happens only once per expression tree so we are not
 // optimizing that code.  We are testing the optimization of potentially more
 // expensive case of FieldReference::evalSpecialForm here.
-TEST_F(FilterProjectTest, nestedFieldReference) {
+TEST_P(FilterProjectTest, nestedFieldReference) {
   auto vector = makeRowVector({
       makeRowVector({
           makeRowVector(
@@ -354,6 +378,7 @@ TEST_F(FilterProjectTest, nestedFieldReference) {
   params.planNode =
       PlanBuilder().values({vector}).projectExpressions({expr}).planNode();
   params.copyResult = false;
+  params.queryCtx = queryCtx_;
   TaskCursor cursor(params);
   ASSERT_TRUE(cursor.moveNext());
   auto result = cursor.current();
@@ -371,7 +396,7 @@ TEST_F(FilterProjectTest, nestedFieldReference) {
 
 // Verify the optimization of avoiding copy in null propagation does not break
 // the case when the field is shared between multiple parents.
-TEST_F(FilterProjectTest, nestedFieldReferenceSharedChild) {
+TEST_P(FilterProjectTest, nestedFieldReferenceSharedChild) {
   auto shared = makeFlatVector<int64_t>(10, folly::identity);
   auto vector = makeRowVector({
       makeRowVector({
@@ -403,14 +428,16 @@ TEST_F(FilterProjectTest, nestedFieldReferenceSharedChild) {
       "plus", std::move(plusInputs), std::nullopt);
   auto plan =
       PlanBuilder().values({vector}).projectExpressions({expr}).planNode();
+  CursorParameters params({.planNode = plan, .queryCtx = queryCtx_});
+
   auto expected = makeFlatVector<int64_t>(10);
   for (int i = 0; i < 10; ++i) {
     expected->set(i, (i % 2 == 0 ? 0 : i) + (i % 3 == 0 ? 0 : i));
   }
-  AssertQueryBuilder(plan).assertResults(makeRowVector({expected}));
+  assertQuery(params, makeRowVector({expected}));
 }
 
-TEST_F(FilterProjectTest, numSilentThrow) {
+TEST_P(FilterProjectTest, numSilentThrow) {
   auto row = makeRowVector(
       {makeFlatVector<int32_t>(100, [&](auto row) { return row; })});
 
@@ -426,3 +453,8 @@ TEST_F(FilterProjectTest, numSilentThrow) {
   auto planStats = toPlanStats(task->taskStats());
   ASSERT_EQ(100, planStats.at(filterId).customStats.at("numSilentThrow").sum);
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    FilterProjectTest,
+    FilterProjectTest,
+    testing::ValuesIn({false, true}));
