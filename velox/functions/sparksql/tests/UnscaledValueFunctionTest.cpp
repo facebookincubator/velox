@@ -35,7 +35,7 @@ TEST_F(UnscaledValueFunctionTest, unscaledValue) {
 
   VELOX_ASSERT_THROW(
       testUnscaledValue({1000, 2000, -3000, -4000}, DECIMAL(20, 3)),
-      "ShortDecimal type is required");
+      "Expect short decimal type");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
