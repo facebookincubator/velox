@@ -85,6 +85,12 @@ These functions support TIMESTAMP and DATE input types.
     ``day`` need to be from 1 to 31, and matches the number of days in each month.
     days of ``year-month-day - 1970-01-01`` need to be in the range of INTEGER type.
 
+.. spark:function:: month(date) -> integer
+
+    Returns the month of ``date``. ::
+
+        SELECT month('2009-07-30'); -- 7
+       
 .. spark:function:: to_unix_timestamp(string) -> integer
 
     Alias for ``unix_timestamp(string) -> integer``.
