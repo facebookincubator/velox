@@ -42,10 +42,20 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
   void assertPositionalDeletes(
       const std::vector<int64_t>& deleteRows,
-      std::string duckdbSql) {
+      std::string duckdbSql,
+      bool multipleBaseFiles = false) {
     std::shared_ptr<TempFilePath> dataFilePath = writeDataFile(rowCount);
-    std::shared_ptr<TempFilePath> deleteFilePath =
-        writePositionDeleteFile(dataFilePath->path, deleteRows);
+
+    std::mt19937 gen{0};
+    int64_t numDeleteRowsBefore =
+        multipleBaseFiles ? folly::Random::rand32(0, 1000, gen) : 0;
+    int64_t numDeleteRowsAfter =
+        multipleBaseFiles ? folly::Random::rand32(0, 1000, gen) : 0;
+    std::shared_ptr<TempFilePath> deleteFilePath = writePositionDeleteFile(
+        dataFilePath->path,
+        deleteRows,
+        numDeleteRowsBefore,
+        numDeleteRowsAfter);
 
     IcebergDeleteFile deleteFile(
         FileContent::kPositionalDeletes,
@@ -135,14 +145,43 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
   std::shared_ptr<TempFilePath> writePositionDeleteFile(
       const std::string& dataFilePath,
-      const std::vector<int64_t>& deleteRows) {
-    uint32_t numDeleteRows = deleteRows.size();
+      const std::vector<int64_t>& deleteRows,
+      int64_t numRowsBefore = 0,
+      int64_t numRowsAfter = 0) {
+    // if containsMultipleDataFiles == true, we will write rows for other base
+    // files before and after the target base file
+    uint32_t numDeleteRows = numRowsBefore + deleteRows.size() + numRowsAfter;
 
     auto child = vectorMaker_.flatVector<int64_t>(std::vector<int64_t>{1UL});
 
-    auto filePathVector = vectorMaker_.flatVector<StringView>(
-        numDeleteRows, [&](auto row) { return StringView(dataFilePath); });
-    auto deletePositionsVector = vectorMaker_.flatVector<int64_t>(deleteRows);
+    auto filePathVector =
+        vectorMaker_.flatVector<StringView>(numDeleteRows, [&](auto row) {
+          if (row < numRowsBefore) {
+            std::string dataFilePathBefore = dataFilePath + "_before";
+            return StringView(dataFilePathBefore);
+          } else if (
+              row >= numRowsBefore && row < deleteRows.size() + numRowsBefore) {
+            return StringView(dataFilePath);
+          } else if (row >= deleteRows.size() + numRowsBefore) {
+            std::string dataFilePathAfter = dataFilePath + "_after";
+            return StringView(dataFilePathAfter);
+          }
+        });
+
+    std::vector<int64_t> deleteRowsVec;
+    deleteRowsVec.resize(numDeleteRows);
+
+    if (numRowsBefore > 0) {
+      auto rowsBefore = makeRandomDeleteRows(numRowsBefore);
+      deleteRowsVec.insert(deleteRowsVec.end(), rowsBefore.begin(), rowsBefore.end());
+    }
+    deleteRowsVec.insert(deleteRowsVec.end(), deleteRows.begin(), deleteRows.end());
+    if (numRowsAfter > 0) {
+      auto rowsAfter = makeRandomDeleteRows(numRowsAfter);
+      deleteRowsVec.insert(deleteRowsVec.end(), rowsAfter.begin(), rowsAfter.end());
+    }
+
+    auto deletePositionsVector = vectorMaker_.flatVector<int64_t>(deleteRowsVec);
     RowVectorPtr deleteFileVectors = makeRowVector(
         {pathColumn_->name, posColumn_->name},
         {filePathVector, deletePositionsVector});
