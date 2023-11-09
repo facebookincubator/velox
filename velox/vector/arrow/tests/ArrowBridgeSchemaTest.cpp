@@ -180,7 +180,7 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARCHAR(), "u");
   testScalarType(VARBINARY(), "z");
 
-  testScalarType(TIMESTAMP(), "ttn");
+  testScalarType(TIMESTAMP(), "tsu:");
   testScalarType(DATE(), "tdD");
 
   testScalarType(DECIMAL(10, 4), "d:10,4");

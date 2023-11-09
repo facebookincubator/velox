@@ -420,11 +420,14 @@ HiveDataSource::HiveDataSource(
   for (auto& [k, v] : hiveTableHandle_->subfieldFilters()) {
     filters.emplace(k.clone(), v->clone());
   }
-  auto remainingFilter = extractFiltersFromRemainingFilter(
-      hiveTableHandle_->remainingFilter(),
-      expressionEvaluator_,
-      false,
-      filters);
+  auto remainingFilter = hiveTableHandle_->remainingFilter();
+  if (hiveTableHandle_->isFilterPushdownEnabled()) {
+    remainingFilter = extractFiltersFromRemainingFilter(
+        hiveTableHandle_->remainingFilter(),
+        expressionEvaluator_,
+        false,
+        filters);
+  }
 
   std::vector<common::Subfield> remainingFilterSubfields;
   if (remainingFilter) {

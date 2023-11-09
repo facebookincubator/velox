@@ -248,7 +248,7 @@ const char* exportArrowFormatStr(
       return "z"; // binary
 
     case TypeKind::TIMESTAMP:
-      return "ttn"; // time64 [nanoseconds]
+      return "tsu:"; // timestamp [microseconds]
     // Complex/nested types.
     case TypeKind::ARRAY:
       static_assert(sizeof(vector_size_t) == 4);
@@ -530,6 +530,7 @@ void exportValues(
   const auto& type = vec.type();
   out.n_buffers = 2;
 
+  // Timestamps need to be converted to micros.
   if (!rows.changed() && isFlatScalarZeroCopy(type)) {
     holder.setBuffer(1, vec.values());
     return;
@@ -1008,6 +1009,11 @@ void exportToArrow(const VectorPtr& vec, ArrowSchema& arrowSchema) {
 TypePtr importFromArrow(const ArrowSchema& arrowSchema) {
   const char* format = arrowSchema.format;
   VELOX_CHECK_NOT_NULL(format);
+  const std::string formatStr(format);
+  // TODO: Timezone and unit are not handled.
+  if (formatStr.rfind("ts", 0) == 0) {
+    return TIMESTAMP();
+  }
 
   switch (format[0]) {
     case 'b':
@@ -1115,6 +1121,34 @@ TypePtr importFromArrow(const ArrowSchema& arrowSchema) {
 }
 
 namespace {
+
+VectorPtr createTimestampVector(
+    memory::MemoryPool* pool,
+    const TypePtr& type,
+    BufferPtr nulls,
+    const ArrowSchema& arrowSchema,
+    const ArrowArray& arrowArray,
+    WrapInBufferViewFunc wrapInBufferView) {
+  auto valueBuf = wrapInBufferView(
+      arrowArray.buffers[1], arrowArray.length * sizeof(Timestamp));
+
+  auto src = valueBuf->as<uint8_t>();
+
+  VectorPtr base = BaseVector::create(type, arrowArray.length, pool);
+  base->setNulls(nulls);
+
+  auto flatVector = std::dynamic_pointer_cast<FlatVector<Timestamp>>(base);
+
+  for (int i = 0; i < arrowArray.length; i++) {
+    if (!base->isNullAt(i)) {
+      int64_t result;
+      memcpy(&result, src + i * sizeof(int64_t), sizeof(int64_t));
+      flatVector->set(i, Timestamp::fromMicros(result));
+    }
+  }
+
+  return flatVector;
+}
 
 VectorPtr importFromArrowImpl(
     ArrowSchema& arrowSchema,

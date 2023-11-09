@@ -144,7 +144,8 @@ class PlanBuilder {
       const std::unordered_map<std::string, std::string>& columnAliases = {},
       const std::vector<std::string>& subfieldFilters = {},
       const std::string& remainingFilter = "",
-      const RowTypePtr& dataColumns = nullptr);
+      const RowTypePtr& dataColumns = nullptr,
+      bool isFilterPushdownEnabled = true);
 
   /// Add a TableScanNode using a connector-specific table handle and
   /// assignments. Supports any connector, not just Hive connector.

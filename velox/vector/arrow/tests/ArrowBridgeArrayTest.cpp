@@ -883,6 +883,15 @@ TEST_F(ArrowBridgeArrayExportTest, constantComplex) {
       vector, std::vector<std::optional<int64_t>>{1, 2, 3});
 }
 
+TEST_F(ArrowBridgeArrayExportTest, unsupported) {
+  ArrowArray arrowArray;
+  VectorPtr vector;
+
+  // Timestamps.
+  vector = vectorMaker_.flatVectorNullable<Timestamp>({});
+  velox::exportToArrow(vector, arrowArray, pool_.get());
+}
+
 class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
  protected:
   // Used by this base test class to import Arrow data and create Velox Vector.
