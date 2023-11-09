@@ -45,10 +45,10 @@ void ArgumentTypeFuzzer::determineUnboundedTypeVariables() {
       continue;
     }
 
-    // Random randomType() never generates unknown here.
-    // TODO: we should extend randomType types and exclude unknown based
-    // on variableInfo.
-    if (variableInfo.orderableTypesOnly()) {
+    // Use UNKNOWN type 10% of the time.
+    if (!variableInfo.knownTypesOnly() && coinToss(rng_, 0.1)) {
+      bindings_[variableName] = UNKNOWN();
+    } else if (variableInfo.orderableTypesOnly()) {
       bindings_[variableName] = randOrderableType();
     } else {
       bindings_[variableName] = randType();
