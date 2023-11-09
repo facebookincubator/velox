@@ -48,6 +48,33 @@ Mathematical Functions
 
     Returns the cosecant of ``x``.
 
+.. spark:function:: decimal_round(decimal, scale) -> [decimal]
+
+    Returns ``decimal`` rounded to a new scale using HALF_UP rounding mode. In HALF_UP rounding, the digit 5 is rounded up. ``scale`` is the new scale to be rounded to.
+    The result precision and scale are decided with the precision and scale of input ``decimal`` and ``scale``.
+    After rounding we may need one more digit in the integral part.
+    When ``scale`` is negative, we need to adjust ``-scale`` number of digits before the decimal point,
+    which means we need at least ``-scale + 1`` digits after rounding, and the result scale is 0.
+
+        SELECT round(cast (0.856 as DECIMAL(3, 3)), -1); -- decimal 0
+        SELECT round(cast (85.6 as DECIMAL(3, 1)), -1); -- decimal 90
+        SELECT round(cast (85.6 as DECIMAL(3, 1)), -2); -- decimal 100
+
+    When ``scale`` is 0, the result scale will be 0.
+
+        SELECT round(cast (0.856 as DECIMAL(3, 3)), 0); -- decimal 1
+
+    When ``scale`` is positive, the result scale will be the minor one of input scale and ``scale``.
+    The result precision is decided with the number of integral digits and the result scale, but cannot exceed the max precision of decimal.
+
+        SELECT round(cast (85.681 as DECIMAL(3, 1)), 1); -- decimal 85.7
+
+.. spark:function:: decimal_round(decimal) -> [decimal]
+
+    A version of ``decimal_round`` that rounds ``decimal`` to scale 0.
+
+        SELECT round(cast (85.6 as DECIMAL(3, 1))); -- decimal 86
+
 .. spark:function:: divide(x, y) -> double
 
     Returns the results of dividing x by y. Performs floating point division.
@@ -164,6 +191,7 @@ Mathematical Functions
 
     Returns ``x`` rounded to ``d`` decimal places using HALF_UP rounding mode. 
     In HALF_UP rounding, the digit 5 is rounded up.
+    Supported types for ``x`` are integral and floating point types.
 
 .. spark:function:: sec(x) -> double
 
