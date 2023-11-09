@@ -314,8 +314,11 @@ TEST_F(MemoryReclaimerTest, common) {
       ASSERT_FALSE(pool->reclaimableBytes(reclaimableBytes));
       ASSERT_EQ(reclaimableBytes, 0);
       ASSERT_EQ(pool->reclaim(0, stats_), 0);
+      ASSERT_EQ(stats_, MemoryReclaimer::Stats{});
       ASSERT_EQ(pool->reclaim(100, stats_), 0);
+      ASSERT_EQ(stats_, MemoryReclaimer::Stats{});
       ASSERT_EQ(pool->reclaim(kMaxMemory, stats_), 0);
+      ASSERT_EQ(stats_, MemoryReclaimer::Stats{});
     }
     ASSERT_EQ(stats_, MemoryReclaimer::Stats{});
     for (const auto& allocation : allocations) {
@@ -352,6 +355,7 @@ class MockLeafMemoryReclaimer : public MemoryReclaimer {
       reclaimedBytes += allocations_.front().size;
       allocations_.pop_front();
     }
+    stats.reclaimBytes += reclaimedBytes;
     return reclaimedBytes;
   }
 
@@ -433,18 +437,25 @@ TEST_F(MemoryReclaimerTest, mockReclaim) {
   for (int iter = 0; iter < numReclaims; ++iter) {
     const auto reclaimedBytes = root->reclaim(numBytesToReclaim, stats_);
     ASSERT_EQ(reclaimedBytes, numBytesToReclaim);
+    ASSERT_EQ(reclaimedBytes, stats_.reclaimBytes);
     ASSERT_TRUE(root->reclaimableBytes(reclaimableBytes));
     ASSERT_EQ(reclaimableBytes, totalUsedBytes);
+    stats_.reset();
   }
   ASSERT_TRUE(root->reclaimableBytes(reclaimableBytes));
   ASSERT_EQ(totalUsedBytes, reclaimableBytes);
   ASSERT_EQ(root->reclaim(allocBytes + 1, stats_), 2 * allocBytes);
   ASSERT_EQ(root->reclaim(allocBytes - 1, stats_), allocBytes);
+  ASSERT_EQ(3 * allocBytes, stats_.reclaimBytes);
+
   const uint64_t expectedReclaimedBytes = totalUsedBytes;
   ASSERT_EQ(root->reclaim(0, stats_), expectedReclaimedBytes);
+  ASSERT_EQ(3 * allocBytes + expectedReclaimedBytes, stats_.reclaimBytes);
   ASSERT_EQ(totalUsedBytes, 0);
   ASSERT_TRUE(root->reclaimableBytes(reclaimableBytes));
   ASSERT_EQ(reclaimableBytes, 0);
+
+  stats_.reset();
   ASSERT_EQ(stats_, MemoryReclaimer::Stats{});
 }
 
@@ -477,9 +488,11 @@ TEST_F(MemoryReclaimerTest, mockReclaimMoreThanAvailable) {
   const uint64_t expectedReclaimedBytes = totalUsedBytes;
   ASSERT_EQ(
       root->reclaim(totalUsedBytes + 100, stats_), expectedReclaimedBytes);
+  ASSERT_EQ(expectedReclaimedBytes, stats_.reclaimBytes);
   ASSERT_EQ(totalUsedBytes, 0);
   ASSERT_TRUE(root->reclaimableBytes(reclaimableBytes));
   ASSERT_EQ(reclaimableBytes, 0);
+  stats_.reset();
   ASSERT_EQ(stats_, MemoryReclaimer::Stats{});
 }
 
@@ -537,6 +550,7 @@ TEST_F(MemoryReclaimerTest, orderedReclaim) {
   ASSERT_EQ(
       root->reclaimer()->reclaim(root.get(), 2 * allocUnitBytes, stats_),
       2 * allocUnitBytes);
+  ASSERT_EQ(2 * allocUnitBytes, stats_.reclaimBytes);
   totalAllocUnits -= 2;
   verify({10, 11, 8, 14, 5});
 
@@ -546,6 +560,7 @@ TEST_F(MemoryReclaimerTest, orderedReclaim) {
   ASSERT_EQ(
       root->reclaimer()->reclaim(root.get(), 2 * allocUnitBytes, stats_),
       2 * allocUnitBytes);
+  ASSERT_EQ(4 * allocUnitBytes, stats_.reclaimBytes);
   totalAllocUnits -= 2;
   verify({10, 11, 8, 12, 5});
 
@@ -555,6 +570,7 @@ TEST_F(MemoryReclaimerTest, orderedReclaim) {
   ASSERT_EQ(
       root->reclaimer()->reclaim(root.get(), 8 * allocUnitBytes, stats_),
       8 * allocUnitBytes);
+  ASSERT_EQ(12 * allocUnitBytes, stats_.reclaimBytes);
   totalAllocUnits -= 8;
   verify({10, 11, 8, 4, 5});
 
@@ -611,6 +627,7 @@ TEST_F(MemoryReclaimerTest, orderedReclaim) {
       totalAllocUnits * allocUnitBytes);
   totalAllocUnits = 0;
   verify({0, 0, 0, 0, 0});
+  stats_.reset();
   ASSERT_EQ(stats_, MemoryReclaimer::Stats{});
 }
 
@@ -679,6 +696,7 @@ TEST_F(MemoryReclaimerTest, concurrentRandomMockReclaims) {
   }
 
   const int32_t kNumReclaims = 100;
+  uint64_t totalReclaimedBytes = 0;
   std::thread reclaimerThread([&]() {
     for (int i = 0; i < kNumReclaims; ++i) {
       const uint64_t oldUsedBytes = totalUsedBytes;
@@ -695,6 +713,7 @@ TEST_F(MemoryReclaimerTest, concurrentRandomMockReclaims) {
         }
       }
       const auto reclaimedBytes = root->reclaim(bytesToReclaim, stats_);
+      totalReclaimedBytes += reclaimedBytes;
       if (reclaimedBytes < bytesToReclaim) {
         ASSERT_GT(bytesToReclaim, oldUsedBytes);
       }
@@ -733,10 +752,12 @@ TEST_F(MemoryReclaimerTest, concurrentRandomMockReclaims) {
   ASSERT_EQ(reclaimableBytes, totalUsedBytes);
 
   root->reclaim(0, stats_);
+  ASSERT_EQ(totalReclaimedBytes + reclaimableBytes, stats_.reclaimBytes);
 
   ASSERT_TRUE(root->reclaimableBytes(reclaimableBytes));
   ASSERT_EQ(reclaimableBytes, 0);
   ASSERT_EQ(totalUsedBytes, 0);
+  stats_.reset();
   ASSERT_EQ(stats_, MemoryReclaimer::Stats{});
 }
 

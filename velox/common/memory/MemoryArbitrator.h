@@ -21,6 +21,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/time/Timer.h"
 
 namespace facebook::velox::memory {
 
@@ -255,6 +256,27 @@ class MemoryReclaimer {
     /// The total number of times of the reclaim attempts that end up failing
     /// due to reclaiming at non-reclaimable stage.
     uint64_t numNonReclaimableAttempts{0};
+
+    /// The total execution time to do the reclaim in microseconds.
+    uint64_t reclaimExecTimeUs{0};
+
+    /// The total reclaimed bytes.
+    uint64_t reclaimBytes{0};
+
+    /// The total time of task pause during reclaim in microseconds.
+    uint64_t reclaimWaitTimeUs{0};
+
+    uint64_t reclaimAndStat(const std::function<uint64_t()>& func) {
+      uint64_t execTimeUs{0};
+      uint64_t bytes{0};
+      {
+        MicrosecondTimer timer{&execTimeUs};
+        bytes = func();
+      }
+      reclaimExecTimeUs += execTimeUs;
+      reclaimBytes += bytes;
+      return bytes;
+    }
 
     void reset();
 

@@ -240,11 +240,17 @@ void MemoryReclaimer::abort(MemoryPool* pool, const std::exception_ptr& error) {
 
 void MemoryReclaimer::Stats::reset() {
   numNonReclaimableAttempts = 0;
+  reclaimExecTimeUs = 0;
+  reclaimBytes = 0;
+  reclaimWaitTimeUs = 0;
 }
 
 bool MemoryReclaimer::Stats::operator==(
     const MemoryReclaimer::Stats& other) const {
-  return numNonReclaimableAttempts == other.numNonReclaimableAttempts;
+  return numNonReclaimableAttempts == other.numNonReclaimableAttempts &&
+      reclaimExecTimeUs == other.reclaimExecTimeUs &&
+      reclaimBytes == other.reclaimBytes &&
+      reclaimWaitTimeUs == other.reclaimWaitTimeUs;
 }
 
 bool MemoryReclaimer::Stats::operator!=(

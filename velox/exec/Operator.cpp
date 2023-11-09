@@ -611,8 +611,13 @@ uint64_t Operator::MemoryReclaimer::reclaim(
   }
 
   RuntimeStatWriterScopeGuard opStatsGuard(op_);
-  op_->reclaim(targetBytes, stats);
-  return pool->shrink(targetBytes);
+
+  auto reclaimBytes = stats.reclaimAndStat([&]() {
+    op_->reclaim(targetBytes, stats);
+    return pool->shrink(targetBytes);
+  });
+
+  return reclaimBytes;
 }
 
 void Operator::MemoryReclaimer::abort(
