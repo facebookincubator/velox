@@ -18,6 +18,7 @@ add_executable(
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
   ArraySortTest.cpp
+  ArrayUnionTest.cpp
   BitwiseTest.cpp
   ComparisonsTest.cpp
   DateTimeFunctionsTest.cpp
