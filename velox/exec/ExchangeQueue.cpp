@@ -91,8 +91,7 @@ void ExchangeQueue::enqueueLocked(
   }
 }
 
-std::vector<std::unique_ptr<SerializedPage>> ExchangeQueue::dequeueLocked(
-    uint32_t maxBytes,
+std::unique_ptr<SerializedPage> ExchangeQueue::dequeueLocked(
     bool* atEnd,
     ContinueFuture* future) {
   VELOX_CHECK(future);
@@ -100,33 +99,21 @@ std::vector<std::unique_ptr<SerializedPage>> ExchangeQueue::dequeueLocked(
     *atEnd = true;
     VELOX_FAIL(error_);
   }
-
-  *atEnd = false;
-
-  std::vector<std::unique_ptr<SerializedPage>> pages;
-  uint32_t pageBytes = 0;
-  for (;;) {
-    if (queue_.empty()) {
-      if (atEnd_) {
-        *atEnd = true;
-      } else {
-        promises_.emplace_back("ExchangeQueue::dequeue");
-        *future = promises_.back().getSemiFuture();
-      }
-      return pages;
+  if (queue_.empty()) {
+    if (atEnd_) {
+      *atEnd = true;
+    } else {
+      promises_.emplace_back("ExchangeQueue::dequeue");
+      *future = promises_.back().getSemiFuture();
+      *atEnd = false;
     }
-
-    if (pageBytes > 0 && pageBytes + queue_.front()->size() > maxBytes) {
-      return pages;
-    }
-
-    pages.emplace_back(std::move(queue_.front()));
-    queue_.pop_front();
-    pageBytes += pages.back()->size();
-    totalBytes_ -= pages.back()->size();
+    return nullptr;
   }
-
-  VELOX_UNREACHABLE();
+  auto page = std::move(queue_.front());
+  queue_.pop_front();
+  *atEnd = false;
+  totalBytes_ -= page->size();
+  return page;
 }
 
 void ExchangeQueue::setError(const std::string& error) {

@@ -66,20 +66,11 @@ class ExchangeClient {
   // runtime metric named ExchangeClient::kBackgroundCpuTimeMs.
   folly::F14FastMap<std::string, RuntimeMetric> stats() const;
 
-  const std::shared_ptr<ExchangeQueue>& queue() const {
+  std::shared_ptr<ExchangeQueue> queue() const {
     return queue_;
   }
 
-  /// Returns up to 'maxBytes' pages of data, but no less than one.
-  ///
-  /// If no data is available returns empty list and sets 'atEnd' to true if no
-  /// more data is expected. If data is still expected, sets 'atEnd' to false
-  /// and sets 'future' to a Future that will comlete when data arrives.
-  ///
-  /// The data may be compressed, in which case 'maxBytes' applies to compressed
-  /// size.
-  std::vector<std::unique_ptr<SerializedPage>>
-  next(uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
+  std::unique_ptr<SerializedPage> next(bool* atEnd, ContinueFuture* future);
 
   std::string toString() const;
 

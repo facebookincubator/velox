@@ -57,11 +57,6 @@ AssertQueryBuilder& AssertQueryBuilder::maxDrivers(int32_t maxDrivers) {
   return *this;
 }
 
-AssertQueryBuilder& AssertQueryBuilder::destination(int32_t destination) {
-  params_.destination = destination;
-  return *this;
-}
-
 AssertQueryBuilder& AssertQueryBuilder::config(
     const std::string& key,
     const std::string& value) {
