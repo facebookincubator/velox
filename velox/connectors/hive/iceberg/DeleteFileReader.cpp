@@ -18,6 +18,7 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 DeleteFileReader::DeleteFileReader(
@@ -82,7 +83,12 @@ void DeleteFileReader::createPositionalDeleteDataSource(
   // TODO: Build filters on the path column: filePathColumn = baseFilePath_
   // TODO: Build filters on the positionsColumn:
   //  positionsColumn >= baseReadOffset_ + splitOffsetInFile
-  SubfieldFilters subfieldFilters = {};
+  SubfieldFilters subfieldFilters;
+  std::vector<std::string> values = {baseFilePath_};
+  std::unique_ptr<common::Filter> pathFilter =
+      std::make_unique<common::BytesValues>(values, false);
+  subfieldFilters[common::Subfield(filePathColumn->name)] =
+      std::move(pathFilter);
 
   auto deleteTableHandle = std::make_shared<HiveTableHandle>(
       connectorId, deleteFileName, false, std::move(subfieldFilters), nullptr);
