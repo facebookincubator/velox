@@ -108,3 +108,14 @@ TEST(S3UtilTest, bucketAndKeyFromS3Path) {
   EXPECT_EQ(bucket, "bucket");
   EXPECT_EQ(key, "file.txt");
 }
+
+TEST(S3UtilTest, bucketAndKeyFromS3PathWithDecode) {
+  std::string bucket, key;
+  auto path =
+      "dt=2023-06-02/audience_type=audience_type=NC_ENGAGEMENT ACTIVE_FOLLOWERS_90d_V2//file.txt";
+  getBucketAndKeyFromS3Path(path, bucket, key);
+  EXPECT_EQ(bucket, "dt=2023-06-02");
+  EXPECT_EQ(
+      key,
+      "audience_type=audience_type=NC_ENGAGEMENT+ACTIVE_FOLLOWERS_90d_V2//file.txt");
+}
