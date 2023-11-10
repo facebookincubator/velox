@@ -276,17 +276,7 @@ class MemoryReclaimer {
 
   static std::unique_ptr<MemoryReclaimer> create();
 
-  static uint64_t run(const std::function<uint64_t()>& func, Stats& stats) {
-    uint64_t execTimeUs{0};
-    uint64_t bytes{0};
-    {
-      MicrosecondTimer timer{&execTimeUs};
-      bytes = func();
-    }
-    stats.reclaimExecTimeUs += execTimeUs;
-    stats.reclaimedBytes += bytes;
-    return bytes;
-  }
+  static uint64_t run(const std::function<uint64_t()>& func, Stats& stats);
 
   /// Invoked by the memory arbitrator before entering the memory arbitration
   /// processing. The default implementation does nothing but user can override
