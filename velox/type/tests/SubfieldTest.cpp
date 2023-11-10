@@ -166,6 +166,7 @@ class FakeTokenizer : public Tokenizer {
       case State::kFailed:
         VELOX_FAIL("Illegal state");
     }
+    return true;
   }
 
   std::unique_ptr<Subfield::PathElement> next() override {
