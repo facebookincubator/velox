@@ -14,17 +14,15 @@
  * limitations under the License.
  */
 
-#include "velox/exec/Aggregate.h"
+#include "velox/functions/sparksql/aggregates/CentralMomentsAggregate.h"
 #include "velox/functions/lib/aggregates/CentralMomentsAggregatesBase.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
-using namespace facebook::velox::functions::aggregate;
+namespace facebook::velox::functions::aggregate::sparksql {
 
-namespace facebook::velox::aggregate::prestosql {
-
+namespace {
 struct SkewnessResultAccessor {
   static bool hasResult(const CentralMomentsAccumulator& accumulator) {
-    return accumulator.count() >= 3;
+    return accumulator.count() >= 1 && accumulator.m2() != 0;
   }
 
   static double result(const CentralMomentsAccumulator& accumulator) {
@@ -33,26 +31,10 @@ struct SkewnessResultAccessor {
   }
 };
 
-struct KurtosisResultAccessor {
-  static bool hasResult(const CentralMomentsAccumulator& accumulator) {
-    return accumulator.count() >= 4;
-  }
-
-  static double result(const CentralMomentsAccumulator& accumulator) {
-    double count = accumulator.count();
-    double m2 = accumulator.m2();
-    double m4 = accumulator.m4();
-    return ((count - 1) * count * (count + 1)) / ((count - 2) * (count - 3)) *
-        m4 / (m2 * m2) -
-        3 * ((count - 1) * (count - 1)) / ((count - 2) * (count - 3));
-  }
-};
-
 template <typename TResultAccessor>
 exec::AggregateRegistrationResult registerCentralMoments(
     const std::string& name,
-    bool withCompanionFunctions,
-    bool overwrite) {
+    bool withCompanionFunctions) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> inputTypes = {
       "smallint", "integer", "bigint", "real", "double"};
@@ -115,18 +97,15 @@ exec::AggregateRegistrationResult registerCentralMoments(
               TResultAccessor>>(resultType);
         }
       },
-      withCompanionFunctions,
-      overwrite);
+      withCompanionFunctions);
 }
+} // namespace
 
-void registerCentralMomentsAggregates(
+void registerCentralMomentsAggregate(
     const std::string& prefix,
-    bool withCompanionFunctions,
-    bool overwrite) {
-  registerCentralMoments<KurtosisResultAccessor>(
-      prefix + kKurtosis, withCompanionFunctions, overwrite);
+    bool withCompanionFunctions) {
   registerCentralMoments<SkewnessResultAccessor>(
-      prefix + kSkewness, withCompanionFunctions, overwrite);
+      prefix + "skewness", withCompanionFunctions);
 }
 
-} // namespace facebook::velox::aggregate::prestosql
+} // namespace facebook::velox::functions::aggregate::sparksql
