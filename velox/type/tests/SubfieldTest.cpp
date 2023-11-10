@@ -174,7 +174,7 @@ class FakeTokenizer : public Tokenizer {
       VELOX_FAIL("No more tokens");
     }
     state = State::kDone;
-    return std::move(std::make_unique<Subfield::NestedField>(path_));
+    return std::make_unique<Subfield::NestedField>(path_);
   }
 
  private:
