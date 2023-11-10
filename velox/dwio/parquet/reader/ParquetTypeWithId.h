@@ -16,9 +16,10 @@
 
 #pragma once
 
-#include <parquet/level_conversion.h>
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+
+#include <parquet/level_conversion.h>
 
 namespace facebook::velox::parquet {
 

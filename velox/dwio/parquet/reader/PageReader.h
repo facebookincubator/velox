@@ -356,8 +356,8 @@ class PageReader {
   // Decoder for single bit definition levels. the arrow decoders are used for
   // multibit levels pending fixing RleBpDecoder for the case.
   std::unique_ptr<RleBpDecoder> defineDecoder_;
-  std::unique_ptr<arrow::util::RleDecoder> repeatDecoder_;
-  std::unique_ptr<arrow::util::RleDecoder> wideDefineDecoder_;
+  std::unique_ptr<::arrow::util::RleDecoder> repeatDecoder_;
+  std::unique_ptr<::arrow::util::RleDecoder> wideDefineDecoder_;
 
   // True for a leaf column for which repdefs are loaded for the whole column
   // chunk. This is typically the leaftmost leaf of a list. Other leaves under
