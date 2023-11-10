@@ -14,17 +14,16 @@
  * limitations under the License.
  */
 
-#include <folly/init/Init.h>
 
-#include "gtest/gtest.h"
-#include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
-#include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <folly/init/Init.h>
+#include <gtest/gtest.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::core;
