@@ -224,13 +224,13 @@ bool DefaultTokenizer::tryToComputeNext() {
   return false;
 }
 
-std::function<std::unique_ptr<Tokenizer>(std::string)>
+std::function<std::unique_ptr<Tokenizer>(const std::string&)>
     Tokenizer::tokenizerFactory_ = nullptr;
 
 // static
-std::unique_ptr<Tokenizer> Tokenizer::getInstance(std::string path) {
+std::unique_ptr<Tokenizer> Tokenizer::getInstance(const std::string& path) {
   if (!tokenizerFactory_) {
-    tokenizerFactory_ = [](std::string p) {
+    tokenizerFactory_ = [](const std::string& p) {
       return std::make_unique<DefaultTokenizer>(p);
     };
   }
@@ -239,7 +239,8 @@ std::unique_ptr<Tokenizer> Tokenizer::getInstance(std::string path) {
 
 // static
 void Tokenizer::registerInstanceFactory(
-    std::function<std::unique_ptr<Tokenizer>(std::string)> tokenizerFactory) {
+    std::function<std::unique_ptr<Tokenizer>(const std::string&)>
+        tokenizerFactory) {
   tokenizerFactory_ = tokenizerFactory;
 }
 } // namespace facebook::velox::common
