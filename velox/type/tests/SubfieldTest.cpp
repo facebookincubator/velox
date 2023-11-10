@@ -148,3 +148,51 @@ TEST(SubfieldTest, longSubscript) {
   ASSERT_TRUE(longSubscript);
   ASSERT_EQ(longSubscript->index(), 3309189884973035076);
 }
+
+class FakeTokenizer : public Tokenizer {
+ public:
+  explicit FakeTokenizer(const std::string& path) : path_(path) {
+    state = State::kNotReady;
+  }
+
+  bool hasNext() override {
+    switch (state) {
+      case State::kDone:
+        return false;
+      case State::kReady:
+        return true;
+      case State::kNotReady:
+        break;
+      case State::kFailed:
+        VELOX_FAIL("Illegal state");
+    }
+  }
+
+  std::unique_ptr<Subfield::PathElement> next() override {
+    if (!hasNext()) {
+      VELOX_FAIL("No more tokens");
+    }
+    state = State::kDone;
+    return std::move(std::make_unique<Subfield::NestedField>(path_));
+  }
+
+ private:
+  const std::string path_;
+  State state;
+};
+
+TEST(SubfieldTest, CustomTokenizer) {
+  Tokenizer::registerInstanceFactory(
+      [](const std::string& p) { return std::make_unique<FakeTokenizer>(p); });
+
+  testColumnName("$bucket");
+  testColumnName("apollo-11");
+  testColumnName("a/b/c:12");
+  testColumnName("@basis");
+  testColumnName("@basis|city_id");
+  testColumnName("city.id@address*:number/date|day$a-b$10_bucket");
+
+  Tokenizer::registerInstanceFactory([](const std::string& p) {
+    return std::make_unique<DefaultTokenizer>(p);
+  });
+}

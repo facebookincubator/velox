@@ -41,13 +41,14 @@ class Tokenizer {
 
   virtual std::unique_ptr<Subfield::PathElement> next() = 0;
 
-  static std::unique_ptr<Tokenizer> getInstance(std::string path);
+  static std::unique_ptr<Tokenizer> getInstance(const std::string& path);
 
   static void registerInstanceFactory(
-      std::function<std::unique_ptr<Tokenizer>(std::string)> tokenizerFactory);
+      std::function<std::unique_ptr<Tokenizer>(const std::string&)>
+          tokenizerFactory);
 
  private:
-  static std::function<std::unique_ptr<Tokenizer>(std::string)>
+  static std::function<std::unique_ptr<Tokenizer>(const std::string&)>
       tokenizerFactory_;
 };
 
