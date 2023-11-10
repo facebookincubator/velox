@@ -260,23 +260,11 @@ class MemoryReclaimer {
     /// The total execution time to do the reclaim in microseconds.
     uint64_t reclaimExecTimeUs{0};
 
-    /// The total reclaimed bytes.
-    uint64_t reclaimBytes{0};
+    /// The total reclaimed memory bytes.
+    uint64_t reclaimedBytes{0};
 
     /// The total time of task pause during reclaim in microseconds.
     uint64_t reclaimWaitTimeUs{0};
-
-    uint64_t reclaimAndStat(const std::function<uint64_t()>& func) {
-      uint64_t execTimeUs{0};
-      uint64_t bytes{0};
-      {
-        MicrosecondTimer timer{&execTimeUs};
-        bytes = func();
-      }
-      reclaimExecTimeUs += execTimeUs;
-      reclaimBytes += bytes;
-      return bytes;
-    }
 
     void reset();
 
@@ -287,6 +275,18 @@ class MemoryReclaimer {
   virtual ~MemoryReclaimer() = default;
 
   static std::unique_ptr<MemoryReclaimer> create();
+
+  static uint64_t run(const std::function<uint64_t()>& func, Stats& stats) {
+    uint64_t execTimeUs{0};
+    uint64_t bytes{0};
+    {
+      MicrosecondTimer timer{&execTimeUs};
+      bytes = func();
+    }
+    stats.reclaimExecTimeUs += execTimeUs;
+    stats.reclaimedBytes += bytes;
+    return bytes;
+  }
 
   /// Invoked by the memory arbitrator before entering the memory arbitration
   /// processing. The default implementation does nothing but user can override

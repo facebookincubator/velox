@@ -172,7 +172,7 @@ class MockMemoryOperator {
       }
       reclaimTargetBytes_.push_back(targetBytes);
       auto reclaimBytes = op_->reclaim(pool, targetBytes);
-      stats.reclaimBytes += reclaimBytes;
+      stats.reclaimedBytes += reclaimBytes;
       return reclaimBytes;
     }
 

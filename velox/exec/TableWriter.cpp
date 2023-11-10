@@ -334,9 +334,11 @@ uint64_t TableWriter::ConnectorReclaimer::reclaim(
   }
 
   RuntimeStatWriterScopeGuard opStatsGuard(op_);
-  auto reclaimBytes = stats.reclaimAndStat([&]() {
-    return memory::MemoryReclaimer::reclaim(pool, targetBytes, stats);
-  });
+  auto reclaimBytes = memory::MemoryReclaimer::run(
+      [&]() {
+        return memory::MemoryReclaimer::reclaim(pool, targetBytes, stats);
+      },
+      stats);
 
   return reclaimBytes;
 }
