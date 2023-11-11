@@ -277,10 +277,8 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
 
   void ensureSize(size_t size) override {
     if (size > rowVector_->size()) {
-      // Note order is important here, we resize children first to ensure
-      // data_ is cached and are not reset when rowVector resizes them.
-      resizeVectorWriters<0>(size);
       rowVector_->resize(size, /*setNotNull*/ false);
+      resizeVectorWriters<0>(rowVector_->size());
     }
   }
 
@@ -536,7 +534,14 @@ struct VectorWriter<Generic<T, comparable, orderable>>
       castWriter_->ensureSize(size);
     } else {
       if (vector_->size() < size) {
-        vector_->resize(size, false);
+        if (vector_->typeKind() == TypeKind::ROW) {
+          // Avoid calling resize on all children by adding top level nulls
+          // only.
+          vector_->asUnchecked<RowVector>()->appendNulls(
+              size - vector_->size());
+        } else {
+          vector_->resize(size, false);
+        }
       }
     }
   }
@@ -710,10 +715,10 @@ struct VectorWriter<DynamicRow, void> : public VectorWriterBase {
 
   void ensureSize(size_t size) override {
     if (size > rowVector_->size()) {
+      rowVector_->resize(size, /*setNotNull*/ false);
       for (int i = 0; i < writer_.childrenCount_; ++i) {
         writer_.childrenWriters_[i]->ensureSize(size);
       }
-      rowVector_->resize(size, /*setNotNull*/ false);
     }
   }
 
