@@ -170,33 +170,21 @@ TEST(CachedFactoryTest, multiThreadedGeneration) {
   EXPECT_EQ(*generated, numValues);
 }
 
-// Same as above, but we keep the returned CachedPtrs till the end
-// of the function.
-TEST(CachedFactoryTest, multiThreadedGenerationAgain) {
+TEST(CachedFactoryTest, disableCacheWithZeroMaxCacheSize) {
   auto generator = std::make_unique<DoublerGenerator>();
   auto* generated = &generator->generated_;
   CachedFactory<int, int, DoublerGenerator> factory(
-      std::make_unique<SimpleLRUCache<int, int>>(1000), std::move(generator));
-  folly::EDFThreadPoolExecutor pool(
-      100, std::make_shared<folly::NamedThreadFactory>("test_pool"));
-  const int numValues = 5;
-  const int requestsPerValue = 10;
-  std::vector<std::pair<bool, int>> cachedValues(numValues * requestsPerValue);
-  folly::Latch latch(numValues * requestsPerValue);
-  for (int i = 0; i < requestsPerValue; i++) {
-    for (int j = 0; j < numValues; j++) {
-      pool.add([&factory, &latch, &cachedValues, i, j]() {
-        cachedValues[i * numValues + j] = factory.generate(j);
-        latch.count_down();
-      });
-    }
-  }
-  latch.wait();
-  ASSERT_EQ(*generated, numValues);
-  for (int i = 0; i < requestsPerValue; i++) {
-    for (int j = 0; j < numValues; j++) {
-      EXPECT_EQ(getCachedValue(cachedValues[i * numValues + j]), 2 * j);
-    }
+      std::make_unique<SimpleLRUCache<int, int>>(0), std::move(generator));
+  EXPECT_EQ(factory.maxSize(), 0);
+  {
+    auto val1 = factory.generate(1);
+    EXPECT_EQ(val1, cacheMiss(2));
+    EXPECT_EQ(*generated, 1);
+
+    auto val2 = factory.generate(1);
+    EXPECT_EQ(val2, cacheMiss(2));
+    EXPECT_EQ(*generated, 2);
+    EXPECT_EQ(factory.currentSize(), 0);
   }
 }
 

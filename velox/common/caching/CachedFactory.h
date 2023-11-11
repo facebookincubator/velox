@@ -119,6 +119,10 @@ template <typename Key, typename Value, typename Generator>
 std::pair<bool, Value> CachedFactory<Key, Value, Generator>::generate(
     const Key& key) {
   process::TraceContext trace("CachedFactory::generate");
+  if (cache_->maxSize() == 0) {
+    return std::make_pair(false, (*generator_)(key));
+  }
+
   std::unique_lock<std::mutex> pending_lock(pendingMu_);
   {
     std::lock_guard<std::mutex> cache_lock(cacheMu_);
