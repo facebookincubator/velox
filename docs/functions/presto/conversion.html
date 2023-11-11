@@ -488,6 +488,7 @@ consistent with other supported cases of cast.</p>
 </section>
 <section id="cast-to-string">
 <h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Permalink to this heading">¶</a></h2>
+<p>Casting from scalar types to string is allowed.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">123</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;123&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">123.45</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;123.45&#39;</span>
@@ -495,13 +496,30 @@ consistent with other supported cases of cast.</p>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">nan</span><span class="p">()</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;NaN&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">infinity</span><span class="p">()</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Infinity&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">true</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;true&#39;</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01T00:00:00.000&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01 00:00:00.000&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">22.51</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;22.510&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">22.51</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-22.51&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">0.123</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;0.123&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1.00&#39;</span>
 </pre></div>
 </div>
+<section id="from-timestamp">
+<h3>From TIMESTAMP<a class="headerlink" href="#from-timestamp" title="Permalink to this heading">¶</a></h3>
+<p>By default, casting a timestamp to a string returns ISO 8601 format with an empty space
+as separator between date and time.</p>
+<p>If legacy_cast configuration property is true, the result string uses character ‘T’
+as separator between date and time.</p>
+<p>Valid examples if legacy_cast = false,</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01 00:00:00.000&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;2000-01-01 12:21:56.129&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2000-01-01 12:21:56.129&#39;</span>
+</pre></div>
+</div>
+<p>Valid examples if legacy_cast = true,</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01T00:00:00.000&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;2000-01-01 12:21:56.129&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2000-01-01T12:21:56.129&#39;</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="cast-to-timestamp">
 <h2>Cast to TIMESTAMP<a class="headerlink" href="#cast-to-timestamp" title="Permalink to this heading">¶</a></h2>
@@ -556,8 +574,8 @@ SELECT cast(from_unixtime(0, &#39;-02:00&#39;) as timestamp); -- 1969-12-31 22:0
 </section>
 <section id="cast-to-timestamp-with-time-zone">
 <h2>Cast to TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#cast-to-timestamp-with-time-zone" title="Permalink to this heading">¶</a></h2>
-<section id="from-timestamp">
-<h3>From TIMESTAMP<a class="headerlink" href="#from-timestamp" title="Permalink to this heading">¶</a></h3>
+<section id="id6">
+<h3>From TIMESTAMP<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h3>
 <p>The results depend on whether configuration property <cite>adjust_timestamp_to_session_timezone</cite> is set or not.</p>
 <p>If set to true, the output is adjusted to be equivalent as the input timestamp in UTC
 based on the user provided <cite>session_timezone</cite> (if any). For example, when user supplies
@@ -580,8 +598,8 @@ SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:0
 </section>
 <section id="cast-to-date">
 <h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Permalink to this heading">¶</a></h2>
-<section id="id6">
-<h3>From strings<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h3>
+<section id="id7">
+<h3>From strings<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
 <p>By default, only ISO 8601 strings are supported: <cite>[+-]YYYY-MM-DD</cite>.</p>
 <p>If cast_string_to_date_is_iso_8601 is set to false, all Spark supported patterns are allowed.
 See the documentation for cast_string_to_date_is_iso_8601 in <a class="reference internal" href="../../configs.html#expression-evaluation-conf"><span class="std std-ref">Expression Evaluation Configuration</span></a>
@@ -620,8 +638,8 @@ for the full list of supported patterns.</p>
 </pre></div>
 </div>
 </section>
-<section id="id7">
-<h3>From TIMESTAMP<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
+<section id="id8">
+<h3>From TIMESTAMP<a class="headerlink" href="#id8" title="Permalink to this heading">¶</a></h3>
 <p>Casting from timestamp to date is allowed. If present, the part of <cite>hh:mm:ss</cite>
 in the input is ignored.</p>
 <p>Valid examples</p>
@@ -643,8 +661,8 @@ True value is converted to 1 and false to 0.</p>
 </pre></div>
 </div>
 </section>
-<section id="id8">
-<h3>From integral types<a class="headerlink" href="#id8" title="Permalink to this heading">¶</a></h3>
+<section id="id9">
+<h3>From integral types<a class="headerlink" href="#id9" title="Permalink to this heading">¶</a></h3>
 <p>Casting an integral number to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. Casting from
 invalid input values throws.</p>
@@ -660,8 +678,8 @@ invalid input values throws.</p>
 </pre></div>
 </div>
 </section>
-<section id="id9">
-<h3>From decimal<a class="headerlink" href="#id9" title="Permalink to this heading">¶</a></h3>
+<section id="id10">
+<h3>From decimal<a class="headerlink" href="#id10" title="Permalink to this heading">¶</a></h3>
 <p>Casting one decimal to another is allowed if the input value can be represented
 by the result decimal type. When casting from a larger scale to a smaller one,
 the fraction part is rounded.</p>
@@ -710,7 +728,10 @@ the fraction part is rounded.</p>
 <li><a class="reference internal" href="#id4">From decimal</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#cast-to-string">Cast to String</a></li>
+<li><a class="reference internal" href="#cast-to-string">Cast to String</a><ul>
+<li><a class="reference internal" href="#from-timestamp">From TIMESTAMP</a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#cast-to-timestamp">Cast to TIMESTAMP</a><ul>
 <li><a class="reference internal" href="#id5">From strings</a></li>
 <li><a class="reference internal" href="#from-date">From date</a></li>
@@ -718,18 +739,18 @@ the fraction part is rounded.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp-with-time-zone">Cast to TIMESTAMP WITH TIME ZONE</a><ul>
-<li><a class="reference internal" href="#from-timestamp">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id6">From TIMESTAMP</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-date">Cast to Date</a><ul>
-<li><a class="reference internal" href="#id6">From strings</a></li>
-<li><a class="reference internal" href="#id7">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id7">From strings</a></li>
+<li><a class="reference internal" href="#id8">From TIMESTAMP</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
 <li><a class="reference internal" href="#from-boolean-type">From boolean type</a></li>
-<li><a class="reference internal" href="#id8">From integral types</a></li>
-<li><a class="reference internal" href="#id9">From decimal</a></li>
+<li><a class="reference internal" href="#id9">From integral types</a></li>
+<li><a class="reference internal" href="#id10">From decimal</a></li>
 </ul>
 </li>
 </ul>

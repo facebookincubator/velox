@@ -210,17 +210,23 @@ evalWithMemo are enabled.</p></td>
 <td><p>Whether to track CPU usage for individual expressions (supported by call and cast expressions). Can be expensive
 when processing small batches, e.g. &lt; 10K rows.</p></td>
 </tr>
-<tr class="row-even"><td><p>cast_match_struct_by_name</p></td>
+<tr class="row-even"><td><p>legacy_cast</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Enables legacy CAST semantics if set to true. CAST(timestamp AS varchar) uses ‘T’ as separator between date and
+time (instead of a space).</p></td>
+</tr>
+<tr class="row-odd"><td><p>cast_match_struct_by_name</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.</p></td>
 </tr>
-<tr class="row-odd"><td><p>cast_to_int_by_truncate</p></td>
+<tr class="row-even"><td><p>cast_to_int_by_truncate</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>This flags forces the cast from float/double/decimal/string to integer to be performed by truncating the decimal part instead of rounding.</p></td>
 </tr>
-<tr class="row-even"><td><p>cast_string_to_date_is_iso_8601</p></td>
+<tr class="row-odd"><td><p>cast_string_to_date_is_iso_8601</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If set, cast from string to date allows only ISO 8601 formatted strings: <code class="docutils literal notranslate"><span class="pre">[+-](YYYY-MM-DD)</span></code>.
