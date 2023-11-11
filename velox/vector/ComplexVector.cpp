@@ -644,7 +644,7 @@ void RowVector::unsafeResize(vector_size_t newSize, bool setNotNull) {
 }
 
 void RowVector::resize(vector_size_t newSize, bool setNotNull) {
-  auto oldSize = size();
+  auto oldSize = length_;
   BaseVector::resize(newSize, setNotNull);
 
   // Resize all the children.
