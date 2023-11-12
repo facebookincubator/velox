@@ -1634,7 +1634,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
       ASSERT_LT(writerPool->capacity(), oldCapacity);
       ASSERT_GT(stats.reclaimedBytes, 0);
       ASSERT_GT(stats.reclaimExecTimeUs, 0);
-      static_cast<memory::MemoryPoolImpl*>(writerPool.get())
+      dynamic_cast<memory::MemoryPoolImpl*>(writerPool.get())
           ->testingSetCapacity(oldCapacity);
     } else {
       ASSERT_EQ(writerPool->capacity(), oldCapacity);

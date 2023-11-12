@@ -223,7 +223,7 @@ class OrderByTest : public OperatorTestBase {
       memory::MemoryReclaimer::Stats& reclaimerStats) {
     const auto oldCapacity = op->pool()->capacity();
     op->pool()->reclaim(targetBytes, reclaimerStats);
-    static_cast<memory::MemoryPoolImpl*>(op->pool())
+    dynamic_cast<memory::MemoryPoolImpl*>(op->pool())
         ->testingSetCapacity(oldCapacity);
   }
 
