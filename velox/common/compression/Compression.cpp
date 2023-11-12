@@ -16,6 +16,7 @@
 
 #include "velox/common/compression/Compression.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/compression/Lz4Compression.h"
 
 #include <folly/Conv.h>
 
@@ -97,5 +98,125 @@ CompressionKind stringToCompressionKind(const std::string& kind) {
   } else {
     VELOX_UNSUPPORTED("Not support compression kind {}", kind);
   }
+}
+
+void Codec::init() {}
+
+bool Codec::supportsGetUncompressedLength(CompressionKind kind) {
+  switch (kind) {
+    default:
+      return false;
+  }
+}
+
+bool Codec::supportsStreamingCompression(CompressionKind kind) {
+  switch (kind) {
+    case CompressionKind::CompressionKind_LZ4:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool Codec::supportsCompressFixedLength(CompressionKind kind) {
+  switch (kind) {
+    default:
+      return false;
+  }
+}
+
+int32_t Codec::maximumCompressionLevel(CompressionKind kind) {
+  auto codec = Codec::create(kind);
+  return codec->maximumCompressionLevel();
+}
+
+int32_t Codec::minimumCompressionLevel(CompressionKind kind) {
+  auto codec = Codec::create(kind);
+  return codec->minimumCompressionLevel();
+}
+
+int32_t Codec::defaultCompressionLevel(CompressionKind kind) {
+  auto codec = Codec::create(kind);
+  return codec->defaultCompressionLevel();
+}
+
+std::unique_ptr<Codec> Codec::create(
+    CompressionKind kind,
+    const CodecOptions& codecOptions) {
+  if (!isAvailable(kind)) {
+    auto name = compressionKindToString(kind);
+    if (folly::StringPiece({name}).startsWith("unknown")) {
+      VELOX_UNSUPPORTED("Unrecognized codec '{}'", name);
+    }
+    VELOX_UNSUPPORTED("Support for codec '{}' not implemented.", name);
+  }
+
+  auto compressionLevel = codecOptions.compressionLevel;
+  std::unique_ptr<Codec> codec;
+  switch (kind) {
+    case CompressionKind::CompressionKind_LZ4:
+      if (auto options = dynamic_cast<const Lz4CodecOptions*>(&codecOptions)) {
+        switch (options->type) {
+          case Lz4CodecOptions::kLz4Frame:
+            codec = makeLz4FrameCodec(compressionLevel);
+            break;
+          case Lz4CodecOptions::kLz4Raw:
+            codec = makeLz4RawCodec(compressionLevel);
+            break;
+          case Lz4CodecOptions::kLz4Hadoop:
+            codec = makeLz4HadoopCodec();
+            break;
+        }
+      }
+      // By default, create LZ4 Frame codec.
+      codec = makeLz4FrameCodec(compressionLevel);
+      break;
+    default:
+      break;
+  }
+
+  if (codec == nullptr) {
+    VELOX_UNSUPPORTED(
+        "{} codec not implemented", compressionKindToString(kind));
+  }
+
+  codec->init();
+
+  return codec;
+}
+
+std::unique_ptr<Codec> Codec::create(
+    CompressionKind kind,
+    int32_t compressionLevel) {
+  return create(kind, CodecOptions{compressionLevel});
+}
+
+bool Codec::isAvailable(CompressionKind kind) {
+  switch (kind) {
+    case CompressionKind::CompressionKind_NONE:
+    case CompressionKind::CompressionKind_LZ4:
+      return true;
+    case CompressionKind::CompressionKind_SNAPPY:
+    case CompressionKind::CompressionKind_GZIP:
+    case CompressionKind::CompressionKind_ZLIB:
+    case CompressionKind::CompressionKind_ZSTD:
+    case CompressionKind::CompressionKind_LZO:
+    default:
+      return false;
+  }
+}
+
+std::optional<uint64_t> Codec::getUncompressedLength(
+    uint64_t inputLength,
+    const uint8_t* input) const {
+  return std::nullopt;
+}
+
+uint64_t Codec::compressFixedLength(
+    const uint8_t* input,
+    uint64_t inputLength,
+    uint8_t* output,
+    uint64_t outputLength) {
+  VELOX_UNSUPPORTED("'{}' doesn't support fixed-length compression", name());
 }
 } // namespace facebook::velox::common
