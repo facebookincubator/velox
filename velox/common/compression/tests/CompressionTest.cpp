@@ -31,6 +31,9 @@ TEST_F(CompressionTest, testCompressionNames) {
   EXPECT_EQ("lzo", compressionKindToString(CompressionKind_LZO));
   EXPECT_EQ("lz4", compressionKindToString(CompressionKind_LZ4));
   EXPECT_EQ("zstd", compressionKindToString(CompressionKind_ZSTD));
+  EXPECT_EQ("gzip", compressionKindToString(CompressionKind_GZIP));
+  EXPECT_EQ("lz4_raw", compressionKindToString(CompressionKind_LZ4RAW));
+  EXPECT_EQ("lz4_hadoop", compressionKindToString(CompressionKind_LZ4HADOOP));
   EXPECT_EQ(
       "unknown - 99",
       compressionKindToString(static_cast<CompressionKind>(99)));
@@ -56,6 +59,8 @@ TEST_F(CompressionTest, stringToCompressionKind) {
   EXPECT_EQ(stringToCompressionKind("lz4"), CompressionKind_LZ4);
   EXPECT_EQ(stringToCompressionKind("zstd"), CompressionKind_ZSTD);
   EXPECT_EQ(stringToCompressionKind("gzip"), CompressionKind_GZIP);
+  EXPECT_EQ(stringToCompressionKind("lz4_raw"), CompressionKind_LZ4RAW);
+  EXPECT_EQ(stringToCompressionKind("lz4_hadoop"), CompressionKind_LZ4HADOOP);
   VELOX_ASSERT_THROW(
       stringToCompressionKind("bz2"), "Not support compression kind bz2");
 }

@@ -11,17 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_subdirectory(base)
-add_subdirectory(caching)
-add_subdirectory(compression)
-add_subdirectory(compression/v2)
-add_subdirectory(config)
-add_subdirectory(encode)
-add_subdirectory(file)
-add_subdirectory(hyperloglog)
-add_subdirectory(io)
-add_subdirectory(memory)
-add_subdirectory(process)
-add_subdirectory(serialization)
-add_subdirectory(time)
-add_subdirectory(testutil)
+
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()
+
+add_library(velox_common_compression_v2
+            Compression.cpp HadoopCompressionFormat.cpp Lz4Compression.cpp)
+
+target_link_libraries(
+  velox_common_compression_v2
+  velox_common_base
+  Folly::folly
+  Snappy::snappy
+  zstd::zstd
+  ZLIB::ZLIB
+  lz4::lz4)

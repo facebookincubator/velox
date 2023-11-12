@@ -29,6 +29,8 @@ enum CompressionKind {
   CompressionKind_ZSTD = 4,
   CompressionKind_LZ4 = 5,
   CompressionKind_GZIP = 6,
+  CompressionKind_LZ4RAW = 7,
+  CompressionKind_LZ4HADOOP = 8,
   CompressionKind_MAX = INT64_MAX
 };
 
