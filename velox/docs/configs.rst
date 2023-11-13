@@ -215,6 +215,12 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether HashAggregation operator can spill to disk under memory pressure.
+   * - partial_aggregation_spill_enabled
+     - boolean
+     - false
+     - When `spill_enabled` is true, determines whether the partial phase of HashAggregation operator can spill to disk under memory pressure.
+       Flushing will be disabled so max_partial_aggregation_memory and max_extended_partial_aggregation_memory will be ignored when turning the option on.
+       this option.
    * - join_spill_enabled
      - boolean
      - true

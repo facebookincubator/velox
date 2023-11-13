@@ -620,6 +620,14 @@ class AggregationNode : public PlanNode {
     return step_ == Step::kSingle;
   }
 
+  bool isIntermediate() const {
+    return step_ == Step::kIntermediate;
+  }
+
+  bool isPartial() const {
+    return step_ == Step::kPartial;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);

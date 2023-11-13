@@ -359,6 +359,7 @@ velox::test::ResultOrError AggregationFuzzerBase::execute(
     const core::PlanNodePtr& plan,
     const std::vector<exec::Split>& splits,
     bool injectSpill,
+    bool injectPartialSpill,
     bool abandonPartial,
     int32_t maxDrivers) {
   LOG(INFO) << "Executing query plan: " << std::endl
@@ -376,6 +377,14 @@ velox::test::ResultOrError AggregationFuzzerBase::execute(
       builder.spillDirectory(spillDirectory->path)
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+          .config(core::QueryConfig::kTestingSpillPct, "100");
+    }
+
+    if (injectPartialSpill) {
+      spillDirectory = exec::test::TempDirectoryPath::create();
+      builder.spillDirectory(spillDirectory->path)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kPartialAggregationSpillEnabled, "true")
           .config(core::QueryConfig::kTestingSpillPct, "100");
     }
 
@@ -431,6 +440,7 @@ AggregationFuzzerBase::computeReferenceResults(
 void AggregationFuzzerBase::testPlan(
     const PlanWithSplits& planWithSplits,
     bool injectSpill,
+    bool injectPartialSpill,
     bool abandonPartial,
     bool customVerification,
     const std::vector<std::shared_ptr<ResultVerifier>>& customVerifiers,
@@ -440,6 +450,7 @@ void AggregationFuzzerBase::testPlan(
       planWithSplits.plan,
       planWithSplits.splits,
       injectSpill,
+      injectPartialSpill,
       abandonPartial,
       maxDrivers);
 

@@ -201,6 +201,14 @@ class QueryConfig {
   static constexpr const char* kAggregationSpillEnabled =
       "aggregation_spill_enabled";
 
+  /// Partial aggregation spilling flag, only applies if "spill_enabled" flag is
+  /// set.
+  /// If true, partial aggregation flushing will be disabled. Which means,
+  /// settings of kMaxPartialAggregationMemory and
+  /// kMaxExtendedPartialAggregationMemory will be ignored.
+  static constexpr const char* kPartialAggregationSpillEnabled =
+      "partial_aggregation_spill_enabled";
+
   /// Join spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kJoinSpillEnabled = "join_spill_enabled";
 
@@ -525,9 +533,15 @@ class QueryConfig {
   }
 
   /// Returns 'is aggregation spilling enabled' flag. Must also check the
-  /// spillEnabled()!g
+  /// spillEnabled()!
   bool aggregationSpillEnabled() const {
     return get<bool>(kAggregationSpillEnabled, true);
+  }
+
+  /// Returns 'is partial aggregation spilling enabled' flag. Must also check
+  /// the spillEnabled()!
+  bool partialAggregationSpillEnabled() const {
+    return get<bool>(kPartialAggregationSpillEnabled, false);
   }
 
   /// Returns 'is join spilling enabled' flag. Must also check the

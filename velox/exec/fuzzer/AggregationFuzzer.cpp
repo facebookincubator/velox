@@ -166,6 +166,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
       testPlan(
           planWithSplits,
           false /*injectSpill*/,
+          false /*injectPartialSpill*/,
           false /*abandonPartial*/,
           customVerification,
           customVerifiers,
@@ -176,6 +177,19 @@ class AggregationFuzzer : public AggregationFuzzerBase {
       testPlan(
           planWithSplits,
           true /*injectSpill*/,
+          false /*injectPartialSpill*/,
+          false /*abandonPartial*/,
+          customVerification,
+          customVerifiers,
+          expected,
+          maxDrivers);
+
+      LOG(INFO) << "Testing plan #" << i
+                << " with partial aggregation spilling";
+      testPlan(
+          planWithSplits,
+          true /*injectSpill*/,
+          true /*injectPartialSpill*/,
           false /*abandonPartial*/,
           customVerification,
           customVerifiers,
@@ -188,6 +202,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
         testPlan(
             planWithSplits,
             false /*injectSpill*/,
+            false /*injectPartialSpill*/,
             true /*abandonPartial*/,
             customVerification,
             customVerifiers,

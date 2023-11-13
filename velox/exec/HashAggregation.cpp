@@ -113,6 +113,10 @@ void HashAggregation::initialize() {
 
 bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
   VELOX_CHECK(isPartialOutput_ && !isGlobal_);
+  if (groupingSet_->hasSpilled()) {
+    // Once spilling kicked in, disable the abandoning code path.
+    return false;
+  }
   return numInputRows_ > abandonPartialAggregationMinRows_ &&
       100 * numOutput / numInputRows_ >= abandonPartialAggregationMinPct_;
 }
@@ -135,9 +139,13 @@ void HashAggregation::addInput(RowVectorPtr input) {
   // NOTE: we should not trigger partial output flush in case of global
   // aggregation as the final aggregator will handle it the same way as the
   // partial aggregator. Hence, we have to use more memory anyway.
+  //
+  // We currently disable flushing when spilling is enabled. It's possible
+  // to make spilling and flushing work together once we had a way to
+  // count the spilled data size into partial aggregation's memory usage.
   const bool abandonPartialEarly = isPartialOutput_ && !isGlobal_ &&
       abandonPartialAggregationEarly(groupingSet_->numDistinct());
-  if (isPartialOutput_ && !isGlobal_ &&
+  if (!spillConfig_.has_value() && isPartialOutput_ && !isGlobal_ &&
       (abandonPartialEarly ||
        groupingSet_->isPartialFull(maxPartialAggregationMemoryUsage_))) {
     partialFull_ = true;

@@ -803,7 +803,7 @@ const HashLookup& GroupingSet::hashLookup() const {
 void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   // Spilling is considered if this is a final or single aggregation and
   // spillPath is set.
-  if (isPartial_ || spillConfig_ == nullptr) {
+  if (spillConfig_ == nullptr) {
     return;
   }
 
@@ -888,7 +888,7 @@ void GroupingSet::ensureOutputFits() {
   // to reserve memory for the output as we can't reclaim much memory from this
   // operator itself. The output processing can reclaim memory from the other
   // operator or query through memory arbitration.
-  if (isPartial_ || spillConfig_ == nullptr || hasSpilled()) {
+  if (spillConfig_ == nullptr || hasSpilled()) {
     return;
   }
 
@@ -938,7 +938,6 @@ void GroupingSet::spill() {
   if (table_ == nullptr || table_->numDistinct() == 0) {
     return;
   }
-
   if (!hasSpilled()) {
     auto rows = table_->rows();
     VELOX_DCHECK(pool_.trackUsage());
@@ -1175,6 +1174,8 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
 }
 
 void GroupingSet::abandonPartialAggregation() {
+  VELOX_CHECK(!hasSpilled())
+
   abandonedPartialAggregation_ = true;
   allSupportToIntermediate_ = true;
   for (auto& aggregate : aggregates_) {

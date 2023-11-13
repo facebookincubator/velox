@@ -190,6 +190,7 @@ class AggregationFuzzerBase {
       const core::PlanNodePtr& plan,
       const std::vector<exec::Split>& splits = {},
       bool injectSpill = false,
+      bool injectPartialSpill = false,
       bool abandonPartial = false,
       int32_t maxDrivers = 2);
 
@@ -201,6 +202,7 @@ class AggregationFuzzerBase {
   void testPlan(
       const PlanWithSplits& planWithSplits,
       bool injectSpill,
+      bool injectPartialSpill,
       bool abandonPartial,
       bool customVerification,
       const std::vector<std::shared_ptr<ResultVerifier>>& customVerifiers,
