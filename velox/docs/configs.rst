@@ -389,6 +389,10 @@ Hive Connector
      - integer
      - 128MB
      - Maximum distance in bytes between chunks to be fetched that may be coalesced into a single request.
+   * - num_cached_file_handles
+     - integer
+     - 20000
+     - Maximum number of entries in the file handle cache.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
