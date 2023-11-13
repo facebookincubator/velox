@@ -156,22 +156,17 @@ class FakeTokenizer : public Tokenizer {
   }
 
   bool hasNext() override {
-    switch (state) {
-      case State::kDone:
-        return false;
-      case State::kReady:
-        return true;
-      case State::kNotReady:
-        break;
-      case State::kFailed:
-        VELOX_FAIL("Illegal state");
+    if (state == State::kDone) {
+      return false;
+    } else if (state == State::kNotReady) {
+      return true;
     }
-    return true;
+    VELOX_FAIL("Illegal state");
   }
 
   std::unique_ptr<Subfield::PathElement> next() override {
     if (!hasNext()) {
-      VELOX_FAIL("No more tokens");
+      VELOX_USER_FAIL("No more tokens");
     }
     state = State::kDone;
     return std::make_unique<Subfield::NestedField>(path_);
