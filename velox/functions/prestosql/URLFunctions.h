@@ -84,6 +84,31 @@ FOLLY_ALWAYS_INLINE void urlEscape(TOutString& output, const TInString& input) {
   output.resize(outIndex);
 }
 
+template<typename TInString>
+FOLLY_ALWAYS_INLINE bool urlUnescapeCheck(const TInString& input) {
+  const char* p = input.data();
+  const char* end = p + input.size();
+  char buf[3];
+  buf[2] = '\0';
+  char* endptr;
+  for (; p < end; ++p) {
+    if (*p == '%') {
+      if (p + 2 < end) {
+        buf[0] = p[1];
+        buf[1] = p[2];
+        strtol(buf, &endptr, 16);
+        p += 2;
+        if (endptr != buf + 2) {
+          return false;
+        }
+      } else {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE void urlUnescape(
     TOutString& output,
@@ -143,6 +168,11 @@ struct UrlExtractProtocolFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
+    auto validUrl = urlUnescapeCheck(url);
+    if (!validUrl) {
+      result.setEmpty();
+      return false;
+    }
     boost::cmatch match;
     if (!parse(url, match)) {
       result.setEmpty();
@@ -166,6 +196,11 @@ struct UrlExtractFragmentFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
+    auto validUrl = urlUnescapeCheck(url);
+    if (!validUrl) {
+      result.setEmpty();
+      return false;
+    }
     boost::cmatch match;
     if (!parse(url, match)) {
       result.setEmpty();
@@ -189,6 +224,11 @@ struct UrlExtractHostFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
+    auto validUrl = urlUnescapeCheck(url);
+    if (!validUrl) {
+      result.setEmpty();
+      return false;
+    }
     boost::cmatch match;
     if (!parse(url, match)) {
       result.setEmpty();
@@ -214,6 +254,10 @@ struct UrlExtractPortFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Varchar>& url) {
+    auto validUrl = urlUnescapeCheck(url);
+    if (!validUrl) {
+      return false;
+    }
     boost::cmatch match;
     if (!parse(url, match)) {
       return false;
@@ -247,18 +291,22 @@ struct UrlExtractPathFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    try {
-      boost::cmatch match;
-      if (!parse(url, match)) {
+    auto validUrl = urlUnescapeCheck(url);
+    if (!validUrl) {
+      result.setEmpty();
+      return false;
+    }
+    boost::cmatch match;
+    if (!parse(url, match)) {
         result.setEmpty();
         return false;
-      }
+    }
 
-      boost::cmatch authAndPathMatch;
-      boost::cmatch authorityMatch;
-      bool hasAuthority;
+    boost::cmatch authAndPathMatch;
+    boost::cmatch authorityMatch;
+    bool hasAuthority;
 
-      if (matchAuthorityAndPath(
+    if (matchAuthorityAndPath(
               match, authAndPathMatch, authorityMatch, hasAuthority)) {
         StringView escapedPath;
         if (hasAuthority) {
@@ -267,10 +315,6 @@ struct UrlExtractPathFunction {
           escapedPath = submatch(match, 2);
         }
         urlUnescape(result, escapedPath);
-      }
-    } catch (VeloxUserError const& ) {
-      result.setEmpty();
-      return false;
     }
 
     return true;
@@ -291,6 +335,11 @@ struct UrlExtractQueryFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
+    auto validUrl = urlUnescapeCheck(url);
+    if (!validUrl) {
+      result.setEmpty();
+      return false;
+    }
     boost::cmatch match;
     if (!parse(url, match)) {
       result.setEmpty();
@@ -317,6 +366,11 @@ struct UrlExtractParameterFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& url,
       const arg_type<Varchar>& param) {
+    auto validUrl = urlUnescapeCheck(url);
+    if (!validUrl) {
+      result.setEmpty();
+      return false;
+    }
     boost::cmatch match;
     if (!parse(url, match)) {
       result.setEmpty();
