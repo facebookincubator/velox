@@ -559,6 +559,12 @@ the input column name and filter is also lower case to achive case-insensitive r
 <td><p>128MB</p></td>
 <td><p>Maximum distance in bytes between chunks to be fetched that may be coalesced into a single request.</p></td>
 </tr>
+<tr class="row-even"><td><p>num_cached_file_handles</p></td>
+<td><p>integer</p></td>
+<td><p>20000</p></td>
+<td><p>Maximum number of entries in the file handle cache. The value must be non-negative. Zero value
+indicates infinite cache capacity.</p></td>
+</tr>
 </tbody>
 </table>
 <section id="amazon-s3-configuration">
