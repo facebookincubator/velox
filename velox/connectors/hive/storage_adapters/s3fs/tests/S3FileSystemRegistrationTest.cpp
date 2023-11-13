@@ -73,7 +73,8 @@ TEST_F(S3FileSystemRegistrationTest, fileHandle) {
   FileHandleFactory factory(
       std::make_unique<
           SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(1000),
-      std::make_unique<FileHandleGenerator>(hiveConfig));
+      std::make_unique<FileHandleGenerator>(hiveConfig),
+      true);
   auto fileHandle = factory.generate(s3File).second;
   readData(fileHandle->file.get());
 }
