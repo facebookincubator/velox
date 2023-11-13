@@ -505,18 +505,23 @@ consistent with other supported cases of cast.</p>
 </div>
 <section id="from-timestamp">
 <h3>From TIMESTAMP<a class="headerlink" href="#from-timestamp" title="Permalink to this heading">¶</a></h3>
-<p>By default, casting a timestamp to a string returns ISO 8601 format with an empty space
-as separator between date and time.</p>
+<p>By default, casting a timestamp to a string returns ISO 8601 format with space as separator
+between date and time, and the year part is padded with zeros to 4 characters.</p>
 <p>If legacy_cast configuration property is true, the result string uses character ‘T’
-as separator between date and time.</p>
+as separator between date and time and the year part is not padded.</p>
 <p>Valid examples if legacy_cast = false,</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01 00:00:00.000&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;2000-01-01 12:21:56.129&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2000-01-01 12:21:56.129&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;384-01-01 08:00:00.000&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;0384-01-01 08:00:00.000&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;10000-02-01 16:00:00.000&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;10000-02-01 16:00:00.000&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;-10-02-01 10:00:00.000&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-0010-02-01 10:00:00.000&#39;</span>
 </pre></div>
 </div>
 <p>Valid examples if legacy_cast = true,</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01T00:00:00.000&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;2000-01-01 12:21:56.129&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2000-01-01T12:21:56.129&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;384-01-01 08:00:00.000&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;384-01-01T08:00:00.000&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;-10-02-01 10:00:00.000&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-10-02-01T10:00:00.000&#39;</span>
 </pre></div>
 </div>
 </section>
