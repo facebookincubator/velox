@@ -392,7 +392,8 @@ Hive Connector
    * - num_cached_file_handles
      - integer
      - 20000
-     - Maximum number of entries in the file handle cache.
+     - Maximum number of entries in the file handle cache. The value must be non-negative. Value zero
+       means no cache eviction.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
