@@ -61,7 +61,8 @@ HiveConnector::HiveConnector(
           std::make_unique<
               SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(
               numCachedFileHandles(properties.get())),
-          std::make_unique<FileHandleGenerator>(properties)),
+          std::make_unique<FileHandleGenerator>(properties),
+          HiveConfig::isFileHandleCacheEnabled(properties.get())),
       executor_(executor) {
   LOG(INFO) << "Hive connector " << connectorId() << " created with maximum of "
             << numCachedFileHandles(properties.get())

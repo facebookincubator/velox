@@ -54,8 +54,11 @@ class CachedFactory {
   // true, but performance will suffer.
   CachedFactory(
       std::unique_ptr<SimpleLRUCache<Key, Value>> cache,
-      std::unique_ptr<Generator> generator)
-      : cache_(std::move(cache)), generator_(std::move(generator)) {}
+      std::unique_ptr<Generator> generator,
+      const bool cacheEnabled)
+      : cache_(std::move(cache)),
+        generator_(std::move(generator)),
+        cacheEnabled_(cacheEnabled) {}
 
   // Returns the generator's output on the given key. If the output is
   // in the cache, returns immediately. Otherwise, blocks until the output
@@ -105,6 +108,7 @@ class CachedFactory {
   std::unique_ptr<SimpleLRUCache<Key, Value>> cache_;
   std::unique_ptr<Generator> generator_;
   folly::F14FastSet<Key> pending_;
+  const bool cacheEnabled_;
 
   std::mutex cacheMu_;
   std::mutex pendingMu_;
@@ -119,6 +123,10 @@ template <typename Key, typename Value, typename Generator>
 std::pair<bool, Value> CachedFactory<Key, Value, Generator>::generate(
     const Key& key) {
   process::TraceContext trace("CachedFactory::generate");
+  if (!cacheEnabled_) {
+    return std::make_pair(false, (*generator_)(key));
+  }
+
   std::unique_lock<std::mutex> pending_lock(pendingMu_);
   {
     std::lock_guard<std::mutex> cache_lock(cacheMu_);

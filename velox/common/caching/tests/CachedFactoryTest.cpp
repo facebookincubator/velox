@@ -58,7 +58,9 @@ TEST(CachedFactoryTest, basicGeneration) {
   auto generator = std::make_unique<DoublerGenerator>();
   auto* generated = &generator->generated_;
   CachedFactory<int, int, DoublerGenerator> factory(
-      std::make_unique<SimpleLRUCache<int, int>>(1000), std::move(generator));
+      std::make_unique<SimpleLRUCache<int, int>>(1000),
+      std::move(generator),
+      true);
   EXPECT_EQ(factory.maxSize(), 1000);
   {
     auto val1 = factory.generate(1);
@@ -113,7 +115,9 @@ struct DoublerWithExceptionsGenerator {
 TEST(CachedFactoryTest, clearCache) {
   auto generator = std::make_unique<DoublerGenerator>();
   CachedFactory<int, int, DoublerGenerator> factory(
-      std::make_unique<SimpleLRUCache<int, int>>(1000), std::move(generator));
+      std::make_unique<SimpleLRUCache<int, int>>(1000),
+      std::move(generator),
+      true);
   EXPECT_EQ(factory.maxSize(), 1000);
   {
     auto val1 = factory.generate(1);
@@ -129,7 +133,9 @@ TEST(CachedFactoryTest, basicExceptionHandling) {
   auto generator = std::make_unique<DoublerWithExceptionsGenerator>();
   int* generated = &generator->generated_;
   CachedFactory<int, int, DoublerWithExceptionsGenerator> factory(
-      std::make_unique<SimpleLRUCache<int, int>>(1000), std::move(generator));
+      std::make_unique<SimpleLRUCache<int, int>>(1000),
+      std::move(generator),
+      true);
   auto val1 = factory.generate(1);
   EXPECT_EQ(getCachedValue(val1), 2);
   EXPECT_EQ(*generated, 1);
@@ -151,7 +157,9 @@ TEST(CachedFactoryTest, multiThreadedGeneration) {
   auto generator = std::make_unique<DoublerGenerator>();
   auto* generated = &generator->generated_;
   CachedFactory<int, int, DoublerGenerator> factory(
-      std::make_unique<SimpleLRUCache<int, int>>(1000), std::move(generator));
+      std::make_unique<SimpleLRUCache<int, int>>(1000),
+      std::move(generator),
+      true);
   folly::EDFThreadPoolExecutor pool(
       100, std::make_shared<folly::NamedThreadFactory>("test_pool"));
   const int numValues = 5;
@@ -176,7 +184,9 @@ TEST(CachedFactoryTest, multiThreadedGenerationAgain) {
   auto generator = std::make_unique<DoublerGenerator>();
   auto* generated = &generator->generated_;
   CachedFactory<int, int, DoublerGenerator> factory(
-      std::make_unique<SimpleLRUCache<int, int>>(1000), std::move(generator));
+      std::make_unique<SimpleLRUCache<int, int>>(1000),
+      std::move(generator),
+      true);
   folly::EDFThreadPoolExecutor pool(
       100, std::make_shared<folly::NamedThreadFactory>("test_pool"));
   const int numValues = 5;
@@ -204,7 +214,9 @@ TEST(CachedFactoryTest, retrievedCached) {
   auto generator = std::make_unique<DoublerGenerator>();
   auto* generated = &generator->generated_;
   CachedFactory<int, int, DoublerGenerator> factory(
-      std::make_unique<SimpleLRUCache<int, int>>(1000), std::move(generator));
+      std::make_unique<SimpleLRUCache<int, int>>(1000),
+      std::move(generator),
+      true);
   for (int i = 0; i < 10; i += 2)
     factory.generate(i);
   EXPECT_EQ(*generated, 5);
@@ -224,4 +236,21 @@ TEST(CachedFactoryTest, retrievedCached) {
     EXPECT_EQ(missing[i], 2 * i + 1);
   }
   EXPECT_EQ(*generated, 5);
+}
+
+TEST(CachedFactoryTest, disableCache) {
+  auto generator = std::make_unique<DoublerGenerator>();
+  auto* generated = &generator->generated_;
+  CachedFactory<int, int, DoublerGenerator> factory(
+      std::make_unique<SimpleLRUCache<int, int>>(1000),
+      std::move(generator),
+      false);
+  auto val1 = factory.generate(1);
+  EXPECT_EQ(val1, cacheMiss(2));
+  EXPECT_EQ(*generated, 1);
+
+  auto val2 = factory.generate(1);
+  EXPECT_EQ(val2, cacheMiss(2));
+  EXPECT_EQ(*generated, 2);
+  EXPECT_EQ(factory.currentSize(), 0);
 }
