@@ -161,8 +161,12 @@ class MallocAllocator : public MemoryAllocator {
   /// Mutex for 'mallocs_'.
   std::mutex mallocsMutex_;
 
-  /// Tracks malloc'd pointers to detect bad frees.
-  std::unordered_set<void*> mallocs_;
+  /// Tracks malloc'd pointers and the corresponding MachinePageCount in
+  /// non-contiguous allocations to detect bad frees.
+  /// Since an allocation can span across multiple PageRuns, we need to store
+  /// the MachinePageCount for each allocation to identify allocation boundaries
+  /// across the PageRuns.
+  std::unordered_map<void*, MachinePageCount> mallocs_;
 
   std::shared_ptr<Cache> cache_;
 };
