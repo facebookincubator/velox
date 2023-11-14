@@ -221,6 +221,16 @@ int64_t MallocAllocator::freeNonContiguous(Allocation& allocation) {
     Allocation::PageRun run = allocation.runAt(i);
     numFreed += run.numPages();
     void* ptr = run.data();
+    // Check if ptr was split into multiple PageRuns.
+    while (i + 1 < allocation.numRuns()) {
+      Allocation::PageRun nextRun = allocation.runAt(i + 1);
+      void* nextPtr = nextRun.data();
+      if (mallocs_.count(nextPtr) != 0) {
+        break;
+      }
+      numFreed += nextRun.numPages();
+      i++;
+    }
     {
       std::lock_guard<std::mutex> l(mallocsMutex_);
       const auto ret = mallocs_.erase(ptr);
