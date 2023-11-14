@@ -231,6 +231,7 @@ TEST(CachedFactoryTest, disableCache) {
   auto* generated = &generator->generated_;
   CachedFactory<int, int, DoublerGenerator> factory(
       nullptr, std::move(generator));
+
   auto val1 = factory.generate(1);
   EXPECT_EQ(val1, cacheMiss(2));
   EXPECT_EQ(*generated, 1);
@@ -238,12 +239,19 @@ TEST(CachedFactoryTest, disableCache) {
   auto val2 = factory.generate(1);
   EXPECT_EQ(val2, cacheMiss(2));
   EXPECT_EQ(*generated, 2);
+
   EXPECT_EQ(factory.currentSize(), 0);
+
   EXPECT_EQ(factory.maxSize(), 0);
+
   EXPECT_EQ(factory.cacheStats(), SimpleLRUCacheStats(0, 0, 0, 0));
+
   EXPECT_EQ(factory.clearCache(), SimpleLRUCacheStats(0, 0, 0, 0));
+
   std::vector<int> keys;
   std::vector<std::pair<int, int>> cached;
   std::vector<int> missing;
   factory.retrieveCached(keys, &cached, &missing);
+  ASSERT_EQ(0, cached.size());
+  ASSERT_EQ(0, missing.size());
 }

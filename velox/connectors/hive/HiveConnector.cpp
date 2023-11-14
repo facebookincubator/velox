@@ -75,7 +75,8 @@ HiveConnector::HiveConnector(
               << numCachedFileHandles(properties.get())
               << " cached file handles.";
   } else {
-    LOG(INFO) << "Hive connector " << connectorId() << " created";
+    LOG(INFO) << "Hive connector " << connectorId()
+              << " created with file handle cache disabled";
   }
 }
 

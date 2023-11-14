@@ -397,7 +397,7 @@ Hive Connector
    * - file_handle_cache_enabled
      - bool
      - true
-     - Enables caching of file handles if true. Disabled caching if false. File handle cache should be
+     - Enables caching of file handles if true. Disables caching if false. File handle cache should be
        disabled if files are not immutable, i.e. file content may change while file path stays the same.
 
 ``Amazon S3 Configuration``
