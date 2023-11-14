@@ -408,4 +408,47 @@ struct DayOfYearFunction {
     result = getDayOfYear(getDateTime(date));
   }
 };
+
+template <typename T>
+struct DateFormatFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  const date::time_zone* sessionTimeZone_ = nullptr;
+  std::shared_ptr<DateTimeFormatter> formatter_;
+  bool isConstFormat_ = false;
+
+  FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>* formatString) {
+    if (formatString != nullptr) {
+      formatter_ = buildJodaDateTimeFormatter(
+          std::string_view(formatString->data(), formatString->size()));
+      isConstFormat_ = true;
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* formatString) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    setFormatter(formatString);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& formatString) {
+    if (!isConstFormat_) {
+      formatter_ = buildJodaDateTimeFormatter(
+          std::string_view(formatString.data(), formatString.size()));
+    }
+
+    auto formattedResult = formatter_->format(timestamp, sessionTimeZone_);
+    auto resultSize = formattedResult.size();
+    result.resize(resultSize);
+    if (resultSize != 0) {
+      std::memcpy(result.data(), formattedResult.data(), resultSize);
+    }
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql

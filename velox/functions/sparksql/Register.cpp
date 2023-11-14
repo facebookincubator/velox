@@ -244,6 +244,8 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "make_date"});
   registerFunction<DateDiffFunction, int32_t, Date, Date>(
       {prefix + "datediff"});
+  registerFunction<DateFormatFunction, Varchar, Timestamp, Varchar>(
+      {"date_format"});
   registerFunction<LastDayFunction, Date, Date>({prefix + "last_day"});
   registerFunction<AddMonthsFunction, Date, Date, int32_t>(
       {prefix + "add_months"});

@@ -16,6 +16,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -454,6 +455,17 @@ TEST_F(DateTimeFunctionsTest, quarterDate) {
   EXPECT_EQ(4, quarter("2013-11-08"));
   EXPECT_EQ(1, quarter("1987-01-08"));
   EXPECT_EQ(3, quarter("1954-08-08"));
+}
+
+TEST_F(DateTimeFunctionsTest, dateFormat) {
+  const auto dateFormat = [&](std::optional<Timestamp> timestamp,
+                              const std::string& formatString) {
+    return evaluateOnce<std::string>(
+        fmt::format("date_format(c0, '{}')", formatString), timestamp);
+  };
+  using util::fromTimestampString;
+
+  EXPECT_EQ("1970", dateFormat(fromTimestampString("1970-01-01"), "y"));
 }
 
 } // namespace
