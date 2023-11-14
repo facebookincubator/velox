@@ -72,7 +72,7 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
     }
   }
 
-  std::vector<void*> pages;
+  std::vector<MallocKey> pages;
   pages.reserve(mix.numSizes);
   for (int32_t i = 0; i < mix.numSizes; ++i) {
     MachinePageCount numSizeClassPages =
@@ -99,15 +99,16 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
       setAllocatorFailureMessage(errorMsg);
       break;
     }
-    pages.emplace_back(ptr);
-    out.append(reinterpret_cast<uint8_t*>(ptr), numSizeClassPages); // NOLINT
+    auto pageRuns = out.append(
+        reinterpret_cast<uint8_t*>(ptr), numSizeClassPages); // NOLINT
+    pages.emplace_back(MallocKey(ptr, pageRuns));
   }
 
   if (pages.size() != mix.numSizes) {
     // Failed to allocate memory using malloc. Free any malloced pages and
     // return false.
-    for (auto ptr : pages) {
-      ::free(ptr);
+    for (const auto& mallocKey : pages) {
+      ::free(reinterpret_cast<void*>(mallocKey.getAddress()));
     }
     out.clear();
     if (reservationCB != nullptr) {
@@ -242,20 +243,29 @@ int64_t MallocAllocator::freeNonContiguous(Allocation& allocation) {
   MachinePageCount numFreed = 0;
   for (int32_t i = 0; i < allocation.numRuns(); ++i) {
     Allocation::PageRun run = allocation.runAt(i);
-    numFreed += run.numPages();
     void* ptr = run.data();
+    int pageRuns;
     {
       std::lock_guard<std::mutex> l(mallocsMutex_);
-      const auto ret = mallocs_.erase(ptr);
-      VELOX_CHECK_EQ(ret, 1, "Bad free page pointer: {}", ptr);
+      // The key is the address, so PageRuns can be 0.
+      const auto ret = mallocs_.find(MallocKey(ptr, 0));
+      VELOX_CHECK(ret != mallocs_.end(), "Bad free page pointer: {}", ptr);
+      pageRuns = ret->getPageRuns();
+      VELOX_CHECK_GE(pageRuns, 1);
+      mallocs_.erase(ret);
     }
-    stats_.recordFree(
-        std::min<int64_t>(
-            AllocationTraits::pageBytes(sizeClassSizes_.back()),
-            AllocationTraits::pageBytes(run.numPages())),
-        [&]() {
-          ::free(ptr); // NOLINT
-        });
+    // Calculate the number of machine page counts.
+    // All the pages except the last page are kMaxPagesInRun.
+    VELOX_CHECK_LE(i + pageRuns, allocation.numRuns());
+    auto numPages = pageRuns > 1
+        ? (pageRuns - 1) * Allocation::PageRun::kMaxPagesInRun +
+            allocation.runAt(i + pageRuns - 1).numPages()
+        : run.numPages();
+    numFreed += numPages;
+    i += pageRuns - 1;
+    stats_.recordFree(AllocationTraits::pageBytes(numPages), [&]() {
+      ::free(ptr); // NOLINT
+    });
   }
 
   const auto freedBytes = AllocationTraits::pageBytes(numFreed);

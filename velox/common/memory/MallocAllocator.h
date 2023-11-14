@@ -22,6 +22,45 @@
 DECLARE_bool(velox_memory_leak_check_enabled);
 
 namespace facebook::velox::memory {
+/// MallocKey is used to store the address and the number of PageRuns for
+/// non-contiguous allocations.
+class MallocKey {
+ public:
+  static constexpr uint32_t kMaxPageRuns =
+      (1UL << (64U - Allocation::PageRun::kPointerSignificantBits)) - 1;
+
+  MallocKey(void* ptr, int pageRuns) {
+    VELOX_CHECK_LE(pageRuns, kMaxPageRuns);
+    ptr_ = reinterpret_cast<uint64_t>(ptr) |
+        (static_cast<uint64_t>(pageRuns)
+         << Allocation::PageRun::kPointerSignificantBits);
+  }
+
+  bool operator==(const MallocKey& t) const {
+    return this->getAddress() == t.getAddress();
+  }
+
+  uint64_t getAddress() const {
+    return this->ptr_ & Allocation::PageRun::kPointerMask;
+  }
+
+  int getPageRuns() const {
+    return ptr_ >> Allocation::PageRun::kPointerSignificantBits;
+  }
+
+ private:
+  /// Combination of address and number of PageRuns.
+  /// The address is 48 bits. The remaining 16 bits are used for PageRun count.
+  uint64_t ptr_;
+};
+
+class MallockKeyHash {
+ public:
+  size_t operator()(const MallocKey& t) const {
+    return t.getAddress();
+  }
+};
+
 /// The implementation of MemoryAllocator using malloc.
 class MallocAllocator : public MemoryAllocator {
  public:
@@ -162,7 +201,7 @@ class MallocAllocator : public MemoryAllocator {
   std::mutex mallocsMutex_;
 
   /// Tracks malloc'd pointers to detect bad frees.
-  std::unordered_set<void*> mallocs_;
+  std::unordered_set<MallocKey, MallockKeyHash> mallocs_;
 
   std::shared_ptr<Cache> cache_;
 };
