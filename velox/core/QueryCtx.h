@@ -66,6 +66,8 @@ class QueryCtx {
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       const std::string& queryId = "");
 
+  ~QueryCtx();
+
   static std::string generatePoolName(const std::string& queryId);
 
   memory::MemoryPool* pool() const {

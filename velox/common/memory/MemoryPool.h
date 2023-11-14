@@ -56,9 +56,6 @@ class MemoryManager;
 
 constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 
-/// Sets the memory reclaimer to the provided memory pool.
-using SetMemoryReclaimer = std::function<void(MemoryPool*)>;
-
 /// This class provides the memory allocation interfaces for a query execution.
 /// Each query execution entity creates a dedicated memory pool object. The
 /// memory pool objects from a query are organized as a tree with four levels
@@ -162,6 +159,15 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     bool debugEnabled{FLAGS_velox_memory_pool_debug_enabled};
   };
 
+  /// Defines states for a root memory pool.
+  enum class State {
+    kActive = 0,
+    /// The memory pool in this state can't grow its capacity and reclaim
+    /// memory.
+    kShutdown = 1,
+  };
+  static std::string stateString(State state);
+
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
   ///
   /// NOTE: we can't create a memory pool with no 'parent' but has 'kind' of
@@ -183,6 +189,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Returns the kind of this memory pool.
   virtual Kind kind() const;
 
+  /// Returns the state of this memory pool.
+  virtual State state() const;
+
   /// Returns the raw pointer to the parent pool. The root memory pool has
   /// no parent.
   ///
@@ -193,6 +202,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Returns the root of this memory pool.
   virtual MemoryPool* root() const;
+
+  /// Invoked to shutdown this memory pool.
+  virtual void shutdown() = 0;
 
   /// Returns the number of child memory pools.
   virtual uint64_t getChildCount() const;
@@ -525,12 +537,15 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const bool checkUsageLeak_;
   const bool debugEnabled_;
 
+  /// Indicates if a root memory pool has been shutdown or not.
+  std::atomic<State> state_{State::kActive};
+
   /// Indicates if the memory pool has been aborted by the memory arbitrator or
   /// not.
   ///
   /// NOTE: this flag is only set for a root memory pool if it has memory
   /// reclaimer. We process a query abort request from the root memory pool.
-  std::atomic<bool> aborted_{false};
+  std::atomic_bool aborted_{false};
   /// Saves the aborted error exception which is only set if 'aborted_' is true.
   std::exception_ptr abortError_{nullptr};
 
@@ -546,11 +561,13 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
 std::ostream& operator<<(std::ostream& out, MemoryPool::Kind kind);
 
+std::ostream& operator<<(std::ostream& out, MemoryPool::State state);
+
 std::ostream& operator<<(std::ostream& os, const MemoryPool::Stats& stats);
 
 class MemoryPoolImpl : public MemoryPool {
  public:
-  using DestructionCallback = std::function<void(MemoryPool*)>;
+  using ShutdownCallback = std::function<void(MemoryPool*)>;
 
   MemoryPoolImpl(
       MemoryManager* manager,
@@ -558,10 +575,12 @@ class MemoryPoolImpl : public MemoryPool {
       Kind kind,
       std::shared_ptr<MemoryPool> parent,
       std::unique_ptr<MemoryReclaimer> reclaimer = nullptr,
-      DestructionCallback destructionCb = nullptr,
+      ShutdownCallback shutdownCb = nullptr,
       const Options& options = Options{});
 
   ~MemoryPoolImpl() override;
+
+  void shutdown() override;
 
   void* allocate(int64_t size) override;
 
@@ -882,10 +901,14 @@ class MemoryPoolImpl : public MemoryPool {
 
   void setAbortError(const std::exception_ptr& error);
 
-  // Check if this memory pool has been aborted. If already aborted, we rethrow
+  // Checks if this memory pool has been aborted. If already aborted, we rethrow
   // the preserved abort error to prevent this pool from triggering additional
   // memory arbitration. The associated query should also abort soon.
   void checkIfAborted() const;
+
+  // Checks if this memory pool has been shutdown. If already shutdown, we shall
+  // throw on memory capacity grow to stop the query execution.
+  void checkIfShutdown() const;
 
   Stats statsLocked() const;
 
@@ -964,7 +987,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   MemoryManager* const manager_;
   MemoryAllocator* const allocator_;
-  const DestructionCallback destructionCb_;
+  const ShutdownCallback shutdownCb_;
 
   // Regex for filtering on 'name_' when debug mode is enabled. This allows us
   // to only track the callsites of memory allocations for memory pools whose

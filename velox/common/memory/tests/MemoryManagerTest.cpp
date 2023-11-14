@@ -16,16 +16,19 @@
 
 #include <gtest/gtest.h>
 
+#include "folly/experimental/EventCount.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/SharedArbitrator.h"
 
 DECLARE_int32(velox_memory_num_shared_leaf_pools);
 DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
 
 using namespace ::testing;
+using namespace facebook::velox::common::testutil;
 
 namespace facebook {
 namespace velox {
@@ -43,6 +46,7 @@ class MemoryManagerTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     exec::SharedArbitrator::registerFactory();
+    TestValue::enable();
   }
 
   inline static const std::string arbitratorKind_{"SHARED"};
@@ -636,6 +640,71 @@ TEST_F(MemoryManagerTest, testCheckUsageLeak) {
   auto leafPool = manager.addLeafPool("duplicateLeafPool", true);
   ASSERT_FALSE(rootPool->testingCheckUsageLeak());
   ASSERT_FALSE(leafPool->testingCheckUsageLeak());
+}
+
+DEBUG_ONLY_TEST_F(MemoryManagerTest, duplicateRootMemoryPoolDuringArbitration) {
+  MemoryManagerOptions options;
+  const auto kCapacity = 32L << 30;
+  auto allocator = std::make_shared<MallocAllocator>(kCapacity);
+  for (bool shutdown : {false, true}) {
+    SCOPED_TRACE(fmt::format("shutdown: {}", shutdown));
+    options.allocator = allocator.get();
+    options.capacity = kCapacity;
+    options.arbitratorKind = arbitratorKind_;
+    options.memoryPoolInitCapacity = 0;
+    MemoryManager manager{options};
+    auto root1 = manager.addRootPool(
+        "duplicateRootMemoryPoolDuringArbitration1",
+        kCapacity,
+        MemoryReclaimer::create());
+    auto root2 = manager.addRootPool(
+        "duplicateRootMemoryPoolDuringArbitration2",
+        kCapacity,
+        MemoryReclaimer::create());
+
+    std::thread allocThread([&]() {
+      auto child = root2->addLeafChild("maybeReserveFailWithAbort");
+      ASSERT_TRUE(child->maybeReserve(kCapacity >> 10));
+      child->release();
+    });
+
+    std::atomic_bool arbitrationStartFlag{false};
+    folly::EventCount arbitrationStart;
+    std::atomic_bool arbitrationWaitFlag{false};
+    folly::EventCount arbitrationWait;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::memory::SharedArbitrator::startArbitration",
+        std::function<void(const MemoryPool*)>(
+            ([&](const MemoryPool* /*unsed*/) {
+              arbitrationStartFlag = true;
+              arbitrationStart.notifyAll();
+              arbitrationWait.await(
+                  [&]() { return arbitrationWaitFlag.load(); });
+            })));
+
+    arbitrationStart.await([&]() { return arbitrationStartFlag.load(); });
+    if (shutdown) {
+      root1->shutdown();
+    }
+    root1.reset();
+    if (shutdown) {
+      auto root1Dup = manager.addRootPool(
+          "duplicateRootMemoryPoolDuringArbitration1",
+          kCapacity,
+          MemoryReclaimer::create());
+    } else {
+      VELOX_ASSERT_THROW(
+          manager.addRootPool(
+              "duplicateRootMemoryPoolDuringArbitration1",
+              kCapacity,
+              MemoryReclaimer::create()),
+          "Duplicate root pool name found: duplicateRootMemoryPoolDuringArbitration1");
+    }
+
+    arbitrationWaitFlag = true;
+    arbitrationWait.notifyAll();
+    allocThread.join();
+  }
 }
 
 } // namespace memory

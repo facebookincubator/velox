@@ -228,12 +228,34 @@ std::ostream& operator<<(std::ostream& out, MemoryPool::Kind kind) {
   return out << MemoryPool::kindString(kind);
 }
 
+std::string MemoryPool::stateString(State state) {
+  switch (state) {
+    case State::kActive:
+      return "ACTIVE";
+    case State::kShutdown:
+      return "SHUTDOWN";
+    default:
+      return fmt::format("UNKNOWN_{}", static_cast<int>(state));
+  }
+}
+
+std::ostream& operator<<(std::ostream& out, MemoryPool::State state) {
+  return out << MemoryPool::stateString(state);
+}
+
 const std::string& MemoryPool::name() const {
   return name_;
 }
 
 MemoryPool::Kind MemoryPool::kind() const {
   return kind_;
+}
+
+MemoryPool::State MemoryPool::state() const {
+  while (parent_ != nullptr) {
+    return parent_->state();
+  }
+  return state_;
 }
 
 MemoryPool* MemoryPool::parent() const {
@@ -365,12 +387,12 @@ MemoryPoolImpl::MemoryPoolImpl(
     Kind kind,
     std::shared_ptr<MemoryPool> parent,
     std::unique_ptr<MemoryReclaimer> reclaimer,
-    DestructionCallback destructionCb,
+    ShutdownCallback shutdownCb,
     const Options& options)
     : MemoryPool{name, kind, parent, options},
       manager_{memoryManager},
       allocator_{&manager_->allocator()},
-      destructionCb_(std::move(destructionCb)),
+      shutdownCb_(std::move(shutdownCb)),
       debugPoolNameRegex_(debugEnabled_ ? *(debugPoolNameRegex().rlock()) : ""),
       reclaimer_(std::move(reclaimer)),
       // The memory manager sets the capacity through grow() according to the
@@ -399,9 +421,7 @@ MemoryPoolImpl::~MemoryPoolImpl() {
         "Bad memory usage track state: {}",
         toString());
   }
-  if (destructionCb_ != nullptr) {
-    destructionCb_(this);
-  }
+  shutdown();
 }
 
 MemoryPool::Stats MemoryPoolImpl::stats() const {
@@ -619,6 +639,24 @@ int64_t MemoryPoolImpl::capacity() const {
   return capacity_;
 }
 
+void MemoryPoolImpl::shutdown() {
+  while (parent_ != nullptr) {
+    parent_->shutdown();
+    return;
+  }
+  VELOX_CHECK_EQ(
+      reservationBytes_,
+      0,
+      "Can't shutdown memory pool {} with memory reservations",
+      name_);
+  if (state_.exchange(State::kShutdown) == State::kShutdown) {
+    return;
+  }
+  if (shutdownCb_ != nullptr) {
+    shutdownCb_(this);
+  }
+}
+
 std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
     std::shared_ptr<MemoryPool> parent,
     const std::string& name,
@@ -776,6 +814,7 @@ bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
 bool MemoryPoolImpl::maybeIncrementReservationLocked(uint64_t size) {
   if (isRoot()) {
     checkIfAborted();
+    checkIfShutdown();
 
     // NOTE: we allow memory pool to overuse its memory during the memory
     // arbitration process. The memory arbitration process itself needs to
@@ -924,6 +963,9 @@ bool MemoryPoolImpl::reclaimableBytes(uint64_t& reclaimableBytes) const {
   if (reclaimer() == nullptr) {
     return false;
   }
+  if (state() == State::kShutdown) {
+    return false;
+  }
   return reclaimer()->reclaimableBytes(*this, reclaimableBytes);
 }
 
@@ -931,6 +973,10 @@ uint64_t MemoryPoolImpl::reclaim(
     uint64_t targetBytes,
     memory::MemoryReclaimer::Stats& stats) {
   if (reclaimer() == nullptr) {
+    return 0;
+  }
+  if (state() == State::kShutdown) {
+    VELOX_CHECK_EQ(reservationBytes_, 0);
     return 0;
   }
   return reclaimer()->reclaim(this, targetBytes, stats);
@@ -1011,6 +1057,12 @@ void MemoryPoolImpl::checkIfAborted() const {
   if (FOLLY_UNLIKELY(aborted())) {
     VELOX_CHECK_NOT_NULL(abortError_);
     std::rethrow_exception(abortError_);
+  }
+}
+
+void MemoryPoolImpl::checkIfShutdown() const {
+  if (FOLLY_UNLIKELY(state() == State::kShutdown)) {
+    VELOX_FAIL("{} has been shutdown", name_);
   }
 }
 

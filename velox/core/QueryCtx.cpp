@@ -69,6 +69,10 @@ QueryCtx::QueryCtx(
   initPool(queryId);
 }
 
+QueryCtx::~QueryCtx() {
+  pool_->shutdown();
+}
+
 /*static*/ std::string QueryCtx::generatePoolName(const std::string& queryId) {
   // We attach a monotonically increasing sequence number to ensure the pool
   // name is unique.

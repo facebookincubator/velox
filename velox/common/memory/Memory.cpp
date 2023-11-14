@@ -39,7 +39,7 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
       alignment_(std::max(MemoryAllocator::kMinAlignment, options.alignment)),
       checkUsageLeak_(options.checkUsageLeak),
       debugEnabled_(options.debugEnabled),
-      poolDestructionCb_([&](MemoryPool* pool) { dropPool(pool); }),
+      poolShutdownCb_([&](MemoryPool* pool) { dropPool(pool); }),
       defaultRoot_{std::make_shared<MemoryPoolImpl>(
           this,
           kDefaultRootName.str(),
@@ -127,7 +127,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
       MemoryPool::Kind::kAggregate,
       nullptr,
       std::move(reclaimer),
-      poolDestructionCb_,
+      poolShutdownCb_,
       options);
   pools_.emplace(poolName, pool);
   VELOX_CHECK_EQ(pool->capacity(), 0);

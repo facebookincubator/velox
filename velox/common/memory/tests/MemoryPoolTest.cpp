@@ -1990,6 +1990,87 @@ TEST_P(MemoryPoolTest, validCheck) {
   ASSERT_ANY_THROW(child->addAggregateChild("validCheck"));
 }
 
+TEST_P(MemoryPoolTest, stateCheck) {
+  ASSERT_EQ(MemoryPool::stateString(MemoryPool::State::kActive), "ACTIVE");
+  ASSERT_EQ(MemoryPool::stateString(MemoryPool::State::kShutdown), "SHUTDOWN");
+  auto manager = getMemoryManager();
+  {
+    auto root = manager->addRootPool();
+    ASSERT_EQ(root->state(), MemoryPool::State::kActive);
+    auto leafChild = root->addLeafChild("leafChild");
+    ASSERT_EQ(leafChild->state(), MemoryPool::State::kActive);
+    auto aggrChild = root->addAggregateChild("aggrChild");
+    ASSERT_EQ(aggrChild->state(), MemoryPool::State::kActive);
+    leafChild->shutdown();
+    leafChild->shutdown();
+    ASSERT_EQ(root->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(leafChild->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(aggrChild->state(), MemoryPool::State::kShutdown);
+    aggrChild->shutdown();
+    root->shutdown();
+    ASSERT_EQ(root->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(leafChild->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(aggrChild->state(), MemoryPool::State::kShutdown);
+  }
+
+  {
+    auto root = manager->addRootPool();
+    auto leafChild = root->addLeafChild("leafChild");
+    auto aggrChild = root->addAggregateChild("aggrChild");
+    aggrChild->shutdown();
+    aggrChild->shutdown();
+    ASSERT_EQ(root->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(leafChild->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(aggrChild->state(), MemoryPool::State::kShutdown);
+    leafChild->shutdown();
+    root->shutdown();
+    ASSERT_EQ(root->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(leafChild->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(aggrChild->state(), MemoryPool::State::kShutdown);
+  }
+
+  {
+    auto root = manager->addRootPool();
+    auto leafChild = root->addLeafChild("leafChild");
+    auto aggrChild = root->addAggregateChild("aggrChild");
+    root->shutdown();
+    root->shutdown();
+    ASSERT_EQ(root->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(leafChild->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(aggrChild->state(), MemoryPool::State::kShutdown);
+    leafChild->shutdown();
+    aggrChild->shutdown();
+    ASSERT_EQ(root->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(leafChild->state(), MemoryPool::State::kShutdown);
+    ASSERT_EQ(aggrChild->state(), MemoryPool::State::kShutdown);
+  }
+}
+
+TEST_P(MemoryPoolTest, memoryCapacityGrowFailedAfterShutdown) {
+  constexpr int64_t kMaxSize = 1 * GB; // 1GB
+  MemoryManagerOptions options;
+  options.capacity = kMaxSize;
+  options.arbitratorKind = "SHARED";
+  options.memoryPoolInitCapacity = 0;
+  setupMemory({.capacity = kMaxSize, .arbitratorKind = "SHARED"});
+  MemoryManager& manager = *getMemoryManager();
+  auto root = manager.addRootPool(
+      "memoryCapacityGrowFailedAfterShutdown",
+      kMaxSize,
+      MemoryReclaimer::create());
+  auto child = root->addLeafChild("memoryCapacityGrowFailedAfterShutdown");
+  ASSERT_TRUE(child->maybeReserve(1UL << 20));
+  VELOX_ASSERT_THROW(root->shutdown(), "Can't shutdown memory pool");
+  child->release();
+  root->shutdown();
+  ASSERT_EQ(child->state(), MemoryPool::State::kShutdown);
+  ASSERT_EQ(root->state(), MemoryPool::State::kShutdown);
+  ASSERT_FALSE(child->maybeReserve(32UL << 20));
+  VELOX_ASSERT_THROW(
+      child->allocate(32UL << 20),
+      "memoryCapacityGrowFailedAfterShutdown has been shutdown");
+}
+
 // Class used to test operations on MemoryPool.
 class MemoryPoolTester {
  public:

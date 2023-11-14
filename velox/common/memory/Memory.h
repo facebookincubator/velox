@@ -224,7 +224,7 @@ class MemoryManager {
   // The destruction callback set for the allocated  root memory pools which are
   // tracked by 'pools_'. It is invoked on the root pool destruction and removes
   // the pool from 'pools_'.
-  const MemoryPoolImpl::DestructionCallback poolDestructionCb_;
+  const MemoryPoolImpl::ShutdownCallback poolShutdownCb_;
 
   const std::shared_ptr<MemoryPool> defaultRoot_;
   std::vector<std::shared_ptr<MemoryPool>> sharedLeafPools_;
