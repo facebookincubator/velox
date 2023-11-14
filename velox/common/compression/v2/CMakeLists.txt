@@ -16,8 +16,12 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-add_library(velox_common_compression_v2
-            Compression.cpp HadoopCompressionFormat.cpp Lz4Compression.cpp)
+add_library(
+  velox_common_compression_v2
+  Compression.cpp
+  GzipCompression.cpp
+  HadoopCompressionFormat.cpp
+  Lz4Compression.cpp)
 
 target_link_libraries(
   velox_common_compression_v2

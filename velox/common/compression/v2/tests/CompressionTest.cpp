@@ -24,6 +24,7 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/compression/v2/Compression.h"
+#include "velox/common/compression/v2/GzipCompression.h"
 
 namespace facebook::velox::common {
 
@@ -446,6 +447,23 @@ TEST_P(CodecTest, streamingDecompressorReuse) {
       codec->makeCompressor(), decompressor, makeRandomData(200));
 }
 
+std::vector<TestParam> getGzipTestParams() {
+  std::vector<TestParam> params;
+  for (auto windowBits : {kGzipDefaultWindowBits, kGzip4KBWindowBits}) {
+    for (auto format : {GzipFormat::kGzip, GzipFormat::kDeflate}) {
+      params.emplace_back(
+          CompressionKind::CompressionKind_ZLIB,
+          std::make_shared<GzipCodecOptions>(
+              kUseDefaultCompressionLevel, format, windowBits));
+    }
+    params.emplace_back(
+        CompressionKind::CompressionKind_ZLIB,
+        std::make_shared<GzipCodecOptions>(
+            kUseDefaultCompressionLevel, GzipFormat::kZlib, windowBits));
+  }
+  return params;
+}
+
 INSTANTIATE_TEST_SUITE_P(
     TestLZ4Frame,
     CodecTest,
@@ -458,6 +476,10 @@ INSTANTIATE_TEST_SUITE_P(
     TestLZ4Hadoop,
     CodecTest,
     ::testing::Values(CompressionKind::CompressionKind_LZ4HADOOP));
+INSTANTIATE_TEST_SUITE_P(
+    TestGzip,
+    CodecTest,
+    ::testing::ValuesIn(getGzipTestParams()));
 
 TEST(CodecLZ4HadoopTest, compatibility) {
   // LZ4 Hadoop codec should be able to read back LZ4 raw blocks.
