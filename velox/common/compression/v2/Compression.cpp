@@ -23,6 +23,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/compression/v2/GzipCompression.h"
 #include "velox/common/compression/v2/Lz4Compression.h"
+#include "velox/common/compression/v2/LzoCompression.h"
 #include "velox/common/compression/v2/SnappyCompression.h"
 #include "velox/common/compression/v2/ZstdCompression.h"
 
@@ -114,6 +115,8 @@ std::unique_ptr<Codec> Codec::create(
 
   std::unique_ptr<Codec> codec;
   switch (kind) {
+    case CompressionKind::CompressionKind_NONE:
+      return nullptr;
     case CompressionKind::CompressionKind_LZ4:
       codec = makeLz4FrameCodec(compressionLevel);
       break;
@@ -147,12 +150,10 @@ std::unique_ptr<Codec> Codec::create(
     case CompressionKind::CompressionKind_SNAPPY:
       codec = makeSnappyCodec();
       break;
+    case CompressionKind::CompressionKind_LZO:
+      codec = makeLzoCodec();
     default:
       break;
-  }
-
-  if (codec == nullptr) {
-    VELOX_UNSUPPORTED("LZO codec not implemented");
   }
 
   codec->init();
@@ -177,8 +178,8 @@ bool Codec::isAvailable(CompressionKind kind) {
     case CompressionKind::CompressionKind_ZLIB:
     case CompressionKind::CompressionKind_ZSTD:
     case CompressionKind::CompressionKind_SNAPPY:
-      return true;
     case CompressionKind::CompressionKind_LZO:
+      return true;
     default:
       return false;
   }

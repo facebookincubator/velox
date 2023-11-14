@@ -22,11 +22,13 @@ add_library(
   GzipCompression.cpp
   HadoopCompressionFormat.cpp
   Lz4Compression.cpp
+  LzoCompression.cpp
   SnappyCompression.cpp
   ZstdCompression.cpp)
 
 target_link_libraries(
   velox_common_compression_v2
+  velox_common_compression
   velox_common_base
   Folly::folly
   Snappy::snappy

@@ -80,6 +80,8 @@ std::string compressionKindToString(CompressionKind kind) {
       return "lz4_raw";
     case CompressionKind_LZ4HADOOP:
       return "lz4_hadoop";
+    case CompressionKind_LZOHADOOP:
+      return "lzo_hadoop";
   }
   return folly::to<std::string>("unknown - ", kind);
 }
@@ -95,7 +97,8 @@ CompressionKind stringToCompressionKind(const std::string& kind) {
           {"lz4", CompressionKind_LZ4},
           {"gzip", CompressionKind_GZIP},
           {"lz4_raw", CompressionKind_LZ4RAW},
-          {"lz4_hadoop", CompressionKind_LZ4HADOOP}};
+          {"lz4_hadoop", CompressionKind_LZ4HADOOP},
+          {"lzo_hadoop", CompressionKind_LZOHADOOP}};
   auto iter = stringToCompressionKindMap.find(kind);
   if (iter != stringToCompressionKindMap.end()) {
     return iter->second;

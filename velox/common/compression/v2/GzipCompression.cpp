@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/Exceptions.h"
 #include "velox/common/compression/v2/GzipCompression.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::common {
 
@@ -520,4 +520,3 @@ std::unique_ptr<Codec> makeZlibCodec(
   return makeGzipCodec(compressionLevel, GzipFormat::kZlib, windowBits);
 }
 } // namespace facebook::velox::common
-
