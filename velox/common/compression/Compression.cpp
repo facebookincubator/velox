@@ -25,6 +25,9 @@
 #ifdef VELOX_ENABLE_COMPRESSION_ZLIB
 #include "velox/common/compression/ZlibCompression.h"
 #endif
+#ifdef VELOX_ENABLE_COMPRESSION_SNAPPY
+#include "velox/common/compression/SnappyCompression.h"
+#endif
 
 #include <folly/Conv.h>
 
@@ -116,7 +119,11 @@ Status Codec::init() {
 bool Codec::supportsGetUncompressedLength(CompressionKind kind) {
   switch (kind) {
 #ifdef VELOX_ENABLE_COMPRESSION_ZSTD
-    case CompressionKind::CompressionKind_ZSTD:
+    case CompressionKind_ZSTD:
+      return true;
+#endif
+#ifdef VELOX_ENABLE_COMPRESSION_SNAPPY
+    case CompressionKind_SNAPPY:
       return true;
 #endif
     default:
@@ -190,6 +197,11 @@ Expected<std::unique_ptr<Codec>> Codec::create(
       }
     } break;
 #endif
+#ifdef VELOX_ENABLE_COMPRESSION_SNAPPY
+    case CompressionKind_SNAPPY:
+      codec = makeSnappyCodec();
+      break;
+#endif
     default:
       break;
   }
@@ -217,12 +229,16 @@ bool Codec::isAvailable(CompressionKind kind) {
       return true;
 #endif
 #ifdef VELOX_ENABLE_COMPRESSION_ZSTD
-    case CompressionKind::CompressionKind_ZSTD:
+    case CompressionKind_ZSTD:
       return true;
 #endif
 #ifdef VELOX_ENABLE_COMPRESSION_ZLIB
     case CompressionKind_GZIP:
     case CompressionKind_ZLIB:
+      return true;
+#endif
+#ifdef VELOX_ENABLE_COMPRESSION_SNAPPY
+    case CompressionKind_SNAPPY:
       return true;
 #endif
     default:

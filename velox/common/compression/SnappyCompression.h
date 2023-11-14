@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <memory>
@@ -20,7 +21,6 @@
 
 namespace facebook::velox::common {
 
-std::unique_ptr<Codec> makeZstdCodec(
-    int32_t compressionLevel = kDefaultCompressionLevel);
+std::unique_ptr<Codec> makeSnappyCodec();
 
-}; // namespace facebook::velox::common
+} // namespace facebook::velox::common
