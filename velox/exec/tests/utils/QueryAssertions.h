@@ -201,6 +201,11 @@ bool assertEqualResults(
     const std::vector<RowVectorPtr>& expected,
     const std::vector<RowVectorPtr>& actual);
 
+/// Ensure both plans have the same results.
+bool assertEqualResults(
+    const core::PlanNodePtr& plan1,
+    const core::PlanNodePtr& plan2);
+
 bool assertEqualResults(
     const MaterializedRowMultiset& expectedRows,
     const TypePtr& expectedRowType,

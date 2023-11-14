@@ -423,6 +423,19 @@ TEST_F(PlanNodeSerdeTest, unnest) {
   plan =
       PlanBuilder().values({data}).unnest({"c0"}, {"c1"}, "ordinal").planNode();
   testSerde(plan);
+
+  // Plan with unnestArrayOfRows.
+  plan = PlanBuilder()
+             .values({data})
+             .unnest({"c0"}, {"c1"}, "ordinal", true)
+             .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data})
+             .unnest({"c0"}, {"c1"}, std::nullopt, true)
+             .planNode();
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, values) {
