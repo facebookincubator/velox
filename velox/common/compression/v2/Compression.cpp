@@ -23,6 +23,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/compression/v2/GzipCompression.h"
 #include "velox/common/compression/v2/Lz4Compression.h"
+#include "velox/common/compression/v2/SnappyCompression.h"
 #include "velox/common/compression/v2/ZstdCompression.h"
 
 namespace facebook::velox::common {
@@ -45,6 +46,7 @@ void Codec::init() {}
 bool Codec::supportsGetUncompressedLength(CompressionKind kind) {
   switch (kind) {
     case CompressionKind_ZSTD:
+    case CompressionKind_SNAPPY:
       return true;
     default:
       return false;
@@ -142,6 +144,9 @@ std::unique_ptr<Codec> Codec::create(
     case CompressionKind::CompressionKind_ZSTD:
       codec = makeZstdCodec(compressionLevel);
       break;
+    case CompressionKind::CompressionKind_SNAPPY:
+      codec = makeSnappyCodec();
+      break;
     default:
       break;
   }
@@ -171,8 +176,8 @@ bool Codec::isAvailable(CompressionKind kind) {
     case CompressionKind::CompressionKind_GZIP:
     case CompressionKind::CompressionKind_ZLIB:
     case CompressionKind::CompressionKind_ZSTD:
-      return true;
     case CompressionKind::CompressionKind_SNAPPY:
+      return true;
     case CompressionKind::CompressionKind_LZO:
     default:
       return false;

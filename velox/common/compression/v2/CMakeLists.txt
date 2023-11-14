@@ -22,6 +22,7 @@ add_library(
   GzipCompression.cpp
   HadoopCompressionFormat.cpp
   Lz4Compression.cpp
+  SnappyCompression.cpp
   ZstdCompression.cpp)
 
 target_link_libraries(
