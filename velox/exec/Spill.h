@@ -238,14 +238,13 @@ class SpillFileList {
   /// buffering and constructing the result data read from 'this'.
   ///
   /// When writing sorted spill runs, the caller is responsible for buffering
-  /// and sorting the data. write is called multiple times, followed by flush().
+  /// and sorting the data.
   SpillFileList(
       const RowTypePtr& type,
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
       const std::string& path,
       uint64_t targetFileSize,
-      uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Synchronized<SpillStats>* stats);
@@ -264,7 +263,7 @@ class SpillFileList {
   void finishFile();
 
   SpillFiles files() {
-    VELOX_CHECK(!files_.empty() || (batch_ != nullptr));
+    VELOX_CHECK(!files_.empty());
     finishFile();
     return std::move(files_);
   }
@@ -276,10 +275,6 @@ class SpillFileList {
  private:
   // Returns the current file to write to and creates one if needed.
   WriteFile& currentOutput();
-
-  // Writes data from 'batch_' to the current output file. Returns the actual
-  // written size.
-  uint64_t flush();
 
   // Invoked to update the number of spilled rows.
   void updateAppendStats(uint64_t numRows, uint64_t serializationTimeUs);
@@ -297,12 +292,10 @@ class SpillFileList {
   const std::vector<CompareFlags> sortCompareFlags_;
   const std::string path_;
   const uint64_t targetFileSize_;
-  const uint64_t writeBufferSize_;
   const common::CompressionKind compressionKind_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<SpillStats>* const stats_;
   uint32_t nextFileId_{0};
-  std::unique_ptr<VectorStreamGroup> batch_;
   SpillFiles files_;
 };
 
@@ -604,7 +597,6 @@ class SpillState {
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
       uint64_t targetFileSize,
-      uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Synchronized<SpillStats>* stats);
@@ -695,7 +687,6 @@ class SpillState {
   const int32_t numSortingKeys_;
   const std::vector<CompareFlags> sortCompareFlags_;
   const uint64_t targetFileSize_;
-  const uint64_t writeBufferSize_;
   const common::CompressionKind compressionKind_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<SpillStats>* const stats_;

@@ -970,7 +970,6 @@ void GroupingSet::spill() {
         rows->keyTypes().size(),
         std::vector<CompareFlags>(),
         spillConfig_->filePath,
-        spillConfig_->writeBufferSize,
         spillConfig_->compressionKind,
         memory::spillMemoryPool(),
         spillConfig_->executor);
@@ -994,7 +993,6 @@ void GroupingSet::spill(const RowContainerIterator& rowIterator) {
       rows,
       makeSpillType(),
       spillConfig_->filePath,
-      spillConfig_->writeBufferSize,
       spillConfig_->compressionKind,
       memory::spillMemoryPool(),
       spillConfig_->executor);

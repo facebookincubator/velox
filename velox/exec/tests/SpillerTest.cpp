@@ -197,7 +197,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         });
     sortSpillData(ascending);
 
-    setupSpiller(2'000'000, 0, 0, makeError);
+    setupSpiller(2'000'000, 0, makeError);
 
     // We spill spillPct% of the data in 10% increments.
     runSpill(makeError);
@@ -465,7 +465,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
 
   void setupSpiller(
       uint64_t targetFileSize,
-      uint64_t writeBufferSize,
       uint64_t minSpillRunSize,
       bool makeError) {
     stats_.clear();
@@ -478,7 +477,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           hashBits_,
           makeError ? "/bad/path" : tempDirPath_->path,
           targetFileSize,
-          writeBufferSize,
           compressionKind_,
           pool_.get(),
           executor());
@@ -494,7 +492,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           rowContainer_->keyTypes().size(),
           compareFlags_,
           makeError ? "/bad/path" : tempDirPath_->path,
-          writeBufferSize,
           compressionKind_,
           pool_.get(),
           executor());
@@ -504,7 +501,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           rowContainer_.get(),
           rowType_,
           makeError ? "/bad/path" : tempDirPath_->path,
-          writeBufferSize,
           compressionKind_,
           pool_.get(),
           executor());
@@ -517,7 +513,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           hashBits_,
           makeError ? "/bad/path" : tempDirPath_->path,
           targetFileSize,
-          writeBufferSize,
           compressionKind_,
           pool_.get(),
           executor());
@@ -713,7 +708,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           1,
           nullptr,
           {});
-      setupSpiller(targetFileSize, 0, 0, false);
+      setupSpiller(targetFileSize, 0, false);
       // Can't append without marking a partition as spilling.
       VELOX_ASSERT_THROW(spiller_->spill(0, rowVector_), "");
       // Can't create sorted stream reader from non-sorted spiller.
@@ -1084,7 +1079,7 @@ TEST_P(AllTypes, nonSortedSpillFunctions) {
       type_ == Spiller::Type::kAggregateOutput) {
     setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
     sortSpillData();
-    setupSpiller(100'000, 0, 0, false);
+    setupSpiller(100'000, 0, false);
     {
       RowVectorPtr dummyVector;
       VELOX_ASSERT_THROW(
@@ -1130,7 +1125,7 @@ TEST_P(HashJoinBuildOnly, spillPartition) {
   std::vector<std::vector<RowVectorPtr>> vectorsByPartition(numPartitions_);
   HashPartitionFunction spillHashFunction(hashBits_, rowType_, keyChannels_);
   splitByPartition(rowVector_, spillHashFunction, vectorsByPartition);
-  setupSpiller(100'000, 0, 0, false);
+  setupSpiller(100'000, 0, false);
   spiller_->spill();
   rowContainer_->clear();
   spiller_->spill();
@@ -1139,65 +1134,50 @@ TEST_P(HashJoinBuildOnly, spillPartition) {
   VELOX_ASSERT_THROW(spiller_->spill(RowContainerIterator{}), "");
 }
 
-TEST_P(HashJoinBuildOnly, writeBufferSize) {
-  std::vector<uint64_t> writeBufferSizes = {0, 4'000'000'000};
-  for (const auto writeBufferSize : writeBufferSizes) {
-    SCOPED_TRACE(
-        fmt::format("writeBufferSize {}", succinctBytes(writeBufferSize)));
-    setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
-    setupSpiller(4'000'000'000, writeBufferSize, 0, false);
-    spiller_->spill();
-    ASSERT_TRUE(spiller_->isAllSpilled());
-    const int numDiskWrites = spiller_->stats().spillDiskWrites;
-    if (writeBufferSize != 0) {
-      ASSERT_EQ(numDiskWrites, 0);
-    }
+TEST_P(HashJoinBuildOnly, writeThrough) {
+  setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
+  setupSpiller(4'000'000'000, 0, false);
+  spiller_->spill();
+  ASSERT_TRUE(spiller_->isAllSpilled());
+  const int numDiskWrites = spiller_->stats().spillDiskWrites;
+  HashPartitionFunction spillHashFunction(hashBits_, rowType_, keyChannels_);
 
-    HashPartitionFunction spillHashFunction(hashBits_, rowType_, keyChannels_);
+  VectorFuzzer::Options options;
+  options.vectorSize = 100;
+  VectorFuzzer fuzzer(options, pool_.get());
 
-    VectorFuzzer::Options options;
-    options.vectorSize = 100;
-    VectorFuzzer fuzzer(options, pool_.get());
-
-    // Tracks the partition has split spill vector input.
-    int spillInputVectorCount{0};
-    const int numBatches = 20;
-    for (int i = 0; i < numBatches; ++i) {
-      const auto inputVector = fuzzer.fuzzRow(rowType_);
-      std::vector<std::vector<RowVectorPtr>> splitVectors(numPartitions_);
-      splitByPartition(inputVector, spillHashFunction, splitVectors);
-      for (int partition = 0; partition < numPartitions_; ++partition) {
-        const auto& splitVector = splitVectors[partition];
-        if (!splitVector.empty()) {
-          spiller_->spill(partition, splitVector.back());
-          ++spillInputVectorCount;
-        }
+  // Tracks the partition has split spill vector input.
+  int spillInputVectorCount{0};
+  const int numBatches = 20;
+  for (int i = 0; i < numBatches; ++i) {
+    const auto inputVector = fuzzer.fuzzRow(rowType_);
+    std::vector<std::vector<RowVectorPtr>> splitVectors(numPartitions_);
+    splitByPartition(inputVector, spillHashFunction, splitVectors);
+    for (int partition = 0; partition < numPartitions_; ++partition) {
+      const auto& splitVector = splitVectors[partition];
+      if (!splitVector.empty()) {
+        spiller_->spill(partition, splitVector.back());
+        ++spillInputVectorCount;
       }
-      // Accumulate all the spilled vectors together.
-      rowVector_->append(inputVector.get());
     }
-    const int numNonEmptySpilledPartitions =
-        spiller_->state().testingNonEmptySpilledPartitionSet().size();
-
-    std::vector<std::vector<RowVectorPtr>> expectedVectorByPartition(
-        numPartitions_);
-    splitByPartition(rowVector_, spillHashFunction, expectedVectorByPartition);
-    std::vector<uint32_t> spillPartitionNums(numPartitions_);
-    std::iota(spillPartitionNums.begin(), spillPartitionNums.end(), 0);
-    SpillPartitionNumSet spillPartitionSet(
-        spillPartitionNums.begin(), spillPartitionNums.end());
-    verifyNonSortedSpillData(spillPartitionSet, expectedVectorByPartition);
-
-    const auto stats = spiller_->stats();
-    if (writeBufferSize > 0) {
-      // With disk write buffering, all the input merged into one disk write per
-      // partition.
-      ASSERT_EQ(stats.spillDiskWrites, numNonEmptySpilledPartitions);
-    } else {
-      // By disable write buffering, then each spill input causes a disk write.
-      ASSERT_EQ(stats.spillDiskWrites, numDiskWrites + spillInputVectorCount);
-    }
+    // Accumulate all the spilled vectors together.
+    rowVector_->append(inputVector.get());
   }
+  const int numNonEmptySpilledPartitions =
+      spiller_->state().testingNonEmptySpilledPartitionSet().size();
+
+  std::vector<std::vector<RowVectorPtr>> expectedVectorByPartition(
+      numPartitions_);
+  splitByPartition(rowVector_, spillHashFunction, expectedVectorByPartition);
+  std::vector<uint32_t> spillPartitionNums(numPartitions_);
+  std::iota(spillPartitionNums.begin(), spillPartitionNums.end(), 0);
+  SpillPartitionNumSet spillPartitionSet(
+      spillPartitionNums.begin(), spillPartitionNums.end());
+  verifyNonSortedSpillData(spillPartitionSet, expectedVectorByPartition);
+
+  const auto stats = spiller_->stats();
+  // Each spill input causes a disk write.
+  ASSERT_EQ(stats.spillDiskWrites, numDiskWrites + spillInputVectorCount);
 }
 
 class AggregationOutputOnly : public SpillerTest,
@@ -1233,7 +1213,7 @@ TEST_P(AggregationOutputOnly, basic) {
     setupSpillData(rowType_, numKeys_, numRows, 0);
     sortSpillData();
     // NOTE: target file size is ignored by aggregation output spiller type.
-    setupSpiller(0, 1'000'000, 0, false);
+    setupSpiller(0, 0, false);
     RowContainerIterator rowIter;
     std::vector<char*> rows(numRows);
     int numListedRows{0};

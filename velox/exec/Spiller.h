@@ -52,7 +52,6 @@ class Spiller {
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
       const std::string& path,
-      uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor);
@@ -62,7 +61,6 @@ class Spiller {
       RowContainer* container,
       RowTypePtr rowType,
       const std::string& path,
-      uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor);
@@ -73,7 +71,6 @@ class Spiller {
       HashBitRange bits,
       const std::string& path,
       uint64_t targetFileSize,
-      uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor);
@@ -85,7 +82,6 @@ class Spiller {
       HashBitRange bits,
       const std::string& path,
       uint64_t targetFileSize,
-      uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor);
@@ -191,7 +187,6 @@ class Spiller {
       const std::vector<CompareFlags>& sortCompareFlags,
       const std::string& path,
       uint64_t targetFileSize,
-      uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor);

@@ -153,7 +153,6 @@ SpillFileList::SpillFileList(
     const std::vector<CompareFlags>& sortCompareFlags,
     const std::string& path,
     uint64_t targetFileSize,
-    uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Synchronized<SpillStats>* stats)
@@ -162,7 +161,6 @@ SpillFileList::SpillFileList(
       sortCompareFlags_(sortCompareFlags),
       path_(path),
       targetFileSize_(targetFileSize),
-      writeBufferSize_(writeBufferSize),
       compressionKind_(compressionKind),
       pool_(pool),
       stats_(stats) {
@@ -191,18 +189,33 @@ WriteFile& SpillFileList::currentOutput() {
   return files_.back()->output();
 }
 
-uint64_t SpillFileList::flush() {
+uint64_t SpillFileList::write(
+    const RowVectorPtr& rows,
+    const folly::Range<IndexRange*>& indices) {
+  uint64_t timeUs{0};
+  std::unique_ptr<VectorStreamGroup> streamGroup;
+  {
+    MicrosecondTimer timer(&timeUs);
+    serializer::presto::PrestoVectorSerde::PrestoOptions options = {
+        kDefaultUseLosslessTimestamp, compressionKind_};
+    streamGroup = std::make_unique<VectorStreamGroup>(pool_);
+    streamGroup->createStreamTree(
+        std::static_pointer_cast<const RowType>(rows->type()), 1000, &options);
+    streamGroup->append(rows, indices);
+  }
+  updateAppendStats(rows->size(), timeUs);
+
+  // Write to backed file
   uint64_t writtenBytes = 0;
-  if (batch_) {
+  if (streamGroup) {
     IOBufOutputStream out(
-        *pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
+        *pool_, nullptr, std::max<int64_t>(64 * 1024, streamGroup->size()));
     uint64_t flushTimeUs{0};
     {
       MicrosecondTimer timer(&flushTimeUs);
-      batch_->flush(&out);
+      streamGroup->flush(&out);
     }
 
-    batch_.reset();
     auto iobuf = out.getIOBuf();
     auto& file = currentOutput();
     uint64_t writeTimeUs{0};
@@ -219,30 +232,6 @@ uint64_t SpillFileList::flush() {
     updateWriteStats(numDiskWrites, writtenBytes, flushTimeUs, writeTimeUs);
   }
   return writtenBytes;
-}
-
-uint64_t SpillFileList::write(
-    const RowVectorPtr& rows,
-    const folly::Range<IndexRange*>& indices) {
-  uint64_t timeUs{0};
-  {
-    MicrosecondTimer timer(&timeUs);
-    if (batch_ == nullptr) {
-      serializer::presto::PrestoVectorSerde::PrestoOptions options = {
-          kDefaultUseLosslessTimestamp, compressionKind_};
-      batch_ = std::make_unique<VectorStreamGroup>(pool_);
-      batch_->createStreamTree(
-          std::static_pointer_cast<const RowType>(rows->type()),
-          1000,
-          &options);
-    }
-    batch_->append(rows, indices);
-  }
-  updateAppendStats(rows->size(), timeUs);
-  if (batch_->size() < writeBufferSize_) {
-    return 0;
-  }
-  return flush();
 }
 
 void SpillFileList::updateAppendStats(
@@ -276,7 +265,6 @@ void SpillFileList::updateSpilledFiles(uint64_t fileSize) {
 }
 
 void SpillFileList::finishFile() {
-  flush();
   if (files_.empty()) {
     return;
   }
@@ -308,7 +296,6 @@ SpillState::SpillState(
     int32_t numSortingKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
     uint64_t targetFileSize,
-    uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Synchronized<SpillStats>* stats)
@@ -317,7 +304,6 @@ SpillState::SpillState(
       numSortingKeys_(numSortingKeys),
       sortCompareFlags_(sortCompareFlags),
       targetFileSize_(targetFileSize),
-      writeBufferSize_(writeBufferSize),
       compressionKind_(compressionKind),
       pool_(pool),
       stats_(stats),
@@ -355,7 +341,6 @@ uint64_t SpillState::appendToPartition(
         sortCompareFlags_,
         fmt::format("{}-spill-{}", path_, partition),
         targetFileSize_,
-        writeBufferSize_,
         compressionKind_,
         pool_,
         stats_);

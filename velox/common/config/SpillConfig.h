@@ -26,7 +26,6 @@ struct SpillConfig {
   SpillConfig(
       const std::string& _filePath,
       uint64_t _maxFileSize,
-      uint64_t _writeBufferSize,
       uint64_t _minSpillRunSize,
       folly::Executor* _executor,
       int32_t _minSpillableReservationPct,
@@ -54,10 +53,6 @@ struct SpillConfig {
   /// The max spill file size. If it is zero, there is no limit on the spill
   /// file size.
   uint64_t maxFileSize;
-
-  /// Specifies the size to buffer the serialized spill data before write to
-  /// storage system for io efficiency.
-  uint64_t writeBufferSize;
 
   /// The min spill run size (bytes) limit used to select partitions for
   /// spilling. The spiller tries to spill a previously spilled partitions if

@@ -20,7 +20,6 @@ namespace facebook::velox::common {
 SpillConfig::SpillConfig(
     const std::string& _filePath,
     uint64_t _maxFileSize,
-    uint64_t _writeBufferSize,
     uint64_t _minSpillRunSize,
     folly::Executor* _executor,
     int32_t _minSpillableReservationPct,
@@ -35,7 +34,6 @@ SpillConfig::SpillConfig(
       maxFileSize(
           _maxFileSize == 0 ? std::numeric_limits<int64_t>::max()
                             : _maxFileSize),
-      writeBufferSize(_writeBufferSize),
       minSpillRunSize(_minSpillRunSize),
       executor(_executor),
       minSpillableReservationPct(_minSpillableReservationPct),

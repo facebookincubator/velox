@@ -393,7 +393,6 @@ void RowNumber::setupHashTableSpiller() {
       std::move(hashBits),
       spillConfig.filePath,
       spillConfig.maxFileSize,
-      spillConfig.writeBufferSize,
       spillConfig.compressionKind,
       memory::spillMemoryPool(),
       spillConfig.executor);
@@ -410,7 +409,6 @@ void RowNumber::setupInputSpiller() {
       hashBits,
       spillConfig.filePath,
       spillConfig.maxFileSize,
-      spillConfig.writeBufferSize,
       spillConfig.compressionKind,
       memory::spillMemoryPool(),
       spillConfig.executor);

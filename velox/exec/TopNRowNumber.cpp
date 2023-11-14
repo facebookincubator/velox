@@ -740,7 +740,6 @@ void TopNRowNumber::setupSpiller() {
       spillCompareFlags_.size(),
       spillCompareFlags_,
       spillConfig_->filePath,
-      spillConfig_->writeBufferSize,
       spillConfig_->compressionKind,
       memory::spillMemoryPool(),
       spillConfig_->executor);

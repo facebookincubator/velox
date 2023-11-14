@@ -41,7 +41,6 @@ Spiller::Spiller(
     int32_t numSortingKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
     const std::string& path,
-    uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor)
@@ -54,7 +53,6 @@ Spiller::Spiller(
           sortCompareFlags,
           path,
           std::numeric_limits<uint64_t>::max(),
-          writeBufferSize,
           compressionKind,
           pool,
           executor) {
@@ -71,7 +69,6 @@ Spiller::Spiller(
     RowContainer* container,
     RowTypePtr rowType,
     const std::string& path,
-    uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor)
@@ -84,7 +81,6 @@ Spiller::Spiller(
           {},
           path,
           std::numeric_limits<uint64_t>::max(),
-          writeBufferSize,
           compressionKind,
           pool,
           executor) {
@@ -103,7 +99,6 @@ Spiller::Spiller(
     HashBitRange bits,
     const std::string& path,
     uint64_t targetFileSize,
-    uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor)
@@ -116,7 +111,6 @@ Spiller::Spiller(
           {},
           path,
           targetFileSize,
-          writeBufferSize,
           compressionKind,
           pool,
           executor) {
@@ -134,7 +128,6 @@ Spiller::Spiller(
     HashBitRange bits,
     const std::string& path,
     uint64_t targetFileSize,
-    uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor)
@@ -147,7 +140,6 @@ Spiller::Spiller(
           {},
           path,
           targetFileSize,
-          writeBufferSize,
           compressionKind,
           pool,
           executor) {
@@ -167,7 +159,6 @@ Spiller::Spiller(
     const std::vector<CompareFlags>& sortCompareFlags,
     const std::string& path,
     uint64_t targetFileSize,
-    uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor)
@@ -183,7 +174,6 @@ Spiller::Spiller(
           numSortingKeys,
           sortCompareFlags,
           targetFileSize,
-          writeBufferSize,
           compressionKind,
           pool_,
           &stats_) {

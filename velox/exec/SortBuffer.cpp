@@ -184,7 +184,6 @@ void SortBuffer::spill() {
         data_->keyTypes().size(),
         sortCompareFlags_,
         spillConfig_->filePath,
-        spillConfig_->writeBufferSize,
         spillConfig_->compressionKind,
         memory::spillMemoryPool(),
         spillConfig_->executor);
