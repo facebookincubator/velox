@@ -54,9 +54,7 @@ struct TestParams {
 std::vector<TestParams> generateLz4TestParams() {
   std::vector<TestParams> params;
   for (auto lz4Type :
-       {Lz4CodecOptions::kLz4Raw,
-        Lz4CodecOptions::kLz4Frame,
-        Lz4CodecOptions::kLz4Hadoop}) {
+       {Lz4Type::kLz4Raw, Lz4Type::kLz4Frame, Lz4Type::kLz4Hadoop}) {
     params.emplace_back(
         CompressionKind_LZ4, std::make_shared<Lz4CodecOptions>(lz4Type));
   }
@@ -544,11 +542,11 @@ TEST(CodecLZ4HadoopTest, compatibility) {
   // LZ4 Hadoop codec should be able to read back LZ4 raw blocks.
   auto c1 = Codec::create(
                 CompressionKind::CompressionKind_LZ4,
-                Lz4CodecOptions{Lz4CodecOptions::kLz4Raw})
+                Lz4CodecOptions{Lz4Type::kLz4Raw})
                 .thenOrThrow([](auto codec) { return codec; }, throwsNotOk);
   auto c2 = Codec::create(
                 CompressionKind::CompressionKind_LZ4,
-                Lz4CodecOptions{Lz4CodecOptions::kLz4Hadoop})
+                Lz4CodecOptions{Lz4Type::kLz4Hadoop})
                 .thenOrThrow([](auto codec) { return codec; }, throwsNotOk);
 
   for (auto dataSize : {0, 10, 10000, 100000}) {
@@ -580,7 +578,7 @@ TEST(CodecTestInvalid, invalidZlibWindowBit) {
                 invalidWindowBits})
             .error(),
         StatusCode::kUserError,
-        "gzip window bits should be between 9 and 15");
+        "zlib window bits should be between 9 and 15");
   }
 }
 } // namespace facebook::velox::common

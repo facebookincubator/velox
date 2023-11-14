@@ -37,12 +37,6 @@ class SnappyCodec : public Codec {
       uint8_t* output,
       uint64_t outputLength) override;
 
-  Expected<std::shared_ptr<StreamingCompressor>> makeStreamingCompressor()
-      override;
-
-  Expected<std::shared_ptr<StreamingDecompressor>> makeStreamingDecompressor()
-      override;
-
   CompressionKind compressionKind() const override;
 
   int32_t minCompressionLevel() const override;
@@ -100,18 +94,6 @@ Expected<uint64_t> SnappyCodec::decompress(
           reinterpret_cast<char*>(output)),
       Status::IOError("Corrupt snappy compressed data."));
   return static_cast<uint64_t>(decompressedSize);
-}
-
-Expected<std::shared_ptr<StreamingCompressor>>
-SnappyCodec::makeStreamingCompressor() {
-  return folly::makeUnexpected(
-      Status::NotImplemented("Streaming compression unsupported with Snappy"));
-}
-
-Expected<std::shared_ptr<StreamingDecompressor>>
-SnappyCodec::makeStreamingDecompressor() {
-  return folly::makeUnexpected(Status::NotImplemented(
-      "Streaming decompression unsupported with Snappy"));
 }
 
 CompressionKind SnappyCodec::compressionKind() const {

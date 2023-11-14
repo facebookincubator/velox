@@ -28,6 +28,9 @@
 #ifdef VELOX_ENABLE_COMPRESSION_SNAPPY
 #include "velox/common/compression/SnappyCompression.h"
 #endif
+#ifdef VELOX_ENABLE_COMPRESSION_LZO
+#include "velox/common/compression/LzoCompression.h"
+#endif
 
 #include <folly/Conv.h>
 
@@ -164,13 +167,13 @@ Expected<std::unique_ptr<Codec>> Codec::create(
     case CompressionKind_LZ4: {
       if (auto options = dynamic_cast<const Lz4CodecOptions*>(&codecOptions)) {
         switch (options->lz4Type) {
-          case Lz4CodecOptions::kLz4Frame:
+          case Lz4Type::kLz4Frame:
             codec = makeLz4FrameCodec(compressionLevel);
             break;
-          case Lz4CodecOptions::kLz4Raw:
+          case Lz4Type::kLz4Raw:
             codec = makeLz4RawCodec(compressionLevel);
             break;
-          case Lz4CodecOptions::kLz4Hadoop:
+          case Lz4Type::kLz4Hadoop:
             codec = makeLz4HadoopCodec();
             break;
         }
@@ -201,6 +204,22 @@ Expected<std::unique_ptr<Codec>> Codec::create(
     case CompressionKind_SNAPPY:
       codec = makeSnappyCodec();
       break;
+#endif
+#ifdef VELOX_ENABLE_COMPRESSION_LZO
+    case CompressionKind_LZO: {
+      if (auto options = dynamic_cast<const LzoCodecOptions*>(&codecOptions)) {
+        switch (options->lzoType) {
+          case LzoType::kLzo:
+            codec = makeLzoCodec();
+            break;
+          case LzoType::kLzoHadoop:
+            codec = makeLzoHadoopCodec();
+            break;
+        }
+      } else {
+        codec = makeLzoCodec();
+      }
+    } break;
 #endif
     default:
       break;
@@ -239,6 +258,10 @@ bool Codec::isAvailable(CompressionKind kind) {
 #endif
 #ifdef VELOX_ENABLE_COMPRESSION_SNAPPY
     case CompressionKind_SNAPPY:
+      return true;
+#endif
+#ifdef VELOX_ENABLE_COMPRESSION_LZO
+    case CompressionKind_LZO:
       return true;
 #endif
     default:

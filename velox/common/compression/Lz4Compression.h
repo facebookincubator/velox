@@ -25,10 +25,10 @@
 
 namespace facebook::velox::common {
 
-struct Lz4CodecOptions : CodecOptions {
-  enum Lz4Type { kLz4Frame, kLz4Raw, kLz4Hadoop };
+enum class Lz4Type { kLz4Frame, kLz4Raw, kLz4Hadoop };
 
-  Lz4CodecOptions(
+struct Lz4CodecOptions : CodecOptions {
+  explicit Lz4CodecOptions(
       Lz4Type lz4Type,
       int32_t compressionLevel = kDefaultCompressionLevel)
       : CodecOptions(compressionLevel), lz4Type(lz4Type) {}

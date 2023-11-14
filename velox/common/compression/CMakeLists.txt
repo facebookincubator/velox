@@ -30,8 +30,7 @@ if(VELOX_ENABLE_COMPRESSION_LZ4)
 endif()
 
 if(VELOX_ENABLE_COMPRESSION_ZSTD)
-  velox_sources(velox_common_compression PRIVATE ZstdCompression.cpp
-                HadoopCompressionFormat.cpp)
+  velox_sources(velox_common_compression PRIVATE ZstdCompression.cpp)
   velox_link_libraries(velox_common_compression PUBLIC zstd::zstd)
   velox_compile_definitions(velox_common_compression
                             PRIVATE VELOX_ENABLE_COMPRESSION_ZSTD)
@@ -49,4 +48,14 @@ if(VELOX_ENABLE_COMPRESSION_SNAPPY)
   velox_link_libraries(velox_common_compression PUBLIC Snappy::snappy)
   velox_compile_definitions(velox_common_compression
                             PRIVATE VELOX_ENABLE_COMPRESSION_SNAPPY)
+endif()
+
+if(VELOX_ENABLE_COMPRESSION_LZO)
+  velox_sources(velox_common_compression PRIVATE LzoCompression.cpp)
+  velox_compile_definitions(velox_common_compression
+                            PRIVATE VELOX_ENABLE_COMPRESSION_LZO)
+endif()
+
+if(VELOX_ENABLE_COMPRESSION_LZ4 OR VELOX_ENABLE_COMPRESSION_LZO)
+  velox_sources(velox_common_compression PRIVATE HadoopCompressionFormat.cpp)
 endif()
