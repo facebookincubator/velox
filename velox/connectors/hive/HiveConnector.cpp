@@ -62,11 +62,12 @@ HiveConnector::HiveConnector(
     folly::Executor* FOLLY_NULLABLE executor)
     : Connector(id, properties),
       fileHandleFactory_(
-          std::make_unique<
-              SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(
-              numCachedFileHandles(properties.get())),
-          std::make_unique<FileHandleGenerator>(properties),
-          isFileHandleCacheEnabled(properties.get())),
+          isFileHandleCacheEnabled(properties.get())
+              ? std::make_unique<
+                    SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(
+                    numCachedFileHandles(properties.get()))
+              : nullptr,
+          std::make_unique<FileHandleGenerator>(properties)),
       executor_(executor) {
   if (isFileHandleCacheEnabled(properties.get())) {
     LOG(INFO) << "Hive connector " << connectorId()

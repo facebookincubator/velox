@@ -39,8 +39,7 @@ TEST(FileHandleTest, localFile) {
   FileHandleFactory factory(
       std::make_unique<
           SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(1000),
-      std::make_unique<FileHandleGenerator>(),
-      true);
+      std::make_unique<FileHandleGenerator>());
   auto fileHandle = factory.generate(filename).second;
   ASSERT_EQ(fileHandle->file->size(), 3);
   char buffer[3];

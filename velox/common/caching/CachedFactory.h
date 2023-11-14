@@ -52,13 +52,12 @@ class CachedFactory {
   // i.e. the cache is large compared to the size of the elements and the number
   // of elements that are pinned. Everything should still work if this is not
   // true, but performance will suffer.
+  // If 'cache' is nullptr, this means the cache is disabled. 'generator' is
+  // invoked directly in 'generate' function.
   CachedFactory(
       std::unique_ptr<SimpleLRUCache<Key, Value>> cache,
-      std::unique_ptr<Generator> generator,
-      const bool cacheEnabled)
-      : cache_(std::move(cache)),
-        generator_(std::move(generator)),
-        cacheEnabled_{cacheEnabled} {}
+      std::unique_ptr<Generator> generator)
+      : cache_(std::move(cache)), generator_(std::move(generator)) {}
 
   // Returns the generator's output on the given key. If the output is
   // in the cache, returns immediately. Otherwise, blocks until the output
@@ -78,24 +77,40 @@ class CachedFactory {
 
   // Total size of elements cached (NOT the maximum size/limit).
   int64_t currentSize() const {
-    return cache_->currentSize();
+    if (cache_) {
+      return cache_->currentSize();
+    } else {
+      return 0;
+    }
   }
 
   // The maximum size of the underlying cache.
   int64_t maxSize() const {
-    return cache_->maxSize();
+    if (cache_) {
+      return cache_->maxSize();
+    } else {
+      return 0;
+    }
   }
 
   SimpleLRUCacheStats cacheStats() {
-    std::lock_guard l(cacheMu_);
-    return cache_->getStats();
+    if (cache_) {
+      std::lock_guard l(cacheMu_);
+      return cache_->getStats();
+    } else {
+      return {0, 0, 0, 0};
+    }
   }
 
   // Clear the cache and return the current cache status
   SimpleLRUCacheStats clearCache() {
-    std::lock_guard l(cacheMu_);
-    cache_->clear();
-    return cache_->getStats();
+    if (cache_) {
+      std::lock_guard l(cacheMu_);
+      cache_->clear();
+      return cache_->getStats();
+    } else {
+      return {0, 0, 0, 0};
+    }
   }
 
   // Move allowed, copy disallowed.
@@ -107,7 +122,6 @@ class CachedFactory {
  private:
   std::unique_ptr<SimpleLRUCache<Key, Value>> cache_;
   std::unique_ptr<Generator> generator_;
-  const bool cacheEnabled_;
   folly::F14FastSet<Key> pending_;
 
   std::mutex cacheMu_;
@@ -123,7 +137,7 @@ template <typename Key, typename Value, typename Generator>
 std::pair<bool, Value> CachedFactory<Key, Value, Generator>::generate(
     const Key& key) {
   process::TraceContext trace("CachedFactory::generate");
-  if (!cacheEnabled_) {
+  if (!cache_) {
     return std::make_pair(false, (*generator_)(key));
   }
 
@@ -184,13 +198,15 @@ void CachedFactory<Key, Value, Generator>::retrieveCached(
     const std::vector<Key>& keys,
     std::vector<std::pair<Key, Value>>* cached,
     std::vector<Key>* missing) {
-  std::lock_guard<std::mutex> cache_lock(cacheMu_);
-  for (const Key& key : keys) {
-    auto value = cache_->get(key);
-    if (value) {
-      cached->emplace_back(key, value.value());
-    } else {
-      missing->push_back(key);
+  if (cache_) {
+    std::lock_guard<std::mutex> cache_lock(cacheMu_);
+    for (const Key& key : keys) {
+      auto value = cache_->get(key);
+      if (value) {
+        cached->emplace_back(key, value.value());
+      } else {
+        missing->push_back(key);
+      }
     }
   }
 }

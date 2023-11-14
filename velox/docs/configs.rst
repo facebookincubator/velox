@@ -397,9 +397,8 @@ Hive Connector
    * - file_handle_cache_enabled
      - bool
      - true
-     - False if disabling the file handle cache. The properties of files, including file length, are stored in file
-       handles. The file handle cache can be disabled to prevent outdated file properties from causing reading
-       errors when file updates are made.
+     - Enables caching of file handles if true. Disabled caching if false. File handle cache should be
+       disabled if files are not immutable, i.e. file content may change while file path stays the same.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
