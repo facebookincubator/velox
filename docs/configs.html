@@ -565,6 +565,12 @@ the input column name and filter is also lower case to achive case-insensitive r
 <td><p>Maximum number of entries in the file handle cache. The value must be non-negative. Zero value
 indicates infinite cache capacity.</p></td>
 </tr>
+<tr class="row-odd"><td><p>file_handle_cache_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Enables caching of file handles if true. Disables caching if false. File handle cache should be
+disabled if files are not immutable, i.e. file content may change while file path stays the same.</p></td>
+</tr>
 </tbody>
 </table>
 <section id="amazon-s3-configuration">
