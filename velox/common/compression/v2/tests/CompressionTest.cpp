@@ -480,6 +480,10 @@ INSTANTIATE_TEST_SUITE_P(
     TestGzip,
     CodecTest,
     ::testing::ValuesIn(getGzipTestParams()));
+INSTANTIATE_TEST_SUITE_P(
+    TestZstd,
+    CodecTest,
+    ::testing::Values(CompressionKind::CompressionKind_ZSTD));
 
 TEST(CodecLZ4HadoopTest, compatibility) {
   // LZ4 Hadoop codec should be able to read back LZ4 raw blocks.

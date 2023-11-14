@@ -23,6 +23,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/compression/v2/GzipCompression.h"
 #include "velox/common/compression/v2/Lz4Compression.h"
+#include "velox/common/compression/v2/ZstdCompression.h"
 
 namespace facebook::velox::common {
 
@@ -43,6 +44,8 @@ void Codec::init() {}
 
 bool Codec::supportsGetUncompressedLength(CompressionKind kind) {
   switch (kind) {
+    case CompressionKind_ZSTD:
+      return true;
     default:
       return false;
   }
@@ -54,6 +57,7 @@ bool Codec::supportsCompressionLevel(CompressionKind kind) {
     case CompressionKind::CompressionKind_LZ4RAW:
     case CompressionKind::CompressionKind_GZIP:
     case CompressionKind::CompressionKind_ZLIB:
+    case CompressionKind::CompressionKind_ZSTD:
       return true;
     default:
       return false;
@@ -65,6 +69,7 @@ bool Codec::supportsStreamingCompression(CompressionKind kind) {
     case CompressionKind::CompressionKind_LZ4:
     case CompressionKind::CompressionKind_GZIP:
     case CompressionKind::CompressionKind_ZLIB:
+    case CompressionKind::CompressionKind_ZSTD:
       return true;
     default:
       return false;
@@ -134,6 +139,9 @@ std::unique_ptr<Codec> Codec::create(
       codec = makeZlibCodec(compressionLevel);
       break;
     }
+    case CompressionKind::CompressionKind_ZSTD:
+      codec = makeZstdCodec(compressionLevel);
+      break;
     default:
       break;
   }
@@ -162,9 +170,9 @@ bool Codec::isAvailable(CompressionKind kind) {
     case CompressionKind::CompressionKind_LZ4HADOOP:
     case CompressionKind::CompressionKind_GZIP:
     case CompressionKind::CompressionKind_ZLIB:
+    case CompressionKind::CompressionKind_ZSTD:
       return true;
     case CompressionKind::CompressionKind_SNAPPY:
-    case CompressionKind::CompressionKind_ZSTD:
     case CompressionKind::CompressionKind_LZO:
     default:
       return false;

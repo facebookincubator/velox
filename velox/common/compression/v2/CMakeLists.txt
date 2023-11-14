@@ -21,7 +21,8 @@ add_library(
   Compression.cpp
   GzipCompression.cpp
   HadoopCompressionFormat.cpp
-  Lz4Compression.cpp)
+  Lz4Compression.cpp
+  ZstdCompression.cpp)
 
 target_link_libraries(
   velox_common_compression_v2
