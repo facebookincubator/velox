@@ -465,7 +465,45 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   };
   using util::fromTimestampString;
 
+  EXPECT_EQ("1969", dateFormat(fromTimestampString("1969-12-31"), "y"));
   EXPECT_EQ("1970", dateFormat(fromTimestampString("1970-01-01"), "y"));
+  EXPECT_EQ("2020", dateFormat(fromTimestampString("2020-08-21"), "y"));
+  EXPECT_EQ("8", dateFormat(fromTimestampString("2020-08-21"), "M"));
+  EXPECT_EQ("08", dateFormat(fromTimestampString("2020-08-21"), "MM"));
+  EXPECT_EQ("08-21", dateFormat(fromTimestampString("2020-08-21"), "MM-dd"));
+  EXPECT_EQ(
+      "08/21/2020",
+      dateFormat(fromTimestampString("2020-08-21"), "MM/dd/yyyy"));
+  EXPECT_EQ(
+      "2020-08-21",
+      dateFormat(fromTimestampString("2020-08-21 12:21:50"), "yyyy-MM-dd"));
+  EXPECT_EQ(
+      "2020-08-21 00:00:00",
+      dateFormat(fromTimestampString("2020-08-21"), "yyyy-MM-dd HH:mm:ss"));
+  EXPECT_EQ(
+      "2020-08-21 12:31:50",
+      dateFormat(
+          fromTimestampString("2020-08-21 12:31:50"), "yyyy-MM-dd HH:mm:ss"));
+  EXPECT_EQ(
+      "2020-08-21 12:31",
+      dateFormat(
+          fromTimestampString("2020-08-21 12:31:50"), "yyyy-MM-dd HH:mm"));
+  EXPECT_EQ(
+      "1969-12-31",
+      dateFormat(fromTimestampString("1969-12-31 23:59:59"), "yyyy-MM-dd"));
+
+  // 8 hours ahead of UTC.
+  setQueryTimeZone("Asia/Shanghai");
+  EXPECT_EQ(
+      "2020-08-21 08:00:00",
+      dateFormat(fromTimestampString("2020-08-21"), "yyyy-MM-dd HH:mm:ss"));
+  EXPECT_EQ(
+      "2020-08-22 07:00:00",
+      dateFormat(
+          fromTimestampString("2020-08-21 23:00:00"), "yyyy-MM-dd HH:mm:ss"));
+  EXPECT_EQ(
+      "1970-01-01",
+      dateFormat(fromTimestampString("1969-12-31 23:59:59"), "yyyy-MM-dd"));
 }
 
 } // namespace

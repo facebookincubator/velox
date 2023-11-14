@@ -29,13 +29,15 @@ These functions support TIMESTAMP and DATE input types.
     If num_days is a negative value then these amount of days will be
     deducted from start_date.
 
-.. spark:function:: datediff(endDate, startDate) -> integer
+.. spark:function:: date_format(timestamp, format) -> string
 
-    Returns the number of days from startDate to endDate. Only DATE type is allowed
-    for input. ::
+    Converts ``timestamp`` to a date/time string in the format specified by ``format``.
+    The result needs to be adjusted according to local time zone.
 
-        SELECT datediff('2009-07-31', '2009-07-30'); -- 1
-        SELECT datediff('2009-07-30', '2009-07-31'); -- -1
+        SELECT date_format('2016-04-08', 'y'); -- '2016'
+        SELECT date_format('2020-08-21 12:21:50', 'yyyy-MM-dd HH:mm:ss'); -- '2020-08-21 12:21:50'
+        SELECT date_format('2020-08-21 12:21:50', 'yyyy-MM-dd'); -- '2020-08-21'
+        SELECT date_format('2020-08-21', 'yyyy-MM-dd HH:mm:ss'); -- '2020-08-21 00:00:00'
 
 .. spark:function:: date_sub(start_date, num_days) -> date
 
@@ -45,6 +47,14 @@ These functions support TIMESTAMP and DATE input types.
     and date_sub('2023-07-10', -2147483648) get -5877588-12-29.
 
     num_days can be positive or negative.
+
+.. spark:function:: datediff(endDate, startDate) -> integer
+
+    Returns the number of days from startDate to endDate. Only DATE type is allowed
+    for input. ::
+
+        SELECT datediff('2009-07-31', '2009-07-30'); -- 1
+        SELECT datediff('2009-07-30', '2009-07-31'); -- -1
 
 .. spark:function:: dayofmonth(date) -> integer
 
