@@ -152,6 +152,7 @@ option(VELOX_ENABLE_COMPRESSION_ZSTD "Enable Zstd compression support." OFF)
 option(VELOX_ENABLE_COMPRESSION_ZLIB "Enable Zlib/Gzip compression support."
        OFF)
 option(VELOX_ENABLE_COMPRESSION_SNAPPY "Enable Snappy compression support." OFF)
+option(VELOX_ENABLE_COMPRESSION_LZO "Enable Lzo compression support." OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_VECTOR_TEST_UTILS "Builds Velox vector test utilities" OFF)
@@ -210,6 +211,7 @@ if(${VELOX_BUILD_TESTING}
   set(VELOX_ENABLE_COMPRESSION_ZSTD ON)
   set(VELOX_ENABLE_COMPRESSION_ZLIB ON)
   set(VELOX_ENABLE_COMPRESSION_SNAPPY ON)
+  set(VELOX_ENABLE_COMPRESSION_LZO ON)
 endif()
 
 if(${VELOX_ENABLE_EXAMPLES})
