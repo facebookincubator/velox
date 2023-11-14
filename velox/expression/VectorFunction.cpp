@@ -14,12 +14,17 @@
  * limitations under the License.
  */
 #include "velox/expression/VectorFunction.h"
+#include <iostream>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
 #include "folly/Singleton.h"
 #include "folly/Synchronized.h"
 #include "velox/expression/SignatureBinder.h"
 
 namespace facebook::velox::exec {
+
+static std::mutex ml;
 
 VectorFunctionMap& vectorFunctionFactories() {
   static VectorFunctionMap factories;

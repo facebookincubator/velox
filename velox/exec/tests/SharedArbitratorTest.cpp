@@ -3787,4 +3787,532 @@ TEST_F(SharedArbitrationTest, reserveReleaseCounter) {
     ASSERT_EQ(arbitrator_->stats().numReleaseRequest, numRootPools);
   }
 }
+
+/// No aggregate, SUCCESS (repeat run 40 times)
+TEST_F(SharedArbitrationTest, concurrentArbitration1) {
+  FLAGS_velox_suppress_memory_capacity_exceeding_error_message = true;
+  const int numVectors = 8;
+  std::vector<RowVectorPtr> vectors;
+  fuzzerOpts_.vectorSize = 32;
+  fuzzerOpts_.stringVariableLength = false;
+  fuzzerOpts_.stringLength = 32;
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(newVector());
+  }
+  const int numDrivers = 4;
+  createDuckDbTable(vectors);
+
+  const auto queryPlan =
+      PlanBuilder()
+          .values(vectors, true)
+          .addNode([&](std::string id, core::PlanNodePtr input) {
+            return std::make_shared<FakeMemoryNode>(id, input);
+          })
+          .planNode();
+  const std::string referenceSQL = "SELECT * FROM tmp";
+
+  std::atomic<bool> stopped{false};
+
+  std::mutex mutex;
+  std::vector<std::shared_ptr<core::QueryCtx>> queries;
+  std::deque<std::shared_ptr<Task>> zombieTasks;
+
+  fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
+    if (folly::Random::oneIn(4)) {
+      auto task = op->testingOperatorCtx()->driverCtx()->task;
+      if (folly::Random::oneIn(3)) {
+        task->requestAbort();
+      } else {
+        task->requestYield();
+      }
+    }
+    const size_t allocationSize = std::max(
+        kMemoryCapacity / 16, folly::Random::rand32() % kMemoryCapacity);
+    auto buffer = op->pool()->allocate(allocationSize);
+    return TestAllocation{op->pool(), buffer, allocationSize};
+  });
+  fakeOperatorFactory_->setMaxDrivers(numDrivers);
+  const std::string injectReclaimErrorMessage("Inject reclaim failure");
+  fakeOperatorFactory_->setReclaimCallback(
+      [&](MemoryPool* /*unused*/,
+          uint64_t /*unused*/,
+          MemoryReclaimer::Stats& /*unused*/) {
+        if (folly::Random::oneIn(10)) {
+          VELOX_FAIL(injectReclaimErrorMessage);
+        }
+        return false;
+      });
+
+  const int numThreads = 30;
+  const int maxNumZombieTasks = 128;
+  std::vector<std::thread> queryThreads;
+  for (int i = 0; i < numThreads; ++i) {
+    queryThreads.emplace_back([&, i]() {
+      DuckDbQueryRunner duckDbQueryRunner;
+      folly::Random::DefaultGenerator rng;
+      rng.seed(i);
+      while (!stopped) {
+        std::shared_ptr<core::QueryCtx> query;
+        {
+          std::lock_guard<std::mutex> l(mutex);
+          if (queries.empty()) {
+            queries.emplace_back(newQueryCtx());
+          }
+          const int index = folly::Random::rand32() % queries.size();
+          query = queries[index];
+        }
+        auto planNodeIdGenerator =
+            std::make_shared<core::PlanNodeIdGenerator>();
+        std::shared_ptr<Task> task =
+            AssertQueryBuilder(duckDbQueryRunner_)
+                .queryCtx(query)
+                .plan(PlanBuilder(planNodeIdGenerator)
+                          .values(vectors)
+                          .project({"c0", "c1", "c2"})
+                          .hashJoin(
+                              {"c0"},
+                              {"u0"},
+                              PlanBuilder(planNodeIdGenerator)
+                                  .values(vectors)
+                                  .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                                  .planNode(),
+                              "",
+                              {"c0", "c1", "c2"},
+                              core::JoinType::kInner)
+                          .orderBy(
+                              {fmt::format("{} ASC NULLS LAST", "c2")}, false)
+                          .planNode())
+                .assertResults(
+                    "SELECT t1.c0 AS c0, t1.c1 AS c1, t1.c2 "
+                    "FROM tmp t1 "
+                    "JOIN tmp t2 "
+                    "ON t1.c0 = t2.c0 "
+                    "ORDER BY t1.c2 ASC NULLS LAST");
+        std::lock_guard<std::mutex> l(mutex);
+        zombieTasks.emplace_back(std::move(task));
+        while (zombieTasks.size() > maxNumZombieTasks) {
+          zombieTasks.pop_front();
+        }
+      }
+    });
+  }
+
+  const int maxNumQueries = 64;
+  std::thread controlThread([&]() {
+    folly::Random::DefaultGenerator rng;
+    rng.seed(1000);
+    while (!stopped) {
+      std::shared_ptr<core::QueryCtx> queryToDelete;
+      {
+        std::lock_guard<std::mutex> l(mutex);
+        if (queries.empty() ||
+            ((queries.size() < maxNumQueries) &&
+             folly::Random::oneIn(4, rng))) {
+          queries.emplace_back(newQueryCtx());
+        } else {
+          const int deleteIndex = folly::Random::rand32(rng) % queries.size();
+          queryToDelete = queries[deleteIndex];
+          queries.erase(queries.begin() + deleteIndex);
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::microseconds(5));
+    }
+  });
+
+  std::this_thread::sleep_for(std::chrono::seconds(5));
+  stopped = true;
+
+  for (auto& queryThread : queryThreads) {
+    queryThread.join();
+  }
+  controlThread.join();
+}
+
+/// Aggregate Fail
+TEST_F(SharedArbitrationTest, concurrentArbitration2) {
+  FLAGS_velox_suppress_memory_capacity_exceeding_error_message = true;
+  const int numVectors = 8;
+  std::vector<RowVectorPtr> vectors;
+  fuzzerOpts_.vectorSize = 32;
+  fuzzerOpts_.stringVariableLength = false;
+  fuzzerOpts_.stringLength = 32;
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(newVector());
+  }
+  const int numDrivers = 4;
+  createDuckDbTable(vectors);
+
+  const auto queryPlan =
+      PlanBuilder()
+          .values(vectors, true)
+          .addNode([&](std::string id, core::PlanNodePtr input) {
+            return std::make_shared<FakeMemoryNode>(id, input);
+          })
+          .planNode();
+  const std::string referenceSQL = "SELECT * FROM tmp";
+
+  std::atomic<bool> stopped{false};
+
+  std::mutex mutex;
+  std::vector<std::shared_ptr<core::QueryCtx>> queries;
+  std::deque<std::shared_ptr<Task>> zombieTasks;
+
+  fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
+    if (folly::Random::oneIn(4)) {
+      auto task = op->testingOperatorCtx()->driverCtx()->task;
+      if (folly::Random::oneIn(3)) {
+        task->requestAbort();
+      } else {
+        task->requestYield();
+      }
+    }
+    const size_t allocationSize = std::max(
+        kMemoryCapacity / 16, folly::Random::rand32() % kMemoryCapacity);
+    auto buffer = op->pool()->allocate(allocationSize);
+    return TestAllocation{op->pool(), buffer, allocationSize};
+  });
+  fakeOperatorFactory_->setMaxDrivers(numDrivers);
+  const std::string injectReclaimErrorMessage("Inject reclaim failure");
+  fakeOperatorFactory_->setReclaimCallback(
+      [&](MemoryPool* /*unused*/,
+          uint64_t /*unused*/,
+          MemoryReclaimer::Stats& /*unused*/) {
+        if (folly::Random::oneIn(10)) {
+          VELOX_FAIL(injectReclaimErrorMessage);
+        }
+        return false;
+      });
+
+  const int numThreads = 30;
+  const int maxNumZombieTasks = 128;
+  std::vector<std::thread> queryThreads;
+  for (int i = 0; i < numThreads; ++i) {
+    queryThreads.emplace_back([&, i]() {
+      DuckDbQueryRunner duckDbQueryRunner;
+      folly::Random::DefaultGenerator rng;
+      rng.seed(i);
+      while (!stopped) {
+        std::shared_ptr<core::QueryCtx> query;
+        {
+          std::lock_guard<std::mutex> l(mutex);
+          if (queries.empty()) {
+            queries.emplace_back(newQueryCtx());
+          }
+          const int index = folly::Random::rand32() % queries.size();
+          query = queries[index];
+        }
+        auto planNodeIdGenerator =
+            std::make_shared<core::PlanNodeIdGenerator>();
+        std::shared_ptr<Task> task =
+            AssertQueryBuilder(duckDbQueryRunner_)
+                .queryCtx(query)
+                .plan(PlanBuilder(planNodeIdGenerator)
+                          .values(vectors)
+                          .project({"c0", "c1", "c2"})
+                          .hashJoin(
+                              {"c0"},
+                              {"u0"},
+                              PlanBuilder(planNodeIdGenerator)
+                                  .values(vectors)
+                                  .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                                  .planNode(),
+                              "",
+                              {"c0", "c1", "c2"},
+                              core::JoinType::kInner)
+                          .singleAggregation(
+                              {"c0", "c1"}, {"array_agg(c2) as c2"})
+                          .orderBy(
+                              {fmt::format("{} ASC NULLS LAST", "c2")}, false)
+                          .planNode())
+                .assertResults(
+                    "SELECT t1.c0 AS c0, t1.c1 AS c1, array_agg(t1.c2) AS c2 "
+                    "FROM tmp t1 "
+                    "JOIN tmp t2 "
+                    "ON t1.c0 = t2.c0 "
+                    "GROUP BY t1.c0, t1.c1 "
+                    "ORDER BY c2 ASC NULLS LAST");
+        std::lock_guard<std::mutex> l(mutex);
+        zombieTasks.emplace_back(std::move(task));
+        while (zombieTasks.size() > maxNumZombieTasks) {
+          zombieTasks.pop_front();
+        }
+      }
+    });
+  }
+
+  const int maxNumQueries = 64;
+  std::thread controlThread([&]() {
+    folly::Random::DefaultGenerator rng;
+    rng.seed(1000);
+    while (!stopped) {
+      std::shared_ptr<core::QueryCtx> queryToDelete;
+      {
+        std::lock_guard<std::mutex> l(mutex);
+        if (queries.empty() ||
+            ((queries.size() < maxNumQueries) &&
+             folly::Random::oneIn(4, rng))) {
+          queries.emplace_back(newQueryCtx());
+        } else {
+          const int deleteIndex = folly::Random::rand32(rng) % queries.size();
+          queryToDelete = queries[deleteIndex];
+          queries.erase(queries.begin() + deleteIndex);
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::microseconds(5));
+    }
+  });
+
+  std::this_thread::sleep_for(std::chrono::seconds(5));
+  stopped = true;
+
+  for (auto& queryThread : queryThreads) {
+    queryThread.join();
+  }
+  controlThread.join();
+}
+
+// Change reclaimFromCompletedJoinBuilder to multi-thread failed for agg
+TEST_F(SharedArbitrationTest, concurrentArbitration3) {
+  const int numVectors = 2;
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(newVector());
+  }
+  createDuckDbTable(vectors);
+  std::vector<bool> sameQueries = {false, true};
+  for (bool sameQuery : sameQueries) {
+    SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const uint64_t numCreatedTasks = Task::numCreatedTasks();
+    std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
+        newQueryCtx(kMemoryCapacity);
+    std::shared_ptr<core::QueryCtx> joinQueryCtx;
+    if (sameQuery) {
+      joinQueryCtx = fakeMemoryQueryCtx;
+    } else {
+      joinQueryCtx = newQueryCtx(kMemoryCapacity);
+    }
+
+    folly::EventCount fakeAllocationWait;
+    auto fakeAllocationWaitKey = fakeAllocationWait.prepareWait();
+
+    const auto fakeAllocationSize = kMemoryCapacity;
+
+    std::atomic<bool> injectAllocationOnce{true};
+    fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
+      if (!injectAllocationOnce.exchange(false)) {
+        return TestAllocation{};
+      }
+      fakeAllocationWait.wait(fakeAllocationWaitKey);
+      auto buffer = op->pool()->allocate(fakeAllocationSize);
+      return TestAllocation{op->pool(), buffer, fakeAllocationSize};
+    });
+
+    std::vector<std::thread> queryThreads;
+    uint32_t numThreads = 10;
+    queryThreads.reserve(numThreads);
+    for (int i = 0; i < numThreads; ++i) {
+      queryThreads.emplace_back([&]() {
+        auto planNodeIdGenerator =
+            std::make_shared<core::PlanNodeIdGenerator>();
+        std::shared_ptr<Task> task =
+            AssertQueryBuilder(duckDbQueryRunner_)
+                .queryCtx(newQueryCtx(kMemoryCapacity))
+                .plan(PlanBuilder(planNodeIdGenerator)
+                          .values(vectors)
+                          .project({"c0", "c1", "c2"})
+                          .hashJoin(
+                              {"c0"},
+                              {"u0"},
+                              PlanBuilder(planNodeIdGenerator)
+                                  .values(vectors)
+                                  .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                                  .planNode(),
+                              "",
+                              {"c0", "c1", "c2"},
+                              core::JoinType::kInner)
+                          .singleAggregation(
+                              {"c0", "c1"}, {"array_agg(c2) as c2"})
+                          .orderBy(
+                              {fmt::format("{} ASC NULLS LAST", "c2")}, false)
+                          .planNode())
+                .assertResults(
+                    "SELECT t1.c0 AS c0, t1.c1 AS c1, array_agg(t1.c2) AS c2 "
+                    "FROM tmp t1 "
+                    "JOIN tmp t2 "
+                    "ON t1.c0 = t2.c0 "
+                    "GROUP BY t1.c0,t1.c1 "
+                    "ORDER BY c2 ASC NULLS LAST");
+        waitForTaskCompletion(task.get());
+        task.reset();
+        // Make sure the join query task has been destroyed.
+        waitForAllTasksToBeDeleted(numCreatedTasks + numThreads, 3'000'000);
+        fakeAllocationWait.notify();
+      });
+    }
+
+    std::thread memThread([&]() {
+      auto task =
+          AssertQueryBuilder(duckDbQueryRunner_)
+              .queryCtx(fakeMemoryQueryCtx)
+              .plan(PlanBuilder()
+                        .values(vectors)
+                        .addNode([&](std::string id, core::PlanNodePtr input) {
+                          return std::make_shared<FakeMemoryNode>(id, input);
+                        })
+                        .planNode())
+              .assertResults("SELECT * FROM tmp");
+    });
+
+    for (auto& queryThread : queryThreads) {
+      queryThread.join();
+    }
+    memThread.join();
+    waitForAllTasksToBeDeleted();
+  }
+}
+
+// Change reclaimFromCompletedJoinBuilder no agg success
+TEST_F(SharedArbitrationTest, concurrentArbitration4) {
+  const int numVectors = 2;
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(newVector());
+  }
+  createDuckDbTable(vectors);
+  std::vector<bool> sameQueries = {false, true};
+  for (bool sameQuery : sameQueries) {
+    SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const uint64_t numCreatedTasks = Task::numCreatedTasks();
+    std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
+        newQueryCtx(kMemoryCapacity);
+    std::shared_ptr<core::QueryCtx> joinQueryCtx;
+    if (sameQuery) {
+      joinQueryCtx = fakeMemoryQueryCtx;
+    } else {
+      joinQueryCtx = newQueryCtx(kMemoryCapacity);
+    }
+
+    folly::EventCount fakeAllocationWait;
+    auto fakeAllocationWaitKey = fakeAllocationWait.prepareWait();
+
+    const auto fakeAllocationSize = kMemoryCapacity;
+
+    std::atomic<bool> injectAllocationOnce{true};
+    fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
+      if (!injectAllocationOnce.exchange(false)) {
+        return TestAllocation{};
+      }
+      fakeAllocationWait.wait(fakeAllocationWaitKey);
+      auto buffer = op->pool()->allocate(fakeAllocationSize);
+      return TestAllocation{op->pool(), buffer, fakeAllocationSize};
+    });
+
+    std::vector<std::thread> queryThreads;
+    uint32_t numThreads = 10;
+    queryThreads.reserve(numThreads);
+    for (int i = 0; i < numThreads; ++i) {
+      queryThreads.emplace_back([&]() {
+        auto planNodeIdGenerator =
+            std::make_shared<core::PlanNodeIdGenerator>();
+        std::shared_ptr<Task> task =
+            AssertQueryBuilder(duckDbQueryRunner_)
+                .queryCtx(newQueryCtx(kMemoryCapacity))
+                .plan(PlanBuilder(planNodeIdGenerator)
+                          .values(vectors)
+                          .project({"c0", "c1", "c2"})
+                          .hashJoin(
+                              {"c0"},
+                              {"u0"},
+                              PlanBuilder(planNodeIdGenerator)
+                                  .values(vectors)
+                                  .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                                  .planNode(),
+                              "",
+                              {"c0", "c1", "c2"},
+                              core::JoinType::kInner)
+                          //.singleAggregation({"c0", "c1"}, {"array_agg(c2) as
+                          // c2"})
+                          .orderBy(
+                              {fmt::format("{} ASC NULLS LAST", "c2")}, false)
+                          .planNode())
+                .assertResults(
+                    "SELECT t1.c0 AS c0, t1.c1 AS c1, t1.c2 AS c2 "
+                    "FROM tmp t1 "
+                    "JOIN tmp t2 "
+                    "ON t1.c0 = t2.c0 "
+                    "ORDER BY t1.c2 ASC NULLS LAST");
+        waitForTaskCompletion(task.get());
+        task.reset();
+        // Make sure the join query task has been destroyed.
+        waitForAllTasksToBeDeleted(numCreatedTasks + numThreads, 3'000'000);
+        fakeAllocationWait.notify();
+      });
+    }
+
+    std::thread memThread([&]() {
+      auto task =
+          AssertQueryBuilder(duckDbQueryRunner_)
+              .queryCtx(fakeMemoryQueryCtx)
+              .plan(PlanBuilder()
+                        .values(vectors)
+                        .addNode([&](std::string id, core::PlanNodePtr input) {
+                          return std::make_shared<FakeMemoryNode>(id, input);
+                        })
+                        .planNode())
+              .assertResults("SELECT * FROM tmp");
+    });
+
+    for (auto& queryThread : queryThreads) {
+      queryThread.join();
+    }
+    memThread.join();
+    waitForAllTasksToBeDeleted();
+  }
+}
+
+// Function resolver may have race condition issue
+TEST_F(SharedArbitrationTest, concurrentArbitration5) {
+  const int numVectors = 2;
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(newVector());
+  }
+  createDuckDbTable(vectors);
+
+  std::vector<std::thread> queryThreads;
+  uint32_t numThreads = 10;
+  queryThreads.reserve(numThreads);
+  for (int i = 0; i < numThreads; ++i) {
+    // std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    queryThreads.emplace_back([&]() {
+      auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+      const int numVectors = 2;
+
+      std::shared_ptr<Task> task =
+          AssertQueryBuilder(duckDbQueryRunner_)
+              .queryCtx(newQueryCtx(kMemoryCapacity))
+              .plan(
+                  PlanBuilder(planNodeIdGenerator)
+                      .values(vectors)
+                      .project({"c0", "c1"})
+                      .singleAggregation({"c0"}, {"array_agg(c1)"})
+                      .orderBy({fmt::format("{} ASC NULLS LAST", "a0")}, false)
+                      .planNode())
+              .assertResults(
+                  "SELECT c0, array_agg(c1) AS a0 "
+                  "FROM tmp "
+                  "GROUP BY c0 "
+                  "ORDER BY a0 ASC NULLS LAST");
+    });
+  }
+
+  for (auto& queryThread : queryThreads) {
+    queryThread.join();
+  }
+
+  waitForAllTasksToBeDeleted();
+}
+
 } // namespace facebook::velox::exec::test
