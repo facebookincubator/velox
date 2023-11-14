@@ -248,10 +248,15 @@ TEST(CachedFactoryTest, disableCache) {
 
   EXPECT_EQ(factory.clearCache(), SimpleLRUCacheStats(0, 0, 0, 0));
 
-  std::vector<int> keys;
+  std::vector<int> keys(10);
+  for (int i = 0; i < 10; i += 1)
+    keys[i] = i;
   std::vector<std::pair<int, int>> cached;
   std::vector<int> missing;
   factory.retrieveCached(keys, &cached, &missing);
   ASSERT_EQ(0, cached.size());
-  ASSERT_EQ(0, missing.size());
+  ASSERT_EQ(10, missing.size());
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ(missing[i], i);
+  }
 }

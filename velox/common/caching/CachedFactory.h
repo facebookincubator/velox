@@ -208,6 +208,10 @@ void CachedFactory<Key, Value, Generator>::retrieveCached(
         missing->push_back(key);
       }
     }
+  } else {
+    for (const Key& key : keys) {
+      missing->push_back(key);
+    }
   }
 }
 
