@@ -43,3 +43,10 @@ if(VELOX_ENABLE_COMPRESSION_ZLIB)
   velox_compile_definitions(velox_common_compression
                             PRIVATE VELOX_ENABLE_COMPRESSION_ZLIB)
 endif()
+
+if(VELOX_ENABLE_COMPRESSION_SNAPPY)
+  velox_sources(velox_common_compression PRIVATE SnappyCompression.cpp)
+  velox_link_libraries(velox_common_compression PUBLIC Snappy::snappy)
+  velox_compile_definitions(velox_common_compression
+                            PRIVATE VELOX_ENABLE_COMPRESSION_SNAPPY)
+endif()
