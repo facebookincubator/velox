@@ -139,6 +139,48 @@ TypeSignature parseTypeSignature(const std::string& signature) {
   return TypeSignature(baseName, std::move(nestedTypes));
 }
 
+TypePtr signatureToVeloxType(const TypeSignature& typeSignature) {
+  const auto& baseName = typeSignature.baseName();
+  if (baseName == "tinyint") {
+    return TINYINT();
+  } else if (baseName == "smallint") {
+    return SMALLINT();
+  } else if (baseName == "integer") {
+    return INTEGER();
+  } else if (baseName == "bigint") {
+    return BIGINT();
+  } else if (baseName == "float") {
+    return REAL();
+  } else if (baseName == "double") {
+    return DOUBLE();
+  } else if (baseName == "timestamp") {
+    return TIMESTAMP();
+  } else if (baseName == "decimal") {
+    const auto& parameters = typeSignature.parameters();
+    VELOX_USER_CHECK(parameters.size() == 2);
+    auto precision = std::stoi(parameters.front().baseName());
+    auto scale = std::stoi(parameters.back().baseName());
+    return DECIMAL(precision, scale);
+  } else if (baseName == "map") {
+    const auto& parameters = typeSignature.parameters();
+    VELOX_USER_CHECK(parameters.size() == 2);
+    auto keyType = signatureToVeloxType(parameters.front());
+    auto valueType = signatureToVeloxType(parameters.back());
+    return MAP(keyType, valueType);
+  } else if (baseName == "array") {
+    const auto& parameters = typeSignature.parameters();
+    VELOX_USER_CHECK(parameters.size() == 1);
+    auto elementType = signatureToVeloxType(parameters.front());
+    return ARRAY(elementType);
+  } else { // row
+    std::vector<TypePtr> elementTypes;
+    for (const auto& typeName : typeSignature.parameters()) {
+      elementTypes.emplace_back(signatureToVeloxType(typeName));
+    }
+    return ROW(std::move(elementTypes));
+  }
+}
+
 namespace {
 /// Returns true only if 'str' contains digits.
 bool isPositiveInteger(const std::string& str) {

@@ -248,6 +248,8 @@ inline void addVariable(
 ///     - function(S,T,R)
 TypeSignature parseTypeSignature(const std::string& signature);
 
+TypePtr signatureToVeloxType(const TypeSignature& typeSignature);
+
 /// Convenience class for creating FunctionSignature instances.
 /// Example of usage:
 ///     - signature of "concat" function: varchar... -> varchar

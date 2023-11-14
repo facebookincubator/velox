@@ -88,3 +88,24 @@ TEST(ParseTypeSignatureTest, invalidSignatures) {
   EXPECT_THROW(parseTypeSignature("array(varchar"), VeloxRuntimeError);
   EXPECT_THROW(parseTypeSignature("array(array(T)"), VeloxRuntimeError);
 }
+
+TEST(ParseTypeSignatureTest, toVeloxType) {
+  ASSERT_NE(INTEGER(), signatureToVeloxType(parseTypeSignature("bigint")));
+  ASSERT_EQ(TINYINT(), signatureToVeloxType(parseTypeSignature("tinyint")));
+  ASSERT_EQ(SMALLINT(), signatureToVeloxType(parseTypeSignature("smallint")));
+  ASSERT_EQ(INTEGER(), signatureToVeloxType(parseTypeSignature("integer")));
+  ASSERT_EQ(BIGINT(), signatureToVeloxType(parseTypeSignature("bigint")));
+  ASSERT_EQ(DOUBLE(), signatureToVeloxType(parseTypeSignature("double")));
+  ASSERT_EQ(REAL(), signatureToVeloxType(parseTypeSignature("float")));
+  ASSERT_TRUE(DECIMAL(32, 8)->equivalent(
+      *signatureToVeloxType(parseTypeSignature("decimal(32, 8)"))));
+  ASSERT_TRUE(MAP(BIGINT(), DOUBLE())
+                  ->equivalent(*signatureToVeloxType(
+                      parseTypeSignature("map(bigint, double)"))));
+  ASSERT_TRUE(MAP(BIGINT(), ARRAY(DOUBLE()))
+                  ->equivalent(*signatureToVeloxType(
+                      parseTypeSignature("map(bigint, array(double))"))));
+  ASSERT_TRUE(ROW({BIGINT(), MAP(BIGINT(), ARRAY(DOUBLE()))})
+                  ->equivalent(*signatureToVeloxType(parseTypeSignature(
+                      "row(bigint,map(bigint, array(double)))"))));
+}
