@@ -98,6 +98,7 @@ bool registerStatefulVectorFunction(
     VectorFunctionFactory factory,
     VectorFunctionMetadata metadata,
     bool overwrite) {
+  VELOX_CHECK_NE(name, "", "Cannot register a function without a name.")
   auto sanitizedName = sanitizeName(name);
 
   if (overwrite) {

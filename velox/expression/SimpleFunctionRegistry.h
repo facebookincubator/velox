@@ -67,6 +67,8 @@ class SimpleFunctionRegistry {
       registerFunctionInternal(metadata->getName(), metadata, factory);
     } else {
       for (const auto& name : aliases) {
+        VELOX_CHECK_NE(
+            name, "", "Cannot register a function with an empty name.");
         registerFunctionInternal(name, metadata, factory);
       }
     }
