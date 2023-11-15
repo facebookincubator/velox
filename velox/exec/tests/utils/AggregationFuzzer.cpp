@@ -83,6 +83,11 @@ DEFINE_bool(
     "This is to rerun with the seed number and persist repro info upon a "
     "crash failure. Only effective if repro_persist_path is set.");
 
+DEFINE_bool(
+    log_signature_stats,
+    false,
+    "Log statistics about function signatures");
+
 using facebook::velox::test::CallableSignature;
 using facebook::velox::test::SignatureTemplate;
 
@@ -96,6 +101,8 @@ class AggregationFuzzer {
       size_t seed,
       const std::unordered_map<std::string, std::string>&
           customVerificationFunctions,
+      const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
+          customInputGenerators,
       VectorFuzzer::Options::TimestampPrecision timestampPrecision,
       const std::unordered_map<std::string, std::string>& queryConfigs,
       std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner);
@@ -110,6 +117,9 @@ class AggregationFuzzer {
 
  private:
   static inline const std::string kHiveConnectorId = "test-hive";
+
+  std::shared_ptr<InputGenerator> findInputGenerator(
+      const CallableSignature& signature);
 
   static exec::Split makeSplit(const std::string& filePath);
 
@@ -186,15 +196,19 @@ class AggregationFuzzer {
       std::vector<TypePtr>& types);
 
   struct SignatureStats {
+    /// Number of times a signature was chosen.
     size_t numRuns{0};
-    size_t numFailures{0};
+
+    /// Number of times generated query plan failed.
+    size_t numFailed{0};
   };
 
   std::pair<CallableSignature, SignatureStats&> pickSignature();
 
   std::vector<RowVectorPtr> generateInputData(
       std::vector<std::string> names,
-      std::vector<TypePtr> types);
+      std::vector<TypePtr> types,
+      const std::optional<CallableSignature>& signature);
 
   // Generate a RowVector of the given types of children with an additional
   // child named "row_number" of BIGINT row numbers that differentiates every
@@ -202,9 +216,11 @@ class AggregationFuzzer {
   // result verification of window aggregations.
   std::vector<RowVectorPtr> generateInputDataWithRowNumber(
       std::vector<std::string> names,
-      std::vector<TypePtr> types);
+      std::vector<TypePtr> types,
+      const CallableSignature& signature);
 
-  void verifyWindow(
+  // Return 'true' if query plans failed.
+  bool verifyWindow(
       const std::vector<std::string>& partitionKeys,
       const std::vector<std::string>& sortingKeys,
       const std::vector<std::string>& aggregates,
@@ -212,7 +228,8 @@ class AggregationFuzzer {
       bool customVerification,
       bool enableWindowVerification);
 
-  void verifyAggregation(
+  // Return 'true' if query plans failed.
+  bool verifyAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
@@ -290,8 +307,12 @@ class AggregationFuzzer {
       bool verifyResults,
       const velox::test::ResultOrError& expected);
 
+  void printSignatureStats();
+
   const std::unordered_map<std::string, std::string>
       customVerificationFunctions_;
+  const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>
+      customInputGenerators_;
   const std::unordered_map<std::string, std::string> queryConfigs_;
   const bool persistAndRunOnce_;
   const std::string reproPersistPath_;
@@ -301,6 +322,8 @@ class AggregationFuzzer {
   std::vector<CallableSignature> signatures_;
   std::vector<SignatureTemplate> signatureTemplates_;
 
+  // Stats for 'signatures_' and 'signatureTemplates_'. Stats for 'signatures_'
+  // come before stats for 'signatureTemplates_'.
   std::vector<SignatureStats> signatureStats_;
 
   FuzzerGenerator rng_;
@@ -320,6 +343,8 @@ void aggregateFuzzer(
     size_t seed,
     const std::unordered_map<std::string, std::string>&
         customVerificationFunctions,
+    const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
+        customInputGenerators,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
     const std::optional<std::string>& planPath,
@@ -328,6 +353,7 @@ void aggregateFuzzer(
       std::move(signatureMap),
       seed,
       customVerificationFunctions,
+      customInputGenerators,
       timestampPrecision,
       queryConfigs,
       std::move(referenceQueryRunner));
@@ -367,10 +393,13 @@ AggregationFuzzer::AggregationFuzzer(
     size_t initialSeed,
     const std::unordered_map<std::string, std::string>&
         customVerificationFunctions,
+    const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
+        customInputGenerators,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
     : customVerificationFunctions_{customVerificationFunctions},
+      customInputGenerators_{customInputGenerators},
       queryConfigs_{queryConfigs},
       persistAndRunOnce_{FLAGS_persist_and_run_once},
       reproPersistPath_{FLAGS_repro_persist_path},
@@ -589,7 +618,8 @@ AggregationFuzzer::pickSignature() {
   if (idx < signatures_.size()) {
     signature = signatures_[idx];
   } else {
-    const auto& signatureTemplate = signatureTemplates_[idx - signatures_.size()];
+    const auto& signatureTemplate =
+        signatureTemplates_[idx - signatures_.size()];
     signature.name = signatureTemplate.name;
     velox::test::ArgumentTypeFuzzer typeFuzzer(
         *signatureTemplate.signature, rng_);
@@ -627,22 +657,60 @@ std::vector<std::string> AggregationFuzzer::generateKeys(
   return keys;
 }
 
+std::shared_ptr<InputGenerator> AggregationFuzzer::findInputGenerator(
+    const CallableSignature& signature) {
+  auto generatorIt = customInputGenerators_.find(signature.name);
+  if (generatorIt != customInputGenerators_.end()) {
+    return generatorIt->second;
+  }
+
+  return nullptr;
+}
+
 std::vector<RowVectorPtr> AggregationFuzzer::generateInputData(
     std::vector<std::string> names,
-    std::vector<TypePtr> types) {
+    std::vector<TypePtr> types,
+    const std::optional<CallableSignature>& signature) {
+  std::shared_ptr<InputGenerator> generator;
+  if (signature.has_value()) {
+    generator = findInputGenerator(signature.value());
+  }
+
+  const auto size = vectorFuzzer_.getOptions().vectorSize;
+
   auto inputType = ROW(std::move(names), std::move(types));
   std::vector<RowVectorPtr> input;
   for (auto i = 0; i < FLAGS_num_batches; ++i) {
-    input.push_back(vectorFuzzer_.fuzzInputRow(inputType));
+    std::vector<VectorPtr> children;
+
+    if (generator != nullptr) {
+      children = generator->generate(
+          signature->args, vectorFuzzer_, rng_, pool_.get());
+    }
+
+    for (auto i = children.size(); i < inputType->size(); ++i) {
+      children.push_back(vectorFuzzer_.fuzz(inputType->childAt(i), size));
+    }
+
+    input.push_back(std::make_shared<RowVector>(
+        pool_.get(), inputType, nullptr, size, std::move(children)));
   }
+
+  if (generator != nullptr) {
+    generator->reset();
+  }
+
   return input;
 }
 
 std::vector<RowVectorPtr> AggregationFuzzer::generateInputDataWithRowNumber(
     std::vector<std::string> names,
-    std::vector<TypePtr> types) {
+    std::vector<TypePtr> types,
+    const CallableSignature& signature) {
   names.push_back("row_number");
   types.push_back(BIGINT());
+
+  auto generator = findInputGenerator(signature);
 
   std::vector<RowVectorPtr> input;
   auto size = vectorFuzzer_.getOptions().vectorSize;
@@ -650,13 +718,24 @@ std::vector<RowVectorPtr> AggregationFuzzer::generateInputDataWithRowNumber(
   int64_t rowNumber = 0;
   for (auto j = 0; j < FLAGS_num_batches; ++j) {
     std::vector<VectorPtr> children;
-    for (auto i = 0; i < types.size() - 1; ++i) {
+
+    if (generator != nullptr) {
+      children =
+          generator->generate(signature.args, vectorFuzzer_, rng_, pool_.get());
+    }
+
+    for (auto i = children.size(); i < types.size() - 1; ++i) {
       children.push_back(vectorFuzzer_.fuzz(types[i], size));
     }
     children.push_back(vectorMaker.flatVector<int64_t>(
         size, [&](auto /*row*/) { return rowNumber++; }));
     input.push_back(vectorMaker.rowVector(names, children));
   }
+
+  if (generator != nullptr) {
+    generator->reset();
+  }
+
   return input;
 }
 
@@ -726,7 +805,7 @@ void AggregationFuzzer::go() {
       std::vector<std::string> names;
 
       auto groupingKeys = generateKeys("g", names, types);
-      auto input = generateInputData(names, types);
+      auto input = generateInputData(names, types, std::nullopt);
 
       verifyAggregation(groupingKeys, {}, {}, input, false, {});
     } else {
@@ -750,15 +829,19 @@ void AggregationFuzzer::go() {
 
         auto partitionKeys = generateKeys("p", argNames, argTypes);
         auto sortingKeys = generateKeys("s", argNames, argTypes);
-        auto input = generateInputDataWithRowNumber(argNames, argTypes);
+        auto input =
+            generateInputDataWithRowNumber(argNames, argTypes, signature);
 
-        verifyWindow(
+        bool failed = verifyWindow(
             partitionKeys,
             sortingKeys,
             {call},
             input,
             customVerification,
             FLAGS_enable_window_reference_verification);
+        if (failed) {
+          signatureWithStats.second.numFailed++;
+        }
       } else {
         // 20% of times use mask.
         std::vector<std::string> masks;
@@ -790,18 +873,17 @@ void AggregationFuzzer::go() {
           }
         }
 
-        auto input = generateInputData(argNames, argTypes);
+        auto input = generateInputData(argNames, argTypes, signature);
 
-        auto numFailed = stats_.numFailed;
-        verifyAggregation(
+        bool failed = verifyAggregation(
             groupingKeys,
             {call},
             masks,
             input,
             customVerification,
             projections);
-        if (stats_.numFailed > numFailed) {
-          signatureWithStats.second.numFailures++;
+        if (failed) {
+          signatureWithStats.second.numFailed++;
         }
       }
     }
@@ -821,23 +903,35 @@ void AggregationFuzzer::go() {
 
   stats_.print(iteration);
 
+  printSignatureStats();
+}
+
+void AggregationFuzzer::printSignatureStats() {
+  if (!FLAGS_log_signature_stats) {
+    return;
+  }
+
   for (auto i = 0; i < signatureStats_.size(); ++i) {
     const auto& stats = signatureStats_[i];
     if (stats.numRuns == 0) {
       continue;
     }
-    if (stats.numFailures * 1.0 / stats.numRuns > 0.5) {
-      if (i < signatures_.size()) {
-        LOG(ERROR) << "Signature " << i << " failed " << stats.numFailures
-                   << " out of " << stats.numRuns
-                   << " times: " << signatures_[i].toString();
-      } else {
-        const auto index = i - signatures_.size();
-        LOG(ERROR) << "Signature template " << i << " failed "
-                   << stats.numFailures << " out of " << stats.numRuns
-                   << " times: " << signatureTemplates_[index].name << ", "
-                   << signatureTemplates_[index].signature->toString();
-      }
+
+    if (stats.numFailed * 1.0 / stats.numRuns < 0.5) {
+      continue;
+    }
+
+    if (i < signatures_.size()) {
+      LOG(INFO) << "Signature #" << i << " failed " << stats.numFailed
+                << " out of " << stats.numRuns
+                << " times: " << signatures_[i].toString();
+    } else {
+      const auto& signatureTemplate =
+          signatureTemplates_[i - signatures_.size()];
+      LOG(INFO) << "Signature template #" << i << " failed " << stats.numFailed
+                << " out of " << stats.numRuns
+                << " times: " << signatureTemplate.name << "("
+                << signatureTemplate.signature->toString() << ")";
     }
   }
 }
@@ -881,7 +975,6 @@ velox::test::ResultOrError AggregationFuzzer::execute(
   } catch (VeloxUserError& e) {
     // NOTE: velox user exception is accepted as it is caused by the invalid
     // fuzzer test inputs.
-    LOG(ERROR) << e.what();
     resultOrError.exceptionPtr = std::current_exception();
   }
 
@@ -1124,7 +1217,7 @@ void AggregationFuzzer::testPlan(
   }
 }
 
-void AggregationFuzzer::verifyWindow(
+bool AggregationFuzzer::verifyWindow(
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortingKeys,
     const std::vector<std::string>& aggregates,
@@ -1168,6 +1261,8 @@ void AggregationFuzzer::verifyWindow(
     } else {
       ++stats_.numVerificationSkipped;
     }
+
+    return resultOrError.exceptionPtr != nullptr;
   } catch (...) {
     if (!reproPersistPath_.empty()) {
       persistReproInfo({{plan, {}}}, reproPersistPath_);
@@ -1210,7 +1305,7 @@ bool isTableScanSupported(const TypePtr& type) {
 }
 } // namespace
 
-void AggregationFuzzer::verifyAggregation(
+bool AggregationFuzzer::verifyAggregation(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
@@ -1310,27 +1405,28 @@ void AggregationFuzzer::verifyAggregation(
       ++stats_.numFailed;
     }
 
-//    const bool verifyResults = !customVerification || !projections.empty();
-//
-//    std::optional<MaterializedRowMultiset> expectedResult;
-//    if (verifyResults) {
-//      expectedResult = computeReferenceResults(firstPlan, input);
-//    } else {
-//      ++stats_.numVerificationSkipped;
-//    }
-//
-//    if (expectedResult && resultOrError.result) {
-//      ++stats_.numVerified;
-//      VELOX_CHECK(
-//          assertEqualResults(
-//              expectedResult.value(),
-//              firstPlan->outputType(),
-//              {resultOrError.result}),
-//          "Velox and DuckDB results don't match");
-//    }
-//
-//    testPlans(plans, verifyResults, resultOrError);
+    const bool verifyResults = !customVerification || !projections.empty();
 
+    std::optional<MaterializedRowMultiset> expectedResult;
+    if (verifyResults) {
+      expectedResult = computeReferenceResults(firstPlan, input);
+    } else {
+      ++stats_.numVerificationSkipped;
+    }
+
+    if (expectedResult && resultOrError.result) {
+      ++stats_.numVerified;
+      VELOX_CHECK(
+          assertEqualResults(
+              expectedResult.value(),
+              firstPlan->outputType(),
+              {resultOrError.result}),
+          "Velox and reference DB results don't match");
+    }
+
+    testPlans(plans, verifyResults, resultOrError);
+
+    return resultOrError.exceptionPtr != nullptr;
   } catch (...) {
     if (!reproPersistPath_.empty()) {
       persistReproInfo(plans, reproPersistPath_);
@@ -1419,7 +1515,7 @@ void AggregationFuzzer::verifyAggregation(
     VELOX_CHECK(
         assertEqualResults(
             expectedResult.value(), plan->outputType(), {resultOrError.result}),
-        "Velox and DuckDB results don't match");
+        "Velox and reference DB results don't match");
   }
 
   // Test all plans.
