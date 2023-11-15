@@ -20,5 +20,5 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
-TypePtr parseTypeSignature(const std::string& typeText);
+TypePtr parseType(const std::string& typeText);
 }

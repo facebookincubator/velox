@@ -66,7 +66,7 @@ int yyFlexLexer::yylex() {
 
 #include "velox/type/type_parser/TypeParser.h"
 
-facebook::velox::TypePtr facebook::velox::parseTypeSignature(const std::string& typeText)
+facebook::velox::TypePtr facebook::velox::parseType(const std::string& typeText)
  {
     std::istringstream is(typeText);
     facebook::velox::TypePtr type;
