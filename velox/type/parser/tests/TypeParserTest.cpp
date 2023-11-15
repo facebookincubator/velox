@@ -20,7 +20,7 @@
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-#include "velox/type/type_parser/TypeParser.h"
+#include "velox/type/parser/TypeParser.h"
 
 namespace facebook::velox {
 namespace {

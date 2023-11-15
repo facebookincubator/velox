@@ -20,5 +20,20 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
+
+/// Parses a type string in Presto format to Velox type.
+/// Example type strings:
+///    row(col0 bigint, varchar)
+///    array(bigint)
+///    map(bigint, array(bigint))
+///    function(bigint,bigint,bigint)
+/// The parsing is case-insensitive. i.e. 'Row' and 'row' are equal.
+/// Field names for rows are optional.
+/// Quoted field names are supported.
+/// All types except for Presto types need to be registered. An error is thrown
+/// otherwise.
+/// Uses the Type::hasType and Type::getType APIs to convert a string to Velox
+/// type.
+
 TypePtr parseType(const std::string& typeText);
-}
+} // namespace facebook::velox

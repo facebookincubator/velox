@@ -32,7 +32,7 @@
 
 %code
 {
-    #include <velox/type/type_parser/Scanner.h>
+    #include <velox/type/parser/Scanner.h>
     #define yylex(x) scanner->lex(x)
     using namespace facebook::velox;
     TypePtr typeFromString(const std::string& type) {

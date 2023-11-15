@@ -15,8 +15,8 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
+add_subdirectory(parser)
 add_subdirectory(tz)
-add_subdirectory(type_parser)
 add_subdirectory(fbhive)
 
 add_library(

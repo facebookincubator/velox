@@ -2,12 +2,12 @@
 #include <vector>
 #include <memory>
 
-#include "velox/type/type_parser/TypeParser.yy.h"  // @manual
-#include "velox/type/type_parser/Scanner.h"
+#include "velox/type/parser/TypeParser.yy.h"  // @manual
+#include "velox/type/parser/Scanner.h"
 #define YY_DECL int facebook::velox::type::Scanner::lex(facebook::velox::type::Parser::semantic_type *yylval)
 %}
 
-%option c++ noyywrap noyylineno nodefault caseless
+%option c++ noyywrap noyylineno nodefault
 
 A   [A|a]
 B   [B|b]
@@ -64,7 +64,7 @@ int yyFlexLexer::yylex() {
     throw std::runtime_error("Bad call to yyFlexLexer::yylex()");
 }
 
-#include "velox/type/type_parser/TypeParser.h"
+#include "velox/type/parser/TypeParser.h"
 
 facebook::velox::TypePtr facebook::velox::parseType(const std::string& typeText)
  {

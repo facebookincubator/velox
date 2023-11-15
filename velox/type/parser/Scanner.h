@@ -43,13 +43,13 @@ class Scanner : public yyFlexLexer {
   }
 
   // Store input to print it as part of the error message.
-  std::string input() {
+  std::string_view input() {
     return input_;
   }
 
  private:
   TypePtr& outputType_;
-  std::string input_;
+  const std::string_view input_;
 };
 
 } // namespace facebook::velox::type
