@@ -179,15 +179,26 @@ void SortWindowBuild::computePartitionStartRows() {
   partitionStartRows_.push_back(0);
 
   VELOX_CHECK_GT(sortedRows_.size(), 0);
-  for (auto i = 1; i < sortedRows_.size(); i++) {
-    if (partitionCompare(sortedRows_[i - 1], sortedRows_[i])) {
-      partitionStartRows_.push_back(i);
+  int32_t start = 0;
+  while (start < sortedRows_.size()) {
+    int left = start;
+    int right = left + 1;
+    int endPosition = sortedRows_.size();
+    while (right < endPosition) {
+      int distance = 1;
+      for (; distance < endPosition - left; distance *= 2) {
+        right = left + distance;
+        if (partitionCompare(sortedRows_[left], sortedRows_[right]) != 0) {
+          endPosition = right;
+          break;
+        }
+      }
+      left = left + distance / 2;
+      right = left + 1;
     }
+    partitionStartRows_.push_back(right);
+    start = right;
   }
-
-  // Setting the startRow of the (last + 1) partition to be returningRows.size()
-  // to help for last partition related calculations.
-  partitionStartRows_.push_back(sortedRows_.size());
 }
 
 void SortWindowBuild::sortPartitions() {
