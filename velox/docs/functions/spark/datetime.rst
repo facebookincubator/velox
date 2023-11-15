@@ -31,8 +31,9 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: date_format(timestamp, format) -> string
 
-    Converts ``timestamp`` to a date/time string in the format specified by ``format``.
-    The result needs to be adjusted according to local time zone.
+    Converts ``timestamp`` to a date/time string (local timezone adjusted) in the format specified by
+    ``format``, such as yyyy-MM-dd HH:mm:ss, yyyy-MM-dd, etc. Invalid ``format`` will cause exception
+    at runtime. ::
 
         SELECT date_format('2016-04-08', 'y'); -- '2016'
         SELECT date_format('2020-08-21 12:21:50', 'yyyy-MM-dd HH:mm:ss'); -- '2020-08-21 12:21:50'

@@ -504,6 +504,9 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   EXPECT_EQ(
       "1970-01-01",
       dateFormat(fromTimestampString("1969-12-31 23:59:59"), "yyyy-MM-dd"));
+
+  // Invalid format.
+  EXPECT_THROW(dateFormat(Timestamp(0, 0), "ABC"), VeloxUserError);
 }
 
 } // namespace
