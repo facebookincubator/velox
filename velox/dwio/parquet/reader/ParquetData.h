@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/parquet/reader/IAAPageReader.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
 
@@ -77,7 +78,7 @@ class ParquetData : public dwio::common::FormatData {
       FilterRowGroupsResult&) override;
 
   PageReader* FOLLY_NONNULL reader() const {
-    return reader_.get();
+    return dynamic_cast<PageReader*>(reader_.get());
   }
 
   // Reads null flags for 'numValues' next top level rows. The first 'numValues'
@@ -163,7 +164,11 @@ class ParquetData : public dwio::common::FormatData {
   /// PageReader::readWithVisitor().
   template <typename Visitor>
   void readWithVisitor(Visitor visitor) {
-    reader_->readWithVisitor(visitor);
+    if (reader_->getType() == PageReaderType::IAA) {
+      dynamic_cast<IAAPageReader*>(reader_.get())->readWithVisitor(visitor);
+    } else {
+      dynamic_cast<PageReader*>(reader_.get())->readWithVisitor(visitor);
+    }
   }
 
   const VectorPtr& dictionaryValues(const TypePtr& type) {
@@ -205,8 +210,8 @@ class ParquetData : public dwio::common::FormatData {
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
-  std::unique_ptr<PageReader> reader_;
-  std::vector<std::unique_ptr<PageReader>> pageReaders_;
+  std::unique_ptr<PageReaderBase> reader_;
+  std::vector<std::unique_ptr<PageReaderBase>> pageReaders_;
   bool needPreDecomp = true;
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;

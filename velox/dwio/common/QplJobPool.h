@@ -39,7 +39,7 @@ namespace facebook::velox::dwio::common {
 // together, so that each analytics operation can perform decompress-only,
 // filter-only, or decompress-and-filter processing.
 //
-// Intel QPLis library to provide application programming interface (API) for
+// Intel QPL is library to provide application programming interface (API) for
 // interaction with Intel® In-Memory Analytics Accelerator (Intel® IAA) hardware
 //
 // Intel® IAA:
@@ -61,6 +61,12 @@ class QplJobHWPool {
   }
 
   std::pair<int, qpl_job*> acquireDeflateJob();
+
+  /**
+   * Get qpl job by job id
+   * @param job_id the job id or index in the qpl job pool
+   * @return nullptr if the job id is invalid
+   */
   qpl_job* getJobById(int job_id) {
     if (job_id >= MAX_JOB_NUMBER || job_id <= 0) {
       return nullptr;
@@ -81,7 +87,7 @@ class QplJobHWPool {
   std::unique_ptr<uint8_t[]> hwJobsBuffer;
 
   // Job pool for storing all job object pointers
-  std::array<qpl_job*, MAX_JOB_NUMBER> hwJobPtrPool;
+  std::vector<qpl_job*> hwJobPtrPool;
 
   // Locks for accessing each job object pointers
   bool iaaJobReady;

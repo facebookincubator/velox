@@ -19,6 +19,7 @@ add_library(
   ParquetReader.cpp
   ParquetTypeWithId.cpp
   PageReader.cpp
+  IAAPageReader.cpp
   ParquetColumnReader.cpp
   ParquetData.cpp
   RepeatedColumnReader.cpp

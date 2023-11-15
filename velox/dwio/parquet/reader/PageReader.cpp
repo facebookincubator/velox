@@ -28,116 +28,11 @@ namespace facebook::velox::parquet {
 using thrift::Encoding;
 using thrift::PageHeader;
 
-void PageReader::preDecompressPage(
-    bool& need_pre_decompress,
-    int64_t numValues) {
-  if (codec_ != thrift::CompressionCodec::GZIP) {
-    need_pre_decompress = false;
-    return;
-  }
-  for (;;) {
-    auto dataStart = pageStart_;
-    if (chunkSize_ <= pageStart_) {
-      // This may happen if seeking to exactly end of row group.
-      numRepDefsInPage_ = 0;
-      numRowsInPage_ = 0;
-      break;
-    }
-    PageHeader pageHeader = readPageHeader();
-    pageStart_ = pageDataStart_ + pageHeader.compressed_page_size;
-    switch (pageHeader.type) {
-      case thrift::PageType::DATA_PAGE:
-        prefetchDataPageV1(pageHeader);
-        break;
-      case thrift::PageType::DATA_PAGE_V2:
-        prefetchDataPageV2(pageHeader);
-        break;
-      case thrift::PageType::DICTIONARY_PAGE:
-        prefetchDictionary(pageHeader);
-        continue;
-      default:
-        break; // ignore INDEX page type and any other custom extensions
-    }
-    break;
-  }
-  need_pre_decompress = isWinSizeFit;
-  rowGroupPageInfo_.numValues = numValues;
-  rowGroupPageInfo_.visitedRows = 0;
-}
-
-void PageReader::prefetchNextPage() {
-  if (rowGroupPageInfo_.visitedRows + numRowsInPage_ >=
-      rowGroupPageInfo_.numValues) {
-    return;
-  }
-  if (chunkSize_ <= pageStart_) {
-    return;
-  }
-  PageHeader pageHeader = readPageHeader();
-  rowGroupPageInfo_.pageStart =
-      pageDataStart_ + pageHeader.compressed_page_size;
-  switch (pageHeader.type) {
-    case thrift::PageType::DATA_PAGE: {
-      dataPageHeader_ = pageHeader;
-      VELOX_CHECK(
-          pageHeader.type == thrift::PageType::DATA_PAGE &&
-          pageHeader.__isset.data_page_header);
-      rowGroupPageInfo_.dataPageData =
-          readBytes(pageHeader.compressed_page_size, pageBuffer_);
-      pre_decompress_data = iaaDecompressGzip(
-          rowGroupPageInfo_.dataPageData,
-          pageHeader.compressed_page_size,
-          pageHeader.uncompressed_page_size,
-          rowGroupPageInfo_.uncompressedDataV1Data,
-          data_qpl_job_id);
-      break;
-    }
-    case thrift::PageType::DATA_PAGE_V2:
-      LOG(WARNING) << "Data Page V2 not support ";
-      break;
-    case thrift::PageType::DICTIONARY_PAGE:
-      LOG(WARNING) << "Wrong path ";
-      break;
-    default:
-      break; // ignore INDEX page type and any other custom extensions
-  }
-}
-
-bool PageReader::seekToPreDecompPage(int64_t row) {
-  bool has_qpl = false;
-  if (dict_qpl_job_id != 0) {
-    bool job_success = getDecompRes(dict_qpl_job_id);
-    prepareDictionary(dictPageHeader_, job_success);
-    dict_qpl_job_id = 0;
-    has_qpl = true;
-  }
-
-  if (this->data_qpl_job_id != 0) {
-    bool job_success = getDecompRes(data_qpl_job_id);
-    prepareDataPageV1(dataPageHeader_, row, job_success);
-    data_qpl_job_id = 0;
-    has_qpl = true;
-  }
-
-  if (has_qpl) {
-    if (row == kRepDefOnly || row < rowOfPage_ + numRowsInPage_) {
-      return true;
-    }
-    updateRowInfoAfterPageSkipped();
-  }
-  return false;
-}
-
 void PageReader::seekToPage(int64_t row) {
   defineDecoder_.reset();
   repeatDecoder_.reset();
   // 'rowOfPage_' is the row number of the first row of the next page.
   rowOfPage_ += numRowsInPage_;
-
-  if (seekToPreDecompPage(row)) {
-    return;
-  }
-
   for (;;) {
     auto dataStart = pageStart_;
     if (chunkSize_ <= pageStart_) {
@@ -294,10 +189,7 @@ void PageReader::updateRowInfoAfterPageSkipped() {
   }
 }
 
-void PageReader::prepareDataPageV1(
-    const PageHeader& pageHeader,
-    int64_t row,
-    bool job_success) {
+void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
   VELOX_CHECK(
       pageHeader.type == thrift::PageType::DATA_PAGE &&
       pageHeader.__isset.data_page_header);
@@ -313,24 +205,11 @@ void PageReader::prepareDataPageV1(
 
     return;
   }
-  if (data_qpl_job_id != 0 && pre_decompress_data && job_success) {
-    if (rowGroupPageInfo_.visitedRows > 0) {
-      BufferPtr tmp = uncompressedDataV1Data_;
-      uncompressedDataV1Data_ = rowGroupPageInfo_.uncompressedDataV1Data;
-      rowGroupPageInfo_.uncompressedDataV1Data = tmp;
-    }
-    pageData_ = uncompressedDataV1Data_->as<char>();
-  } else {
-    if (data_qpl_job_id == 0) {
-      dataPageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
-    } else if (rowGroupPageInfo_.visitedRows > 0) {
-      dataPageData_ = rowGroupPageInfo_.dataPageData;
-    }
-    pageData_ = decompressData(
-        dataPageData_,
-        pageHeader.compressed_page_size,
-        pageHeader.uncompressed_page_size);
-  }
+  pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
+  pageData_ = decompressData(
+      pageData_,
+      pageHeader.compressed_page_size,
+      pageHeader.uncompressed_page_size);
   auto pageEnd = pageData_ + pageHeader.uncompressed_page_size;
   if (maxRepeat_ > 0) {
     uint32_t repeatLength = readField<int32_t>(pageData_);
@@ -428,9 +307,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   }
 }
 
-void PageReader::prepareDictionary(
-    const PageHeader& pageHeader,
-    bool job_success) {
+void PageReader::prepareDictionary(const PageHeader& pageHeader) {
   dictionary_.numValues = pageHeader.dictionary_page_header.num_values;
   dictionaryEncoding_ = pageHeader.dictionary_page_header.encoding;
   dictionary_.sorted = pageHeader.dictionary_page_header.__isset.is_sorted &&
@@ -440,17 +317,11 @@ void PageReader::prepareDictionary(
       dictionaryEncoding_ == Encoding::PLAIN);
 
   if (codec_ != common::CompressionKind::CompressionKind_NONE) {
-    if (dict_qpl_job_id != 0 && pre_decompress_dict && job_success) {
-      pageData_ = uncompressedDictData_->as<char>();
-    } else {
-      if (dict_qpl_job_id == 0) {
-        pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
-      }
-      pageData_ = decompressData(
-          pageData_,
-          pageHeader.compressed_page_size,
-          pageHeader.uncompressed_page_size);
-    }
+    pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
+    pageData_ = decompressData(
+        pageData_,
+        pageHeader.compressed_page_size,
+        pageHeader.uncompressed_page_size);
   }
 
   auto parquetType = type_->parquetType_.value();
@@ -792,10 +663,6 @@ void PageReader::skip(int64_t numRows) {
       numLeafNullsConsumed_ = rowOfPage_;
     }
     toSkip -= rowOfPage_ - firstUnvisited_;
-    if (isWinSizeFit) {
-      prefetchNextPage();
-    }
-    rowGroupPageInfo_.visitedRows += numRowsInPage_;
   }
   firstUnvisited_ += numRows;
 
@@ -849,10 +716,6 @@ void PageReader::skipNullsOnly(int64_t numRows) {
     seekToPage(firstUnvisited_ + numRows);
     firstUnvisited_ += numRows;
     toSkip = firstUnvisited_ - rowOfPage_;
-    if (isWinSizeFit) {
-      prefetchNextPage();
-    }
-    rowGroupPageInfo_.visitedRows += numRowsInPage_;
   } else {
     firstUnvisited_ += numRows;
   }
@@ -873,10 +736,6 @@ void PageReader::readNullsOnly(int64_t numValues, BufferPtr& buffer) {
     if (!availableOnPage) {
       seekToPage(firstUnvisited_);
       availableOnPage = numRowsInPage_;
-      if (isWinSizeFit) {
-        prefetchNextPage();
-      }
-      rowGroupPageInfo_.visitedRows += numRowsInPage_;
     }
     auto numRead = std::min(availableOnPage, toRead);
     auto nulls = readNulls(numRead, nullsInReadRange_);
@@ -937,10 +796,6 @@ bool PageReader::rowsForPage(
     if (hasChunkRepDefs_) {
       numLeafNullsConsumed_ = rowOfPage_;
     }
-    if (isWinSizeFit) {
-      prefetchNextPage();
-    }
-    rowGroupPageInfo_.visitedRows += numRowsInPage_;
   }
   auto& scanState = reader.scanState();
   if (isDictionary()) {
@@ -1034,104 +889,6 @@ const VectorPtr& PageReader::dictionaryValues(const TypePtr& type) {
         std::vector<BufferPtr>{dictionary_.strings});
   }
   return dictionaryValues_;
-}
-
-void PageReader::prefetchDataPageV1(const thrift::PageHeader& pageHeader) {
-  dataPageHeader_ = pageHeader;
-  VELOX_CHECK(
-      pageHeader.type == thrift::PageType::DATA_PAGE &&
-      pageHeader.__isset.data_page_header);
-
-  dataPageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
-  pre_decompress_data = iaaDecompressGzip(
-      dataPageData_,
-      pageHeader.compressed_page_size,
-      pageHeader.uncompressed_page_size,
-      uncompressedDataV1Data_,
-      data_qpl_job_id);
-  return;
-}
-
-void PageReader::prefetchDataPageV2(const thrift::PageHeader& pageHeader) {
-  return;
-}
-
-void PageReader::prefetchDictionary(const thrift::PageHeader& pageHeader) {
-  dictPageHeader_ = pageHeader;
-  dictionaryEncoding_ = pageHeader.dictionary_page_header.encoding;
-  VELOX_CHECK(
-      dictionaryEncoding_ == Encoding::PLAIN_DICTIONARY ||
-      dictionaryEncoding_ == Encoding::PLAIN);
-  dictPageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
-
-  pre_decompress_dict = iaaDecompressGzip(
-      dictPageData_,
-      pageHeader.compressed_page_size,
-      pageHeader.uncompressed_page_size,
-      uncompressedDictData_,
-      dict_qpl_job_id);
-
-  return;
-}
-
-const bool PageReader::iaaDecompressGzip(
-    const char* pageData,
-    uint32_t compressedSize,
-    uint32_t uncompressedSize,
-    BufferPtr& uncompressedData,
-    int& qpl_job_id) {
-  dwio::common::ensureCapacity<char>(
-      uncompressedData, uncompressedSize, &pool_);
-
-  if (!isWinSizeFit) {
-    // window size should be 4KB for IAA
-    if (dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS_4KB ==
-        dwio::common::compression::getZlibWindowBits(
-            (const uint8_t*)pageData, uncompressedSize)) {
-      isWinSizeFit = true;
-    } else {
-      qpl_job_id = -1;
-      return false;
-    }
-  }
-  auto streamDebugInfo =
-      fmt::format("Page Reader: Stream {}", inputStream_->getName());
-  std::unique_ptr<dwio::common::compression::AsyncDecompressor> decompressor =
-      dwio::common::compression::createAsyncDecompressor(
-          thriftCodecToCompressionKind(), uncompressedSize, streamDebugInfo);
-  if (decompressor == nullptr) {
-    return false;
-  }
-  qpl_job_id = decompressor->decompress(
-      (const char*)pageData,
-      compressedSize,
-      (char*)uncompressedData->asMutable<char>(),
-      uncompressedSize);
-  if (qpl_job_id < 0) {
-    return false;
-  }
-  return true;
-}
-
-const bool PageReader::getDecompRes(int job_id) {
-  auto streamDebugInfo =
-      fmt::format("Page Reader: Stream {}", inputStream_->getName());
-  std::unique_ptr<dwio::common::compression::AsyncDecompressor> decompressor =
-      dwio::common::compression::createAsyncDecompressor(
-          thriftCodecToCompressionKind(), 0, streamDebugInfo);
-  return decompressor->waitResult(job_id);
-}
-
-PageReader::~PageReader() {
-  if (data_qpl_job_id > 0 || dict_qpl_job_id > 0) {
-    auto streamDebugInfo =
-        fmt::format("Page Reader: Stream {}", inputStream_->getName());
-    std::unique_ptr<dwio::common::compression::AsyncDecompressor> decompressor =
-        dwio::common::compression::createAsyncDecompressor(
-            thriftCodecToCompressionKind(), 0, streamDebugInfo);
-    decompressor->releaseJob(data_qpl_job_id);
-    decompressor->releaseJob(dict_qpl_job_id);
-  }
 }
 
 } // namespace facebook::velox::parquet

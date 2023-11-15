@@ -17,3 +17,11 @@ add_library(velox_dwio_common_compression Compression.cpp PagedInputStream.cpp
 
 target_link_libraries(velox_dwio_common_compression velox_dwio_common xsimd
                       Folly::folly)
+
+if(VELOX_ENABLE_INTEL_IAA)
+  add_library(velox_dwio_common_iaa_compression IAACompression.cpp)
+  target_link_libraries(velox_dwio_common_iaa_compression velox_dwio_qpl
+                        Folly::folly xsimd)
+  target_link_libraries(velox_dwio_common_compression
+                        velox_dwio_common_iaa_compression)
+endif()
