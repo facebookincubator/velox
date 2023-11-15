@@ -605,7 +605,11 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     // wrapping the results.
     BufferPtr remainingIndices;
     if (remainingFilterExprSet_) {
+      auto filterStartMicros = getCurrentTimeMicro();
       rowsRemaining = evaluateRemainingFilter(rowVector);
+      totalRemainingFilterTime_.fetch_add(
+          (getCurrentTimeMicro() - filterStartMicros) * 1000,
+          std::memory_order_relaxed);
       VELOX_CHECK_LE(rowsRemaining, rowsScanned);
       if (rowsRemaining == 0) {
         // No rows passed the remaining filter.
@@ -675,6 +679,10 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
        {"totalScanTime",
         RuntimeCounter(
             ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+       {"totalRemainingFilterTime",
+        RuntimeCounter(
+            totalRemainingFilterTime_.load(std::memory_order_relaxed),
+            RuntimeCounter::Unit::kNanos)},
        {"ioWaitNanos",
         RuntimeCounter(
             ioStats_->queryThreadIoLatency().sum() * 1000,
