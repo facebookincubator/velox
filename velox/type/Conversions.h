@@ -92,7 +92,7 @@ struct Converter<
       return folly::to<T>(v);
     } else {
       // Handling integer target cases
-      T result = 0;
+      long long result = 0;
       int index = 0;
       int len = v.size();
       if (len == 0) {
@@ -111,6 +111,7 @@ struct Converter<
         index = 1;
       }
       if (negative) {
+        auto max_value = std::abs(static_cast<long>(std::numeric_limits<T>::min()));
         for (; index < len; index++) {
           // Truncate the decimal
           if (!decimalPoint && v[index] == '.') {
@@ -126,7 +127,7 @@ struct Converter<
             result = result * 10 - (v[index] - '0');
           }
           // Overflow check
-          if (result > 0) {
+          if (result > max_value) {
             VELOX_USER_FAIL("Value is too large for type");
           }
         }
@@ -146,13 +147,13 @@ struct Converter<
             result = result * 10 + (v[index] - '0');
           }
           // Overflow check
-          if (result < 0) {
+          if (result > std::numeric_limits<T>::max()) {
             VELOX_USER_FAIL("Value is too large for type");
           }
         }
       }
       // Final result
-      return result;
+      return static_cast<T>(result);
     }
   }
 
