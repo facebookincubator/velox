@@ -111,7 +111,6 @@ struct Converter<
         index = 1;
       }
       if (negative) {
-        auto max_value = std::abs(static_cast<long>(std::numeric_limits<T>::min()));
         for (; index < len; index++) {
           // Truncate the decimal
           if (!decimalPoint && v[index] == '.') {
@@ -127,7 +126,7 @@ struct Converter<
             result = result * 10 - (v[index] - '0');
           }
           // Overflow check
-          if (result > max_value) {
+          if (result < std::numeric_limits<T>::min()) {
             VELOX_USER_FAIL("Value is too large for type");
           }
         }
