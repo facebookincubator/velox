@@ -19,13 +19,16 @@
 #include "velox/common/compression/v2/Compression.h"
 #include <memory>
 #include <string>
-#include <utility>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/compression/v2/GzipCompression.h"
 #include "velox/common/compression/v2/Lz4Compression.h"
 #include "velox/common/compression/v2/LzoCompression.h"
 #include "velox/common/compression/v2/SnappyCompression.h"
 #include "velox/common/compression/v2/ZstdCompression.h"
+
+#ifdef VELOX_ENABLE_QAT
+#include "velox/common/compression/v2/qat/QatCompression.h"
+#endif
 
 namespace facebook::velox::common {
 
@@ -127,11 +130,17 @@ std::unique_ptr<Codec> Codec::create(
       codec = makeLz4HadoopRawCodec();
       break;
     case CompressionKind::CompressionKind_GZIP: {
-      auto opt = dynamic_cast<const GzipCodecOptions*>(&codecOptions);
-      if (opt) {
+      if (auto opt = dynamic_cast<const GzipCodecOptions*>(&codecOptions)) {
         codec = makeGzipCodec(compressionLevel, opt->format, opt->windowBits);
         break;
       }
+#ifdef VELOX_ENABLE_QAT
+      if (auto opt =
+              dynamic_cast<const qat::QatGzipCodecOptions*>(&codecOptions)) {
+        codec = qat::makeQatGzipCodec(compressionLevel, opt->pollingMode);
+        break;
+      }
+#endif
       codec = makeGzipCodec(compressionLevel);
       break;
     }
