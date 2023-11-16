@@ -2,10 +2,6 @@
 #include <FlexLexer.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Type.h"
-#include "velox/functions/prestosql/types/HyperLogLogType.h"
-#include "velox/functions/prestosql/types/JsonType.h"
-#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-
 %}
 %require "3.0.4"
 %language "C++"
@@ -38,27 +34,14 @@
     TypePtr typeFromString(const std::string& type) {
         auto upper = type;
         std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-        if (upper == "UNKNOWN") {
-            return UNKNOWN();
-        }
-        if (upper == TIMESTAMP_WITH_TIME_ZONE()->toString()) {
-            return TIMESTAMP_WITH_TIME_ZONE();
-        }
-        if (upper == HYPERLOGLOG()->toString()) {
-            return HYPERLOGLOG();
-        }
-        if (upper == JSON()->toString()) {
-            return JSON();
-        }
         if (upper == "INT") {
             upper = "INTEGER";
         } else if (upper == "DOUBLE PRECISION") {
             upper = "DOUBLE";
         }
-        if (!hasType(upper)) {
-            VELOX_FAIL("Failed to parse type [{}]", type);
-        }
-        return getType(upper, {});
+        auto inferredType = getType(upper, {});
+        VELOX_CHECK(inferredType, "Failed to parse type [{}]", type);
+        return inferredType;
     }
 }
 

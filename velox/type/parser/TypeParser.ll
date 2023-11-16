@@ -7,7 +7,7 @@
 #define YY_DECL int facebook::velox::type::Scanner::lex(facebook::velox::type::Parser::semantic_type *yylval)
 %}
 
-%option c++ noyywrap noyylineno nodefault
+%option c++ noyywrap noyylineno nodefault caseless
 
 A   [A|a]
 B   [B|b]
@@ -51,7 +51,7 @@ TYPE_WITH_SPACES  ((DOUBLE[ ]PRECISION)|(TIME[ ]WITH[ ]TIME[ ]ZONE)|(TIMESTAMP[ 
 (DECIMAL)          return Parser::token::DECIMAL;
 {ROW}              return Parser::token::ROW;
 {VARIABLE}         yylval->build<std::string>(YYText()); return Parser::token::VARIABLE;
-{NUMBER}           yylval->build<long long>(strtoll(YYText(), nullptr, 10)); return Parser::token::NUMBER;
+{NUMBER}           yylval->build<long long>(folly::to<int>(YYText())); return Parser::token::NUMBER;
 {WORD}             yylval->build<std::string>(YYText()); return Parser::token::WORD;
 {TYPE_WITH_SPACES} yylval->build<std::string>(YYText()); return Parser::token::TYPE_WITH_SPACES;
 {QUOTED_ID}        yylval->build<std::string>(YYText()); return Parser::token::QUOTED_ID;
@@ -70,7 +70,7 @@ facebook::velox::TypePtr facebook::velox::parseType(const std::string& typeText)
  {
     std::istringstream is(typeText);
     facebook::velox::TypePtr type;
-    facebook::velox::type::Scanner scanner{ is, std::cerr, type, typeText};
+    facebook::velox::type::Scanner scanner{is, std::cerr, type, typeText};
     facebook::velox::type::Parser parser{ &scanner };
     parser.parse();
     VELOX_CHECK(type, "Failed to parse type [{}]", typeText);

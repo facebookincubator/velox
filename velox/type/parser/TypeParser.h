@@ -30,10 +30,8 @@ namespace facebook::velox {
 /// The parsing is case-insensitive. i.e. 'Row' and 'row' are equal.
 /// Field names for rows are optional.
 /// Quoted field names are supported.
-/// All types except for Presto types need to be registered. An error is thrown
-/// otherwise.
-/// Uses the Type::hasType and Type::getType APIs to convert a string to Velox
-/// type.
-
+/// All custom types need to be registered. An error is thrown otherwise.
+/// Uses the Type::getType API to convert a string to Velox type.
 TypePtr parseType(const std::string& typeText);
+
 } // namespace facebook::velox

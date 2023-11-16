@@ -25,7 +25,12 @@
 namespace facebook::velox {
 namespace {
 
-class TestTypeSignature : public ::testing::Test {};
+class TestTypeSignature : public ::testing::Test {
+  void SetUp() override {
+    registerJsonType();
+    registerTimestampWithTimeZoneType();
+  }
+};
 
 TEST_F(TestTypeSignature, booleanType) {
   ASSERT_EQ(*parseType("boolean"), *BOOLEAN());
@@ -137,9 +142,9 @@ TEST_F(TestTypeSignature, rowType) {
 
   ASSERT_EQ(*parseType("row(array(Json))"), *ROW({ARRAY(JSON())}));
 
-  ASSERT_EQ(
+  VELOX_ASSERT_THROW(
       *parseType("row(col0 row(array(HyperLogLog)))"),
-      *ROW({"col0"}, {ROW({ARRAY(HYPERLOGLOG())})}));
+      "Failed to parse type [HyperLogLog]");
 
   // Field type canonicalization.
   ASSERT_EQ(*parseType("row(col iNt)"), *ROW({"col"}, {INTEGER()}));

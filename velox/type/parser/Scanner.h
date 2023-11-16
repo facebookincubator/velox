@@ -32,7 +32,7 @@ class Scanner : public yyFlexLexer {
       std::istream& arg_yyin,
       std::ostream& arg_yyout,
       TypePtr& outputType,
-      const std::string& input)
+      const std::string_view input)
       : yyFlexLexer(&arg_yyin, &arg_yyout),
         outputType_(outputType),
         input_(input){};
