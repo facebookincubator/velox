@@ -41,44 +41,41 @@ class MakeDecimalTest : public SparkFunctionBaseTest {
     }
   }
 
-  template <typename TOutput>
   void testMakeDecimal(
       const VectorPtr& input,
       std::optional<bool> nullOnOverflow,
       const VectorPtr& expected,
       bool tryMakeDecimal = false) {
-    auto makeDecimal =
+    auto expr =
         createMakeDecimal(nullOnOverflow, expected->type(), tryMakeDecimal);
-    velox::test::assertEqualVectors(
-        expected, evaluate(makeDecimal, makeRowVector({input})));
-    testEncodings<int64_t, TOutput>({input}, makeDecimal, expected);
+    testEncodings(expr, {input}, expected);
   }
 };
 
 TEST_F(MakeDecimalTest, makeDecimal) {
-  testMakeDecimal<int64_t>(
+  testMakeDecimal(
       makeFlatVector<int64_t>({1111, -1112, 9999, 0}),
       std::nullopt,
       makeFlatVector<int64_t>({1111, -1112, 9999, 0}, DECIMAL(5, 1)));
-  testMakeDecimal<int64_t>(
+  testMakeDecimal(
       makeFlatVector<int64_t>({1111, -1112, 9999, 0}),
       true,
       makeFlatVector<int64_t>({1111, -1112, 9999, 0}, DECIMAL(5, 1)));
-  testMakeDecimal<int128_t>(
+  testMakeDecimal(
       makeFlatVector<int64_t>(
           {11111111, -11112112, 99999999, DecimalUtil::kShortDecimalMax + 1}),
       true,
       makeFlatVector<int128_t>(
           {11111111, -11112112, 99999999, DecimalUtil::kShortDecimalMax + 1},
           DECIMAL(38, 19)));
-  testMakeDecimal<int64_t>(
+  testMakeDecimal(
       makeFlatVector<int64_t>(
           {11111111, -11112112, 99999999, DecimalUtil::kShortDecimalMax + 1}),
       true,
       makeNullableFlatVector<int64_t>(
           {11111111, -11112112, 99999999, std::nullopt}, DECIMAL(18, 0)));
   VELOX_ASSERT_THROW(
-      testMakeDecimal<int64_t>(
+      testMakeDecimal(
           makeFlatVector<int64_t>(
               {11111111,
                -11112112,
@@ -88,14 +85,14 @@ TEST_F(MakeDecimalTest, makeDecimal) {
           makeNullableFlatVector<int64_t>(
               {11111111, -11112112, 99999999, std::nullopt}, DECIMAL(18, 0))),
       "Unscaled value 1000000000000000000 too large for precision 18.");
-  testMakeDecimal<int64_t>(
+  testMakeDecimal(
       makeFlatVector<int64_t>(
           {11111111, -11112112, 99999999, DecimalUtil::kShortDecimalMax + 1}),
       false,
       makeNullableFlatVector<int64_t>(
           {11111111, -11112112, 99999999, std::nullopt}, DECIMAL(18, 0)),
       true /*tryMakeDecimal*/);
-  testMakeDecimal<int64_t>(
+  testMakeDecimal(
       makeNullableFlatVector<int64_t>({101, std::nullopt, 1000}),
       true,
       makeNullableFlatVector<int64_t>(
