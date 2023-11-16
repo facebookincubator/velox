@@ -605,11 +605,7 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     // wrapping the results.
     BufferPtr remainingIndices;
     if (remainingFilterExprSet_) {
-      auto filterStartMicros = getCurrentTimeMicro();
       rowsRemaining = evaluateRemainingFilter(rowVector);
-      totalRemainingFilterTime_.fetch_add(
-          (getCurrentTimeMicro() - filterStartMicros) * 1000,
-          std::memory_order_relaxed);
       VELOX_CHECK_LE(rowsRemaining, rowsScanned);
       if (rowsRemaining == 0) {
         // No rows passed the remaining filter.
@@ -824,12 +820,17 @@ HiveDataSource::createBufferedInput(
 }
 
 vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
+  auto filterStartMicros = getCurrentTimeMicro();
   filterRows_.resize(output_->size());
 
   expressionEvaluator_->evaluate(
       remainingFilterExprSet_.get(), filterRows_, *rowVector, filterResult_);
-  return exec::processFilterResults(
+  auto res = exec::processFilterResults(
       filterResult_, filterRows_, filterEvalCtx_, pool_);
+  totalRemainingFilterTime_.fetch_add(
+      (getCurrentTimeMicro() - filterStartMicros) * 1000,
+      std::memory_order_relaxed);
+  return res;
 }
 
 void HiveDataSource::resetSplit() {
