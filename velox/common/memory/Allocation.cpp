@@ -36,7 +36,7 @@ void Allocation::append(uint8_t* address, uint32_t numPages) {
       runs_.empty() || address != runs_.back().data(),
       "Appending a duplicate address into a PageRun");
   while (numPages > 0) {
-    auto numPagesInRun = std::min(numPages, PageRun::kMaxPagesInRun);
+    const auto numPagesInRun = std::min(numPages, PageRun::kMaxPagesInRun);
     runs_.emplace_back(address, numPagesInRun);
     address += AllocationTraits::pageBytes(numPagesInRun);
     numPages -= numPagesInRun;

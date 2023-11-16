@@ -225,11 +225,12 @@ int64_t MallocAllocator::freeNonContiguous(Allocation& allocation) {
     while (i + 1 < allocation.numRuns()) {
       Allocation::PageRun nextRun = allocation.runAt(i + 1);
       void* nextPtr = nextRun.data();
-      if (mallocs_.count(nextPtr) != 0) {
+      if (static_cast<char*>(nextPtr) - static_cast<char*>(ptr) !=
+          AllocationTraits::pageBytes(numFreed)) {
         break;
       }
       numFreed += nextRun.numPages();
-      i++;
+      ++i;
     }
     {
       std::lock_guard<std::mutex> l(mallocsMutex_);
