@@ -288,3 +288,11 @@ add_test(
   COMMAND cpr_http_client_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(cpr_http_client_test cpr::cpr gtest gtest_main)
+
+add_executable(presto_query_runner_test PrestoQueryRunnerTest.cpp)
+add_test(
+  NAME presto_query_runner_test
+  COMMAND presto_query_runner_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(presto_query_runner_test velox_presto_serializer
+                      velox_dwio_dwrf_writer velox_exec_test_lib)
