@@ -156,7 +156,7 @@ struct Converter<
         }
       }
       // Final result
-      return static_cast<T>(result);
+      return result;
     }
   }
 
