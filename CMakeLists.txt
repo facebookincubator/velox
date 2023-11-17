@@ -265,6 +265,11 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   find_package(FBThrift CONFIG REQUIRED)
 endif()
 
+if(VELOX_ENABLE_IAA)
+  find_package(qpl REQUIRED)
+  add_definitions(-DVELOX_ENABLE_IAA)
+endif()
+
 # define processor variable for conditional compilation
 if(${VELOX_CODEGEN_SUPPORT})
   add_compile_definitions(CODEGEN_ENABLED=1)

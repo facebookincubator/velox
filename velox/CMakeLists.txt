@@ -79,3 +79,7 @@ endif()
 if(${VELOX_ENABLE_SUBSTRAIT})
   add_subdirectory(substrait)
 endif()
+
+if(${VELOX_ENABLE_IAA})
+  add_subdirectory(common/compression/v2/iaa)
+endif()

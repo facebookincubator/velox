@@ -27,6 +27,10 @@
 #include "velox/common/compression/v2/SnappyCompression.h"
 #include "velox/common/compression/v2/ZstdCompression.h"
 
+#ifdef VELOX_ENABLE_IAA
+#include "velox/common/compression/v2/iaa/IaaCompression.h"
+#endif
+
 namespace facebook::velox::common {
 
 namespace {
@@ -127,11 +131,17 @@ std::unique_ptr<Codec> Codec::create(
       codec = makeLz4HadoopRawCodec();
       break;
     case CompressionKind::CompressionKind_GZIP: {
-      auto opt = dynamic_cast<const GzipCodecOptions*>(&codecOptions);
-      if (opt) {
+      if (auto opt = dynamic_cast<const GzipCodecOptions*>(&codecOptions)) {
         codec = makeGzipCodec(compressionLevel, opt->format, opt->windowBits);
         break;
       }
+#ifdef VELOX_ENABLE_IAA
+      if (auto opt =
+              dynamic_cast<const iaa::IaaGzipCodecOptions*>(&codecOptions)) {
+        codec = iaa::makeIaaGzipCodec(compressionLevel, opt->maxJobNumber);
+        break;
+      }
+#endif
       codec = makeGzipCodec(compressionLevel);
       break;
     }
@@ -232,6 +242,7 @@ uint64_t Codec::compressPartial(
 bool AsyncCodec::isAvailable(CompressionKind kind) {
   switch (kind) {
     case CompressionKind::CompressionKind_NONE:
+    case CompressionKind::CompressionKind_GZIP:
       return true;
     default:
       return false;
@@ -257,6 +268,15 @@ std::unique_ptr<AsyncCodec> AsyncCodec::create(
   std::unique_ptr<AsyncCodec> codec;
   switch (kind) {
     case CompressionKind::CompressionKind_NONE:
+      return nullptr;
+    case CompressionKind::CompressionKind_GZIP:
+#ifdef VELOX_ENABLE_IAA
+      if (auto opt =
+              dynamic_cast<const iaa::IaaGzipCodecOptions*>(&codecOptions)) {
+        codec = iaa::makeIaaGzipAsyncCodec(compressionLevel, opt->maxJobNumber);
+        break;
+      }
+#endif
       return nullptr;
     default:
       VELOX_UNREACHABLE("Unknown compression kind: {}", kind);
