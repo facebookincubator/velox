@@ -124,7 +124,8 @@ struct Converter<
           }
           if (!decimalPoint) {
             // Overflow check
-            if ((std::numeric_limits<T>::min() + (v[index] - '0')) / 10 > result) {
+            auto tmpResult = (std::numeric_limits<T>::min() + (v[index] - '0')) / 10;
+            if (tmpResult > result) {
               VELOX_USER_FAIL("Value is too large for type");
             }
             result = result * 10 - (v[index] - '0');
@@ -144,7 +145,8 @@ struct Converter<
           }
           if (!decimalPoint) {
             // Overflow check
-            if ((std::numeric_limits<T>::max() - (v[index] - '0')) / 10 < result) {
+            auto tmpResult = (std::numeric_limits<T>::max() - (v[index] - '0')) / 10;
+            if (tmpResult < result) {
               VELOX_USER_FAIL("Value is too large for type");
             }
             result = result * 10 + (v[index] - '0');
