@@ -94,13 +94,13 @@ TEST_F(AllocationTest, multiplePageRuns) {
   ASSERT_EQ(allocation.numRuns(), 2);
 
   uint8_t* const secondBufAddr = reinterpret_cast<uint8_t*>(
-      startBufAddrValue + allocation.numPages() * AllocationTraits::kPageSize);
+      startBufAddrValue + AllocationTraits::pageBytes(allocation.numPages()));
   allocation.append(secondBufAddr, Allocation::PageRun::kMaxPagesInRun - 100);
   ASSERT_EQ(allocation.numPages(), Allocation::PageRun::kMaxPagesInRun * 2);
   ASSERT_EQ(allocation.numRuns(), 3);
 
   uint8_t* const thirdBufAddr = reinterpret_cast<uint8_t*>(
-      firstBufAddr + 2 * allocation.numPages() * AllocationTraits::kPageSize);
+      firstBufAddr + 2 * AllocationTraits::pageBytes(allocation.numPages()));
   allocation.append(thirdBufAddr, Allocation::PageRun::kMaxPagesInRun * 2);
   ASSERT_EQ(allocation.numPages(), Allocation::PageRun::kMaxPagesInRun * 4);
   ASSERT_EQ(allocation.numRuns(), 5);
