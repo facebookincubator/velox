@@ -92,7 +92,7 @@ struct Converter<
       return folly::to<T>(v);
     } else {
       // Handling integer target cases
-      long long result = 0;
+      T result = 0;
       int index = 0;
       int len = v.size();
       if (len == 0) {
@@ -123,11 +123,11 @@ struct Converter<
             VELOX_USER_FAIL("Encountered a non-digit character");
           }
           if (!decimalPoint) {
+            // Overflow check
+            if ((std::numeric_limits<T>::min() + (v[index] - '0')) / 10 > result) {
+              VELOX_USER_FAIL("Value is too large for type");
+            }
             result = result * 10 - (v[index] - '0');
-          }
-          // Overflow check
-          if (result < std::numeric_limits<T>::min()) {
-            VELOX_USER_FAIL("Value is too large for type");
           }
         }
       } else {
@@ -143,11 +143,11 @@ struct Converter<
             VELOX_USER_FAIL("Encountered a non-digit character");
           }
           if (!decimalPoint) {
+            // Overflow check
+            if ((std::numeric_limits<T>::max() - (v[index] - '0')) / 10 < result) {
+              VELOX_USER_FAIL("Value is too large for type");
+            }
             result = result * 10 + (v[index] - '0');
-          }
-          // Overflow check
-          if (result > std::numeric_limits<T>::max()) {
-            VELOX_USER_FAIL("Value is too large for type");
           }
         }
       }
