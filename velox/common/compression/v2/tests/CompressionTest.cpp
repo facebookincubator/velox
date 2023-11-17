@@ -96,17 +96,46 @@ void checkCodecRoundtrip(
   ASSERT_EQ(data.size(), decompressedSize);
 }
 
-// Use same codec for both compression and decompression.
 void checkCodecRoundtrip(
-    const std::unique_ptr<Codec>& codec,
+    AsyncCodec* c1,
+    AsyncCodec* c2,
+    const std::vector<uint8_t>& data) {
+  auto maxCompressedLen =
+      static_cast<size_t>(c1->maxCompressedLength(data.size()));
+  std::vector<uint8_t> compressed(maxCompressedLen);
+  std::vector<uint8_t> decompressed(data.size());
+
+  // Compress with codec c1.
+  auto compressedFuture = c1->compressAsync(
+      data.size(), data.data(), maxCompressedLen, compressed.data());
+  auto compressedSize = std::move(compressedFuture).get();
+  compressed.resize(compressedSize);
+
+  // Decompress with codec c2.
+  auto decompressedFuture = c2->decompressAsync(
+      compressed.size(),
+      compressed.data(),
+      decompressed.size(),
+      decompressed.data());
+  auto decompressedSize = std::move(decompressedFuture).get();
+
+  ASSERT_EQ(data, decompressed);
+  ASSERT_EQ(data.size(), decompressedSize);
+}
+
+// Use same codec for both compression and decompression.
+template <typename CodecType>
+void checkCodecRoundtrip(
+    const std::unique_ptr<CodecType>& codec,
     const std::vector<uint8_t>& data) {
   checkCodecRoundtrip(codec.get(), codec.get(), data);
 }
 
 // Compress with codec c1 and decompress with codec c2.
+template <typename CodecType>
 void checkCodecRoundtrip(
-    const std::unique_ptr<Codec>& c1,
-    const std::unique_ptr<Codec>& c2,
+    const std::unique_ptr<CodecType>& c1,
+    const std::unique_ptr<CodecType>& c2,
     const std::vector<uint8_t>& data) {
   checkCodecRoundtrip(c1.get(), c2.get(), data);
 }
@@ -260,6 +289,35 @@ void checkStreamingRoundtrip(Codec* codec, const std::vector<uint8_t>& data) {
   checkStreamingRoundtrip(
       codec->makeCompressor(), codec->makeDecompressor(), data);
 }
+
+class DummyGzipAsyncCodec : public AsyncCodec, public GzipCodec {
+ public:
+  DummyGzipAsyncCodec()
+      : GzipCodec(
+            kGzipDefaultCompressionLevel,
+            GzipFormat::kGzip,
+            kGzip4KBWindowBits) {}
+
+  folly::SemiFuture<uint64_t> decompressAsync(
+      uint64_t inputLength,
+      const uint8_t* input,
+      uint64_t outputLength,
+      uint8_t* output) override {
+    return folly::makeSemiFuture().deferValue([=](auto&&) -> uint64_t {
+      return GzipCodec::decompress(inputLength, input, outputLength, output);
+    });
+  }
+
+  folly::SemiFuture<uint64_t> compressAsync(
+      uint64_t inputLength,
+      const uint8_t* input,
+      uint64_t outputLength,
+      uint8_t* output) override {
+    return folly::makeSemiFuture().deferValue([=](auto&&) -> uint64_t {
+      return GzipCodec::compress(inputLength, input, outputLength, output);
+    });
+  }
+};
 } // namespace
 
 class CodecTest : public ::testing::TestWithParam<TestParam> {
@@ -464,6 +522,23 @@ std::vector<TestParam> getGzipTestParams() {
   return params;
 }
 
+TEST_P(CodecTest, createAsyncCodec) {
+  const auto kind = getCompressionKind();
+  if (!AsyncCodec::isAvailable(kind)) {
+    // Support for this codec hasn't been built.
+    VELOX_ASSERT_THROW(
+        AsyncCodec::create(
+            kind, CodecOptions{Codec::useDefaultCompressionLevel()}),
+        "Support for codec '" + compressionKindToString(kind) +
+            "' not implemented.");
+  } else {
+    auto codec = Codec::create(kind, Codec::minimumCompressionLevel(kind));
+    if (getCompressionKind() != CompressionKind::CompressionKind_NONE) {
+      ASSERT(codec);
+    }
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     TestLZ4Frame,
     CodecTest,
@@ -496,6 +571,16 @@ TEST(CodecLZ4HadoopTest, compatibility) {
 
   for (auto dataSize : {0, 10, 10000, 100000}) {
     checkCodecRoundtrip(c1, c2, makeRandomData(dataSize));
+  }
+}
+
+TEST(AsyncCodecTest, codecRoundTrip) {
+  std::unique_ptr<AsyncCodec> codec = std::make_unique<DummyGzipAsyncCodec>();
+  for (int dataSize : {0, 10, 10000, 100000}) {
+    auto randomData = makeRandomData(dataSize);
+    checkCodecRoundtrip(codec, randomData);
+    auto compressibleData = makeCompressibleData(dataSize);
+    checkCodecRoundtrip(codec, compressibleData);
   }
 }
 } // namespace facebook::velox::common

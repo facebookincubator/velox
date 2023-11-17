@@ -57,7 +57,7 @@ class GzipCodecOptions : public CodecOptions {
   std::optional<int32_t> windowBits;
 };
 
-class GzipCodec : public Codec {
+class GzipCodec : public virtual Codec {
  public:
   GzipCodec(int32_t compressionLevel, GzipFormat format, int32_t windowBits);
 

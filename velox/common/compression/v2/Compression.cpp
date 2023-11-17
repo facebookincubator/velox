@@ -228,4 +228,41 @@ uint64_t Codec::compressPartial(
     uint8_t* output) {
   VELOX_UNSUPPORTED("'{}' doesn't support partial compression", name());
 }
+
+bool AsyncCodec::isAvailable(CompressionKind kind) {
+  switch (kind) {
+    case CompressionKind::CompressionKind_NONE:
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::unique_ptr<AsyncCodec> AsyncCodec::create(
+    CompressionKind kind,
+    const CodecOptions& codecOptions) {
+  if (!isAvailable(kind)) {
+    auto name = compressionKindToString(kind);
+    if (folly::StringPiece({name}).startsWith("unknown")) {
+      VELOX_UNSUPPORTED("Unrecognized codec '{}'", name);
+    }
+    VELOX_UNSUPPORTED("Support for codec '{}' not implemented.", name);
+  }
+
+  auto compressionLevel = codecOptions.compressionLevel;
+  if (compressionLevel != kUseDefaultCompressionLevel) {
+    checkSupportsCompressionLevel(kind);
+  }
+
+  std::unique_ptr<AsyncCodec> codec;
+  switch (kind) {
+    case CompressionKind::CompressionKind_NONE:
+      return nullptr;
+    default:
+      VELOX_UNREACHABLE("Unknown compression kind: {}", kind);
+  }
+
+  codec->init();
+  return codec;
+}
 } // namespace facebook::velox::common

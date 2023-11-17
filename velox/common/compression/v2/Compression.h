@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <folly/futures/Future.h>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -234,7 +235,7 @@ class Codec {
     return kUseDefaultCompressionLevel;
   }
 
- private:
+ protected:
   /// Initializes the codec's resources.
   virtual void init();
 
@@ -242,5 +243,28 @@ class Codec {
       uint64_t inputLength,
       const uint8_t* input,
       std::optional<uint64_t> uncompressedLength) const;
+};
+
+class AsyncCodec : public virtual Codec {
+ public:
+  virtual ~AsyncCodec() override = default;
+
+  static bool isAvailable(CompressionKind kind);
+
+  static std::unique_ptr<AsyncCodec> create(
+      CompressionKind kind,
+      const CodecOptions& codecOptions);
+
+  virtual folly::SemiFuture<uint64_t> decompressAsync(
+      uint64_t inputLength,
+      const uint8_t* input,
+      uint64_t outputLength,
+      uint8_t* output) = 0;
+
+  virtual folly::SemiFuture<uint64_t> compressAsync(
+      uint64_t inputLength,
+      const uint8_t* input,
+      uint64_t outputLength,
+      uint8_t* output) = 0;
 };
 } // namespace facebook::velox::common
