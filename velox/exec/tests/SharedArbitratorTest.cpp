@@ -20,6 +20,7 @@
 #include <re2/re2.h>
 #include <deque>
 
+#include <functional>
 #include "folly/experimental/EventCount.h"
 #include "folly/futures/Barrier.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -380,6 +381,173 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
         std::move(pool));
     ++numAddedPools_;
     return queryCtx;
+  }
+
+  std::shared_ptr<Task> makeHashJoinTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kJoinSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .project({"c0", "c1", "c2"})
+                  .hashJoin(
+                      {"c0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(vectors)
+                          .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                          .planNode(),
+                      "",
+                      {"c0", "c1", "c2"},
+                      core::JoinType::kInner)
+                  .planNode())
+        .assertResults(
+            "SELECT t1.c0 AS c0, t1.c1 AS c1, t1.c2 "
+            "FROM tmp t1 "
+            "JOIN tmp t2 "
+            "ON t1.c0 = t2.c0");
+  }
+
+  std::shared_ptr<Task> makeAggregateTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                  .planNode())
+        .assertResults("SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
+  }
+
+  std::shared_ptr<Task> makeOrderByTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .project({"c0", "c1", "c2"})
+                  .orderBy({fmt::format("{} ASC NULLS LAST", "c2")}, false)
+                  .planNode())
+        .assertResults(
+            "SELECT c0, c1, c2 "
+            "FROM tmp "
+            "ORDER BY c2 ASC NULLS LAST");
+  }
+
+  std::shared_ptr<Task> makeRowNumberTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kRowNumberSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .rowNumber({"c0"}, 2, false)
+                  .project({"c0", "c1"})
+                  .planNode())
+        .assertResults(
+            "SELECT c0, c1 "
+            "FROM ("
+            " SELECT *, row_number() over (partition by c0) AS rn FROM tmp) "
+            "WHERE rn <= 2");
+  }
+
+  std::shared_ptr<Task> makeTopNTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .project({"c1"})
+                  .topN({"c1 NULLS FIRST"}, 10, false)
+                  .planNode())
+        .assertResults(
+            "SELECT c1 "
+            "FROM tmp "
+            "ORDER BY c1 ASC NULLS LAST "
+            "LIMIT 10");
+  }
+
+  std::shared_ptr<Task> makeWriteTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    int numRows = std::accumulate(
+        vectors.cbegin(),
+        vectors.cend(),
+        0,
+        [](int sum, const RowVectorPtr& row) { return sum + row->size(); });
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto outputDirectory = TempDirectoryPath::create();
+    auto writerPlan =
+        PlanBuilder()
+            .values(vectors)
+            .tableWrite(outputDirectory->path)
+            .singleAggregation(
+                {},
+                {fmt::format(
+                    "sum({})", TableWriteTraits::rowCountColumnName())})
+            .planNode();
+
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kWriterSpillEnabled, "true")
+        // Set 0 file writer flush threshold to always trigger flush in test.
+        .config(
+            core::QueryConfig::kWriterFlushThresholdBytes,
+            folly::to<std::string>(0))
+        // Set stripe size to extreme large to avoid writer internal triggered
+        // flush.
+        .connectorConfig(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+            folly::to<std::string>("1GB"))
+        .connectorConfig(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+            folly::to<std::string>("1GB"))
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(writerPlan)
+        .assertResults(fmt::format("SELECT {}", numRows));
   }
 
   static inline FakeMemoryOperatorFactory* fakeOperatorFactory_;
@@ -3634,23 +3802,14 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
   fuzzerOpts_.vectorSize = 32;
   fuzzerOpts_.stringVariableLength = false;
   fuzzerOpts_.stringLength = 32;
+  vectors.reserve(numVectors);
   for (int i = 0; i < numVectors; ++i) {
     vectors.push_back(newVector());
   }
   const int numDrivers = 4;
   createDuckDbTable(vectors);
 
-  const auto queryPlan =
-      PlanBuilder()
-          .values(vectors, true)
-          .addNode([&](std::string id, core::PlanNodePtr input) {
-            return std::make_shared<FakeMemoryNode>(id, input);
-          })
-          .planNode();
-  const std::string referenceSQL = "SELECT * FROM tmp";
-
   std::atomic<bool> stopped{false};
-
   std::mutex mutex;
   std::vector<std::shared_ptr<core::QueryCtx>> queries;
   std::deque<std::shared_ptr<Task>> zombieTasks;
@@ -3681,78 +3840,42 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
         return false;
       });
 
-  const int numThreads = 30;
-  const int maxNumZombieTasks = 128;
+  const int numThreads = 32;
   std::vector<std::thread> queryThreads;
+  queryThreads.reserve(numThreads);
   for (int i = 0; i < numThreads; ++i) {
     queryThreads.emplace_back([&, i]() {
-      DuckDbQueryRunner duckDbQueryRunner;
-      folly::Random::DefaultGenerator rng;
-      rng.seed(i);
-      while (!stopped) {
-        std::shared_ptr<core::QueryCtx> query;
-        {
-          std::lock_guard<std::mutex> l(mutex);
-          if (queries.empty()) {
-            queries.emplace_back(newQueryCtx());
-          }
-          const int index = folly::Random::rand32() % queries.size();
-          query = queries[index];
-        }
         std::shared_ptr<Task> task;
-        try {
-          task = AssertQueryBuilder(duckDbQueryRunner)
-                     .queryCtx(query)
-                     .plan(PlanBuilder()
-                               .values(vectors)
-                               .addNode([&](std::string id,
-                                            core::PlanNodePtr input) {
-                                 return std::make_shared<FakeMemoryNode>(
-                                     id, input);
-                               })
-                               .planNode())
-                     .assertResults("SELECT * FROM tmp");
-        } catch (const VeloxException& e) {
-          continue;
+        if (i == 0) {
+          // Write task contains aggregate node, which does not support
+          // multithread aggregation type resolver, so make sure it is built in
+          // a single thread.
+          task =
+              makeWriteTask(vectors, newQueryCtx(kMemoryCapacity), numDrivers);
+        } else if ((i % 4) == 0) {
+          task = makeHashJoinTask(
+              vectors, newQueryCtx(kMemoryCapacity), numDrivers);
+        } else if ((i % 4) == 1) {
+          task = makeOrderByTask(
+              vectors, newQueryCtx(kMemoryCapacity), numDrivers);
+        } else if ((i % 4) == 2) {
+          task =
+              makeTopNTask(vectors, newQueryCtx(kMemoryCapacity), numDrivers);
+        } else {
+          task = makeRowNumberTask(
+              vectors, newQueryCtx(kMemoryCapacity), numDrivers);
         }
+
         std::lock_guard<std::mutex> l(mutex);
-        zombieTasks.emplace_back(std::move(task));
-        while (zombieTasks.size() > maxNumZombieTasks) {
-          zombieTasks.pop_front();
+        if ((folly::Random::rand32() % 10) <= 2) {
+          zombieTasks.emplace_back(std::move(task));
         }
-      }
     });
   }
-
-  const int maxNumQueries = 64;
-  std::thread controlThread([&]() {
-    folly::Random::DefaultGenerator rng;
-    rng.seed(1000);
-    while (!stopped) {
-      std::shared_ptr<core::QueryCtx> queryToDelete;
-      {
-        std::lock_guard<std::mutex> l(mutex);
-        if (queries.empty() ||
-            ((queries.size() < maxNumQueries) &&
-             folly::Random::oneIn(4, rng))) {
-          queries.emplace_back(newQueryCtx());
-        } else {
-          const int deleteIndex = folly::Random::rand32(rng) % queries.size();
-          queryToDelete = queries[deleteIndex];
-          queries.erase(queries.begin() + deleteIndex);
-        }
-      }
-      std::this_thread::sleep_for(std::chrono::microseconds(5));
-    }
-  });
-
-  std::this_thread::sleep_for(std::chrono::seconds(5));
-  stopped = true;
 
   for (auto& queryThread : queryThreads) {
     queryThread.join();
   }
-  controlThread.join();
 }
 
 TEST_F(SharedArbitrationTest, reserveReleaseCounters) {
