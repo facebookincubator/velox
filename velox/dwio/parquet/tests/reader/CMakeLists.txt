@@ -21,6 +21,10 @@ target_link_libraries(
   velox_dwio_parquet_reader_test velox_dwio_native_parquet_reader
   velox_link_libs ${TEST_LINK_LIBS})
 
+add_executable(velox_scan_parquet ParquetReaderExample.cpp)
+target_link_libraries(velox_scan_parquet velox_dwio_native_parquet_reader
+                      velox_link_libs ${TEST_LINK_LIBS})
+
 add_executable(velox_dwio_parquet_page_reader_test ParquetPageReaderTest.cpp)
 add_test(
   NAME velox_dwio_parquet_page_reader_test
