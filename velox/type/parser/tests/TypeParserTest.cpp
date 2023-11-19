@@ -17,18 +17,66 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/types/HyperLogLogType.h"
-#include "velox/functions/prestosql/types/JsonType.h"
-#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/parser/TypeParser.h"
 
 namespace facebook::velox {
 namespace {
 
+class CustomType : public VarcharType {
+ public:
+  CustomType() = default;
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+};
+
+static const TypePtr& JSON() {
+  static const TypePtr instance{new CustomType()};
+  return instance;
+}
+
+static const TypePtr& TIMESTAMP_WITH_TIME_ZONE() {
+  static const TypePtr instance{new CustomType()};
+  return instance;
+}
+
+static const TypePtr& TIMESTAMP_WITHOUT_TIME_ZONE() {
+  static const TypePtr instance{new CustomType()};
+  return instance;
+}
+
+class TypeFactories : public CustomTypeFactories {
+ public:
+  TypeFactories(const TypePtr& type) : type_(type) {}
+
+  TypePtr getType() const override {
+    return type_;
+  }
+
+  exec::CastOperatorPtr getCastOperator() const override {
+    return nullptr;
+  }
+
+ private:
+  TypePtr type_;
+};
+
 class TestTypeSignature : public ::testing::Test {
+ private:
   void SetUp() override {
-    registerJsonType();
-    registerTimestampWithTimeZoneType();
+    // Register custom types with and without spaces.
+    // Does not need any parser support.
+    registerCustomType("json", std::make_unique<const TypeFactories>(JSON()));
+    // Needs and has parser support.
+    registerCustomType(
+        "timestamp with time zone",
+        std::make_unique<const TypeFactories>(TIMESTAMP_WITH_TIME_ZONE()));
+    // Needs and does not have parser support.
+    registerCustomType(
+        "timestamp without time zone",
+        std::make_unique<const TypeFactories>(TIMESTAMP_WITHOUT_TIME_ZONE()));
   }
 };
 
@@ -144,16 +192,22 @@ TEST_F(TestTypeSignature, rowType) {
 
   VELOX_ASSERT_THROW(
       *parseType("row(col0 row(array(HyperLogLog)))"),
-      "Failed to parse type [HyperLogLog]");
+      "Failed to parse type [HyperLogLog]. Type not registered.");
 
   // Field type canonicalization.
   ASSERT_EQ(*parseType("row(col iNt)"), *ROW({"col"}, {INTEGER()}));
 }
 
 TEST_F(TestTypeSignature, typesWithSpaces) {
+  // Type is handled by the parser but is not registered.
   VELOX_ASSERT_THROW(
       parseType("row(time time with time zone)"),
-      "Failed to parse type [time with time zone]");
+      "Failed to parse type [time with time zone]. Type not registered.");
+
+  // Type is not handled by the parser but is registered.
+  VELOX_ASSERT_THROW(
+      parseType("row(col0 timestamp without time zone)"),
+      "Failed to parse type [row(col0 timestamp without time zone)]");
 
   ASSERT_EQ(
       *parseType("row(double double precision)"), *ROW({"double"}, {DOUBLE()}));

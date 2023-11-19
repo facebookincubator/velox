@@ -40,7 +40,7 @@
             upper = "DOUBLE";
         }
         auto inferredType = getType(upper, {});
-        VELOX_CHECK(inferredType, "Failed to parse type [{}]", type);
+        VELOX_CHECK(inferredType, "Failed to parse type [{}]. Type not registered.", type);
         return inferredType;
     }
 }

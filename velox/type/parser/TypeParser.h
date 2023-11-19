@@ -31,6 +31,7 @@ namespace facebook::velox {
 /// Field names for rows are optional.
 /// Quoted field names are supported.
 /// All custom types need to be registered. An error is thrown otherwise.
+/// Types with spaces must be explicitly handled in the parser.
 /// Uses the Type::getType API to convert a string to Velox type.
 TypePtr parseType(const std::string& typeText);
 
