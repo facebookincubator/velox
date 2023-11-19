@@ -151,6 +151,16 @@ class SelectiveColumnReader {
   // from a downstream operator.
   virtual void resetFilterCaches();
 
+  virtual void resetWhenFilterAll() {
+    rawStringBuffer_ = nullptr;
+    rawStringSize_ = 0;
+    rawStringUsed_ = 0;
+    for (auto& buff : stringBuffers_) {
+      buff->release();
+    }
+    stringBuffers_.clear();
+  }
+
   // Seeks to offset and reads the rows in 'rows' and applies
   // filters and value processing as given by 'scanSpec supplied at
   // construction. 'offset' is relative to start of stripe. 'rows' are
