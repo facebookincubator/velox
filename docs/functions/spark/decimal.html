@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
-    <title>Decimal functions &#8212; Velox  documentation</title>
+    <title>Decimal functions and special forms &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
@@ -33,7 +33,7 @@
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../spark_functions.html" accesskey="U">Spark Functions</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Decimal functions</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Decimal functions and special forms</a></li> 
       </ul>
     </div>  
 
@@ -42,8 +42,10 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="decimal-functions">
-<h1>Decimal functions<a class="headerlink" href="#decimal-functions" title="Permalink to this heading">¶</a></h1>
+  <section id="decimal-functions-and-special-forms">
+<h1>Decimal functions and special forms<a class="headerlink" href="#decimal-functions-and-special-forms" title="Permalink to this heading">¶</a></h1>
+<section id="decimal-functions">
+<h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Permalink to this heading">¶</a></h2>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="unscaled_value">
 <span class="sig-name descname"><span class="pre">unscaled_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#unscaled_value" title="Permalink to this definition">¶</a></dt>
@@ -51,6 +53,18 @@
 Supported type is: SHORT_DECIMAL.</p>
 </dd></dl>
 
+</section>
+<section id="decimal-special-forms">
+<h2>Decimal Special Forms<a class="headerlink" href="#decimal-special-forms" title="Permalink to this heading">¶</a></h2>
+<dl class="spark function">
+<dt class="sig sig-object spark" id="make_decimal">
+<span class="sig-name descname"><span class="pre">make_decimal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">nullOnOverflow</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#make_decimal" title="Permalink to this definition">¶</a></dt>
+<dd><p>Create <code class="docutils literal notranslate"><span class="pre">decimal</span></code> of requsted precision and scale from an unscaled bigint value <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+By default, the value of <code class="docutils literal notranslate"><span class="pre">nullOnOverflow</span></code> is true, and null will be returned when <code class="docutils literal notranslate"><span class="pre">x</span></code> is too large for the result precision.
+Otherwise, exception will be thrown when <code class="docutils literal notranslate"><span class="pre">x</span></code> overflows.</p>
+</dd></dl>
+
+</section>
 </section>
 
 
@@ -60,6 +74,17 @@ Supported type is: SHORT_DECIMAL.</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Decimal functions and special forms</a><ul>
+<li><a class="reference internal" href="#decimal-functions">Decimal Functions</a></li>
+<li><a class="reference internal" href="#decimal-special-forms">Decimal Special Forms</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
   <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="bitwise.html"
@@ -105,7 +130,7 @@ Supported type is: SHORT_DECIMAL.</p>
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../spark_functions.html" >Spark Functions</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Decimal functions</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Decimal functions and special forms</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">
