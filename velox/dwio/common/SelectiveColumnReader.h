@@ -159,6 +159,9 @@ class SelectiveColumnReader {
       buff->release();
     }
     stringBuffers_.clear();
+    for(auto child : children()) {
+      child->resetWhenFilterAll();
+    }
   }
 
   // Seeks to offset and reads the rows in 'rows' and applies
