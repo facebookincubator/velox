@@ -19,8 +19,12 @@
 #include "folly/Conv.h"
 #include "folly/Random.h"
 #include "folly/String.h"
+#include "folly/experimental/coro/BlockingWait.h"
+#include "folly/experimental/coro/Collect.h"
+#include "folly/experimental/coro/Task.h"
 #include "velox/common/file/File.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Config.h"
@@ -263,3 +267,63 @@ INSTANTIATE_TEST_SUITE_P(
          "array<integer>",
          "array<bigint>",
          "array<string>"})}));
+
+folly::coro::Task<void> co_task() {
+  co_await folly::coro::co_reschedule_on_current_executor;
+  LOG(INFO) << "Task thread id: " << std::this_thread::get_id();
+  co_return;
+}
+void task() {}
+
+void leaf(folly::Executor* e, int count) {
+  ExecutorBarrier barrier(*e);
+  for (int i = 0; i < count; ++i) {
+    barrier.add([]() { task(); });
+  }
+  barrier.waitAll();
+}
+
+folly::coro::Task<void> co_leaf(int count) {
+  co_await folly::coro::co_reschedule_on_current_executor;
+  std::vector<folly::coro::Task<void>> tasks;
+  tasks.reserve(count);
+  for (int i = 0; i < count; ++i) {
+    tasks.push_back(co_task());
+  }
+  co_await folly::coro::collectAllRange(std::move(tasks));
+}
+
+void root(folly::Executor* e, int count) {
+  ExecutorBarrier barrier(*e);
+  for (int i = 0; i < count; ++i) {
+    barrier.add([e, count]() { leaf(e, count); });
+  }
+  barrier.waitAll();
+}
+
+folly::coro::Task<void> co_root(int count) {
+  co_await folly::coro::co_reschedule_on_current_executor;
+  std::vector<folly::coro::Task<void>> tasks;
+  tasks.reserve(count);
+  for (int i = 0; i < count; ++i) {
+    tasks.push_back(co_leaf(count));
+  }
+  co_await folly::coro::collectAllRange(std::move(tasks));
+}
+
+TEST(DanielTest, ExecutorSingleThread) {
+  LOG(INFO) << "Main thread id: " << std::this_thread::get_id();
+  auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(1);
+  folly::coro::blockingWait(co_root(5).scheduleOn(executor.get()));
+}
+
+TEST(DanielTest, ExecutorMultiThread) {
+  LOG(INFO) << "Main thread id: " << std::this_thread::get_id();
+  folly::coro::blockingWait(
+      co_root(5).scheduleOn(folly::getGlobalCPUExecutor()));
+}
+
+TEST(DanielTest, MainThread) {
+  LOG(INFO) << "Main thread id: " << std::this_thread::get_id();
+  folly::coro::blockingWait(co_root(5));
+}
