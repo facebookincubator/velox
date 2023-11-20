@@ -165,59 +165,56 @@ class DataSource {
   static constexpr int64_t kUnknownRowSize = -1;
   virtual ~DataSource() = default;
 
-  // Add split to process, then call next multiple times to process the split.
-  // A split must be fully processed by next before another split can be
-  // added. Next returns nullptr to indicate that current split is fully
-  // processed.
+  /// Add split to process, then call next multiple times to process the split.
+  /// A split must be fully processed by next before another split can be added.
+  /// Next returns nullptr to indicate that current split is fully processed.
   virtual void addSplit(std::shared_ptr<ConnectorSplit> split) = 0;
 
-  // Process a split added via addSplit. Returns nullptr if split has been fully
-  // processed. Returns std::nullopt and sets the 'future' if started
-  // asynchronous work and needs to wait for it to complete to continue
-  // processing. The caller will wait for the 'future' to complete before
-  // calling 'next' again.
+  /// Process a split added via addSplit. Returns nullptr if split has been
+  /// fully processed. Returns std::nullopt and sets the 'future' if started
+  /// asynchronous work and needs to wait for it to complete to continue
+  /// processing. The caller will wait for the 'future' to complete before
+  /// calling 'next' again.
   virtual std::optional<RowVectorPtr> next(
       uint64_t size,
       velox::ContinueFuture& future) = 0;
 
-  // Add dynamically generated filter.
-  // @param outputChannel index into outputType specified in
-  // Connector::createDataSource() that identifies the column this filter
-  // applies to.
+  /// Add dynamically generated filter.
+  /// @param outputChannel index into outputType specified in
+  /// Connector::createDataSource() that identifies the column this filter
+  /// applies to.
   virtual void addDynamicFilter(
       column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) = 0;
 
-  // Returns the number of input bytes processed so far.
+  /// Returns the number of input bytes processed so far.
   virtual uint64_t getCompletedBytes() = 0;
 
-  // Returns the number of input rows processed so far.
+  /// Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
   virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
 
-  // Returns true if 'this' has initiated all the prefetch this will
-  // initiate. This means that the caller should schedule next splits
-  // to prefetch in the background. false if the source does not
-  // prefetch.
+  /// Returns true if 'this' has initiated all the prefetch this will initiate.
+  /// This means that the caller should schedule next splits to prefetch in the
+  /// background. false if the source does not prefetch.
   virtual bool allPrefetchIssued() const {
     return false;
   }
 
-  // Initializes this from 'source'. 'source' is effectively moved
-  // into 'this' Adaptation like dynamic filters stay in effect but
-  // the parts dealing with open files, prefetched data etc. are moved. 'source'
-  // is freed after the move.
+  /// Initializes this from 'source'. 'source' is effectively moved into 'this'
+  /// Adaptation like dynamic filters stay in effect but the parts dealing with
+  /// open files, prefetched data etc. are moved. 'source' is freed after the
+  /// move.
   virtual void setFromDataSource(std::unique_ptr<DataSource> /*source*/) {
     VELOX_UNSUPPORTED("setFromDataSource");
   }
 
-  // Returns a connector dependent row size if available. This can be
-  // called after addSplit().  This estimates uncompressed data
-  // sizes. This is better than getCompletedBytes()/getCompletedRows()
-  // since these track sizes before decompression and may include
-  // read-ahead and extra IO from coalescing reads and  will not
-  // fully account for size of sparsely accessed columns.
+  /// Returns a connector dependent row size if available. This can be called
+  /// after addSplit().  This estimates uncompressed data sizes. This is better
+  /// than getCompletedBytes()/getCompletedRows() since these track sizes before
+  /// decompression and may include read-ahead and extra IO from coalescing
+  /// reads and  will not fully account for size of sparsely accessed columns.
   virtual int64_t estimatedRowSize() {
     return kUnknownRowSize;
   }
@@ -283,10 +280,10 @@ class ConnectorQueryCtx {
     return cache_;
   }
 
-  // This is a combination of task id and the scan's PlanNodeId. This is an id
-  // that allows sharing state between different threads of the same scan. This
-  // is used for locating a scanTracker, which tracks the read density of
-  // columns for prefetch and other memory hierarchy purposes.
+  /// This is a combination of task id and the scan's PlanNodeId. This is an id
+  /// that allows sharing state between different threads of the same scan. This
+  /// is used for locating a scanTracker, which tracks the read density of
+  /// columns for prefetch and other memory hierarchy purposes.
   const std::string& scanId() const {
     return scanId_;
   }
@@ -338,8 +335,8 @@ class Connector {
     return properties_;
   }
 
-  // Returns true if this connector would accept a filter dynamically generated
-  // during query execution.
+  /// Returns true if this connector would accept a filter dynamically generated
+  /// during query execution.
   virtual bool canAddDynamicFilter() const {
     return false;
   }
@@ -352,10 +349,9 @@ class Connector {
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) = 0;
 
-  // Returns true if addSplit of DataSource can use 'dataSource' from
-  // ConnectorSplit in addSplit(). If so, TableScan can preload splits
-  // so that file opening and metadata operations are off the Driver'
-  // thread.
+  /// Returns true if addSplit of DataSource can use 'dataSource' from
+  /// ConnectorSplit in addSplit(). If so, TableScan can preload splits
+  /// so that file opening and metadata operations are off the Driver' thread.
   virtual bool supportsSplitPreload() {
     return false;
   }
@@ -366,15 +362,18 @@ class Connector {
       ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy) = 0;
 
-  // Returns a ScanTracker for 'id'. 'id' uniquely identifies the
-  // tracker and different threads will share the same
-  // instance. 'loadQuantum' is the largest single IO for the query
-  // being tracked.
+  /// Invoked to clear any cache used by this connector internally, such as file
+  /// handle cache used by HiveConnector.
+  virtual void clearCache() {}
+
+  /// Returns a ScanTracker for 'id'. 'id' uniquely identifies the tracker and
+  /// different threads will share the same instance. 'loadQuantum' is the
+  /// largest single IO for the query being tracked.
   static std::shared_ptr<cache::ScanTracker> getTracker(
       const std::string& scanId,
       int32_t loadQuantum);
 
-  virtual folly::Executor* FOLLY_NULLABLE executor() const {
+  virtual folly::Executor* executor() const {
     return nullptr;
   }
 
@@ -396,7 +395,7 @@ class ConnectorFactory {
 
   virtual ~ConnectorFactory() = default;
 
-  // Initialize is called during the factory registration.
+  /// Initialize is called during the factory registration.
   virtual void initialize() {}
 
   const std::string& connectorName() const {
@@ -406,7 +405,7 @@ class ConnectorFactory {
   virtual std::shared_ptr<Connector> newConnector(
       const std::string& id,
       std::shared_ptr<const Config> properties,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr) = 0;
+      folly::Executor* executor = nullptr) = 0;
 
  private:
   const std::string name_;
@@ -438,6 +437,9 @@ std::shared_ptr<Connector> getConnector(const std::string& connectorId);
 /// Returns a map of all (connectorId -> connector) pairs currently registered.
 const std::unordered_map<std::string, std::shared_ptr<Connector>>&
 getAllConnectors();
+
+/// Invoked to clear the caches from all the connector instances.
+void clearConnectorsCache();
 
 #define VELOX_REGISTER_CONNECTOR_FACTORY(theFactory)                      \
   namespace {                                                             \

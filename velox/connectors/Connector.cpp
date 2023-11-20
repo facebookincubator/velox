@@ -80,6 +80,12 @@ getAllConnectors() {
   return connectors();
 }
 
+void clearConnectorsCache() {
+  for (const auto& connectorEntry : getAllConnectors()) {
+    connectorEntry.second->clearCache();
+  }
+}
+
 folly::Synchronized<
     std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>
     Connector::trackers_;

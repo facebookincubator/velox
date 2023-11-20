@@ -127,6 +127,10 @@ std::unique_ptr<DataSink> HiveConnector::createDataSink(
       connectorProperties());
 }
 
+void HiveConnector::clearCache() {
+  fileHandleFactory_.clearCache();
+}
+
 std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
     int numPartitions) const {
   std::vector<int> bucketToPartitions;

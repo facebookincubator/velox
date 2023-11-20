@@ -239,6 +239,11 @@ TEST_F(TableScanTest, connectorStats) {
 
   verifyCacheStats(hiveConnector->fileHandleCacheStats(), 99, 0, 99);
   verifyCacheStats(hiveConnector->clearFileHandleCache(), 0, 0, 99);
+
+  connector::clearConnectorsCache();
+
+  // Clear cache only clear the cached file handles but keep the stats.
+  verifyCacheStats(hiveConnector->fileHandleCacheStats(), 0, 0, 99);
 }
 
 TEST_F(TableScanTest, columnAliases) {
