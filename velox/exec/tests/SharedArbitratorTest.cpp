@@ -383,7 +383,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     return queryCtx;
   }
 
-  std::shared_ptr<Task> makeHashJoinTask(
+  std::shared_ptr<Task> runHashJoinTask(
       const std::vector<RowVectorPtr>& vectors,
       const std::shared_ptr<core::QueryCtx>& queryCtx,
       uint32_t numDrivers) {
@@ -415,7 +415,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
             "ON t1.c0 = t2.c0");
   }
 
-  std::shared_ptr<Task> makeAggregateTask(
+  std::shared_ptr<Task> runAggregateTask(
       const std::vector<RowVectorPtr>& vectors,
       const std::shared_ptr<core::QueryCtx>& queryCtx,
       uint32_t numDrivers) {
@@ -434,7 +434,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
         .assertResults("SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
   }
 
-  std::shared_ptr<Task> makeOrderByTask(
+  std::shared_ptr<Task> runOrderByTask(
       const std::vector<RowVectorPtr>& vectors,
       const std::shared_ptr<core::QueryCtx>& queryCtx,
       uint32_t numDrivers) {
@@ -457,7 +457,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
             "ORDER BY c2 ASC NULLS LAST");
   }
 
-  std::shared_ptr<Task> makeRowNumberTask(
+  std::shared_ptr<Task> runRowNumberTask(
       const std::vector<RowVectorPtr>& vectors,
       const std::shared_ptr<core::QueryCtx>& queryCtx,
       uint32_t numDrivers) {
@@ -481,7 +481,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
             "WHERE rn <= 2");
   }
 
-  std::shared_ptr<Task> makeTopNTask(
+  std::shared_ptr<Task> runTopNTask(
       const std::vector<RowVectorPtr>& vectors,
       const std::shared_ptr<core::QueryCtx>& queryCtx,
       uint32_t numDrivers) {
@@ -505,7 +505,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
             "LIMIT 10");
   }
 
-  std::shared_ptr<Task> makeWriteTask(
+  std::shared_ptr<Task> runWriteTask(
       const std::vector<RowVectorPtr>& vectors,
       const std::shared_ptr<core::QueryCtx>& queryCtx,
       uint32_t numDrivers) {
@@ -3809,38 +3809,12 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
   const int numDrivers = 4;
   createDuckDbTable(vectors);
 
-  std::atomic<bool> stopped{false};
   std::mutex mutex;
   std::vector<std::shared_ptr<core::QueryCtx>> queries;
   std::deque<std::shared_ptr<Task>> zombieTasks;
 
-  fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
-    if (folly::Random::oneIn(4)) {
-      auto task = op->testingOperatorCtx()->driverCtx()->task;
-      if (folly::Random::oneIn(3)) {
-        task->requestAbort();
-      } else {
-        task->requestYield();
-      }
-    }
-    const size_t allocationSize = std::max(
-        kMemoryCapacity / 16, folly::Random::rand32() % kMemoryCapacity);
-    auto buffer = op->pool()->allocate(allocationSize);
-    return TestAllocation{op->pool(), buffer, allocationSize};
-  });
-  fakeOperatorFactory_->setMaxDrivers(numDrivers);
-  const std::string injectReclaimErrorMessage("Inject reclaim failure");
-  fakeOperatorFactory_->setReclaimCallback(
-      [&](MemoryPool* /*unused*/,
-          uint64_t /*unused*/,
-          MemoryReclaimer::Stats& /*unused*/) {
-        if (folly::Random::oneIn(10)) {
-          VELOX_FAIL(injectReclaimErrorMessage);
-        }
-        return false;
-      });
-
   const int numThreads = 32;
+  const int maxNumZombieTasks = 8;
   std::vector<std::thread> queryThreads;
   queryThreads.reserve(numThreads);
   for (int i = 0; i < numThreads; ++i) {
@@ -3851,24 +3825,26 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
           // multithread aggregation type resolver, so make sure it is built in
           // a single thread.
           task =
-              makeWriteTask(vectors, newQueryCtx(kMemoryCapacity), numDrivers);
+              runWriteTask(vectors, newQueryCtx(kMemoryCapacity), numDrivers);
         } else if ((i % 4) == 0) {
-          task = makeHashJoinTask(
+          task = runHashJoinTask(
               vectors, newQueryCtx(kMemoryCapacity), numDrivers);
         } else if ((i % 4) == 1) {
-          task = makeOrderByTask(
-              vectors, newQueryCtx(kMemoryCapacity), numDrivers);
-        } else if ((i % 4) == 2) {
           task =
-              makeTopNTask(vectors, newQueryCtx(kMemoryCapacity), numDrivers);
+              runOrderByTask(vectors, newQueryCtx(kMemoryCapacity), numDrivers);
+        } else if ((i % 4) == 2) {
+          task = runTopNTask(vectors, newQueryCtx(kMemoryCapacity), numDrivers);
         } else {
-          task = makeRowNumberTask(
+          task = runRowNumberTask(
               vectors, newQueryCtx(kMemoryCapacity), numDrivers);
         }
 
         std::lock_guard<std::mutex> l(mutex);
-        if ((folly::Random::rand32() % 10) <= 2) {
+        if (folly::Random().oneIn(3)) {
           zombieTasks.emplace_back(std::move(task));
+        }
+        while (zombieTasks.size() > maxNumZombieTasks) {
+          zombieTasks.pop_front();
         }
     });
   }
