@@ -14,6 +14,7 @@
     <script src="../_static/underscore.js"></script>
     <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Vectors" href="vectors.html" />
@@ -189,8 +190,8 @@ point in a number. For example, the number <cite>123.45</cite> has a precision o
 scale of <cite>2</cite>. DECIMAL types are backed by <cite>BIGINT</cite> and <cite>HUGEINT</cite> physical types,
 which store the unscaled value. For example, the unscaled value of decimal
 <cite>123.45</cite> is <cite>12345</cite>. <cite>BIGINT</cite> is used upto 18 precision, and has a range of
-[<span class="math">-10^{18} + 1, +10^{18} - 1</span>]. <cite>HUGEINT</cite> is used starting from 19 precision
-upto 38 precision, with a range of [<span class="math">-10^{38} + 1, +10^{38} - 1</span>].</p>
+<span class="math notranslate nohighlight">\([-10^{18} + 1, +10^{18} - 1]\)</span>. <cite>HUGEINT</cite> is used starting from 19 precision
+upto 38 precision, with a range of <span class="math notranslate nohighlight">\([-10^{38} + 1, +10^{38} - 1]\)</span>.</p>
 <p>All the three values, precision, scale, unscaled value are required to represent a
 decimal value.</p>
 </section>

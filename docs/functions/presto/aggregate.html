@@ -14,6 +14,7 @@
     <script src="../../_static/underscore.js"></script>
     <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
+    <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Window functions" href="window.html" />
@@ -118,9 +119,9 @@ This function is equivalent to <code class="docutils literal notranslate"><span 
 <dt class="sig sig-object py" id="entropy">
 <span class="sig-name descname"><span class="pre">entropy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">c</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#entropy" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the log-2 entropy of count input-values.</p>
-<div class="math">
-<p><span class="math">\mathrm{entropy}(c) = \sum_i \left[ {c_i \over \sum_j [c_j]} \log_2\left({\sum_j [c_j] \over c_i}\right) \right].</span></p>
-</div><p><code class="docutils literal notranslate"><span class="pre">c</span></code> must be a <code class="docutils literal notranslate"><span class="pre">integer</span></code> column of non-negative values.</p>
+<div class="math notranslate nohighlight">
+\[\mathrm{entropy}(c) = \sum_i \left[ {c_i \over \sum_j [c_j]} \log_2\left({\sum_j [c_j] \over c_i}\right) \right].\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">c</span></code> must be a <code class="docutils literal notranslate"><span class="pre">integer</span></code> column of non-negative values.</p>
 <p>The function ignores any <code class="docutils literal notranslate"><span class="pre">NULL</span></code> count. If the sum of non-<code class="docutils literal notranslate"><span class="pre">NULL</span></code> counts is 0,
 it returns 0.</p>
 </dd></dl>
@@ -531,10 +532,10 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
 <dd><blockquote>
 <div><p>Returns the excess kurtosis of all input values. Unbiased estimate using
 the following expression:</p>
-<div class="math">
-<p><span class="math">\mathrm{kurtosis}(x) = {n(n+1) \over (n-1)(n-2)(n-3)} { \sum[(x_i-\mu)^4] \over \sigma^4} -3{ (n-1)^2 \over (n-2)(n-3) },</span></p>
-</div></div></blockquote>
-<p>where <span class="math">\mu</span> is the mean, and <span class="math">\sigma</span> is the standard deviation.</p>
+<div class="math notranslate nohighlight">
+\[\mathrm{kurtosis}(x) = {n(n+1) \over (n-1)(n-2)(n-3)} { \sum[(x_i-\mu)^4] \over \sigma^4} -3{ (n-1)^2 \over (n-2)(n-3) },\]</div>
+</div></blockquote>
+<p>where <span class="math notranslate nohighlight">\(\mu\)</span> is the mean, and <span class="math notranslate nohighlight">\(\sigma\)</span> is the standard deviation.</p>
 </dd></dl>
 
 <dl class="py function">

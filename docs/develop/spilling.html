@@ -14,6 +14,7 @@
     <script src="../_static/underscore.js"></script>
     <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Serialization Formats" href="serde.html" />
@@ -401,9 +402,9 @@ spilling, and so on so forth.</p>
 can support with the following parameters: the query memory limit is <em>M</em>, the
 number of partition bits is <em>N</em>, the spilling level is <em>L</em> (1 for the initial
 spilling, 2 for the first level recursive spilling etc):</p>
-<div class="math">
-<p><span class="math">T = M * ((2 ^ N) ^ L)</span></p>
-</div><p>The following table gives the max supported table size at different spilling
+<div class="math notranslate nohighlight">
+\[T = M * ((2 ^ N) ^ L)\]</div>
+<p>The following table gives the max supported table size at different spilling
 level, <em>M</em> = 1*GB*, <em>N</em> = 3:</p>
 <table class="docutils align-center" id="data">
 <thead>
