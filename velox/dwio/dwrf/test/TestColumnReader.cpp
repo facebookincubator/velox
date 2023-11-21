@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
+#include "folly/Random.h"
+#include "folly/String.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "folly/experimental/coro/BlockingWait.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/common/exception/Exceptions.h"
@@ -28,11 +32,6 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
-
-#include <folly/Random.h>
-#include <folly/String.h>
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;
@@ -5385,5 +5384,22 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     SelectiveSchemaMismatchCoro,
     SchemaMismatchTest,
     Values(SchemaMismatchTestParam{true, false, true}));
+
+TEST(CoRescheduleTest, E2E) {
+  int n = 1;
+  auto nonVoidTask =
+      facebook::velox::dwrf::detail::reschedule([&]() { return n; });
+  auto voidTask = facebook::velox::dwrf::detail::reschedule([&]() { ++n; });
+
+  EXPECT_EQ(n, 1);
+  EXPECT_EQ(
+      folly::coro::blockingWait(
+          std::move(nonVoidTask).scheduleOn(folly::getGlobalCPUExecutor())),
+      1);
+  EXPECT_EQ(n, 1);
+  folly::coro::blockingWait(
+      std::move(voidTask).scheduleOn(folly::getGlobalCPUExecutor()));
+  EXPECT_EQ(n, 2);
+}
 
 #endif // FOLLY_HAS_COROUTINES
