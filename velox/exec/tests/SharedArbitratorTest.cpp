@@ -3823,8 +3823,8 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
     std::string debugString() const {
       return fmt::format(
           "totalCapacity = {}, queryCapacity = {}.",
-          totalCapacity,
-          queryCapacity);
+          succinctBytes(totalCapacity),
+          succinctBytes(queryCapacity));
     }
   } testSettings[3] = {
       {16 * MB, 128 * MB}, {128 * MB, 16 * MB}, {128 * MB, 128 * MB}};
