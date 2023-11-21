@@ -30,6 +30,28 @@ FOLLY_ALWAYS_INLINE StringView submatch(const boost::cmatch& match, int idx) {
 
 template <typename TInString>
 bool parse(const TInString& rawUrl, boost::cmatch& match) {
+  /// This regex is taken from RFC - 3986.
+  /// See: https://www.rfc-editor.org/rfc/rfc3986#appendix-B
+  /// The basic groups are:
+  ///      scheme    = $2
+  ///      authority = $4
+  ///      path      = $5
+  ///      query     = $7
+  ///      fragment  = $9
+  /// For example a URI like below :
+  ///  http://www.ics.uci.edu/pub/ietf/uri/#Related
+  ///
+  ///   results in the following subexpression matches:
+  ///
+  ///      $1 = http:
+  ///      $2 = http
+  ///      $3 = //www.ics.uci.edu
+  ///      $4 = www.ics.uci.edu
+  ///      $5 = /pub/ietf/uri/
+  ///      $6 = <undefined>
+  ///      $7 = <undefined>
+  ///      $8 = #Related
+  ///      $9 = Related
   static const boost::regex kUriRegex(
       "^(([^:\\/?#]+):)?" // scheme:
       "(\\/\\/([^\\/?#]*))?([^?#]*)" // authority and path
@@ -85,8 +107,10 @@ FOLLY_ALWAYS_INLINE void urlEscape(TOutString& output, const TInString& input) {
   output.resize(outIndex);
 }
 
-template <typename TInString>
-FOLLY_ALWAYS_INLINE bool urlUnescapeCheck(const TInString& input) {
+/// Performs initial validation of the URI.
+/// Checks if the URI contains ascii whitespaces or
+/// unescaped '%' chars.
+bool isValidURI(const StringView& input) {
   const char* p = input.data();
   const char* end = p + input.size();
   char buf[3];
@@ -173,8 +197,7 @@ struct UrlExtractProtocolFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    auto validUrl = urlUnescapeCheck(url);
-    if (!validUrl) {
+    if (!isValidURI(url)) {
       result.setEmpty();
       return false;
     }
@@ -201,8 +224,7 @@ struct UrlExtractFragmentFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    auto validUrl = urlUnescapeCheck(url);
-    if (!validUrl) {
+    if (!isValidURI(url)) {
       result.setEmpty();
       return false;
     }
@@ -229,8 +251,7 @@ struct UrlExtractHostFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    auto validUrl = urlUnescapeCheck(url);
-    if (!validUrl) {
+    if (!isValidURI(url)) {
       result.setEmpty();
       return false;
     }
@@ -246,8 +267,7 @@ struct UrlExtractHostFunction {
     if (matchAuthorityAndPath(
             match, authAndPathMatch, authorityMatch, hasAuthority) &&
         hasAuthority) {
-      auto host = submatch(authorityMatch, 3);
-      result.setNoCopy(host);
+      result.setNoCopy(submatch(authorityMatch, 3));
     } else {
       result.setEmpty();
     }
@@ -260,8 +280,7 @@ struct UrlExtractPortFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Varchar>& url) {
-    auto validUrl = urlUnescapeCheck(url);
-    if (!validUrl) {
+    if (!isValidURI(url)) {
       return false;
     }
     boost::cmatch match;
@@ -297,20 +316,18 @@ struct UrlExtractPathFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
+    if (!isValidURI(url)) {
+      result.setEmpty();
+      return false;
+    }
+
     boost::cmatch match;
     if (!parse(url, match)) {
       result.setEmpty();
       return false;
     }
 
-    if (!urlUnescapeCheck(url)) {
-      result.setEmpty();
-      return false;
-    }
-
-    StringView escapedPath;
-    escapedPath = submatch(match, 5);
-    urlUnescape(result, escapedPath);
+    urlUnescape(result, submatch(match, 5));
 
     return true;
   }
@@ -329,8 +346,7 @@ struct UrlExtractQueryFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    auto validUrl = urlUnescapeCheck(url);
-    if (!validUrl) {
+    if (!isValidURI(url)) {
       result.setEmpty();
       return false;
     }
@@ -360,8 +376,7 @@ struct UrlExtractParameterFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& url,
       const arg_type<Varchar>& param) {
-    auto validUrl = urlUnescapeCheck(url);
-    if (!validUrl) {
+    if (!isValidURI(url)) {
       result.setEmpty();
       return false;
     }
