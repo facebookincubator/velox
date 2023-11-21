@@ -390,41 +390,30 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
 
-    std::shared_ptr<Task> task;
-    try {
-      task =
-          AssertQueryBuilder(duckDbQueryRunner_)
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kJoinSpillEnabled, "true")
-              .queryCtx(queryCtx)
-              .maxDrivers(numDrivers)
-              .plan(PlanBuilder(planNodeIdGenerator)
-                        .values(vectors)
-                        .project({"c0", "c1", "c2"})
-                        .hashJoin(
-                            {"c0"},
-                            {"u0"},
-                            PlanBuilder(planNodeIdGenerator)
-                                .values(vectors)
-                                .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
-                                .planNode(),
-                            "",
-                            {"c0", "c1", "c2"},
-                            core::JoinType::kInner)
-                        .planNode())
-              .assertResults(
-                  "SELECT t1.c0 AS c0, t1.c1 AS c1, t1.c2 "
-                  "FROM tmp t1 "
-                  "JOIN tmp t2 "
-                  "ON t1.c0 = t2.c0");
-    } catch (const VeloxException& e) {
-      VELOX_CHECK(
-          e.errorCode() == error_code::kMemCapExceeded.c_str() ||
-          e.errorCode() == error_code::kMemAborted.c_str() ||
-          e.errorCode() == error_code::kMemAllocError.c_str());
-    }
-
-    return task;
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kJoinSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .project({"c0", "c1", "c2"})
+                  .hashJoin(
+                      {"c0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(vectors)
+                          .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                          .planNode(),
+                      "",
+                      {"c0", "c1", "c2"},
+                      core::JoinType::kInner)
+                  .planNode())
+        .assertResults(
+            "SELECT t1.c0 AS c0, t1.c1 AS c1, t1.c2 "
+            "FROM tmp t1 "
+            "JOIN tmp t2 "
+            "ON t1.c0 = t2.c0");
   }
 
   std::shared_ptr<Task> runAggregateTask(
@@ -434,27 +423,17 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
 
-    std::shared_ptr<Task> task;
-    try {
-      task = AssertQueryBuilder(duckDbQueryRunner_)
-                 .spillDirectory(spillDirectory->path)
-                 .config(core::QueryConfig::kSpillEnabled, "true")
-                 .config(core::QueryConfig::kAggregationSpillEnabled, "true")
-                 .queryCtx(queryCtx)
-                 .maxDrivers(numDrivers)
-                 .plan(PlanBuilder(planNodeIdGenerator)
-                           .values(vectors)
-                           .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                           .planNode())
-                 .assertResults(
-                     "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
-    } catch (const VeloxException& e) {
-      VELOX_CHECK(
-          e.errorCode() == error_code::kMemCapExceeded.c_str() ||
-          e.errorCode() == error_code::kMemAborted.c_str() ||
-          e.errorCode() == error_code::kMemAllocError.c_str());
-    }
-    return task;
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                  .planNode())
+        .assertResults("SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
   }
 
   std::shared_ptr<Task> runOrderByTask(
@@ -464,32 +443,21 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
 
-    std::shared_ptr<Task> task;
-    try {
-      task = AssertQueryBuilder(duckDbQueryRunner_)
-                 .spillDirectory(spillDirectory->path)
-                 .config(core::QueryConfig::kSpillEnabled, "true")
-                 .config(core::QueryConfig::kOrderBySpillEnabled, "true")
-                 .queryCtx(queryCtx)
-                 .maxDrivers(numDrivers)
-                 .plan(PlanBuilder(planNodeIdGenerator)
-                           .values(vectors)
-                           .project({"c0", "c1", "c2"})
-                           .orderBy(
-                               {fmt::format("{} ASC NULLS LAST", "c2")}, false)
-                           .planNode())
-                 .assertResults(
-                     "SELECT c0, c1, c2 "
-                     "FROM tmp "
-                     "ORDER BY c2 ASC NULLS LAST");
-    } catch (const VeloxException& e) {
-      VELOX_CHECK(
-          e.errorCode() == error_code::kMemCapExceeded.c_str() ||
-          e.errorCode() == error_code::kMemAborted.c_str() ||
-          e.errorCode() == error_code::kMemAllocError.c_str());
-    }
-
-    return task;
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .project({"c0", "c1", "c2"})
+                  .orderBy({fmt::format("{} ASC NULLS LAST", "c2")}, false)
+                  .planNode())
+        .assertResults(
+            "SELECT c0, c1, c2 "
+            "FROM tmp "
+            "ORDER BY c2 ASC NULLS LAST");
   }
 
   std::shared_ptr<Task> runRowNumberTask(
@@ -500,32 +468,22 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
 
     std::shared_ptr<Task> task;
-    try {
-      task =
-          AssertQueryBuilder(duckDbQueryRunner_)
-              .spillDirectory(spillDirectory->path)
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kRowNumberSpillEnabled, "true")
-              .queryCtx(queryCtx)
-              .maxDrivers(numDrivers)
-              .plan(PlanBuilder(planNodeIdGenerator)
-                        .values(vectors)
-                        .rowNumber({"c0"}, 2, false)
-                        .project({"c0", "c1"})
-                        .planNode())
-              .assertResults(
-                  "SELECT c0, c1 "
-                  "FROM ("
-                  " SELECT *, row_number() over (partition by c0) AS rn FROM tmp) "
-                  "WHERE rn <= 2");
-    } catch (const VeloxException& e) {
-      VELOX_CHECK(
-          e.errorCode() == error_code::kMemCapExceeded.c_str() ||
-          e.errorCode() == error_code::kMemAborted.c_str() ||
-          e.errorCode() == error_code::kMemAllocError.c_str());
-    }
-
-    return task;
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kRowNumberSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .rowNumber({"c0"}, 2, false)
+                  .project({"c0", "c1"})
+                  .planNode())
+        .assertResults(
+            "SELECT c0, c1 "
+            "FROM ("
+            " SELECT *, row_number() over (partition by c0) AS rn FROM tmp) "
+            "WHERE rn <= 2");
   }
 
   std::shared_ptr<Task> runTopNTask(
@@ -535,32 +493,22 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
 
-    std::shared_ptr<Task> task;
-    try {
-      task = AssertQueryBuilder(duckDbQueryRunner_)
-                 .spillDirectory(spillDirectory->path)
-                 .config(core::QueryConfig::kSpillEnabled, "true")
-                 .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
-                 .queryCtx(queryCtx)
-                 .maxDrivers(numDrivers)
-                 .plan(PlanBuilder(planNodeIdGenerator)
-                           .values(vectors)
-                           .project({"c1"})
-                           .topN({"c1 NULLS FIRST"}, 10, false)
-                           .planNode())
-                 .assertResults(
-                     "SELECT c1 "
-                     "FROM tmp "
-                     "ORDER BY c1 ASC NULLS LAST "
-                     "LIMIT 10");
-    } catch (const VeloxException& e) {
-      VELOX_CHECK(
-          e.errorCode() == error_code::kMemCapExceeded.c_str() ||
-          e.errorCode() == error_code::kMemAborted.c_str() ||
-          e.errorCode() == error_code::kMemAllocError.c_str());
-    }
-
-    return task;
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .project({"c1"})
+                  .topN({"c1 NULLS FIRST"}, 10, false)
+                  .planNode())
+        .assertResults(
+            "SELECT c1 "
+            "FROM tmp "
+            "ORDER BY c1 ASC NULLS LAST "
+            "LIMIT 10");
   }
 
   std::shared_ptr<Task> runWriteTask(
@@ -584,39 +532,29 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
                     "sum({})", TableWriteTraits::rowCountColumnName())})
             .planNode();
 
-    std::shared_ptr<Task> task;
-    try {
-      task = AssertQueryBuilder(duckDbQueryRunner_)
-                 .spillDirectory(spillDirectory->path)
-                 .config(core::QueryConfig::kSpillEnabled, "true")
-                 .config(core::QueryConfig::kWriterSpillEnabled, "true")
-                 // Set 0 file writer flush threshold to always trigger flush in
-                 // test.
-                 .config(
-                     core::QueryConfig::kWriterFlushThresholdBytes,
-                     folly::to<std::string>(0))
-                 // Set stripe size to extreme large to avoid writer internal
-                 // triggered flush.
-                 .connectorConfig(
-                     kHiveConnectorId,
-                     connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
-                     folly::to<std::string>("1GB"))
-                 .connectorConfig(
-                     kHiveConnectorId,
-                     connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
-                     folly::to<std::string>("1GB"))
-                 .queryCtx(queryCtx)
-                 .maxDrivers(numDrivers)
-                 .plan(writerPlan)
-                 .assertResults(fmt::format("SELECT {}", numRows));
-    } catch (const VeloxException& e) {
-      VELOX_CHECK(
-          e.errorCode() == error_code::kMemCapExceeded.c_str() ||
-          e.errorCode() == error_code::kMemAborted.c_str() ||
-          e.errorCode() == error_code::kMemAllocError.c_str());
-    }
-
-    return task;
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kWriterSpillEnabled, "true")
+        // Set 0 file writer flush threshold to always trigger flush in
+        // test.
+        .config(
+            core::QueryConfig::kWriterFlushThresholdBytes,
+            folly::to<std::string>(0))
+        // Set stripe size to extreme large to avoid writer internal
+        // triggered flush.
+        .connectorConfig(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+            folly::to<std::string>("1GB"))
+        .connectorConfig(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+            folly::to<std::string>("1GB"))
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(writerPlan)
+        .assertResults(fmt::format("SELECT {}", numRows));
   }
 
   static inline FakeMemoryOperatorFactory* fakeOperatorFactory_;
@@ -3865,27 +3803,37 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, joinBuildSpillError) {
 }
 
 TEST_F(SharedArbitrationTest, concurrentArbitration) {
-  for (const auto& capacities : std::vector<std::vector<uint64_t>>{
-           {16 * MB, 128 * MB},
-           {128 * MB, 16 * MB},
-           {128 * MB, 128 * MB},
-       }) {
-    auto totalCapacity = capacities[0];
-    auto queryCapacity = capacities[1];
-    setupMemory(totalCapacity);
+  FLAGS_velox_suppress_memory_capacity_exceeding_error_message = true;
+  const int numVectors = 8;
+  std::vector<RowVectorPtr> vectors;
+  fuzzerOpts_.vectorSize = 32;
+  fuzzerOpts_.stringVariableLength = false;
+  fuzzerOpts_.stringLength = 32;
+  vectors.reserve(numVectors);
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(newVector());
+  }
+  const int numDrivers = 4;
+  createDuckDbTable(vectors);
 
-    FLAGS_velox_suppress_memory_capacity_exceeding_error_message = true;
-    const int numVectors = 8;
-    std::vector<RowVectorPtr> vectors;
-    fuzzerOpts_.vectorSize = 32;
-    fuzzerOpts_.stringVariableLength = false;
-    fuzzerOpts_.stringLength = 32;
-    vectors.reserve(numVectors);
-    for (int i = 0; i < numVectors; ++i) {
-      vectors.push_back(newVector());
+  struct {
+    uint64_t totalCapacity;
+    uint64_t queryCapacity;
+
+    std::string debugString() const {
+      return fmt::format(
+          "totalCapacity = {}, queryCapacity = {}.",
+          totalCapacity,
+          queryCapacity);
     }
-    const int numDrivers = 4;
-    createDuckDbTable(vectors);
+  } testSettings[3] = {
+      {16 * MB, 128 * MB}, {128 * MB, 16 * MB}, {128 * MB, 128 * MB}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    auto totalCapacity = testData.totalCapacity;
+    auto queryCapacity = testData.queryCapacity;
+    setupMemory(totalCapacity);
 
     std::mutex mutex;
     std::vector<std::shared_ptr<core::QueryCtx>> queries;
@@ -3898,20 +3846,29 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
     for (int i = 0; i < numThreads; ++i) {
       queryThreads.emplace_back([&, i]() {
         std::shared_ptr<Task> task;
-        if (i == 0) {
-          // Write task contains aggregate node, which does not support
-          // multithread aggregation type resolver, so make sure it is built in
-          // a single thread.
-          task = runWriteTask(vectors, newQueryCtx(queryCapacity), numDrivers);
-        } else if ((i % 4) == 0) {
-          task =
-              runHashJoinTask(vectors, newQueryCtx(queryCapacity), numDrivers);
-        } else if ((i % 4) == 1) {
-          task =
-              runOrderByTask(vectors, newQueryCtx(queryCapacity), numDrivers);
-        } else {
-          task = runTopNTask(vectors, newQueryCtx(queryCapacity), numDrivers);
+        try {
+          if (i == 0) {
+            // Write task contains aggregate node, which does not support
+            // multithread aggregation type resolver, so make sure it is built
+            // in a single thread.
+            task =
+                runWriteTask(vectors, newQueryCtx(queryCapacity), numDrivers);
+          } else if ((i % 4) == 0) {
+            task = runHashJoinTask(
+                vectors, newQueryCtx(queryCapacity), numDrivers);
+          } else if ((i % 4) == 1) {
+            task =
+                runOrderByTask(vectors, newQueryCtx(queryCapacity), numDrivers);
+          } else {
+            task = runTopNTask(vectors, newQueryCtx(queryCapacity), numDrivers);
+          }
+        } catch (const VeloxException& e) {
+          VELOX_CHECK(
+              e.errorCode() == error_code::kMemCapExceeded.c_str() ||
+              e.errorCode() == error_code::kMemAborted.c_str() ||
+              e.errorCode() == error_code::kMemAllocError.c_str());
         }
+
         // TODO: Add RowNumber task after fixing its spiller bug.
         std::lock_guard<std::mutex> l(mutex);
         if (folly::Random().oneIn(3)) {
@@ -3926,6 +3883,7 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
     for (auto& queryThread : queryThreads) {
       queryThread.join();
     }
+    ASSERT_GT(arbitrator_->stats().numRequests, 0);
   }
 }
 
