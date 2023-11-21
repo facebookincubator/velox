@@ -18,6 +18,7 @@
 #include <boost/regex.hpp>
 #include <cctype>
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::functions {
 
@@ -30,10 +31,10 @@ FOLLY_ALWAYS_INLINE StringView submatch(const boost::cmatch& match, int idx) {
 template <typename TInString>
 bool parse(const TInString& rawUrl, boost::cmatch& match) {
   static const boost::regex kUriRegex(
-      "([a-zA-Z][a-zA-Z0-9+.-]*):" // scheme:
-      "([^?#]*)" // authority and path
-      "(?:\\?([^#]*))?" // ?query
-      "(?:#(.*))?"); // #fragment
+      "^(([^:\\/?#]+):)?" // scheme:
+      "(\\/\\/([^\\/?#]*))?([^?#]*)" // authority and path
+      "(\\?([^#]*))?" // ?query
+      "(#(.*))?"); // #fragment
 
   return boost::regex_match(
       rawUrl.data(), rawUrl.data() + rawUrl.size(), match, kUriRegex);
@@ -84,7 +85,7 @@ FOLLY_ALWAYS_INLINE void urlEscape(TOutString& output, const TInString& input) {
   output.resize(outIndex);
 }
 
-template<typename TInString>
+template <typename TInString>
 FOLLY_ALWAYS_INLINE bool urlUnescapeCheck(const TInString& input) {
   const char* p = input.data();
   const char* end = p + input.size();
@@ -92,6 +93,10 @@ FOLLY_ALWAYS_INLINE bool urlUnescapeCheck(const TInString& input) {
   buf[2] = '\0';
   char* endptr;
   for (; p < end; ++p) {
+    if (stringImpl::isAsciiWhiteSpace(*p)) {
+      return false;
+    }
+
     if (*p == '%') {
       if (p + 2 < end) {
         buf[0] = p[1];
@@ -177,7 +182,7 @@ struct UrlExtractProtocolFunction {
     if (!parse(url, match)) {
       result.setEmpty();
     } else {
-      result.setNoCopy(submatch(match, 1));
+      result.setNoCopy(submatch(match, 2));
     }
     return true;
   }
@@ -205,7 +210,7 @@ struct UrlExtractFragmentFunction {
     if (!parse(url, match)) {
       result.setEmpty();
     } else {
-      result.setNoCopy(submatch(match, 4));
+      result.setNoCopy(submatch(match, 9));
     }
     return true;
   }
@@ -241,7 +246,8 @@ struct UrlExtractHostFunction {
     if (matchAuthorityAndPath(
             match, authAndPathMatch, authorityMatch, hasAuthority) &&
         hasAuthority) {
-      result.setNoCopy(submatch(authorityMatch, 3));
+      auto host = submatch(authorityMatch, 3);
+      result.setNoCopy(host);
     } else {
       result.setEmpty();
     }
@@ -291,35 +297,23 @@ struct UrlExtractPathFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    auto validUrl = urlUnescapeCheck(url);
-    if (!validUrl) {
+    boost::cmatch match;
+    if (!parse(url, match)) {
       result.setEmpty();
       return false;
     }
-    boost::cmatch match;
-    if (!parse(url, match)) {
-        result.setEmpty();
-        return false;
+
+    if (!urlUnescapeCheck(url)) {
+      result.setEmpty();
+      return false;
     }
 
-    boost::cmatch authAndPathMatch;
-    boost::cmatch authorityMatch;
-    bool hasAuthority;
-
-    if (matchAuthorityAndPath(
-              match, authAndPathMatch, authorityMatch, hasAuthority)) {
-        StringView escapedPath;
-        if (hasAuthority) {
-          escapedPath = submatch(authAndPathMatch, 2);
-        } else {
-          escapedPath = submatch(match, 2);
-        }
-        urlUnescape(result, escapedPath);
-    }
+    StringView escapedPath;
+    escapedPath = submatch(match, 5);
+    urlUnescape(result, escapedPath);
 
     return true;
   }
-
 };
 
 template <typename T>
@@ -346,7 +340,7 @@ struct UrlExtractQueryFunction {
       return true;
     }
 
-    auto query = submatch(match, 3);
+    auto query = submatch(match, 7);
     result.setNoCopy(query);
     return true;
   }
@@ -377,7 +371,7 @@ struct UrlExtractParameterFunction {
       return false;
     }
 
-    auto query = submatch(match, 3);
+    auto query = submatch(match, 7);
     if (!query.empty()) {
       // Parse query string.
       static const boost::regex kQueryParamRegex(

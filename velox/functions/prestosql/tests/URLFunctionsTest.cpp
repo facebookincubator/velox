@@ -38,8 +38,8 @@ class URLFunctionsTest : public functions::test::FunctionBaseTest {
     const auto extractPort = [&](const std::optional<std::string>& a) {
       return evaluateOnce<int64_t>("url_extract_port(c0)", a);
     };
-    auto protocol = extractFn("protocol", url);
-    EXPECT_EQ(protocol, expectedProtocol);
+
+    EXPECT_EQ(extractFn("protocol", url), expectedProtocol);
     EXPECT_EQ(extractFn("host", url), expectedHost);
     EXPECT_EQ(extractFn("path", url), expectedPath);
     EXPECT_EQ(extractFn("fragment", url), expectedFragment);
@@ -49,63 +49,71 @@ class URLFunctionsTest : public functions::test::FunctionBaseTest {
 };
 
 TEST_F(URLFunctionsTest, validateURL) {
-//  validate(
-//      "http://example.com/path1/p.php?k1=v1&k2=v2#Ref1",
-//      "http",
-//      "example.com",
-//      "/path1/p.php",
-//      "Ref1",
-//      "k1=v1&k2=v2",
-//      std::nullopt);
-//  validate(
-//      "http://example.com/path1/p.php?",
-//      "http",
-//      "example.com",
-//      "/path1/p.php",
-//      "",
-//      "",
-//      std::nullopt);
-//  validate(
-//      "HTTP://example.com/path1/p.php?",
-//      "HTTP",
-//      "example.com",
-//      "/path1/p.php",
-//      "",
-//      "",
-//      std::nullopt);
-//  validate(
-//      "http://example.com:8080/path1/p.php?k1=v1&k2=v2#Ref1",
-//      "http",
-//      "example.com",
-//      "/path1/p.php",
-//      "Ref1",
-//      "k1=v1&k2=v2",
-//      8080);
-//  validate(
-//      "https://username@example.com",
-//      "https",
-//      "example.com",
-//      "",
-//      "",
-//      "",
-//      std::nullopt);
-//  validate(
-//      "https:/auth/login.html",
-//      "https",
-//      "",
-//      "/auth/login.html",
-//      "",
-//      "",
-//      std::nullopt);
-  validate("https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%",
-           std::nullopt,
-           std::nullopt,
-           std::nullopt,
-           std::nullopt,
-           std::nullopt,
-           std::nullopt);
-  //validate("foo", "", "", "foo", "", "", std::nullopt);
-  validate("foo!", "", "", "", "", "", std::nullopt);
+  validate(
+      "http://example.com/path1/p.php?k1=v1&k2=v2#Ref1",
+      "http",
+      "example.com",
+      "/path1/p.php",
+      "Ref1",
+      "k1=v1&k2=v2",
+      std::nullopt);
+  validate(
+      "http://example.com/path1/p.php?",
+      "http",
+      "example.com",
+      "/path1/p.php",
+      "",
+      "",
+      std::nullopt);
+  validate(
+      "HTTP://example.com/path1/p.php?",
+      "HTTP",
+      "example.com",
+      "/path1/p.php",
+      "",
+      "",
+      std::nullopt);
+  validate(
+      "http://example.com:8080/path1/p.php?k1=v1&k2=v2#Ref1",
+      "http",
+      "example.com",
+      "/path1/p.php",
+      "Ref1",
+      "k1=v1&k2=v2",
+      8080);
+  validate(
+      "https://username@example.com",
+      "https",
+      "example.com",
+      "",
+      "",
+      "",
+      std::nullopt);
+  validate(
+      "https:/auth/login.html",
+      "https",
+      "",
+      "/auth/login.html",
+      "",
+      "",
+      std::nullopt);
+  validate(
+      "https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%",
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt);
+  validate("foo", "", "", "foo", "", "", std::nullopt);
+  validate(
+      "foo ",
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt);
 }
 
 TEST_F(URLFunctionsTest, extractPath) {
@@ -113,13 +121,18 @@ TEST_F(URLFunctionsTest, extractPath) {
     return evaluateOnce<std::string>("url_extract_path(c0)", url);
   };
 
-  ASSERT_EQ(
+  EXPECT_EQ(
       "/media/set/Books and Magazines.php",
       extractPath(
           "https://www.cnn.com/media/set/Books%20and%20Magazines.php?foo=bar"));
 
-  ASSERT_EQ(std::nullopt, extractPath("BAD URL!"));
-  ASSERT_EQ(std::nullopt, extractPath("https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%"));
+  EXPECT_EQ(
+      "java-net@java.sun.com", extractPath("mailto:java-net@java.sun.com"));
+  EXPECT_EQ(
+      std::nullopt,
+      extractPath("https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%"));
+  EXPECT_EQ("foo", extractPath("foo"));
+  EXPECT_EQ(std::nullopt, extractPath("BAD URL!"));
 }
 
 TEST_F(URLFunctionsTest, extractParameter) {
