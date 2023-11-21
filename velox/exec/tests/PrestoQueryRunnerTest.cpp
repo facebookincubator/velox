@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -93,9 +92,3 @@ TEST_F(PrestoQueryRunnerTest, DISABLED_fuzzer) {
       prestoResults, plan->outputType(), {veloxResults});
 }
 } // namespace facebook::velox::exec::test
-
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  folly::Init init(&argc, &argv, true);
-  return RUN_ALL_TESTS();
-}
