@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
-    <title>Date and Time Functions &#8212; Velox  documentation</title>
+    <title>Date and Time Functions and Operators &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
@@ -33,7 +33,7 @@
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Date and Time Functions</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Date and Time Functions and Operators</a></li> 
       </ul>
     </div>  
 
@@ -42,8 +42,61 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="date-and-time-functions">
-<h1>Date and Time Functions<a class="headerlink" href="#date-and-time-functions" title="Permalink to this heading">¶</a></h1>
+  <section id="date-and-time-functions-and-operators">
+<h1>Date and Time Functions and Operators<a class="headerlink" href="#date-and-time-functions-and-operators" title="Permalink to this heading">¶</a></h1>
+<section id="date-and-time-operators">
+<h2>Date and Time Operators<a class="headerlink" href="#date-and-time-operators" title="Permalink to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 15%" />
+<col style="width: 60%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Operator</p></th>
+<th class="head"><p>Example</p></th>
+<th class="head"><p>Result</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">*</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">second</span> <span class="pre">*</span> <span class="pre">2</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">00:00:02.000</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">*</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">second</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">00:00:02.000</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">*</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">second</span> <span class="pre">*</span> <span class="pre">0.001</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">00:00:00.001</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">*</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.001</span> <span class="pre">*</span> <span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">second</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">00:00:00.001</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<dl class="py function">
+<dt class="sig sig-object py" id="multiply">
+<span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></span></span><a class="headerlink" href="#multiply" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the result of multiplying <code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></code> by <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+<code class="docutils literal notranslate"><span class="pre">x</span></code> can be a bigint or double. Returns <code class="docutils literal notranslate"><span class="pre">0</span></code> when <code class="docutils literal notranslate"><span class="pre">x</span></code> is NaN. Returns
+<code class="docutils literal notranslate"><span class="pre">106751991167</span> <span class="pre">07:12:55.807</span></code> when <code class="docutils literal notranslate"><span class="pre">x</span></code> is infinity or when the
+multiplication overflow in positive. Returns <code class="docutils literal notranslate"><span class="pre">-106751991167</span> <span class="pre">07:12:55.808</span></code>
+when <code class="docutils literal notranslate"><span class="pre">x</span></code> is -infinity or when the multiplication overflow in negiative.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the result of multiplying <code class="docutils literal notranslate"><span class="pre">x</span></code> by <code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></code>.
+Same as <code class="docutils literal notranslate"><span class="pre">multiply(interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second,</span> <span class="pre">x)</span></code>.</p>
+</dd></dl>
+
+</section>
+<section id="date-and-time-functions">
+<h2>Date and Time Functions<a class="headerlink" href="#date-and-time-functions" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="current_date">
 <span class="sig-name descname"><span class="pre">current_date</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#current_date" title="Permalink to this definition">¶</a></dt>
@@ -75,6 +128,7 @@ using <code class="docutils literal notranslate"><span class="pre">string</span>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> as a UNIX timestamp.</p>
 </dd></dl>
 
+</section>
 <section id="truncation-function">
 <h2>Truncation Function<a class="headerlink" href="#truncation-function" title="Permalink to this heading">¶</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">date_trunc</span></code> function supports the following units:</p>
@@ -501,7 +555,9 @@ picked to be consistent with Presto.</p>
   <div>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
-<li><a class="reference internal" href="#">Date and Time Functions</a><ul>
+<li><a class="reference internal" href="#">Date and Time Functions and Operators</a><ul>
+<li><a class="reference internal" href="#date-and-time-operators">Date and Time Operators</a></li>
+<li><a class="reference internal" href="#date-and-time-functions">Date and Time Functions</a></li>
 <li><a class="reference internal" href="#truncation-function">Truncation Function</a></li>
 <li><a class="reference internal" href="#interval-functions">Interval Functions</a></li>
 <li><a class="reference internal" href="#mysql-date-functions">MySQL Date Functions</a></li>
@@ -558,7 +614,7 @@ picked to be consistent with Presto.</p>
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../functions.html" >Presto Functions</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Date and Time Functions</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Date and Time Functions and Operators</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">
