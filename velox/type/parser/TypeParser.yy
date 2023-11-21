@@ -2,6 +2,7 @@
 #include <FlexLexer.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Type.h"
+#include "velox/type/parser/ParserUtil.h"
 %}
 %require "3.0.4"
 %language "C++"
@@ -30,41 +31,6 @@
 {
     #include <velox/type/parser/Scanner.h>
     #define yylex(x) scanner->lex(x)
-    using namespace facebook::velox;
-    TypePtr typeFromString(const std::string& type, bool failIfNotRegistered = true) {
-        auto upper = type;
-        std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-        if (upper == "INT") {
-            upper = "INTEGER";
-        } else if (upper == "DOUBLE PRECISION") {
-            upper = "DOUBLE";
-        }
-        auto inferredType = getType(upper, {});
-        if (failIfNotRegistered) {
-            VELOX_CHECK(inferredType, "Failed to parse type [{}]. Type not registered.", type);
-        }
-        return inferredType;
-    }
-
-    std::pair<std::string, std::shared_ptr<const Type>> inferTypeWithSpaces(std::vector<std::string>& words,
-                                                                            bool cannotHaveFieldName = false) {
-        // First check if all the words form a type.
-        // Then check if the first word is a field name and the remaining form a type.
-        // If cannotHaveFieldName = true, then all words must form a type.
-        VELOX_CHECK_GE(words.size(), 2);
-        std::string fieldName = words[0];
-        std::string typeName = words[1];
-        for (int i = 2; i < words.size(); ++i) {
-           typeName = fmt::format("{} {}", typeName, words[i]);
-        }
-        auto allWords = fmt::format("{} {}", fieldName, typeName);
-        // Fail if cannotHaveFieldName = true.
-        auto type = typeFromString(allWords, cannotHaveFieldName);
-        if (type) {
-            return std::make_pair("", type);
-        }
-        return std::make_pair(fieldName, typeFromString(typeName));
-    }
 }
 
 %token               LPAREN RPAREN COMMA ARRAY MAP ROW FUNCTION DECIMAL
