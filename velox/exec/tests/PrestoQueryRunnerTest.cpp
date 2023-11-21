@@ -39,6 +39,8 @@ class PrestoQueryRunnerTest : public ::testing::Test,
   }
 };
 
+// This test requires a Presto Coordinator running at localhost, so disable it
+// by default.
 TEST_F(PrestoQueryRunnerTest, DISABLED_basic) {
   auto queryRunner =
       std::make_unique<PrestoQueryRunner>("http://127.0.0.1:8080", "hive");
@@ -59,6 +61,8 @@ TEST_F(PrestoQueryRunnerTest, DISABLED_basic) {
   velox::exec::test::assertEqualResults({expected}, {results});
 }
 
+// This test requires a Presto Coordinator running at localhost, so disable it
+// by default.
 TEST_F(PrestoQueryRunnerTest, DISABLED_fuzzer) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
