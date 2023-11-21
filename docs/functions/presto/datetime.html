@@ -75,6 +75,10 @@
 <td><p><code class="docutils literal notranslate"><span class="pre">0.001</span> <span class="pre">*</span> <span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">second</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">00:00:00.001</span></code></p></td>
 </tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">'15'</span> <span class="pre">second</span> <span class="pre">/</span> <span class="pre">1.5</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">00:00:10.000</span></code></p></td>
+</tr>
 </tbody>
 </table>
 <dl class="py function">
@@ -92,6 +96,18 @@ when <code class="docutils literal notranslate"><span class="pre">x</span></code
 <span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the result of multiplying <code class="docutils literal notranslate"><span class="pre">x</span></code> by <code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></code>.
 Same as <code class="docutils literal notranslate"><span class="pre">multiply(interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second,</span> <span class="pre">x)</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="divide">
+<span class="sig-name descname"><span class="pre">divide</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></span></span><a class="headerlink" href="#divide" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the result of <code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></code> divided by <code class="docutils literal notranslate"><span class="pre">x</span></code>. <code class="docutils literal notranslate"><span class="pre">x</span></code> is
+a double. Returns <code class="docutils literal notranslate"><span class="pre">0</span></code> when <code class="docutils literal notranslate"><span class="pre">x</span></code> is NaN or is infinity. Returns
+<code class="docutils literal notranslate"><span class="pre">106751991167</span> <span class="pre">07:12:55.807</span></code> when <code class="docutils literal notranslate"><span class="pre">x</span></code> is <code class="docutils literal notranslate"><span class="pre">0.0</span></code> and
+<code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></code> is not <code class="docutils literal notranslate"><span class="pre">0</span></code>, or when the division overflows in
+positive. Returns <code class="docutils literal notranslate"><span class="pre">-106751991167</span> <span class="pre">07:12:55.808</span></code> when <code class="docutils literal notranslate"><span class="pre">x</span></code> is <code class="docutils literal notranslate"><span class="pre">-0.0</span></code> and
+<code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></code> is not <code class="docutils literal notranslate"><span class="pre">0</span></code>, or when the division overflows in
+negiative.</p>
 </dd></dl>
 
 </section>
