@@ -52,6 +52,7 @@ target_link_libraries(
   velox_functions_prestosql
   velox_aggregates
   cpr::cpr
+  velox_type_parser
   Folly::folly)
 
 add_library(velox_aggregation_fuzzer AggregationFuzzer.cpp)

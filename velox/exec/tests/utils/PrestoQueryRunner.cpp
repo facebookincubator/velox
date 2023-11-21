@@ -24,6 +24,7 @@
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/type/parser/TypeParser.h"
 
 #include <utility>
 
@@ -121,17 +122,7 @@ class ServerResponse {
     std::vector<TypePtr> types;
     for (const auto& column : response_["columns"]) {
       names.push_back(column["name"].asString());
-      // TODO：types.push_back(parseTypeSignature(column["type"].asString()));
-      auto tn = column["type"].asString();
-      if (tn == "bigint") {
-        types.emplace_back(BIGINT());
-      } else if (tn == "varchar") {
-        types.emplace_back(VARCHAR());
-      } else if (tn == "array(bigint)") {
-        types.emplace_back(ARRAY(BIGINT()));
-      } else if (tn == "array(array(bigint))") {
-        types.emplace_back(ARRAY(ARRAY(BIGINT())));
-      }
+      types.push_back(parseType(column["type"].asString()));
     }
 
     auto rowType = ROW(std::move(names), std::move(types));
@@ -503,7 +494,7 @@ std::string PrestoQueryRunner::startQuery(const std::string& sql) {
   VELOX_CHECK_EQ(
       response.status_code,
       200,
-      "Post to {} failed: {}",
+      "POST to {} failed: {}",
       uri,
       response.error.message);
   return response.text;
@@ -517,7 +508,7 @@ std::string PrestoQueryRunner::fetchNext(const std::string& nextUri) {
   VELOX_CHECK_EQ(
       response.status_code,
       200,
-      "Get from {} failed: {}",
+      "GET from {} failed: {}",
       nextUri,
       response.error.message);
   return response.text;
