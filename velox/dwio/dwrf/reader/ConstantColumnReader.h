@@ -58,6 +58,7 @@ class NullColumnReader : public ColumnReader {
       uint64_t numValues,
       VectorPtr& result,
       const uint64_t* nulls = nullptr) override {
+    co_await folly::coro::co_reschedule_on_current_executor;
     if (result && result->encoding() == VectorEncoding::Simple::CONSTANT &&
         result->isNullAt(0)) {
       // If vector already exists and contains the right value, resize.
