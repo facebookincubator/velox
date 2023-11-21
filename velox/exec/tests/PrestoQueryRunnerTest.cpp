@@ -41,8 +41,8 @@ class PrestoQueryRunnerTest : public ::testing::Test,
 };
 
 TEST_F(PrestoQueryRunnerTest, DISABLED_basic) {
-  auto queryRunner = std::make_unique<PrestoQueryRunner>(
-      "http://127.0.0.1:8080", "hive", 20'000);
+  auto queryRunner =
+      std::make_unique<PrestoQueryRunner>("http://127.0.0.1:8080", "hive");
 
   auto results = queryRunner->execute("SELECT count(*) FROM nation");
   auto expected = makeRowVector({

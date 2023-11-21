@@ -147,7 +147,7 @@ class ServerResponse {
 PrestoQueryRunner::PrestoQueryRunner(
     std::string coordinatorUri,
     std::string user,
-    const int32_t timeout)
+    std::chrono::milliseconds timeout)
     : coordinatorUri_{std::move(coordinatorUri)},
       user_{std::move(user)},
       timeout_(timeout) {

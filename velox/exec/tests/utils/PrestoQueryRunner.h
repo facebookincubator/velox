@@ -27,10 +27,11 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
  public:
   /// @param coordinatorUri Presto REST API endpoint, e.g. http://127.0.0.1:8080
   /// @param user Username to use in X-Presto-User header.
+  /// @param timeout Timeout in milliseconds of an HTTP request.
   PrestoQueryRunner(
       std::string coordinatorUri,
       std::string user,
-      const int32_t timeout = 10'000);
+      std::chrono::milliseconds timeout = std::chrono::milliseconds{1000});
 
   /// Converts Velox query plan to Presto SQL. Supports Values -> Aggregation or
   /// Window with an optional Project on top.
@@ -84,7 +85,7 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
 
   const std::string coordinatorUri_;
   const std::string user_;
-  const int32_t timeout_;
+  const std::chrono::milliseconds timeout_;
   folly::EventBaseThread eventBaseThread_{false};
   std::shared_ptr<velox::memory::MemoryPool> rootPool_{
       velox::memory::defaultMemoryManager().addRootPool()};
