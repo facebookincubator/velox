@@ -700,7 +700,7 @@ TEST(SignatureBinderTest, tryResolveTypeNullOutput) {
   auto assertNullResult = [&](const std::string& argument) {
     ASSERT_EQ(
         exec::SignatureBinder::tryResolveType(
-            exec::parseTypeSignature(argument), {}, {}),
+            *exec::parseTypeSignature(argument), {}, {}),
         nullptr);
   };
 
@@ -755,7 +755,7 @@ TEST(SignatureBinderTest, logicalType) {
     testSignatureBinder(signature, {INTERVAL_DAY_TIME()}, BIGINT());
   }
 
-  // Logical type as an return type.
+  // Logical type as a return type.
   {
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("interval day to second")

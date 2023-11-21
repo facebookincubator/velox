@@ -15,19 +15,18 @@
  */
 #include <gtest/gtest.h>
 
-#include "velox/expression/FunctionSignature.h"
-#include "velox/type/Type.h"
+#include "velox/expression/signature_parser/SignatureParser.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 
 namespace {
 std::string roundTrip(const std::string& typeSignature) {
-  return parseTypeSignature(typeSignature).toString();
+  return parseTypeSignature(typeSignature)->toString();
 }
 
 void testScalarType(const std::string& typeSignature) {
-  auto signature = parseTypeSignature(typeSignature);
+  auto signature = *parseTypeSignature(typeSignature);
   ASSERT_EQ(signature.baseName(), typeSignature);
   ASSERT_EQ(signature.parameters().size(), 0);
 }
@@ -43,8 +42,34 @@ TEST(ParseTypeSignatureTest, scalar) {
   testScalarType("timestamp");
 }
 
+TEST(ParseTypeSignatureTest, decimal) {
+  {
+    auto signature = *parseTypeSignature("DECIMAL(a_precision, a_scale)");
+    ASSERT_EQ(signature.baseName(), "decimal");
+    ASSERT_EQ(signature.parameters().size(), 2);
+
+    auto param1 = signature.parameters()[0];
+    ASSERT_EQ(param1.baseName(), "a_precision");
+    ASSERT_EQ(param1.parameters().size(), 0);
+
+    auto param2 = signature.parameters()[1];
+    ASSERT_EQ(param2.baseName(), "a_scale");
+    ASSERT_EQ(param2.parameters().size(), 0);
+  }
+  {
+    auto signature = *parseTypeSignature("decimal(38, a_scale)");
+    auto param1 = signature.parameters()[0];
+    ASSERT_EQ(param1.baseName(), "38");
+    ASSERT_EQ(param1.parameters().size(), 0);
+
+    auto param2 = signature.parameters()[1];
+    ASSERT_EQ(param2.baseName(), "a_scale");
+    ASSERT_EQ(param2.parameters().size(), 0);
+  }
+}
+
 TEST(ParseTypeSignatureTest, array) {
-  auto signature = parseTypeSignature("array(bigint)");
+  auto signature = *parseTypeSignature("array(bigint)");
   ASSERT_EQ(signature.baseName(), "array");
   ASSERT_EQ(signature.parameters().size(), 1);
 
@@ -54,17 +79,23 @@ TEST(ParseTypeSignatureTest, array) {
 }
 
 TEST(ParseTypeSignatureTest, map) {
-  auto signature = parseTypeSignature("map(bigint, double)");
+  auto signature = *parseTypeSignature("map(interval day to second, double)");
   ASSERT_EQ(signature.baseName(), "map");
   ASSERT_EQ(signature.parameters().size(), 2);
 
   auto key = signature.parameters()[0];
-  ASSERT_EQ(key.baseName(), "bigint");
+  ASSERT_EQ(key.baseName(), "interval day to second");
   ASSERT_EQ(key.parameters().size(), 0);
 
   auto value = signature.parameters()[1];
   ASSERT_EQ(value.baseName(), "double");
   ASSERT_EQ(value.parameters().size(), 0);
+}
+
+TEST(ParseTypeSignatureTest, row) {
+  auto signature = *parseTypeSignature("row(v)");
+  ASSERT_EQ(signature.baseName(), "row");
+  ASSERT_EQ(signature.parameters().size(), 1);
 }
 
 TEST(ParseTypeSignatureTest, roundTrip) {
@@ -85,6 +116,6 @@ TEST(ParseTypeSignatureTest, roundTrip) {
 }
 
 TEST(ParseTypeSignatureTest, invalidSignatures) {
-  EXPECT_THROW(parseTypeSignature("array(varchar"), VeloxRuntimeError);
-  EXPECT_THROW(parseTypeSignature("array(array(T)"), VeloxRuntimeError);
+  EXPECT_THROW(*parseTypeSignature("array(varchar"), VeloxRuntimeError);
+  EXPECT_THROW(*parseTypeSignature("array(array(T)"), VeloxRuntimeError);
 }
