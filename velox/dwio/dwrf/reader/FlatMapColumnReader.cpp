@@ -481,6 +481,7 @@ folly::coro::Task<void> FlatMapColumnReader<T>::co_next(
     uint64_t numValues,
     VectorPtr& result,
     const uint64_t* incomingNulls) {
+  co_await folly::coro::co_reschedule_on_current_executor;
   auto mapVector = detail::resetIfWrongVectorType<MapVector>(result);
   VectorPtr keysVector;
   VectorPtr valuesVector;
@@ -518,15 +519,25 @@ folly::coro::Task<void> FlatMapColumnReader<T>::co_next(
   std::vector<const BaseVector*> nodeBatches;
   size_t totalChildren = 0;
   if (nonNullMaps > 0) {
-    auto keyNodes_sz = keyNodes_.size();
+    const auto keyNodes_sz = keyNodes_.size();
+
+    std::vector<folly::coro::Task<BaseVector*>> loadTasks;
+    loadTasks.reserve(keyNodes_.size());
+    for (auto& node : keyNodes_) {
+      loadTasks.emplace_back(node->co_load(nonNullMaps));
+    }
+    auto nodeBatchesVec =
+        co_await folly::coro::collectAllRange(std::move(loadTasks));
+
     nodeBatches.reserve(keyNodes_sz);
     nodes.reserve(keyNodes_sz);
-    for (auto& node : keyNodes_) {
+    for (size_t i = 0; i < keyNodes_sz; ++i) {
+      auto& batch = nodeBatchesVec[i];
+      auto& node = keyNodes_[i];
       // if the node has value filled into key-value batch
       // future optimization - enable batch to be sortable on row index
       // and below next can be updated to next(keys, values, numValues)
       // which writes row index into batch and offsets can be generated
-      auto batch = node->load(nonNullMaps);
       if (batch) {
         nodes.emplace_back(node.get());
         node->addToBulkInMapBitIterator(bulkInMapIter);
@@ -568,8 +579,13 @@ folly::coro::Task<void> FlatMapColumnReader<T>::co_next(
       childOffset += nodeBatches[i]->size();
     }
 
-    initKeysVector(keysVector, totalChildren);
-    initializeVector(valuesVector, mapValueType, memoryPool_, nodeBatches);
+    co_await folly::coro::collectAll(
+        detail::reschedule(
+            [&]() { initKeysVector(keysVector, totalChildren); }),
+        detail::reschedule([&]() {
+          initializeVector(
+              valuesVector, mapValueType, memoryPool_, nodeBatches);
+        }));
 
     if (!returnFlatVector_) {
       for (auto batch : nodeBatches) {
@@ -679,6 +695,25 @@ BaseVector* KeyNode<T>::load(uint64_t numValues) {
   }
   return nullptr;
 }
+
+#if FOLLY_HAS_COROUTINES
+
+template <typename T>
+folly::coro::Task<BaseVector*> KeyNode<T>::co_load(uint64_t numValues) {
+  co_await folly::coro::co_reschedule_on_current_executor;
+  DWIO_ENSURE_GT(numValues, 0, "numValues should be positive");
+  auto numItems = readInMapData(numValues);
+
+  // we're going to load next count of data
+  if (numItems > 0) {
+    co_await reader_->co_next(numItems, vector_);
+    DWIO_ENSURE_EQ(numItems, vector_->size(), "items loaded assurance");
+    co_return vector_.get();
+  }
+  co_return nullptr;
+}
+
+#endif // FOLLY_HAS_COROUTINES
 
 template <typename T>
 void KeyNode<T>::loadAsChild(
