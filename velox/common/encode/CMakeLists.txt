@@ -13,4 +13,10 @@
 # limitations under the License.
 
 add_library(velox_encode Base64.cpp)
-target_link_libraries(velox_encode PUBLIC Folly::folly)
+target_link_libraries(
+    velox_encode 
+    PUBLIC Folly::folly
+    PRIVATE gflags::gflags)
+    
+# include_directories(${FOLLY_INCLUDE_DIRS})
+# message(FATAL_ERROR "${FOLLY_INCLUDE_DIRS}")

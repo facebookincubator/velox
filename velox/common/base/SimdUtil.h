@@ -97,7 +97,7 @@ struct Batch64 {
   T data[size];
 
   static Batch64 from(std::initializer_list<T> values) {
-    VELOX_DCHECK_EQ(values.size(), size);
+    VELOX_DCHECK_EQ_W(values.size(), size);
     Batch64 ans;
     for (int i = 0; i < size; ++i) {
       ans.data[i] = *(values.begin() + i);

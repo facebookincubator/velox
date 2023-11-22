@@ -61,7 +61,7 @@ common::InputByteStream initializeInputStream(const char* serialized) {
   common::InputByteStream stream(serialized);
 
   auto version = stream.read<int8_t>();
-  VELOX_CHECK_EQ(kPrestoSparseV2, version);
+  VELOX_CHECK_EQ_W(kPrestoSparseV2, version);
 
   // Skip indexBitLength.
   stream.read<int8_t>();
@@ -185,7 +185,7 @@ void SparseHll::mergeWith(const char* serialized) {
 }
 
 void SparseHll::mergeWith(size_t otherSize, const uint32_t* otherEntries) {
-  VELOX_CHECK_GT(otherSize, 0);
+  VELOX_CHECK_GT_W(otherSize, 0);
 
   auto size = entries_.size();
   std::vector<uint32_t> merged(size + otherSize);
@@ -231,7 +231,7 @@ void SparseHll::verify() const {
   auto prevIndex = decodeIndex(entries_[0]);
   for (auto i = 1; i < entries_.size(); i++) {
     auto index = decodeIndex(entries_[i]);
-    VELOX_CHECK_LT(prevIndex, index);
+    VELOX_CHECK_LT_W(prevIndex, index);
     prevIndex = index;
   }
 }

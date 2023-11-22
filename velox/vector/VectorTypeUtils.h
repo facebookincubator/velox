@@ -73,7 +73,7 @@ struct KindToFlatVector<TypeKind::VARBINARY> {
 };
 
 template <>
-struct KindToFlatVector<TypeKind::OPAQUE> {
+struct KindToFlatVector<TypeKind::OPAQUE_2> {
   using type = FlatVector<std::shared_ptr<void>>;
   using WrapperType = std::shared_ptr<void>;
   using HashRowType = void;

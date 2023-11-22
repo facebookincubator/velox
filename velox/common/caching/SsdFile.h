@@ -38,8 +38,8 @@ class SsdRun {
 
   SsdRun(uint64_t offset, uint32_t size)
       : bits_((offset << kSizeBits) | ((size - 1))) {
-    VELOX_CHECK_LT(offset, 1L << (64 - kSizeBits));
-    VELOX_CHECK_LT(size - 1, 1 << kSizeBits);
+    VELOX_CHECK_LT_W(offset, 1L << (64 - kSizeBits));
+    VELOX_CHECK_LT_W(size - 1, 1 << kSizeBits);
   }
 
   SsdRun(uint64_t bits) : bits_(bits) {}
@@ -221,7 +221,7 @@ class SsdFile {
   // the pin holder. The pin count can be read without mutex.
   void checkPinned(uint64_t offset) const {
     tsan_lock_guard<std::shared_mutex> l(mutex_);
-    VELOX_CHECK_GT(regionPins_[regionIndex(offset)], 0);
+    VELOX_CHECK_GT_W(regionPins_[regionIndex(offset)], 0);
   }
 
   // Returns the region number corresponding to offset.

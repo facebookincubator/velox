@@ -16,7 +16,12 @@
 
 #pragma once
 
+#include "velox/type/custom_type/Int128.h"
+
 namespace facebook::velox::dwio::common {
+
+using int128_t = type::int128;
+using uint128_t = type::uint128;
 
 // Converts signed/unsigned int 16/32/64 and float/double to unsigned int of the
 // same size. Used to make a dictionary index from a type.
@@ -55,7 +60,7 @@ struct make_index<uint64_t> {
 
 template <>
 struct make_index<int128_t> {
-  using type = __uint128_t;
+  using type = uint128_t;
 };
 
 template <>

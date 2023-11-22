@@ -283,7 +283,7 @@ TypePtr SignatureBinder::tryResolveType(
 
   // getType(parameters) function doesn't support OPAQUE type.
   switch (*typeKind) {
-    case TypeKind::OPAQUE:
+    case TypeKind::OPAQUE_2:
       return OpaqueType::create<void>();
     default:
       return nullptr;

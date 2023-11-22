@@ -35,9 +35,9 @@ class MapConcatFunction : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_GE(args.size(), 2);
+    VELOX_CHECK_GE_W(args.size(), 2);
     auto mapType = args[0]->type();
-    VELOX_CHECK_EQ(mapType->kind(), TypeKind::MAP);
+    VELOX_CHECK_EQ_W(mapType->kind(), TypeKind::MAP);
     for (auto& arg : args) {
       VELOX_CHECK(mapType->kindEquals(arg->type()));
     }

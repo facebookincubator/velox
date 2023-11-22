@@ -28,6 +28,7 @@
 
 #include <folly/FBString.h>
 #include <folly/Range.h>
+#include <folly/portability/SysTypes.h>
 
 namespace facebook {
 namespace strings {

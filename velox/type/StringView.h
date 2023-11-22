@@ -56,7 +56,7 @@ struct StringView {
   }
 
   StringView(const char* data, int32_t len) : size_(len) {
-    VELOX_CHECK_GE(len, 0);
+    VELOX_CHECK_GE_W(len, 0);
     VELOX_DCHECK(data || len == 0);
     if (isInline()) {
       // Zero the inline part.

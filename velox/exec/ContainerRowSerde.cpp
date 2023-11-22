@@ -211,7 +211,7 @@ void deserializeOne(
     BaseVector& result) {
   using T = typename TypeTraits<Kind>::NativeType;
   // Check that the vector is writable. This is faster than dynamic_cast.
-  VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::FLAT);
+  VELOX_CHECK_EQ_W(result.encoding(), VectorEncoding::Simple::FLAT);
   auto values = result.asUnchecked<FlatVector<T>>();
   values->set(index, in.read<T>());
 }
@@ -220,7 +220,7 @@ void deserializeString(
     ByteInputStream& in,
     vector_size_t index,
     BaseVector& result) {
-  VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::FLAT);
+  VELOX_CHECK_EQ_W(result.encoding(), VectorEncoding::Simple::FLAT);
   auto values = result.asUnchecked<FlatVector<StringView>>();
   auto size = in.read<int32_t>();
   auto buffer = values->getBufferWithSpace(size);
@@ -264,10 +264,10 @@ void deserializeOne<TypeKind::ROW>(
     vector_size_t index,
     BaseVector& result) {
   const auto& type = result.type()->as<TypeKind::ROW>();
-  VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::ROW);
+  VELOX_CHECK_EQ_W(result.encoding(), VectorEncoding::Simple::ROW);
   auto row = result.asUnchecked<RowVector>();
   auto childrenSize = type.size();
-  VELOX_CHECK_EQ(childrenSize, row->childrenSize());
+  VELOX_CHECK_EQ_W(childrenSize, row->childrenSize());
   auto nulls = readNulls(in, childrenSize);
   for (auto i = 0; i < childrenSize; ++i) {
     auto child = row->childAt(i);
@@ -309,7 +309,7 @@ void deserializeOne<TypeKind::ARRAY>(
     ByteInputStream& in,
     vector_size_t index,
     BaseVector& result) {
-  VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::ARRAY);
+  VELOX_CHECK_EQ_W(result.encoding(), VectorEncoding::Simple::ARRAY);
   auto array = result.asUnchecked<ArrayVector>();
   if (array->size() <= index) {
     array->resize(index + 1);
@@ -325,7 +325,7 @@ void deserializeOne<TypeKind::MAP>(
     ByteInputStream& in,
     vector_size_t index,
     BaseVector& result) {
-  VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::MAP);
+  VELOX_CHECK_EQ_W(result.encoding(), VectorEncoding::Simple::MAP);
   auto map = result.asUnchecked<MapVector>();
   if (map->size() <= index) {
     map->resize(index + 1);
@@ -334,8 +334,8 @@ void deserializeOne<TypeKind::MAP>(
   auto keySize = deserializeArray(in, *map->mapKeys(), keyOffset);
   vector_size_t valueOffset;
   auto valueSize = deserializeArray(in, *map->mapValues(), valueOffset);
-  VELOX_CHECK_EQ(keySize, valueSize);
-  VELOX_CHECK_EQ(keyOffset, valueOffset);
+  VELOX_CHECK_EQ_W(keySize, valueSize);
+  VELOX_CHECK_EQ_W(keyOffset, valueOffset);
   map->setOffsetAndSize(index, keyOffset, keySize);
   result.setNull(index, false);
 }
@@ -422,10 +422,10 @@ std::optional<int32_t> compare<TypeKind::ROW>(
     CompareFlags flags) {
   auto row = right.wrappedVector()->asUnchecked<RowVector>();
   auto wrappedIndex = right.wrappedIndex(index);
-  VELOX_CHECK_EQ(row->encoding(), VectorEncoding::Simple::ROW);
+  VELOX_CHECK_EQ_W(row->encoding(), VectorEncoding::Simple::ROW);
   const auto& type = row->type()->as<TypeKind::ROW>();
   auto childrenSize = type.size();
-  VELOX_CHECK_EQ(childrenSize, row->childrenSize());
+  VELOX_CHECK_EQ_W(childrenSize, row->childrenSize());
   auto nulls = readNulls(left, childrenSize);
   for (auto i = 0; i < childrenSize; ++i) {
     auto child = row->childAt(i);
@@ -526,7 +526,7 @@ std::optional<int32_t> compare<TypeKind::ARRAY>(
     vector_size_t index,
     CompareFlags flags) {
   auto array = right.wrappedVector()->asUnchecked<ArrayVector>();
-  VELOX_CHECK_EQ(array->encoding(), VectorEncoding::Simple::ARRAY);
+  VELOX_CHECK_EQ_W(array->encoding(), VectorEncoding::Simple::ARRAY);
   auto wrappedIndex = right.wrappedIndex(index);
   return compareArrays(
       left,
@@ -543,7 +543,7 @@ std::optional<int32_t> compare<TypeKind::MAP>(
     vector_size_t index,
     CompareFlags flags) {
   auto map = right.wrappedVector()->asUnchecked<MapVector>();
-  VELOX_CHECK_EQ(map->encoding(), VectorEncoding::Simple::MAP);
+  VELOX_CHECK_EQ_W(map->encoding(), VectorEncoding::Simple::MAP);
   auto wrappedIndex = right.wrappedIndex(index);
   auto size = map->sizeAt(wrappedIndex);
   std::vector<vector_size_t> indices(size);

@@ -123,7 +123,7 @@ std::string ToChars(T value, Args&&... args) {
 }
 
 Repetition::type RepetitionFromNullable(bool is_nullable) {
-  return is_nullable ? Repetition::OPTIONAL : Repetition::REQUIRED;
+  return is_nullable ? Repetition::OPTIONAL_2 : Repetition::REQUIRED;
 }
 
 Status FieldToNode(
@@ -385,7 +385,7 @@ Status FieldToNode(
     case ArrowTypeId::NA: {
       type = ParquetType::INT32;
       logical_type = LogicalType::Null();
-      if (repetition != Repetition::OPTIONAL) {
+      if (repetition != Repetition::OPTIONAL_2) {
         return Status::Invalid("NullType Arrow field must be nullable");
       }
     } break;

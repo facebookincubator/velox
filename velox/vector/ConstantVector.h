@@ -346,7 +346,7 @@ class ConstantVector final : public SimpleVector<T> {
     }
     if (valueVector_ != nullptr) {
       if (!isNull_) {
-        VELOX_CHECK_LT(index_, valueVector_->size());
+        VELOX_CHECK_LT_W(index_, valueVector_->size());
       }
       valueVector_->validate(options);
     }

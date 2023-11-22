@@ -300,7 +300,7 @@ class FieldAccessTypedExpr : public ITypedExpr {
     }
 
     auto newInputs = rewriteInputsRecursive(mapping);
-    VELOX_CHECK_EQ(1, newInputs.size());
+    VELOX_CHECK_EQ_W(1, newInputs.size());
     // Only rewrite name if input in InputTypedExpr. Rewrite in other
     // cases(like dereference) is unsound.
     if (!std::dynamic_pointer_cast<const InputTypedExpr>(newInputs[0])) {
@@ -399,7 +399,7 @@ class DereferenceTypedExpr : public ITypedExpr {
       const std::unordered_map<std::string, TypedExprPtr>& mapping)
       const override {
     auto newInputs = rewriteInputsRecursive(mapping);
-    VELOX_CHECK_EQ(1, newInputs.size());
+    VELOX_CHECK_EQ_W(1, newInputs.size());
 
     return std::make_shared<DereferenceTypedExpr>(type(), newInputs[0], index_);
   }

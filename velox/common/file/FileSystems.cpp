@@ -143,7 +143,7 @@ class LocalFileSystem : public FileSystem {
     const std::filesystem::path folder{directoryPath};
     std::vector<std::string> filePaths;
     for (auto const& entry : std::filesystem::directory_iterator{folder}) {
-      filePaths.push_back(entry.path());
+      filePaths.push_back(entry.path().generic_string());
     }
     return filePaths;
   }

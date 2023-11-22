@@ -30,7 +30,7 @@ class NthValueFunction : public exec::WindowFunction {
       bool ignoreNulls,
       velox::memory::MemoryPool* pool)
       : WindowFunction(resultType, pool, nullptr), ignoreNulls_(ignoreNulls) {
-    VELOX_CHECK_EQ(args.size(), 2);
+    VELOX_CHECK_EQ_W(args.size(), 2);
     VELOX_CHECK_NULL(args[0].constantValue);
     auto offsetType = args[1].type;
     VELOX_USER_CHECK(

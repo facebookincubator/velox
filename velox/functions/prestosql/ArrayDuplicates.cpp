@@ -170,7 +170,7 @@ void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
 template <TypeKind kind>
 std::shared_ptr<exec::VectorFunction> createTyped(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  VELOX_CHECK_EQ(inputArgs.size(), 1);
+  VELOX_CHECK_EQ_W(inputArgs.size(), 1);
 
   using T = typename TypeTraits<kind>::NativeType;
   return std::make_shared<ArrayDuplicatesFunction<T>>();

@@ -190,7 +190,7 @@ class SubscriptImpl : public exec::Subscript {
       const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
+    VELOX_CHECK_EQ_W(args.size(), 2);
     VectorPtr localResult;
 
     switch (args[0]->typeKind()) {
@@ -212,7 +212,7 @@ class SubscriptImpl : public exec::Subscript {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       exec::EvalCtx& context) const {
-    VELOX_CHECK_EQ(args[0]->typeKind(), TypeKind::ARRAY);
+    VELOX_CHECK_EQ_W(args[0]->typeKind(), TypeKind::ARRAY);
 
     auto arrayArg = args[0];
     auto indexArg = args[1];

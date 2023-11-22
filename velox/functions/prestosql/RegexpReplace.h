@@ -74,17 +74,38 @@ FOLLY_ALWAYS_INLINE std::string preparePrestoRegexpReplaceReplacement(
       RE2::UNANCHORED,
       groupName,
       2)) {
+    #ifdef WIN32
+    auto groupIter = re.NamedCapturingGroups().find(
+        (std::string) {groupName[1].begin(), groupName[1].end()});
+    #else
     auto groupIter = re.NamedCapturingGroups().find(groupName[1].as_string());
-    if (groupIter == re.NamedCapturingGroups().end()) {
+    #endif
+    #ifdef WIN32
+        if (groupIter == re.NamedCapturingGroups().end()) {
+        VELOX_USER_FAIL(
+            "Invalid replacement sequence: unknown group {{ {} }}.",
+            (std::string) {groupName[1].begin(), groupName[1].end()});
+        }
+    #else
+        if (groupIter == re.NamedCapturingGroups().end()) {
       VELOX_USER_FAIL(
           "Invalid replacement sequence: unknown group {{ {} }}.",
           groupName[1].as_string());
     }
-
+    #endif
+    #ifdef WIN32
+    RE2::GlobalReplace(
+        &newReplacement,
+        fmt::format(
+            R"(\${{{}}})",
+            (std::string) {groupName[1].begin(), groupName[1].end()}),
+        fmt::format("${}", groupIter->second));
+    #else 
     RE2::GlobalReplace(
         &newReplacement,
         fmt::format(R"(\${{{}}})", groupName[1].as_string()),
         fmt::format("${}", groupIter->second));
+    #endif
   }
 
   // Convert references to numbered capturing groups from $g to \g.

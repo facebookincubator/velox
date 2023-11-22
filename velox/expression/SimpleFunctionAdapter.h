@@ -377,7 +377,7 @@ class SimpleFunctionAdapter : public VectorFunction {
     // references to input string buffers to all result vectors.
     auto reuseStringsFromArg = reuseStringsFromArgValue();
     if (reuseStringsFromArg >= 0) {
-      VELOX_CHECK_LT(reuseStringsFromArg, args.size());
+      VELOX_CHECK_LT_W(reuseStringsFromArg, args.size());
       if (decoded.size() == 0 || !decoded.at(reuseStringsFromArg).has_value()) {
         // If we're here, we're guaranteed the argument is either a Flat
         // or Constant vector so no decoding is necessary.

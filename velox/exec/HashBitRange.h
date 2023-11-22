@@ -25,8 +25,8 @@ class HashBitRange {
  public:
   HashBitRange(uint8_t begin, uint8_t end)
       : begin_(begin), end_(end), fieldMask_(bits::lowMask(end - begin)) {
-    VELOX_CHECK_LE(begin_, end_);
-    VELOX_CHECK_LE(end_, 64);
+    VELOX_CHECK_LE_W(begin_, end_);
+    VELOX_CHECK_LE_W(end_, 64);
   }
   HashBitRange() : HashBitRange(0, 0) {}
 

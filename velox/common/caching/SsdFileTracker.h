@@ -67,7 +67,7 @@ class SsdFileTracker {
   }
 
   void setRegionScores(const std::vector<int64_t>& scores) {
-    VELOX_CHECK_EQ(scores.size(), regionScores_.size());
+    VELOX_CHECK_EQ_W(scores.size(), regionScores_.size());
     for (auto i = 0; i < scores.size(); ++i) {
       regionScores_[i] = scores[i];
     }

@@ -18,6 +18,7 @@
 
 #include <folly/experimental/symbolizer/SignalHandler.h>
 #include <glog/logging.h>
+#include <io.h>
 
 namespace facebook::velox::process {
 thread_local const ThreadDebugInfo* threadDebugInfo = nullptr;
@@ -34,20 +35,21 @@ static void printCurrentQueryId() {
     const char* msg =
         "Fatal signal handler. "
         "ThreadDebugInfo object not found.";
-    write(STDERR_FILENO, msg, strlen(msg));
+    _write(_fileno(stderr), msg, strlen(msg));
   } else {
     const char* msg1 = "Fatal signal handler. Query Id= ";
-    write(STDERR_FILENO, msg1, strlen(msg1));
-    write(STDERR_FILENO, info->queryId_.c_str(), info->queryId_.length());
+    _write(_fileno(stderr), msg1, strlen(msg1));
+    _write(_fileno(stderr), info->queryId_.c_str(), info->queryId_.length());
     const char* msg2 = " Task Id= ";
-    write(STDERR_FILENO, msg2, strlen(msg2));
-    write(STDERR_FILENO, info->taskId_.c_str(), info->taskId_.length());
-    if (!fatalSignalProcessed && info->callback_) {
-      fatalSignalProcessed = true;
-      info->callback_();
-    }
+    _write(_fileno(stderr), msg2, strlen(msg2));
+    _write(_fileno(stderr), info->taskId_.c_str(), info->taskId_.length());
   }
-  write(STDERR_FILENO, "\n", 1);
+
+  if (!fatalSignalProcessed && info->callback_) {
+    fatalSignalProcessed = true;
+    info->callback_();
+  }
+  _write(_fileno(stderr), "\n", 1);
 }
 
 const ThreadDebugInfo* GetThreadDebugInfo() {

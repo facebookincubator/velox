@@ -16,6 +16,8 @@ find_library(LZO2_LIBRARY_DEBUG lzo2d PATHS ${LZO2_LIBRARYDIR})
 find_path(LZO2_INCLUDE_DIR lzo/lzo1a.h PATHS ${LZO2_INCLUDEDIR})
 
 select_library_configurations(LZO2)
+set(LZO2_LIBRARY "C:\\Users\\davidmar.AMR\\Downloads\\lzo-2.10\\lzo-2.10\\lzo2.lib")
+set(LZO2_INCLUDE_DIR "C:\\Users\\davidmar.AMR\\Downloads\\lzo-2.10\\lzo-2.10\\include")
 
 find_package_handle_standard_args(lzo2 DEFAULT_MSG LZO2_LIBRARY
                                   LZO2_INCLUDE_DIR)
@@ -23,11 +25,8 @@ find_package_handle_standard_args(lzo2 DEFAULT_MSG LZO2_LIBRARY
 mark_as_advanced(LZO2_LIBRARY LZO2_INCLUDE_DIR)
 
 get_filename_component(liblzo2_ext ${LZO2_LIBRARY} EXT)
-if(liblzo2_ext STREQUAL ".a")
+
   set(liblzo2_type STATIC)
-else()
-  set(liblzo2_type SHARED)
-endif()
 
 if(NOT TARGET lzo2::lzo2)
   add_library(lzo2::lzo2 ${liblzo2_type} IMPORTED)

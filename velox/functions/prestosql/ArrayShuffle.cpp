@@ -50,7 +50,7 @@ class ArrayShuffleFunction : public exec::VectorFunction {
       const TypePtr& /*outputType*/,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 1);
+    VELOX_CHECK_EQ_W(args.size(), 1);
 
     // This is a non-deterministic function, which violates the guarantee on a
     // deterministic single-arg function that the expression evaluation will

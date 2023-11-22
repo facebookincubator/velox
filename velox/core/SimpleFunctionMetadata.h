@@ -201,7 +201,7 @@ struct TypeAnalysis {
     // This should only handle primitives and OPAQUE.
     static_assert(
         SimpleTypeTrait<T>::isPrimitiveType ||
-        SimpleTypeTrait<T>::typeKind == TypeKind::OPAQUE);
+        SimpleTypeTrait<T>::typeKind == TypeKind::OPAQUE_2);
     results.stats.concreteCount++;
     results.out << detail::strToLowerCopy(
         std::string(SimpleTypeTrait<T>::name));

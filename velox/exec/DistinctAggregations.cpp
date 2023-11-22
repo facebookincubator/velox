@@ -211,7 +211,7 @@ std::unique_ptr<DistinctAggregations> DistinctAggregations::create(
     std::vector<AggregateInfo*> aggregates,
     const RowTypePtr& inputType,
     memory::MemoryPool* pool) {
-  VELOX_CHECK_EQ(aggregates.size(), 1);
+  VELOX_CHECK_EQ_W(aggregates.size(), 1);
   VELOX_CHECK(!aggregates[0]->inputs.empty());
 
   const bool isSingleInput = aggregates[0]->inputs.size() == 1;

@@ -119,7 +119,7 @@ class LogicalType;
 struct Repetition {
   enum type {
     REQUIRED = 0,
-    OPTIONAL = 1,
+    OPTIONAL_2 = 1,
     REPEATED = 2,
     /*Always last*/ UNDEFINED = 3
   };

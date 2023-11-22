@@ -20,7 +20,7 @@ namespace facebook::velox::exec {
 void HashJoinBridge::start() {
   std::lock_guard<std::mutex> l(mutex_);
   started_ = true;
-  VELOX_CHECK_GT(numBuilders_, 0);
+  VELOX_CHECK_GT_W(numBuilders_, 0);
 }
 
 void HashJoinBridge::addBuilder() {
@@ -55,7 +55,7 @@ bool HashJoinBridge::setHashTable(
 
     for (auto& partitionEntry : spillPartitionSet) {
       const auto id = partitionEntry.first;
-      VELOX_CHECK_EQ(spillPartitionSets_.count(id), 0);
+      VELOX_CHECK_EQ_W(spillPartitionSets_.count(id), 0);
       spillPartitionSets_.emplace(id, std::move(partitionEntry.second));
     }
     buildResult_ = HashBuildResult(
@@ -117,7 +117,7 @@ bool HashJoinBridge::probeFinished() {
     VELOX_CHECK(
         !restoringSpillPartitionId_.has_value() &&
         restoringSpillShards_.empty());
-    VELOX_CHECK_GT(numBuilders_, 0);
+    VELOX_CHECK_GT_W(numBuilders_, 0);
 
     // NOTE: we are clearing the hash table as it has been fully processed and
     // not needed anymore. We'll wait for the HashBuild operator to build a new
@@ -129,7 +129,7 @@ bool HashJoinBridge::probeFinished() {
       restoringSpillPartitionId_ = spillPartitionSets_.begin()->first;
       restoringSpillShards_ =
           spillPartitionSets_.begin()->second->split(numBuilders_);
-      VELOX_CHECK_EQ(restoringSpillShards_.size(), numBuilders_);
+      VELOX_CHECK_EQ_W(restoringSpillShards_.size(), numBuilders_);
       spillPartitionSets_.erase(spillPartitionSets_.begin());
       promises = std::move(promises_);
     } else {

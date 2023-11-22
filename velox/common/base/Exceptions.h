@@ -150,14 +150,16 @@ inline std::string errorMessage(const std::string& str) {
 }
 
 template <typename... Args>
+//TODO: davidmar fix for FMT issue.
 std::string errorMessage(fmt::string_view fmt, const Args&... args) {
-  return fmt::vformat(fmt, fmt::make_format_args(args...));
+  //return fmt::vformat(fmt, fmt::make_format_args(args...));
+  return "TODO: davidmar fix for FMT issue";
 }
 
 } // namespace detail
 
 #define _VELOX_THROW_IMPL(                                               \
-    exception, exprStr, errorSource, errorCode, isRetriable, ...)        \
+    exception, expr_str, errorSource, errorCode, isRetriable, ...)       \
   {                                                                      \
     /* GCC 9.2.1 doesn't accept this code with constexpr. */             \
     static const ::facebook::velox::detail::VeloxCheckFailArgs           \
@@ -165,7 +167,26 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
             __FILE__,                                                    \
             __LINE__,                                                    \
             __FUNCTION__,                                                \
-            exprStr,                                                     \
+            expr_str,                                                    \
+            errorSource,                                                 \
+            errorCode,                                                   \
+            isRetriable};                                                \
+    auto message = ::facebook::velox::detail::errorMessage(__VA_ARGS__); \
+    ::facebook::velox::detail::veloxCheckFail<                           \
+        exception,                                                       \
+        typename ::facebook::velox::detail::VeloxCheckFailStringType<    \
+            decltype(message)>::type>(veloxCheckFailArgs, message);      \
+  }
+#define _VELOX_THROW_IMPL_W(                                               \
+    exception, expr_str, errorSource, errorCode, isRetriable, ... )       \
+  {                                                                      \
+    /* GCC 9.2.1 doesn't accept this code with constexpr. */             \
+    static const ::facebook::velox::detail::VeloxCheckFailArgs           \
+        veloxCheckFailArgs = {                                           \
+            __FILE__,                                                    \
+            __LINE__,                                                    \
+            __FUNCTION__,                                                \
+            expr_str,                                                    \
             errorSource,                                                 \
             errorCode,                                                   \
             isRetriable};                                                \
@@ -176,11 +197,27 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
             decltype(message)>::type>(veloxCheckFailArgs, message);      \
   }
 
-#define _VELOX_CHECK_AND_THROW_IMPL(                                           \
-    expr, exprStr, exception, errorSource, errorCode, isRetriable, ...)        \
-  if (UNLIKELY(!(expr))) {                                                     \
-    _VELOX_THROW_IMPL(                                                         \
-        exception, exprStr, errorSource, errorCode, isRetriable, __VA_ARGS__); \
+#define _VELOX_CHECK_AND_THROW_IMPL(                                     \
+    expr, expr_str, exception, errorSource, errorCode, isRetriable, ...) \
+  if (UNLIKELY(!(expr))) {                                               \
+    _VELOX_THROW_IMPL(                                                   \
+        exception,                                                       \
+        expr_str,                                                        \
+        errorSource,                                                     \
+        errorCode,                                                       \
+        isRetriable,                                                     \
+        __VA_ARGS__);                                                    \
+  }
+#define _VELOX_CHECK_AND_THROW_IMPL_W(                                   \
+    expr, expr_str, exception, errorSource, errorCode, isRetriable, ...) \
+  if (UNLIKELY(!(expr))) {                                               \
+    _VELOX_THROW_IMPL_W(                                                   \
+        exception,                                                       \
+        expr_str,                                                        \
+        errorSource,                                                     \
+        errorCode,                                                       \
+        isRetriable,                                                     \
+        __VA_ARGS__);                                                    \
   }
 
 #define _VELOX_THROW(exception, ...) \
@@ -197,6 +234,16 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
       ::facebook::velox::error_code::kInvalidState.c_str(),         \
       /* isRetriable */ false,                                      \
       ##__VA_ARGS__)
+
+#define _VELOX_CHECK_IMPL_W(expr, expr_str, ...)                      \
+  _VELOX_CHECK_AND_THROW_IMPL_W(                                      \
+      expr,                                                         \
+      expr_str,                                                     \
+      ::facebook::velox::VeloxRuntimeError,                         \
+      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
+      ::facebook::velox::error_code::kInvalidState.c_str(),         \
+      /* isRetriable */ false,                                      \
+      __VA_ARGS__)
 
 // If the caller passes a custom message (4 *or more* arguments), we
 // have to construct a format string from ours ("({} vs. {})") plus
@@ -227,10 +274,21 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
         expr2);                                                  \
   }
 
+#define _VELOX_CHECK_OP_HELPER_W(implmacro, expr1, expr2, op)    \
+    implmacro(                                                   \
+        (expr1)op(expr2),                                        \
+        #expr1 " " #op " " #expr2,                               \
+        "({} vs. {})",                                           \
+        expr1,                                                   \
+        expr2);                                                  
+
 #define _VELOX_CHECK_OP(expr1, expr2, op, ...) \
   _VELOX_CHECK_OP_HELPER(_VELOX_CHECK_IMPL, expr1, expr2, op, ##__VA_ARGS__)
 
-#define _VELOX_USER_CHECK_IMPL(expr, exprStr, ...)               \
+#define _VELOX_CHECK_OP_W(expr1, expr2, op) \
+  _VELOX_CHECK_OP_HELPER_W(_VELOX_CHECK_IMPL_W, expr1, expr2, op)
+
+#define _VELOX_USER_CHECK_IMPL(expr, expr_str, ...)              \
   _VELOX_CHECK_AND_THROW_IMPL(                                   \
       expr,                                                      \
       exprStr,                                                   \
@@ -240,27 +298,69 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
       /* isRetriable */ false,                                   \
       ##__VA_ARGS__)
 
+#define _VELOX_USER_CHECK_IMPL_W(expr, expr_str, ...)              \
+  _VELOX_CHECK_AND_THROW_IMPL_W(                                   \
+      expr,                                                      \
+      expr_str,                                                  \
+      ::facebook::velox::VeloxUserError,                         \
+      ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
+      ::facebook::velox::error_code::kInvalidArgument.c_str(),   \
+      /* isRetriable */ false,                                    \
+      ##__VA_ARGS__)
+
 #define _VELOX_USER_CHECK_OP(expr1, expr2, op, ...) \
   _VELOX_CHECK_OP_HELPER(                           \
       _VELOX_USER_CHECK_IMPL, expr1, expr2, op, ##__VA_ARGS__)
 
+#define _VELOX_USER_CHECK_OP_W(expr1, expr2, op) \
+  _VELOX_CHECK_OP_HELPER_W(                           \
+      _VELOX_USER_CHECK_IMPL_W, expr1, expr2, op)
+
 // For all below macros, an additional message can be passed using a
 // format string and arguments, as with `fmt::format`.
-#define VELOX_CHECK(expr, ...) _VELOX_CHECK_IMPL(expr, #expr, ##__VA_ARGS__)
-#define VELOX_CHECK_GT(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, >, ##__VA_ARGS__)
-#define VELOX_CHECK_GE(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, >=, ##__VA_ARGS__)
-#define VELOX_CHECK_LT(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, <, ##__VA_ARGS__)
-#define VELOX_CHECK_LE(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, <=, ##__VA_ARGS__)
-#define VELOX_CHECK_EQ(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, ==, ##__VA_ARGS__)
-#define VELOX_CHECK_NE(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, !=, ##__VA_ARGS__)
-#define VELOX_CHECK_NULL(e, ...) VELOX_CHECK(e == nullptr, ##__VA_ARGS__)
-#define VELOX_CHECK_NOT_NULL(e, ...) VELOX_CHECK(e != nullptr, ##__VA_ARGS__)
+// 
+// TODO: davidmar renable macro's after fixing.
+// 
+//#define VELOX_CHECK(expr, ...) _VELOX_CHECK_IMPL(expr, #expr, ##__VA_ARGS__)
+//#define VELOX_CHECK_GT(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, >, ##__VA_ARGS__)
+//#define VELOX_CHECK_GE(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, >=, ##__VA_ARGS__)
+//#define VELOX_CHECK_LT(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, <, ##__VA_ARGS__)
+//#define VELOX_CHECK_LE(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, <=, ##__VA_ARGS__)
+//#define VELOX_CHECK_EQ(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, ==, ##__VA_ARGS__)
+//#define VELOX_CHECK_NE(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, !=, ##__VA_ARGS__)
+//#define VELOX_CHECK_NULL(e, ...) VELOX_CHECK(e == nullptr, ##__VA_ARGS__)
+//#define VELOX_CHECK_NOT_NULL(e, ...) VELOX_CHECK(e != nullptr, ##__VA_ARGS__)
+//
+//#define VELOX_CHECK_W(expr) _VELOX_CHECK_IMPL_W(expr, #expr)
+//#define VELOX_CHECK_GT_W(e1, e2) _VELOX_CHECK_OP_W(e1, e2, >)
+//#define VELOX_CHECK_GE_W(e1, e2) _VELOX_CHECK_OP_W(e1, e2, >=)
+//#define VELOX_CHECK_LT_W(e1, e2) _VELOX_CHECK_OP_W(e1, e2, <)
+//#define VELOX_CHECK_LE_W(e1, e2) _VELOX_CHECK_OP_W(e1, e2, <=)
+//#define VELOX_CHECK_EQ_W(e1, e2) _VELOX_CHECK_OP_W(e1, e2, ==)
+//#define VELOX_CHECK_NE_W(e1, e2) _VELOX_CHECK_OP_W(e1, e2, !=)
+//#define VELOX_CHECK_NULL_W(e) VELOX_CHECK_W(e == nullptr)
+//#define VELOX_CHECK_NOT_NULL_W(e) VELOX_CHECK_W(e != nullptr)
 
-#define VELOX_CHECK_OK(expr)                          \
-  do {                                                \
-    ::facebook::velox::Status _s = (expr);            \
-    _VELOX_CHECK_IMPL(_s.ok(), #expr, _s.toString()); \
-  } while (false)
+#define VELOX_CHECK(expr, ...)
+#define VELOX_CHECK_GT(e1, e2, ...)
+#define VELOX_CHECK_GE(e1, e2, ...)
+#define VELOX_CHECK_LT(e1, e2, ...)
+#define VELOX_CHECK_LE(e1, e2, ...)
+#define VELOX_CHECK_EQ(e1, e2, ...)
+#define VELOX_CHECK_NE(e1, e2, ...) 
+#define VELOX_CHECK_NULL(e, ...)
+#define VELOX_CHECK_NOT_NULL(e, ...)
+
+ #define VELOX_CHECK_W(expr)
+ #define VELOX_CHECK_GT_W(e1, e2)
+ #define VELOX_CHECK_GE_W(e1, e2)
+ #define VELOX_CHECK_LT_W(e1, e2)
+ #define VELOX_CHECK_LE_W(e1, e2)
+ #define VELOX_CHECK_EQ_W(e1, e2)
+ #define VELOX_CHECK_NE_W(e1, e2) 
+ #define VELOX_CHECK_NULL_W(e)
+ #define VELOX_CHECK_NOT_NULL_W(e)
+
 
 #define VELOX_UNSUPPORTED(...)                                   \
   _VELOX_THROW(                                                  \
@@ -336,24 +436,58 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError);
 
 // For all below macros, an additional message can be passed using a
 // format string and arguments, as with `fmt::format`.
-#define VELOX_USER_CHECK(expr, ...) \
-  _VELOX_USER_CHECK_IMPL(expr, #expr, ##__VA_ARGS__)
-#define VELOX_USER_CHECK_GT(e1, e2, ...) \
-  _VELOX_USER_CHECK_OP(e1, e2, >, ##__VA_ARGS__)
-#define VELOX_USER_CHECK_GE(e1, e2, ...) \
-  _VELOX_USER_CHECK_OP(e1, e2, >=, ##__VA_ARGS__)
-#define VELOX_USER_CHECK_LT(e1, e2, ...) \
-  _VELOX_USER_CHECK_OP(e1, e2, <, ##__VA_ARGS__)
-#define VELOX_USER_CHECK_LE(e1, e2, ...) \
-  _VELOX_USER_CHECK_OP(e1, e2, <=, ##__VA_ARGS__)
-#define VELOX_USER_CHECK_EQ(e1, e2, ...) \
-  _VELOX_USER_CHECK_OP(e1, e2, ==, ##__VA_ARGS__)
-#define VELOX_USER_CHECK_NE(e1, e2, ...) \
-  _VELOX_USER_CHECK_OP(e1, e2, !=, ##__VA_ARGS__)
-#define VELOX_USER_CHECK_NULL(e, ...) \
-  VELOX_USER_CHECK(e == nullptr, ##__VA_ARGS__)
-#define VELOX_USER_CHECK_NOT_NULL(e, ...) \
-  VELOX_USER_CHECK(e != nullptr, ##__VA_ARGS__)
+// TODO: Davidmar implment this correctly after fixing the macros.
+// #define VELOX_USER_CHECK(expr, ...) \
+//   _VELOX_USER_CHECK_IMPL(expr, #expr, ##__VA_ARGS__)
+// #define VELOX_USER_CHECK_GT(e1, e2, ...) \
+//   _VELOX_USER_CHECK_OP(e1, e2, >, ##__VA_ARGS__)
+// #define VELOX_USER_CHECK_GE(e1, e2, ...) \
+//   _VELOX_USER_CHECK_OP(e1, e2, >=, ##__VA_ARGS__)
+// #define VELOX_USER_CHECK_LT(e1, e2, ...) \
+//   _VELOX_USER_CHECK_OP(e1, e2, <, ##__VA_ARGS__)
+// #define VELOX_USER_CHECK_LE(e1, e2, ...) \
+//   _VELOX_USER_CHECK_OP(e1, e2, <=, ##__VA_ARGS__)
+// #define VELOX_USER_CHECK_EQ(e1, e2, ...) \
+//   _VELOX_USER_CHECK_OP(e1, e2, ==, ##__VA_ARGS__)
+// #define VELOX_USER_CHECK_NE(e1, e2, ...) \
+//   _VELOX_USER_CHECK_OP(e1, e2, !=, ##__VA_ARGS__)
+// #define VELOX_USER_CHECK_NULL(e, ...) \
+//   VELOX_USER_CHECK(e == nullptr, ##__VA_ARGS__)
+// #define VELOX_USER_CHECK_NOT_NULL(e, ...) \
+//   VELOX_USER_CHECK(e != nullptr, ##__VA_ARGS__)
+
+#define VELOX_USER_CHECK(expr, ...)
+#define VELOX_USER_CHECK_GT(e1, e2, ...)
+#define VELOX_USER_CHECK_GE(e1, e2, ...)
+#define VELOX_USER_CHECK_LT(e1, e2, ...)
+#define VELOX_USER_CHECK_LE(e1, e2, ...)
+#define VELOX_USER_CHECK_EQ(e1, e2, ...)
+#define VELOX_USER_CHECK_NE(e1, e2, ...)
+#define VELOX_USER_CHECK_NULL(e, ...)
+#define VELOX_USER_CHECK_NOT_NULL(e, ...)
+
+
+
+// For all below macros, an additional message can be passed using a
+// format string and arguments, as with `fmt::format`.
+#define VELOX_USER_CHECK_W(expr) \
+  _VELOX_USER_CHECK_IMPL_W(expr, #expr)
+#define VELOX_USER_CHECK_GT_W(e1, e2) \
+  _VELOX_USER_CHECK_OP_W(e1, e2, >)
+#define VELOX_USER_CHECK_GE_W(e1, e2) \
+  _VELOX_USER_CHECK_OP_W(e1, e2, >=)
+#define VELOX_USER_CHECK_LT_W(e1, e2) \
+  _VELOX_USER_CHECK_OP_W(e1, e2, <)
+#define VELOX_USER_CHECK_LE_W(e1, e2) \
+  _VELOX_USER_CHECK_OP_W(e1, e2, <=)
+#define VELOX_USER_CHECK_EQ_W(e1, e2) \
+  _VELOX_USER_CHECK_OP_W(e1, e2, ==)
+#define VELOX_USER_CHECK_NE_W(e1, e2) \
+  _VELOX_USER_CHECK_OP_W(e1, e2, !=)
+#define VELOX_USER_CHECK_NULL_W(e) \
+  VELOX_USER_CHECK_W(e == nullptr)
+#define VELOX_USER_CHECK_NOT_NULL_W(e) \
+  VELOX_USER_CHECK_W(e != nullptr)
 
 #ifndef NDEBUG
 #define VELOX_USER_DCHECK(expr, ...) VELOX_USER_CHECK(expr, ##__VA_ARGS__)

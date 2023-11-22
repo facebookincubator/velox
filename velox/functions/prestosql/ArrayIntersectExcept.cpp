@@ -396,7 +396,7 @@ std::shared_ptr<exec::VectorFunction> createTypedArraysIntersectExcept(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   using T = typename TypeTraits<kind>::NativeType;
 
-  VELOX_CHECK_EQ(inputArgs.size(), 2);
+  VELOX_CHECK_EQ_W(inputArgs.size(), 2);
   BaseVector* rhs = inputArgs[1].constantValue.get();
 
   // We don't optimize the case where lhs is a constant expression for
@@ -461,7 +461,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
 template <TypeKind kind>
 const std::shared_ptr<exec::VectorFunction> createTypedArraysOverlap(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  VELOX_CHECK_EQ(inputArgs.size(), 2);
+  VELOX_CHECK_EQ_W(inputArgs.size(), 2);
   auto left = inputArgs[0].constantValue.get();
   auto right = inputArgs[1].constantValue.get();
   using T = typename TypeTraits<kind>::NativeType;

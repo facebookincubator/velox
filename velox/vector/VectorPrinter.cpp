@@ -358,8 +358,8 @@ std::string printVector(const BaseVector& vector) {
 
 std::string
 printVector(const BaseVector& vector, vector_size_t from, vector_size_t size) {
-  VELOX_CHECK_GE(from, 0);
-  VELOX_CHECK_GE(size, 0);
+  VELOX_CHECK_GE_W(from, 0);
+  VELOX_CHECK_GE_W(size, 0);
 
   auto end = std::min(from + size, vector.size());
 

@@ -140,7 +140,7 @@ TypedExprPtr FieldAccessTypedExpr::create(
     void* context) {
   auto type = core::deserializeType(obj, context);
   auto inputs = deserializeInputs(obj, context);
-  VELOX_CHECK_LE(inputs.size(), 1);
+  VELOX_CHECK_LE_W(inputs.size(), 1);
 
   auto name = obj["fieldName"].asString();
 
@@ -164,7 +164,7 @@ TypedExprPtr DereferenceTypedExpr::create(
     void* context) {
   auto type = core::deserializeType(obj, context);
   auto inputs = deserializeInputs(obj, context);
-  VELOX_CHECK_EQ(inputs.size(), 1);
+  VELOX_CHECK_EQ_W(inputs.size(), 1);
 
   uint32_t index = obj["fieldIndex"].asInt();
 

@@ -185,8 +185,8 @@ class ComparisonSimdFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 2, "Comparison requires two arguments");
-    VELOX_CHECK_EQ(args[0]->typeKind(), args[1]->typeKind());
-    VELOX_USER_CHECK_EQ(outputType->kind(), TypeKind::BOOLEAN);
+    VELOX_CHECK_EQ_W(args[0]->typeKind(), args[1]->typeKind());
+    VELOX_USER_CHECK_EQ_W(outputType->kind(), TypeKind::BOOLEAN);
 
     context.ensureWritable(rows, outputType, result);
     auto comparator = SimdComparator<ComparisonOp>{};

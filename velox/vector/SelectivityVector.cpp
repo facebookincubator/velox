@@ -33,7 +33,7 @@ std::string SelectivityVector::toString(
     vector_size_t maxSelectedRowsToPrint) const {
   const auto selectedCnt = countSelected();
 
-  VELOX_CHECK_GE(maxSelectedRowsToPrint, 0);
+  VELOX_CHECK_GE_W(maxSelectedRowsToPrint, 0);
 
   std::stringstream out;
   out << selectedCnt << " out of " << size() << " rows selected between "

@@ -15,10 +15,10 @@
  */
 
 #include "velox/dwio/common/BitPackDecoder.h"
-
+#include "velox/type/custom_type/Int128.h"
 namespace facebook::velox::dwio::common {
 
-using int128_t = __int128_t;
+using int128_t = type::int128;
 
 #if XSIMD_WITH_AVX2
 

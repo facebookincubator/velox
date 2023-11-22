@@ -537,7 +537,7 @@ void MemoryPoolImpl::allocateNonContiguous(
   if (!out.empty()) {
     INC_MEM_OP_STATS(Frees);
   }
-  VELOX_CHECK_GT(numPages, 0);
+  VELOX_CHECK_GT_W(numPages, 0);
   TestValue::adjust(
       "facebook::velox::common::memory::MemoryPoolImpl::allocateNonContiguous",
       this);
@@ -591,7 +591,7 @@ void MemoryPoolImpl::allocateContiguous(
   if (!out.empty()) {
     INC_MEM_OP_STATS(Frees);
   }
-  VELOX_CHECK_GT(numPages, 0);
+  VELOX_CHECK_GT_W(numPages, 0);
   DEBUG_RECORD_FREE(out);
   if (!allocator_->allocateContiguous(
           numPages,
@@ -764,7 +764,7 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
     MemoryPool* requestor,
     uint64_t size) {
   VELOX_CHECK(threadSafe_);
-  VELOX_CHECK_GT(size, 0);
+  VELOX_CHECK_GT_W(size, 0);
 
   // Propagate the increment to the root memory pool to check the capacity limit
   // first. If it exceeds the capacity and can't grow, the root memory pool will
@@ -878,7 +878,7 @@ void MemoryPoolImpl::releaseThreadSafe(uint64_t size, bool releaseOnly) {
 }
 
 void MemoryPoolImpl::decrementReservation(uint64_t size) noexcept {
-  VELOX_CHECK_GT(size, 0);
+  VELOX_CHECK_GT_W(size, 0);
 
   if (parent_ != nullptr) {
     toImpl(parent_)->decrementReservation(size);
@@ -932,7 +932,7 @@ uint64_t MemoryPoolImpl::freeBytes() const {
   if (capacity_ == kMaxMemory) {
     return 0;
   }
-  VELOX_CHECK_GE(capacity_, reservationBytes_);
+  VELOX_CHECK_GE_W(capacity_, reservationBytes_);
   return capacity_ - reservationBytes_;
 }
 
@@ -996,7 +996,7 @@ uint64_t MemoryPoolImpl::shrink(uint64_t targetBytes) {
   }
   std::lock_guard<std::mutex> l(mutex_);
   // We don't expect to shrink a memory pool without capacity limit.
-  VELOX_CHECK_NE(capacity_, kMaxMemory);
+  VELOX_CHECK_NE_W(capacity_, kMaxMemory);
   uint64_t freeBytes = std::max<uint64_t>(0, capacity_ - reservationBytes_);
   if (targetBytes != 0) {
     freeBytes = std::min(targetBytes, freeBytes);
@@ -1017,7 +1017,7 @@ uint64_t MemoryPoolImpl::grow(uint64_t bytes) noexcept {
   VELOX_CHECK_LE(
       capacity_ + bytes, maxCapacity_, "Can't grow beyond the max capacity");
   capacity_ += bytes;
-  VELOX_CHECK_GE(capacity_, bytes);
+  VELOX_CHECK_GE_W(capacity_, bytes);
   return capacity_;
 }
 

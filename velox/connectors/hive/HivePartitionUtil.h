@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/vector/ComplexVector.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive {
 

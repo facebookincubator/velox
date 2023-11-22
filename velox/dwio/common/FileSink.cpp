@@ -20,8 +20,15 @@
 #include "velox/dwio/common/exception/Exception.h"
 
 #include <fcntl.h>
-#include <sys/mman.h>
+#include <mman/sys/mman.h>
+#ifndef WIN32
 #include <unistd.h>
+#endif
+
+#ifdef WIN32
+#define S_IRUSR S_IREAD
+#define S_IWUSR S_IWRITE
+#endif // WIN32
 
 namespace facebook::velox::dwio::common {
 namespace {

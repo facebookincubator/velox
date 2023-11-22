@@ -106,7 +106,7 @@ void ByteInputStream::seekp(std::streampos position) {
 void ByteInputStream::next(bool throwIfPastEnd) {
   VELOX_CHECK(current_ >= &ranges_[0]);
   size_t position = current_ - &ranges_[0];
-  VELOX_CHECK_LT(position, ranges_.size());
+  VELOX_CHECK_LT_W(position, ranges_.size());
   if (position == ranges_.size() - 1) {
     if (throwIfPastEnd) {
       VELOX_FAIL("Reading past end of ByteInputStream");
@@ -342,7 +342,7 @@ void ByteOutputStream::extend(int32_t bytes) {
       ranges_.size() == 1 ? nullptr : &ranges_[ranges_.size() - 2],
       current_);
   allocatedBytes_ += current_->size;
-  VELOX_CHECK_GT(allocatedBytes_, 0);
+  VELOX_CHECK_GT_W(allocatedBytes_, 0);
   if (isBits_) {
     // size and position are in units of bits for a bits stream.
     current_->size *= 8;

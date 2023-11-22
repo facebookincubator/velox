@@ -61,6 +61,9 @@ template <typename TPolicy>
 struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
   using T = bool;
 
+  static T cast(const facebook::velox::type::int128& v) {
+    return v != 0;
+  }
   template <typename From>
   static T cast(const From& v) {
     if constexpr (TPolicy::truncate) {
@@ -372,6 +375,27 @@ struct Converter<
   }
 };
 
+template <>
+struct Converter<TypeKind::HUGEINT> {
+  static int128_t cast(const bool& v) {
+    return int128_t(v);
+  }
+  // TODO: davidmar implement logic to convert string to int128_t
+  static int128_t cast(const std::string& v) {
+    return int128_t(0);
+  }
+};
+
+template <>
+struct Converter<TypeKind::HUGEINT, void, true> {
+  static int128_t cast(const bool& v) {
+    return int128_t(v);
+  }
+  //TODO: davidmar implement logic to convert string to int128_t
+  static int128_t cast(const std::string& v) {
+    return int128_t(0);
+  }
+};
 template <TypeKind KIND, typename TPolicy>
 struct Converter<
     KIND,
@@ -486,6 +510,10 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
 
     return folly::to<std::string>(val);
   }
+  //TODO: Davidmar, implmenet int128 to string
+  static std::string cast(const facebook::velox::type::int128& val) {
+    return "";
+  }
 
   static std::string cast(const Timestamp& val) {
     TimestampToStringOptions options;
@@ -501,7 +529,7 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
     return val ? "true" : "false";
   }
 
-  /// Normalize the given floating-point standard notation string in place, by
+    /// Normalize the given floating-point standard notation string in place, by
   /// appending '.0' if it has only the integer part but no fractional part. For
   /// example, for the given string '12345', replace it with '12345.0'.
   static void normalizeStandardNotation(std::string& str) {
@@ -551,6 +579,7 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
 
     str.resize(pos);
   }
+  
 };
 
 // Allow conversions from string to TIMESTAMP type.

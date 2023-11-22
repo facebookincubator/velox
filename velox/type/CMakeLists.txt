@@ -18,6 +18,7 @@ endif()
 add_subdirectory(parser)
 add_subdirectory(tz)
 add_subdirectory(fbhive)
+add_subdirectory(custom_type)
 
 add_library(
   velox_type
@@ -33,7 +34,8 @@ add_library(
   TimestampConversion.cpp
   Tokenizer.cpp
   Type.cpp
-  Variant.cpp)
+  Variant.cpp
+  )
 
 target_link_libraries(
   velox_type
@@ -44,6 +46,7 @@ target_link_libraries(
   velox_serialization
   velox_external_date
   velox_status
+  velox_custom_type
   Boost::headers
   Folly::folly
   re2::re2)

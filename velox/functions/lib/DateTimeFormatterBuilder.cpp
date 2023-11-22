@@ -210,7 +210,7 @@ DateTimeFormatterBuilder& DateTimeFormatterBuilder::setType(
 }
 
 std::shared_ptr<DateTimeFormatter> DateTimeFormatterBuilder::build() {
-  VELOX_CHECK_NE(type_, DateTimeFormatterType::UNKNOWN);
+  VELOX_CHECK_NE_W(type_, DateTimeFormatterType::UNKNOWN);
   return std::make_shared<DateTimeFormatter>(
       std::move(literalBuf_), bufEnd_, std::move(tokens_), type_);
 }

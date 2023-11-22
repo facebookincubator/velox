@@ -267,7 +267,7 @@ void LazyVector::load(RowSet rows, ValueHook* hook) const {
   // that.
   loader_->load(rows, hook, size(), &vector_);
   if (!hook) {
-    VELOX_CHECK_GE(vector_->size(), size());
+    VELOX_CHECK_GE_W(vector_->size(), size());
   }
 }
 

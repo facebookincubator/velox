@@ -118,7 +118,7 @@ class Buffer {
   // TODO: `resize` is probably a better name for this method
   virtual void setSize(size_t size) {
     VELOX_CHECK(!isView());
-    VELOX_CHECK_LE(size, capacity_);
+    VELOX_CHECK_LE_W(size, capacity_);
     size_ = size;
     checkEndGuard();
   }
@@ -213,7 +213,7 @@ class Buffer {
 
   virtual void copyFrom(const Buffer* other, size_t bytes) {
     VELOX_CHECK(!isView());
-    VELOX_CHECK_GE(capacity_, bytes);
+    VELOX_CHECK_GE_W(capacity_, bytes);
     VELOX_CHECK(podType_);
     memcpy(data_, other->data_, bytes);
   }
@@ -475,7 +475,7 @@ class AlignedBuffer : public Buffer {
       size_t oldBytes,
       size_t newBytes,
       const std::optional<RawT>& initValue) {
-    VELOX_CHECK_LE(newBytes, capacity());
+    VELOX_CHECK_LE_W(newBytes, capacity());
     if (newBytes <= oldBytes) {
       return;
     }
@@ -543,8 +543,8 @@ class NonPODAlignedBuffer : public Buffer {
 
   void setSize(size_t size) override {
     size_t old = size_;
-    VELOX_CHECK_EQ(old % sizeof(T), 0);
-    VELOX_CHECK_EQ(size % sizeof(T), 0);
+    VELOX_CHECK_EQ_W(old % sizeof(T), 0);
+    VELOX_CHECK_EQ_W(size % sizeof(T), 0);
     Buffer::setSize(size);
     int oldN = old / sizeof(T);
     int newN = size / sizeof(T);
@@ -571,7 +571,7 @@ class NonPODAlignedBuffer : public Buffer {
   }
 
   void releaseResources() override {
-    VELOX_CHECK_EQ(size_ % sizeof(T), 0);
+    VELOX_CHECK_EQ_W(size_ % sizeof(T), 0);
     size_t numValues = size_ / sizeof(T);
     // we can't use asMutable because it checks isMutable and we wan't to
     // destroy regardless
@@ -583,11 +583,11 @@ class NonPODAlignedBuffer : public Buffer {
 
   void copyFrom(const Buffer* other, size_t bytes) override {
     VELOX_CHECK(!isView());
-    VELOX_CHECK_GE(size_, bytes);
+    VELOX_CHECK_GE_W(size_, bytes);
     VELOX_DCHECK(
         dynamic_cast<const NonPODAlignedBuffer<T>*>(other) != nullptr,
         "Types don't match");
-    VELOX_CHECK_EQ(bytes % sizeof(T), 0);
+    VELOX_CHECK_EQ_W(bytes % sizeof(T), 0);
     size_t numValues = bytes / sizeof(T);
     const T* from = other->as<T>();
     T* to = asMutable<T>();
@@ -602,14 +602,14 @@ class NonPODAlignedBuffer : public Buffer {
       size_t newBytes,
       const std::optional<RawT>& initValue) {
     static_assert(std::is_same_v<T, RawT>);
-    VELOX_CHECK_LE(newBytes, capacity());
+    VELOX_CHECK_LE_W(newBytes, capacity());
     VELOX_CHECK_GE(
         newBytes,
         oldBytes,
         "It probably indicates that destructors won't be called for non-POD types");
     // always initialize (i.e. call constructor)
-    VELOX_CHECK_EQ(newBytes % sizeof(T), 0);
-    VELOX_CHECK_EQ(oldBytes % sizeof(T), 0);
+    VELOX_CHECK_EQ_W(newBytes % sizeof(T), 0);
+    VELOX_CHECK_EQ_W(oldBytes % sizeof(T), 0);
     int oldNum = oldBytes / sizeof(T);
     int newNum = newBytes / sizeof(T);
     auto data = asMutable<T>();

@@ -352,7 +352,7 @@ class InPredicate : public exec::VectorFunction {
       return std::make_shared<InPredicate>(nullptr, true);
     }
 
-    VELOX_CHECK_EQ(values->typeKind(), TypeKind::ARRAY);
+    VELOX_CHECK_EQ_W(values->typeKind(), TypeKind::ARRAY);
 
     auto constantInput =
         std::dynamic_pointer_cast<ConstantVector<ComplexType>>(values);
@@ -592,7 +592,7 @@ class InPredicate : public exec::VectorFunction {
       return;
     }
 
-    VELOX_CHECK_EQ(arg->encoding(), VectorEncoding::Simple::FLAT);
+    VELOX_CHECK_EQ_W(arg->encoding(), VectorEncoding::Simple::FLAT);
     auto flatArg = arg->asUnchecked<FlatVector<T>>();
 
     context.ensureWritable(rows, BOOLEAN(), result);

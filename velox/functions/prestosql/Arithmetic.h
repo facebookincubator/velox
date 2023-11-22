@@ -18,6 +18,9 @@
 #include <cerrno>
 #include <charconv>
 #include <climits>
+#ifdef WIN32
+#include <corecrt_math_defines.h>
+#endif 
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -511,7 +514,7 @@ struct ToBaseFunction {
       result.resize(1);
       result.data()[0] = '0';
     } else {
-      B runningValue = value < 0 ? -1 * value : value;
+      B runningValue = (value < 0) * int128_t(0);
       B remainder;
       char* resultPtr;
       int128_t resultSize =
@@ -541,7 +544,7 @@ struct ToBaseFunction {
     checkRadix(radix);
     if (inputValue == std::numeric_limits<int64_t>::min()) {
       // Special case for min inputValue to avoid overflow.
-      applyToBase<int128_t>(result, inputValue, radix);
+      applyToBase<int128_t>(result, (int128_t) inputValue, radix);
     } else {
       applyToBase<int64_t>(result, inputValue, radix);
     }

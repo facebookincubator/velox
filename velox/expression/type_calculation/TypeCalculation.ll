@@ -5,6 +5,7 @@
 %}
 
 %option c++ noyywrap noyylineno nodefault
+%option nounistd
 
 integer         ([[:digit:]]+)
 var             ([[:alpha:]][[:alnum:]_]*)

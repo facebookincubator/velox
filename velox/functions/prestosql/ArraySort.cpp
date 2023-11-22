@@ -217,7 +217,7 @@ class ArraySortFunction : public exec::VectorFunction {
       const TypePtr& /*outputType*/,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 1);
+    VELOX_CHECK_EQ_W(args.size(), 1);
     auto& arg = args[0];
 
     VectorPtr localResult;
@@ -370,7 +370,7 @@ std::shared_ptr<exec::VectorFunction> createTyped(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     bool ascending,
     bool throwOnNestedNull = true) {
-  VELOX_CHECK_EQ(inputArgs.size(), 1);
+  VELOX_CHECK_EQ_W(inputArgs.size(), 1);
   return std::make_shared<ArraySortFunction<kind>>(
       ascending, throwOnNestedNull);
 }

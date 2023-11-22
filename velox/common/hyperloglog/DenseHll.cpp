@@ -235,7 +235,7 @@ DenseHllView deserialize(const char* serialized) {
   common::InputByteStream stream(serialized);
 
   auto version = stream.read<int8_t>();
-  VELOX_CHECK_EQ(kPrestoDenseV2, version);
+  VELOX_CHECK_EQ_W(kPrestoDenseV2, version);
 
   auto indexBitLength = stream.read<int8_t>();
   auto baseline = stream.read<int8_t>();
@@ -543,7 +543,7 @@ void DenseHll::mergeWith(const char* serialized) {
   common::InputByteStream stream(serialized);
 
   auto version = stream.read<int8_t>();
-  VELOX_CHECK_EQ(kPrestoDenseV2, version);
+  VELOX_CHECK_EQ_W(kPrestoDenseV2, version);
 
   auto indexBitLength = stream.read<int8_t>();
   VELOX_CHECK_EQ(

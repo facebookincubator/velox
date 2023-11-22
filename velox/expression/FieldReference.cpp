@@ -143,7 +143,7 @@ void FieldReference::evalSpecialFormSimplified(
   if (inputs_.empty()) {
     row = context.row();
   } else {
-    VELOX_CHECK_EQ(inputs_.size(), 1);
+    VELOX_CHECK_EQ_W(inputs_.size(), 1);
     inputs_[0]->evalSimplified(rows, context, input);
     BaseVector::flattenVector(input);
     row = input->as<RowVector>();
@@ -153,7 +153,7 @@ void FieldReference::evalSpecialFormSimplified(
   if (index_ == -1) {
     index_ = index;
   } else {
-    VELOX_CHECK_EQ(index_, index);
+    VELOX_CHECK_EQ_W(index_, index);
   }
 
   LocalSelectivityVector nonNullRowsHolder(*context.execCtx());

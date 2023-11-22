@@ -44,7 +44,9 @@ class VeloxPromise : public folly::Promise<T> {
 
   explicit VeloxPromise(VeloxPromise<T>&& other)
       : folly::Promise<T>(std::move(other)),
-        context_(std::move(other.context_)) {}
+        context_(std::move(other.context_)) {}  
+  //TODO: davidmar implement copy CTR.
+  VeloxPromise(const VeloxPromise<T>& other) {}
 
   VeloxPromise& operator=(VeloxPromise<T>&& other) noexcept {
     folly::Promise<T>::operator=(std::move(other));
@@ -65,7 +67,7 @@ using ContinuePromise = VeloxPromise<folly::Unit>;
 using ContinueFuture = folly::SemiFuture<folly::Unit>;
 
 /// Equivalent of folly's makePromiseContract for VeloxPromise.
-static inline std::pair<ContinuePromise, ContinueFuture>
+static inline std::pair<ContinuePromise, ContinueFuture> 
 makeVeloxContinuePromiseContract(const std::string& promiseContext = "") {
   auto p = ContinuePromise(promiseContext);
   auto f = p.getSemiFuture();

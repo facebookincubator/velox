@@ -656,12 +656,12 @@ VectorPtr newConstant(
 }
 
 template <>
-VectorPtr newConstant<TypeKind::OPAQUE>(
+VectorPtr newConstant<TypeKind::OPAQUE_2>(
     const TypePtr& type,
     variant& value,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
-  const auto& capsule = value.value<TypeKind::OPAQUE>();
+  const auto& capsule = value.value<TypeKind::OPAQUE_2>();
 
   return std::make_shared<ConstantVector<std::shared_ptr<void>>>(
       pool, size, value.isNull(), type, std::shared_ptr<void>(capsule.obj));
@@ -673,7 +673,7 @@ VectorPtr BaseVector::createConstant(
     variant value,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
-  VELOX_CHECK_EQ(type->kind(), value.kind());
+  VELOX_CHECK_EQ_W(type->kind(), value.kind());
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
       newConstant, value.kind(), type, value, size, pool);
 }
@@ -713,7 +713,7 @@ void BaseVector::copy(
   }
   std::vector<CopyRange> ranges;
   if (toSourceRow == nullptr) {
-    VELOX_CHECK_GE(source->size(), rows.end());
+    VELOX_CHECK_GE_W(source->size(), rows.end());
     ranges = toCopyRanges(rows);
   } else {
     ranges.reserve(rows.end());
@@ -908,7 +908,7 @@ void BaseVector::prepareForReuse() {
 void BaseVector::validate(const VectorValidateOptions& options) const {
   if (nulls_ != nullptr) {
     auto bytes = byteSize<bool>(size());
-    VELOX_CHECK_GE(nulls_->size(), bytes);
+    VELOX_CHECK_GE_W(nulls_->size(), bytes);
   }
   if (options.callback) {
     options.callback(*this);
@@ -922,7 +922,7 @@ size_t typeSize(const Type& type) {
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
       return sizeof(StringView);
-    case TypeKind::OPAQUE:
+    case TypeKind::OPAQUE_2:
       return sizeof(std::shared_ptr<void>);
     default:
       VELOX_DCHECK(type.isPrimitiveType(), type.toString());
@@ -1006,7 +1006,7 @@ std::optional<vector_size_t> BaseVector::findDuplicateValue(
 }
 
 std::string printNulls(const BufferPtr& nulls, vector_size_t maxBitsToPrint) {
-  VELOX_CHECK_GE(maxBitsToPrint, 0);
+  VELOX_CHECK_GE_W(maxBitsToPrint, 0);
 
   vector_size_t totalCount = nulls->size() * 8;
   auto* rawNulls = nulls->as<uint64_t>();
@@ -1028,7 +1028,7 @@ std::string printNulls(const BufferPtr& nulls, vector_size_t maxBitsToPrint) {
 std::string printIndices(
     const BufferPtr& indices,
     vector_size_t maxIndicesToPrint) {
-  VELOX_CHECK_GE(maxIndicesToPrint, 0);
+  VELOX_CHECK_GE_W(maxIndicesToPrint, 0);
 
   auto* rawIndices = indices->as<vector_size_t>();
 

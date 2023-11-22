@@ -11,6 +11,6 @@
 # limitations under the License.
 include_directories(SYSTEM velox/external)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_OS_TZDB")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ")
 
 add_library(velox_external_date tz.cpp)

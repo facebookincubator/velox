@@ -41,7 +41,7 @@ void RuntimeMetric::merge(const RuntimeMetric& other)
 #endif
 #endif
 {
-  VELOX_CHECK_EQ(unit, other.unit);
+  VELOX_CHECK_EQ_W(unit, other.unit);
   sum += other.sum;
   count += other.count;
   min = std::min(min, other.min);

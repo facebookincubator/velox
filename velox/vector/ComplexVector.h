@@ -58,7 +58,7 @@ class RowVector : public BaseVector {
         childrenSize_(children.size()),
         children_(std::move(children)) {
     // Some columns may not be projected out
-    VELOX_CHECK_LE(children_.size(), type->size());
+    VELOX_CHECK_LE_W(children_.size(), type->size());
     [[maybe_unused]] const auto* rowType =
         dynamic_cast<const RowType*>(type.get());
 
@@ -353,9 +353,9 @@ struct ArrayVectorBase : BaseVector {
         rawOffsets_(offsets_->as<vector_size_t>()),
         sizes_(std::move(lengths)),
         rawSizes_(sizes_->as<vector_size_t>()) {
-    VELOX_CHECK_GE(
+    VELOX_CHECK_GE_W(
         offsets_->capacity(), BaseVector::length_ * sizeof(vector_size_t));
-    VELOX_CHECK_GE(
+    VELOX_CHECK_GE_W(
         sizes_->capacity(), BaseVector::length_ * sizeof(vector_size_t));
   }
 
@@ -403,7 +403,7 @@ class ArrayVector : public ArrayVectorBase {
             std::move(elements),
             type->childAt(0),
             pool)) {
-    VELOX_CHECK_EQ(type->kind(), TypeKind::ARRAY);
+    VELOX_CHECK_EQ_W(type->kind(), TypeKind::ARRAY);
     VELOX_CHECK(
         elements_->type()->kindEquals(type->childAt(0)),
         "Unexpected element type: {}. Expected: {}",
@@ -510,7 +510,7 @@ class MapVector : public ArrayVectorBase {
             type->childAt(1),
             pool)),
         sortedKeys_{sortedKeys} {
-    VELOX_CHECK_EQ(type->kind(), TypeKind::MAP);
+    VELOX_CHECK_EQ_W(type->kind(), TypeKind::MAP);
 
     VELOX_CHECK(
         keys_->type()->kindEquals(type->childAt(0)),

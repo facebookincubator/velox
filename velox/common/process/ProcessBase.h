@@ -16,7 +16,8 @@
 
 #pragma once
 
-#include <pthread.h>
+#include <folly/portability/Pthread.h>
+#include <folly/portability/SysTypes.h>
 #include <sys/types.h>
 #include <string>
 #include <vector>
@@ -38,6 +39,7 @@ std::string getHostName();
 /**
  * Process identifier.
  */
+//TODO: davidmar what are the pid_t used for in Windows and in the process library
 pid_t getProcessId();
 
 /**

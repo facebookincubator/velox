@@ -39,7 +39,7 @@ class TransformFunction : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
+    VELOX_CHECK_EQ_W(args.size(), 2);
 
     // Flatten input array.
     exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);

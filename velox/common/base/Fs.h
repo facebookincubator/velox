@@ -33,6 +33,7 @@ namespace facebook::velox::common {
 /// message will be printed if creation is unsuccessful, but the created
 /// directories will not be removed on failure.
 bool generateFileDirectory(const char* dirPath);
+bool generateFileDirectory(const fs::path::value_type* dirPath);
 
 /// Creates a file with a generated file name in provided 'basePath'. The
 /// generated file will have random chars in the file name to avoid duplication.

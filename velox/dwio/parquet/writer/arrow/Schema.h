@@ -112,7 +112,7 @@ class PARQUET_EXPORT Node {
   }
 
   bool is_optional() const {
-    return repetition_ == Repetition::OPTIONAL;
+    return repetition_ == Repetition::OPTIONAL_2;
   }
 
   bool is_repeated() const {
@@ -422,7 +422,7 @@ class PARQUET_EXPORT GroupNode : public Node {
 #define PRIMITIVE_FACTORY(FuncName, TYPE)                 \
   static inline NodePtr FuncName(                         \
       const std::string& name,                            \
-      Repetition::type repetition = Repetition::OPTIONAL, \
+      Repetition::type repetition = Repetition::OPTIONAL_2, \
       int field_id = -1) {                                \
     return PrimitiveNode::Make(                           \
         name,                                             \

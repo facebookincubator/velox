@@ -308,13 +308,13 @@ std::string variant::toJson(const TypePtr& type) const {
       auto& timestamp = value<TypeKind::TIMESTAMP>();
       return '"' + timestamp.toString() + '"';
     }
-    case TypeKind::OPAQUE: {
+    case TypeKind::OPAQUE_2: {
       // Although this is not used for deserialization, we need to include the
       // real data because commonExpressionEliminationRules uses
       // CallTypedExpr.toString as key, which ends up using this string.
       // Opaque types that want to use common expression elimination need to
       // make their serialization deterministic.
-      const detail::OpaqueCapsule& capsule = value<TypeKind::OPAQUE>();
+      const detail::OpaqueCapsule& capsule = value<TypeKind::OPAQUE_2>();
       auto serializeFunction = capsule.type->getSerializeFunc();
       return "Opaque<type:" + capsule.type->toString() + ",value:\"" +
           serializeFunction(capsule.obj) + "\">";
@@ -435,13 +435,13 @@ std::string variant::toJsonUnsafe(const TypePtr& type) const {
       auto& timestamp = value<TypeKind::TIMESTAMP>();
       return '"' + timestamp.toString() + '"';
     }
-    case TypeKind::OPAQUE: {
+    case TypeKind::OPAQUE_2: {
       // Although this is not used for deserialization, we need to include the
       // real data because commonExpressionEliminationRules uses
       // CallTypedExpr.toString as key, which ends up using this string.
       // Opaque types that want to use common expression elimination need to
       // make their serialization deterministic.
-      const detail::OpaqueCapsule& capsule = value<TypeKind::OPAQUE>();
+      const detail::OpaqueCapsule& capsule = value<TypeKind::OPAQUE_2>();
       auto serializeFunction = capsule.type->getSerializeFunc();
       return "Opaque<type:" + capsule.type->toString() + ",value:\"" +
           serializeFunction(capsule.obj) + "\">";
@@ -548,8 +548,8 @@ folly::dynamic variant::serialize() const {
       objValue = value<TypeKind::VARCHAR>();
       break;
     }
-    case TypeKind::OPAQUE: {
-      serializeOpaque(variantObj, value<TypeKind::OPAQUE>());
+    case TypeKind::OPAQUE_2: {
+      serializeOpaque(variantObj, value<TypeKind::OPAQUE_2>());
       break;
     }
     case TypeKind::TIMESTAMP: {
@@ -598,7 +598,7 @@ variant variant::create(const folly::dynamic& variantobj) {
       const folly::dynamic& keys = obj["keys"];
       const folly::dynamic& values = obj["values"];
       VELOX_USER_CHECK(keys.isArray() && values.isArray());
-      VELOX_USER_CHECK_EQ(keys.size(), values.size());
+      VELOX_USER_CHECK_EQ_W(keys.size(), values.size());
       for (size_t idx = 0; idx < keys.size(); ++idx) {
         auto first = variant::create(keys[idx]);
         auto second = variant::create(values[idx]);
@@ -653,7 +653,7 @@ variant variant::create(const folly::dynamic& variantobj) {
       }
       return variant::create<TypeKind::DOUBLE>(obj.asDouble());
     }
-    case TypeKind::OPAQUE: {
+    case TypeKind::OPAQUE_2: {
       return deserializeOpaque(variantobj);
     }
     case TypeKind::TIMESTAMP: {
@@ -782,7 +782,7 @@ bool equalsFloatingPointWithEpsilon(const variant& a, const variant& b) {
   if (a.kind() == TypeKind::REAL) {
     return equalsFloatingPointWithEpsilonTyped<TypeKind::REAL, float>(a, b);
   } else {
-    VELOX_CHECK_EQ(a.kind(), TypeKind::DOUBLE);
+    VELOX_CHECK_EQ_W(a.kind(), TypeKind::DOUBLE);
     return equalsFloatingPointWithEpsilonTyped<TypeKind::DOUBLE, double>(a, b);
   }
 }

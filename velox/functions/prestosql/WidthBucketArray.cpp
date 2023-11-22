@@ -42,7 +42,7 @@ int64_t widthBucket(
     int index = (lower + upper) / 2;
     auto bin = elementsHolder.valueAt<T>(offset + index);
 
-    VELOX_USER_CHECK(std::isfinite(bin), "Bin value must be finite");
+    VELOX_USER_CHECK(std::isfinite((long double) bin), "Bin value must be finite");
 
     if (operand < bin) {
       upper = index;
@@ -164,7 +164,8 @@ std::vector<double> toBinValues(
     VELOX_USER_CHECK(
         !simpleVector->isNullAt(offset + i), "Bin value cannot be null");
     auto value = simpleVector->valueAt(offset + i);
-    VELOX_USER_CHECK(std::isfinite(value), "Bin value must be finite");
+    VELOX_USER_CHECK(
+        std::isfinite( (long double) value), "Bin value must be finite");
     if (i > 0) {
       VELOX_USER_CHECK_GT(
           value,
@@ -181,12 +182,12 @@ std::shared_ptr<exec::VectorFunction> makeWidthBucketArray(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
-  VELOX_CHECK_EQ(inputArgs.size(), 2);
+  VELOX_CHECK_EQ_W(inputArgs.size(), 2);
   const auto& operandVector = inputArgs[0];
   const auto& binsVector = inputArgs[1];
 
-  VELOX_CHECK_EQ(operandVector.type->kind(), TypeKind::DOUBLE);
-  VELOX_CHECK_EQ(binsVector.type->kind(), TypeKind::ARRAY);
+  VELOX_CHECK_EQ_W(operandVector.type->kind(), TypeKind::DOUBLE);
+  VELOX_CHECK_EQ_W(binsVector.type->kind(), TypeKind::ARRAY);
 
   auto binsTypeKind = binsVector.type->asArray().elementType()->kind();
 

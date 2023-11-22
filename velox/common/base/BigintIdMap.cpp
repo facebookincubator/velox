@@ -20,7 +20,7 @@
 namespace facebook::velox {
 
 void BigintIdMap::makeTable(int64_t capacity) {
-  VELOX_CHECK_LE(capacity, kMaxCapacity);
+  VELOX_CHECK_LE_W(capacity, kMaxCapacity);
   byteSize_ = capacity * kEntrySize + kReadPadding;
   table_ = reinterpret_cast<char*>(pool_.allocate(byteSize_));
   memset(table_, 0, byteSize_);
@@ -31,7 +31,7 @@ void BigintIdMap::makeTable(int64_t capacity) {
 }
 
 void BigintIdMap::resize(int64_t newCapacity) {
-  VELOX_CHECK_LE(newCapacity, kMaxCapacity);
+  VELOX_CHECK_LE_W(newCapacity, kMaxCapacity);
 
   auto oldCapacity = capacity_;
   auto oldTable = table_;

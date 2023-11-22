@@ -40,10 +40,10 @@
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Tree.h"
-
+#include "velox/type/custom_type/Int128.h"
 namespace facebook::velox {
 
-using int128_t = __int128_t;
+using int128_t = type::int128;
 
 struct __attribute__((__packed__)) Int96Timestamp {
   int32_t days;
@@ -84,7 +84,7 @@ enum class TypeKind : int8_t {
   ROW = 32,
   UNKNOWN = 33,
   FUNCTION = 34,
-  OPAQUE = 35,
+  OPAQUE_2 = 35,
   INVALID = 36
 };
 
@@ -371,13 +371,13 @@ struct TypeTraits<TypeKind::FUNCTION> {
 };
 
 template <>
-struct TypeTraits<TypeKind::OPAQUE> {
+struct TypeTraits<TypeKind::OPAQUE_2> {
   using ImplType = OpaqueType;
   using NativeType = std::shared_ptr<void>;
   using DeepCopiedType = std::shared_ptr<void>;
   static constexpr uint32_t minSubTypes = 0;
   static constexpr uint32_t maxSubTypes = 0;
-  static constexpr TypeKind typeKind = TypeKind::OPAQUE;
+  static constexpr TypeKind typeKind = TypeKind::OPAQUE_2;
   static constexpr bool isPrimitiveType = false;
   static constexpr bool isFixedWidth = false;
   static constexpr const char* name = "OPAQUE";
@@ -544,7 +544,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   VELOX_FLUENT_CAST(Array, ARRAY)
   VELOX_FLUENT_CAST(Map, MAP)
   VELOX_FLUENT_CAST(Row, ROW)
-  VELOX_FLUENT_CAST(Opaque, OPAQUE)
+  VELOX_FLUENT_CAST(Opaque, OPAQUE_2)
   VELOX_FLUENT_CAST(UnKnown, UNKNOWN)
   VELOX_FLUENT_CAST(Function, FUNCTION)
 
@@ -606,7 +606,8 @@ class TypeBase : public Type {
   }
 
   const std::vector<TypeParameter>& parameters() const override {
-    static const std::vector<TypeParameter> kEmpty = {};
+    static const std::vector<TypeParameter> 
+        kEmpty = {};
     return kEmpty;
   }
 };
@@ -995,7 +996,7 @@ class FunctionType : public TypeBase<TypeKind::FUNCTION> {
   }
 
   const std::shared_ptr<const Type>& childAt(uint32_t idx) const override {
-    VELOX_CHECK_LT(idx, children_.size());
+    VELOX_CHECK_LT_W(idx, children_.size());
     return children_[idx];
   }
 
@@ -1034,7 +1035,7 @@ class FunctionType : public TypeBase<TypeKind::FUNCTION> {
   const std::vector<TypeParameter> parameters_;
 };
 
-class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
+class OpaqueType : public TypeBase<TypeKind::OPAQUE_2> {
  public:
   template <typename T>
   using SerializeFunc = std::function<std::string(const std::shared_ptr<T>&)>;
@@ -1375,7 +1376,7 @@ std::shared_ptr<const FunctionType> FUNCTION(
     TypePtr returnType);
 
 template <typename Class>
-std::shared_ptr<const OpaqueType> OPAQUE() {
+std::shared_ptr<const OpaqueType> OPAQUE_2() {
   return OpaqueType::create<Class>();
 }
 
@@ -1489,8 +1490,8 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
   [&]() {                                                                      \
     if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {                  \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
-    } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {            \
-      return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE>(__VA_ARGS__);  \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE_2) {            \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE_2>(__VA_ARGS__);  \
     } else {                                                                   \
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                               \
           TEMPLATE_FUNC, typeKind, __VA_ARGS__);                               \
@@ -1564,8 +1565,8 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
   [&]() {                                                                      \
     if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {                  \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
-    } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {            \
-      return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE>(__VA_ARGS__);  \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE_2) {            \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE_2>(__VA_ARGS__);  \
     } else {                                                                   \
       return VELOX_DYNAMIC_TYPE_DISPATCH_IMPL(                                 \
           TEMPLATE_FUNC, , typeKind, __VA_ARGS__);                             \
@@ -1646,8 +1647,8 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
   [&]() {                                                                 \
     if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {             \
       return CLASS<::facebook::velox::TypeKind::UNKNOWN>::FIELD;          \
-    } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {       \
-      return CLASS<::facebook::velox::TypeKind::OPAQUE>::FIELD;           \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE_2) {       \
+      return CLASS<::facebook::velox::TypeKind::OPAQUE_2>::FIELD;           \
     } else if ((typeKind) == ::facebook::velox::TypeKind::HUGEINT) {      \
       return CLASS<::facebook::velox::TypeKind::HUGEINT>::FIELD;          \
     } else {                                                              \
@@ -1716,7 +1717,7 @@ std::shared_ptr<const Type> createType<TypeKind::MAP>(
     std::vector<std::shared_ptr<const Type>>&& children);
 
 template <>
-std::shared_ptr<const Type> createType<TypeKind::OPAQUE>(
+std::shared_ptr<const Type> createType<TypeKind::OPAQUE_2>(
     std::vector<std::shared_ptr<const Type>>&& children);
 
 #undef VELOX_SCALAR_ACCESSOR
@@ -1980,7 +1981,7 @@ struct SimpleTypeTrait<Generic<T, comparable, orderable>> {
 
 template <typename T>
 struct SimpleTypeTrait<std::shared_ptr<T>>
-    : public TypeTraits<TypeKind::OPAQUE> {};
+    : public TypeTraits<TypeKind::OPAQUE_2> {};
 
 template <typename KEY, typename VAL>
 struct SimpleTypeTrait<Map<KEY, VAL>> : public TypeTraits<TypeKind::MAP> {};
@@ -2099,7 +2100,7 @@ struct CppToType<Generic<T>> : public CppToTypeBase<TypeKind::UNKNOWN> {};
 // TODO: maybe do something smarter than just matching any shared_ptr, e.g. we
 // can declare "registered" types explicitly
 template <typename T>
-struct CppToType<std::shared_ptr<T>> : public CppToTypeBase<TypeKind::OPAQUE> {
+struct CppToType<std::shared_ptr<T>> : public CppToTypeBase<TypeKind::OPAQUE_2> {
   // We override the type with the concrete specialization here!
   // using NativeType = std::shared_ptr<T>;
   static auto create() {
@@ -2178,10 +2179,18 @@ template <>
 inline std::string to(const Timestamp& value) {
   return value.toString();
 }
-
+//TODO: davidmar implement toString function for int128_t
 template <>
 inline std::string to(const int128_t& value) {
-  return std::to_string(value);
+  //return std::string(value);D
+  return "TODO: davidmar implement toString function for int128_t";
+}
+
+//TODO: davidmar implement toString function for uint128
+template <>
+inline std::string to(const uint128_t& value) {
+  //return std::string(value);
+  return "TODO: davidmar implement toString function for uint128_t";
 }
 
 template <>
@@ -2402,6 +2411,19 @@ struct hasher<::facebook::velox::UnknownValue> {
     return 0;
   }
 };
+// TODO: davidmar implement toString function for int128_t
+template <>
+inline std::string to<std::string, int128_t>(const int128_t& value) {
+  // return std::string(value);D
+  return "TODO: davidmar implement toString function for int128_t";
+}
+
+// TODO: davidmar implement toString function for uint128
+template <>
+inline std::string to<std::string>(const uint128_t& value) {
+  // return std::string(value);
+  return "TODO: davidmar implement toString function for uint128_t";
+}
 
 // Helper functions to allow TypeKind and some common variations to be
 // transparently used by folly::sformat.

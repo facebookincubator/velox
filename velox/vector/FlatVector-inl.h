@@ -140,10 +140,10 @@ void FlatVector<T>::copyValuesAndNulls(
   }
 
   source = source->loadedVector();
-  VELOX_CHECK_EQ(BaseVector::typeKind(), source->typeKind());
-  VELOX_CHECK_GE(BaseVector::length_, rows.end());
+  VELOX_CHECK_EQ_W(BaseVector::typeKind(), source->typeKind());
+  VELOX_CHECK_GE_W(BaseVector::length_, rows.end());
   if (!toSourceRow) {
-    VELOX_CHECK_GE(source->size(), rows.end());
+    VELOX_CHECK_GE_W(source->size(), rows.end());
   }
   const uint64_t* sourceNulls = source->rawNulls();
   uint64_t* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
@@ -274,7 +274,7 @@ void FlatVector<T>::copyRanges(
   }
 
   source = source->loadedVector();
-  VELOX_CHECK_EQ(BaseVector::typeKind(), source->typeKind());
+  VELOX_CHECK_EQ_W(BaseVector::typeKind(), source->typeKind());
 
   if constexpr (std::is_same_v<T, StringView>) {
     auto leaf =

@@ -48,7 +48,7 @@ BooleanMix getFlatBool(
     bool mergeNullsToValues,
     const uint64_t** valuesOut,
     const uint64_t** nullsOut) {
-  VELOX_CHECK_EQ(vector->typeKind(), TypeKind::BOOLEAN);
+  VELOX_CHECK_EQ_W(vector->typeKind(), TypeKind::BOOLEAN);
   const auto size = activeRows.end();
   switch (vector->encoding()) {
     case VectorEncoding::Simple::FLAT: {

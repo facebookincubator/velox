@@ -1342,7 +1342,7 @@ inline void RowContainer::storeNoNulls<TypeKind::HUGEINT>(
 }
 
 template <>
-inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
+inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE_2>(
     const char* FOLLY_NONNULL const* FOLLY_NONNULL /*rows*/,
     folly::Range<const vector_size_t*> /*rowNumbers*/,
     int32_t /*numRows*/,
@@ -1437,7 +1437,7 @@ inline bool RowContainer::equals(
 }
 
 template <>
-inline int RowContainer::compare<TypeKind::OPAQUE>(
+inline int RowContainer::compare<TypeKind::OPAQUE_2>(
     const char* FOLLY_NONNULL /*row*/,
     RowColumn /*column*/,
     const DecodedVector& /*decoded*/,
@@ -1447,7 +1447,7 @@ inline int RowContainer::compare<TypeKind::OPAQUE>(
 }
 
 template <>
-inline int RowContainer::compare<TypeKind::OPAQUE>(
+inline int RowContainer::compare<TypeKind::OPAQUE_2>(
     const char* FOLLY_NONNULL /*left*/,
     const char* FOLLY_NONNULL /*right*/,
     const Type* FOLLY_NONNULL /*type*/,

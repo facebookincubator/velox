@@ -219,8 +219,8 @@ class ISerializable {
           std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>>>
   static T deserialize(const folly::dynamic& obj, void* context = nullptr) {
     auto raw = obj.asInt();
-    VELOX_USER_CHECK_GE(raw, std::numeric_limits<T>::min());
-    VELOX_USER_CHECK_LE(raw, std::numeric_limits<T>::max());
+    VELOX_USER_CHECK_GE_W(raw, std::numeric_limits<T>::min());
+    VELOX_USER_CHECK_LE_W(raw, std::numeric_limits<T>::max());
     return (T)raw;
   }
 
@@ -308,7 +308,7 @@ class ISerializable {
     const folly::dynamic& keys = obj["keys"];
     const folly::dynamic& values = obj["values"];
     VELOX_USER_CHECK(keys.isArray() && values.isArray());
-    VELOX_USER_CHECK_EQ(keys.size(), values.size());
+    VELOX_USER_CHECK_EQ_W(keys.size(), values.size());
     for (size_t idx = 0; idx < keys.size(); ++idx) {
       auto first =
           ISerializable::deserialize<typename T::key_type>(keys[idx], context);

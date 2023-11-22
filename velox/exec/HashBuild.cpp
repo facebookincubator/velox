@@ -537,7 +537,7 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
 }
 
 void HashBuild::spillInput(const RowVectorPtr& input) {
-  VELOX_CHECK_EQ(input->size(), activeRows_.size());
+  VELOX_CHECK_EQ_W(input->size(), activeRows_.size());
 
   if (!spillEnabled() || spiller_ == nullptr || !spiller_->isAnySpilled() ||
       !activeRows_.hasSelections()) {
@@ -1064,13 +1064,13 @@ void HashBuild::setState(State state) {
 }
 
 void HashBuild::checkStateTransition(State state) {
-  VELOX_CHECK_NE(state_, state);
+  VELOX_CHECK_NE_W(state_, state);
   switch (state) {
     case State::kRunning:
       if (!spillEnabled()) {
-        VELOX_CHECK_EQ(state_, State::kWaitForBuild);
+        VELOX_CHECK_EQ_W(state_, State::kWaitForBuild);
       } else {
-        VELOX_CHECK_NE(state_, State::kFinish);
+        VELOX_CHECK_NE_W(state_, State::kFinish);
       }
       break;
     case State::kWaitForBuild:
@@ -1080,7 +1080,7 @@ void HashBuild::checkStateTransition(State state) {
     case State::kWaitForProbe:
       [[fallthrough]];
     case State::kFinish:
-      VELOX_CHECK_EQ(state_, State::kRunning);
+      VELOX_CHECK_EQ_W(state_, State::kRunning);
       break;
     default:
       VELOX_UNREACHABLE(stateName(state_));

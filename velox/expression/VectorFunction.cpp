@@ -62,7 +62,7 @@ std::shared_ptr<VectorFunction> getVectorFunction(
   auto sanitizedName = sanitizeName(name);
 
   if (!constantInputs.empty()) {
-    VELOX_CHECK_EQ(inputTypes.size(), constantInputs.size());
+    VELOX_CHECK_EQ_W(inputTypes.size(), constantInputs.size());
   }
 
   // Zip `inputTypes` and `constantInputs` vectors into a single vector of

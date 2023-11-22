@@ -42,7 +42,7 @@ std::vector<PlanNodePtr> deserializeSources(
 
 PlanNodePtr deserializeSingleSource(const folly::dynamic& obj, void* context) {
   auto sources = deserializeSources(obj, context);
-  VELOX_CHECK_EQ(1, sources.size());
+  VELOX_CHECK_EQ_W(1, sources.size());
 
   return sources[0];
 }
@@ -691,7 +691,7 @@ folly::dynamic ValuesNode::serialize() const {
 // static
 PlanNodePtr ValuesNode::create(const folly::dynamic& obj, void* context) {
   auto sources = deserializeSources(obj, context);
-  VELOX_CHECK_EQ(0, sources.size());
+  VELOX_CHECK_EQ_W(0, sources.size());
 
   auto encodedData = obj["data"].asString();
   auto serializedData = encoding::Base64::decode(encodedData);
@@ -959,7 +959,7 @@ AbstractJoinNode::AbstractJoinNode(
       core::isRightSemiProjectJoin(joinType)) {
     // Last output column must be a boolean 'match'.
     --numOutputColumms;
-    VELOX_CHECK_EQ(outputType_->childAt(numOutputColumms), BOOLEAN());
+    VELOX_CHECK_EQ_W(outputType_->childAt(numOutputColumms), BOOLEAN());
 
     // Verify that 'match' column name doesn't match any column from left or
     // right source.
@@ -1068,7 +1068,7 @@ folly::dynamic HashJoinNode::serialize() const {
 // static
 PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
   auto sources = deserializeSources(obj, context);
-  VELOX_CHECK_EQ(2, sources.size());
+  VELOX_CHECK_EQ_W(2, sources.size());
 
   auto nullAware = obj["nullAware"].asBool();
   auto leftKeys = deserializeFields(obj["leftKeys"], context);
@@ -1100,7 +1100,7 @@ folly::dynamic MergeJoinNode::serialize() const {
 // static
 PlanNodePtr MergeJoinNode::create(const folly::dynamic& obj, void* context) {
   auto sources = deserializeSources(obj, context);
-  VELOX_CHECK_EQ(2, sources.size());
+  VELOX_CHECK_EQ_W(2, sources.size());
 
   auto leftKeys = deserializeFields(obj["leftKeys"], context);
   auto rightKeys = deserializeFields(obj["rightKeys"], context);
@@ -1191,7 +1191,7 @@ PlanNodePtr NestedLoopJoinNode::create(
     const folly::dynamic& obj,
     void* context) {
   auto sources = deserializeSources(obj, context);
-  VELOX_CHECK_EQ(2, sources.size());
+  VELOX_CHECK_EQ_W(2, sources.size());
 
   TypedExprPtr joinCondition;
   if (obj.count("joinCondition")) {
@@ -1550,8 +1550,8 @@ MarkDistinctNode::MarkDistinctNode(
       sources_{std::move(source)},
       outputType_(
           getMarkDistinctOutputType(sources_[0]->outputType(), markerName_)) {
-  VELOX_USER_CHECK_GT(markerName_.size(), 0)
-  VELOX_USER_CHECK_GT(distinctKeys_.size(), 0);
+  VELOX_USER_CHECK_GT_W(markerName_.size(), 0)
+  VELOX_USER_CHECK_GT_W(distinctKeys_.size(), 0);
 }
 
 folly::dynamic MarkDistinctNode::serialize() const {

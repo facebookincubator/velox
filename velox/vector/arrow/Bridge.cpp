@@ -71,7 +71,7 @@ class VeloxToArrowBridgeHolder {
 
   // Allocates and properly acquires buffers for a child ArrowArray structure.
   ArrowArray* allocateChild(size_t i) {
-    VELOX_CHECK_LT(i, childrenPtrs_.size());
+    VELOX_CHECK_LT_W(i, childrenPtrs_.size());
     childrenPtrs_[i] = std::make_unique<ArrowArray>();
     children_[i] = childrenPtrs_[i].get();
     return children_[i];
@@ -593,7 +593,7 @@ void exportStrings(
   });
   holder.setBuffer(2, AlignedBuffer::allocate<char>(bufSize, pool));
   char* rawBuffer = holder.getBufferAs<char>(2);
-  VELOX_CHECK_LT(bufSize, std::numeric_limits<int32_t>::max());
+  VELOX_CHECK_LT_W(bufSize, std::numeric_limits<int32_t>::max());
   auto offsetLen = checkedPlus<size_t>(out.length, 1);
   holder.setBuffer(1, AlignedBuffer::allocate<int32_t>(offsetLen, pool));
   auto* rawOffsets = holder.getBufferAs<int32_t>(1);
@@ -1253,7 +1253,7 @@ RowVectorPtr createRowVector(
     const ArrowSchema& arrowSchema,
     const ArrowArray& arrowArray,
     bool isViewer) {
-  VELOX_CHECK_EQ(arrowArray.n_children, rowType->size());
+  VELOX_CHECK_EQ_W(arrowArray.n_children, rowType->size());
 
   // Recursively create the children vectors.
   std::vector<VectorPtr> childrenVector;
@@ -1299,8 +1299,8 @@ ArrayVectorPtr createArrayVector(
     bool isViewer,
     WrapInBufferViewFunc wrapInBufferView) {
   static_assert(sizeof(vector_size_t) == sizeof(int32_t));
-  VELOX_CHECK_EQ(arrowArray.n_buffers, 2);
-  VELOX_CHECK_EQ(arrowArray.n_children, 1);
+  VELOX_CHECK_EQ_W(arrowArray.n_buffers, 2);
+  VELOX_CHECK_EQ_W(arrowArray.n_children, 1);
   auto offsets = wrapInBufferView(
       arrowArray.buffers[1], (arrowArray.length + 1) * sizeof(vector_size_t));
   auto sizes =
@@ -1331,8 +1331,8 @@ MapVectorPtr createMapVector(
     const ArrowArray& arrowArray,
     bool isViewer,
     WrapInBufferViewFunc wrapInBufferView) {
-  VELOX_CHECK_EQ(arrowArray.n_buffers, 2);
-  VELOX_CHECK_EQ(arrowArray.n_children, 1);
+  VELOX_CHECK_EQ_W(arrowArray.n_buffers, 2);
+  VELOX_CHECK_EQ_W(arrowArray.n_children, 1);
   auto offsets = wrapInBufferView(
       arrowArray.buffers[1], (arrowArray.length + 1) * sizeof(vector_size_t));
   auto sizes =
@@ -1346,7 +1346,7 @@ MapVectorPtr createMapVector(
       isViewer);
   VELOX_CHECK(entries->type()->isRow());
   const auto& rows = *entries->asUnchecked<RowVector>();
-  VELOX_CHECK_EQ(rows.childrenSize(), 2);
+  VELOX_CHECK_EQ_W(rows.childrenSize(), 2);
   return std::make_shared<MapVector>(
       pool,
       type,
@@ -1368,7 +1368,7 @@ VectorPtr createDictionaryVector(
     const ArrowArray& arrowArray,
     bool isViewer,
     WrapInBufferViewFunc wrapInBufferView) {
-  VELOX_CHECK_EQ(arrowArray.n_buffers, 2);
+  VELOX_CHECK_EQ_W(arrowArray.n_buffers, 2);
   VELOX_CHECK_NOT_NULL(arrowArray.dictionary);
   static_assert(sizeof(vector_size_t) == sizeof(int32_t));
   VELOX_CHECK_EQ(

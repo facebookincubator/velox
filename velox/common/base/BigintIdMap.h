@@ -223,7 +223,7 @@ class BigintIdMap {
   static constexpr int32_t kAllSet =
       bits::lowMask(xsimd::batch<int64_t, xsimd::default_arch>::size);
   static constexpr int32_t kEntrySize = sizeof(int64_t) + sizeof(int32_t);
-  static constexpr int64_t kLow32 = (1L << 32) - 1;
+  static constexpr int64_t kLow32 = UINT_MAX;
 
   // Number of bytes past end of last entry that may get read. The last id is
   // accessed with a width of 8.

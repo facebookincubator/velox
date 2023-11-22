@@ -19,12 +19,14 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <time.h>
-#include <unistd.h>
+#include <Windows.h>
 
 #include <folly/CpuId.h>
 #include <folly/FileUtil.h>
 #include <folly/String.h>
 #include <gflags/gflags.h>
+#include <boost/chrono.hpp>
+
 
 constexpr const char* kProcSelfCmdline = "/proc/self/cmdline";
 
@@ -63,14 +65,14 @@ std::string getAppName() {
  * This machine's name.
  */
 std::string getHostName() {
-  char hostbuf[_POSIX_HOST_NAME_MAX + 1];
-  if (gethostname(hostbuf, _POSIX_HOST_NAME_MAX + 1) < 0) {
+  char hostbuf[MAX_COMPUTERNAME_LENGTH + 1];
+  if (gethostname(hostbuf, MAX_COMPUTERNAME_LENGTH + 1) < 0) {
     return "";
   } else {
     // When the host name is precisely HOST_NAME_MAX bytes long, gethostname
     // returns 0 even though the result is not NUL-terminated. Manually NUL-
     // terminate to handle that case.
-    hostbuf[_POSIX_HOST_NAME_MAX] = '\0';
+    hostbuf[MAX_COMPUTERNAME_LENGTH] = '\0';
     return hostbuf;
   }
 }
@@ -78,8 +80,10 @@ std::string getHostName() {
 /**
  * Process identifier.
  */
-pid_t getProcessId() {
-  return getpid();
+// TODO: davidmar what are the pid_t used for in Windows and in the process
+// library
+ pid_t getProcessId() {
+  return 0;
 }
 
 /**
@@ -93,14 +97,15 @@ pthread_t getThreadId() {
  * Get current working directory.
  */
 std::string getCurrentDirectory() {
-  char buf[PATH_MAX];
-  return getcwd(buf, PATH_MAX);
+  char buf[MAX_PATH];
+  return getcwd(buf, MAX_PATH);
 }
 
 uint64_t threadCpuNanos() {
-  timespec ts;
-  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
-  return ts.tv_sec * 1'000'000'000 + ts.tv_nsec;
+  boost::chrono::thread_clock::time_point tp = boost::chrono::thread_clock::now();
+  tp = boost::chrono::time_point_cast<boost::chrono::nanoseconds>(tp);
+  
+  return (uint64_t) tp.time_since_epoch().count();
 }
 
 namespace {

@@ -13,3 +13,15 @@
 # limitations under the License.
 add_library(velox_flag_definitions OBJECT flags.cpp)
 target_link_libraries(velox_flag_definitions PRIVATE gflags::gflags)
+
+# Find include directories for gflags
+set(GFLAGS_INCLUDE_DIRS "C:/Program Files (x86)/gflags/include")
+#message(FATAL_ERROR "${GFLAGS_INCLUDE_DIRS}")
+# Check if GFLAGS_INCLUDE_DIRS is found
+
+
+if(GFLAGS_INCLUDE_DIRS)
+    target_include_directories(velox_encode PRIVATE ${GFLAGS_INCLUDE_DIRS})
+else()
+    message(FATAL_ERROR "gflags include directories not found. Set GFLAGS_INCLUDE_DIRS manually...")
+endif()

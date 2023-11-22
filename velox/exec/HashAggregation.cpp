@@ -437,8 +437,8 @@ void HashAggregation::reclaim(
     // having row container memory compaction support later.
     groupingSet_->spill();
   }
-  VELOX_CHECK_EQ(groupingSet_->numRows(), 0);
-  VELOX_CHECK_EQ(groupingSet_->numDistinct(), 0);
+  VELOX_CHECK_EQ_W(groupingSet_->numRows(), 0);
+  VELOX_CHECK_EQ_W(groupingSet_->numDistinct(), 0);
   // Release the minimum reserved memory.
   pool()->release();
 }

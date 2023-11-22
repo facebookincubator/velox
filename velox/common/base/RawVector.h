@@ -19,6 +19,7 @@
 #include <folly/Range.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/SimdUtil.h"
+#include <malloc.h>
 
 namespace facebook::velox {
 
@@ -165,7 +166,7 @@ class raw_vector {
 
   T* allocateData(int32_t size, int32_t& capacity) {
     auto bytes = paddedSize(sizeof(T) * size);
-    auto ptr = reinterpret_cast<T*>(aligned_alloc(simd::kPadding, bytes));
+    auto ptr = reinterpret_cast<T*>(_aligned_malloc(simd::kPadding, bytes));
     // Clear the word below the pointer so that we do not get read of
     // uninitialized when reading a partial word that extends below
     // the pointer.

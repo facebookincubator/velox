@@ -364,7 +364,7 @@ class SpillState {
   }
 
   bool isAllPartitionSpilled() const {
-    VELOX_CHECK_LE(spilledPartitionSet_.size(), maxPartitions_);
+    VELOX_CHECK_LE_W(spilledPartitionSet_.size(), maxPartitions_);
     return spilledPartitionSet_.size() == maxPartitions_;
   }
 

@@ -56,7 +56,7 @@ class ReverseFunction : public exec::VectorFunction {
       const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 1);
+    VELOX_CHECK_EQ_W(args.size(), 1);
 
     auto& arg = args[0];
 

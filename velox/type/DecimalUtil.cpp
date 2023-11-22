@@ -48,9 +48,11 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
     // Append the fraction part.
     fractionString += fraction;
   }
+//TODO: davidmar fix for FMT issue.
+//  return fmt::format(
+//      "{}{}{}", isNegative ? "-" : "", integralPart, fractionString);
 
-  return fmt::format(
-      "{}{}{}", isNegative ? "-" : "", integralPart, fractionString);
+  return "TODO: davidmar fix for fmt issue";
 }
 } // namespace
 

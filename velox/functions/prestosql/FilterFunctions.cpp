@@ -122,7 +122,7 @@ class ArrayFilterFunction : public FilterFunctionBase {
       const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
+    VELOX_CHECK_EQ_W(args.size(), 2);
     exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);
     auto& decodedArray = *arrayDecoder.get();
 
@@ -184,7 +184,7 @@ class MapFilterFunction : public FilterFunctionBase {
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
+    VELOX_CHECK_EQ_W(args.size(), 2);
     exec::LocalDecodedVector mapDecoder(context, *args[0], rows);
     auto& decodedMap = *mapDecoder.get();
 

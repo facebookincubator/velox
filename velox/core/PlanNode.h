@@ -684,7 +684,7 @@ class TableWriteNode : public PlanNode {
         hasPartitioningScheme_(hasPartitioningScheme),
         outputType_(std::move(outputType)),
         commitStrategy_(commitStrategy) {
-    VELOX_USER_CHECK_EQ(columns->size(), columnNames.size());
+    VELOX_USER_CHECK_EQ_W(columns->size(), columnNames.size());
     for (const auto& column : columns->names()) {
       VELOX_USER_CHECK(
           source->outputType()->containsChild(column),
@@ -1217,7 +1217,7 @@ class PartitionedOutputNode : public PlanNode {
         replicateNullsAndAny_(replicateNullsAndAny),
         partitionFunctionSpec_(std::move(partitionFunctionSpec)),
         outputType_(std::move(outputType)) {
-    VELOX_USER_CHECK_GT(numPartitions, 0);
+    VELOX_USER_CHECK_GT_W(numPartitions, 0);
     if (numPartitions == 1) {
       VELOX_USER_CHECK(
           keys_.empty(),

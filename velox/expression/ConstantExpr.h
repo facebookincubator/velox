@@ -28,7 +28,7 @@ class ConstantExpr : public SpecialForm {
             !value->isNullAt(0) /* supportsFlatNoNullsFastPath */,
             false /* trackCpuUsage */),
         needToSetIsAscii_{value->type()->isVarchar()} {
-    VELOX_CHECK_EQ(value->encoding(), VectorEncoding::Simple::CONSTANT);
+    VELOX_CHECK_EQ_W(value->encoding(), VectorEncoding::Simple::CONSTANT);
     // sharedConstantValue_ may be modified so we should take our own copy to
     // prevent sharing across threads.
     sharedConstantValue_ =

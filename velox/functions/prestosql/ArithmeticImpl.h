@@ -39,7 +39,7 @@ round(const TNum& number, const TDecimals& decimals = 0) {
       return number;
     }
   }
-  if (!std::isfinite(number)) {
+  if (!std::isfinite((long double) number)) {
     return number;
   }
 

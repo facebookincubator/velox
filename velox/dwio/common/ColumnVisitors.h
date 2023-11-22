@@ -943,18 +943,21 @@ class DictionaryColumnVisitor
       T* values,
       int32_t& numValues) {
     auto indices = reinterpret_cast<typename make_index<T>::type*>(values);
-    if (sizeof(T) == 8) {
-      constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
-      for (auto i = 0; i < numRows; i += kWidth) {
-        auto numbers = detail::cvtU32toI64(
-                           simd::loadGatherIndices<int64_t>(
-                               super::rows_ + super::rowIndex_ + i) -
-                           currentRow) *
-                delta +
-            value;
-        numbers.store_unaligned(indices + numValues + i);
-      }
-    } else if (sizeof(T) == 4) {
+    //TODO: davidmar, with this 64 bit is essentialy not using xsimd.
+    // need to find a way to detect when T is int128.
+    //else if (sizeof(T) == 8) {
+    //  constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
+    //  for (auto i = 0; i < numRows; i += kWidth) {
+    //    auto numbers = detail::cvtU32toI64(
+    //                       simd::loadGatherIndices<int64_t>(
+    //                           super::rows_ + super::rowIndex_ + i) -
+    //                       currentRow) *
+    //            delta +
+    //        value;
+    //    numbers.store_unaligned(indices + numValues + i);
+    //  }
+    //}
+    if (sizeof(T) == 4) {
       constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
       for (auto i = 0; i < numRows; i += kWidth) {
         auto numbers =

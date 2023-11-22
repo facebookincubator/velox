@@ -28,9 +28,14 @@
 #include <x86intrin.h>
 #endif
 
+#include "velox/type/custom_type/Int128.h"
+
 namespace facebook {
 namespace velox {
 namespace bits {
+
+using int128_t = type::int128;
+using uint128_t = type::uint128;
 
 template <typename T>
 inline bool isBitSet(const T* bits, int32_t idx) {
@@ -96,8 +101,12 @@ constexpr inline T roundUp(T value, U factor) {
 }
 
 constexpr inline uint64_t lowMask(int32_t bits) {
-  return (1UL << bits) - 1;
+  return (uint64_t(1) << bits) - 1;
 }
+constexpr inline uint64_t lowMask(size_t bits) {
+  return (size_t(1) << bits) - 1;
+}
+
 
 constexpr inline uint64_t highMask(int32_t bits) {
   return lowMask(bits) << (64 - bits);
@@ -695,7 +704,7 @@ bool inline hasIntersection(
 
 template <typename T = uint64_t>
 inline int32_t countLeadingZeros(T word) {
-  static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, __uint128_t>);
+  static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, uint128_t>);
   /// Built-in Function: int __builtin_clz (unsigned int x) returns the number
   /// of leading 0-bits in x, starting at the most significant bit position. If
   /// x is 0, the result is undefined.

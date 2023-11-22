@@ -922,7 +922,7 @@ Operator* Driver::findOperator(std::string_view planNodeId) const {
 }
 
 Operator* Driver::findOperator(int32_t operatorId) const {
-  VELOX_CHECK_LT(operatorId, operators_.size());
+  VELOX_CHECK_LT_W(operatorId, operators_.size());
   return operators_[operatorId].get();
 }
 

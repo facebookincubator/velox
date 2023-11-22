@@ -277,7 +277,7 @@ void KllSketch<T, A, C>::setK(uint32_t k) {
   if (k_ == k) {
     return;
   }
-  VELOX_CHECK_EQ(n_, 0);
+  VELOX_CHECK_EQ_W(n_, 0);
   k_ = k;
   levels_.resize(2);
 }
@@ -540,8 +540,8 @@ void KllSketch<T, A, C>::estimateQuantiles(
   }
   int i = 0;
   for (auto& q : fractions) {
-    VELOX_CHECK_GE(q, 0.0);
-    VELOX_CHECK_LE(q, 1.0);
+    VELOX_CHECK_GE_W(q, 0.0);
+    VELOX_CHECK_LE_W(q, 1.0);
     if (fractions[i] == 0.0) {
       out[i++] = minValue_;
       continue;
@@ -807,7 +807,7 @@ KllSketch<T, A, C> KllSketch<T, A, C>::fromRepeatedValue(
   for (auto x = count; x > 0; x >>= 1) {
     ++numLevels;
   }
-  VELOX_CHECK_LE(numLevels, detail::kMaxLevel);
+  VELOX_CHECK_LE_W(numLevels, detail::kMaxLevel);
   KllSketch<T, A, C> ans(allocator, seed);
   ans.k_ = k;
   ans.n_ = count;

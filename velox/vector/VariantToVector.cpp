@@ -62,7 +62,7 @@ ArrayVectorPtr variantArrayToVector(
     const TypePtr& arrayType,
     const std::vector<variant>& variantArray,
     velox::memory::MemoryPool* pool) {
-  VELOX_CHECK_EQ(TypeKind::ARRAY, arrayType->kind());
+  VELOX_CHECK_EQ_W(TypeKind::ARRAY, arrayType->kind());
 
   if (arrayType->childAt(0)->isUnKnown()) {
     return variantArrayToVectorImpl<TypeKind::UNKNOWN>(

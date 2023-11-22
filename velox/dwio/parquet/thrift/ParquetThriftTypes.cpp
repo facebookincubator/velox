@@ -357,7 +357,7 @@ int _kFieldRepetitionTypeValues[] = {
     /**
      * The field is optional (can be null) and each record has 0 or 1 values.
      */
-    FieldRepetitionType::OPTIONAL,
+    FieldRepetitionType::OPTIONAL_2,
     /**
      * The field is repeated and can contain 0 or more values
      */

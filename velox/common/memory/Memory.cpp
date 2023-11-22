@@ -255,7 +255,7 @@ int64_t MemoryManager::getTotalBytes() const {
 
 size_t MemoryManager::numPools() const {
   size_t numPools = defaultRoot_->getChildCount();
-  VELOX_CHECK_GE(numPools, 0);
+  VELOX_CHECK_GE_W(numPools, 0);
   {
     std::shared_lock guard{mutex_};
     numPools += pools_.size() - sharedLeafPools_.size();

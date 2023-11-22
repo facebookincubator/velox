@@ -72,9 +72,9 @@ char* AllocationPool::allocateFixed(uint64_t bytes, int32_t alignment) {
     }
   }
   currentOffset_ += alignmentPadding(firstFreeInRun(), alignment);
-  VELOX_CHECK_LE(bytes + currentOffset_, bytesInRun_);
+  VELOX_CHECK_LE_W(bytes + currentOffset_, bytesInRun_);
   auto* result = startOfRun_ + currentOffset_;
-  VELOX_CHECK_EQ(reinterpret_cast<uintptr_t>(result) % alignment, 0);
+  VELOX_CHECK_EQ_W(reinterpret_cast<uintptr_t>(result) % alignment, 0);
   currentOffset_ += bytes;
   if (currentOffset_ > endOfReservedRun()) {
     growLastAllocation();
@@ -83,7 +83,7 @@ char* AllocationPool::allocateFixed(uint64_t bytes, int32_t alignment) {
 }
 
 void AllocationPool::growLastAllocation() {
-  VELOX_CHECK_GT(bytesInRun_, AllocationTraits::kHugePageSize);
+  VELOX_CHECK_GT_W(bytesInRun_, AllocationTraits::kHugePageSize);
   const auto bytesToReserve = bits::roundUp(
       currentOffset_ - endOfReservedRun(), AllocationTraits::kHugePageSize);
   largeAllocations_.back().grow(AllocationTraits::numPages(bytesToReserve));
@@ -133,7 +133,7 @@ void AllocationPool::newRunImpl(MachinePageCount numPages) {
   Allocation allocation;
   auto roundedPages = std::max<int32_t>(kMinPages, numPages);
   pool_->allocateNonContiguous(roundedPages, allocation, roundedPages);
-  VELOX_CHECK_EQ(allocation.numRuns(), 1);
+  VELOX_CHECK_EQ_W(allocation.numRuns(), 1);
   startOfRun_ = allocation.runAt(0).data<char>();
   bytesInRun_ = allocation.runAt(0).numBytes();
   currentOffset_ = 0;

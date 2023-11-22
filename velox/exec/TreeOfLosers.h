@@ -67,8 +67,8 @@ class TreeOfLosers {
   explicit TreeOfLosers(std::vector<std::unique_ptr<Stream>> streams)
       : streams_(std::move(streams)) {
     static_assert(std::is_base_of_v<MergeStream, Stream>);
-    VELOX_CHECK_LT(streams_.size(), std::numeric_limits<TIndex>::max());
-    VELOX_CHECK_GE(streams_.size(), 1);
+    VELOX_CHECK_LT_W(streams_.size(), std::numeric_limits<TIndex>::max());
+    VELOX_CHECK_GE_W(streams_.size(), 1);
 
     int32_t size = 0;
     int32_t levelSize = 1;

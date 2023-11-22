@@ -17,6 +17,7 @@
 #include <fstream>
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+#include <filesystem>
 
 namespace facebook::velox {
 
@@ -549,7 +550,7 @@ class LoadedVectorShim : public VectorLoader {
     VELOX_CHECK(
         vector_ != nullptr, "This lazy vector should not have been loaded.");
     *result = vector_;
-    VELOX_CHECK_EQ((*result)->size(), resultSize);
+    VELOX_CHECK_EQ_W((*result)->size(), resultSize);
   }
 
  private:
@@ -713,12 +714,11 @@ std::string restoreStringFromFile(const char* FOLLY_NONNULL filePath) {
 std::optional<std::string> generateFolderPath(
     const char* basePath,
     const char* prefix) {
-  auto path = fmt::format("{}/velox_{}_XXXXXX", basePath, prefix);
-  auto createdPath = mkdtemp(path.data());
-  if (createdPath == nullptr) {
-    return std::nullopt;
+  std::filesystem::path path = std::filesystem::path(basePath) / fmt::format("velox_{}_XXXXXX", prefix);
+  if (std::filesystem::create_directory(path)) {
+    return path.generic_string();
   }
-  return path;
+  return std::nullopt;
 }
 
 template <typename T>

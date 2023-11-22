@@ -347,7 +347,7 @@ void FlatVector<StringView>::validate(
     return;
   }
   VELOX_CHECK_NOT_NULL(values_);
-  VELOX_CHECK_GE(values_->size(), byteSize);
+  VELOX_CHECK_GE_W(values_->size(), byteSize);
   auto rawValues = values_->as<StringView>();
 
   for (auto i = 0; i < BaseVector::length_; ++i) {

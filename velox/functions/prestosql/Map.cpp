@@ -32,7 +32,7 @@ class MapFunction : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
+    VELOX_CHECK_EQ_W(args.size(), 2);
 
     auto keys = args[0];
     auto values = args[1];
@@ -296,8 +296,8 @@ class MapFunction : public exec::VectorFunction {
       ArrayVector* keys,
       ArrayVector* values,
       const SelectivityVector& rows) const {
-    VELOX_CHECK_GE(keys->size(), rows.end());
-    VELOX_CHECK_GE(values->size(), rows.end());
+    VELOX_CHECK_GE_W(keys->size(), rows.end());
+    VELOX_CHECK_GE_W(values->size(), rows.end());
     // the fast path takes a reference to the keys and values and the
     // offsets and sizes from keys. This is valid only if the keys and
     // values align for all rows for both size and offset. Anything

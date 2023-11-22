@@ -214,7 +214,7 @@ struct FieldRepetitionType {
     /**
      * The field is optional (can be null) and each record has 0 or 1 values.
      */
-    OPTIONAL = 1,
+    OPTIONAL_2 = 1,
     /**
      * The field is repeated and can contain 0 or more values
      */
@@ -462,12 +462,14 @@ class FileCryptoMetaData;
 
 typedef struct _Statistics__isset {
   _Statistics__isset()
-      : max(false),
-        min(false),
-        null_count(false),
+      : null_count(false),
         distinct_count(false),
         max_value(false),
-        min_value(false) {}
+        min_value(false) {
+  
+    this->max = false;
+    this->min = false;
+  }
   bool max : 1;
   bool min : 1;
   bool null_count : 1;
@@ -487,9 +489,7 @@ class Statistics : public virtual ::apache::thrift::TBase {
   Statistics& operator=(const Statistics&);
   Statistics& operator=(Statistics&&) noexcept;
   Statistics() noexcept
-      : max(),
-        min(),
-        null_count(0),
+      : null_count(0),
         distinct_count(0),
         max_value(),
         min_value() {}

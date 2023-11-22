@@ -175,7 +175,7 @@ class ArrayContainsFunction : public exec::VectorFunction {
       const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
+    VELOX_CHECK_EQ_W(args.size(), 2);
     const auto& arrayVector = args[0];
     const auto& searchVector = args[1];
 

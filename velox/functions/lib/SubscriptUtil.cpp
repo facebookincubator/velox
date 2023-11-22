@@ -241,7 +241,7 @@ VectorPtr applyMapComplexType(
       set.insert(MapKey{mapKeysBase, mapKeysIndices[i], i});
     }
     rows.applyToSelected([&](vector_size_t row) {
-      VELOX_CHECK_EQ(0, mapIndices[row]);
+      VELOX_CHECK_EQ_W(0, mapIndices[row]);
 
       auto searchIndex = searchIndices[row];
       auto it = set.find(MapKey{searchBase, searchIndex, row});

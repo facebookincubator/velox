@@ -484,6 +484,11 @@ struct StlAllocator {
       : allocator_{allocator} {
     VELOX_CHECK(allocator);
   }
+  //TODO: davidmar, created constructor
+  StlAllocator() {
+    // Initializing an alocator requires a pool. Let's try to understand why is te contructor needed. in the first place.
+    //allocator_ = new HashStringAllocator();
+  }
 
   template <class U>
   explicit StlAllocator(const StlAllocator<U>& allocator)

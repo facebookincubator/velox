@@ -45,7 +45,7 @@ class IfMatcher : public Matcher {
  public:
   explicit IfMatcher(std::vector<MatcherPtr> inputMatchers)
       : inputMatchers_{std::move(inputMatchers)} {
-    VELOX_CHECK_EQ(3, inputMatchers_.size());
+    VELOX_CHECK_EQ_W(3, inputMatchers_.size());
   }
 
   bool match(const core::TypedExprPtr& expr) override {
@@ -70,7 +70,7 @@ class ComparisonMatcher : public Matcher {
       std::vector<MatcherPtr> inputMatchers,
       std::string* op)
       : prefix_{prefix}, inputMatchers_{std::move(inputMatchers)}, op_{op} {
-    VELOX_CHECK_EQ(2, inputMatchers_.size());
+    VELOX_CHECK_EQ_W(2, inputMatchers_.size());
   }
 
   bool match(const core::TypedExprPtr& expr) override {

@@ -96,7 +96,7 @@ class FlatVector final : public SimpleVector<T> {
       return;
     }
     auto byteSize = BaseVector::byteSize<T>(BaseVector::length_);
-    VELOX_CHECK_GE(values_->capacity(), byteSize);
+    VELOX_CHECK_GE_W(values_->capacity(), byteSize);
     if (values_->size() < byteSize) {
       // If values_ is resized, this guarantees that elements below
       // 'length_' get preserved. If the size is already sufficient,
@@ -491,7 +491,7 @@ class FlatVector final : public SimpleVector<T> {
     auto byteSize = BaseVector::byteSize<T>(BaseVector::size());
     if (byteSize > 0) {
       VELOX_CHECK_NOT_NULL(values_);
-      VELOX_CHECK_GE(values_->size(), byteSize);
+      VELOX_CHECK_GE_W(values_->size(), byteSize);
     }
   }
 

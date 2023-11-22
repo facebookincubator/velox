@@ -1,0 +1,55 @@
+{
+  "name": "velox",
+  "version-semver": "1.0.0",
+  "builtin-baseline": "fe1e9f508ee13ed3d0a7d318beac7efe1ec4f9d7",
+  "dependencies": [
+    "boost",
+    "glog",
+    "simdjson",
+    "fmt",
+    "folly",
+    "xsimd",
+    "re2",
+    "mman",
+    "cpr",
+    "gtest",
+    "zlib",
+    "lz4",
+    "zstd",
+    "snappy",
+    "arrow",
+    "thrift",
+    "protobuf"
+  ],
+  "overrides" : [
+    {
+      "name" : "simdjson",
+      "version" : "3.1.5"
+    },
+    {
+      "name" : "xsimd",
+      "version" : "10.0.0"
+    },
+    {
+      "name" : "fmt",
+      "version" : "8.0.1"
+    },
+    {
+      "name" : "folly",
+      "version" : "2022.11.14"
+    },
+    {
+      "name" : "gtest",
+      "version" : "1.13.0"
+    },
+    {
+      "name" : "protobuf",
+      "version" : "3.21.12"
+    }
+  ],
+  "vcpkg-configuration" : {
+    "overlay-ports" : [
+      "./port_overlays"
+    ]
+  }
+}

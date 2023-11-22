@@ -695,7 +695,7 @@ static void PrintRepLevel(Repetition::type repetition, std::ostream& stream) {
     case Repetition::REQUIRED:
       stream << "required";
       break;
-    case Repetition::OPTIONAL:
+    case Repetition::OPTIONAL_2:
       stream << "optional";
       break;
     case Repetition::REPEATED:

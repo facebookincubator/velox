@@ -14,4 +14,4 @@
 
 add_library(velox_common_io IoStatistics.cpp)
 
-target_link_libraries(velox_common_io Folly::folly glog::glog)
+target_link_libraries(velox_common_io Folly::folly glog::glog gflags::gflags)

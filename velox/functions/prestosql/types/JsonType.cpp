@@ -34,6 +34,25 @@
 #include "velox/type/Conversions.h"
 #include "velox/type/Type.h"
 
+
+namespace std {
+
+template <>
+struct is_convertible<facebook::velox::type::int128, const char*>
+    : std::true_type {};
+
+} // namespace std
+namespace folly {
+// TODO: davidmar, implement append for int128 (requires int128 to string/char*)
+template <>
+void toAppend<std::string, facebook::velox::type::int128>(
+    facebook::velox::type::int128 value,
+    std::string* result) {
+  return;
+}
+} // namespace folly
+
+
 namespace facebook::velox {
 
 namespace {
@@ -504,7 +523,7 @@ void castToJsonFromRow(
     const SelectivityVector& rows,
     FlatVector<StringView>& flatResult) {
   // input is guaranteed to be in flat encoding when passed in.
-  VELOX_CHECK_EQ(input.encoding(), VectorEncoding::Simple::ROW);
+  VELOX_CHECK_EQ_W(input.encoding(), VectorEncoding::Simple::ROW);
   auto inputRow = input.as<RowVector>();
   auto childrenSize = inputRow->childrenSize();
 
@@ -1166,3 +1185,4 @@ void registerJsonType() {
 }
 
 } // namespace facebook::velox
+

@@ -21,13 +21,7 @@ find_package_handle_standard_args(lz4 DEFAULT_MSG LZ4_LIBRARY LZ4_INCLUDE_DIR)
 
 mark_as_advanced(LZ4_LIBRARY LZ4_INCLUDE_DIR)
 
-get_filename_component(liblz4_ext ${LZ4_LIBRARY} EXT)
-if(liblz4_ext STREQUAL ".a")
-  set(liblz4_type STATIC)
-else()
-  set(liblz4_type SHARED)
-endif()
-
+set(liblz4_type STATIC)
 if(NOT TARGET lz4::lz4)
   add_library(lz4::lz4 ${liblz4_type} IMPORTED)
   set_target_properties(lz4::lz4 PROPERTIES INTERFACE_INCLUDE_DIRECTORIES

@@ -73,7 +73,7 @@ class Allocation {
 
     PageRun(void* address, MachinePageCount numPages) {
       auto word = reinterpret_cast<uint64_t>(address); // NOLINT
-      VELOX_CHECK_LE(numPages, kMaxPagesInRun);
+      VELOX_CHECK_LE_W(numPages, kMaxPagesInRun);
       VELOX_CHECK_EQ(
           word & ~kPointerMask, 0, "A pointer must have its 16 high bits 0");
       data_ =
@@ -167,7 +167,7 @@ class Allocation {
 
  private:
   FOLLY_ALWAYS_INLINE void sanityCheck() const {
-    VELOX_CHECK_EQ(numPages_ == 0, runs_.empty());
+    VELOX_CHECK_EQ_W(numPages_ == 0, runs_.empty());
     VELOX_CHECK(numPages_ != 0 || pool_ == nullptr);
   }
 
@@ -280,7 +280,7 @@ class ContiguousAllocation {
 
  private:
   FOLLY_ALWAYS_INLINE void sanityCheck() const {
-    VELOX_CHECK_EQ(size_ == 0, data_ == nullptr);
+    VELOX_CHECK_EQ_W(size_ == 0, data_ == nullptr);
     VELOX_CHECK(size_ != 0 || pool_ == nullptr);
   }
 

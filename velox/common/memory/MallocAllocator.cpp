@@ -17,7 +17,7 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 
-#include <sys/mman.h>
+#include <mman/sys/mman.h>
 
 namespace facebook::velox::memory {
 MallocAllocator::MallocAllocator(size_t capacity, uint32_t reservationByteLimit)
@@ -173,7 +173,7 @@ bool MallocAllocator::allocateContiguousImpl(
   if (maxPages == 0) {
     maxPages = numPages;
   } else {
-    VELOX_CHECK_LE(numPages, maxPages);
+    VELOX_CHECK_LE_W(numPages, maxPages);
   }
   MachinePageCount numCollateralPages = 0;
   if (collateral != nullptr) {
@@ -302,7 +302,7 @@ bool MallocAllocator::growContiguousWithoutRetry(
     MachinePageCount increment,
     ContiguousAllocation& allocation,
     ReservationCallback reservationCB) {
-  VELOX_CHECK_LE(
+  VELOX_CHECK_LE_W(
       allocation.size() + increment * AllocationTraits::kPageSize,
       allocation.maxSize());
   if (reservationCB != nullptr) {
@@ -352,7 +352,7 @@ void* MallocAllocator::allocateBytesWithoutRetry(
         bytes,
         alignment);
   }
-  void* result = (alignment > kMinAlignment) ? ::aligned_alloc(alignment, bytes)
+  void* result = (alignment > kMinAlignment)? ::_aligned_malloc(bytes, alignment)
                                              : ::malloc(bytes);
   if (FOLLY_UNLIKELY(result == nullptr)) {
     VELOX_MEM_LOG(ERROR) << "Failed to allocateBytes " << succinctBytes(bytes)

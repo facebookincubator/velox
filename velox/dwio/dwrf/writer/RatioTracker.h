@@ -16,7 +16,9 @@
 
 #pragma once
 
+#ifndef WIN32
 #include <glob.h>
+#endif
 
 constexpr float kCompressionRatioInitialGuess = 0.3f;
 constexpr float kFlushOverheadRatioInitialGuess = 1.0f;

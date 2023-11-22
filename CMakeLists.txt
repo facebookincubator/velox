@@ -16,7 +16,7 @@ cmake_minimum_required(VERSION 3.14)
 # The policy allows us to change options without caching.
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
-
+# cmake_policy(SET CMP0111 NEW)
 # Sets new behavior for CMP0135, which controls how timestamps are extracted
 # when using ExternalProject_Add():
 # https://cmake.org/cmake/help/latest/policy/CMP0135.html
@@ -80,6 +80,7 @@ set(VELOX_DEPENDENCY_SOURCE
       STRING
       "Default source for all dependencies with source builds enabled: AUTO SYSTEM BUNDLED."
 )
+option(VELOX_ENABLE_DUCKDB "Build duckDB to enable differential testing." OFF)
 option(VELOX_ENABLE_EXEC "Build exec." ON)
 option(VELOX_ENABLE_AGGREGATES "Build aggregates." ON)
 option(VELOX_ENABLE_HIVE_CONNECTOR "Build Hive connector." ON)
@@ -97,7 +98,7 @@ option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
-option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
+option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
@@ -260,7 +261,15 @@ if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
   # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
   # are included in Arrow.
-  set(VELOX_ENABLE_ARROW ON)
+  set(VELOX_ENABLE_ARROW OFF)
+endif()
+
+if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+  # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
+  # requires clients to explicitly install fizz and wangle.
+  find_package(fizz CONFIG REQUIRED)
+  find_package(wangle CONFIG REQUIRED)
+  find_package(FBThrift CONFIG REQUIRED)
 endif()
 
 # define processor variable for conditional compilation
@@ -297,12 +306,15 @@ set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-execute_process(
-  COMMAND
-    bash -c
-    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
-  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
-  RESULT_VARIABLE COMMAND_STATUS)
+# execute_process(
+#   COMMAND
+#     bash -c
+#     "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+#   OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
+#   RESULT_VARIABLE COMMAND_STATUS)
+set(SCRIPT_CXX_FLAGS "-mfma -mavx -mf16c -mlzcnt -mbmi2 -mavx2 -Wno-c++98-compat")
+message(STATUS "HS-SCRIPT_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
+message(STATUS "HS-CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
 if(COMMAND_STATUS EQUAL "1")
   message(FATAL_ERROR "Unable to determine compiler flags!")
@@ -381,16 +393,16 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(BOOST_INCLUDE_LIBRARIES
-    headers
-    atomic
-    context
-    date_time
-    filesystem
-    program_options
-    regex
-    system
-    thread)
+# set(BOOST_INCLUDE_LIBRARIES
+#     # headers
+#     atomic
+#     context
+#     date_time
+#     filesystem
+#     program_options
+#     regex
+#     system
+#     thread)
 
 set_source(Boost)
 resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
@@ -399,6 +411,7 @@ resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 # for reference. find_package(range-v3)
 
 set_source(gflags)
+
 resolve_dependency(gflags COMPONENTS shared)
 if(NOT TARGET gflags::gflags)
   # This is a bit convoluted, but we want to be able to use gflags::gflags as a
@@ -417,12 +430,10 @@ if(${gflags_SOURCE} STREQUAL "BUNDLED")
 else()
   set(glog_SOURCE SYSTEM)
 endif()
-resolve_dependency(glog)
-
-if(${VELOX_ENABLE_DUCKDB})
-  set_source(DuckDB)
-  resolve_dependency(DuckDB)
-endif()
+set(GLOG_LIBRARY "C:\\Program Files (x86)\\glog\\bin\\glogd.dll")
+set(GLOG_INCLUDE_DIR "C:\\Program Files (x86)\\glog\\include")
+list(APPEND CMAKE_PREFIX_PATH "C:/Program Files (x86)/glog")
+resolve_dependency(glog 0.6.0 REQUIRED)
 
 set_source(fmt)
 resolve_dependency(fmt 9.0.0)
@@ -543,8 +554,11 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
     set(FLEX_INCLUDE_DIR "${BREW_FLEX_PREFIX}/include")
   endif()
 endif()
-find_package(BISON 3.0.4 REQUIRED)
-find_package(FLEX 2.5.13 REQUIRED)
+# set(BISON_EXECUTABLE "C:\\Users\\davidmar.AMR\\Downloads\\win_flex_bison-2.5.25\\win_bison.exe")
+# set(FLEX_EXECUTABLE "C:\\Users\\davidmar.AMR\\Downloads\\win_flex_bison-2.5.25\\win_flex.exe")
+# set(FLEX_INCLUDE_DIR "C:\\Users\\davidmar.AMR\\Downloads\\win_flex_bison-2.5.25")
+find_package(BISON REQUIRED)
+find_package(FLEX REQUIRED)
 
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
@@ -558,13 +572,28 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
       PARENT_SCOPE)
 endif()
 
-set_source(xsimd)
-resolve_dependency(xsimd 10.0.0)
+set(xsimd_SOURCE AUTO)
+resolve_dependency(xsimd)
 
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)
   include(CTest) # include after project() but before add_subdirectory()
 endif()
+
+include(CTest) # include after project() but before add_subdirectory()
+
+#TODO: Davidmar, change references to include testing: 
+
+
+# enable_testing()
+
+# find_package(GTest CONFIG REQUIRED)
+# target_link_libraries(main PRIVATE GTest::gtest GTest::gtest_main GTest::gmock GTest::gmock_main)
+
+
+set(cpr_SOURCE AUTO)
+resolve_dependency(cpr)
+
 
 include_directories(.)
 
@@ -576,6 +605,15 @@ install(FILES velox/type/Type.h DESTINATION "include/velox")
 # build
 if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+endif()
+
+# Check for AVX support
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
+
+if(COMPILER_SUPPORTS_MARCH_NATIVE)
+    # If -march=native is supported, add the compile definition
+    add_compile_definitions(__AVX__)
 endif()
 
 add_subdirectory(third_party)

@@ -17,7 +17,7 @@
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MallocAllocator.h"
 
-#include <sys/mman.h>
+#include <mman/sys/mman.h>
 #include <iostream>
 #include <numeric>
 

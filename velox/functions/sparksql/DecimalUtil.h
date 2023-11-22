@@ -23,6 +23,14 @@
 
 namespace facebook::velox::functions::sparksql {
 using int256_t = boost::multiprecision::int256_t;
+using int128_t = type::int128;
+using uint128_t = type::uint128;
+
+int256_t toInt256(int128_t value) {
+  int256_t retval = value.hi();
+  retval = retval << 64;
+  retval |= value.lo();
+}
 
 // DecimalUtil holds the utility function for Spark sql.
 class DecimalUtil {
@@ -55,15 +63,18 @@ class DecimalUtil {
           std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>>>
   inline static T convert(int256_t in, bool& overflow) {
     typedef typename std::
-        conditional<std::is_same_v<T, int64_t>, uint64_t, __uint128_t>::type UT;
+        conditional<std::is_same_v<T, int64_t>, uint64_t, uint128_t>::type UT;
     T result = 0;
-    constexpr auto uintMask =
-        static_cast<int256_t>(std::numeric_limits<UT>::max());
+    //TODO: Davidmar, set the correct numeric limit
+    //constexpr auto uintMask =
+    //    static_cast<int256_t>(std::numeric_limits<UT>::max());    
+    
+    constexpr int256_t uintMask = int256_t(0);
 
     int256_t inAbs = abs(in);
     bool isNegative = in < 0;
 
-    UT unsignResult = (inAbs & uintMask).convert_to<UT>();
+    UT unsignResult = (uint64_t) (inAbs & uintMask);
     inAbs >>= sizeof(T) * 8;
 
     if (inAbs > 0) {
@@ -105,7 +116,7 @@ class DecimalUtil {
   FOLLY_ALWAYS_INLINE static int128_t
   multiply(int128_t a, int128_t b, bool& overflow) {
     int128_t value;
-    overflow = __builtin_mul_overflow(a, b, &value);
+    overflow = type::mul_overflow(a, b, &value);
     return value;
   }
 
@@ -143,6 +154,29 @@ class DecimalUtil {
   /// result type bits, result type is enough, if not, we should introduce
   /// int256_t as intermediate type, and then convert to real result type with
   /// overflow flag.
+  template <typename R>
+  static bool mul_overflow(
+      R a,
+      R b,
+      R* result) {
+    return __builtin_mul_overflow(a,b,result);
+  }  
+  template <typename R>
+  static bool mul_overflow(
+      R a,
+      R b,
+      int64_t result) {
+    return __builtin_mul_overflow(a,b,result);
+  }  
+  template <>
+  static bool mul_overflow<int128_t>(int128_t a, int128_t b, int128_t* result) {
+    return type::mul_overflow(a,b,result);
+  }  
+  template <>
+  static bool mul_overflow<int128_t>(int128_t a, int128_t b, int64_t result) {
+    return type::mul_overflow(a,b,result);
+  }
+
   template <typename R, typename A, typename B>
   inline static R
   divideWithRoundUp(R& r, A a, B b, uint8_t aRescale, bool& overflow) {
@@ -168,7 +202,7 @@ class DecimalUtil {
     auto bitsRequiredAfterScaling = maxBitsRequiredAfterScaling<A>(a, aRescale);
     if (bitsRequiredAfterScaling < sizeof(R) * 8) {
       // Fast-path. The dividend fits in 128-bit after scaling too.
-      overflow = __builtin_mul_overflow(
+      overflow = mul_overflow<R>(
           unsignedDividendRescaled,
           R(velox::DecimalUtil::kPowersOfTen[aRescale]),
           &unsignedDividendRescaled);
@@ -187,7 +221,7 @@ class DecimalUtil {
       }
       int256_t aLarge = a;
       int256_t aLargeScaledUp =
-          aLarge * velox::DecimalUtil::kPowersOfTen[aRescale];
+          aLarge * toInt256(velox::DecimalUtil::kPowersOfTen[aRescale]);
       int256_t bLarge = b;
       int256_t resultLarge = aLargeScaledUp / bLarge;
       int256_t remainderLarge = aLargeScaledUp % bLarge;

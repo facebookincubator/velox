@@ -305,7 +305,7 @@ message PostScript {
 
 // define single type conversion schema
 enum PrimitiveType {
-  VOID = 0;
+  VOID_2 = 0;
   BOOLEAN = 1;
   BYTE = 2;
   SHORT = 3;

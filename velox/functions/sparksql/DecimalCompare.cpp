@@ -27,7 +27,28 @@ int32_t rescaleAndCompare(T a, T b, int32_t deltaScale) {
   T aScaled = a;
   T bScaled = b;
   if (deltaScale < 0) {
-    aScaled = a * velox::DecimalUtil::kPowersOfTen[-deltaScale];
+    aScaled = a * ((boost::multiprecision::int128_t) velox::DecimalUtil::kPowersOfTen[-deltaScale]);
+  } else if (deltaScale > 0) {
+    bScaled = b *
+        (boost::multiprecision::int128_t)
+             velox::DecimalUtil::kPowersOfTen[deltaScale];
+  }
+  if (aScaled == bScaled) {
+    return 0;
+  } else if (aScaled < bScaled) {
+    return -1;
+  } else {
+    return 1;
+  }
+}
+
+template <>
+int32_t
+rescaleAndCompare<int128_t>(int128_t a, int128_t b, int32_t deltaScale) {
+  int128_t aScaled = a;
+  int128_t bScaled = b;
+  if (deltaScale < 0) {
+    aScaled = a *  velox::DecimalUtil::kPowersOfTen[-deltaScale];
   } else if (deltaScale > 0) {
     bScaled = b * velox::DecimalUtil::kPowersOfTen[deltaScale];
   }

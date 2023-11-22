@@ -16,9 +16,11 @@
 
 #include "velox/common/memory/MmapArena.h"
 
-#include <sys/mman.h>
+#include <mman/sys/mman.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
+
+#include <Windows.h>
 
 namespace facebook::velox::memory {
 uint64_t MmapArena::roundBytes(uint64_t bytes) {
@@ -88,8 +90,7 @@ void MmapArena::free(void* address, uint64_t bytes) {
     return;
   }
   bytes = roundBytes(bytes);
-
-  ::madvise(address, bytes, MADV_DONTNEED);
+  ::VirtualFree(address, bytes, MEM_DECOMMIT);
   freeBytes_ += bytes;
 
   const auto curAddr = reinterpret_cast<uint64_t>(address);
@@ -303,7 +304,7 @@ void ManagedMmapArenas::free(void* address, uint64_t bytes) {
   if (iter == arenas_.end() || iter->first != addressU64) {
     VELOX_CHECK(iter != arenas_.begin());
     --iter;
-    VELOX_CHECK_GE(iter->first + singleArenaCapacity_, addressU64 + bytes);
+    VELOX_CHECK_GE_W(iter->first + singleArenaCapacity_, addressU64 + bytes);
   }
   iter->second->free(address, bytes);
   if (iter->second->empty() && iter->second != currentArena_) {

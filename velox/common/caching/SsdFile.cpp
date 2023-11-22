@@ -28,11 +28,17 @@
 #ifdef linux
 #include <linux/fs.h>
 #endif // linux
+#ifndef WIN32
 #include <sys/ioctl.h>
+#endif //WIN32
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fstream>
 #include <numeric>
+#ifdef WIN32 
+#define S_IRUSR S_IREAD
+#define S_IWUSR S_IWRITE
+#endif //WIN32
 
 DEFINE_bool(ssd_odirect, true, "Use O_DIRECT for SSD cache IO");
 DEFINE_bool(ssd_verify_write, false, "Read back data after writing to SSD");
@@ -181,7 +187,7 @@ void SsdFile::pinRegion(uint64_t offset) {
 void SsdFile::unpinRegion(uint64_t offset) {
   std::lock_guard<std::shared_mutex> l(mutex_);
   const auto count = --regionPins_[regionIndex(offset)];
-  VELOX_CHECK_GE(count, 0);
+  VELOX_CHECK_GE_W(count, 0);
   if (suspended_ && count == 0) {
     growOrEvictLocked();
   }
@@ -220,7 +226,7 @@ bool SsdFile::erase(RawFileCacheKey key) {
 CoalesceIoStats SsdFile::load(
     const std::vector<SsdPin>& ssdPins,
     const std::vector<CachePin>& pins) {
-  VELOX_CHECK_EQ(ssdPins.size(), pins.size());
+  VELOX_CHECK_EQ_W(ssdPins.size(), pins.size());
   if (pins.empty()) {
     return CoalesceIoStats();
   }
@@ -396,7 +402,7 @@ void SsdFile::write(std::vector<CachePin>& pins) {
       bytes += entrySize;
       ++numWritten;
     }
-    VELOX_CHECK_GE(fileSize_, offset + bytes);
+    VELOX_CHECK_GE_W(fileSize_, offset + bytes);
 
     const auto rc = folly::pwritev(fd_, iovecs.data(), iovecs.size(), offset);
     if (rc != bytes) {
@@ -453,7 +459,7 @@ void SsdFile::verifyWrite(AsyncDataCacheEntry& entry, SsdRun ssdRun) {
   process::TraceContext trace("SsdFile::verifyWrite");
   auto testData = std::make_unique<char[]>(entry.size());
   const auto rc = ::pread(fd_, testData.get(), entry.size(), ssdRun.offset());
-  VELOX_CHECK_EQ(rc, entry.size());
+  VELOX_CHECK_EQ_W(rc, entry.size());
   if (entry.tinyData() != 0) {
     if (::memcmp(testData.get(), entry.tinyData(), entry.size()) != 0) {
       VELOX_FAIL("bad read back");
@@ -751,7 +757,7 @@ void SsdFile::checkpoint(bool force) {
     const auto checkpointFd = checkRc(
         ::open(checkpointPath.c_str(), O_WRONLY),
         "Open of checkpoint file for sync");
-    VELOX_CHECK_GE(checkpointFd, 0);
+    VELOX_CHECK_GE_W(checkpointFd, 0);
     checkRc(::fsync(checkpointFd), "Sync of checkpoint file");
     ::close(checkpointFd);
 
@@ -839,7 +845,7 @@ T readNumber(std::ifstream& stream) {
 void SsdFile::readCheckpoint(std::ifstream& state) {
   char magic[4];
   state.read(magic, sizeof(magic));
-  VELOX_CHECK_EQ(strncmp(magic, kCheckpointMagic, 4), 0);
+  VELOX_CHECK_EQ_W(strncmp(magic, kCheckpointMagic, 4), 0);
   const auto maxRegions = readNumber<int32_t>(state);
   VELOX_CHECK_EQ(
       maxRegions,
@@ -887,7 +893,7 @@ void SsdFile::readCheckpoint(std::ifstream& state) {
   }
   // The state is successfully read. Install the access frequency scores and
   // evicted regions.
-  VELOX_CHECK_EQ(scores.size(), tracker_.regionScores().size());
+  VELOX_CHECK_EQ_W(scores.size(), tracker_.regionScores().size());
   // Set the writable regions by deduplicated evicted regions.
   writableRegions_.clear();
   for (auto region : evictedMap) {

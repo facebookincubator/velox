@@ -119,7 +119,7 @@ struct OpaqueCapsule {
 };
 
 template <>
-struct VariantTypeTraits<TypeKind::OPAQUE> {
+struct VariantTypeTraits<TypeKind::OPAQUE_2> {
   using stored_type = OpaqueCapsule;
 };
 } // namespace detail
@@ -263,7 +263,7 @@ class variant {
   static variant opaque(const std::shared_ptr<T>& input) {
     VELOX_CHECK(input.get(), "Can't create a variant of nullptr opaque type");
     return {
-        TypeKind::OPAQUE,
+        TypeKind::OPAQUE_2,
         new detail::OpaqueCapsule{OpaqueType::create<T>(), input}};
   }
 
@@ -271,7 +271,7 @@ class variant {
       const std::shared_ptr<void>& input,
       const std::shared_ptr<const OpaqueType>& type) {
     VELOX_CHECK(input.get(), "Can't create a variant of nullptr opaque type");
-    return {TypeKind::OPAQUE, new detail::OpaqueCapsule{type, input}};
+    return {TypeKind::OPAQUE_2, new detail::OpaqueCapsule{type, input}};
   }
 
   static void verifyArrayElements(const std::vector<variant>& inputs);
@@ -485,7 +485,7 @@ class variant {
 
   template <class T>
   std::shared_ptr<T> opaque() const {
-    const auto& capsule = value<TypeKind::OPAQUE>();
+    const auto& capsule = value<TypeKind::OPAQUE_2>();
     VELOX_CHECK(
         capsule.type->typeIndex() == std::type_index(typeid(T)),
         "Requested {} but contains {}",
@@ -533,8 +533,8 @@ class variant {
         }
         return ARRAY(elementType);
       }
-      case TypeKind::OPAQUE: {
-        return value<TypeKind::OPAQUE>().type;
+      case TypeKind::OPAQUE_2: {
+        return value<TypeKind::OPAQUE_2>().type;
       }
       case TypeKind::UNKNOWN: {
         return UNKNOWN();
@@ -581,6 +581,7 @@ struct VariantConverter {
     auto converted = util::Converter<ToKind>::cast(value.value<FromKind>());
     return {converted};
   }
+
 
   template <TypeKind ToKind>
   static variant convert(const variant& value) {

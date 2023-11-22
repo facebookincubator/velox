@@ -97,7 +97,7 @@ void DecodedVector::makeIndices(
     const SelectivityVector* rows,
     int32_t numLevels) {
   if (rows) {
-    VELOX_CHECK_LE(rows->end(), vector.size());
+    VELOX_CHECK_LE_W(rows->end(), vector.size());
   }
 
   reset(end(vector.size(), rows));
@@ -378,7 +378,7 @@ DecodedVector::DictionaryWrapping DecodedVector::dictionaryWrapping(
     vector_size_t size) const {
   VELOX_CHECK(!isIdentityMapping_);
   VELOX_CHECK(!isConstantMapping_);
-  VELOX_CHECK_LE(size, size_);
+  VELOX_CHECK_LE_W(size, size_);
 
   // Make a copy of the indices and nulls buffers.
   BufferPtr indices = copyIndicesBuffer(indices_, size, wrapper.pool());

@@ -29,48 +29,49 @@ namespace facebook::velox {
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
+  //TODO: davidmar generate the powers of ten of 128 bit values.
   static constexpr int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1] = {
-      1,
-      10,
-      100,
-      1'000,
-      10'000,
-      100'000,
-      1'000'000,
-      10'000'000,
-      100'000'000,
-      1'000'000'000,
-      10'000'000'000,
-      100'000'000'000,
-      1'000'000'000'000,
-      10'000'000'000'000,
-      100'000'000'000'000,
-      1'000'000'000'000'000,
-      10'000'000'000'000'000,
-      100'000'000'000'000'000,
-      1'000'000'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)10,
-      1'000'000'000'000'000'000 * (int128_t)100,
-      1'000'000'000'000'000'000 * (int128_t)1'000,
-      1'000'000'000'000'000'000 * (int128_t)10'000,
-      1'000'000'000'000'000'000 * (int128_t)100'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000,
-      1'000'000'000'000'000'000 * (int128_t)10'000'000,
-      1'000'000'000'000'000'000 * (int128_t)100'000'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)10'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)100'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)10'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)100'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)10'000'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)100'000'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
-          (int128_t)10,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
-          (int128_t)100};
+      int128_t(1),
+      int128_t(10),
+      int128_t(100),
+      int128_t(1'000),
+      int128_t(10'000),
+      int128_t(100'000),
+      int128_t(1'000'000),
+      int128_t(10'000'000),
+      int128_t(100'000'000),
+      int128_t(1'000'000'000),
+      int128_t(10'000'000'000),
+      int128_t(100'000'000'000),
+      int128_t(1'000'000'000'000),
+      int128_t(10'000'000'000'000),
+      int128_t(100'000'000'000'000),
+      int128_t(1'000'000'000'000'000),
+      int128_t(10'000'000'000'000'000),
+      int128_t(100'000'000'000'000'000),
+      int128_t(1'000'000'000'000'000'000),
+      int128_t(0,                0x8AC7230489E80000),
+      int128_t(0x05,             0x6BC75E2D63100000),
+      int128_t(0x36,             0x35C9ADC5DEA00000),
+      int128_t(0x021E,           0x19E0C9BAB2400000),
+      int128_t(0x152D,           0x02C7E14AF6800000),
+      int128_t(0xD3C2,           0x1BCECCEDA1000000),
+      int128_t(0x084595,         0x161401484A000000),
+      int128_t(0x52B7D2,         0xDCC80CD2E4000000),
+      int128_t(0x033B2E3C,       0x9FD0803CE8000000),
+      int128_t(0x204FCE5E,       0x3E25026110000000),
+      int128_t(0x01431E0FAE,     0x6D7217CAA0000000),
+      int128_t(0x0C9F2C9CD0,     0x4674EDEA40000000),
+      int128_t(0x7E37BE2022,     0xC0914B2680000000),
+      int128_t(0x04EE2D6D415B,   0x85ACEF8100000000),
+      int128_t(0x314DC6448D93,   0x38C15B0A00000000),
+      int128_t(0x01ED09BEAD87C0, 0x378D8E6400000000),
+      int128_t(0x13426172C74D82, 0x2B878FE800000000),
+      int128_t(0xC097CE7BC90715, 0xB34B9F1000000000),
+
+      };
+
+
 
   static constexpr int128_t kLongDecimalMin =
       -kPowersOfTen[LongDecimalType::kMaxPrecision] + 1;
@@ -83,6 +84,7 @@ class DecimalUtil {
 
   static constexpr uint64_t kInt64Mask = ~(static_cast<uint64_t>(1) << 63);
   static constexpr uint128_t kInt128Mask = (static_cast<uint128_t>(1) << 127);
+
 
   FOLLY_ALWAYS_INLINE static void valueInRange(int128_t value) {
     VELOX_USER_CHECK(
@@ -159,7 +161,7 @@ class DecimalUtil {
     auto scaleDifference = toScale - fromScale;
     bool isOverflow = false;
     if (scaleDifference >= 0) {
-      isOverflow = __builtin_mul_overflow(
+      isOverflow = velox::type::mul_overflow(
           rescaledValue,
           DecimalUtil::kPowersOfTen[scaleDifference],
           &rescaledValue);
@@ -190,7 +192,7 @@ class DecimalUtil {
   inline static std::optional<TOutput>
   rescaleInt(TInput inputValue, int toPrecision, int toScale) {
     int128_t rescaledValue = static_cast<int128_t>(inputValue);
-    bool isOverflow = __builtin_mul_overflow(
+    bool isOverflow = velox::type::mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
     // Check overflow.
     if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
@@ -309,7 +311,7 @@ class DecimalUtil {
       int128_t lhs,
       int128_t rhs,
       bool isResultNegative) {
-    __uint128_t unsignedSum = (__uint128_t)lhs + (__uint128_t)rhs;
+    uint128_t unsignedSum = (uint128_t)lhs + (uint128_t)rhs;
     // Ignore overflow value.
     sum = (int128_t)unsignedSum & ~kOverflowMultiplier;
     sum = isResultNegative ? -sum : sum;
@@ -405,6 +407,6 @@ class DecimalUtil {
   /// @return The length of out.
   static int32_t toByteArray(int128_t value, char* out);
 
-  static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
+  static constexpr uint128_t kOverflowMultiplier = ((uint128_t)1 << 127);
 }; // DecimalUtil
 } // namespace facebook::velox

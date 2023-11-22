@@ -27,6 +27,7 @@
 #include <glog/logging.h>
 
 #include "velox/common/process/StackTrace.h"
+#
 
 DECLARE_bool(velox_exception_user_stacktrace_enabled);
 DECLARE_bool(velox_exception_system_stacktrace_enabled);
@@ -44,15 +45,15 @@ using namespace folly::string_literals;
 // or an unsupported pattern of use are classified with source USER. Examples
 // of errors in this category include syntax errors, unavailable names or
 // objects.
-inline constexpr auto kErrorSourceUser = "USER"_fs;
+inline constexpr auto kErrorSourceUser = folly::makeFixedString("USER");
 
 // Errors where the root cause of the problem is an unexpected internal state in
 // the system.
-inline constexpr auto kErrorSourceRuntime = "RUNTIME"_fs;
+inline constexpr auto kErrorSourceRuntime = folly::makeFixedString("RUNTIME");
 
 // Errors where the root cause of the problem is some unreliable aspect of the
 // system are classified with source SYSTEM.
-inline constexpr auto kErrorSourceSystem = "SYSTEM"_fs;
+inline constexpr auto kErrorSourceSystem = folly::makeFixedString("SYSTEM");
 } // namespace error_source
 
 namespace error_code {
@@ -61,55 +62,56 @@ using namespace folly::string_literals;
 //====================== User Error Codes ======================:
 
 // A generic user error code
-inline constexpr auto kGenericUserError = "GENERIC_USER_ERROR"_fs;
+inline constexpr auto kGenericUserError =
+    folly::makeFixedString("GENERIC_USER_ERROR");
 
 // An error raised when an argument verification fails
-inline constexpr auto kInvalidArgument = "INVALID_ARGUMENT"_fs;
+inline constexpr auto kInvalidArgument = folly::makeFixedString("INVALID_ARGUMENT");
 
 // An error raised when a requested operation is not supported.
-inline constexpr auto kUnsupported = "UNSUPPORTED"_fs;
+inline constexpr auto kUnsupported = folly::makeFixedString("UNSUPPORTED");
 
 // Arithmetic errors - underflow, overflow, divide by zero etc.
-inline constexpr auto kArithmeticError = "ARITHMETIC_ERROR"_fs;
+inline constexpr auto kArithmeticError = folly::makeFixedString("ARITHMETIC_ERROR");
 
 // Arithmetic errors - underflow, overflow, divide by zero etc.
-inline constexpr auto kSchemaMismatch = "SCHEMA_MISMATCH"_fs;
+inline constexpr auto kSchemaMismatch = folly::makeFixedString("SCHEMA_MISMATCH");
 
 //====================== Runtime Error Codes ======================:
 
 // An error raised when the current state of a component is invalid.
-inline constexpr auto kInvalidState = "INVALID_STATE"_fs;
+inline constexpr auto kInvalidState = folly::makeFixedString("INVALID_STATE");
 
 // An error raised when unreachable code point was executed.
-inline constexpr auto kUnreachableCode = "UNREACHABLE_CODE"_fs;
+inline constexpr auto kUnreachableCode = folly::makeFixedString("UNREACHABLE_CODE");
 
 // An error raised when a requested operation is not yet supported.
-inline constexpr auto kNotImplemented = "NOT_IMPLEMENTED"_fs;
+inline constexpr auto kNotImplemented = folly::makeFixedString("NOT_IMPLEMENTED");
 
 // An error raised when memory pool exceeds limits.
-inline constexpr auto kMemCapExceeded = "MEM_CAP_EXCEEDED"_fs;
+inline constexpr auto kMemCapExceeded = folly::makeFixedString("MEM_CAP_EXCEEDED");
 
 // An error raised when memory pool is aborted.
-inline constexpr auto kMemAborted = "MEM_ABORTED"_fs;
+inline constexpr auto kMemAborted = folly::makeFixedString("MEM_ABORTED");
 
 // Error caused by memory allocation failure (inclusive of allocator memory cap
 // exceeded).
-inline constexpr auto kMemAllocError = "MEM_ALLOC_ERROR"_fs;
+inline constexpr auto kMemAllocError = folly::makeFixedString("MEM_ALLOC_ERROR");
 
 // Error caused by failing to allocate cache buffer space for IO.
-inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
+inline constexpr auto kNoCacheSpace = folly::makeFixedString("NO_CACHE_SPACE");
 
 // An error raised when spill bytes exceeds limits.
 inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
 
 // Errors indicating file read corruptions.
-inline constexpr auto kFileCorruption = "FILE_CORRUPTION"_fs;
+inline constexpr auto kFileCorruption = folly::makeFixedString("FILE_CORRUPTION");
 
 // Errors indicating file not found.
 inline constexpr auto kFileNotFound = "FILE_NOT_FOUND"_fs;
 
 // We do not know how to classify it yet.
-inline constexpr auto kUnknown = "UNKNOWN"_fs;
+inline constexpr auto kUnknown = folly::makeFixedString("UNKNOWN");
 } // namespace error_code
 
 class VeloxException : public std::exception {

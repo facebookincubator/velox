@@ -282,9 +282,9 @@ class Addition {
   {
     int128_t aRescaled;
     int128_t bRescaled;
-    if (__builtin_mul_overflow(
+    if (mul_overflow(
             a, DecimalUtil::kPowersOfTen[aRescale], &aRescaled) ||
-        __builtin_mul_overflow(
+        mul_overflow(
             b, DecimalUtil::kPowersOfTen[bRescale], &bRescaled)) {
       VELOX_ARITHMETIC_ERROR("Decimal overflow: {} + {}", a, b);
     }
@@ -324,9 +324,9 @@ class Subtraction {
   {
     int128_t aRescaled;
     int128_t bRescaled;
-    if (__builtin_mul_overflow(
+    if (mul_overflow(
             a, DecimalUtil::kPowersOfTen[aRescale], &aRescaled) ||
-        __builtin_mul_overflow(
+        mul_overflow(
             b, DecimalUtil::kPowersOfTen[bRescale], &bRescaled)) {
       VELOX_ARITHMETIC_ERROR("Decimal overflow: {} - {}", a, b);
     }
@@ -611,7 +611,7 @@ std::shared_ptr<exec::VectorFunction> createDecimalUnary(
   ExtraParams extraParams{};
   if (inputArgs.size() == 2) {
     // Round can accept additional argument like number of decimal places.
-    VELOX_CHECK_EQ(inputArgs[1].type->kind(), TypeKind::INTEGER);
+    VELOX_CHECK_EQ_W(inputArgs[1].type->kind(), TypeKind::INTEGER);
     extraParams.params.round.decimal =
         inputArgs[1]
             .constantValue->asUnchecked<SimpleVector<int32_t>>()

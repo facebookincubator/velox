@@ -1177,7 +1177,7 @@ void GroupingSet::abandonPartialAggregation() {
     }
   }
 
-  VELOX_CHECK_EQ(table_->rows()->numRows(), 0);
+  VELOX_CHECK_EQ_W(table_->rows()->numRows(), 0);
   intermediateRows_ = std::make_unique<RowContainer>(
       table_->rows()->keyTypes(),
       !ignoreNullKeys_,

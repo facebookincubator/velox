@@ -32,7 +32,7 @@ namespace facebook::velox::functions::aggregate {
 struct LongDecimalWithOverflowState {
  public:
   void mergeWith(const StringView& serializedData) {
-    VELOX_CHECK_EQ(serializedData.size(), serializedSize());
+    VELOX_CHECK_EQ_W(serializedData.size(), serializedSize());
     auto serialized = serializedData.data();
     common::InputByteStream stream(serialized);
     count += stream.read<int64_t>();
@@ -44,7 +44,7 @@ struct LongDecimalWithOverflowState {
   }
 
   void serialize(StringView& serialized) {
-    VELOX_CHECK_EQ(serialized.size(), serializedSize());
+    VELOX_CHECK_EQ_W(serialized.size(), serializedSize());
     char* outputBuffer = const_cast<char*>(serialized.data());
     common::OutputByteStream outStream(outputBuffer);
     outStream.append((char*)&count, sizeof(int64_t));

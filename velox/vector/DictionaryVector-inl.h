@@ -194,7 +194,7 @@ void DictionaryVector<T>::validate(const VectorValidateOptions& options) const {
   SimpleVector<T>::validate(options);
   auto indicesByteSize =
       BaseVector::byteSize<vector_size_t>(BaseVector::length_);
-  VELOX_CHECK_GE(indices_->size(), indicesByteSize);
+  VELOX_CHECK_GE_W(indices_->size(), indicesByteSize);
   for (auto i = 0; i < BaseVector::length_; ++i) {
     const bool isNull =
         BaseVector::rawNulls_ && bits::isBitNull(BaseVector::rawNulls_, i);

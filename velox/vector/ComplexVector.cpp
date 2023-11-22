@@ -195,7 +195,7 @@ void RowVector::copy(
   // Copy non-null values.
   SelectivityVector nonNullRows = rows;
   if (!toSourceRow) {
-    VELOX_CHECK_GE(source->size(), rows.end());
+    VELOX_CHECK_GE_W(source->size(), rows.end());
   }
 
   DecodedVector decodedSource(*source);
@@ -516,7 +516,7 @@ void ArrayVectorBase::copyRangesImpl(
   const BaseVector* sourceKeys = nullptr;
 
   auto leafSource = source->wrappedVector();
-  VELOX_CHECK_EQ(leafSource->encoding(), encoding());
+  VELOX_CHECK_EQ_W(leafSource->encoding(), encoding());
 
   if (typeKind_ == TypeKind::ARRAY) {
     sourceValues = leafSource->as<ArrayVector>()->elements().get();
@@ -711,8 +711,8 @@ void ArrayVectorBase::validateArrayVectorBase(
     vector_size_t minChildVectorSize) const {
   BaseVector::validate(options);
   auto bufferByteSize = byteSize<vector_size_t>(BaseVector::length_);
-  VELOX_CHECK_GE(sizes_->size(), bufferByteSize);
-  VELOX_CHECK_GE(offsets_->size(), bufferByteSize);
+  VELOX_CHECK_GE_W(sizes_->size(), bufferByteSize);
+  VELOX_CHECK_GE_W(offsets_->size(), bufferByteSize);
   for (auto i = 0; i < BaseVector::length_; ++i) {
     const bool isNull =
         BaseVector::rawNulls_ && bits::isBitNull(BaseVector::rawNulls_, i);
@@ -1524,7 +1524,7 @@ MapVectorPtr MapVector::update(const std::vector<MapVectorPtr>& others) const {
 }
 
 void RowVector::appendNulls(vector_size_t numberOfRows) {
-  VELOX_CHECK_GE(numberOfRows, 0);
+  VELOX_CHECK_GE_W(numberOfRows, 0);
   if (numberOfRows == 0) {
     return;
   }

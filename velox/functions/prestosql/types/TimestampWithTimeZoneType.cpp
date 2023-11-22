@@ -94,7 +94,7 @@ void castFromTimestampWithTimeZone(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     BaseVector& result) {
-  VELOX_CHECK_EQ(kind, TypeKind::TIMESTAMP)
+  VELOX_CHECK_EQ_W(kind, TypeKind::TIMESTAMP)
 
   auto flatResult = result.as<FlatVector<Timestamp>>();
   castToTimestamp(input, context, rows, *flatResult);

@@ -285,8 +285,8 @@ class UnsafeRow {
    * @param size
    */
   void writeOffsetPointer(size_t pos, size_t size) {
-    VELOX_CHECK_LE(variableLengthOffset_, UINT32_MAX);
-    VELOX_CHECK_LE(size, UINT32_MAX);
+    VELOX_CHECK_LE_W(variableLengthOffset_, UINT32_MAX);
+    VELOX_CHECK_LE_W(size, UINT32_MAX);
     uint64_t dataPointer = variableLengthOffset_ << 32 | size;
 
     // write the data pointer
@@ -372,7 +372,7 @@ class UnsafeRow {
    * @param offset
    */
   void setVariableLengthOffset(size_t offset) {
-    VELOX_CHECK_GE(offset, variableLengthOffset_);
+    VELOX_CHECK_GE_W(offset, variableLengthOffset_);
     variableLengthOffset_ = offset;
   }
 
@@ -383,7 +383,7 @@ class UnsafeRow {
    * @return a string_view of length width
    */
   const std::string_view readFixedLengthDataAt(size_t pos, size_t width) const {
-    VELOX_CHECK_LE(width, 8);
+    VELOX_CHECK_LE_W(width, 8);
     uint64_t* dataPointer = &reinterpret_cast<uint64_t*>(fixedLengthData_)[pos];
     return std::string_view(reinterpret_cast<char*>(dataPointer), width);
   }

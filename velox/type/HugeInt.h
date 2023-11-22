@@ -19,13 +19,15 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/StringView.h"
+#include "velox/type/custom_type/Int128.h"
 
 #pragma once
 
 namespace facebook::velox {
 
-using int128_t = __int128_t;
-using uint128_t = __uint128_t;
+using int128_t = type::int128;
+using uint128_t = type::uint128;
+;
 
 class HugeInt {
  public:
@@ -36,11 +38,11 @@ class HugeInt {
   }
 
   static constexpr FOLLY_ALWAYS_INLINE uint64_t lower(int128_t value) {
-    return static_cast<uint64_t>(value);
+    return value.lo();
   }
 
   static constexpr FOLLY_ALWAYS_INLINE uint64_t upper(int128_t value) {
-    return static_cast<uint64_t>(value >> 64);
+    return static_cast<uint64_t>(value.hi());
   }
 
   static FOLLY_ALWAYS_INLINE int128_t deserialize(const char* serializedData) {
@@ -61,5 +63,5 @@ class HugeInt {
 } // namespace facebook::velox
 
 namespace std {
-string to_string(__int128_t x);
+string to_string(facebook::velox::int128_t x);
 } // namespace std

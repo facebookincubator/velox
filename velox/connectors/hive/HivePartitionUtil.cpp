@@ -15,6 +15,8 @@
  */
 
 #include "velox/connectors/hive/HivePartitionUtil.h"
+#include "velox/type/Type.h"
+
 
 namespace facebook::velox::connector::hive {
 
@@ -35,16 +37,21 @@ namespace facebook::velox::connector::hive {
             "Unsupported partition type: {}", mapTypeKindToName(typeKind)); \
     }                                                                       \
   }()
-
 namespace {
 template <typename T>
 inline std::string makePartitionValueString(T value) {
   return folly::to<std::string>(value);
 }
 
+
 template <>
 inline std::string makePartitionValueString(bool value) {
   return value ? "true" : "false";
+}
+// TODO: davidmar implement toString function for int128_t
+template <>
+inline std::string makePartitionValueString(facebook::velox::type::int128 value) {
+  return "TODO: davidmar implement toString function for int128_t";
 }
 
 template <TypeKind Kind>

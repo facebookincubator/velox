@@ -64,7 +64,7 @@ uint64_t ReadFile::preadv(
 void ReadFile::preadv(
     folly::Range<const common::Region*> regions,
     folly::Range<folly::IOBuf*> iobufs) const {
-  VELOX_CHECK_EQ(regions.size(), iobufs.size());
+  VELOX_CHECK_EQ_W(regions.size(), iobufs.size());
   for (size_t i = 0; i < regions.size(); ++i) {
     const auto& region = regions[i];
     auto& output = iobufs[i];

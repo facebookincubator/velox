@@ -60,7 +60,7 @@ const std::unordered_map<std::string, TypeKind>& getTypeStringMap() {
       {"ROW", TypeKind::ROW},
       {"FUNCTION", TypeKind::FUNCTION},
       {"UNKNOWN", TypeKind::UNKNOWN},
-      {"OPAQUE", TypeKind::OPAQUE},
+      {"OPAQUE", TypeKind::OPAQUE_2},
       {"INVALID", TypeKind::INVALID}};
   return kTypeStringMap;
 }
@@ -103,7 +103,7 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
       {TypeKind::ROW, "ROW"},
       {TypeKind::FUNCTION, "FUNCTION"},
       {TypeKind::UNKNOWN, "UNKNOWN"},
-      {TypeKind::OPAQUE, "OPAQUE"},
+      {TypeKind::OPAQUE_2, "OPAQUE_2"},
       {TypeKind::INVALID, "INVALID"}};
 
   auto found = typeEnumMap.find(typeKind);
@@ -174,7 +174,7 @@ TypePtr Type::create(const folly::dynamic& obj) {
   TypeKind typeKind = mapNameToTypeKind(typeName);
   switch (typeKind) {
     case TypeKind::ROW: {
-      VELOX_USER_CHECK(obj["names"].isArray());
+      VELOX_USER_CHECK_W(obj["names"].isArray());
       std::vector<std::string> names;
       for (const auto& name : obj["names"]) {
         names.push_back(name.asString());
@@ -184,7 +184,7 @@ TypePtr Type::create(const folly::dynamic& obj) {
           std::move(names), std::move(childTypes));
     }
 
-    case TypeKind::OPAQUE: {
+    case TypeKind::OPAQUE_2: {
       const auto& persistentName = obj["opaque"].asString();
       const auto& registry = OpaqueSerdeRegistry::get();
       auto it = registry.reverse.find(persistentName);
@@ -636,7 +636,7 @@ folly::dynamic OpaqueType::serialize() const {
 
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = "Type";
-  obj["type"] = TypeTraits<TypeKind::OPAQUE>::name;
+  obj["type"] = TypeTraits<TypeKind::OPAQUE_2>::name;
   obj["opaque"] = it->second.persistentName;
   return obj;
 }
@@ -802,8 +802,8 @@ TypePtr createType<TypeKind::MAP>(std::vector<TypePtr>&& children) {
 }
 
 template <>
-TypePtr createType<TypeKind::OPAQUE>(std::vector<TypePtr>&& /*children*/) {
-  std::string name{TypeTraits<TypeKind::OPAQUE>::name};
+TypePtr createType<TypeKind::OPAQUE_2>(std::vector<TypePtr>&& /*children*/) {
+  std::string name{TypeTraits<TypeKind::OPAQUE_2>::name};
   VELOX_USER_FAIL("Not supported for kind: {}", name);
 }
 
@@ -1042,10 +1042,10 @@ const SingletonTypeMap& singletonBuiltInTypes() {
 class DecimalParametricType {
  public:
   static TypePtr create(const std::vector<TypeParameter>& parameters) {
-    VELOX_USER_CHECK_EQ(2, parameters.size());
-    VELOX_USER_CHECK(parameters[0].kind == TypeParameterKind::kLongLiteral);
-    VELOX_USER_CHECK(parameters[0].longLiteral.has_value());
-    VELOX_USER_CHECK(parameters[1].kind == TypeParameterKind::kLongLiteral);
+    VELOX_USER_CHECK_EQ_W(2, parameters.size());
+    VELOX_USER_CHECK_W(parameters[0].kind == TypeParameterKind::kLongLiteral);
+    VELOX_USER_CHECK_W(parameters[0].longLiteral.has_value());
+    VELOX_USER_CHECK_W(parameters[1].kind == TypeParameterKind::kLongLiteral);
     VELOX_USER_CHECK(parameters[1].longLiteral.has_value());
 
     return DECIMAL(
@@ -1056,9 +1056,9 @@ class DecimalParametricType {
 class ArrayParametricType {
  public:
   static TypePtr create(const std::vector<TypeParameter>& parameters) {
-    VELOX_USER_CHECK_EQ(1, parameters.size());
-    VELOX_USER_CHECK(parameters[0].kind == TypeParameterKind::kType);
-    VELOX_USER_CHECK_NOT_NULL(parameters[0].type);
+    VELOX_USER_CHECK_EQ_W(1, parameters.size());
+    VELOX_USER_CHECK_W(parameters[0].kind == TypeParameterKind::kType);
+    VELOX_USER_CHECK_NOT_NULL_W(parameters[0].type);
 
     return ARRAY(parameters[0].type);
   }
@@ -1067,12 +1067,12 @@ class ArrayParametricType {
 class MapParametricType {
  public:
   static TypePtr create(const std::vector<TypeParameter>& parameters) {
-    VELOX_USER_CHECK_EQ(2, parameters.size());
-    VELOX_USER_CHECK(parameters[0].kind == TypeParameterKind::kType);
-    VELOX_USER_CHECK_NOT_NULL(parameters[0].type);
+    VELOX_USER_CHECK_EQ_W(2, parameters.size());
+    VELOX_USER_CHECK_W(parameters[0].kind == TypeParameterKind::kType);
+    VELOX_USER_CHECK_NOT_NULL_W(parameters[0].type);
 
-    VELOX_USER_CHECK(parameters[1].kind == TypeParameterKind::kType);
-    VELOX_USER_CHECK_NOT_NULL(parameters[1].type);
+    VELOX_USER_CHECK_W(parameters[1].kind == TypeParameterKind::kType);
+    VELOX_USER_CHECK_NOT_NULL_W(parameters[1].type);
 
     return MAP(parameters[0].type, parameters[1].type);
   }
@@ -1099,10 +1099,10 @@ class RowParametricType {
 class FunctionParametricType {
  public:
   static TypePtr create(const std::vector<TypeParameter>& parameters) {
-    VELOX_USER_CHECK_GE(parameters.size(), 1);
+    VELOX_USER_CHECK_GE_W(parameters.size(), 1);
     for (const auto& parameter : parameters) {
-      VELOX_USER_CHECK(parameter.kind == TypeParameterKind::kType);
-      VELOX_USER_CHECK_NOT_NULL(parameter.type);
+      VELOX_USER_CHECK_W(parameter.kind == TypeParameterKind::kType);
+      VELOX_USER_CHECK_NOT_NULL_W(parameter.type);
     }
 
     std::vector<TypePtr> argumentTypes;

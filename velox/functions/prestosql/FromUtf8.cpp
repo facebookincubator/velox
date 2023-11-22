@@ -218,7 +218,7 @@ class FromUtf8Function : public exec::VectorFunction {
       auto flatInput = decodedInput.base()->asFlatVector<StringView>();
 
       auto stringBuffers = flatInput->stringBuffers();
-      VELOX_CHECK_LE(rows.end(), flatInput->size());
+      VELOX_CHECK_LE_W(rows.end(), flatInput->size());
       localResult = std::make_shared<FlatVector<StringView>>(
           context.pool(),
           VARCHAR(),
