@@ -101,12 +101,15 @@ HiveDataSource::HiveDataSource(
     filters.emplace(k.clone(), v->clone());
   }
   double sampleRate = 1;
-  auto remainingFilter = extractFiltersFromRemainingFilter(
-      hiveTableHandle_->remainingFilter(),
-      expressionEvaluator_,
-      false,
-      filters,
-      sampleRate);
+  auto remainingFilter = hiveTableHandle_->remainingFilter();
+  if (hiveTableHandle_->isFilterPushdownEnabled()) {
+    remainingFilter = extractFiltersFromRemainingFilter(
+        hiveTableHandle_->remainingFilter(),
+        expressionEvaluator_,
+        false,
+        filters,
+        sampleRate);
+  }
   if (sampleRate != 1) {
     randomSkip_ = std::make_shared<random::RandomSkipTracker>(sampleRate);
   }
