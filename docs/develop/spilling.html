@@ -187,7 +187,7 @@ partition to create a sorted reader to restore the spilled partition state.</p>
 <span class="w">    </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">partition</span><span class="p">);</span><span class="w"></span>
 </pre></div>
 </div>
-<p><strong>unsorted spill restore</strong>: Used by order by hash build and hash probe
+<p><strong>unsorted spill restore</strong>: Used by hash build and hash probe
 operators. The operator first calls Spiller::finishSpill() to mark the
 completion of spilling. The Spiller collects metadata for the spilled
 partitioned and returns these to the operator. The operator processes the
