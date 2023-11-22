@@ -83,6 +83,10 @@ struct Timestamp {
   static constexpr int64_t kMicrosecondsInMillisecond = 1'000;
   static constexpr int64_t kNanosecondsInMicrosecond = 1'000;
   static constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
+  static constexpr int64_t kNanosInSecond =
+      kNanosecondsInMillisecond * kMillisecondsInSecond;
+  static constexpr int64_t kJulianToUnixEpochDays = 2440588LL;
+  static constexpr int64_t kSecondsPerDay = 86400LL;
 
   // Limit the range of seconds to avoid some problems. Seconds should be
   // in the range [INT64_MIN/1000 - 1, INT64_MAX/1000].

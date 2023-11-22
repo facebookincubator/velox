@@ -94,6 +94,34 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     assertQuery(plan, splits_, sql);
   }
 
+  void assertSelectWithFilter(
+      std::vector<std::string>&& outputColumnNames,
+      const std::vector<std::string>& subfieldFilters,
+      const std::string& remainingFilter,
+      const std::string& sql,
+      bool isFilterPushdownEnabled) {
+    auto rowType = getRowType(std::move(outputColumnNames));
+    parse::ParseOptions options;
+    options.parseDecimalAsDouble = false;
+
+    auto plan = PlanBuilder(pool_.get())
+                    .setParseOptions(options)
+                    // Function extractFiltersFromRemainingFilter will extract
+                    // filters to subfield filters, but for some types, filter
+                    // pushdown is not supported.
+                    .tableScan(
+                        "hive_table",
+                        rowType,
+                        {},
+                        subfieldFilters,
+                        remainingFilter,
+                        nullptr,
+                        isFilterPushdownEnabled)
+                    .planNode();
+
+    assertQuery(plan, splits_, sql);
+  }
+
   void assertSelectWithAgg(
       std::vector<std::string>&& outputColumnNames,
       const std::vector<std::string>& aggregates,
@@ -672,6 +700,84 @@ TEST_F(ParquetTableScanTest, sessionTimezone) {
           }));
 
   assertSelectWithTimezone({"a"}, "SELECT a FROM tmp", "Asia/Shanghai");
+}
+
+TEST_F(ParquetTableScanTest, timestampFilter) {
+  // Timestamp-int96.parquet holds one column (t: TIMESTAMP) and
+  // 10 rows in one row group. Data is in SNAPPY compressed format.
+  // The values are:
+  // |t                  |
+  // +-------------------+
+  // |2015-06-01 19:34:56|
+  // |2015-06-02 19:34:56|
+  // |2001-02-03 03:34:06|
+  // |1998-03-01 08:01:06|
+  // |2022-12-23 03:56:01|
+  // |1980-01-24 00:23:07|
+  // |1999-12-08 13:39:26|
+  // |2023-04-21 09:09:34|
+  // |2000-09-12 22:36:29|
+  // |2007-12-12 04:27:56|
+  // +-------------------+
+  auto vector = makeFlatVector<Timestamp>(
+      {Timestamp(1433116800, 70496000000000),
+       Timestamp(1433203200, 70496000000000),
+       Timestamp(981158400, 12846000000000),
+       Timestamp(888710400, 28866000000000),
+       Timestamp(1671753600, 14161000000000),
+       Timestamp(317520000, 1387000000000),
+       Timestamp(944611200, 49166000000000),
+       Timestamp(1682035200, 32974000000000),
+       Timestamp(968716800, 81389000000000),
+       Timestamp(1197417600, 16076000000000)});
+
+  loadData(
+      getExampleFilePath("timestamp_int96.parquet"),
+      ROW({"t"}, {TIMESTAMP()}),
+      makeRowVector(
+          {"t"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter({"t"}, {}, "", "SELECT t from tmp", false);
+  assertSelectWithFilter(
+      {"t"},
+      {},
+      "t < TIMESTAMP '2000-09-12 22:36:29'",
+      "SELECT t from tmp where t < TIMESTAMP '2000-09-12 22:36:29'",
+      false);
+  assertSelectWithFilter(
+      {"t"},
+      {},
+      "t <= TIMESTAMP '2000-09-12 22:36:29'",
+      "SELECT t from tmp where t <= TIMESTAMP '2000-09-12 22:36:29'",
+      false);
+  assertSelectWithFilter(
+      {"t"},
+      {},
+      "t > TIMESTAMP '1980-01-24 00:23:07'",
+      "SELECT t from tmp where t > TIMESTAMP '1980-01-24 00:23:07'",
+      false);
+  assertSelectWithFilter(
+      {"t"},
+      {},
+      "t >= TIMESTAMP '1980-01-24 00:23:07'",
+      "SELECT t from tmp where t >= TIMESTAMP '1980-01-24 00:23:07'",
+      false);
+  assertSelectWithFilter(
+      {"t"},
+      {},
+      "t == TIMESTAMP '2022-12-23 03:56:01'",
+      "SELECT t from tmp where t == TIMESTAMP '2022-12-23 03:56:01'",
+      false);
+  VELOX_ASSERT_THROW(
+      assertSelectWithFilter(
+          {"t"},
+          {"t < TIMESTAMP '2000-09-12 22:36:29'"},
+          "",
+          "SELECT t from tmp where t < TIMESTAMP '2000-09-12 22:36:29'"),
+      "testInt128() is not supported");
 }
 
 int main(int argc, char** argv) {
