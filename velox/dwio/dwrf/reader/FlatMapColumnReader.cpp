@@ -15,10 +15,13 @@
  */
 
 #include "velox/dwio/dwrf/reader/FlatMapColumnReader.h"
-#include <folly/Conv.h>
-#include <folly/container/F14Set.h>
-#include <folly/json.h>
 
+#include "folly/Conv.h"
+#include "folly/container/F14Set.h"
+#include "folly/experimental/coro/BlockingWait.h"
+#include "folly/experimental/coro/Collect.h"
+#include "folly/experimental/coro/Invoke.h"
+#include "folly/json.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FlatMapHelper.h"
@@ -690,6 +693,24 @@ void KeyNode<T>::loadAsChild(
   DWIO_ENSURE_EQ(numValues, vec->size(), "items loaded assurance");
 }
 
+#if FOLLY_HAS_COROUTINES
+
+template <typename T>
+folly::coro::Task<void> KeyNode<T>::co_loadAsChild(
+    VectorPtr& vec,
+    uint64_t numValues,
+    uint64_t nonNullMaps,
+    const uint64_t* nulls) {
+  DWIO_ENSURE_GT(numValues, 0, "numValues should be positive");
+  BufferPtr mergedNulls;
+  co_await reader_->co_next(
+      numValues, vec, mergeNulls(numValues, mergedNulls, nonNullMaps, nulls));
+  DWIO_ENSURE_EQ(numValues, vec->size(), "items loaded assurance");
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 template <typename T>
 const uint64_t* KeyNode<T>::mergeNulls(
     uint64_t numValues,
@@ -992,44 +1013,20 @@ folly::coro::Task<void> FlatMapStructEncodingColumnReader<T>::co_next(
     childrenPtr = &children;
   }
 
-  if (executor_) {
-    dwio::common::ExecutorBarrier barrier(*executor_);
-    auto mergedNullsBuffers = std::make_shared<
-        folly::Synchronized<std::unordered_map<std::thread::id, BufferPtr>>>();
-    for (size_t i = 0; i < keyNodes_.size(); ++i) {
-      auto& node = keyNodes_[i];
-      auto& child = (*childrenPtr)[i];
+  std::vector<folly::coro::Task<void>> tasks;
+  tasks.reserve(keyNodes_.size());
+  for (size_t i = 0; i < keyNodes_.size(); ++i) {
+    auto& node = keyNodes_[i];
+    auto& child = (*childrenPtr)[i];
 
-      if (node) {
-        barrier.add([&node,
-                     &child,
-                     numValues,
-                     nonNullMaps,
-                     nullsPtr,
-                     mergedNullsBuffers]() {
-          auto mergedNullsBuffer =
-              getBufferForCurrentThread(*mergedNullsBuffers);
-          node->loadAsChild(
-              child, numValues, mergedNullsBuffer, nonNullMaps, nullsPtr);
-        });
-      } else {
-        nullColumnReader_->next(numValues, child, nullsPtr);
-      }
-    }
-    barrier.waitAll();
-  } else {
-    for (size_t i = 0; i < keyNodes_.size(); ++i) {
-      auto& node = keyNodes_[i];
-      auto& child = (*childrenPtr)[i];
-
-      if (node) {
-        node->loadAsChild(
-            child, numValues, mergedNulls_, nonNullMaps, nullsPtr);
-      } else {
-        nullColumnReader_->next(numValues, child, nullsPtr);
-      }
+    if (node) {
+      tasks.push_back(
+          node->co_loadAsChild(child, numValues, nonNullMaps, nullsPtr));
+    } else {
+      tasks.push_back(nullColumnReader_->co_next(numValues, child, nullsPtr));
     }
   }
+  co_await folly::coro::collectAllRange(std::move(tasks));
 
   if (result) {
     result->setNullCount(nullCount);
