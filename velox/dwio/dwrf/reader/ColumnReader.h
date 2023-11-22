@@ -17,6 +17,7 @@
 #pragma once
 
 #include "folly/Executor.h"
+#include "folly/experimental/coro/Task.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/TypeWithId.h"
@@ -90,6 +91,27 @@ class ColumnReader {
       uint64_t numValues,
       VectorPtr& result,
       const uint64_t* nulls = nullptr) = 0;
+
+#if FOLLY_HAS_COROUTINES
+
+  /**
+   * Skip number of specified rows.
+   * @param numValues the number of values to skip
+   * @return the number of non-null values skipped
+   */
+  virtual folly::coro::Task<uint64_t> co_skip(uint64_t numValues);
+
+  /**
+   * Read the next group of values into a RowVector.
+   * @param numValues the number of values to read
+   * @param vector to read into
+   */
+  virtual folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) = 0;
+
+#endif // FOLLY_HAS_COROUTINES
 
   // Return list of strides/rowgroups that can be skipped (based on statistics).
   // Stride indices are monotonically increasing.

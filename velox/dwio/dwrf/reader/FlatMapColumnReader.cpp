@@ -248,6 +248,24 @@ uint64_t FlatMapColumnReader<T>::skip(uint64_t numValues) {
   return numValues;
 }
 
+#if FOLLY_HAS_COROUTINES
+
+template <typename T>
+folly::coro::Task<uint64_t> FlatMapColumnReader<T>::co_skip(
+    uint64_t numValues) {
+  // skip basic rows
+  numValues = co_await ColumnReader::co_skip(numValues);
+
+  // skip every single node
+  for (auto& node : keyNodes_) {
+    node->skip(numValues);
+  }
+
+  co_return numValues;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 template <typename T>
 void FlatMapColumnReader<T>::initKeysVector(
     VectorPtr& vector,
@@ -453,6 +471,177 @@ void FlatMapColumnReader<T>::next(
       nullCount);
 }
 
+#if FOLLY_HAS_COROUTINES
+
+template <typename T>
+folly::coro::Task<void> FlatMapColumnReader<T>::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto mapVector = detail::resetIfWrongVectorType<MapVector>(result);
+  VectorPtr keysVector;
+  VectorPtr valuesVector;
+  BufferPtr offsets;
+  BufferPtr lengths;
+  if (mapVector) {
+    keysVector = mapVector->mapKeys();
+    if (returnFlatVector_) {
+      valuesVector = mapVector->mapValues();
+    }
+    offsets = mapVector->mutableOffsets(numValues);
+    lengths = mapVector->mutableSizes(numValues);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  // Release extra references of keys and values vectors as well as nulls,
+  // offsets and lengths buffers.
+  result.reset();
+
+  if (!offsets) {
+    offsets = AlignedBuffer::allocate<vector_size_t>(numValues, &memoryPool_);
+  }
+  if (!lengths) {
+    lengths = AlignedBuffer::allocate<vector_size_t>(numValues, &memoryPool_);
+  }
+
+  auto nonNullMaps = numValues - nullCount;
+
+  // opt - only loop over nodes that have value
+  std::vector<KeyNode<T>*> nodes;
+  utils::BulkBitIterator<char> bulkInMapIter{};
+  std::vector<const BaseVector*> nodeBatches;
+  size_t totalChildren = 0;
+  if (nonNullMaps > 0) {
+    auto keyNodes_sz = keyNodes_.size();
+    nodeBatches.reserve(keyNodes_sz);
+    nodes.reserve(keyNodes_sz);
+    for (auto& node : keyNodes_) {
+      // if the node has value filled into key-value batch
+      // future optimization - enable batch to be sortable on row index
+      // and below next can be updated to next(keys, values, numValues)
+      // which writes row index into batch and offsets can be generated
+      auto batch = node->load(nonNullMaps);
+      if (batch) {
+        nodes.emplace_back(node.get());
+        node->addToBulkInMapBitIterator(bulkInMapIter);
+        nodeBatches.push_back(batch);
+        totalChildren += batch->size();
+      }
+    }
+  }
+
+  if (nodeBatches.empty()) {
+    auto* offsetsPtr = offsets->asMutable<vector_size_t>();
+    auto* lengthsPtr = lengths->asMutable<vector_size_t>();
+    std::fill(offsetsPtr, offsetsPtr + numValues, 0);
+    std::fill(lengthsPtr, lengthsPtr + numValues, 0);
+
+    // todo: refactor this method to reduce branching
+    result = std::make_shared<MapVector>(
+        &memoryPool_,
+        getMapType(keysVector, valuesVector, requestedType_->type()),
+        std::move(nulls),
+        numValues,
+        std::move(offsets),
+        std::move(lengths),
+        nullptr,
+        nullptr,
+        nullCount);
+    co_return;
+  }
+
+  std::vector<size_t> startIndices(nodeBatches.size());
+  std::vector<size_t> nodeIndices(nodeBatches.size());
+
+  auto& mapValueType = requestedType_->type()->asMap().valueType();
+  if (totalChildren > 0) {
+    size_t childOffset = 0;
+    for (size_t i = 0; i < nodeBatches.size(); i++) {
+      nodeIndices[i] = 0;
+      startIndices[i] = childOffset;
+      childOffset += nodeBatches[i]->size();
+    }
+
+    initKeysVector(keysVector, totalChildren);
+    initializeVector(valuesVector, mapValueType, memoryPool_, nodeBatches);
+
+    if (!returnFlatVector_) {
+      for (auto batch : nodeBatches) {
+        valuesVector->append(batch);
+      }
+    }
+  }
+
+  BufferPtr indices;
+  vector_size_t* indicesPtr = nullptr;
+  if (!returnFlatVector_) {
+    indices = AlignedBuffer::allocate<int32_t>(totalChildren, &memoryPool_);
+    indices->setSize(totalChildren * sizeof(vector_size_t));
+    indicesPtr = indices->asMutable<vector_size_t>();
+  }
+
+  // now we're doing the rotation concat for sure to fill data
+  vector_size_t offset = 0;
+  auto* offsetsPtr = offsets->asMutable<vector_size_t>();
+  auto* lengthsPtr = lengths->asMutable<vector_size_t>();
+  for (uint64_t i = 0; i < numValues; ++i) {
+    // case for having map on this row
+    offsetsPtr[i] = offset;
+    if (!nullsPtr || !bits::isBitNull(nullsPtr, i)) {
+      bulkInMapIter.loadNext();
+      for (size_t j = 0; j < nodes.size(); j++) {
+        if (bulkInMapIter.hasValueAt(j)) {
+          nodes[j]->fillKeysVector(keysVector, offset, stringKeyBuffer_.get());
+          if (returnFlatVector_) {
+            copyOne(
+                mapValueType,
+                *valuesVector,
+                offset,
+                *nodeBatches[j],
+                nodeIndices[j]);
+          } else {
+            indicesPtr[offset] = startIndices[j] + nodeIndices[j];
+          }
+          offset++;
+          nodeIndices[j]++;
+        }
+      }
+    }
+
+    lengthsPtr[i] = offset - offsetsPtr[i];
+  }
+
+  DWIO_ENSURE_EQ(totalChildren, offset, "fill the same amount of items");
+
+  VLOG(1) << "[Flat-Map] num elements: " << numValues
+          << ", total children: " << totalChildren;
+
+  if (totalChildren > 0 && !returnFlatVector_) {
+    valuesVector = BaseVector::wrapInDictionary(
+        nullptr, indices, totalChildren, std::move(valuesVector));
+  }
+
+  auto mapType = getMapType(keysVector, valuesVector, requestedType_->type());
+
+  // TODO Reuse
+  result = std::make_shared<MapVector>(
+      &memoryPool_,
+      mapType,
+      std::move(nulls),
+      numValues,
+      std::move(offsets),
+      std::move(lengths),
+      std::move(keysVector),
+      std::move(valuesVector),
+      nullCount);
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 template <>
 void FlatMapColumnReader<StringView>::initStringKeyBuffer() {
   stringKeyBuffer_ = std::make_unique<StringKeyBuffer>(memoryPool_, keyNodes_);
@@ -645,6 +834,26 @@ uint64_t FlatMapStructEncodingColumnReader<T>::skip(uint64_t numValues) {
   return numValues;
 }
 
+#if FOLLY_HAS_COROUTINES
+
+template <typename T>
+folly::coro::Task<uint64_t> FlatMapStructEncodingColumnReader<T>::co_skip(
+    uint64_t numValues) {
+  // skip basic rows
+  numValues = co_await ColumnReader::co_skip(numValues);
+
+  // skip every single node
+  for (auto& node : keyNodes_) {
+    if (node) {
+      node->skip(numValues);
+    }
+  }
+
+  co_return numValues;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 namespace {
 
 BufferPtr getBufferForCurrentThread(
@@ -748,6 +957,97 @@ void FlatMapStructEncodingColumnReader<T>::next(
         nullCount);
   }
 }
+
+#if FOLLY_HAS_COROUTINES
+
+template <typename T>
+folly::coro::Task<void> FlatMapStructEncodingColumnReader<T>::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto rowVector = detail::resetIfWrongVectorType<RowVector>(result);
+  std::vector<VectorPtr> children;
+  if (rowVector) {
+    // Track children vectors in a local variable because readNulls may reset
+    // the parent vector.
+    result->resize(numValues, false);
+    children = rowVector->children();
+    DWIO_ENSURE_EQ(children.size(), keyNodes_.size());
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  const uint64_t nullCount =
+      nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+  const auto nonNullMaps = numValues - nullCount;
+
+  std::vector<VectorPtr>* childrenPtr = nullptr;
+  if (result) {
+    // Parent vector still exist, so there is no need to double reference
+    // children vectors.
+    childrenPtr = &rowVector->children();
+    children.clear();
+  } else {
+    children.resize(keyNodes_.size());
+    childrenPtr = &children;
+  }
+
+  if (executor_) {
+    dwio::common::ExecutorBarrier barrier(*executor_);
+    auto mergedNullsBuffers = std::make_shared<
+        folly::Synchronized<std::unordered_map<std::thread::id, BufferPtr>>>();
+    for (size_t i = 0; i < keyNodes_.size(); ++i) {
+      auto& node = keyNodes_[i];
+      auto& child = (*childrenPtr)[i];
+
+      if (node) {
+        barrier.add([&node,
+                     &child,
+                     numValues,
+                     nonNullMaps,
+                     nullsPtr,
+                     mergedNullsBuffers]() {
+          auto mergedNullsBuffer =
+              getBufferForCurrentThread(*mergedNullsBuffers);
+          node->loadAsChild(
+              child, numValues, mergedNullsBuffer, nonNullMaps, nullsPtr);
+        });
+      } else {
+        nullColumnReader_->next(numValues, child, nullsPtr);
+      }
+    }
+    barrier.waitAll();
+  } else {
+    for (size_t i = 0; i < keyNodes_.size(); ++i) {
+      auto& node = keyNodes_[i];
+      auto& child = (*childrenPtr)[i];
+
+      if (node) {
+        node->loadAsChild(
+            child, numValues, mergedNulls_, nonNullMaps, nullsPtr);
+      } else {
+        nullColumnReader_->next(numValues, child, nullsPtr);
+      }
+    }
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+  } else {
+    result = std::make_shared<RowVector>(
+        &memoryPool_,
+        ROW(std::vector<std::string>(keyNodes_.size()),
+            std::vector<std::shared_ptr<const Type>>(
+                keyNodes_.size(), requestedType_->type()->asMap().valueType())),
+        nulls,
+        numValues,
+        std::move(children),
+        nullCount);
+  }
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
 
 inline bool isRequiringStructEncoding(
     const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
