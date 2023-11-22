@@ -214,5 +214,41 @@ void fillTimestamps(
     const uint64_t* nanos,
     vector_size_t numValues);
 
+// reschedule: Helper method to convert a non-coroutine lambda into a
+// coroutine and reschedule it in the current executor. Use like: co_await
+// reschedule([&](){ return obj.method(...); });
+
+#if FOLLY_HAS_COROUTINES
+
+// Non void return function
+template <typename F>
+std::enable_if_t<
+    !std::is_same_v<typename std::result_of_t<F()>, void>,
+    folly::coro::Task<typename std::result_of_t<F()>>>
+reschedule(F&& f) {
+  return folly::coro::co_invoke(
+      [f = std::forward<F>(
+           f)]() -> folly::coro::Task<typename std::result_of_t<F()>> {
+        co_await folly::coro::co_reschedule_on_current_executor;
+        co_return f();
+      });
+}
+
+// Void return function
+template <typename F>
+std::enable_if_t<
+    std::is_same_v<typename std::result_of_t<F()>, void>,
+    folly::coro::Task<void>>
+reschedule(F&& f) {
+  return folly::coro::co_invoke(
+      [f = std::forward<F>(f)]() -> folly::coro::Task<void> {
+        co_await folly::coro::co_reschedule_on_current_executor;
+        f();
+        co_return;
+      });
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 } // namespace detail
 } // namespace facebook::velox::dwrf
