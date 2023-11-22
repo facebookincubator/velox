@@ -20,6 +20,7 @@
 #include "folly/Portability.h"
 #include "folly/String.h"
 #include "folly/experimental/coro/Collect.h"
+#include "folly/experimental/coro/Invoke.h"
 #include "velox/dwio/common/IntCodecCommon.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/TypeUtils.h"
@@ -589,8 +590,15 @@ template <typename DataT>
 folly::coro::Task<uint64_t> DecimalColumnReader<DataT>::co_skip(
     uint64_t numValues) {
   numValues = co_await ColumnReader::co_skip(numValues);
-  valueDecoder_->skip(numValues);
-  scaleDecoder_->skip(numValues);
+  co_await folly::coro::collectAll(
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        valueDecoder_->skip(numValues);
+        co_return;
+      }),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        scaleDecoder_->skip(numValues);
+        co_return;
+      }));
   co_return numValues;
 }
 
@@ -997,9 +1005,18 @@ template <class ReqT>
 folly::coro::Task<uint64_t> IntegerDictionaryColumnReader<ReqT>::co_skip(
     uint64_t numValues) {
   numValues = co_await ColumnReader::co_skip(numValues);
-  dataReader->skip(numValues);
   if (inDictionaryReader) {
-    inDictionaryReader->skip(numValues);
+    co_await folly::coro::collectAll(
+        folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+          dataReader->skip(numValues);
+          co_return;
+        }),
+        folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+          inDictionaryReader->skip(numValues);
+          co_return;
+        }));
+  } else {
+    dataReader->skip(numValues);
   }
   co_return numValues;
 }
@@ -1180,8 +1197,15 @@ void TimestampColumnReader::next(
 
 folly::coro::Task<uint64_t> TimestampColumnReader::co_skip(uint64_t numValues) {
   numValues = co_await ColumnReader::co_skip(numValues);
-  seconds->skip(numValues);
-  nano->skip(numValues);
+  co_await folly::coro::collectAll(
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        seconds->skip(numValues);
+        co_return;
+      }),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        nano->skip(numValues);
+        co_return;
+      }));
   co_return numValues;
 }
 
@@ -2121,9 +2145,18 @@ void StringDictionaryColumnReader::ensureInitialized() {
 folly::coro::Task<uint64_t> StringDictionaryColumnReader::co_skip(
     uint64_t numValues) {
   numValues = co_await ColumnReader::co_skip(numValues);
-  dictIndex_->skip(numValues);
   if (inDictionaryReader_) {
-    inDictionaryReader_->skip(numValues);
+    co_await folly::coro::collectAll(
+        folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+          dictIndex_->skip(numValues);
+          co_return;
+        }),
+        folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+          inDictionaryReader_->skip(numValues);
+          co_return;
+        }));
+  } else {
+    dictIndex_->skip(numValues);
   }
   co_return numValues;
 }
@@ -2862,11 +2895,14 @@ void StructColumnReader::next(
 
 folly::coro::Task<uint64_t> StructColumnReader::co_skip(uint64_t numValues) {
   numValues = co_await ColumnReader::co_skip(numValues);
+  std::vector<folly::coro::Task<uint64_t>> tasks;
+  tasks.reserve(children_.size());
   for (auto& ptr : children_) {
     if (ptr) {
-      co_await ptr->co_skip(numValues);
+      tasks.emplace_back(ptr->co_skip(numValues));
     }
   }
+  co_await folly::coro::collectAllRange(std::move(tasks));
   co_return numValues;
 }
 
@@ -3125,7 +3161,7 @@ void ListColumnReader::next(
 folly::coro::Task<uint64_t> ListColumnReader::co_skip(uint64_t numValues) {
   numValues = co_await ColumnReader::co_skip(numValues);
   if (child) {
-    child->skip(skipLengths(numValues, *length));
+    co_await child->co_skip(skipLengths(numValues, *length));
   } else {
     length->skip(numValues);
   }
@@ -3417,11 +3453,22 @@ folly::coro::Task<uint64_t> MapColumnReader::co_skip(uint64_t numValues) {
   numValues = co_await ColumnReader::co_skip(numValues);
   if (keyReader || elementReader) {
     auto childrenElements = skipLengths(numValues, *length);
-    if (keyReader) {
-      co_await keyReader->co_skip(childrenElements);
-    }
-    if (elementReader) {
-      co_await elementReader->co_skip(childrenElements);
+    // I want to avoid creating a std::vector just for this
+    const int combination = (keyReader ? 1 : 0) + (elementReader ? 2 : 0);
+    switch (combination) {
+      case 1:
+        co_await keyReader->co_skip(childrenElements);
+        break;
+      case 2:
+        co_await elementReader->co_skip(childrenElements);
+        break;
+      case 3:
+        co_await folly::coro::collectAll(
+            keyReader->co_skip(childrenElements),
+            elementReader->co_skip(childrenElements));
+        break;
+      default:
+        break;
     }
   } else {
     length->skip(numValues);
