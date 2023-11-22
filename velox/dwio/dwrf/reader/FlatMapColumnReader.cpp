@@ -260,9 +260,12 @@ folly::coro::Task<uint64_t> FlatMapColumnReader<T>::co_skip(
   numValues = co_await ColumnReader::co_skip(numValues);
 
   // skip every single node
+  std::vector<folly::coro::Task<void>> tasks;
+  tasks.reserve(keyNodes_.size());
   for (auto& node : keyNodes_) {
-    node->skip(numValues);
+    tasks.push_back(node->co_skip(numValues));
   }
+  co_await folly::coro::collectAllRange(std::move(tasks));
 
   co_return numValues;
 }
@@ -684,6 +687,17 @@ void KeyNode<T>::skip(uint64_t numValues) {
   reader_->skip(toSkip);
 }
 
+#if FOLLY_HAS_COROUTINES
+
+template <typename T>
+folly::coro::Task<void> KeyNode<T>::co_skip(uint64_t numValues) {
+  auto toSkip = readInMapData(numValues);
+  co_await reader_->co_skip(toSkip);
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 template <typename T>
 BaseVector* KeyNode<T>::load(uint64_t numValues) {
   DWIO_ENSURE_GT(numValues, 0, "numValues should be positive");
@@ -900,11 +914,12 @@ folly::coro::Task<uint64_t> FlatMapStructEncodingColumnReader<T>::co_skip(
   numValues = co_await ColumnReader::co_skip(numValues);
 
   // skip every single node
+  std::vector<folly::coro::Task<void>> tasks;
+  tasks.reserve(keyNodes_.size());
   for (auto& node : keyNodes_) {
-    if (node) {
-      node->skip(numValues);
-    }
+    tasks.push_back(node->co_skip(numValues));
   }
+  co_await folly::coro::collectAllRange(std::move(tasks));
 
   co_return numValues;
 }
