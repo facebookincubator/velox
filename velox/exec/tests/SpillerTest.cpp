@@ -227,7 +227,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     VELOX_ASSERT_THROW(spiller_->spill(0, nullptr), "Unexpected spiller type");
     VELOX_ASSERT_THROW(
         spiller_->setPartitionsSpilled({}), "Unexpected spiller type");
-    spiller_->finalizeSpill();
+    auto spillPartition = spiller_->finishSpill();
     ASSERT_TRUE(spiller_->finalized());
     ASSERT_EQ(rowContainer_->numRows(), 0);
     ASSERT_EQ(numPartitions_, spiller_->stats().spilledPartitions);
@@ -241,7 +241,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         spiller_->spill(0, nullptr), "Spiller has been finalize");
     VELOX_ASSERT_THROW(spiller_->spill(RowContainerIterator{}), "");
 
-    verifySortedSpillData(outputBatchSize);
+    verifySortedSpillData(&spillPartition, outputBatchSize);
 
     stats = spiller_->stats();
     ASSERT_EQ(stats.spilledFiles, spilledFileSet.size());
@@ -543,14 +543,17 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     }
   }
 
-  void verifySortedSpillData(int32_t outputBatchSize = 0) {
+  void verifySortedSpillData(
+      SpillPartition* spillPartition,
+      int32_t outputBatchSize = 0) {
     ASSERT_EQ(numPartitions_, 1);
-    if (!spiller_->isSpilled(0)) {
-      return;
-    }
+    ASSERT_TRUE(spiller_->isSpilled(0));
+
     // We make a merge reader that merges the spill files and the rows that
     // are still in the RowContainer.
-    auto merge = spiller_->startMerge();
+    auto merge = spillPartition->createOrderedReader();
+    ASSERT_TRUE(merge != nullptr);
+    ASSERT_TRUE(spillPartition->createOrderedReader() == nullptr);
 
     // We read the spilled data back and check that it matches the sorted
     // order of the partition.
@@ -716,8 +719,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       setupSpiller(targetFileSize, 0, 0, false);
       // Can't append without marking a partition as spilling.
       VELOX_ASSERT_THROW(spiller_->spill(0, rowVector_), "");
-      // Can't create sorted stream reader from non-sorted spiller.
-      VELOX_ASSERT_THROW(spiller_->startMerge(), "");
 
       splitByPartition(rowVector_, spillHashFunction, inputsByPartition);
       if (type_ == Spiller::Type::kHashJoinProbe) {
@@ -846,7 +847,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       const int partition = spillPartitionEntry.first.partitionNumber();
       ASSERT_EQ(
           hashBits_.begin(), spillPartitionEntry.first.partitionBitOffset());
-      auto reader = spillPartitionEntry.second->createReader();
+      auto reader = spillPartitionEntry.second->createUnorderedReader();
       if (type_ == Spiller::Type::kHashJoinProbe) {
         // For hash probe type, we append each input vector as one batch in
         // spill file so that we can do one-to-one comparison.
@@ -903,6 +904,9 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         type_ == Spiller::Type::kHashJoinBuild ||
         type_ == Spiller::Type::kHashJoinProbe);
 
+    if (numPartitions_ > 0) {
+      VELOX_ASSERT_THROW(spiller_->finishSpill(), "");
+    }
     SpillPartitionSet spillPartitionSet;
     spiller_->finishSpill(spillPartitionSet);
     VELOX_ASSERT_THROW(
@@ -915,7 +919,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       const int partition = spillPartitionEntry.first.partitionNumber();
       ASSERT_EQ(
           hashBits_.begin(), spillPartitionEntry.first.partitionBitOffset());
-      auto reader = spillPartitionEntry.second->createReader();
+      auto reader = spillPartitionEntry.second->createUnorderedReader();
       if (type_ == Spiller::Type::kHashJoinProbe) {
         // For hash probe type, we append each input vector as one batch in
         // spill file so that we can do one-to-one comparison.
@@ -1092,9 +1096,11 @@ TEST_P(AllTypes, nonSortedSpillFunctions) {
     }
     spiller_->spill();
     ASSERT_FALSE(spiller_->finalized());
-    spiller_->finalizeSpill();
+    SpillPartitionSet spillPartitionSet;
+    spiller_->finishSpill(spillPartitionSet);
     ASSERT_TRUE(spiller_->finalized());
-    verifySortedSpillData();
+    ASSERT_EQ(spillPartitionSet.size(), 1);
+    verifySortedSpillData(spillPartitionSet.begin()->second.get());
     return;
   }
   testNonSortedSpill(1, 1000, 1, 1);
@@ -1251,15 +1257,13 @@ TEST_P(AggregationOutputOnly, basic) {
     spiller_->spill(rowIter);
     ASSERT_EQ(rowContainer_->numRows(), numRows);
     rowContainer_->clear();
-    VELOX_ASSERT_THROW(
-        spiller_->startMerge(), "Spiller hasn't been finalized yet");
 
     rowContainer_->clear();
-    spiller_->finalizeSpill();
-    VELOX_ASSERT_THROW(spiller_->finalizeSpill(), "Spiller has been finalized");
+    auto spillPartition = spiller_->finishSpill();
+    ASSERT_TRUE(spiller_->finalized());
 
     const int expectedNumSpilledRows = numRows - numListedRows;
-    auto merge = spiller_->startMerge();
+    auto merge = spillPartition.createOrderedReader();
     if (expectedNumSpilledRows == 0) {
       ASSERT_TRUE(merge == nullptr);
     } else {
@@ -1273,7 +1277,6 @@ TEST_P(AggregationOutputOnly, basic) {
         stream->pop();
       }
     }
-    ASSERT_TRUE(spiller_->startMerge() == nullptr);
 
     const auto stats = spiller_->stats();
     if (expectedNumSpilledRows == 0) {
