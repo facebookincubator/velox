@@ -87,6 +87,16 @@ class KeyNode {
       uint64_t nonNullMaps,
       const uint64_t* FOLLY_NULLABLE nulls);
 
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<void> co_loadAsChild(
+      VectorPtr& vec,
+      uint64_t numValues,
+      uint64_t nonNullMaps,
+      const uint64_t* FOLLY_NULLABLE nulls);
+
+#endif // FOLLY_HAS_COROUTINES
+
   const uint64_t* FOLLY_NULLABLE mergeNulls(
       uint64_t numValues,
       BufferPtr& mergedNulls,
