@@ -123,7 +123,7 @@ void HashStringAllocator::freeToPool(void* ptr, size_t size) {
 }
 
 // static
-void HashStringAllocator::prepareRead(const Header* begin, ByteStream& stream) {
+ByteInputStream HashStringAllocator::prepareRead(const Header* begin) {
   std::vector<ByteRange> ranges;
   auto header = const_cast<Header*>(begin);
   for (;;) {
@@ -134,7 +134,7 @@ void HashStringAllocator::prepareRead(const Header* begin, ByteStream& stream) {
     }
     header = header->nextContinued();
   }
-  stream.resetInput(std::move(ranges));
+  return ByteInputStream(std::move(ranges));
 }
 
 HashStringAllocator::Position HashStringAllocator::newWrite(
@@ -289,8 +289,7 @@ StringView HashStringAllocator::contiguousString(
     return view;
   }
 
-  ByteStream stream;
-  prepareRead(headerOf(view.data()), stream);
+  auto stream = prepareRead(headerOf(view.data()));
   storage.resize(view.size());
   stream.readBytes(storage.data(), view.size());
   return StringView(storage);
@@ -325,7 +324,7 @@ void HashStringAllocator::removeFromFreeList(Header* header) {
 HashStringAllocator::Header* FOLLY_NULLABLE
 HashStringAllocator::allocate(int32_t size, bool exactSize) {
   if (size > kMaxAlloc && exactSize) {
-    VELOX_CHECK(size <= Header::kSizeMask);
+    VELOX_CHECK_LE(size, Header::kSizeMask);
     auto header =
         reinterpret_cast<Header*>(allocateFromPool(size + sizeof(Header)));
     new (header) Header(size);
@@ -518,6 +517,77 @@ void HashStringAllocator::ensureAvailable(int32_t bytes, Position& position) {
   position = finishWrite(stream, 0).first;
 }
 
+inline bool HashStringAllocator::storeStringFast(
+    const char* bytes,
+    int32_t numBytes,
+    char* destination) {
+  auto roundedBytes = std::max(numBytes, kMinAlloc);
+  Header* header = nullptr;
+  if (free_[kNumFreeLists - 1].empty()) {
+    if (roundedBytes >= kMaxAlloc) {
+      return false;
+    }
+    auto index = freeListIndex(roundedBytes);
+    auto available = bits::findFirstBit(freeNonEmpty_, index, kNumFreeLists);
+    if (available < 0) {
+      return false;
+    }
+    header = allocateFromFreeList(roundedBytes, true, true, available);
+    VELOX_CHECK_NOT_NULL(header);
+  } else {
+    auto& freeList = free_[kNumFreeLists - 1];
+    header = headerOf(freeList.next());
+    const auto spaceTaken = roundedBytes + sizeof(Header);
+    if (spaceTaken > header->size()) {
+      return false;
+    }
+    if (header->size() - spaceTaken > kMaxAlloc) {
+      // The entry after allocation stays in the largest free list.
+      // The size at the end of the block is changed in place.
+      reinterpret_cast<int32_t*>(header->end())[-1] -= spaceTaken;
+      auto freeHeader = new (header->begin() + roundedBytes)
+          Header(header->size() - spaceTaken);
+      freeHeader->setFree();
+      header->clearFree();
+      memcpy(freeHeader->begin(), header->begin(), sizeof(CompactDoubleList));
+      freeList.nextMoved(
+          reinterpret_cast<CompactDoubleList*>(freeHeader->begin()));
+      header->setSize(roundedBytes);
+      freeBytes_ -= spaceTaken;
+      cumulativeBytes_ += roundedBytes;
+    } else {
+      header =
+          allocateFromFreeList(roundedBytes, true, true, kNumFreeLists - 1);
+      if (!header) {
+        return false;
+      }
+    }
+  }
+  simd::memcpy(header->begin(), bytes, numBytes);
+  *reinterpret_cast<StringView*>(destination) =
+      StringView(reinterpret_cast<char*>(header->begin()), numBytes);
+  return true;
+}
+
+void HashStringAllocator::copyMultipartNoInline(
+    char* FOLLY_NONNULL group,
+    int32_t offset) {
+  auto string = reinterpret_cast<StringView*>(group + offset);
+  const auto numBytes = string->size();
+  if (storeStringFast(string->data(), numBytes, group + offset)) {
+    return;
+  }
+  // Write the string as non-contiguous chunks.
+  ByteStream stream(this, false, false);
+  auto position = newWrite(stream, numBytes);
+  stream.appendStringView(*string);
+  finishWrite(stream, 0);
+
+  // The stringView has a pointer to the first byte and the total
+  // size. Read with contiguousString().
+  *string = StringView(reinterpret_cast<char*>(position.position), numBytes);
+}
+
 std::string HashStringAllocator::toString() const {
   std::ostringstream out;
 
@@ -624,6 +694,9 @@ int64_t HashStringAllocator::checkConsistency() const {
     VELOX_CHECK_EQ(hasData, listNonEmpty);
     for (auto free = free_[i].next(); free != &free_[i]; free = free->next()) {
       ++numInFreeList;
+      VELOX_CHECK(
+          free->next()->previous() == free,
+          "free list previous link inconsistent");
       auto size = headerOf(free)->size();
       VELOX_CHECK_GE(size, kMinAlloc);
       if (size - kMinAlloc < kNumFreeLists - 1) {
@@ -649,33 +722,4 @@ void HashStringAllocator::checkEmpty() const {
   VELOX_CHECK_EQ(0, checkConsistency());
 }
 
-void HashStringAllocator::copy(char* FOLLY_NONNULL group, int32_t offset) {
-  StringView* string = reinterpret_cast<StringView*>(group + offset);
-  if (string->isInline()) {
-    return;
-  }
-  auto data = pool_.allocateFixed(string->size());
-  memcpy(data, string->data(), string->size());
-  *string = StringView(data, string->size());
-}
-
-void HashStringAllocator::copyMultipart(
-    char* FOLLY_NONNULL group,
-    int32_t offset) {
-  auto string = reinterpret_cast<StringView*>(group + offset);
-  if (string->isInline()) {
-    return;
-  }
-  auto numBytes = string->size();
-
-  // Write the string as non-contiguous chunks.
-  ByteStream stream(this, false, false);
-  auto position = newWrite(stream, numBytes);
-  stream.appendStringPiece(folly::StringPiece(string->data(), numBytes));
-  finishWrite(stream, 0);
-
-  // The stringView has a pointer to the first byte and the total
-  // size. Read with contiguousString().
-  *string = StringView(reinterpret_cast<char*>(position.position), numBytes);
-}
 } // namespace facebook::velox

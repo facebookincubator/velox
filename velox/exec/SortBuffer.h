@@ -34,7 +34,6 @@ class SortBuffer {
       const RowTypePtr& input,
       const std::vector<column_index_t>& sortColumnIndices,
       const std::vector<CompareFlags>& sortCompareFlags,
-      uint32_t outputBatchSize,
       velox::memory::MemoryPool* pool,
       tsan_atomic<bool>* nonReclaimableSection,
       uint32_t* numSpillRuns,
@@ -50,18 +49,15 @@ class SortBuffer {
   void noMoreInput();
 
   /// Returns the sorted output rows in batch.
-  RowVectorPtr getOutput();
+  RowVectorPtr getOutput(uint32_t maxOutputRows);
 
   /// Indicates if this sort buffer can spill or not.
   bool canSpill() const {
     return spillConfig_ != nullptr;
   }
 
-  /// Invoked to spill from 'data_' to disk with specified targets.
-  ///
-  /// NOTE: if either 'targetRows' or 'targetBytes' is zero, then we spill all
-  /// the rows from 'data_'.
-  void spill(int64_t targetRows, int64_t targetBytes);
+  /// Invoked to spill all the rows from 'data_'.
+  void spill();
 
   memory::MemoryPool* pool() const {
     return pool_;
@@ -75,18 +71,19 @@ class SortBuffer {
     return spiller_->stats();
   }
 
+  std::optional<uint64_t> estimateOutputRowSize() const;
+
  private:
   // Ensures there is sufficient memory reserved to process 'input'.
   void ensureInputFits(const VectorPtr& input);
+  void updateEstimatedOutputRowSize();
   // Invoked to initialize or reset the reusable output buffer to get output.
-  void prepareOutput();
+  void prepareOutput(uint32_t maxOutputRows);
   void getOutputWithoutSpill();
   void getOutputWithSpill();
 
   const RowTypePtr input_;
   const std::vector<CompareFlags> sortCompareFlags_;
-  // Maximum number of rows to return in one output batch.
-  const uint32_t outputBatchSize_;
   velox::memory::MemoryPool* const pool_;
   // The flag is passed from the associated operator such as OrderBy or
   // TableWriter to indicate if this sort buffer object is under non-reclaimable
@@ -128,6 +125,9 @@ class SortBuffer {
 
   // Reusable output vector.
   RowVectorPtr output_;
+  // Estimated size of a single output row by using the max
+  // 'data_->estimateRowSize()' across all accumulated data set.
+  std::optional<uint64_t> estimatedOutputRowSize_{};
   // The number of rows that has been returned.
   size_t numOutputRows_{0};
 };

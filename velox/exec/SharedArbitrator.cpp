@@ -152,6 +152,7 @@ void SharedArbitrator::reserveMemory(MemoryPool* pool, uint64_t /*unused*/) {
   const int64_t bytesToReserve =
       std::min<int64_t>(maxGrowBytes(*pool), memoryPoolInitCapacity_);
   std::lock_guard<std::mutex> l(mutex_);
+  ++numReserves_;
   if (running_) {
     // NOTE: if there is a running memory arbitration, then we shall skip
     // reserving the free memory for the newly created memory pool but let it
@@ -164,6 +165,7 @@ void SharedArbitrator::reserveMemory(MemoryPool* pool, uint64_t /*unused*/) {
 
 void SharedArbitrator::releaseMemory(MemoryPool* pool) {
   std::lock_guard<std::mutex> l(mutex_);
+  ++numReleases_;
   const uint64_t freedBytes = pool->shrink(0);
   incrementFreeCapacityLocked(freedBytes);
 }
@@ -499,6 +501,8 @@ MemoryArbitrator::Stats SharedArbitrator::statsLocked() const {
   stats.freeCapacityBytes = freeCapacity_;
   stats.reclaimTimeUs = reclaimTimeUs_;
   stats.numNonReclaimableAttempts = numNonReclaimableAttempts_;
+  stats.numReserves = numReserves_;
+  stats.numReleases = numReleases_;
   return stats;
 }
 

@@ -52,6 +52,12 @@ class CastExprTest : public functions::test::CastBaseTest {
         std::make_unique<TestingDictionaryFunction>());
   }
 
+  void setLegacyCast(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kLegacyCast, std::to_string(value)},
+    });
+  }
+
   void setCastIntByTruncate(bool value) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kCastToIntByTruncate, std::to_string(value)},
@@ -533,6 +539,7 @@ TEST_F(CastExprTest, stringToTimestamp) {
 }
 
 TEST_F(CastExprTest, timestampToString) {
+  setLegacyCast(false);
   testCast<Timestamp, std::string>(
       "string",
       {
@@ -546,19 +553,43 @@ TEST_F(CastExprTest, timestampToString) {
           Timestamp(946729316, 123),
           Timestamp(946729316, 129900000),
           Timestamp(7266, 0),
+          Timestamp(-50049331200, 0),
+          Timestamp(253405036800, 0),
+          Timestamp(-62480037600, 0),
           std::nullopt,
       },
       {
-          "1940-01-02T00:00:00.000",
-          "1969-12-31T21:58:54.000",
-          "1970-01-01T00:00:00.000",
-          "2000-01-01T00:00:00.000",
-          "2269-12-29T00:00:00.000",
-          "4969-12-04T00:00:00.000",
+          "1940-01-02 00:00:00.000",
+          "1969-12-31 21:58:54.000",
+          "1970-01-01 00:00:00.000",
+          "2000-01-01 00:00:00.000",
+          "2269-12-29 00:00:00.000",
+          "4969-12-04 00:00:00.000",
+          "2000-01-01 12:21:56.000",
+          "2000-01-01 12:21:56.000",
+          "2000-01-01 12:21:56.129",
+          "1970-01-01 02:01:06.000",
+          "0384-01-01 08:00:00.000",
+          "10000-02-01 16:00:00.000",
+          "-0010-02-01 10:00:00.000",
+          std::nullopt,
+      });
+
+  setLegacyCast(true);
+  testCast<Timestamp, std::string>(
+      "string",
+      {
+          Timestamp(946729316, 123),
+          Timestamp(-50049331200, 0),
+          Timestamp(253405036800, 0),
+          Timestamp(-62480037600, 0),
+          std::nullopt,
+      },
+      {
           "2000-01-01T12:21:56.000",
-          "2000-01-01T12:21:56.000",
-          "2000-01-01T12:21:56.129",
-          "1970-01-01T02:01:06.000",
+          "384-01-01T08:00:00.000",
+          "10000-02-01T16:00:00.000",
+          "-10-02-01T10:00:00.000",
           std::nullopt,
       });
 }

@@ -16,8 +16,8 @@
 
 #pragma once
 
+#include "folly/Executor.h"
 #include "folly/synchronization/Baton.h"
-#include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/dwrf/reader/SelectiveDwrfReader.h"
 
@@ -55,15 +55,15 @@ class DwrfRowReader : public StrideIndexProvider,
   }
 
   std::shared_ptr<const dwio::common::TypeWithId> getSelectedType() const {
-    if (!selectedSchema) {
-      selectedSchema = columnSelector_->buildSelected();
+    if (!selectedSchema_) {
+      selectedSchema_ = columnSelector_->buildSelected();
     }
 
-    return selectedSchema;
+    return selectedSchema_;
   }
 
   uint64_t getRowNumber() const {
-    return previousRow;
+    return previousRow_;
   }
 
   uint64_t seekToRow(uint64_t rowNumber);
@@ -71,7 +71,7 @@ class DwrfRowReader : public StrideIndexProvider,
   uint64_t skipRows(uint64_t numberOfRowsToSkip);
 
   uint32_t getCurrentStripe() const {
-    return currentStripe;
+    return currentStripe_;
   }
 
   uint64_t getStrideIndex() const override {
@@ -132,21 +132,23 @@ class DwrfRowReader : public StrideIndexProvider,
   FetchResult prefetch(uint32_t stripeToFetch);
 
   // footer
-  std::vector<uint64_t> firstRowOfStripe;
-  mutable std::shared_ptr<const dwio::common::TypeWithId> selectedSchema;
+  std::vector<uint64_t> firstRowOfStripe_;
+  mutable std::shared_ptr<const dwio::common::TypeWithId> selectedSchema_;
 
   // reading state
-  uint64_t previousRow;
-  uint32_t firstStripe;
-  uint32_t currentStripe;
-  uint32_t lastStripe; // the stripe AFTER the last one
-  uint64_t currentRowInStripe;
-  bool newStripeReadyForRead;
-  uint64_t rowsInCurrentStripe;
+  uint64_t previousRow_;
+  uint32_t firstStripe_;
+  uint32_t currentStripe_;
+  // The the stripe AFTER the last one that should be read. e.g. if the highest
+  // stripe in the RowReader's bounds is 3, then stripeCeiling_ is 4.
+  uint32_t stripeCeiling_;
+  uint64_t currentRowInStripe_;
+  bool newStripeReadyForRead_;
+  uint64_t rowsInCurrentStripe_;
   uint64_t strideIndex_;
   std::shared_ptr<StripeDictionaryCache> stripeDictionaryCache_;
   dwio::common::RowReaderOptions options_;
-  std::unique_ptr<dwio::common::ExecutorBarrier> executorBarrier_;
+  std::shared_ptr<folly::Executor> executor_;
 
   struct PrefetchedStripeState {
     bool preloaded;
@@ -197,7 +199,7 @@ class DwrfRowReader : public StrideIndexProvider,
   // internal methods
 
   std::optional<size_t> estimatedRowSizeHelper(
-      const FooterWrapper& footer,
+      const FooterWrapper& fileFooter,
       const dwio::common::Statistics& stats,
       uint32_t nodeId) const;
 
@@ -206,7 +208,7 @@ class DwrfRowReader : public StrideIndexProvider,
   }
 
   bool isEmptyFile() const {
-    return (lastStripe == 0);
+    return (stripeCeiling_ == firstStripe_);
   }
 
   void checkSkipStrides(uint64_t strideSize);
@@ -299,9 +301,9 @@ class DwrfReader : public dwio::common::Reader {
   }
 
   std::optional<uint64_t> numberOfRows() const override {
-    auto& footer = readerBase_->getFooter();
-    if (footer.hasNumberOfRows()) {
-      return footer.numberOfRows();
+    auto& fileFooter = readerBase_->getFooter();
+    if (fileFooter.hasNumberOfRows()) {
+      return fileFooter.numberOfRows();
     }
     return std::nullopt;
   }

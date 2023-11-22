@@ -36,10 +36,10 @@ void JoinSpillInputBenchmarkBase::setUp() {
       exec::Spiller::Type::kHashJoinProbe,
       rowType_,
       HashBitRange{29, 29},
-      fmt::format("{}/{}", spillDir_, FLAGS_spiller_benchmark_name),
+      [&]() -> const std::string& { return spillDir_; },
+      FLAGS_spiller_benchmark_name,
       FLAGS_spiller_benchmark_max_spill_file_size,
       FLAGS_spiller_benchmark_write_buffer_size,
-      FLAGS_spiller_benchmark_min_spill_run_size,
       stringToCompressionKind(FLAGS_spiller_benchmark_compression_kind),
       memory::spillMemoryPool(),
       executor_.get());

@@ -35,11 +35,17 @@ DEFINE_string(
 DEFINE_string(
     spiller_benchmark_path,
     "",
-    "The file directory path for spilling");
+    "The directory path for spilling. e.g. with '/path/to/dir' provided, spill "
+    "file like '/path/to/dir/SpillerBenchmarkTest-spill-0-0-0' will be "
+    "created.");
 DEFINE_string(
     spiller_benchmark_compression_kind,
     "none",
     "The compression kind to compress spill rows before write to disk");
+DEFINE_string(
+    spiller_benchmark_spiller_type,
+    "AGGREGATE_INPUT",
+    "The spiller type name.");
 DEFINE_uint32(
     spiller_benchmark_num_spill_vectors,
     10'000,

@@ -244,7 +244,9 @@ class E2EWriterTest : public testing::Test {
       int32_t minSpillableReservationPct,
       int32_t spillableReservationGrowthPct,
       uint64_t writerFlushThresholdSize = 0) {
+    static const std::string emptySpillFolder = "";
     return common::SpillConfig(
+        [&]() -> const std::string& { return emptySpillFolder; },
         "fakeSpillConfig",
         0,
         0,
@@ -1632,10 +1634,13 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
     ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
     if (enableReclaim) {
       ASSERT_LT(writerPool->capacity(), oldCapacity);
-      static_cast<memory::MemoryPoolImpl*>(writerPool.get())
+      ASSERT_GT(stats.reclaimedBytes, 0);
+      ASSERT_GT(stats.reclaimExecTimeUs, 0);
+      dynamic_cast<memory::MemoryPoolImpl*>(writerPool.get())
           ->testingSetCapacity(oldCapacity);
     } else {
       ASSERT_EQ(writerPool->capacity(), oldCapacity);
+      ASSERT_EQ(stats, memory::MemoryReclaimer::Stats{});
     }
 
     // Expect a throw if we don't set the non-reclaimable section.
@@ -1650,7 +1655,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
     if (!enableReclaim) {
       ASSERT_FALSE(reservationCalled);
       ASSERT_EQ(writerPool->reclaim(1L << 30, stats), 0);
-      ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
+      ASSERT_EQ(stats, memory::MemoryReclaimer::Stats{});
     } else {
       ASSERT_TRUE(reservationCalled);
       writer->testingNonReclaimableSection() = true;
@@ -1660,6 +1665,8 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
       stats.numNonReclaimableAttempts = 0;
       ASSERT_GT(writerPool->reclaim(1L << 30, stats), 0);
       ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
+      ASSERT_GT(stats.reclaimedBytes, 0);
+      ASSERT_GT(stats.reclaimExecTimeUs, 0);
     }
     writer->close();
   }
@@ -1812,6 +1819,7 @@ TEST_F(E2EWriterTest, memoryReclaimAfterClose) {
 
     auto writer =
         std::make_unique<dwrf::Writer>(std::move(sink), options, dwrfPool);
+    ASSERT_EQ(writer->state(), dwio::common::Writer::State::kRunning);
     ASSERT_EQ(writer->canReclaim(), testData.canReclaim);
 
     writer->flush();
@@ -1826,15 +1834,16 @@ TEST_F(E2EWriterTest, memoryReclaimAfterClose) {
 
     if (testData.abort) {
       writer->abort();
-      writer->abort();
+      VELOX_ASSERT_THROW(writer->abort(), "Writer is not running: ABORTED");
+      VELOX_ASSERT_THROW(writer->close(), "Writer is not running: ABORTED");
     } else {
       writer->close();
-      writer->close();
+      VELOX_ASSERT_THROW(writer->abort(), "Writer is not running: CLOSED");
+      VELOX_ASSERT_THROW(writer->close(), "Writer is not running: CLOSED");
     }
     // Verify append or write after close or abort will fail.
-    VELOX_ASSERT_THROW(
-        writer->write(vectors[0]), "write not allowed on a closed writer");
-    VELOX_ASSERT_THROW(writer->flush(), "flush not allowed on a closed writer");
+    VELOX_ASSERT_THROW(writer->write(vectors[0]), "Writer is not running");
+    VELOX_ASSERT_THROW(writer->flush(), "Writer is not running");
 
     memory::MemoryReclaimer::Stats stats;
     const auto oldCapacity = writerPool->capacity();
@@ -1844,6 +1853,9 @@ TEST_F(E2EWriterTest, memoryReclaimAfterClose) {
     } else {
       ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
     }
+    // Reclaim does not happen as the writer is either aborted or closed.
+    ASSERT_EQ(stats.reclaimExecTimeUs, 0);
+    ASSERT_EQ(stats.reclaimedBytes, 0);
   }
 }
 
@@ -1898,9 +1910,11 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimDuringInit) {
             ASSERT_GE(reclaimableBytes, 0);
             // We can't reclaim during writer init.
             ASSERT_EQ(stats.numNonReclaimableAttempts, 1);
+            ASSERT_EQ(stats.reclaimedBytes, 0);
+            ASSERT_EQ(stats.reclaimExecTimeUs, 0);
           } else {
             ASSERT_EQ(reclaimableBytes, 0);
-            ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
+            ASSERT_EQ(stats, memory::MemoryReclaimer::Stats{});
           }
         }));
 
@@ -1983,11 +1997,16 @@ TEST_F(E2EWriterTest, memoryReclaimThreshold) {
           *writerPool, reclaimableBytes));
       ASSERT_GT(reclaimableBytes, 0);
       ASSERT_GT(writerPool->reclaim(1L << 30, stats), 0);
+      ASSERT_GT(stats.reclaimExecTimeUs, 0);
+      ASSERT_GT(stats.reclaimedBytes, 0);
     } else {
       ASSERT_FALSE(writerPool->reclaimer()->reclaimableBytes(
           *writerPool, reclaimableBytes));
       ASSERT_EQ(reclaimableBytes, 0);
       ASSERT_EQ(writerPool->reclaim(1L << 30, stats), 0);
+      ASSERT_GT(stats.numNonReclaimableAttempts, 0);
+      ASSERT_EQ(stats.reclaimExecTimeUs, 0);
+      ASSERT_EQ(stats.reclaimedBytes, 0);
     }
     writer->flush();
     writer->close();

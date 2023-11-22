@@ -16,6 +16,7 @@
 #include "velox/functions/sparksql/Register.h"
 
 #include "velox/expression/RegisterSpecialForm.h"
+#include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
@@ -35,6 +36,8 @@
 #include "velox/functions/sparksql/RegisterCompare.h"
 #include "velox/functions/sparksql/Size.h"
 #include "velox/functions/sparksql/String.h"
+#include "velox/functions/sparksql/UnscaledValueFunction.h"
+#include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
@@ -76,6 +79,9 @@ namespace sparksql {
 
 void registerAllSpecialFormGeneralFunctions() {
   exec::registerFunctionCallToSpecialForms();
+  exec::registerFunctionCallToSpecialForm(
+      MakeDecimalCallToSpecialForm::kMakeDecimal,
+      std::make_unique<MakeDecimalCallToSpecialForm>());
 }
 
 namespace {
@@ -250,13 +256,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
 
-  registerFunction<DayFunction, int64_t, Timestamp>(
+  registerFunction<DayFunction, int32_t, Date>(
       {prefix + "day", prefix + "dayofmonth"});
-  registerFunction<DayFunction, int64_t, Date>(
-      {prefix + "day", prefix + "dayofmonth"});
-  registerFunction<DayOfYearFunction, int64_t, Timestamp>(
-      {prefix + "doy", prefix + "dayofyear"});
-  registerFunction<DayOfYearFunction, int64_t, Date>(
+  registerFunction<DayOfYearFunction, int32_t, Date>(
       {prefix + "doy", prefix + "dayofyear"});
 
   registerFunction<DayOfWeekFunction, int32_t, Timestamp>(
@@ -264,11 +266,21 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<DayOfWeekFunction, int32_t, Date>(
       {prefix + "dow", prefix + "dayofweek"});
 
+  registerFunction<QuarterFunction, int32_t, Date>({prefix + "quarter"});
+
+  registerFunction<MonthFunction, int32_t, Date>({prefix + "month"});
+
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
       {prefix + "might_contain"});
 
   registerArrayMinMaxFunctions(prefix);
+
+  // Register decimal vector functions.
+  exec::registerVectorFunction(
+      prefix + "unscaled_value",
+      unscaledValueSignatures(),
+      makeUnscaledValue());
 }
 
 } // namespace sparksql

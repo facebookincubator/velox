@@ -291,7 +291,7 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
 
 TEST_F(DateTimeFunctionsTest, dayOfYear) {
   const auto day = [&](std::optional<int32_t> date) {
-    return evaluateOnce<int64_t, int32_t>("dayofyear(c0)", {date}, {DATE()});
+    return evaluateOnce<int32_t, int32_t>("dayofyear(c0)", {date}, {DATE()});
   };
   EXPECT_EQ(std::nullopt, day(std::nullopt));
   EXPECT_EQ(100, day(parseDate("2016-04-09")));
@@ -301,7 +301,7 @@ TEST_F(DateTimeFunctionsTest, dayOfYear) {
 
 TEST_F(DateTimeFunctionsTest, dayOfMonth) {
   const auto day = [&](std::optional<int32_t> date) {
-    return evaluateOnce<int64_t, int32_t>("dayofmonth(c0)", {date}, {DATE()});
+    return evaluateOnce<int32_t, int32_t>("dayofmonth(c0)", {date}, {DATE()});
   };
   EXPECT_EQ(std::nullopt, day(std::nullopt));
   EXPECT_EQ(30, day(parseDate("2009-07-30")));
@@ -431,5 +431,30 @@ TEST_F(DateTimeFunctionsTest, addMonths) {
       addMonths("2023-07-10", kMax),
       fmt::format("Integer overflow in add_months(2023-07-10, {})", kMax));
 }
+
+TEST_F(DateTimeFunctionsTest, monthDate) {
+  const auto month = [&](const std::string& dateString) {
+    return evaluateOnce<int32_t, int32_t>(
+        "month(c0)", {parseDate(dateString)}, {DATE()});
+  };
+
+  EXPECT_EQ(4, month("2015-04-08"));
+  EXPECT_EQ(11, month("2013-11-08"));
+  EXPECT_EQ(1, month("1987-01-08"));
+  EXPECT_EQ(8, month("1954-08-08"));
+}
+
+TEST_F(DateTimeFunctionsTest, quarterDate) {
+  const auto quarter = [&](const std::string& dateString) {
+    return evaluateOnce<int32_t, int32_t>(
+        "quarter(c0)", {parseDate(dateString)}, {DATE()});
+  };
+
+  EXPECT_EQ(2, quarter("2015-04-08"));
+  EXPECT_EQ(4, quarter("2013-11-08"));
+  EXPECT_EQ(1, quarter("1987-01-08"));
+  EXPECT_EQ(3, quarter("1954-08-08"));
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

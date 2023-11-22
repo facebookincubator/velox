@@ -24,7 +24,6 @@ SortBuffer::SortBuffer(
     const RowTypePtr& input,
     const std::vector<column_index_t>& sortColumnIndices,
     const std::vector<CompareFlags>& sortCompareFlags,
-    uint32_t outputBatchSize,
     velox::memory::MemoryPool* pool,
     tsan_atomic<bool>* nonReclaimableSection,
     uint32_t* numSpillRuns,
@@ -32,7 +31,6 @@ SortBuffer::SortBuffer(
     uint64_t spillMemoryThreshold)
     : input_(input),
       sortCompareFlags_(sortCompareFlags),
-      outputBatchSize_(outputBatchSize),
       pool_(pool),
       nonReclaimableSection_(nonReclaimableSection),
       numSpillRuns_(numSpillRuns),
@@ -41,7 +39,6 @@ SortBuffer::SortBuffer(
   VELOX_CHECK_GE(input_->size(), sortCompareFlags_.size());
   VELOX_CHECK_GT(sortCompareFlags_.size(), 0);
   VELOX_CHECK_EQ(sortColumnIndices.size(), sortCompareFlags_.size());
-  VELOX_CHECK_GT(outputBatchSize_, 0);
   VELOX_CHECK_NOT_NULL(nonReclaimableSection_);
   VELOX_CHECK_NOT_NULL(numSpillRuns_);
 
@@ -113,6 +110,7 @@ void SortBuffer::noMoreInput() {
 
   if (spiller_ == nullptr) {
     VELOX_CHECK_EQ(numInputRows_, data_->numRows());
+    updateEstimatedOutputRowSize();
     // Sort the pointers to the rows in RowContainer (data_) instead of sorting
     // the rows.
     sortedRows_.resize(numInputRows_);
@@ -132,27 +130,30 @@ void SortBuffer::noMoreInput() {
           return false;
         });
   } else {
+    // Spill the remaining in-memory state to disk if spilling has been
+    // triggered on this sort buffer. This is to simplify query OOM prevention
+    // when producing output as we don't support to spill during that stage as
+    // for now.
+    spill();
+
     // Finish spill, and we shouldn't get any rows from non-spilled partition as
     // there is only one hash partition for SortBuffer.
-    Spiller::SpillRows nonSpilledRows = spiller_->finishSpill();
+    spiller_->finalizeSpill();
     VELOX_CHECK_LE(spiller_->stats().spilledPartitions, 1);
-    VELOX_CHECK(nonSpilledRows.empty());
 
     VELOX_CHECK_NULL(spillMerger_);
-    spillMerger_ = spiller_->startMerge(0);
-    spillSources_.resize(outputBatchSize_);
-    spillSourceRows_.resize(outputBatchSize_);
+    spillMerger_ = spiller_->startMerge();
   }
 }
 
-RowVectorPtr SortBuffer::getOutput() {
+RowVectorPtr SortBuffer::getOutput(uint32_t maxOutputRows) {
   VELOX_CHECK(noMoreInput_);
 
   if (numOutputRows_ == numInputRows_) {
     return nullptr;
   }
 
-  prepareOutput();
+  prepareOutput(maxOutputRows);
   if (spiller_ != nullptr) {
     getOutputWithSpill();
   } else {
@@ -161,47 +162,39 @@ RowVectorPtr SortBuffer::getOutput() {
   return output_;
 }
 
-void SortBuffer::spill(int64_t targetRows, int64_t targetBytes) {
+void SortBuffer::spill() {
   VELOX_CHECK_NOT_NULL(
       spillConfig_, "spill config is null when SortBuffer spill is called");
-  VELOX_CHECK_GE(targetRows, 0);
-  VELOX_CHECK_GE(targetBytes, 0);
 
   // Check if sort buffer is empty or not, and skip spill if it is empty.
   if (data_->numRows() == 0) {
     return;
   }
+  updateEstimatedOutputRowSize();
 
   ++(*numSpillRuns_);
   if (spiller_ == nullptr) {
     spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kOrderBy,
         data_.get(),
-        [&](folly::Range<char**> rows) { data_->eraseRows(rows); },
         spillerStoreType_,
         data_->keyTypes().size(),
         sortCompareFlags_,
-        spillConfig_->filePath,
-        std::numeric_limits<uint64_t>::max(),
+        spillConfig_->getSpillDirPathCb,
+        spillConfig_->fileNamePrefix,
         spillConfig_->writeBufferSize,
-        spillConfig_->minSpillRunSize,
         spillConfig_->compressionKind,
         memory::spillMemoryPool(),
         spillConfig_->executor);
     VELOX_CHECK_EQ(spiller_->state().maxPartitions(), 1);
   }
 
-  spiller_->spill(targetRows, targetBytes);
+  spiller_->spill();
+  data_->clear();
+}
 
-  if (targetRows == 0 || targetBytes == 0) {
-    VELOX_CHECK_EQ(data_->numRows(), 0);
-  }
-  // TODO: support fine-grain memory recycling after row container memory
-  // compaction support. As of now, we only support releasing all the memory
-  // when we spill everything.
-  if (data_->numRows() == 0) {
-    data_->clear();
-  }
+std::optional<uint64_t> SortBuffer::estimateOutputRowSize() const {
+  return estimatedOutputRowSize_;
 }
 
 void SortBuffer::ensureInputFits(const VectorPtr& input) {
@@ -226,10 +219,7 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
   if (numRows > 0 && spillConfig_->testSpillPct &&
       (folly::hasher<uint64_t>()(++spillTestCounter_)) % 100 <=
           spillConfig_->testSpillPct) {
-    const int64_t rowsToSpill = std::max<int64_t>(1, numRows / 10);
-    spill(
-        numRows - rowsToSpill,
-        outOfLineBytes - (rowsToSpill * outOfLineBytesPerRow));
+    spill();
     return;
   }
 
@@ -237,14 +227,7 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
   const auto currentMemoryUsage = pool_->currentBytes();
   if (spillMemoryThreshold_ != 0 &&
       currentMemoryUsage > spillMemoryThreshold_) {
-    const int64_t bytesToSpill =
-        currentMemoryUsage * spillConfig_->spillableReservationGrowthPct / 100;
-    auto rowsToSpill = std::max<int64_t>(
-        1, bytesToSpill / (data_->fixedRowSize() + outOfLineBytesPerRow));
-    spill(
-        std::max<int64_t>(0, numRows - rowsToSpill),
-        std::max<int64_t>(
-            0, outOfLineBytes - (rowsToSpill * outOfLineBytesPerRow)));
+    spill();
     return;
   }
 
@@ -277,21 +260,29 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
     }
   }
 
-  // NOTE: disk spilling use the system disk spilling memory pool instead of
-  // the operator memory pool.
-  const int64_t rowsToSpill = std::max<int64_t>(
-      1, targetIncrementBytes / (data_->fixedRowSize() + outOfLineBytesPerRow));
-  spill(
-      std::max<int64_t>(0, numRows - rowsToSpill),
-      std::max<int64_t>(
-          0, outOfLineBytes - (rowsToSpill * outOfLineBytesPerRow)));
+  spill();
 }
 
-void SortBuffer::prepareOutput() {
+void SortBuffer::updateEstimatedOutputRowSize() {
+  const auto optionalRowSize = data_->estimateRowSize();
+  if (!optionalRowSize.has_value() || optionalRowSize.value() == 0) {
+    return;
+  }
+
+  const auto rowSize = optionalRowSize.value();
+  if (!estimatedOutputRowSize_.has_value()) {
+    estimatedOutputRowSize_ = rowSize;
+  } else if (rowSize > estimatedOutputRowSize_.value()) {
+    estimatedOutputRowSize_ = rowSize;
+  }
+}
+
+void SortBuffer::prepareOutput(uint32_t maxOutputRows) {
+  VELOX_CHECK_GT(maxOutputRows, 0);
   VELOX_CHECK_GT(numInputRows_, numOutputRows_);
 
   const vector_size_t batchSize =
-      std::min<vector_size_t>(numInputRows_ - numOutputRows_, outputBatchSize_);
+      std::min<vector_size_t>(numInputRows_ - numOutputRows_, maxOutputRows);
   if (output_ != nullptr) {
     VectorPtr output = std::move(output_);
     BaseVector::prepareForReuse(output, batchSize);
@@ -304,14 +295,19 @@ void SortBuffer::prepareOutput() {
   for (auto& child : output_->children()) {
     child->resize(batchSize);
   }
+
+  if (spiller_ != nullptr) {
+    spillSources_.resize(maxOutputRows);
+    spillSourceRows_.resize(maxOutputRows);
+  }
+
+  VELOX_CHECK_GT(output_->size(), 0);
+  VELOX_DCHECK_LE(output_->size(), maxOutputRows);
+  VELOX_CHECK_LE(output_->size() + numOutputRows_, numInputRows_);
 }
 
 void SortBuffer::getOutputWithoutSpill() {
-  VELOX_CHECK_GT(output_->size(), 0);
-  VELOX_DCHECK_LE(output_->size(), outputBatchSize_);
-  VELOX_CHECK_LE(output_->size() + numOutputRows_, numInputRows_);
   VELOX_DCHECK_EQ(numInputRows_, sortedRows_.size());
-
   for (const auto& columnProjection : columnMap_) {
     data_->extractColumn(
         sortedRows_.data() + numOutputRows_,
@@ -325,8 +321,6 @@ void SortBuffer::getOutputWithoutSpill() {
 void SortBuffer::getOutputWithSpill() {
   VELOX_CHECK_NOT_NULL(spillMerger_);
   VELOX_DCHECK_EQ(sortedRows_.size(), 0);
-  VELOX_DCHECK_EQ(spillSources_.size(), outputBatchSize_);
-  VELOX_DCHECK_EQ(spillSourceRows_.size(), outputBatchSize_);
 
   int32_t outputRow = 0;
   int32_t outputSize = 0;

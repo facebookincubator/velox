@@ -54,7 +54,7 @@ BaseVector::BaseVector(
 
   if (nulls_) {
     int32_t bytes = byteSize<bool>(length_);
-    VELOX_CHECK(nulls_->capacity() >= bytes);
+    VELOX_CHECK_GE(nulls_->capacity(), bytes);
     if (nulls_->size() < bytes) {
       // Set the size so that values get preserved by resize. Do not
       // set if already large enough, so that it is safe to take a
@@ -70,7 +70,7 @@ void BaseVector::ensureNullsCapacity(
     bool setNotNull) {
   auto fill = setNotNull ? bits::kNotNull : bits::kNull;
   // Ensure the size of nulls_ is always at least as large as length_.
-  auto size = std::max(minimumSize, length_);
+  auto size = std::max<vector_size_t>(minimumSize, length_);
   if (nulls_ && !nulls_->isView() && nulls_->unique()) {
     if (nulls_->capacity() < bits::nbytes(size)) {
       AlignedBuffer::reallocate<bool>(&nulls_, size, fill);
@@ -90,7 +90,7 @@ void BaseVector::ensureNullsCapacity(
       memcpy(
           newNulls->asMutable<char>(),
           nulls_->as<char>(),
-          byteSize<bool>(std::min(length_, size)));
+          byteSize<bool>(std::min<vector_size_t>(length_, size)));
     }
     nulls_ = std::move(newNulls);
     rawNulls_ = nulls_->as<uint64_t>();
@@ -254,11 +254,7 @@ std::optional<bool> BaseVector::equalValueAt(
     vector_size_t index,
     vector_size_t otherIndex,
     CompareFlags::NullHandlingMode nullHandlingMode) const {
-  const CompareFlags compareFlags = {
-      .nullsFirst = false,
-      .ascending = false,
-      .equalsOnly = true,
-      .nullHandlingMode = nullHandlingMode};
+  const CompareFlags compareFlags = CompareFlags::equality(nullHandlingMode);
   std::optional<int32_t> result =
       compare(other, index, otherIndex, compareFlags);
   if (result.has_value()) {
@@ -380,7 +376,7 @@ void BaseVector::addNulls(const uint64_t* bits, const SelectivityVector& rows) {
     return;
   }
   VELOX_CHECK(isNullsWritable());
-  VELOX_CHECK(length_ >= rows.end());
+  VELOX_CHECK_GE(length_, rows.end());
   ensureNulls();
   auto target = nulls_->asMutable<uint64_t>();
   const uint64_t* selected = rows.asRange().bits();
@@ -401,7 +397,7 @@ void BaseVector::addNulls(const SelectivityVector& nullRows) {
     return;
   }
   VELOX_CHECK(isNullsWritable());
-  VELOX_CHECK(length_ >= nullRows.end());
+  VELOX_CHECK_GE(length_, nullRows.end());
   ensureNulls();
   auto target = nulls_->asMutable<uint64_t>();
   const uint64_t* selected = nullRows.asRange().bits();
@@ -427,8 +423,8 @@ void BaseVector::clearNulls(const SelectivityVector& nonNullRows) {
   bits::orBits(
       rawNulls,
       nonNullRows.asRange().bits(),
-      std::min(length_, nonNullRows.begin()),
-      std::min(length_, nonNullRows.end()));
+      std::min<vector_size_t>(length_, nonNullRows.begin()),
+      std::min<vector_size_t>(length_, nonNullRows.end()));
   nullCount_ = std::nullopt;
 }
 

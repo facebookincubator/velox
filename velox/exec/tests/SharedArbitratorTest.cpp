@@ -20,6 +20,7 @@
 #include <re2/re2.h>
 #include <deque>
 
+#include <functional>
 #include "folly/experimental/EventCount.h"
 #include "folly/futures/Barrier.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -32,6 +33,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SharedArbitrator.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/Values.h"
@@ -313,6 +315,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     VectorFuzzer fuzzer(fuzzerOpts_, pool());
     vector_ = newVector();
     executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(32);
+    numAddedPools_ = 0;
   }
 
   void TearDown() override {
@@ -337,11 +340,28 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     memoryManager_ = std::make_unique<MemoryManager>(options);
     ASSERT_EQ(memoryManager_->arbitrator()->kind(), "SHARED");
     arbitrator_ = static_cast<SharedArbitrator*>(memoryManager_->arbitrator());
+    numAddedPools_ = 0;
   }
 
   RowVectorPtr newVector() {
     VectorFuzzer fuzzer(fuzzerOpts_, pool());
     return fuzzer.fuzzRow(rowType_);
+  }
+
+  std::vector<RowVectorPtr> newVectors(size_t vectorSize, size_t expectedSize) {
+    VectorFuzzer::Options fuzzerOpts;
+    fuzzerOpts.vectorSize = vectorSize;
+    fuzzerOpts.stringVariableLength = false;
+    fuzzerOpts.stringLength = 1024;
+    fuzzerOpts.allowLazyVector = false;
+    VectorFuzzer fuzzer(fuzzerOpts_, pool());
+    uint64_t totalSize{0};
+    std::vector<RowVectorPtr> vectors;
+    while (totalSize < expectedSize) {
+      vectors.push_back(fuzzer.fuzzInputRow(rowType_));
+      totalSize += vectors.back()->estimateFlatSize();
+    }
+    return vectors;
   }
 
   std::shared_ptr<core::QueryCtx> newQueryCtx(
@@ -359,7 +379,182 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
         configs,
         cache::AsyncDataCache::getInstance(),
         std::move(pool));
+    ++numAddedPools_;
     return queryCtx;
+  }
+
+  std::shared_ptr<Task> runHashJoinTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kJoinSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .project({"c0", "c1", "c2"})
+                  .hashJoin(
+                      {"c0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(vectors)
+                          .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                          .planNode(),
+                      "",
+                      {"c0", "c1", "c2"},
+                      core::JoinType::kInner)
+                  .planNode())
+        .assertResults(
+            "SELECT t1.c0 AS c0, t1.c1 AS c1, t1.c2 "
+            "FROM tmp t1 "
+            "JOIN tmp t2 "
+            "ON t1.c0 = t2.c0");
+  }
+
+  std::shared_ptr<Task> runAggregateTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                  .planNode())
+        .assertResults("SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
+  }
+
+  std::shared_ptr<Task> runOrderByTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .project({"c0", "c1", "c2"})
+                  .orderBy({fmt::format("{} ASC NULLS LAST", "c2")}, false)
+                  .planNode())
+        .assertResults(
+            "SELECT c0, c1, c2 "
+            "FROM tmp "
+            "ORDER BY c2 ASC NULLS LAST");
+  }
+
+  std::shared_ptr<Task> runRowNumberTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+
+    std::shared_ptr<Task> task;
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kRowNumberSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .rowNumber({"c0"}, 2, false)
+                  .project({"c0", "c1"})
+                  .planNode())
+        .assertResults(
+            "SELECT c0, c1 "
+            "FROM ("
+            " SELECT *, row_number() over (partition by c0) AS rn FROM tmp) "
+            "WHERE rn <= 2");
+  }
+
+  std::shared_ptr<Task> runTopNTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .project({"c1"})
+                  .topN({"c1 NULLS FIRST"}, 10, false)
+                  .planNode())
+        .assertResults(
+            "SELECT c1 "
+            "FROM tmp "
+            "ORDER BY c1 ASC NULLS LAST "
+            "LIMIT 10");
+  }
+
+  std::shared_ptr<Task> runWriteTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers) {
+    int numRows = std::accumulate(
+        vectors.cbegin(),
+        vectors.cend(),
+        0,
+        [](int sum, const RowVectorPtr& row) { return sum + row->size(); });
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto outputDirectory = TempDirectoryPath::create();
+    auto writerPlan =
+        PlanBuilder()
+            .values(vectors)
+            .tableWrite(outputDirectory->path)
+            .singleAggregation(
+                {},
+                {fmt::format(
+                    "sum({})", TableWriteTraits::rowCountColumnName())})
+            .planNode();
+
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .spillDirectory(spillDirectory->path)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kWriterSpillEnabled, "true")
+        // Set 0 file writer flush threshold to always trigger flush in
+        // test.
+        .config(
+            core::QueryConfig::kWriterFlushThresholdBytes,
+            folly::to<std::string>(0))
+        // Set stripe size to extreme large to avoid writer internal
+        // triggered flush.
+        .connectorConfig(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+            folly::to<std::string>("1GB"))
+        .connectorConfig(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+            folly::to<std::string>("1GB"))
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .plan(writerPlan)
+        .assertResults(fmt::format("SELECT {}", numRows));
   }
 
   static inline FakeMemoryOperatorFactory* fakeOperatorFactory_;
@@ -370,6 +565,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
   VectorFuzzer::Options fuzzerOpts_;
   RowVectorPtr vector_;
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
+  uint64_t numAddedPools_;
 };
 
 DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromOrderBy) {
@@ -662,6 +858,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
     const auto newStats = arbitrator_->stats();
     ASSERT_GT(newStats.numReclaimedBytes, oldStats.numReclaimedBytes);
     ASSERT_GT(newStats.reclaimTimeUs, oldStats.reclaimTimeUs);
+    ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
   }
 }
 
@@ -829,6 +1026,31 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromAggregation) {
     memThread.join();
     waitForAllTasksToBeDeleted();
   }
+}
+
+TEST_F(SharedArbitrationTest, reclaimFromDistinctAggregation) {
+  const uint64_t maxQueryCapacity = 20L << 20;
+  std::vector<RowVectorPtr> vectors = newVectors(1024, maxQueryCapacity * 2);
+  createDuckDbTable(vectors);
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  core::PlanNodeId aggrNodeId;
+  std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(maxQueryCapacity);
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .spillDirectory(spillDirectory->path)
+                  .config(core::QueryConfig::kSpillEnabled, "true")
+                  .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+                  .queryCtx(queryCtx)
+                  .plan(PlanBuilder()
+                            .values(vectors)
+                            .singleAggregation({"c0"}, {})
+                            .capturePlanNodeId(aggrNodeId)
+                            .planNode())
+                  .assertResults("SELECT distinct c0 FROM tmp");
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  auto& planStats = taskStats.at(aggrNodeId);
+  ASSERT_GT(planStats.spilledBytes, 0);
+  task.reset();
+  waitForAllTasksToBeDeleted();
 }
 
 DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromAggregationOnNoMoreInput) {
@@ -1130,6 +1352,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
     const auto newStats = arbitrator_->stats();
     ASSERT_GT(newStats.numReclaimedBytes, oldStats.numReclaimedBytes);
     ASSERT_GT(newStats.reclaimTimeUs, oldStats.reclaimTimeUs);
+    ASSERT_EQ(newStats.numReserves, numAddedPools_);
   }
 }
 
@@ -1421,6 +1644,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
     const auto newStats = arbitrator_->stats();
     ASSERT_GT(newStats.numReclaimedBytes, oldStats.numReclaimedBytes);
     ASSERT_GT(newStats.reclaimTimeUs, oldStats.reclaimTimeUs);
+    ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
   }
 }
 
@@ -1753,6 +1977,7 @@ DEBUG_ONLY_TEST_F(
   memThread.join();
   waitForAllTasksToBeDeleted();
   ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 2);
+  ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
 }
 
 DEBUG_ONLY_TEST_F(
@@ -2652,6 +2877,84 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, tableFileWriteError) {
   waitForAllTasksToBeDeleted();
 }
 
+DEBUG_ONLY_TEST_F(SharedArbitrationTest, runtimeStats) {
+  const uint64_t memoryCapacity = 128 * MB;
+  setupMemory(memoryCapacity);
+  fuzzerOpts_.vectorSize = 1000;
+  fuzzerOpts_.stringLength = 1024;
+  fuzzerOpts_.stringVariableLength = false;
+  VectorFuzzer fuzzer(fuzzerOpts_, pool());
+  std::vector<RowVectorPtr> vectors;
+  int numRows{0};
+  for (int i = 0; i < 10; ++i) {
+    vectors.push_back(fuzzer.fuzzInputRow(rowType_));
+    numRows += vectors.back()->size();
+  }
+
+  std::atomic<int> outputCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(const facebook::velox::exec::Values*)>(
+          ([&](const facebook::velox::exec::Values* values) {
+            if (outputCount++ != 5) {
+              return;
+            }
+            const auto fakeAllocationSize =
+                arbitrator_->stats().maxCapacityBytes -
+                values->pool()->capacity() + 1;
+            void* buffer = values->pool()->allocate(fakeAllocationSize);
+            values->pool()->free(buffer, fakeAllocationSize);
+          })));
+
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto queryCtx = newQueryCtx(memoryCapacity);
+  auto writerPlan =
+      PlanBuilder()
+          .values(vectors)
+          .tableWrite(outputDirectory->path)
+          .singleAggregation(
+              {},
+              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
+          .planNode();
+  {
+    const std::shared_ptr<Task> task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .queryCtx(queryCtx)
+            .maxDrivers(1)
+            .spillDirectory(spillDirectory->path)
+            .config(core::QueryConfig::kSpillEnabled, "true")
+            .config(core::QueryConfig::kWriterSpillEnabled, "true")
+            // Set 0 file writer flush threshold to always trigger flush in
+            // test.
+            .config(
+                core::QueryConfig::kWriterFlushThresholdBytes,
+                folly::to<std::string>(0))
+            // Set stripe size to extreme large to avoid writer internal
+            // triggered flush.
+            .connectorConfig(
+                kHiveConnectorId,
+                connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+                folly::to<std::string>("1GB"))
+            .connectorConfig(
+                kHiveConnectorId,
+                connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+                folly::to<std::string>("1GB"))
+            .plan(std::move(writerPlan))
+            .assertResults(fmt::format("SELECT {}", numRows));
+
+    auto stats = task->taskStats().pipelineStats.front().operatorStats;
+    // TableWrite Operator's stripeSize runtime stats would be updated twice:
+    // - Values Operator's memory allocation triggers TableWrite's memory
+    // reclaim, which triggers data flush.
+    // - TableWrite Operator's close would trigger flush.
+    ASSERT_EQ(stats[1].runtimeStats["stripeSize"].count, 2);
+    // Values Operator won't be set stripeSize in its runtimeStats.
+    ASSERT_EQ(stats[0].runtimeStats["stripeSize"].count, 0);
+  }
+  waitForAllTasksToBeDeleted();
+}
+
 DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromTableWriter) {
   VectorFuzzer::Options options;
   const int batchSize = 1'000;
@@ -2669,73 +2972,77 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromTableWriter) {
   createDuckDbTable(vectors);
 
   for (bool writerSpillEnabled : {false, true}) {
-    SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
+    {
+      SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
 
-    setupMemory(kMemoryCapacity, 0);
+      setupMemory(kMemoryCapacity, 0);
 
-    std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(kMemoryCapacity);
-    ASSERT_EQ(queryCtx->pool()->capacity(), 0);
+      std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(kMemoryCapacity);
+      ASSERT_EQ(queryCtx->pool()->capacity(), 0);
 
-    std::atomic<int> numInputs{0};
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Driver::runInternal::addInput",
-        std::function<void(Operator*)>(([&](Operator* op) {
-          if (op->operatorType() != "TableWrite") {
-            return;
-          }
-          // We reclaim memory from table writer connector memory pool which
-          // connects to the memory pools inside the hive connector.
-          ASSERT_FALSE(op->canReclaim());
-          if (++numInputs != numBatches) {
-            return;
-          }
+      std::atomic<int> numInputs{0};
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::exec::Driver::runInternal::addInput",
+          std::function<void(Operator*)>(([&](Operator* op) {
+            if (op->operatorType() != "TableWrite") {
+              return;
+            }
+            // We reclaim memory from table writer connector memory pool which
+            // connects to the memory pools inside the hive connector.
+            ASSERT_FALSE(op->canReclaim());
+            if (++numInputs != numBatches) {
+              return;
+            }
 
-          const auto fakeAllocationSize =
-              arbitrator_->stats().maxCapacityBytes -
-              op->pool()->parent()->reservedBytes();
-          if (writerSpillEnabled) {
-            auto* buffer = op->pool()->allocate(fakeAllocationSize);
-            op->pool()->free(buffer, fakeAllocationSize);
-          } else {
-            VELOX_ASSERT_THROW(
-                op->pool()->allocate(fakeAllocationSize),
-                "Exceeded memory pool");
-          }
-        })));
+            const auto fakeAllocationSize =
+                arbitrator_->stats().maxCapacityBytes -
+                op->pool()->parent()->reservedBytes();
+            if (writerSpillEnabled) {
+              auto* buffer = op->pool()->allocate(fakeAllocationSize);
+              op->pool()->free(buffer, fakeAllocationSize);
+            } else {
+              VELOX_ASSERT_THROW(
+                  op->pool()->allocate(fakeAllocationSize),
+                  "Exceeded memory pool");
+            }
+          })));
 
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto outputDirectory = TempDirectoryPath::create();
-    auto writerPlan =
-        PlanBuilder()
-            .values(vectors)
-            .tableWrite(outputDirectory->path)
-            .project({TableWriteTraits::rowCountColumnName()})
-            .singleAggregation(
-                {},
-                {fmt::format(
-                    "sum({})", TableWriteTraits::rowCountColumnName())})
-            .planNode();
+      auto spillDirectory = exec::test::TempDirectoryPath::create();
+      auto outputDirectory = TempDirectoryPath::create();
+      auto writerPlan =
+          PlanBuilder()
+              .values(vectors)
+              .tableWrite(outputDirectory->path)
+              .project({TableWriteTraits::rowCountColumnName()})
+              .singleAggregation(
+                  {},
+                  {fmt::format(
+                      "sum({})", TableWriteTraits::rowCountColumnName())})
+              .planNode();
 
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .queryCtx(queryCtx)
-        .maxDrivers(1)
-        .spillDirectory(spillDirectory->path)
-        .config(
-            core::QueryConfig::kSpillEnabled,
-            writerSpillEnabled ? "true" : "false")
-        .config(
-            core::QueryConfig::kWriterSpillEnabled,
-            writerSpillEnabled ? "true" : "false")
-        // Set 0 file writer flush threshold to always trigger flush in test.
-        .config(
-            core::QueryConfig::kWriterFlushThresholdBytes,
-            folly::to<std::string>(0))
-        .plan(std::move(writerPlan))
-        .assertResults(fmt::format("SELECT {}", numRows));
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .queryCtx(queryCtx)
+          .maxDrivers(1)
+          .spillDirectory(spillDirectory->path)
+          .config(
+              core::QueryConfig::kSpillEnabled,
+              writerSpillEnabled ? "true" : "false")
+          .config(
+              core::QueryConfig::kWriterSpillEnabled,
+              writerSpillEnabled ? "true" : "false")
+          // Set 0 file writer flush threshold to always trigger flush in test.
+          .config(
+              core::QueryConfig::kWriterFlushThresholdBytes,
+              folly::to<std::string>(0))
+          .plan(std::move(writerPlan))
+          .assertResults(fmt::format("SELECT {}", numRows));
 
-    ASSERT_EQ(arbitrator_->stats().numFailures, writerSpillEnabled ? 0 : 1);
-    ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 0);
-    waitForAllTasksToBeDeleted(3'000'000);
+      ASSERT_EQ(arbitrator_->stats().numFailures, writerSpillEnabled ? 0 : 1);
+      ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 0);
+      waitForAllTasksToBeDeleted(3'000'000);
+    }
+    ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
+    ASSERT_EQ(arbitrator_->stats().numReleases, numAddedPools_);
   }
 }
 
@@ -2759,83 +3066,87 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromSortTableWriter) {
   createDuckDbTable(vectors);
 
   for (bool writerSpillEnabled : {false, true}) {
-    SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
+    {
+      SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
 
-    setupMemory(kMemoryCapacity, 0);
+      setupMemory(kMemoryCapacity, 0);
 
-    std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(kMemoryCapacity);
-    ASSERT_EQ(queryCtx->pool()->capacity(), 0);
+      std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(kMemoryCapacity);
+      ASSERT_EQ(queryCtx->pool()->capacity(), 0);
 
-    const auto spillStats = globalSpillStats();
+      const auto spillStats = globalSpillStats();
 
-    std::atomic<int> numInputs{0};
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Driver::runInternal::addInput",
-        std::function<void(Operator*)>(([&](Operator* op) {
-          if (op->operatorType() != "TableWrite") {
-            return;
-          }
-          // We reclaim memory from table writer connector memory pool which
-          // connects to the memory pools inside the hive connector.
-          ASSERT_FALSE(op->canReclaim());
-          if (++numInputs != numBatches) {
-            return;
-          }
+      std::atomic<int> numInputs{0};
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::exec::Driver::runInternal::addInput",
+          std::function<void(Operator*)>(([&](Operator* op) {
+            if (op->operatorType() != "TableWrite") {
+              return;
+            }
+            // We reclaim memory from table writer connector memory pool which
+            // connects to the memory pools inside the hive connector.
+            ASSERT_FALSE(op->canReclaim());
+            if (++numInputs != numBatches) {
+              return;
+            }
 
-          const auto fakeAllocationSize =
-              arbitrator_->stats().maxCapacityBytes -
-              op->pool()->parent()->reservedBytes();
-          if (writerSpillEnabled) {
-            auto* buffer = op->pool()->allocate(fakeAllocationSize);
-            op->pool()->free(buffer, fakeAllocationSize);
-          } else {
-            VELOX_ASSERT_THROW(
-                op->pool()->allocate(fakeAllocationSize),
-                "Exceeded memory pool");
-          }
-        })));
+            const auto fakeAllocationSize =
+                arbitrator_->stats().maxCapacityBytes -
+                op->pool()->parent()->reservedBytes();
+            if (writerSpillEnabled) {
+              auto* buffer = op->pool()->allocate(fakeAllocationSize);
+              op->pool()->free(buffer, fakeAllocationSize);
+            } else {
+              VELOX_ASSERT_THROW(
+                  op->pool()->allocate(fakeAllocationSize),
+                  "Exceeded memory pool");
+            }
+          })));
 
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto outputDirectory = TempDirectoryPath::create();
-    auto writerPlan =
-        PlanBuilder()
-            .values(vectors)
-            .tableWrite(outputDirectory->path, {"c0"}, 4, {"c1"}, {"c2"})
-            .project({TableWriteTraits::rowCountColumnName()})
-            .singleAggregation(
-                {},
-                {fmt::format(
-                    "sum({})", TableWriteTraits::rowCountColumnName())})
-            .planNode();
+      auto spillDirectory = exec::test::TempDirectoryPath::create();
+      auto outputDirectory = TempDirectoryPath::create();
+      auto writerPlan =
+          PlanBuilder()
+              .values(vectors)
+              .tableWrite(outputDirectory->path, {"c0"}, 4, {"c1"}, {"c2"})
+              .project({TableWriteTraits::rowCountColumnName()})
+              .singleAggregation(
+                  {},
+                  {fmt::format(
+                      "sum({})", TableWriteTraits::rowCountColumnName())})
+              .planNode();
 
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .queryCtx(queryCtx)
-        .maxDrivers(1)
-        .spillDirectory(spillDirectory->path)
-        .config(
-            core::QueryConfig::kSpillEnabled,
-            writerSpillEnabled ? "true" : "false")
-        .config(
-            core::QueryConfig::kWriterSpillEnabled,
-            writerSpillEnabled ? "true" : "false")
-        // Set 0 file writer flush threshold to always trigger flush in test.
-        .config(
-            core::QueryConfig::kWriterFlushThresholdBytes,
-            folly::to<std::string>(0))
-        .plan(std::move(writerPlan))
-        .assertResults(fmt::format("SELECT {}", numRows));
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .queryCtx(queryCtx)
+          .maxDrivers(1)
+          .spillDirectory(spillDirectory->path)
+          .config(
+              core::QueryConfig::kSpillEnabled,
+              writerSpillEnabled ? "true" : "false")
+          .config(
+              core::QueryConfig::kWriterSpillEnabled,
+              writerSpillEnabled ? "true" : "false")
+          // Set 0 file writer flush threshold to always trigger flush in test.
+          .config(
+              core::QueryConfig::kWriterFlushThresholdBytes,
+              folly::to<std::string>(0))
+          .plan(std::move(writerPlan))
+          .assertResults(fmt::format("SELECT {}", numRows));
 
-    ASSERT_EQ(arbitrator_->stats().numFailures, writerSpillEnabled ? 0 : 1);
-    ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 0);
-    waitForAllTasksToBeDeleted(3'000'000);
-    const auto updatedSpillStats = globalSpillStats();
-    if (writerSpillEnabled) {
-      ASSERT_GT(updatedSpillStats.spilledBytes, spillStats.spilledBytes);
-      ASSERT_GT(
-          updatedSpillStats.spilledPartitions, spillStats.spilledPartitions);
-    } else {
-      ASSERT_EQ(updatedSpillStats, spillStats);
+      ASSERT_EQ(arbitrator_->stats().numFailures, writerSpillEnabled ? 0 : 1);
+      ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 0);
+      waitForAllTasksToBeDeleted(3'000'000);
+      const auto updatedSpillStats = globalSpillStats();
+      if (writerSpillEnabled) {
+        ASSERT_GT(updatedSpillStats.spilledBytes, spillStats.spilledBytes);
+        ASSERT_GT(
+            updatedSpillStats.spilledPartitions, spillStats.spilledPartitions);
+      } else {
+        ASSERT_EQ(updatedSpillStats, spillStats);
+      }
     }
+    ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
+    ASSERT_EQ(arbitrator_->stats().numReleases, numAddedPools_);
   }
 }
 
@@ -2857,71 +3168,75 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, writerFlushThreshold) {
 
   const std::vector<uint64_t> writerFlushThresholds{0, 1UL << 30};
   for (uint64_t writerFlushThreshold : writerFlushThresholds) {
-    SCOPED_TRACE(fmt::format(
-        "writerFlushThreshold: {}", succinctBytes(writerFlushThreshold)));
+    {
+      SCOPED_TRACE(fmt::format(
+          "writerFlushThreshold: {}", succinctBytes(writerFlushThreshold)));
 
-    setupMemory(kMemoryCapacity, 0);
+      setupMemory(kMemoryCapacity, 0);
 
-    std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(kMemoryCapacity);
-    ASSERT_EQ(queryCtx->pool()->capacity(), 0);
+      std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(kMemoryCapacity);
+      ASSERT_EQ(queryCtx->pool()->capacity(), 0);
 
-    std::atomic<int> numInputs{0};
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Driver::runInternal::addInput",
-        std::function<void(Operator*)>(([&](Operator* op) {
-          if (op->operatorType() != "TableWrite") {
-            return;
-          }
-          if (++numInputs != numBatches) {
-            return;
-          }
+      std::atomic<int> numInputs{0};
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::exec::Driver::runInternal::addInput",
+          std::function<void(Operator*)>(([&](Operator* op) {
+            if (op->operatorType() != "TableWrite") {
+              return;
+            }
+            if (++numInputs != numBatches) {
+              return;
+            }
 
-          const auto fakeAllocationSize =
-              arbitrator_->stats().maxCapacityBytes -
-              op->pool()->parent()->reservedBytes();
-          if (writerFlushThreshold == 0) {
-            auto* buffer = op->pool()->allocate(fakeAllocationSize);
-            op->pool()->free(buffer, fakeAllocationSize);
-          } else {
-            // The injected memory allocation fail if we set very high memory
-            // flush threshold.
-            VELOX_ASSERT_THROW(
-                op->pool()->allocate(fakeAllocationSize),
-                "Exceeded memory pool");
-          }
-        })));
+            const auto fakeAllocationSize =
+                arbitrator_->stats().maxCapacityBytes -
+                op->pool()->parent()->reservedBytes();
+            if (writerFlushThreshold == 0) {
+              auto* buffer = op->pool()->allocate(fakeAllocationSize);
+              op->pool()->free(buffer, fakeAllocationSize);
+            } else {
+              // The injected memory allocation fail if we set very high memory
+              // flush threshold.
+              VELOX_ASSERT_THROW(
+                  op->pool()->allocate(fakeAllocationSize),
+                  "Exceeded memory pool");
+            }
+          })));
 
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto outputDirectory = TempDirectoryPath::create();
-    auto writerPlan =
-        PlanBuilder()
-            .values(vectors)
-            .tableWrite(outputDirectory->path)
-            .project({TableWriteTraits::rowCountColumnName()})
-            .singleAggregation(
-                {},
-                {fmt::format(
-                    "sum({})", TableWriteTraits::rowCountColumnName())})
-            .planNode();
+      auto spillDirectory = exec::test::TempDirectoryPath::create();
+      auto outputDirectory = TempDirectoryPath::create();
+      auto writerPlan =
+          PlanBuilder()
+              .values(vectors)
+              .tableWrite(outputDirectory->path)
+              .project({TableWriteTraits::rowCountColumnName()})
+              .singleAggregation(
+                  {},
+                  {fmt::format(
+                      "sum({})", TableWriteTraits::rowCountColumnName())})
+              .planNode();
 
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .queryCtx(queryCtx)
-        .maxDrivers(1)
-        .spillDirectory(spillDirectory->path)
-        .config(core::QueryConfig::kSpillEnabled, "true")
-        .config(core::QueryConfig::kWriterSpillEnabled, "true")
-        .config(
-            core::QueryConfig::kWriterFlushThresholdBytes,
-            folly::to<std::string>(writerFlushThreshold))
-        .plan(std::move(writerPlan))
-        .assertResults(fmt::format("SELECT {}", numRows));
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .queryCtx(queryCtx)
+          .maxDrivers(1)
+          .spillDirectory(spillDirectory->path)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWriterSpillEnabled, "true")
+          .config(
+              core::QueryConfig::kWriterFlushThresholdBytes,
+              folly::to<std::string>(writerFlushThreshold))
+          .plan(std::move(writerPlan))
+          .assertResults(fmt::format("SELECT {}", numRows));
 
-    ASSERT_EQ(
-        arbitrator_->stats().numFailures, writerFlushThreshold == 0 ? 0 : 1);
-    ASSERT_EQ(
-        arbitrator_->stats().numNonReclaimableAttempts,
-        writerFlushThreshold == 0 ? 0 : 1);
-    waitForAllTasksToBeDeleted(3'000'000);
+      ASSERT_EQ(
+          arbitrator_->stats().numFailures, writerFlushThreshold == 0 ? 0 : 1);
+      ASSERT_EQ(
+          arbitrator_->stats().numNonReclaimableAttempts,
+          writerFlushThreshold == 0 ? 0 : 1);
+      waitForAllTasksToBeDeleted(3'000'000);
+    }
+    ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
+    ASSERT_EQ(arbitrator_->stats().numReleases, numAddedPools_);
   }
 }
 
@@ -3000,6 +3315,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromNonReclaimableTableWriter) {
 
   ASSERT_EQ(arbitrator_->stats().numFailures, 1);
   ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 1);
+  ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
 }
 
 DEBUG_ONLY_TEST_F(
@@ -3092,6 +3408,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 0);
   ASSERT_EQ(arbitrator_->stats().numFailures, 0);
   ASSERT_GT(arbitrator_->stats().numReclaimedBytes, 0);
+  ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
 }
 
 DEBUG_ONLY_TEST_F(
@@ -3181,6 +3498,7 @@ DEBUG_ONLY_TEST_F(
 
   ASSERT_EQ(arbitrator_->stats().numFailures, 1);
   ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 1);
+  ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
   const auto updatedSpillStats = globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
 }
@@ -3337,6 +3655,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, raceBetweenRaclaimAndJoinFinish) {
   waitForAllTasksToBeDeleted();
   ASSERT_EQ(arbitrator_->stats().numFailures, 0);
   ASSERT_EQ(arbitrator_->stats().numReclaimedBytes, 0);
+  ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
 }
 
 DEBUG_ONLY_TEST_F(SharedArbitrationTest, arbitrateMemoryFromOtherOperator) {
@@ -3480,6 +3799,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, joinBuildSpillError) {
 
   waitForAllTasksToBeDeleted();
   ASSERT_EQ(arbitrator_->stats().numFailures, 1);
+  ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
 }
 
 TEST_F(SharedArbitrationTest, concurrentArbitration) {
@@ -3489,124 +3809,114 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
   fuzzerOpts_.vectorSize = 32;
   fuzzerOpts_.stringVariableLength = false;
   fuzzerOpts_.stringLength = 32;
+  vectors.reserve(numVectors);
   for (int i = 0; i < numVectors; ++i) {
     vectors.push_back(newVector());
   }
   const int numDrivers = 4;
   createDuckDbTable(vectors);
 
-  const auto queryPlan =
-      PlanBuilder()
-          .values(vectors, true)
-          .addNode([&](std::string id, core::PlanNodePtr input) {
-            return std::make_shared<FakeMemoryNode>(id, input);
-          })
-          .planNode();
-  const std::string referenceSQL = "SELECT * FROM tmp";
+  struct {
+    uint64_t totalCapacity;
+    uint64_t queryCapacity;
 
-  std::atomic<bool> stopped{false};
-
-  std::mutex mutex;
-  std::vector<std::shared_ptr<core::QueryCtx>> queries;
-  std::deque<std::shared_ptr<Task>> zombieTasks;
-
-  fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
-    if (folly::Random::oneIn(4)) {
-      auto task = op->testingOperatorCtx()->driverCtx()->task;
-      if (folly::Random::oneIn(3)) {
-        task->requestAbort();
-      } else {
-        task->requestYield();
-      }
+    std::string debugString() const {
+      return fmt::format(
+          "totalCapacity = {}, queryCapacity = {}.",
+          succinctBytes(totalCapacity),
+          succinctBytes(queryCapacity));
     }
-    const size_t allocationSize = std::max(
-        kMemoryCapacity / 16, folly::Random::rand32() % kMemoryCapacity);
-    auto buffer = op->pool()->allocate(allocationSize);
-    return TestAllocation{op->pool(), buffer, allocationSize};
-  });
-  fakeOperatorFactory_->setMaxDrivers(numDrivers);
-  const std::string injectReclaimErrorMessage("Inject reclaim failure");
-  fakeOperatorFactory_->setReclaimCallback(
-      [&](MemoryPool* /*unused*/,
-          uint64_t /*unused*/,
-          MemoryReclaimer::Stats& /*unused*/) {
-        if (folly::Random::oneIn(10)) {
-          VELOX_FAIL(injectReclaimErrorMessage);
-        }
-        return false;
-      });
+  } testSettings[3] = {
+      {16 * MB, 128 * MB}, {128 * MB, 16 * MB}, {128 * MB, 128 * MB}};
 
-  const int numThreads = 30;
-  const int maxNumZombieTasks = 128;
-  std::vector<std::thread> queryThreads;
-  for (int i = 0; i < numThreads; ++i) {
-    queryThreads.emplace_back([&, i]() {
-      DuckDbQueryRunner duckDbQueryRunner;
-      folly::Random::DefaultGenerator rng;
-      rng.seed(i);
-      while (!stopped) {
-        std::shared_ptr<core::QueryCtx> query;
-        {
-          std::lock_guard<std::mutex> l(mutex);
-          if (queries.empty()) {
-            queries.emplace_back(newQueryCtx());
-          }
-          const int index = folly::Random::rand32() % queries.size();
-          query = queries[index];
-        }
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    auto totalCapacity = testData.totalCapacity;
+    auto queryCapacity = testData.queryCapacity;
+    setupMemory(totalCapacity);
+
+    std::mutex mutex;
+    std::vector<std::shared_ptr<core::QueryCtx>> queries;
+    std::deque<std::shared_ptr<Task>> zombieTasks;
+
+    const int numThreads = 32;
+    const int maxNumZombieTasks = 8;
+    std::vector<std::thread> queryThreads;
+    queryThreads.reserve(numThreads);
+    for (int i = 0; i < numThreads; ++i) {
+      queryThreads.emplace_back([&, i]() {
         std::shared_ptr<Task> task;
         try {
-          task = AssertQueryBuilder(duckDbQueryRunner)
-                     .queryCtx(query)
-                     .plan(PlanBuilder()
-                               .values(vectors)
-                               .addNode([&](std::string id,
-                                            core::PlanNodePtr input) {
-                                 return std::make_shared<FakeMemoryNode>(
-                                     id, input);
-                               })
-                               .planNode())
-                     .assertResults("SELECT * FROM tmp");
+          if (i == 0) {
+            // Write task contains aggregate node, which does not support
+            // multithread aggregation type resolver, so make sure it is built
+            // in a single thread.
+            task =
+                runWriteTask(vectors, newQueryCtx(queryCapacity), numDrivers);
+          } else if ((i % 4) == 0) {
+            task = runHashJoinTask(
+                vectors, newQueryCtx(queryCapacity), numDrivers);
+          } else if ((i % 4) == 1) {
+            task =
+                runOrderByTask(vectors, newQueryCtx(queryCapacity), numDrivers);
+          } else {
+            task = runTopNTask(vectors, newQueryCtx(queryCapacity), numDrivers);
+          }
         } catch (const VeloxException& e) {
-          continue;
+          VELOX_CHECK(
+              e.errorCode() == error_code::kMemCapExceeded.c_str() ||
+              e.errorCode() == error_code::kMemAborted.c_str() ||
+              e.errorCode() == error_code::kMemAllocError.c_str());
         }
+
+        // TODO: Add RowNumber task after fixing its spiller bug.
         std::lock_guard<std::mutex> l(mutex);
-        zombieTasks.emplace_back(std::move(task));
+        if (folly::Random().oneIn(3)) {
+          zombieTasks.emplace_back(std::move(task));
+        }
         while (zombieTasks.size() > maxNumZombieTasks) {
           zombieTasks.pop_front();
         }
-      }
-    });
-  }
-
-  const int maxNumQueries = 64;
-  std::thread controlThread([&]() {
-    folly::Random::DefaultGenerator rng;
-    rng.seed(1000);
-    while (!stopped) {
-      std::shared_ptr<core::QueryCtx> queryToDelete;
-      {
-        std::lock_guard<std::mutex> l(mutex);
-        if (queries.empty() ||
-            ((queries.size() < maxNumQueries) &&
-             folly::Random::oneIn(4, rng))) {
-          queries.emplace_back(newQueryCtx());
-        } else {
-          const int deleteIndex = folly::Random::rand32(rng) % queries.size();
-          queryToDelete = queries[deleteIndex];
-          queries.erase(queries.begin() + deleteIndex);
-        }
-      }
-      std::this_thread::sleep_for(std::chrono::microseconds(5));
+      });
     }
-  });
 
-  std::this_thread::sleep_for(std::chrono::seconds(5));
-  stopped = true;
-
-  for (auto& queryThread : queryThreads) {
-    queryThread.join();
+    for (auto& queryThread : queryThreads) {
+      queryThread.join();
+    }
+    ASSERT_GT(arbitrator_->stats().numRequests, 0);
   }
-  controlThread.join();
+}
+
+TEST_F(SharedArbitrationTest, reserveReleaseCounters) {
+  for (int i = 0; i < 37; ++i) {
+    folly::Random::DefaultGenerator rng(i);
+    auto numRootPools = folly::Random::rand32(rng) % 11 + 3;
+    std::vector<std::thread> threads;
+    threads.reserve(numRootPools);
+    std::mutex mutex;
+    setupMemory(kMemoryCapacity, 0);
+    {
+      std::vector<std::shared_ptr<core::QueryCtx>> queries;
+      queries.reserve(numRootPools);
+      for (int j = 0; j < numRootPools; ++j) {
+        threads.emplace_back([&]() {
+          {
+            std::lock_guard<std::mutex> l(mutex);
+            auto oldNum = arbitrator_->stats().numReserves;
+            queries.emplace_back(newQueryCtx());
+            ASSERT_EQ(arbitrator_->stats().numReserves, oldNum + 1);
+          }
+        });
+      }
+
+      for (auto& queryThread : threads) {
+        queryThread.join();
+      }
+      ASSERT_EQ(arbitrator_->stats().numReserves, numRootPools);
+      ASSERT_EQ(arbitrator_->stats().numReleases, 0);
+    }
+    ASSERT_EQ(arbitrator_->stats().numReserves, numRootPools);
+    ASSERT_EQ(arbitrator_->stats().numReleases, numRootPools);
+  }
 }
 } // namespace facebook::velox::exec::test

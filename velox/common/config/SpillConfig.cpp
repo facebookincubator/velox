@@ -18,7 +18,8 @@
 
 namespace facebook::velox::common {
 SpillConfig::SpillConfig(
-    const std::string& _filePath,
+    GetSpillDirectoryPathCB _getSpillDirPathCb,
+    std::string _fileNamePrefix,
     uint64_t _maxFileSize,
     uint64_t _writeBufferSize,
     uint64_t _minSpillRunSize,
@@ -30,8 +31,10 @@ SpillConfig::SpillConfig(
     int32_t _maxSpillLevel,
     uint64_t _writerFlushThresholdSize,
     int32_t _testSpillPct,
-    const std::string& _compressionKind)
-    : filePath(_filePath),
+    const std::string& _compressionKind,
+    const std::unordered_map<std::string, std::string>& _writeFileOptions)
+    : getSpillDirPathCb(std::move(_getSpillDirPathCb)),
+      fileNamePrefix(std::move(_fileNamePrefix)),
       maxFileSize(
           _maxFileSize == 0 ? std::numeric_limits<int64_t>::max()
                             : _maxFileSize),
@@ -45,7 +48,8 @@ SpillConfig::SpillConfig(
       maxSpillLevel(_maxSpillLevel),
       writerFlushThresholdSize(_writerFlushThresholdSize),
       testSpillPct(_testSpillPct),
-      compressionKind(common::stringToCompressionKind(_compressionKind)) {
+      compressionKind(common::stringToCompressionKind(_compressionKind)),
+      writeFileOptions(_writeFileOptions) {
   VELOX_USER_CHECK_GE(
       spillableReservationGrowthPct,
       minSpillableReservationPct,

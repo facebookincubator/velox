@@ -48,12 +48,13 @@ setBit(char* bits, uint32_t idx) {
 }
 } // namespace
 
-Accumulator::Accumulator(Aggregate* aggregate)
+Accumulator::Accumulator(Aggregate* aggregate, TypePtr spillType)
     : isFixedSize_{aggregate->isFixedSize()},
       fixedSize_{aggregate->accumulatorFixedWidthSize()},
       usesExternalMemory_{aggregate->accumulatorUsesExternalMemory()},
       alignment_{aggregate->accumulatorAlignmentSize()},
-      extractFunction_{
+      spillType_{std::move(spillType)},
+      spillExtractFunction_{
           [aggregate](folly::Range<char**> groups, VectorPtr& result) {
             aggregate->extractAccumulators(
                 groups.data(), groups.size(), &result);
@@ -69,14 +70,16 @@ Accumulator::Accumulator(
     int32_t fixedSize,
     bool usesExternalMemory,
     int32_t alignment,
+    TypePtr spillType,
     std::function<void(folly::Range<char**> groups, VectorPtr& result)>
-        extractFunction,
+        spillExtractFunction,
     std::function<void(folly::Range<char**> groups)> destroyFunction)
     : isFixedSize_{isFixedSize},
       fixedSize_{fixedSize},
       usesExternalMemory_{usesExternalMemory},
       alignment_{alignment},
-      extractFunction_{extractFunction},
+      spillType_{std::move(spillType)},
+      spillExtractFunction_{spillExtractFunction},
       destroyFunction_{destroyFunction} {}
 
 bool Accumulator::isFixedSize() const {
@@ -99,10 +102,14 @@ void Accumulator::destroy(folly::Range<char**> groups) {
   destroyFunction_(groups);
 }
 
+const TypePtr& Accumulator::spillType() const {
+  return spillType_;
+}
+
 void Accumulator::extractForSpill(
     folly::Range<char**> groups,
     VectorPtr& result) const {
-  extractFunction_(groups, result);
+  spillExtractFunction_(groups, result);
 }
 
 // static
@@ -174,8 +181,7 @@ RowContainer::RowContainer(
   // Make offset at least sizeof pointer so that there is space for a
   // free list next pointer below the bit at 'freeFlagOffset_'.
   offset = std::max<int32_t>(offset, sizeof(void*));
-  int32_t firstAggregate = offsets_.size();
-  int32_t firstAggregateOffset = offset;
+  const int32_t firstAggregateOffset = offset;
   for (const auto& accumulator : accumulators) {
     nullOffsets_.push_back(nullOffset);
     ++nullOffset;
@@ -199,11 +205,11 @@ RowContainer::RowContainer(
   nullOffsets_.push_back(nullOffset);
   freeFlagOffset_ = nullOffset + firstAggregateOffset * 8;
   ++nullOffset;
-  // Fixup nullOffsets_ to be the bit number from the start of the row.
+  // Fixup 'nullOffsets_' to be the bit number from the start of the row.
   for (int32_t i = 0; i < nullOffsets_.size(); ++i) {
     nullOffsets_[i] += firstAggregateOffset * 8;
   }
-  int32_t nullBytes = bits::nbytes(nullOffsets_.size());
+  const int32_t nullBytes = bits::nbytes(nullOffsets_.size());
   offset += nullBytes;
   for (const auto& accumulator : accumulators) {
     // Accumulator offset must be aligned by their alignment size.
@@ -224,9 +230,6 @@ RowContainer::RowContainer(
     offset += sizeof(void*);
   }
   fixedRowSize_ = bits::roundUp(offset, alignment_);
-  for (int i = 0; i < accumulators_.size(); ++i) {
-    nullOffset = nullOffsets_[i + firstAggregate];
-  }
   // A distinct hash table has no aggregates and if the hash table has
   // no nulls, it may be that there are no null flags.
   if (!nullOffsets_.empty()) {
@@ -234,7 +237,7 @@ RowContainer::RowContainer(
     // start as 0.
     initialNulls_.resize(nullBytes, 0x0);
     // Aggregates are null on a new row.
-    auto aggregateNullOffset = nullableKeys ? keyTypes.size() : 0;
+    const auto aggregateNullOffset = nullableKeys ? keyTypes.size() : 0;
     for (int32_t i = 0; i < accumulators_.size(); ++i) {
       bits::setBit(initialNulls_.data(), i + aggregateNullOffset);
     }
@@ -434,15 +437,199 @@ void RowContainer::store(
   }
 }
 
-void RowContainer::prepareRead(
-    const char* row,
-    int32_t offset,
-    ByteStream& stream) {
+ByteInputStream RowContainer::prepareRead(const char* row, int32_t offset) {
   const auto& view = reinterpret_cast<const std::string_view*>(row + offset);
   // We set 'stream' to range over the ranges that start at the Header
   // immediately below the first character in the std::string_view.
-  HashStringAllocator::prepareRead(
-      HashStringAllocator::headerOf(view->data()), stream);
+  return HashStringAllocator::prepareRead(
+      HashStringAllocator::headerOf(view->data()));
+}
+
+int32_t RowContainer::variableSizeAt(const char* row, column_index_t column) {
+  const auto rowColumn = rowColumns_[column];
+
+  if (isNullAt(row, rowColumn)) {
+    return 0;
+  }
+
+  const auto typeKind = typeKinds_[column];
+  if (typeKind == TypeKind::VARCHAR || typeKind == TypeKind::VARBINARY) {
+    return reinterpret_cast<const StringView*>(row + rowColumn.offset())
+        ->size();
+  } else {
+    return reinterpret_cast<const std::string_view*>(row + rowColumn.offset())
+        ->size();
+  }
+}
+
+int32_t RowContainer::extractVariableSizeAt(
+    const char* row,
+    column_index_t column,
+    char* output) {
+  const auto rowColumn = rowColumns_[column];
+
+  // 4 bytes for size + N bytes for data.
+  if (isNullAt(row, rowColumn)) {
+    memset(output, 0, 4);
+    return 4;
+  }
+
+  const auto typeKind = typeKinds_[column];
+  if (typeKind == TypeKind::VARCHAR || typeKind == TypeKind::VARBINARY) {
+    const auto value = valueAt<StringView>(row, rowColumn.offset());
+    const auto size = value.size();
+    memcpy(output, &size, 4);
+
+    if (value.isInline() ||
+        reinterpret_cast<const HashStringAllocator::Header*>(value.data())[-1]
+                .size() >= value.size()) {
+      memcpy(output + 4, value.data(), size);
+    } else {
+      auto stream = HashStringAllocator::prepareRead(
+          HashStringAllocator::headerOf(value.data()));
+      stream.readBytes(output + 4, size);
+    }
+    return 4 + size;
+  }
+
+  const auto value = valueAt<std::string_view>(row, rowColumn.offset());
+  const auto size = value.size();
+
+  auto stream = prepareRead(row, rowColumn.offset());
+
+  memcpy(output, &size, 4);
+  stream.readBytes(output + 4, size);
+
+  return 4 + size;
+}
+
+int32_t RowContainer::storeVariableSizeAt(
+    const char* data,
+    char* row,
+    column_index_t column) {
+  const auto typeKind = typeKinds_[column];
+  const auto rowColumn = rowColumns_[column];
+
+  // First 4 bytes is the size of the data.
+  const auto size = *reinterpret_cast<const int32_t*>(data);
+
+  if (typeKind == TypeKind::VARCHAR || typeKind == TypeKind::VARBINARY) {
+    valueAt<StringView>(row, rowColumn.offset()) = StringView(data + 4, size);
+    if (size > 0) {
+      stringAllocator_->copyMultipart(row, rowColumn.offset());
+    }
+  } else {
+    if (size > 0) {
+      ByteStream stream(stringAllocator_.get(), false, false);
+      const auto position = stringAllocator_->newWrite(stream);
+      stream.appendStringView(std::string_view(data + 4, size));
+      stringAllocator_->finishWrite(stream, 0);
+      valueAt<std::string_view>(row, rowColumn.offset()) =
+          std::string_view(reinterpret_cast<char*>(position.position), size);
+    } else {
+      valueAt<std::string_view>(row, rowColumn.offset()) = std::string_view();
+    }
+  }
+
+  return 4 + size;
+}
+
+void RowContainer::extractSerializedRows(
+    folly::Range<char**> rows,
+    const VectorPtr& result) {
+  // The format of the extracted row is: null bytes followed by keys and
+  // dependent columns. Fixed-width columns are serialized into fixed number of
+  // bytes (see typeKindSize). Variable-width columns are serialized as 4 bytes
+  // of size followed by that many bytes.
+
+  const int32_t nullBytes = bits::nbytes(nullOffsets_.size());
+
+  // First, calculate total number of bytes needed to serialize all rows.
+
+  size_t fixedWidthRowSize = 0;
+  bool hasVariableWidth = false;
+  for (auto i = 0; i < types_.size(); ++i) {
+    const auto& type = types_[i];
+    if (type->isFixedWidth()) {
+      fixedWidthRowSize += typeKindSize(type->kind());
+    } else {
+      hasVariableWidth = true;
+    }
+  }
+
+  size_t totalBytes = nullBytes * rows.size() + fixedWidthRowSize * rows.size();
+  if (hasVariableWidth) {
+    for (const char* row : rows) {
+      for (auto i = 0; i < types_.size(); ++i) {
+        const auto& type = types_[i];
+        if (!type->isFixedWidth()) {
+          // 4 bytes for size + N bytes for data.
+          totalBytes += 4 + variableSizeAt(row, i);
+        }
+      }
+    }
+  }
+
+  // Allocate sufficient buffer.
+  auto* flatResult = result->as<FlatVector<StringView>>();
+  flatResult->resize(rows.size());
+  auto* rawBuffer = flatResult->getRawStringBufferWithSpace(totalBytes, true);
+
+  // Write serialized data.
+  size_t totalWritten = 0;
+  for (auto i = 0; i < rows.size(); ++i) {
+    auto* row = rows[i];
+    size_t offset = 0;
+
+    // Copy nulls.
+    memcpy(rawBuffer + offset, row + rowColumns_[0].nullByte(), nullBytes);
+    offset += nullBytes;
+
+    // Copy values.
+    for (auto j = 0; j < types_.size(); ++j) {
+      const auto& type = types_[j];
+      if (type->isFixedWidth()) {
+        const auto size = typeKindSize(type->kind());
+        memcpy(rawBuffer + offset, row + rowColumns_[j].offset(), size);
+        offset += size;
+      } else {
+        auto size = extractVariableSizeAt(row, j, rawBuffer + offset);
+        offset += size;
+      }
+    }
+
+    flatResult->setNoCopy(i, StringView(rawBuffer, offset));
+    rawBuffer += offset;
+    totalWritten += offset;
+  }
+
+  VELOX_CHECK_EQ(totalWritten, totalBytes);
+}
+
+void RowContainer::storeSerializedRow(
+    const FlatVector<StringView>& vector,
+    vector_size_t index,
+    char* row) {
+  VELOX_CHECK(!vector.isNullAt(index));
+  auto serialized = vector.valueAt(index);
+  size_t offset = 0;
+
+  const int32_t nullBytes = bits::nbytes(nullOffsets_.size());
+  memcpy(row + rowColumns_[0].nullByte(), serialized.data(), nullBytes);
+  offset += nullBytes;
+
+  RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
+  for (auto i = 0; i < types_.size(); ++i) {
+    const auto& type = types_[i];
+    if (type->isFixedWidth()) {
+      const auto size = typeKindSize(type->kind());
+      memcpy(row + rowColumns_[i].offset(), serialized.data() + offset, size);
+      offset += size;
+    } else {
+      const auto size = storeVariableSizeAt(serialized.data() + offset, row, i);
+      offset += size;
+    }
+  }
 }
 
 void RowContainer::extractString(
@@ -457,9 +644,8 @@ void RowContainer::extractString(
     return;
   }
   auto rawBuffer = values->getRawStringBufferWithSpace(value.size());
-  ByteStream stream;
-  HashStringAllocator::prepareRead(
-      HashStringAllocator::headerOf(value.data()), stream);
+  auto stream = HashStringAllocator::prepareRead(
+      HashStringAllocator::headerOf(value.data()));
   stream.readBytes(rawBuffer, value.size());
   values->setNoCopy(index, StringView(rawBuffer, value.size()));
 }
@@ -481,8 +667,19 @@ void RowContainer::storeComplexType(
   auto position = stringAllocator_->newWrite(stream);
   ContainerRowSerde::serialize(*decoded.base(), decoded.index(index), stream);
   stringAllocator_->finishWrite(stream, 0);
+
   valueAt<std::string_view>(row, offset) = std::string_view(
       reinterpret_cast<char*>(position.position), stream.size());
+
+  // TODO Fix ByteStream::size() API. @oerling is looking into that.
+  // Fix the 'size' of the std::string_view.
+  // stream.size() is the capacity
+  // stream.size() - stream.remainingSize() is the size of the data + size of
+  // 'next' links (8 bytes per link).
+  auto readStream = prepareRead(row, offset);
+  const auto size = readStream.size();
+  valueAt<std::string_view>(row, offset) =
+      std::string_view(reinterpret_cast<char*>(position.position), size);
 }
 
 //   static
@@ -502,10 +699,9 @@ int RowContainer::compareComplexType(
     const DecodedVector& decoded,
     vector_size_t index,
     CompareFlags flags) {
-  VELOX_DCHECK(!flags.mayStopAtNull(), "not supported null handling mode");
+  VELOX_DCHECK(flags.nullAsValue(), "not supported null handling mode");
 
-  ByteStream stream;
-  prepareRead(row, offset, stream);
+  auto stream = prepareRead(row, offset);
   return ContainerRowSerde::compare(stream, decoded, index, flags);
 }
 
@@ -523,12 +719,10 @@ int32_t RowContainer::compareComplexType(
     int32_t leftOffset,
     int32_t rightOffset,
     CompareFlags flags) {
-  VELOX_DCHECK(!flags.mayStopAtNull(), "not supported null handling mode");
+  VELOX_DCHECK(flags.nullAsValue(), "not supported null handling mode");
 
-  ByteStream leftStream;
-  ByteStream rightStream;
-  prepareRead(left, leftOffset, leftStream);
-  prepareRead(right, rightOffset, rightStream);
+  auto leftStream = prepareRead(left, leftOffset);
+  auto rightStream = prepareRead(right, rightOffset);
   return ContainerRowSerde::compare(leftStream, rightStream, type, flags);
 }
 
@@ -550,14 +744,13 @@ void RowContainer::hashTyped(
     bool mix,
     uint64_t* result) {
   using T = typename KindToFlatVector<Kind>::HashRowType;
-  auto nullByte = column.nullByte();
-  auto nullMask = column.nullMask();
+
   auto offset = column.offset();
   std::string storage;
   auto numRows = rows.size();
   for (int32_t i = 0; i < numRows; ++i) {
     char* row = rows[i];
-    if (nullable && isNullAt(row, nullByte, nullMask)) {
+    if (nullable && isNullAt(row, column)) {
       result[i] = mix ? bits::hashMix(result[i], BaseVector::kNullHash)
                       : BaseVector::kNullHash;
     } else {
@@ -569,8 +762,7 @@ void RowContainer::hashTyped(
       } else if (
           Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
           Kind == TypeKind::MAP) {
-        ByteStream in;
-        prepareRead(row, offset, in);
+        auto in = prepareRead(row, offset);
         hash = ContainerRowSerde::hash(in, type);
       } else {
         hash = folly::hasher<T>()(valueAt<T>(row, offset));
@@ -653,9 +845,7 @@ void RowContainer::extractProbedFlags(
     bool nullResult = false;
     if (setNullForNullKeysRow && nullableKeys_) {
       for (auto c = 0; c < keyTypes_.size(); ++c) {
-        bool isNull =
-            isNullAt(rows[i], columnAt(c).nullByte(), columnAt(c).nullMask());
-        if (isNull) {
+        if (isNullAt(rows[i], columnAt(c))) {
           nullResult = true;
           break;
         }
@@ -810,8 +1000,8 @@ int32_t RowContainer::listPartitionRows(
         bits &= bits - 1;
       }
       startRow += kBatch;
-      // The last batch of 32 bytes may have been partly filled. If so, we could
-      // have skipped past end.
+      // The last batch of 32 bytes may have been partly filled. If so, we
+      // could have skipped past end.
       if (atEnd) {
         iter.rowNumber = numRows_;
         return numResults;

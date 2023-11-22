@@ -53,12 +53,24 @@ void StreamingAggregation::initialize() {
     groupingKeyTypes.push_back(inputType->childAt(channel));
   }
 
-  auto numAggregates = aggregationNode_->aggregates().size();
+  const auto numAggregates = aggregationNode_->aggregates().size();
   aggregates_.reserve(numAggregates);
+  std::vector<Accumulator> accumulators;
+  accumulators.reserve(aggregates_.size());
   std::vector<std::optional<column_index_t>> maskChannels;
   maskChannels.reserve(numAggregates);
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode_->aggregates()[i];
+
+    if (!aggregate.sortingKeys.empty()) {
+      VELOX_UNSUPPORTED(
+          "Streaming aggregation doesn't support aggregations over sorted inputs yet");
+    }
+
+    if (aggregate.distinct) {
+      VELOX_UNSUPPORTED(
+          "Streaming aggregation doesn't support aggregations over distinct inputs yet");
+    }
 
     std::vector<column_index_t> channels;
     std::vector<VectorPtr> constants;
@@ -90,19 +102,19 @@ void StreamingAggregation::initialize() {
         operatorCtx_->driverCtx()->queryConfig()));
     args_.push_back(channels);
     constantArgs_.push_back(constants);
+
+    const auto intermediateType = Aggregate::intermediateType(
+        aggregate.call->name(), aggregate.rawInputTypes);
+    accumulators.push_back(
+        Accumulator{aggregates_.back().get(), std::move(intermediateType)});
   }
 
   if (aggregationNode_->ignoreNullKeys()) {
-    VELOX_NYI("Streaming aggregation doesn't support ignoring null keys yet");
+    VELOX_UNSUPPORTED(
+        "Streaming aggregation doesn't support ignoring null keys yet");
   }
 
   masks_ = std::make_unique<AggregationMasks>(std::move(maskChannels));
-
-  std::vector<Accumulator> accumulators;
-  accumulators.reserve(aggregates_.size());
-  for (auto& aggregate : aggregates_) {
-    accumulators.push_back(Accumulator{aggregate.get()});
-  }
 
   rows_ = std::make_unique<RowContainer>(
       groupingKeyTypes,

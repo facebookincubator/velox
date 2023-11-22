@@ -102,7 +102,8 @@ SpillFile::SpillFile(
     const std::vector<CompareFlags>& sortCompareFlags,
     const std::string& path,
     common::CompressionKind compressionKind,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    const std::unordered_map<std::string, std::string>& writeFileOptions)
     : id_(id),
       type_(std::move(type)),
       numSortingKeys_(numSortingKeys),
@@ -110,6 +111,7 @@ SpillFile::SpillFile(
       ordinal_(ordinalCounter_++),
       path_(fmt::format("{}-{}", path, ordinal_)),
       compressionKind_(compressionKind),
+      writeFileOptions_(filesystems::FileOptions{writeFileOptions, nullptr}),
       pool_(pool) {
   // NOTE: if the spilling operator has specified the sort comparison flags,
   // then it must match the number of sorting keys.
@@ -120,7 +122,7 @@ SpillFile::SpillFile(
 WriteFile& SpillFile::output() {
   if (!output_) {
     auto fs = filesystems::getFileSystem(path_, nullptr);
-    output_ = fs->openFileForWrite(path_);
+    output_ = fs->openFileForWrite(path_, writeFileOptions_);
   }
   return *output_;
 }
@@ -156,7 +158,8 @@ SpillFileList::SpillFileList(
     uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
-    folly::Synchronized<SpillStats>* stats)
+    folly::Synchronized<SpillStats>* stats,
+    const std::unordered_map<std::string, std::string>& writeFileOptions)
     : type_(type),
       numSortingKeys_(numSortingKeys),
       sortCompareFlags_(sortCompareFlags),
@@ -164,6 +167,7 @@ SpillFileList::SpillFileList(
       targetFileSize_(targetFileSize),
       writeBufferSize_(writeBufferSize),
       compressionKind_(compressionKind),
+      writeFileOptions_(writeFileOptions),
       pool_(pool),
       stats_(stats) {
   // NOTE: if the associated spilling operator has specified the sort
@@ -186,7 +190,8 @@ WriteFile& SpillFileList::currentOutput() {
         sortCompareFlags_,
         fmt::format("{}-{}", path_, files_.size()),
         compressionKind_,
-        pool_));
+        pool_,
+        writeFileOptions_));
   }
   return files_.back()->output();
 }
@@ -303,7 +308,8 @@ std::vector<uint32_t> SpillFileList::testingSpilledFileIds() const {
 }
 
 SpillState::SpillState(
-    const std::string& path,
+    common::GetSpillDirectoryPathCB getSpillDirPathCb,
+    const std::string& fileNamePrefix,
     int32_t maxPartitions,
     int32_t numSortingKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
@@ -311,14 +317,17 @@ SpillState::SpillState(
     uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
-    folly::Synchronized<SpillStats>* stats)
-    : path_(path),
+    folly::Synchronized<SpillStats>* stats,
+    const std::unordered_map<std::string, std::string>& writeFileOptions)
+    : getSpillDirPathCb_(getSpillDirPathCb),
+      fileNamePrefix_(fileNamePrefix),
       maxPartitions_(maxPartitions),
       numSortingKeys_(numSortingKeys),
       sortCompareFlags_(sortCompareFlags),
       targetFileSize_(targetFileSize),
       writeBufferSize_(writeBufferSize),
       compressionKind_(compressionKind),
+      writeFileOptions_(writeFileOptions),
       pool_(pool),
       stats_(stats),
       files_(maxPartitions_) {}
@@ -347,18 +356,23 @@ uint64_t SpillState::appendToPartition(
   TestValue::adjust(
       "facebook::velox::exec::SpillState::appendToPartition", this);
 
+  VELOX_CHECK_NOT_NULL(
+      getSpillDirPathCb_, "Spill directory callback not specified.");
+  const std::string& spillDir = getSpillDirPathCb_();
+  VELOX_CHECK(!spillDir.empty(), "Spill directory does not exist");
   // Ensure that partition exist before writing.
   if (!files_.at(partition)) {
     files_[partition] = std::make_unique<SpillFileList>(
         std::static_pointer_cast<const RowType>(rows->type()),
         numSortingKeys_,
         sortCompareFlags_,
-        fmt::format("{}-spill-{}", path_, partition),
+        fmt::format("{}/{}-spill-{}", spillDir, fileNamePrefix_, partition),
         targetFileSize_,
         writeBufferSize_,
         compressionKind_,
         pool_,
-        stats_);
+        stats_,
+        writeFileOptions_);
   }
   updateSpilledInputBytes(rows->estimateFlatSize());
 
@@ -377,7 +391,6 @@ std::unique_ptr<TreeOfLosers<SpillMergeStream>> SpillState::startMerge(
       result.push_back(FileSpillMergeStream::create(std::move(file)));
     }
   }
-  VELOX_CHECK_EQ(!result.empty(), isPartitionSpilled(partition));
   if (extra != nullptr) {
     result.push_back(std::move(extra));
   }
@@ -433,18 +446,23 @@ SpillPartitionNumSet SpillState::testingNonEmptySpilledPartitionSet() const {
 
 std::vector<std::unique_ptr<SpillPartition>> SpillPartition::split(
     int numShards) {
-  const int32_t numFilesPerShard = bits::roundUp(files_.size(), numShards);
   std::vector<std::unique_ptr<SpillPartition>> shards(numShards);
-
-  for (int shard = 0, fileIdx = 0; shard < numShards; ++shard) {
-    SpillFiles shardFiles;
-    shardFiles.reserve(numFilesPerShard);
-    while (shardFiles.size() < numFilesPerShard && fileIdx < files_.size()) {
-      shardFiles.push_back(std::move(files_[fileIdx++]));
+  const auto numFilesPerShard = files_.size() / numShards;
+  int32_t numRemainingFiles = files_.size() % numShards;
+  int fileIdx{0};
+  for (int shard = 0; shard < numShards; ++shard) {
+    SpillFiles files;
+    auto numFiles = numFilesPerShard;
+    if (numRemainingFiles-- > 0) {
+      ++numFiles;
     }
-    shards[shard] =
-        std::make_unique<SpillPartition>(id_, std::move(shardFiles));
+    files.reserve(numFiles);
+    while (files.size() < numFiles) {
+      files.push_back(std::move(files_[fileIdx++]));
+    }
+    shards[shard] = std::make_unique<SpillPartition>(id_, std::move(files));
   }
+  VELOX_CHECK_EQ(fileIdx, files_.size());
   files_.clear();
   return shards;
 }

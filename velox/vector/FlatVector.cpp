@@ -47,7 +47,9 @@ void FlatVector<bool>::set(vector_size_t idx, bool value) {
 }
 
 template <>
-Buffer* FlatVector<StringView>::getBufferWithSpace(int32_t size) {
+Buffer* FlatVector<StringView>::getBufferWithSpace(
+    int32_t size,
+    bool exactSize) {
   VELOX_DCHECK_GE(stringBuffers_.size(), stringBufferSet_.size());
 
   // Check if the last buffer is uniquely referenced and has enough space.
@@ -59,7 +61,7 @@ Buffer* FlatVector<StringView>::getBufferWithSpace(int32_t size) {
   }
 
   // Allocate a new buffer.
-  int32_t newSize = std::max(kInitialStringSize, size);
+  const int32_t newSize = exactSize ? size : std::max(kInitialStringSize, size);
   BufferPtr newBuffer = AlignedBuffer::allocate<char>(newSize, pool());
   newBuffer->setSize(0);
   addStringBuffer(newBuffer);
@@ -67,8 +69,10 @@ Buffer* FlatVector<StringView>::getBufferWithSpace(int32_t size) {
 }
 
 template <>
-char* FlatVector<StringView>::getRawStringBufferWithSpace(int32_t size) {
-  Buffer* buffer = getBufferWithSpace(size);
+char* FlatVector<StringView>::getRawStringBufferWithSpace(
+    int32_t size,
+    bool exactSize) {
+  Buffer* buffer = getBufferWithSpace(size, exactSize);
   char* rawBuffer = buffer->asMutable<char>() + buffer->size();
   buffer->setSize(buffer->size() + size);
   return rawBuffer;
@@ -85,18 +89,7 @@ void FlatVector<StringView>::prepareForReuse() {
     rawValues_ = nullptr;
   }
 
-  // Check string buffers. Keep at most one singly-referenced buffer if it is
-  // not too large.
-  if (!stringBuffers_.empty()) {
-    auto& firstBuffer = stringBuffers_.front();
-    if (firstBuffer->isMutable() &&
-        firstBuffer->capacity() <= kMaxStringSizeForReuse) {
-      firstBuffer->setSize(0);
-      setStringBuffers({firstBuffer});
-    } else {
-      clearStringBuffers();
-    }
-  }
+  keepAtMostOneStringBuffer();
 
   // Clear the StringViews to avoid referencing freed memory.
   if (rawValues_) {
@@ -332,7 +325,7 @@ void FlatVector<StringView>::copy(
       if (!asciiInfo.isAllAscii()) {
         invalidateIsAscii();
       } else {
-        asciiInfo.asciiSetRows().deselect(rows);
+        asciiInfo.writeLockedAsciiComputedRows()->deselect(rows);
       }
     }
   }

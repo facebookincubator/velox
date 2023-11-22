@@ -19,10 +19,15 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
+#include <boost/random/uniform_int_distribution.hpp>
 #include "velox/exec/tests/utils/AggregationFuzzerRunner.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/DuckQueryRunner.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/vector/FlatVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 DEFINE_int64(
     seed,
@@ -37,8 +42,289 @@ DEFINE_string(
     "this comma separated list of function names "
     "(e.g: --only \"min\" or --only \"sum,avg\").");
 
+namespace facebook::velox::exec::test {
+namespace {
+
+class MinMaxInputGenerator : public InputGenerator {
+ public:
+  MinMaxInputGenerator(const std::string& name) : indexOfN_{indexOfN(name)} {}
+
+  std::vector<VectorPtr> generate(
+      const std::vector<TypePtr>& types,
+      VectorFuzzer& fuzzer,
+      FuzzerGenerator& rng,
+      memory::MemoryPool* pool) override {
+    // TODO Generate inputs free of nested nulls.
+    if (types.size() <= indexOfN_) {
+      return {};
+    }
+
+    // Make sure to use the same value of 'n' for all batches in a given Fuzzer
+    // iteration.
+    if (!n_.has_value()) {
+      n_ = boost::random::uniform_int_distribution<int64_t>(0, 9'999)(rng);
+    }
+
+    const auto size = fuzzer.getOptions().vectorSize;
+
+    std::vector<VectorPtr> inputs;
+    inputs.reserve(types.size());
+    for (auto i = 0; i < types.size() - 1; ++i) {
+      inputs.push_back(fuzzer.fuzz(types[i]));
+    }
+
+    VELOX_CHECK(
+        types.back()->isBigint(),
+        "Unexpected type: {}",
+        types.back()->toString())
+    inputs.push_back(
+        BaseVector::createConstant(BIGINT(), n_.value(), size, pool));
+    return inputs;
+  }
+
+  void reset() override {
+    n_.reset();
+  }
+
+ private:
+  // Returns zero-based index of the 'n' argument, 1 for min and max. 2 for
+  // min_by and max_by.
+  static int32_t indexOfN(const std::string& name) {
+    if (name == "min" || name == "max") {
+      return 1;
+    }
+
+    if (name == "min_by" || name == "max_by") {
+      return 2;
+    }
+
+    VELOX_FAIL("Unexpected function name: {}", name)
+  }
+
+  // Zero-based index of the 'n' argument.
+  const int32_t indexOfN_;
+  std::optional<int64_t> n_;
+};
+
+class ApproxDistinctInputGenerator : public InputGenerator {
+ public:
+  std::vector<VectorPtr> generate(
+      const std::vector<TypePtr>& types,
+      VectorFuzzer& fuzzer,
+      FuzzerGenerator& rng,
+      memory::MemoryPool* pool) override {
+    if (types.size() != 2) {
+      return {};
+    }
+
+    // Make sure to use the same value of 'e' for all batches in a given Fuzzer
+    // iteration.
+    if (!e_.has_value()) {
+      // Generate value in [0.0040625, 0.26] range.
+      static constexpr double kMin = 0.0040625;
+      static constexpr double kMax = 0.26;
+      e_ = kMin + (kMax - kMin) * boost::random::uniform_01<double>()(rng);
+    }
+
+    const auto size = fuzzer.getOptions().vectorSize;
+
+    VELOX_CHECK(
+        types.back()->isDouble(),
+        "Unexpected type: {}",
+        types.back()->toString())
+    return {
+        fuzzer.fuzz(types[0]),
+        BaseVector::createConstant(DOUBLE(), e_.value(), size, pool)};
+  }
+
+  void reset() override {
+    e_.reset();
+  }
+
+ private:
+  std::optional<double> e_;
+};
+
+class ApproxPercentileInputGenerator : public InputGenerator {
+ public:
+  std::vector<VectorPtr> generate(
+      const std::vector<TypePtr>& types,
+      VectorFuzzer& fuzzer,
+      FuzzerGenerator& rng,
+      memory::MemoryPool* pool) override {
+    // The arguments are: x, [w], percentile(s), [accuracy].
+    //
+    // First argument is always 'x'. If second argument's type is BIGINT, then
+    // it is 'w'. Otherwise, it is percentile(x).
+
+    const auto size = fuzzer.getOptions().vectorSize;
+
+    std::vector<VectorPtr> inputs;
+    inputs.reserve(types.size());
+    inputs.push_back(fuzzer.fuzz(types[0]));
+
+    if (types[1]->isBigint()) {
+      velox::test::VectorMaker vectorMaker{pool};
+      auto weight = vectorMaker.flatVector<int64_t>(size, [&](auto row) {
+        return boost::random::uniform_int_distribution<int64_t>(1, 1'000)(rng);
+      });
+
+      inputs.push_back(weight);
+    }
+
+    const int percentileTypeIndex = types[1]->isBigint() ? 2 : 1;
+    const TypePtr& percentileType = types[percentileTypeIndex];
+    if (percentileType->isDouble()) {
+      if (!percentile_.has_value()) {
+        percentile_ = pickPercentile(fuzzer, rng);
+      }
+
+      inputs.push_back(BaseVector::createConstant(
+          DOUBLE(), percentile_.value(), size, pool));
+    } else {
+      VELOX_CHECK(percentileType->isArray());
+      VELOX_CHECK(percentileType->childAt(0)->isDouble());
+
+      if (percentiles_.empty()) {
+        percentiles_.push_back(pickPercentile(fuzzer, rng));
+        percentiles_.push_back(pickPercentile(fuzzer, rng));
+        percentiles_.push_back(pickPercentile(fuzzer, rng));
+      }
+
+      auto arrayVector =
+          BaseVector::create<ArrayVector>(ARRAY(DOUBLE()), 1, pool);
+      auto elementsVector = arrayVector->elements()->asFlatVector<double>();
+      elementsVector->resize(percentiles_.size());
+      for (auto i = 0; i < percentiles_.size(); ++i) {
+        elementsVector->set(i, percentiles_[i]);
+      }
+      arrayVector->setOffsetAndSize(0, 0, percentiles_.size());
+
+      inputs.push_back(BaseVector::wrapInConstant(size, 0, arrayVector));
+    }
+
+    if (types.size() > percentileTypeIndex + 1) {
+      // Last argument is 'accuracy'.
+      VELOX_CHECK(types.back()->isDouble());
+      if (!accuracy_.has_value()) {
+        accuracy_ = boost::random::uniform_01<double>()(rng);
+      }
+
+      inputs.push_back(
+          BaseVector::createConstant(DOUBLE(), accuracy_.value(), size, pool));
+    }
+
+    return inputs;
+  }
+
+  void reset() override {
+    percentile_.reset();
+    percentiles_.clear();
+    accuracy_.reset();
+  }
+
+ private:
+  double pickPercentile(VectorFuzzer& fuzzer, FuzzerGenerator& rng) {
+    // 10% of the times generate random value in [0, 1] range.
+    // 90% of the times use one of the common values.
+    if (fuzzer.coinToss(0.1)) {
+      return boost::random::uniform_01<double>()(rng);
+    }
+
+    static const std::vector<double> kPercentiles = {
+        0.1, 0.25, 0.5, 0.75, 0.90, 0.95, 0.99, 0.999, 0.9999};
+
+    const auto index =
+        boost::random::uniform_int_distribution<uint32_t>()(rng) %
+        kPercentiles.size();
+
+    return kPercentiles[index];
+  }
+
+  std::optional<double> percentile_;
+  std::vector<double> percentiles_;
+  std::optional<double> accuracy_;
+};
+
+std::unordered_map<std::string, std::shared_ptr<InputGenerator>>
+getCustomInputGenerators() {
+  return {
+      {"min", std::make_shared<MinMaxInputGenerator>("min")},
+      {"min_by", std::make_shared<MinMaxInputGenerator>("min_by")},
+      {"max", std::make_shared<MinMaxInputGenerator>("max")},
+      {"max_by", std::make_shared<MinMaxInputGenerator>("max_by")},
+      {"approx_distinct", std::make_shared<ApproxDistinctInputGenerator>()},
+      {"approx_set", std::make_shared<ApproxDistinctInputGenerator>()},
+      {"approx_percentile", std::make_shared<ApproxPercentileInputGenerator>()},
+  };
+}
+
+/// Applies specified SQL transformation to the results before comparing. For
+/// example, sorts an array before comparing results of array_agg.
+///
+/// Supports 'compare' API.
+class TransformResultVerifier : public ResultVerifier {
+ public:
+  /// @param transform fmt::format-compatible SQL expression to use to transform
+  /// aggregation results before comparison. The string must have a single
+  /// placeholder for the column name that contains aggregation results. For
+  /// example, "array_sort({})".
+  explicit TransformResultVerifier(const std::string& transform)
+      : transform_{transform} {}
+
+  static std::shared_ptr<ResultVerifier> create(const std::string& transform) {
+    return std::make_shared<TransformResultVerifier>(transform);
+  }
+
+  bool supportsCompare() override {
+    return true;
+  }
+
+  bool supportsVerify() override {
+    return false;
+  }
+
+  void initialize(
+      const std::vector<RowVectorPtr>& /*input*/,
+      const std::vector<std::string>& groupingKeys,
+      const core::AggregationNode::Aggregate& /*aggregate*/,
+      const std::string& aggregateName) override {
+    projections_ = groupingKeys;
+    projections_.push_back(
+        fmt::format(fmt::runtime(transform_), aggregateName));
+  }
+
+  bool compare(const RowVectorPtr& result, const RowVectorPtr& altResult)
+      override {
+    return assertEqualResults({transform(result)}, {transform(altResult)});
+  }
+
+  bool verify(const RowVectorPtr& /*result*/) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  void reset() override {
+    projections_.clear();
+  }
+
+ private:
+  RowVectorPtr transform(const RowVectorPtr& data) {
+    VELOX_CHECK(!projections_.empty());
+    auto plan = PlanBuilder().values({data}).project(projections_).planNode();
+    return AssertQueryBuilder(plan).copyResults(data->pool());
+  }
+
+  const std::string transform_;
+
+  std::vector<std::string> projections_;
+};
+
+} // namespace
+} // namespace facebook::velox::exec::test
+
 int main(int argc, char** argv) {
-  facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
+  facebook::velox::aggregate::prestosql::registerAllAggregateFunctions(
+      "", false);
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
   facebook::velox::functions::prestosql::registerInternalFunctions();
 
@@ -53,6 +339,13 @@ int main(int argc, char** argv) {
 
   auto duckQueryRunner =
       std::make_unique<facebook::velox::exec::test::DuckQueryRunner>();
+  duckQueryRunner->disableAggregateFunctions({
+      "skewness",
+      // DuckDB results on constant inputs are incorrect. Should be NaN,
+      // but DuckDB returns some random value.
+      "kurtosis",
+      "entropy",
+  });
 
   // List of functions that have known bugs that cause crashes or failures.
   static const std::unordered_set<std::string> skipFunctions = {
@@ -62,6 +355,17 @@ int main(int argc, char** argv) {
       "reduce_agg",
   };
 
+  using facebook::velox::exec::test::TransformResultVerifier;
+
+  auto makeArrayVerifier = []() {
+    return TransformResultVerifier::create("\"$internal$canonicalize\"({})");
+  };
+
+  auto makeMapVerifier = []() {
+    return TransformResultVerifier::create(
+        "\"$internal$canonicalize\"(map_keys({}))");
+  };
+
   // Functions whose results verification should be skipped. These can be
   // order-dependent functions whose results depend on the order of input rows,
   // or functions that return complex-typed results containing floating-point
@@ -69,47 +373,33 @@ int main(int argc, char** argv) {
   // can be verified. If such transformation exists, it can be specified to be
   // used for results verification. If no transformation is specified, results
   // are not verified.
-  static const std::unordered_map<std::string, std::string>
+  static const std::unordered_map<
+      std::string,
+      std::shared_ptr<facebook::velox::exec::test::ResultVerifier>>
       customVerificationFunctions = {
           // Order-dependent functions.
-          {"approx_distinct", ""},
-          {"approx_distinct_partial", ""},
-          {"approx_distinct_merge", ""},
-          {"approx_set", ""},
-          {"approx_set_partial", ""},
-          {"approx_set_merge", ""},
-          {"approx_percentile_partial", ""},
-          {"approx_percentile_merge", ""},
-          {"arbitrary", ""},
-          {"array_agg", "\"$internal$canonicalize\"({})"},
-          {"array_agg_partial", "\"$internal$canonicalize\"({})"},
-          {"array_agg_merge", "\"$internal$canonicalize\"({})"},
-          {"array_agg_merge_extract", "\"$internal$canonicalize\"({})"},
-          {"set_agg", "\"$internal$canonicalize\"({})"},
-          {"set_union", "\"$internal$canonicalize\"({})"},
-          {"map_agg", "\"$internal$canonicalize\"(map_keys({}))"},
-          {"map_union", "\"$internal$canonicalize\"(map_keys({}))"},
-          {"map_union_sum", "\"$internal$canonicalize\"(map_keys({}))"},
-          {"max_by", ""},
-          {"min_by", ""},
-          {"map_union_sum", "\"$internal$canonicalize\"(map_keys({}))"},
+          {"approx_distinct", nullptr},
+          {"approx_set", nullptr},
+          {"approx_percentile", nullptr},
+          {"arbitrary", nullptr},
+          {"array_agg", makeArrayVerifier()},
+          {"set_agg", makeArrayVerifier()},
+          {"set_union", makeArrayVerifier()},
+          {"map_agg", makeMapVerifier()},
+          {"map_union", makeMapVerifier()},
+          {"map_union_sum", makeMapVerifier()},
+          {"max_by", nullptr},
+          {"min_by", nullptr},
           {"multimap_agg",
-           "transform_values({}, (k, v) -> \"$internal$canonicalize\"(v))"},
-          // TODO: Skip result verification of companion functions that return
-          // complex types that contain floating-point fields for now, until we
-          // fix
-          // test utilities in QueryAssertions to tolerate floating-point
-          // imprecision in complex types.
-          // https://github.com/facebookincubator/velox/issues/4481
-          {"avg_partial", ""},
-          {"avg_merge", ""},
+           TransformResultVerifier::create(
+               "transform_values({}, (k, v) -> \"$internal$canonicalize\"(v))")},
           // Semantically inconsistent functions
-          {"skewness", ""},
-          {"kurtosis", ""},
-          {"entropy", ""},
+          {"skewness", nullptr},
+          {"kurtosis", nullptr},
+          {"entropy", nullptr},
           // https://github.com/facebookincubator/velox/issues/6330
-          {"max_data_size_for_stats", ""},
-          {"sum_data_size_for_stats", ""},
+          {"max_data_size_for_stats", nullptr},
+          {"sum_data_size_for_stats", nullptr},
       };
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
@@ -118,6 +408,8 @@ int main(int argc, char** argv) {
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
   options.customVerificationFunctions = customVerificationFunctions;
+  options.customInputGenerators =
+      facebook::velox::exec::test::getCustomInputGenerators();
   options.timestampPrecision =
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   return Runner::run(initialSeed, std::move(duckQueryRunner), options);

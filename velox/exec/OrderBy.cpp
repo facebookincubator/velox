@@ -26,7 +26,7 @@ CompareFlags fromSortOrderToCompareFlags(const core::SortOrder& sortOrder) {
       sortOrder.isNullsFirst(),
       sortOrder.isAscending(),
       false,
-      CompareFlags::NullHandlingMode::NoStop};
+      CompareFlags::NullHandlingMode::kNullAsValue};
 }
 } // namespace
 
@@ -43,6 +43,7 @@ OrderBy::OrderBy(
           orderByNode->canSpill(driverCtx->queryConfig())
               ? driverCtx->makeSpillConfig(operatorId)
               : std::nullopt) {
+  maxOutputRows_ = outputBatchRows(std::nullopt);
   VELOX_CHECK(pool()->trackUsage());
   std::vector<column_index_t> sortColumnIndices;
   std::vector<CompareFlags> sortCompareFlags;
@@ -62,9 +63,6 @@ OrderBy::OrderBy(
       outputType_,
       sortColumnIndices,
       sortCompareFlags,
-      outputBatchRows(), // TODO(gaoge): Move to where we can estimate the
-                         // average row size and set the output batch rows based
-                         // on it.
       pool(),
       &nonReclaimableSection_,
       &numSpillRuns_,
@@ -98,7 +96,7 @@ void OrderBy::reclaim(
 
   // TODO: support fine-grain disk spilling based on 'targetBytes' after having
   // row container memory compaction support later.
-  sortBuffer_->spill(0, targetBytes);
+  sortBuffer_->spill();
   // Release the minimum reserved memory.
   pool()->release();
 }
@@ -106,7 +104,7 @@ void OrderBy::reclaim(
 void OrderBy::noMoreInput() {
   Operator::noMoreInput();
   sortBuffer_->noMoreInput();
-
+  maxOutputRows_ = outputBatchRows(sortBuffer_->estimateOutputRowSize());
   recordSpillStats();
 }
 
@@ -115,7 +113,7 @@ RowVectorPtr OrderBy::getOutput() {
     return nullptr;
   }
 
-  RowVectorPtr output = sortBuffer_->getOutput();
+  RowVectorPtr output = sortBuffer_->getOutput(maxOutputRows_);
   finished_ = (output == nullptr);
   return output;
 }

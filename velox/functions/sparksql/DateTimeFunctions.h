@@ -372,4 +372,40 @@ struct AddMonthsFunction {
     result = daysSinceEpoch;
   }
 };
+
+template <typename T>
+struct MonthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+    result = getMonth(getDateTime(date));
+  }
+};
+
+template <typename T>
+struct QuarterFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+    result = getQuarter(getDateTime(date));
+  }
+};
+
+template <typename T>
+struct DayFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+    result = getDateTime(date).tm_mday;
+  }
+};
+
+template <typename T>
+struct DayOfYearFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+    result = getDayOfYear(getDateTime(date));
+  }
+};
 } // namespace facebook::velox::functions::sparksql

@@ -258,18 +258,16 @@ class BaseVector {
       const BaseVector* other,
       vector_size_t index,
       vector_size_t otherIndex) const {
-    static constexpr CompareFlags kEqualValueAtFlags = {
-        false,
-        false,
-        true /*equalOnly*/,
-        CompareFlags::NullHandlingMode::NoStop /*nullHandlingMode**/};
-    // Will always have value because nullHandlingMode is NoStop.
+    static constexpr CompareFlags kEqualValueAtFlags =
+        CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
+
+    // Will always have value because nullHandlingMode is NullAsValue.
     return compare(other, index, otherIndex, kEqualValueAtFlags).value() == 0;
   }
 
   /// Returns true if this vector has the same value at the given index as the
   /// other vector at the other vector's index (including if both are null when
-  /// nullHandlingMode is NoStop), false otherwise. If nullHandlingMode is
+  /// nullHandlingMode is NullAsValue), false otherwise. If nullHandlingMode is
   /// StopAtNull, returns std::nullopt if null encountered.
   virtual std::optional<bool> equalValueAt(
       const BaseVector* other,
@@ -289,7 +287,7 @@ class BaseVector {
   /// than 'other' at 'otherIndex', 0 if equal and > 0 otherwise.
   /// When CompareFlags is DESCENDING, returns < 0 if 'this' at 'index' is
   /// larger than 'other' at 'otherIndex', 0 if equal and < 0 otherwise. If
-  /// flags.nullHandlingMode is not NoStop, the function may returns
+  /// flags.nullHandlingMode is not NullAsValue, the function may returns
   /// std::nullopt if null encountered.
   virtual std::optional<int32_t> compare(
       const BaseVector* other,
@@ -805,9 +803,9 @@ class BaseVector {
   compareNulls(bool thisNull, bool otherNull, CompareFlags flags) {
     DCHECK(thisNull || otherNull);
     switch (flags.nullHandlingMode) {
-      case CompareFlags::NullHandlingMode::StopAtNull:
+      case CompareFlags::NullHandlingMode::kStopAtNull:
         return std::nullopt;
-      case CompareFlags::NullHandlingMode::NoStop:
+      case CompareFlags::NullHandlingMode::kNullAsValue:
       default:
         break;
     }
@@ -886,7 +884,7 @@ class BaseVector {
   // Caches raw pointer to 'nulls->as<uint64_t>().
   const uint64_t* rawNulls_ = nullptr;
   velox::memory::MemoryPool* pool_;
-  vector_size_t length_ = 0;
+  tsan_atomic<vector_size_t> length_{0};
 
   /**
    * Holds the number of nulls in the vector. If the number of nulls

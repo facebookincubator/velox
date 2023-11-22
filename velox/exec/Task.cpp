@@ -332,15 +332,40 @@ bool Task::allNodesReceivedNoMoreSplitsMessageLocked() const {
   return true;
 }
 
+const std::string& Task::getOrCreateSpillDirectory() {
+  VELOX_CHECK(!spillDirectory_.empty(), "Spill directory not set");
+  if (spillDirectoryCreated_) {
+    return spillDirectory_;
+  }
+
+  std::lock_guard<std::mutex> l(spillDirCreateMutex_);
+  if (spillDirectoryCreated_) {
+    return spillDirectory_;
+  }
+  try {
+    auto fileSystem = filesystems::getFileSystem(spillDirectory_, nullptr);
+    fileSystem->mkdir(spillDirectory_);
+  } catch (const std::exception& e) {
+    VELOX_FAIL(
+        "Failed to create spill directory '{}' for Task {}: {}",
+        spillDirectory_,
+        taskId(),
+        e.what());
+  }
+  spillDirectoryCreated_ = true;
+  return spillDirectory_;
+}
+
 void Task::removeSpillDirectoryIfExists() {
-  if (!spillDirectory_.empty()) {
-    try {
-      auto fs = filesystems::getFileSystem(spillDirectory_, nullptr);
-      fs->rmdir(spillDirectory_);
-    } catch (const std::exception& e) {
-      LOG(ERROR) << "Failed to remove spill directory '" << spillDirectory_
-                 << "' for Task " << taskId() << ": " << e.what();
-    }
+  if (spillDirectory_.empty() || !spillDirectoryCreated_) {
+    return;
+  }
+  try {
+    auto fs = filesystems::getFileSystem(spillDirectory_, nullptr);
+    fs->rmdir(spillDirectory_);
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Failed to remove spill directory '" << spillDirectory_
+               << "' for Task " << taskId() << ": " << e.what();
   }
 }
 
@@ -490,6 +515,7 @@ RowVectorPtr Task::next(ContinueFuture* future) {
         "Single-threaded execution doesn't support delivering results to a "
         "callback");
 
+    taskStats_.executionStartTimeMs = getCurrentTimeMs();
     LocalPlanner::plan(
         planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
     exchangeClients_.resize(driverFactories_.size());
@@ -1696,6 +1722,11 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     if (taskStats_.executionEndTimeMs == 0) {
       taskStats_.executionEndTimeMs = getCurrentTimeMs();
     }
+    if (taskStats_.terminationTimeMs == 0) {
+      // In case terminate gets called multiple times somehow,
+      // this represents the first time.
+      taskStats_.terminationTimeMs = getCurrentTimeMs();
+    }
     if (not isRunningLocked()) {
       return makeFinishFutureLocked("Task::terminate");
     }
@@ -1941,6 +1972,14 @@ uint64_t Task::timeSinceEndMs() const {
     return 0UL;
   }
   return getCurrentTimeMs() - taskStats_.executionEndTimeMs;
+}
+
+uint64_t Task::timeSinceTerminationMs() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (taskStats_.terminationTimeMs == 0UL) {
+    return 0UL;
+  }
+  return getCurrentTimeMs() - taskStats_.terminationTimeMs;
 }
 
 void Task::onTaskCompletion() {
@@ -2510,7 +2549,13 @@ uint64_t Task::MemoryReclaimer::reclaim(
     return 0;
   }
   VELOX_CHECK_EQ(task->pool()->name(), pool->name());
-  task->requestPause().wait();
+  uint64_t reclaimWaitTimeUs{0};
+  {
+    MicrosecondTimer timer{&reclaimWaitTimeUs};
+    task->requestPause().wait();
+  }
+  stats.reclaimWaitTimeUs += reclaimWaitTimeUs;
+
   auto guard = folly::makeGuard([&]() {
     try {
       Task::resume(task);

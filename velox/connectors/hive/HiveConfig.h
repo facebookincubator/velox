@@ -107,6 +107,10 @@ class HiveConfig {
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
+  /// Enable file handle cache.
+  static constexpr const char* kEnableFileHandleCache =
+      "file_handle_cache_enabled";
+
   // TODO: Refactor and merge config and session property.
   static constexpr const char* kOrcWriterMaxStripeSize =
       "orc_optimized_writer_max_stripe_size";
@@ -117,6 +121,11 @@ class HiveConfig {
       "orc_optimized_writer_max_dictionary_memory";
   static constexpr const char* kOrcWriterMaxDictionaryMemoryConfig =
       "hive.orc.writer.dictionary-max-memory";
+
+  static constexpr const char* kSortWriterMaxOutputRows =
+      "sort_writer_max_output_rows";
+  static constexpr const char* kSortWriterMaxOutputBytes =
+      "sort_writer_max_output_bytes";
 
   static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* config);
@@ -159,7 +168,13 @@ class HiveConfig {
 
   static int32_t numCacheFileHandles(const Config* config);
 
+  static bool isFileHandleCacheEnabled(const Config* config);
+
   static uint64_t fileWriterFlushThresholdBytes(const Config* config);
+
+  static uint32_t sortWriterMaxOutputRows(const Config* config);
+
+  static uint64_t sortWriterMaxOutputBytes(const Config* config);
 
   static uint64_t getOrcWriterMaxStripeSize(
       const Config* connectorQueryCtxConfig,

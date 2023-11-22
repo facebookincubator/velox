@@ -21,10 +21,16 @@
 #include "velox/common/compression/Compression.h"
 
 namespace facebook::velox::common {
+
+/// Defining type for a callback function that returns the spill directory path.
+/// Implementations can use it to ensure the path exists before returning.
+using GetSpillDirectoryPathCB = std::function<const std::string&()>;
+
 /// Specifies the config for spilling.
 struct SpillConfig {
   SpillConfig(
-      const std::string& _filePath,
+      GetSpillDirectoryPathCB _getSpillDirPathCb,
+      std::string _filePath,
       uint64_t _maxFileSize,
       uint64_t _writeBufferSize,
       uint64_t _minSpillRunSize,
@@ -36,7 +42,9 @@ struct SpillConfig {
       int32_t _maxSpillLevel,
       uint64_t _writerFlushThresholdSize,
       int32_t _testSpillPct,
-      const std::string& _compressionKind);
+      const std::string& _compressionKind,
+      const std::unordered_map<std::string, std::string>& _writeFileOptions =
+          {});
 
   /// Returns the hash join spilling level with given 'startBitOffset'.
   ///
@@ -48,8 +56,12 @@ struct SpillConfig {
   /// spill limit.
   bool exceedJoinSpillLevelLimit(uint8_t startBitOffset) const;
 
-  /// Filesystem path for spill files.
-  std::string filePath;
+  /// A callback function that returns the spill directory path. Implementations
+  /// can use it to ensure the path exists before returning.
+  GetSpillDirectoryPathCB getSpillDirPathCb;
+
+  /// Prefix for spill files.
+  std::string fileNamePrefix;
 
   /// The max spill file size. If it is zero, there is no limit on the spill
   /// file size.
@@ -103,5 +115,8 @@ struct SpillConfig {
 
   /// CompressionKind when spilling, CompressionKind_NONE means no compression.
   common::CompressionKind compressionKind;
+
+  /// Custom options passed to velox::FileSystem to create spill WriteFile.
+  std::unordered_map<std::string, std::string> writeFileOptions;
 };
 } // namespace facebook::velox::common

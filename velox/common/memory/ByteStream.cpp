@@ -22,37 +22,21 @@ std::string ByteRange::toString() const {
   return fmt::format("[{} starting at {}]", succinctBytes(size), position);
 }
 
-size_t ByteStream::size() const {
-  if (ranges_.empty()) {
-    return 0;
+std::string ByteInputStream::toString() const {
+  std::stringstream oss;
+  oss << ranges_.size() << " ranges (position/size) [";
+  for (const auto& range : ranges_) {
+    oss << "(" << range.position << "/" << range.size
+        << (&range == current_ ? " current" : "") << ")";
+    if (&range != &ranges_.back()) {
+      oss << ",";
+    }
   }
-  size_t total = 0;
-  for (auto i = 0; i < ranges_.size() - 1; ++i) {
-    total += ranges_[i].size;
-  }
-  return total + std::max(ranges_.back().position, lastRangeEnd_);
+  oss << "]";
+  return oss.str();
 }
 
-size_t ByteStream::remainingSize() const {
-  if (ranges_.empty()) {
-    return 0;
-  }
-  const auto* lastRange = &ranges_[ranges_.size() - 1];
-  auto cur = current_;
-  size_t total{0};
-  if (cur == lastRange) {
-    total += (std::max(cur->position, lastRangeEnd_) - cur->position);
-  } else {
-    total += cur->size - cur->position;
-  }
-
-  while (++cur <= lastRange) {
-    total += (cur == lastRange) ? lastRangeEnd_ : cur->size;
-  }
-  return total;
-}
-
-bool ByteStream::atEnd() const {
+bool ByteInputStream::atEnd() const {
   if (!current_) {
     return false;
   }
@@ -64,7 +48,59 @@ bool ByteStream::atEnd() const {
   return current_ == &ranges_.back();
 }
 
-void ByteStream::next(bool throwIfPastEnd) {
+size_t ByteInputStream::size() const {
+  size_t total = 0;
+  for (const auto& range : ranges_) {
+    total += range.size;
+  }
+  return total;
+}
+
+size_t ByteInputStream::remainingSize() const {
+  if (ranges_.empty()) {
+    return 0;
+  }
+  const auto* lastRange = &ranges_[ranges_.size() - 1];
+  auto cur = current_;
+  size_t total = cur->size - cur->position;
+  while (++cur <= lastRange) {
+    total += cur->size;
+  }
+  return total;
+}
+
+std::streampos ByteInputStream::tellp() const {
+  if (ranges_.empty()) {
+    return 0;
+  }
+  assert(current_);
+  int64_t size = 0;
+  for (auto& range : ranges_) {
+    if (&range == current_) {
+      return current_->position + size;
+    }
+    size += range.size;
+  }
+  VELOX_FAIL("ByteStream 'current_' is not in 'ranges_'.");
+}
+
+void ByteInputStream::seekp(std::streampos position) {
+  if (ranges_.empty() && position == 0) {
+    return;
+  }
+  int64_t toSkip = position;
+  for (auto& range : ranges_) {
+    if (toSkip <= range.size) {
+      current_ = &range;
+      current_->position = toSkip;
+      return;
+    }
+    toSkip -= range.size;
+  }
+  VELOX_FAIL("Seeking past end of ByteInputStream: {}", position);
+}
+
+void ByteInputStream::next(bool throwIfPastEnd) {
   VELOX_CHECK(current_ >= &ranges_[0]);
   size_t position = current_ - &ranges_[0];
   VELOX_CHECK_LT(position, ranges_.size());
@@ -78,7 +114,7 @@ void ByteStream::next(bool throwIfPastEnd) {
   current_->position = 0;
 }
 
-uint8_t ByteStream::readByte() {
+uint8_t ByteInputStream::readByte() {
   if (current_->position < current_->size) {
     return current_->buffer[current_->position++];
   }
@@ -86,7 +122,7 @@ uint8_t ByteStream::readByte() {
   return readByte();
 }
 
-void ByteStream::readBytes(uint8_t* bytes, int32_t size) {
+void ByteInputStream::readBytes(uint8_t* bytes, int32_t size) {
   int32_t offset = 0;
   for (;;) {
     int32_t available = current_->size - current_->position;
@@ -102,7 +138,7 @@ void ByteStream::readBytes(uint8_t* bytes, int32_t size) {
   }
 }
 
-std::string_view ByteStream::nextView(int32_t size) {
+std::string_view ByteInputStream::nextView(int32_t size) {
   if (current_->position == current_->size) {
     if (current_ == &ranges_.back()) {
       return std::string_view(nullptr, 0);
@@ -117,7 +153,7 @@ std::string_view ByteStream::nextView(int32_t size) {
       reinterpret_cast<char*>(current_->buffer) + position, viewSize);
 }
 
-void ByteStream::skip(int32_t size) {
+void ByteInputStream::skip(int32_t size) {
   for (;;) {
     int32_t available = current_->size - current_->position;
     int32_t numUsed = std::min(available, size);
@@ -128,6 +164,17 @@ void ByteStream::skip(int32_t size) {
     }
     next();
   }
+}
+
+size_t ByteStream::size() const {
+  if (ranges_.empty()) {
+    return 0;
+  }
+  size_t total = 0;
+  for (auto i = 0; i < ranges_.size() - 1; ++i) {
+    total += ranges_[i].size;
+  }
+  return total + std::max(ranges_.back().position, lastRangeEnd_);
 }
 
 void ByteStream::appendBool(bool value, int32_t count) {
@@ -158,7 +205,11 @@ void ByteStream::appendBool(bool value, int32_t count) {
   }
 }
 
-void ByteStream::appendStringPiece(folly::StringPiece value) {
+void ByteStream::appendStringView(StringView value) {
+  appendStringView((std::string_view)value);
+}
+
+void ByteStream::appendStringView(std::string_view value) {
   const int32_t bytes = value.size();
   int32_t offset = 0;
   for (;;) {

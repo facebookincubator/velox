@@ -231,15 +231,12 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
   spiller_ = std::make_unique<Spiller>(
       Spiller::Type::kHashJoinBuild,
       table_->rows(),
-      [&](folly::Range<char**> rows) { table_->rows()->eraseRows(rows); },
       tableType_,
       std::move(hashBits),
-      keyChannels_.size(),
-      std::vector<CompareFlags>(),
-      spillConfig.filePath,
+      spillConfig.getSpillDirPathCb,
+      spillConfig.fileNamePrefix,
       spillConfig.maxFileSize,
       spillConfig.writeBufferSize,
-      spillConfig.minSpillRunSize,
       spillConfig.compressionKind,
       memory::spillMemoryPool(),
       spillConfig.executor);
@@ -637,6 +634,11 @@ bool HashBuild::requestSpill(RowVectorPtr& input) {
   VELOX_CHECK_GT(numSpillRows_, 0);
   VELOX_CHECK_GT(numSpillBytes_, 0);
 
+  // If all the partitions have been spilled, then nothing to spill.
+  if (spiller_->isAllSpilled()) {
+    return true;
+  }
+
   input_ = std::move(input);
   if (spillGroup_->requestSpill(*this, future_)) {
     VELOX_CHECK(future_.valid());
@@ -667,53 +669,22 @@ void HashBuild::runSpill(const std::vector<Operator*>& spillOperators) {
 
   uint64_t targetRows = 0;
   uint64_t targetBytes = 0;
-  std::vector<Spiller*> spillers;
-  spillers.reserve(spillOperators.size());
   for (auto& spillOp : spillOperators) {
     HashBuild* build = dynamic_cast<HashBuild*>(spillOp);
     VELOX_CHECK_NOT_NULL(build);
     ++build->numSpillRuns_;
-    spillers.push_back(build->spiller_.get());
     build->addAndClearSpillTarget(targetRows, targetBytes);
   }
   VELOX_CHECK_GT(targetRows, 0);
   VELOX_CHECK_GT(targetBytes, 0);
 
-  std::vector<Spiller::SpillableStats> spillableStats(
-      spiller_->hashBits().numPartitions());
-  for (auto* spiller : spillers) {
-    spiller->fillSpillRuns(spillableStats);
-  }
-
-  // Sort the partitions based on the amount of spillable data.
-  SpillPartitionNumSet partitionsToSpill;
-  std::vector<int32_t> partitionIndices(spillableStats.size());
-  std::iota(partitionIndices.begin(), partitionIndices.end(), 0);
-  std::sort(
-      partitionIndices.begin(),
-      partitionIndices.end(),
-      [&](int32_t lhs, int32_t rhs) {
-        return spillableStats[lhs].numBytes > spillableStats[rhs].numBytes;
-      });
-  int64_t numRows = 0;
-  int64_t numBytes = 0;
-  for (auto partitionNum : partitionIndices) {
-    if (spillableStats[partitionNum].numBytes == 0) {
-      break;
-    }
-    partitionsToSpill.insert(partitionNum);
-    numRows += spillableStats[partitionNum].numRows;
-    numBytes += spillableStats[partitionNum].numBytes;
-    if (numRows >= targetRows && numBytes >= targetBytes) {
-      break;
-    }
-  }
-  VELOX_CHECK(!partitionsToSpill.empty());
-
   // TODO: consider to offload the partition spill processing to an executor to
   // run in parallel.
-  for (auto* spiller : spillers) {
-    spiller->spill(partitionsToSpill);
+  for (auto& spillOp : spillOperators) {
+    HashBuild* build = dynamic_cast<HashBuild*>(spillOp);
+    build->spiller_->spill();
+    build->table_->clear();
+    build->pool()->release();
   }
 }
 
@@ -1152,9 +1123,6 @@ void HashBuild::reclaim(
     }
   }
 
-  std::vector<Spiller::SpillableStats> spillableStats;
-  spillableStats.reserve(spiller_->hashBits().numPartitions());
-
   struct SpillResult {
     const std::exception_ptr error{nullptr};
 
@@ -1166,12 +1134,10 @@ void HashBuild::reclaim(
   for (auto* op : operators) {
     HashBuild* buildOp = static_cast<HashBuild*>(op);
     ++buildOp->numSpillRuns_;
-    spillTasks.push_back(std::make_shared<AsyncSource<SpillResult>>(
-        [this, &spillableStats, buildOp]() {
+    spillTasks.push_back(
+        std::make_shared<AsyncSource<SpillResult>>([buildOp]() {
           try {
-            buildOp->spiller_->fillSpillRuns(spillableStats);
             buildOp->spiller_->spill();
-            VELOX_CHECK_EQ(buildOp->table_->numDistinct(), 0);
             buildOp->table_->clear();
             // Release the minimum reserved memory.
             buildOp->pool()->release();

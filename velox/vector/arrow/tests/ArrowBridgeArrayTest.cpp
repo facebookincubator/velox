@@ -24,12 +24,23 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
 namespace {
 
 void mockSchemaRelease(ArrowSchema*) {}
 void mockArrayRelease(ArrowArray*) {}
+
+template <typename T>
+struct VeloxToArrowType {
+  using type = T;
+};
+
+template <>
+struct VeloxToArrowType<Timestamp> {
+  using type = int64_t;
+};
 
 class ArrowBridgeArrayExportTest : public testing::Test {
  protected:
@@ -61,6 +72,37 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     EXPECT_EQ(nullptr, arrowArray.private_data);
   }
 
+  // Construct and test a constant vector based on a scalar value.
+  template <typename T>
+  void testConstant(
+      const T& input,
+      size_t vectorSize = 1000,
+      const TypePtr& type = CppToType<T>::create()) {
+    VectorPtr vector = BaseVector::createConstant(
+        type, variant(input), vectorSize, pool_.get());
+    testConstantVector<true /*isScalar*/, T>(vector, input);
+  }
+
+  // Test arrow conversion based on a constant vector already constructed.
+  template <bool isScalar, typename T, typename TInput>
+  void testConstantVector(
+      const VectorPtr& constantVector,
+      const TInput& input) {
+    ArrowArray arrowArray;
+    velox::exportToArrow(constantVector, arrowArray, pool_.get());
+    validateConstant<isScalar, T>(
+        input,
+        constantVector->size(),
+        constantVector->mayHaveNulls(),
+        arrowArray);
+
+    arrowArray.release(&arrowArray);
+    EXPECT_EQ(nullptr, arrowArray.release);
+    EXPECT_EQ(nullptr, arrowArray.private_data);
+  }
+
+  // Helper functions for verification.
+
   template <typename T>
   void validateArray(
       const std::vector<std::optional<T>>& inputData,
@@ -90,11 +132,13 @@ class ArrowBridgeArrayExportTest : public testing::Test {
   void validateNumericalArray(
       const std::vector<std::optional<T>>& inputData,
       const ArrowArray& arrowArray) {
+    using TArrow = typename VeloxToArrowType<T>::type;
+
     ASSERT_EQ(2, arrowArray.n_buffers); // null and values buffers.
     ASSERT_NE(nullptr, arrowArray.buffers);
 
     const uint64_t* nulls = static_cast<const uint64_t*>(arrowArray.buffers[0]);
-    const T* values = static_cast<const T*>(arrowArray.buffers[1]);
+    const TArrow* values = static_cast<const TArrow*>(arrowArray.buffers[1]);
 
     EXPECT_NE(values, nullptr);
 
@@ -110,7 +154,11 @@ class ArrowBridgeArrayExportTest : public testing::Test {
         if constexpr (std::is_same_v<T, bool>) {
           EXPECT_EQ(
               inputData[i],
-              bits::isBitSet(reinterpret_cast<const uint64_t*>(values), i));
+              bits::isBitSet(reinterpret_cast<const uint64_t*>(values), i))
+              << "mismatch at index " << i;
+        } else if constexpr (std::is_same_v<T, Timestamp>) {
+          EXPECT_EQ(inputData[i], Timestamp::fromNanos(values[i]))
+              << "mismatch at index " << i;
         } else {
           EXPECT_EQ(inputData[i], values[i]) << "mismatch at index " << i;
         }
@@ -149,20 +197,25 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     }
   }
 
+  // Validate nulls and returns whether this array uses Arrow's Null Layout.
   template <typename T>
   void validateNulls(
       const std::vector<std::optional<T>>& inputData,
       const ArrowArray& arrowArray) {
     size_t nullCount =
         std::count(inputData.begin(), inputData.end(), std::nullopt);
-    if (arrowArray.null_count != -1) {
-      EXPECT_EQ(nullCount, arrowArray.null_count);
-    }
+    EXPECT_EQ(arrowArray.null_count, nullCount);
 
     if (arrowArray.null_count == 0) {
       EXPECT_EQ(arrowArray.buffers[0], nullptr);
     } else {
       EXPECT_NE(arrowArray.buffers[0], nullptr);
+      EXPECT_EQ(
+          arrowArray.null_count,
+          bits::countNulls(
+              static_cast<const uint64_t*>(arrowArray.buffers[0]),
+              0,
+              inputData.size()));
     }
   }
 
@@ -211,6 +264,45 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     } else {
       validateNumericalArray(flattenedData, *childArray);
     }
+  }
+
+  template <bool isScalar, typename T, typename TInput>
+  void validateConstant(
+      const TInput& inputData,
+      size_t vectorSize,
+      bool isNullConstant,
+      const ArrowArray& arrowArray) {
+    using TRunEnds = int32_t;
+
+    // Validate base REE array.
+    EXPECT_EQ(vectorSize, arrowArray.length);
+    if (isNullConstant) {
+      EXPECT_EQ(vectorSize, arrowArray.null_count);
+    } else {
+      EXPECT_EQ(0, arrowArray.null_count);
+    }
+    EXPECT_EQ(0, arrowArray.offset);
+    EXPECT_EQ(0, arrowArray.n_buffers);
+    EXPECT_EQ(nullptr, arrowArray.buffers);
+    EXPECT_EQ(nullptr, arrowArray.dictionary);
+    EXPECT_NE(nullptr, arrowArray.release);
+
+    // Validate children.
+    EXPECT_EQ(2, arrowArray.n_children); // run_ends and values children.
+    EXPECT_NE(nullptr, arrowArray.children);
+
+    const auto& runEnds = *arrowArray.children[0];
+    const auto& values = *arrowArray.children[1];
+
+    // Validate values.
+    if constexpr (isScalar) {
+      validateArray<T>({inputData}, values);
+    } else {
+      validateListArray<T>({{{inputData}}}, values);
+    }
+
+    // Validate run ends - single run of the vector size.
+    validateArray<TRunEnds>({vectorSize}, runEnds);
   }
 
   ArrowSchema makeArrowSchema(const char* format) {
@@ -396,6 +488,25 @@ TEST_F(ArrowBridgeArrayExportTest, flatDate) {
       DATE());
 }
 
+TEST_F(ArrowBridgeArrayExportTest, flatTimestamp) {
+  testFlatVector<Timestamp>(
+      {
+          Timestamp(0, 0),
+          std::nullopt,
+          Timestamp(1699300965, 12'349),
+          Timestamp(-2208960000, 0), // 1900-01-01
+          Timestamp(3155788800, 999'999'999),
+          std::nullopt,
+      },
+      TIMESTAMP());
+
+  // Out of range. If nanosecond precision is represented in Arrow, timestamps
+  // starting around 2263-01-01 should overflow and throw a user exception.
+  EXPECT_THROW(
+      testFlatVector<Timestamp>({Timestamp(9246211200, 0)}, TIMESTAMP()),
+      VeloxUserError);
+}
+
 TEST_F(ArrowBridgeArrayExportTest, flatString) {
   testFlatVector<std::string>({
       "my string",
@@ -551,6 +662,28 @@ TEST_F(ArrowBridgeArrayExportTest, arrayCrossValidate) {
   for (int i = 0; i < 5; ++i) {
     EXPECT_EQ(values.Value(i), i + 1);
   }
+}
+
+TEST_F(ArrowBridgeArrayExportTest, arrayDictionary) {
+  auto vec = ({
+    auto indices = makeBuffer<vector_size_t>({1, 2, 0});
+    auto wrapped = vectorMaker_.flatVector<int64_t>({1, 2, 3});
+    auto inner = BaseVector::wrapInDictionary(nullptr, indices, 3, wrapped);
+    auto offsets = makeBuffer<vector_size_t>({2, 0});
+    auto sizes = makeBuffer<vector_size_t>({1, 1});
+    std::make_shared<ArrayVector>(
+        pool_.get(), ARRAY(inner->type()), nullptr, 2, offsets, sizes, inner);
+  });
+
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vec, schema);
+  velox::exportToArrow(vec, data, vec->pool());
+
+  auto result = importFromArrowAsViewer(schema, data, vec->pool());
+  test::assertEqualVectors(result, vec);
+  schema.release(&schema);
+  data.release(&data);
 }
 
 TEST_F(ArrowBridgeArrayExportTest, arrayGap) {
@@ -745,19 +878,32 @@ TEST_F(ArrowBridgeArrayExportTest, dictionaryNested) {
   EXPECT_EQ(values.Value(2), 3);
 }
 
-TEST_F(ArrowBridgeArrayExportTest, unsupported) {
-  ArrowArray arrowArray;
-  VectorPtr vector;
+TEST_F(ArrowBridgeArrayExportTest, constants) {
+  testConstant((int64_t)987654321);
+  testConstant((int32_t)1234);
+  testConstant((float)44.3);
+  testConstant(true);
+  testConstant(StringView("inlined"));
 
-  // Timestamps.
-  vector = vectorMaker_.flatVectorNullable<Timestamp>({});
-  EXPECT_THROW(
-      velox::exportToArrow(vector, arrowArray, pool_.get()), VeloxException);
+  // Null constant.
+  VectorPtr vector =
+      BaseVector::createNullConstant(TINYINT(), 2048, pool_.get());
+  testConstantVector<true, int8_t>(
+      vector, std::vector<std::optional<int8_t>>{std::nullopt});
+}
 
-  // Constant encoding.
-  vector = BaseVector::createConstant(INTEGER(), variant(10), 10, pool_.get());
-  EXPECT_THROW(
-      velox::exportToArrow(vector, arrowArray, pool_.get()), VeloxException);
+TEST_F(ArrowBridgeArrayExportTest, constantComplex) {
+  auto innerArray =
+      vectorMaker_.arrayVector<int64_t>({{1, 2, 3}, {4, 5}, {6, 7, 8, 9}});
+
+  // Wrap around different indices.
+  VectorPtr vector = BaseVector::wrapInConstant(100, 1, innerArray);
+  testConstantVector<false, int64_t>(
+      vector, std::vector<std::optional<int64_t>>{4, 5});
+
+  vector = BaseVector::wrapInConstant(100, 0, innerArray);
+  testConstantVector<false, int64_t>(
+      vector, std::vector<std::optional<int64_t>>{1, 2, 3});
 }
 
 class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
@@ -786,13 +932,14 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
   ArrowArray fillArrowArray(
       const std::vector<std::optional<T>>& inputValues,
       ArrowContextHolder& holder) {
+    using TArrow = typename VeloxToArrowType<T>::type;
     int64_t length = inputValues.size();
     int64_t nullCount = 0;
 
-    holder.values = AlignedBuffer::allocate<T>(length, pool_.get());
+    holder.values = AlignedBuffer::allocate<TArrow>(length, pool_.get());
     holder.nulls = AlignedBuffer::allocate<uint64_t>(length, pool_.get());
 
-    auto rawValues = holder.values->asMutable<T>();
+    auto rawValues = holder.values->asMutable<TArrow>();
     auto rawNulls = holder.nulls->asMutable<uint64_t>();
 
     for (size_t i = 0; i < length; ++i) {
@@ -803,6 +950,8 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         bits::clearNull(rawNulls, i);
         if constexpr (std::is_same_v<T, bool>) {
           bits::setBit(rawValues, i, *inputValues[i]);
+        } else if constexpr (std::is_same_v<T, Timestamp>) {
+          rawValues[i] = inputValues[i]->toNanos();
         } else {
           rawValues[i] = *inputValues[i];
         }
@@ -949,6 +1098,9 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     testArrowImport<double>("g", {std::nullopt});
     testArrowImport<double>("g", {-99.9, 4.3, 31.1, 129.11, -12});
     testArrowImport<float>("f", {-99.9, 4.3, 31.1, 129.11, -12});
+
+    testArrowImport<Timestamp>(
+        "ttn", {Timestamp(0, 0), std::nullopt, Timestamp(1699308257, 1234)});
   }
 
   void testImportWithoutNullsBuffer() {

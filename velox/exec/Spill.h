@@ -19,7 +19,9 @@
 #include <folly/container/F14Set.h>
 
 #include "velox/common/compression/Compression.h"
+#include "velox/common/config/SpillConfig.h"
 #include "velox/common/file/File.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/exec/TreeOfLosers.h"
 #include "velox/exec/UnorderedStreamReader.h"
 #include "velox/vector/ComplexVector.h"
@@ -27,9 +29,12 @@
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
-
-// Input stream backed by spill file.
-class SpillInput : public ByteStream {
+/// Input stream backed by spill file.
+///
+/// TODO Usage of ByteInputStream as base class is hacky and just happens to
+/// work. For example, ByteInputStream::size(), seekp(), tellp(),
+/// remainingSize() APIs do not work properly.
+class SpillInput : public ByteInputStream {
  public:
   // Reads from 'input' using 'buffer' for buffering reads.
   SpillInput(std::unique_ptr<ReadFile>&& input, BufferPtr buffer)
@@ -39,14 +44,14 @@ class SpillInput : public ByteStream {
     next(true);
   }
 
-  void next(bool throwIfPastEnd) override;
-
   // True if all of the file has been read into vectors.
-  bool atEnd() const {
+  bool atEnd() const override {
     return offset_ >= size_ && ranges()[0].position >= ranges()[0].size;
   }
 
  private:
+  void next(bool throwIfPastEnd) override;
+
   std::unique_ptr<ReadFile> input_;
   BufferPtr buffer_;
   const uint64_t size_;
@@ -71,7 +76,8 @@ class SpillFile {
       const std::vector<CompareFlags>& sortCompareFlags,
       const std::string& path,
       common::CompressionKind compressionKind,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const std::unordered_map<std::string, std::string>& writeFileOptions);
 
   uint32_t id() const {
     return id_;
@@ -141,6 +147,7 @@ class SpillFile {
   const int32_t ordinal_;
   const std::string path_;
   const common::CompressionKind compressionKind_;
+  const filesystems::FileOptions writeFileOptions_;
   memory::MemoryPool* const pool_;
 
   // Byte size of the backing file. Set when finishing writing.
@@ -248,7 +255,8 @@ class SpillFileList {
       uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
-      folly::Synchronized<SpillStats>* stats);
+      folly::Synchronized<SpillStats>* stats,
+      const std::unordered_map<std::string, std::string>& writeFileOptions);
 
   /// Adds 'rows' for the positions in 'indices' into 'this'. The indices
   /// must produce a view where the rows are sorted if sorting is desired.
@@ -299,6 +307,7 @@ class SpillFileList {
   const uint64_t targetFileSize_;
   const uint64_t writeBufferSize_;
   const common::CompressionKind compressionKind_;
+  const std::unordered_map<std::string, std::string> writeFileOptions_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<SpillStats>* const stats_;
   uint32_t nextFileId_{0};
@@ -599,7 +608,8 @@ class SpillState {
   /// target size of a single file.  'pool' owns the memory for state and
   /// results.
   SpillState(
-      const std::string& path,
+      common::GetSpillDirectoryPathCB getSpillDirectoryPath,
+      const std::string& fileNamePrefix,
       int32_t maxPartitions,
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
@@ -607,7 +617,9 @@ class SpillState {
       uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
-      folly::Synchronized<SpillStats>* stats);
+      folly::Synchronized<SpillStats>* stats,
+      const std::unordered_map<std::string, std::string>& writeFileOptions =
+          {});
 
   /// Indicates if a given 'partition' has been spilled or not.
   bool isPartitionSpilled(int32_t partition) const {
@@ -690,13 +702,20 @@ class SpillState {
   void updateSpilledInputBytes(uint64_t bytes);
 
   const RowTypePtr type_;
-  const std::string path_;
+
+  // A callback function that returns the spill directory path. Implementations
+  // can use it to ensure the path exists before returning.
+  common::GetSpillDirectoryPathCB getSpillDirPathCb_;
+
+  /// Prefix for spill files.
+  const std::string fileNamePrefix_;
   const int32_t maxPartitions_;
   const int32_t numSortingKeys_;
   const std::vector<CompareFlags> sortCompareFlags_;
   const uint64_t targetFileSize_;
   const uint64_t writeBufferSize_;
   const common::CompressionKind compressionKind_;
+  const std::unordered_map<std::string, std::string> writeFileOptions_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<SpillStats>* const stats_;
 

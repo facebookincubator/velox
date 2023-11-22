@@ -95,7 +95,8 @@ add_executable(
   PlanBuilderTest.cpp
   QueryAssertionsTest.cpp
   TaskTest.cpp
-  TreeOfLosersTest.cpp)
+  TreeOfLosersTest.cpp
+  PrestoQueryRunnerTest.cpp)
 
 add_test(
   NAME velox_exec_test
@@ -164,6 +165,8 @@ target_link_libraries(
   velox_type
   velox_vector
   velox_vector_fuzzer
+  velox_presto_serializer
+  velox_dwio_dwrf_writer
   Boost::atomic
   Boost::context
   Boost::date_time
@@ -281,3 +284,10 @@ add_executable(velox_spiller_aggregate_benchmark
 target_link_libraries(
   velox_spiller_aggregate_benchmark velox_exec velox_exec_test_lib
   velox_spiller_aggregate_benchmark_base)
+
+add_executable(cpr_http_client_test CprHttpClientTest.cpp)
+add_test(
+  NAME cpr_http_client_test
+  COMMAND cpr_http_client_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(cpr_http_client_test cpr::cpr gtest gtest_main)
