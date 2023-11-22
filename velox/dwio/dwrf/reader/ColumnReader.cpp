@@ -168,6 +168,28 @@ uint64_t ColumnReader::skip(uint64_t numValues) {
   return numValues;
 }
 
+#if FOLLY_HAS_COROUTINES
+
+folly::coro::Task<uint64_t> ColumnReader::co_skip(uint64_t numValues) {
+  if (notNullDecoder_) {
+    // page through the values that we want to skip
+    // and count how many are non-null
+    std::array<char, BUFFER_SIZE> buffer;
+    constexpr auto bitCount = BUFFER_SIZE * 8;
+    uint64_t remaining = numValues;
+    while (remaining > 0) {
+      uint64_t chunkSize = std::min(remaining, bitCount);
+      notNullDecoder_->next(buffer.data(), chunkSize, nullptr);
+      remaining -= chunkSize;
+      numValues -= bits::countNulls(
+          reinterpret_cast<uint64_t*>(buffer.data()), 0, chunkSize);
+    }
+  }
+  co_return numValues;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 /**
  * Expand an array of bytes in place to the corresponding bigger.
  * Has to work backwards so that they data isn't clobbered during the
@@ -230,6 +252,17 @@ class ByteRleColumnReader : public ColumnReader {
 
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 
  private:
   const TypePtr requestedType_;
@@ -305,6 +338,68 @@ void ByteRleColumnReader<FileType, RequestedType>::next(
     expandBytes<FileType>(valuesPtr, numValues);
   }
 }
+
+#if FOLLY_HAS_COROUTINES
+
+template <typename FileType, typename RequestedType>
+folly::coro::Task<uint64_t>
+ByteRleColumnReader<FileType, RequestedType>::co_skip(uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  rle->skip(numValues);
+  co_return numValues;
+}
+
+template <typename FileType, typename RequestedType>
+folly::coro::Task<void> ByteRleColumnReader<FileType, RequestedType>::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto flatVector = resetIfWrongFlatVectorType<RequestedType>(result);
+
+  if (result) {
+    result->resize(numValues, false);
+  }
+
+  BufferPtr values;
+  if (flatVector) {
+    values = flatVector->mutableValues(numValues);
+  }
+
+  if (flatVector) {
+    detail::resetIfNotWritable(result, values);
+  }
+  if (!values) {
+    values = AlignedBuffer::allocate<RequestedType>(numValues, &memoryPool_);
+  }
+  values->setSize(BaseVector::byteSize<RequestedType>(numValues));
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+  if (result) {
+    // This resize will re-allocate nulls
+    result->setNullCount(nullCount);
+  } else {
+    result = makeFlatVector<RequestedType>(
+        &memoryPool_, requestedType_, nulls, nullCount, numValues, values);
+  }
+
+  // Since the byte rle places the output in a char* instead of long*,
+  // we cheat here and use the long* and then expand it in a second pass.
+  auto valuesPtr = values->asMutable<RequestedType>();
+  rle->next(reinterpret_cast<char*>(valuesPtr), numValues, nullsPtr);
+
+  // Handle upcast
+  if constexpr (
+      !std::is_same_v<FileType, RequestedType> &&
+      (std::is_same_v<FileType, bool> ||
+       sizeof(FileType) < sizeof(RequestedType))) {
+    expandBytes<FileType>(valuesPtr, numValues);
+  }
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
 
 namespace {
 
@@ -389,6 +484,17 @@ class DecimalColumnReader : public ColumnReader {
 
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 };
 
 template <typename DataT>
@@ -477,6 +583,63 @@ void DecimalColumnReader<DataT>::next(
       valuesPtr, nullsPtr, valuesData, scalesData, numValues, scale_);
 }
 
+#if FOLLY_HAS_COROUTINES
+
+template <typename DataT>
+folly::coro::Task<uint64_t> DecimalColumnReader<DataT>::co_skip(
+    uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  valueDecoder_->skip(numValues);
+  scaleDecoder_->skip(numValues);
+  co_return numValues;
+}
+
+template <typename DataT>
+folly::coro::Task<void> DecimalColumnReader<DataT>::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto flatVector = resetIfWrongFlatVectorType<DataT>(result);
+  if (result) {
+    result->resize(numValues, false);
+  }
+  BufferPtr values;
+  if (flatVector) {
+    values = flatVector->mutableValues(numValues);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  if (flatVector) {
+    detail::resetIfNotWritable(result, values);
+  }
+  if (!values) {
+    values = AlignedBuffer::allocate<DataT>(numValues, &memoryPool_);
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+  } else {
+    result = makeFlatVector<DataT>(
+        &memoryPool_, requestedType_, nulls, nullCount, numValues, values);
+  }
+
+  detail::ensureCapacity<DataT>(valueBuffer_, numValues, &memoryPool_);
+  detail::ensureCapacity<int64_t>(scaleBuffer_, numValues, &memoryPool_);
+  auto valuesData = valueBuffer_->asMutable<DataT>();
+  auto scalesData = scaleBuffer_->asMutable<int64_t>();
+  valueDecoder_->nextValues(valuesData, numValues, nullsPtr);
+  scaleDecoder_->next(scalesData, numValues, nullsPtr);
+  auto* valuesPtr = values->asMutable<DataT>();
+  DecimalUtil::fillDecimals<DataT>(
+      valuesPtr, nullsPtr, valuesData, scalesData, numValues, scale_);
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 } // namespace
 
 template <class ReqT>
@@ -496,6 +659,17 @@ class IntegerDirectColumnReader : public ColumnReader {
 
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 
  private:
   const TypePtr requestedType_;
@@ -576,6 +750,52 @@ void IntegerDirectColumnReader<ReqT>::next(
   nextValues(*ints, values->asMutable<ReqT>(), numValues, nullsPtr);
 }
 
+#if FOLLY_HAS_COROUTINES
+
+template <class ReqT>
+folly::coro::Task<uint64_t> IntegerDirectColumnReader<ReqT>::co_skip(
+    uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  ints->skip(numValues);
+  co_return numValues;
+}
+
+template <class ReqT>
+folly::coro::Task<void> IntegerDirectColumnReader<ReqT>::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto flatVector = resetIfWrongFlatVectorType<ReqT>(result);
+  BufferPtr values;
+  if (flatVector) {
+    values = flatVector->mutableValues(numValues);
+    result->resize(numValues, false);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  if (flatVector) {
+    detail::resetIfNotWritable(result, values);
+  }
+  if (!values) {
+    values = AlignedBuffer::allocate<ReqT>(numValues, &memoryPool_);
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+  } else {
+    result = makeFlatVector<ReqT>(
+        &memoryPool_, requestedType_, nulls, nullCount, numValues, values);
+  }
+
+  nextValues(*ints, values->asMutable<ReqT>(), numValues, nullsPtr);
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 template <class ReqT>
 class IntegerDictionaryColumnReader : public ColumnReader {
  public:
@@ -593,6 +813,17 @@ class IntegerDictionaryColumnReader : public ColumnReader {
 
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 
  private:
   template <typename T>
@@ -747,6 +978,71 @@ void IntegerDictionaryColumnReader<ReqT>::next(
   populateOutput(dict, valuesPtr, numValues, nullsPtr, inDict);
 }
 
+#if FOLLY_HAS_COROUTINES
+
+template <class ReqT>
+folly::coro::Task<uint64_t> IntegerDictionaryColumnReader<ReqT>::co_skip(
+    uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  dataReader->skip(numValues);
+  if (inDictionaryReader) {
+    inDictionaryReader->skip(numValues);
+  }
+  co_return numValues;
+}
+
+template <class ReqT>
+folly::coro::Task<void> IntegerDictionaryColumnReader<ReqT>::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto flatVector = resetIfWrongFlatVectorType<ReqT>(result);
+  BufferPtr values;
+  if (result) {
+    result->resize(numValues, false);
+    values = flatVector->mutableValues(numValues);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  if (flatVector) {
+    detail::resetIfNotWritable(result, values);
+  }
+  if (!values) {
+    values = AlignedBuffer::allocate<ReqT>(numValues, &memoryPool_);
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+  } else {
+    result = makeFlatVector<ReqT>(
+        &memoryPool_, requestedType_, nulls, nullCount, numValues, values);
+  }
+
+  // read the stream of booleans indicating whether a given data entry
+  // is an offset or a literal value.
+  const char* inDict = nullptr;
+  if (inDictionaryReader) {
+    detail::ensureCapacity<bool>(inDictionary, numValues, &memoryPool_);
+    inDictionaryReader->next(
+        inDictionary->asMutable<char>(), numValues, nullsPtr);
+    inDict = inDictionary->as<char>();
+  }
+
+  // lazy load dictionary only when it's needed
+  ensureInitialized();
+
+  auto dict = dictionary->as<int64_t>();
+  auto* valuesPtr = values->asMutable<ReqT>();
+  nextValues(*dataReader, valuesPtr, numValues, nullsPtr);
+  populateOutput(dict, valuesPtr, numValues, nullsPtr, inDict);
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 template <class ReqT>
 void IntegerDictionaryColumnReader<ReqT>::ensureInitialized() {
   if (LIKELY(initialized_)) {
@@ -777,6 +1073,17 @@ class TimestampColumnReader : public ColumnReader {
 
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 };
 
 TimestampColumnReader::TimestampColumnReader(
@@ -856,6 +1163,58 @@ void TimestampColumnReader::next(
       valuesPtr, nullsPtr, secondsData, nanosData, numValues);
 }
 
+#if FOLLY_HAS_COROUTINES
+
+folly::coro::Task<uint64_t> TimestampColumnReader::co_skip(uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  seconds->skip(numValues);
+  nano->skip(numValues);
+  co_return numValues;
+}
+
+folly::coro::Task<void> TimestampColumnReader::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto flatVector = resetIfWrongFlatVectorType<Timestamp>(result);
+  BufferPtr values;
+  if (flatVector) {
+    result->resize(numValues, false);
+    values = flatVector->mutableValues(numValues);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  if (flatVector) {
+    detail::resetIfNotWritable(result, values);
+  }
+  if (!values) {
+    values = AlignedBuffer::allocate<Timestamp>(numValues, &memoryPool_);
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+  } else {
+    result = makeFlatVector<Timestamp>(
+        &memoryPool_, TIMESTAMP(), nulls, nullCount, numValues, values);
+  }
+
+  detail::ensureCapacity<int64_t>(secondsBuffer_, numValues, &memoryPool_);
+  detail::ensureCapacity<uint64_t>(nanosBuffer_, numValues, &memoryPool_);
+  auto secondsData = secondsBuffer_->asMutable<int64_t>();
+  auto nanosData = nanosBuffer_->asMutable<uint64_t>();
+  seconds->next(secondsData, numValues, nullsPtr);
+  nano->next(reinterpret_cast<int64_t*>(nanosData), numValues, nullsPtr);
+  auto* valuesPtr = values->asMutable<Timestamp>();
+  detail::fillTimestamps(
+      valuesPtr, nullsPtr, secondsData, nanosData, numValues);
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 template <class T>
 struct FpColumnReaderTraits {};
 
@@ -885,6 +1244,17 @@ class FloatingPointColumnReader : public ColumnReader {
 
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 
  private:
   const TypePtr requestedType_;
@@ -1036,6 +1406,100 @@ void FloatingPointColumnReader<DataT, ReqT>::next(
   }
 }
 
+#if FOLLY_HAS_COROUTINES
+
+template <class DataT, class ReqT>
+folly::coro::Task<uint64_t> FloatingPointColumnReader<DataT, ReqT>::co_skip(
+    uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  auto remaining = static_cast<size_t>(bufferEnd - bufferPointer);
+  auto toSkip = sizeof(DataT) * numValues;
+  if (remaining >= toSkip) {
+    bufferPointer += toSkip;
+  } else {
+    inputStream->Skip(static_cast<int32_t>(toSkip - remaining));
+    bufferEnd = nullptr;
+    bufferPointer = nullptr;
+  }
+
+  co_return numValues;
+}
+
+template <class DataT, class ReqT>
+folly::coro::Task<void> FloatingPointColumnReader<DataT, ReqT>::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto flatVector = resetIfWrongFlatVectorType<ReqT>(result);
+  if (result) {
+    result->resize(numValues, false);
+  }
+  BufferPtr values;
+  if (flatVector) {
+    values = flatVector->mutableValues(numValues);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  if (flatVector) {
+    detail::resetIfNotWritable(result, values);
+  }
+  if (!values) {
+    values = AlignedBuffer::allocate<ReqT>(numValues, &memoryPool_);
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+  } else {
+    result = makeFlatVector<ReqT>(
+        &memoryPool_, requestedType_, nulls, nullCount, numValues, values);
+  }
+
+  auto* valuesPtr = values->asMutable<ReqT>();
+  if (nulls) {
+    for (size_t i = 0; i < numValues; ++i) {
+      if (!bits::isBitNull(nullsPtr, i)) {
+        valuesPtr[i] = readValue();
+      }
+    }
+  } else {
+    if (folly::kIsLittleEndian && sizeof(DataT) == sizeof(ReqT)) {
+      int32_t indexToWrite = 0;
+      while (indexToWrite != numValues) {
+        readStreamIfRequired();
+        size_t validElements = (bufferEnd - bufferPointer) / sizeof(DataT);
+        size_t elementsToCopy = std::min(
+            static_cast<uint64_t>(validElements), numValues - indexToWrite);
+        size_t bytesToCopy = (elementsToCopy * sizeof(DataT));
+        std::copy(
+            bufferPointer,
+            bufferPointer + bytesToCopy,
+            reinterpret_cast<char*>(valuesPtr) +
+                (indexToWrite * sizeof(DataT)));
+        bufferPointer += bytesToCopy;
+        indexToWrite += elementsToCopy;
+
+        // If a value crosses the boundary we can be in a state where
+        // index != numValues and bufferPointer != bufferEnd. In this
+        // state reading a single value causes a read of the stream in order
+        // to decode the next value after which we can resume the fast copy.
+        if ((indexToWrite != numValues) && (bufferPointer != bufferEnd)) {
+          valuesPtr[indexToWrite++] = readValue();
+        }
+      }
+    } else {
+      for (size_t i = 0; i < numValues; ++i) {
+        valuesPtr[i] = readValue();
+      }
+    }
+  }
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 namespace {
 
 struct MakeRleDecoderParams {
@@ -1077,6 +1541,17 @@ class StringDictionaryColumnReader : public ColumnReader {
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
 
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
+
  private:
   void loadStrideDictionary();
 
@@ -1106,6 +1581,22 @@ class StringDictionaryColumnReader : public ColumnReader {
   readFlatVector(uint64_t numValues, VectorPtr& result, const uint64_t* nulls);
 
   void ensureInitialized();
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<void> co_readDictionaryVector(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls);
+
+  folly::coro::Task<void> co_readFlatVector(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls);
+
+  folly::coro::Task<void> co_ensureInitialized();
+
+#endif // FOLLY_HAS_COROUTINES
 
   BufferPtr dictionaryBlob_;
   BufferPtr dictionaryOffset_;
@@ -1598,6 +2089,316 @@ void StringDictionaryColumnReader::ensureInitialized() {
   initialized_ = true;
 }
 
+#if FOLLY_HAS_COROUTINES
+
+folly::coro::Task<uint64_t> StringDictionaryColumnReader::co_skip(
+    uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  dictIndex_->skip(numValues);
+  if (inDictionaryReader_) {
+    inDictionaryReader_->skip(numValues);
+  }
+  co_return numValues;
+}
+
+folly::coro::Task<void> StringDictionaryColumnReader::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  // lazy loading dictionary data when first hit
+  co_await co_ensureInitialized();
+
+  const char* strideDictBlob = nullptr;
+  if (inDictionaryReader_) {
+    loadStrideDictionary();
+    if (strideDict_) {
+      DWIO_ENSURE_NOT_NULL(strideDictOffset_);
+
+      // It's possible strideDictBlob is nullptr when stride dictionary only
+      // contains empty string. In that case, we need to make sure
+      // strideDictBlob point to some valid address, and the last entry of
+      // strideDictOffset have value 0.
+      strideDictBlob = strideDict_->as<char>();
+      if (!strideDictBlob) {
+        strideDictBlob = EMPTY_DICT.data();
+        DWIO_ENSURE_EQ(strideDictOffset_->as<int64_t>()[strideDictCount_], 0);
+      }
+    }
+  }
+
+  if (returnFlatVector_) {
+    co_await co_readFlatVector(numValues, result, incomingNulls);
+  } else {
+    co_await co_readDictionaryVector(numValues, result, incomingNulls);
+  }
+}
+
+folly::coro::Task<void> StringDictionaryColumnReader::co_readDictionaryVector(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto dictVector =
+      detail::resetIfWrongVectorType<DictionaryVector<StringView>>(result);
+  BufferPtr indices;
+  if (dictVector) {
+    dictVector->resize(numValues, false);
+    indices = dictVector->mutableIndices(numValues);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  if (result) {
+    detail::resetIfNotWritable(result, indices);
+  }
+  if (!indices) {
+    indices = AlignedBuffer::allocate<vector_size_t>(numValues, &memoryPool_);
+  }
+
+  auto indicesPtr = indices->asMutable<vector_size_t>();
+  dictIndex_->nextInts(indicesPtr, numValues, nullsPtr);
+  indices->setSize(numValues * sizeof(vector_size_t));
+
+  bool hasStrideDict = false;
+
+  // load inDictionary
+  const char* inDictPtr = nullptr;
+  if (inDictionaryReader_) {
+    detail::ensureCapacity<bool>(inDict_, numValues, &memoryPool_);
+    inDictionaryReader_->next(inDict_->asMutable<char>(), numValues, nullsPtr);
+    inDictPtr = inDict_->as<char>();
+  }
+
+  if (nulls) {
+    for (uint64_t i = 0; i < numValues; ++i) {
+      if (!bits::isBitNull(nullsPtr, i)) {
+        if (!inDictPtr || bits::isBitSet(inDictPtr, i)) {
+          // points to an entry in rowgroup dictionary
+        } else {
+          // points to an entry in stride dictionary
+          indicesPtr[i] += dictionaryCount_;
+          hasStrideDict = true;
+        }
+      }
+    }
+  } else {
+    for (uint64_t i = 0; i < numValues; ++i) {
+      if (!inDictPtr || bits::isBitSet(inDictPtr, i)) {
+        // points to an entry in rowgroup dictionary
+      } else {
+        // points to an entry in stride dictionary
+        indicesPtr[i] += dictionaryCount_;
+        hasStrideDict = true;
+      }
+    }
+  }
+
+  VectorPtr dictionaryValues;
+  const auto* dictionaryBlobPtr = dictionaryBlob_->as<char>();
+  const auto* dictionaryOffsetsPtr = dictionaryOffset_->as<int64_t>();
+  if (hasStrideDict) {
+    if (!combinedDictionaryValues_) {
+      // TODO Reuse memory
+      BufferPtr values = AlignedBuffer::allocate<StringView>(
+          dictionaryCount_ + strideDictCount_, &memoryPool_);
+      auto* valuesPtr = values->asMutable<StringView>();
+      for (size_t i = 0; i < dictionaryCount_; i++) {
+        valuesPtr[i] = StringView(
+            dictionaryBlobPtr + dictionaryOffsetsPtr[i],
+            dictionaryOffsetsPtr[i + 1] - dictionaryOffsetsPtr[i]);
+      }
+
+      const auto* strideDictPtr = strideDict_->as<char>();
+      const auto* strideDictOffsetPtr = strideDictOffset_->as<int64_t>();
+      for (size_t i = 0; i < strideDictCount_; i++) {
+        valuesPtr[dictionaryCount_ + i] = StringView(
+            strideDictPtr + strideDictOffsetPtr[i],
+            strideDictOffsetPtr[i + 1] - strideDictOffsetPtr[i]);
+      }
+
+      combinedDictionaryValues_ = std::make_shared<FlatVector<StringView>>(
+          &memoryPool_,
+          fileType_->type(),
+          BufferPtr(nullptr), // TODO nulls
+          dictionaryCount_ + strideDictCount_ /*length*/,
+          values,
+          std::vector<BufferPtr>{dictionaryBlob_, strideDict_});
+    }
+
+    dictionaryValues = combinedDictionaryValues_;
+  } else {
+    if (!dictionaryValues_) {
+      // TODO Reuse memory
+      BufferPtr values =
+          AlignedBuffer::allocate<StringView>(dictionaryCount_, &memoryPool_);
+      auto* valuesPtr = values->asMutable<StringView>();
+      for (size_t i = 0; i < dictionaryCount_; i++) {
+        valuesPtr[i] = StringView(
+            dictionaryBlobPtr + dictionaryOffsetsPtr[i],
+            dictionaryOffsetsPtr[i + 1] - dictionaryOffsetsPtr[i]);
+      }
+
+      dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
+          &memoryPool_,
+          fileType_->type(),
+          BufferPtr(nullptr), // TODO nulls
+          dictionaryCount_ /*length*/,
+          values,
+          std::vector<BufferPtr>{dictionaryBlob_});
+    }
+    dictionaryValues = dictionaryValues_;
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+    result->as<DictionaryVector<StringView>>()->setDictionaryValues(
+        dictionaryValues);
+  } else {
+    result = std::make_shared<DictionaryVector<StringView>>(
+        &memoryPool_, nulls, numValues, dictionaryValues, indices);
+    result->setNullCount(nullCount);
+  }
+  co_return;
+}
+
+folly::coro::Task<void> StringDictionaryColumnReader::co_readFlatVector(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto flatVector = resetIfWrongFlatVectorType<StringView>(result);
+
+  if (result) {
+    result->resize(numValues, false);
+  }
+
+  BufferPtr data;
+  if (flatVector) {
+    data = flatVector->mutableValues(numValues);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  if (result) {
+    detail::resetIfNotWritable(result, data);
+  }
+  if (!data) {
+    data = AlignedBuffer::allocate<StringView>(numValues, &memoryPool_);
+  }
+
+  // load inDictionary
+  const char* inDictPtr = nullptr;
+  if (inDictionaryReader_) {
+    detail::ensureCapacity<bool>(inDict_, numValues, &memoryPool_);
+    inDictionaryReader_->next(inDict_->asMutable<char>(), numValues, nullsPtr);
+    inDictPtr = inDict_->as<char>();
+  }
+  auto dataPtr = data->asMutable<StringView>();
+
+  // read indices
+  if (!indices_ || indices_->capacity() < numValues * sizeof(int64_t)) {
+    indices_ = AlignedBuffer::allocate<int64_t>(numValues, &memoryPool_);
+  }
+  auto indices = indices_->asMutable<int64_t>();
+  dictIndex_->next(indices, numValues, nullsPtr);
+
+  const char* strideDictPtr = nullptr;
+  int64_t* strideDictOffsetPtr = nullptr;
+  if (strideDict_) {
+    strideDictPtr = strideDict_->as<char>();
+    strideDictOffsetPtr = strideDictOffset_->asMutable<int64_t>();
+  }
+  auto* dictionaryBlobPtr = dictionaryBlob_->as<char>();
+  auto* dictionaryOffsetsPtr = dictionaryOffset_->asMutable<int64_t>();
+  bool hasStrideDict = false;
+  const char* strData;
+  int64_t strLen;
+  if (nulls) {
+    for (uint64_t i = 0; i < numValues; ++i) {
+      if (!bits::isBitNull(nullsPtr, i)) {
+        hasStrideDict = setOutput(
+                            i,
+                            indices[i],
+                            dictionaryBlobPtr,
+                            dictionaryOffsetsPtr,
+                            strideDictPtr,
+                            strideDictOffsetPtr,
+                            inDictPtr,
+                            strData,
+                            strLen) ||
+            hasStrideDict;
+        dataPtr[i] = StringView{strData, static_cast<int32_t>(strLen)};
+      }
+    }
+  } else {
+    for (uint64_t i = 0; i < numValues; ++i) {
+      hasStrideDict = setOutput(
+                          i,
+                          indices[i],
+                          dictionaryBlobPtr,
+                          dictionaryOffsetsPtr,
+                          strideDictPtr,
+                          strideDictOffsetPtr,
+                          inDictPtr,
+                          strData,
+                          strLen) ||
+          hasStrideDict;
+      dataPtr[i] = StringView{strData, static_cast<int32_t>(strLen)};
+    }
+  }
+  std::vector<BufferPtr> stringBuffers = {dictionaryBlob_};
+  if (hasStrideDict) {
+    stringBuffers.emplace_back(strideDict_);
+  }
+  if (result) {
+    result->setNullCount(nullCount);
+    flatVector->setStringBuffers(stringBuffers);
+  } else {
+    result = std::make_shared<FlatVector<StringView>>(
+        &memoryPool_,
+        VARCHAR(),
+        nulls,
+        numValues,
+        data,
+        std::vector<BufferPtr>{stringBuffers});
+    result->setNullCount(nullCount);
+  }
+  co_return;
+}
+
+folly::coro::Task<void> StringDictionaryColumnReader::co_ensureInitialized() {
+  if (LIKELY(initialized_)) {
+    co_return;
+  }
+
+  detail::ensureCapacity<int64_t>(
+      dictionaryOffset_, dictionaryCount_ + 1, &memoryPool_);
+  dictionaryBlob_ = loadDictionary(
+      dictionaryCount_, *blobStream_, *lengthDecoder_, dictionaryOffset_);
+  dictionaryValues_.reset();
+  combinedDictionaryValues_.reset();
+
+  // handle in dictionary stream
+  if (inDictionaryReader_) {
+    // load stride dictionary offsets
+    rowIndex_ = ProtoUtils::readProto<proto::RowIndex>(std::move(indexStream_));
+    auto indexStartOffset = flatMapContext_.inMapDecoder
+        ? flatMapContext_.inMapDecoder->loadIndices(0)
+        : 0;
+    positionOffset_ = notNullDecoder_
+        ? notNullDecoder_->loadIndices(indexStartOffset)
+        : indexStartOffset;
+    size_t offset = strideDictStream_->positionSize() + positionOffset_;
+    strideDictSizeOffset_ = strideDictLengthDecoder_->loadIndices(offset);
+  }
+  initialized_ = true;
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 class StringDirectColumnReader : public ColumnReader {
  private:
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> length;
@@ -1627,6 +2428,17 @@ class StringDirectColumnReader : public ColumnReader {
 
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 };
 
 StringDirectColumnReader::StringDirectColumnReader(
@@ -1759,6 +2571,98 @@ void StringDirectColumnReader::next(
   }
 }
 
+#if FOLLY_HAS_COROUTINES
+
+folly::coro::Task<uint64_t> StringDirectColumnReader::co_skip(
+    uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  std::array<int64_t, BUFFER_SIZE> buffer;
+  uint64_t done = 0;
+  size_t totalBytes = 0;
+  // read the lengths, so we know haw many bytes to skip
+  while (done < numValues) {
+    uint64_t step = std::min(BUFFER_SIZE, numValues - done);
+    length->next(buffer.data(), step, nullptr);
+    totalBytes += computeSize(buffer.data(), nullptr, step);
+    done += step;
+  }
+  blobStream->SkipInt64(static_cast<int64_t>(totalBytes));
+  co_return numValues;
+}
+
+folly::coro::Task<void> StringDirectColumnReader::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto flatVector = resetIfWrongFlatVectorType<StringView>(result);
+  BufferPtr values;
+  if (flatVector) {
+    flatVector->resize(numValues, false);
+    values = flatVector->mutableValues(numValues);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  if (flatVector) {
+    detail::resetIfNotWritable(result, values);
+  }
+  if (!values) {
+    values = AlignedBuffer::allocate<StringView>(numValues, &memoryPool_);
+  }
+
+  // TODO Reuse memory
+  // read the length vector
+  BufferPtr lengths = AlignedBuffer::allocate<int64_t>(numValues, &memoryPool_);
+  length->next(lengths->asMutable<int64_t>(), numValues, nullsPtr);
+
+  // figure out the total length of data we need fom the blob stream
+  const auto* lengthsPtr = lengths->as<int64_t>();
+  const size_t totalLength = computeSize(lengthsPtr, nullsPtr, numValues);
+
+  // TODO Reuse memory
+  // Load data from the blob stream into our buffer until we have enough
+  // to get the rest directly out of the stream's buffer.
+  BufferPtr data = AlignedBuffer::allocate<char>(totalLength, &memoryPool_);
+  blobStream->readFully(data->asMutable<char>(), totalLength);
+
+  auto* valuesPtr = values->asMutable<StringView>();
+  const auto* dataPtr = data->as<char>();
+  // Set up the start pointers for the ones that will come out of the buffer.
+  uint64_t usedBytes = 0;
+  if (nulls) {
+    for (uint64_t i = 0; i < numValues; ++i) {
+      if (!bits::isBitNull(nullsPtr, i)) {
+        valuesPtr[i] = StringView(dataPtr + usedBytes, lengthsPtr[i]);
+        usedBytes += lengthsPtr[i];
+      }
+    }
+  } else {
+    for (uint64_t i = 0; i < numValues; ++i) {
+      valuesPtr[i] = StringView(dataPtr + usedBytes, lengthsPtr[i]);
+      usedBytes += lengthsPtr[i];
+    }
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+    flatVector->setStringBuffers(std::vector<BufferPtr>{data});
+  } else {
+    result = std::make_shared<FlatVector<StringView>>(
+        &memoryPool_,
+        fileType_->type(),
+        nulls,
+        numValues,
+        values,
+        std::vector<BufferPtr>{data});
+    result->setNullCount(nullCount);
+  }
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 class StructColumnReader : public ColumnReader {
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
@@ -1779,6 +2683,17 @@ class StructColumnReader : public ColumnReader {
 
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 };
 
 FlatMapContext makeCopyWithNullDecoder(FlatMapContext& original) {
@@ -1916,6 +2831,86 @@ void StructColumnReader::next(
   }
 }
 
+#if FOLLY_HAS_COROUTINES
+
+folly::coro::Task<uint64_t> StructColumnReader::co_skip(uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  for (auto& ptr : children_) {
+    if (ptr) {
+      co_await ptr->co_skip(numValues);
+    }
+  }
+  co_return numValues;
+}
+
+folly::coro::Task<void> StructColumnReader::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto rowVector = detail::resetIfWrongVectorType<RowVector>(result);
+  std::vector<VectorPtr> childrenVectors;
+  if (rowVector) {
+    // Track children vectors in a local variable because readNulls may reset
+    // the parent vector.
+    childrenVectors = rowVector->children();
+    DWIO_ENSURE_GE(childrenVectors.size(), children_.size());
+
+    // Resize rowVector
+    rowVector->unsafeResize(numValues, false);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  std::vector<VectorPtr>* childrenVectorsPtr = nullptr;
+  if (result) {
+    // Parent vector still exist, so there is no need to double reference
+    // children vectors.
+    childrenVectorsPtr = &rowVector->children();
+    childrenVectors.clear();
+  } else {
+    childrenVectors.resize(children_.size());
+    childrenVectorsPtr = &childrenVectors;
+  }
+
+  for (uint64_t i = 0; i < children_.size(); ++i) {
+    auto& reader = children_[i];
+    if (reader) {
+      co_await reader->co_next(numValues, (*childrenVectorsPtr)[i], nullsPtr);
+    }
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+  } else {
+    // When read-string-as-row flag is on, string readers produce ROW(BIGINT,
+    // BIGINT) type instead of VARCHAR or VARBINARY. In these cases,
+    // requestedType_->type is not the right type of the final struct.
+    std::vector<TypePtr> types;
+    types.reserve(childrenVectorsPtr->size());
+    for (auto i = 0; i < childrenVectorsPtr->size(); i++) {
+      const auto& child = (*childrenVectorsPtr)[i];
+      if (child) {
+        types.emplace_back(child->type());
+      } else {
+        types.emplace_back(requestedType_->type()->childAt(i));
+      }
+    }
+
+    result = std::make_shared<RowVector>(
+        &memoryPool_,
+        ROW(std::move(types)),
+        nulls,
+        numValues,
+        std::move(childrenVectors),
+        nullCount);
+  }
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 class ListColumnReader : public ColumnReader {
  private:
   std::unique_ptr<ColumnReader> child;
@@ -1936,6 +2931,17 @@ class ListColumnReader : public ColumnReader {
 
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 };
 
 ListColumnReader::ListColumnReader(
@@ -2083,6 +3089,106 @@ void ListColumnReader::next(
   }
 }
 
+#if FOLLY_HAS_COROUTINES
+
+folly::coro::Task<uint64_t> ListColumnReader::co_skip(uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  if (child) {
+    child->skip(skipLengths(numValues, *length));
+  } else {
+    length->skip(numValues);
+  }
+  co_return numValues;
+}
+
+folly::coro::Task<void> ListColumnReader::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto resultArray = detail::resetIfWrongVectorType<ArrayVector>(result);
+  VectorPtr elements;
+  BufferPtr offsets;
+  BufferPtr lengths;
+  if (resultArray) {
+    resultArray->resize(numValues, false);
+    elements = resultArray->elements();
+    offsets = resultArray->mutableOffsets(numValues);
+    lengths = resultArray->mutableSizes(numValues);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  if (resultArray) {
+    detail::resetIfNotWritable(result, offsets, lengths);
+  }
+
+  if (!offsets) {
+    offsets = AlignedBuffer::allocate<vector_size_t>(numValues, &memoryPool_);
+  }
+  if (!lengths) {
+    lengths = AlignedBuffer::allocate<vector_size_t>(numValues, &memoryPool_);
+  }
+
+  // Hack. Cast vector_size_t to signed so integer reader can handle it. This
+  // cast is safe because length is unsigned 4 byte integer. We should instead
+  // fix integer reader (similar to integer writer) so it can take unsigned
+  // directly
+  auto rawLengths = lengths->asMutable<std::make_signed_t<vector_size_t>>();
+  length->next(rawLengths, numValues, nullsPtr);
+
+  auto* offsetsPtr = offsets->asMutable<vector_size_t>();
+
+  uint64_t totalChildren = 0;
+  if (nulls) {
+    for (size_t i = 0; i < numValues; ++i) {
+      if (!bits::isBitNull(nullsPtr, i)) {
+        offsetsPtr[i] = totalChildren;
+        totalChildren += rawLengths[i];
+      } else {
+        offsetsPtr[i] = totalChildren;
+        rawLengths[i] = 0;
+      }
+    }
+  } else {
+    for (size_t i = 0; i < numValues; ++i) {
+      offsetsPtr[i] = totalChildren;
+      totalChildren += rawLengths[i];
+    }
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+  } else {
+    // When read-string-as-row flag is on, string readers produce ROW(BIGINT,
+    // BIGINT) type instead of VARCHAR or VARBINARY. In these cases,
+    // requestedType_->type is not the right type of the final vector.
+    auto arrayType =
+        elements != nullptr ? ARRAY(elements->type()) : requestedType_->type();
+    result = std::make_shared<ArrayVector>(
+        &memoryPool_,
+        arrayType,
+        nulls,
+        numValues,
+        offsets,
+        lengths,
+        elements,
+        nullCount);
+  }
+  // reset elements to avoid it being double referenced.
+  elements.reset();
+
+  bool hasChildren = (child && totalChildren > 0);
+  if (hasChildren) {
+    co_await child->co_next(
+        totalChildren, result->as<ArrayVector>()->elements());
+  }
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
+
 class MapColumnReader : public ColumnReader {
  private:
   std::unique_ptr<ColumnReader> keyReader;
@@ -2104,6 +3210,17 @@ class MapColumnReader : public ColumnReader {
 
   void next(uint64_t numValues, VectorPtr& result, const uint64_t* nulls)
       override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 };
 
 MapColumnReader::MapColumnReader(
@@ -2262,6 +3379,119 @@ void MapColumnReader::next(
     elementReader->next(totalChildren, resultMap->mapValues());
   }
 }
+
+#if FOLLY_HAS_COROUTINES
+
+folly::coro::Task<uint64_t> MapColumnReader::co_skip(uint64_t numValues) {
+  numValues = co_await ColumnReader::co_skip(numValues);
+  if (keyReader || elementReader) {
+    auto childrenElements = skipLengths(numValues, *length);
+    if (keyReader) {
+      co_await keyReader->co_skip(childrenElements);
+    }
+    if (elementReader) {
+      co_await elementReader->co_skip(childrenElements);
+    }
+  } else {
+    length->skip(numValues);
+  }
+  co_return numValues;
+}
+
+folly::coro::Task<void> MapColumnReader::co_next(
+    uint64_t numValues,
+    VectorPtr& result,
+    const uint64_t* incomingNulls) {
+  auto resultMap = detail::resetIfWrongVectorType<MapVector>(result);
+  VectorPtr keys;
+  VectorPtr values;
+  BufferPtr offsets;
+  BufferPtr lengths;
+  if (result) {
+    result->resize(numValues, false);
+    keys = resultMap->mapKeys();
+    values = resultMap->mapValues();
+    offsets = resultMap->mutableOffsets(numValues);
+    lengths = resultMap->mutableSizes(numValues);
+  }
+
+  BufferPtr nulls = readNulls(numValues, result, incomingNulls);
+  const auto* nullsPtr = nulls ? nulls->as<uint64_t>() : nullptr;
+  uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
+
+  if (resultMap) {
+    detail::resetIfNotWritable(result, offsets, lengths);
+  }
+
+  if (!offsets) {
+    offsets = AlignedBuffer::allocate<vector_size_t>(numValues, &memoryPool_);
+  }
+  if (!lengths) {
+    lengths = AlignedBuffer::allocate<vector_size_t>(numValues, &memoryPool_);
+  }
+
+  // Hack. Cast vector_size_t to signed so integer reader can handle it. This
+  // cast is safe because length is unsigned 4 byte integer. We should instead
+  // fix integer reader (similar to integer writer) so it can take unsigned
+  // directly
+  auto rawLengths = lengths->asMutable<std::make_signed_t<vector_size_t>>();
+  length->next(rawLengths, numValues, nullsPtr);
+
+  auto* offsetsPtr = offsets->asMutable<vector_size_t>();
+
+  uint32_t totalChildren = 0;
+  if (nulls) {
+    for (size_t i = 0; i < numValues; ++i) {
+      if (!bits::isBitNull(nullsPtr, i)) {
+        offsetsPtr[i] = totalChildren;
+        totalChildren += rawLengths[i];
+      } else {
+        offsetsPtr[i] = totalChildren;
+        rawLengths[i] = 0;
+      }
+    }
+  } else {
+    for (size_t i = 0; i < numValues; ++i) {
+      offsetsPtr[i] = totalChildren;
+      totalChildren += rawLengths[i];
+    }
+  }
+
+  if (result) {
+    result->setNullCount(nullCount);
+  } else {
+    // When read-string-as-row flag is on, string readers produce ROW(BIGINT,
+    // BIGINT) type instead of VARCHAR or VARBINARY. In these cases,
+    // requestedType_->type is not the right type of the final vector.
+    auto mapType = (keys == nullptr || values == nullptr)
+        ? requestedType_->type()
+        : MAP(keys->type(), values->type());
+    result = std::make_shared<MapVector>(
+        &memoryPool_,
+        mapType,
+        nulls,
+        numValues,
+        offsets,
+        lengths,
+        keys,
+        values,
+        nullCount);
+  }
+  // reset keys/values to avoid them being double referenced.
+  keys.reset();
+  values.reset();
+
+  resultMap = result->as<MapVector>();
+  if (keyReader && totalChildren > 0) {
+    co_await keyReader->co_next(totalChildren, resultMap->mapKeys());
+  }
+  if (elementReader && totalChildren > 0) {
+    co_await elementReader->co_next(totalChildren, resultMap->mapValues());
+  }
+  co_return;
+}
+
+#endif // FOLLY_HAS_COROUTINES
 
 template <typename DataT>
 struct RleDecoderFactory {};
