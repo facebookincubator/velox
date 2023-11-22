@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "folly/experimental/coro/BlockingWait.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
@@ -37,6 +38,13 @@ DwrfRowReader::DwrfRowReader(
       executor_{options_.getDecodingExecutor()},
       columnSelector_{std::make_shared<ColumnSelector>(
           ColumnSelector::apply(opts.getSelector(), reader->getSchema()))} {
+  if (executor_) {
+#if FOLLY_HAS_COROUTINES
+    LOG(INFO) << "Using parallel decoding in executor with co_routines";
+#else // no FOLLY_HAS_COROUTINES
+    LOG(INFO) << "Using parallel decoding in executor without co_routines";
+#endif // FOLLY_HAS_COROUTINES
+  }
   auto& fileFooter = getReader().getFooter();
   uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;
@@ -172,7 +180,16 @@ uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
   if (selectiveColumnReader_) {
     selectiveColumnReader_->skip(currentRowInStripe_);
   } else {
+#if FOLLY_HAS_COROUTINES
+    if (executor_) {
+      folly::coro::blockingWait(columnReader_->co_skip(currentRowInStripe_)
+                                    .scheduleOn(executor_.get()));
+    } else {
+      columnReader_->skip(currentRowInStripe_);
+    }
+#else // no FOLLY_HAS_COROUTINES
     columnReader_->skip(currentRowInStripe_);
+#endif // FOLLY_HAS_COROUTINES
   }
 
   return previousRow_;
@@ -271,7 +288,16 @@ void DwrfRowReader::readNext(
     VELOX_CHECK(
         mutation == nullptr,
         "Mutation pushdown is only supported in selective reader");
+#if FOLLY_HAS_COROUTINES
+    if (executor_) {
+      folly::coro::blockingWait(columnReader_->co_next(rowsToRead, result)
+                                    .scheduleOn(executor_.get()));
+    } else {
+      columnReader_->next(rowsToRead, result);
+    }
+#else // no FOLLY_HAS_COROUTINES
     columnReader_->next(rowsToRead, result);
+#endif // FOLLY_HAS_COROUTINES
     auto reportDecodingTimeMsMetric = options_.getDecodingTimeMsCallback();
     if (reportDecodingTimeMsMetric) {
       auto decodingTime = std::chrono::duration_cast<std::chrono::milliseconds>(
