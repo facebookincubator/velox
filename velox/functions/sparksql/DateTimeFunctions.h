@@ -413,18 +413,6 @@ template <typename T>
 struct DateFormatFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  const date::time_zone* sessionTimeZone_ = nullptr;
-  std::shared_ptr<DateTimeFormatter> formatter_;
-  bool isConstFormat_ = false;
-
-  FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>* formatString) {
-    if (formatString != nullptr) {
-      formatter_ = buildJodaDateTimeFormatter(
-          std::string_view(formatString->data(), formatString->size()));
-      isConstFormat_ = true;
-    }
-  }
-
   FOLLY_ALWAYS_INLINE void initialize(
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*timestamp*/,
@@ -449,6 +437,19 @@ struct DateFormatFunction {
       std::memcpy(result.data(), formattedResult.data(), resultSize);
     }
   }
+
+ private:
+  FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>* formatString) {
+    if (formatString != nullptr) {
+      formatter_ = buildJodaDateTimeFormatter(
+          std::string_view(formatString->data(), formatString->size()));
+      isConstFormat_ = true;
+    }
+  }
+
+  const date::time_zone* sessionTimeZone_{nullptr};
+  std::shared_ptr<DateTimeFormatter> formatter_;
+  bool isConstFormat_{false};
 };
 
 } // namespace facebook::velox::functions::sparksql
