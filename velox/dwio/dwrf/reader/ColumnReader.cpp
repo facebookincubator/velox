@@ -626,12 +626,25 @@ folly::coro::Task<void> DecimalColumnReader<DataT>::co_next(
         &memoryPool_, requestedType_, nulls, nullCount, numValues, values);
   }
 
-  detail::ensureCapacity<DataT>(valueBuffer_, numValues, &memoryPool_);
-  detail::ensureCapacity<int64_t>(scaleBuffer_, numValues, &memoryPool_);
-  auto valuesData = valueBuffer_->asMutable<DataT>();
-  auto scalesData = scaleBuffer_->asMutable<int64_t>();
-  valueDecoder_->nextValues(valuesData, numValues, nullsPtr);
-  scaleDecoder_->next(scalesData, numValues, nullsPtr);
+  auto valuesDataTask =
+      folly::coro::co_invoke([&]() -> folly::coro::Task<const DataT*> {
+        detail::ensureCapacity<DataT>(valueBuffer_, numValues, &memoryPool_);
+        auto valuesData = valueBuffer_->asMutable<DataT>();
+        valueDecoder_->nextValues(valuesData, numValues, nullsPtr);
+        co_return valuesData;
+      });
+
+  auto scalesDataTask =
+      folly::coro::co_invoke([&]() -> folly::coro::Task<const int64_t*> {
+        detail::ensureCapacity<int64_t>(scaleBuffer_, numValues, &memoryPool_);
+        auto scalesData = scaleBuffer_->asMutable<int64_t>();
+        scaleDecoder_->next(scalesData, numValues, nullsPtr);
+        co_return scalesData;
+      });
+
+  auto [valuesData, scalesData] = co_await folly::coro::collectAll(
+      std::move(valuesDataTask), std::move(scalesDataTask));
+
   auto* valuesPtr = values->asMutable<DataT>();
   DecimalUtil::fillDecimals<DataT>(
       valuesPtr, nullsPtr, valuesData, scalesData, numValues, scale_);
@@ -1201,12 +1214,26 @@ folly::coro::Task<void> TimestampColumnReader::co_next(
         &memoryPool_, TIMESTAMP(), nulls, nullCount, numValues, values);
   }
 
-  detail::ensureCapacity<int64_t>(secondsBuffer_, numValues, &memoryPool_);
-  detail::ensureCapacity<uint64_t>(nanosBuffer_, numValues, &memoryPool_);
-  auto secondsData = secondsBuffer_->asMutable<int64_t>();
-  auto nanosData = nanosBuffer_->asMutable<uint64_t>();
-  seconds->next(secondsData, numValues, nullsPtr);
-  nano->next(reinterpret_cast<int64_t*>(nanosData), numValues, nullsPtr);
+  auto secondsDataTask =
+      folly::coro::co_invoke([&]() -> folly::coro::Task<const int64_t*> {
+        detail::ensureCapacity<int64_t>(
+            secondsBuffer_, numValues, &memoryPool_);
+        auto secondsData = secondsBuffer_->asMutable<int64_t>();
+        seconds->next(secondsData, numValues, nullsPtr);
+        co_return secondsData;
+      });
+
+  auto nanosDataTask =
+      folly::coro::co_invoke([&]() -> folly::coro::Task<const uint64_t*> {
+        detail::ensureCapacity<uint64_t>(nanosBuffer_, numValues, &memoryPool_);
+        auto nanosData = nanosBuffer_->asMutable<uint64_t>();
+        nano->next(reinterpret_cast<int64_t*>(nanosData), numValues, nullsPtr);
+        co_return nanosData;
+      });
+
+  auto [secondsData, nanosData] = co_await folly::coro::collectAll(
+      std::move(secondsDataTask), std::move(nanosDataTask));
+
   auto* valuesPtr = values->asMutable<Timestamp>();
   detail::fillTimestamps(
       valuesPtr, nullsPtr, secondsData, nanosData, numValues);
@@ -3485,13 +3512,16 @@ folly::coro::Task<void> MapColumnReader::co_next(
   keys.reset();
   values.reset();
 
+  std::vector<folly::coro::Task<void>> tasks;
   resultMap = result->as<MapVector>();
   if (keyReader && totalChildren > 0) {
-    co_await keyReader->co_next(totalChildren, resultMap->mapKeys());
+    tasks.emplace_back(keyReader->co_next(totalChildren, resultMap->mapKeys()));
   }
   if (elementReader && totalChildren > 0) {
-    co_await elementReader->co_next(totalChildren, resultMap->mapValues());
+    tasks.emplace_back(
+        elementReader->co_next(totalChildren, resultMap->mapValues()));
   }
+  co_await folly::coro::collectAllRange(std::move(tasks));
   co_return;
 }
 
