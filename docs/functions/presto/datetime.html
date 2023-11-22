@@ -59,6 +59,22 @@
 </tr>
 </thead>
 <tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">+</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">second</span> <span class="pre">+</span> <span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">hour</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">01:00:01.000</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">+</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timestamp</span> <span class="pre">'1970-01-01</span> <span class="pre">00:00:00.000'</span> <span class="pre">+</span> <span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">second</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1970-01-01</span> <span class="pre">00:00:01.000</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">hour</span> <span class="pre">-</span> <span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">second</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">00:59:59.000</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timestamp</span> <span class="pre">'1970-01-01</span> <span class="pre">00:00:00.000'</span> <span class="pre">-</span> <span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">second</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1969-12-31</span> <span class="pre">23:59:59.000</span></code></p></td>
+</tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">*</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">second</span> <span class="pre">*</span> <span class="pre">2</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">00:00:02.000</span></code></p></td>
@@ -81,6 +97,28 @@
 </tr>
 </tbody>
 </table>
+<dl class="py function">
+<dt class="sig sig-object py" id="plus">
+<span class="sig-name descname"><span class="pre">plus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#plus" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the sum of <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code>. Both <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> are intervals day
+to second or one of them can be timestamp. For addition of two intervals day to
+second, returns <code class="docutils literal notranslate"><span class="pre">-106751991167</span> <span class="pre">07:12:55.808</span></code> when the addition overflows
+in positive and returns <code class="docutils literal notranslate"><span class="pre">106751991167</span> <span class="pre">07:12:55.807</span></code> when the addition
+overflows in negative. When addition of a timestamp with an interval day to
+second, overflowed results are wrapped around.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="minus">
+<span class="sig-name descname"><span class="pre">minus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#minus" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the result of subtracting <code class="docutils literal notranslate"><span class="pre">y</span></code> from <code class="docutils literal notranslate"><span class="pre">x</span></code>. Both <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code>
+are intervals day to second or <code class="docutils literal notranslate"><span class="pre">x</span></code> can be timestamp. For subtraction of
+two intervals day to second, returns <code class="docutils literal notranslate"><span class="pre">-106751991167</span> <span class="pre">07:12:55.808</span></code> when
+the subtraction overflows in positive and returns <code class="docutils literal notranslate"><span class="pre">106751991167</span> <span class="pre">07:12:55.807</span></code>
+when the subtraction overflows in negative. For subtraction of an interval
+day to second from a timestamp, overflowed results are wrapped around.</p>
+</dd></dl>
+
 <dl class="py function">
 <dt class="sig sig-object py" id="multiply">
 <span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></span></span><a class="headerlink" href="#multiply" title="Permalink to this definition">¶</a></dt>

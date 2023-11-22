@@ -21,6 +21,10 @@ General Aggregate Functions
 
     Returns an arbitrary non-null value of ``x``, if one exists.
 
+.. function:: any_value(x) -> [same as x]
+
+    This is an alias for :func:`arbitrary(x)`.
+
 .. function:: array_agg(x) -> array<[same as x]>
 
     Returns an array created from the input ``x`` elements. Ignores null
@@ -436,7 +440,7 @@ Statistical Aggregate Functions
 
 .. function:: stddev(x) -> double
 
-    This is an alias for stddev_samp().
+    This is an alias for :func:`stddev_samp`.
 
 .. function:: stddev_pop(x) -> double
 
@@ -448,7 +452,7 @@ Statistical Aggregate Functions
 
 .. function:: variance(x) -> double
 
-    This is an alias for var_samp().
+    This is an alias for :func:`var_samp`.
 
 .. function:: var_pop(x) -> double
 
