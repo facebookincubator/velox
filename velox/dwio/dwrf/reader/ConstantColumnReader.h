@@ -47,6 +47,30 @@ class NullColumnReader : public ColumnReader {
       result = BaseVector::wrapInConstant(numValues, 0, valueVector);
     }
   }
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override {
+    co_return numValues;
+  }
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override {
+    if (result && result->encoding() == VectorEncoding::Simple::CONSTANT &&
+        result->isNullAt(0)) {
+      // If vector already exists and contains the right value, resize.
+      result->resize(numValues);
+    } else {
+      auto valueVector = BaseVector::create(fileType_->type(), 1, &memoryPool_);
+      valueVector->setNull(0, true);
+      result = BaseVector::wrapInConstant(numValues, 0, valueVector);
+    }
+    co_return;
+  }
+
+#endif // FOLLY_HAS_COROUTINES
 };
 
 } // namespace facebook::velox::dwrf
