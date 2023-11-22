@@ -15,6 +15,11 @@
  */
 
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
+#include "folly/Conv.h"
+#include "folly/Likely.h"
+#include "folly/Portability.h"
+#include "folly/String.h"
+#include "folly/experimental/coro/Collect.h"
 #include "velox/dwio/common/IntCodecCommon.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/TypeUtils.h"
@@ -26,11 +31,6 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
-
-#include <folly/Conv.h>
-#include <folly/Likely.h>
-#include <folly/Portability.h>
-#include <folly/String.h>
 
 namespace facebook::velox::dwrf {
 
@@ -2874,12 +2874,16 @@ folly::coro::Task<void> StructColumnReader::co_next(
     childrenVectorsPtr = &childrenVectors;
   }
 
+  std::vector<folly::coro::Task<void>> tasks;
+  tasks.reserve(children_.size());
   for (uint64_t i = 0; i < children_.size(); ++i) {
     auto& reader = children_[i];
     if (reader) {
-      co_await reader->co_next(numValues, (*childrenVectorsPtr)[i], nullsPtr);
+      tasks.emplace_back(
+          reader->co_next(numValues, (*childrenVectorsPtr)[i], nullsPtr));
     }
   }
+  co_await folly::coro::collectAllRange(std::move(tasks));
 
   if (result) {
     result->setNullCount(nullCount);
