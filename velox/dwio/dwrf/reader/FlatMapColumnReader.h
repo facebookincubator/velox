@@ -89,6 +89,8 @@ class KeyNode {
 
 #if FOLLY_HAS_COROUTINES
 
+  folly::coro::Task<BaseVector * FOLLY_NULLABLE> co_load(uint64_t numValues);
+
   folly::coro::Task<void> co_loadAsChild(
       VectorPtr& vec,
       uint64_t numValues,
