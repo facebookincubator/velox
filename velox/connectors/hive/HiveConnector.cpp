@@ -48,31 +48,24 @@ using namespace facebook::velox::dwrf;
 
 namespace facebook::velox::connector::hive {
 
-bool isFileHandleCacheEnabled(const Config* properties) {
-  return properties ? HiveConfig::isFileHandleCacheEnabled(properties) : true;
-}
-
-int32_t numCachedFileHandles(const Config* properties) {
-  return properties ? HiveConfig::numCacheFileHandles(properties) : 20'000;
-}
-
 HiveConnector::HiveConnector(
     const std::string& id,
-    std::shared_ptr<const Config> properties,
+    const std::unordered_map<std::string, std::string>& connectorConf,
     folly::Executor* FOLLY_NULLABLE executor)
-    : Connector(id, properties),
+    : Connector(id),
+      hiveConfig_(std::make_shared<HiveConfig>(connectorConf)),
       fileHandleFactory_(
-          isFileHandleCacheEnabled(properties.get())
+          hiveConfig_->isFileHandleCacheEnabled()
               ? std::make_unique<
                     SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(
-                    numCachedFileHandles(properties.get()))
+                    hiveConfig_->numCachedFileHandles())
               : nullptr,
-          std::make_unique<FileHandleGenerator>(properties)),
+          std::make_unique<FileHandleGenerator>(nullptr)),
       executor_(executor) {
-  if (isFileHandleCacheEnabled(properties.get())) {
+  if (hiveConfig_->isFileHandleCacheEnabled()) {
     LOG(INFO) << "Hive connector " << connectorId()
               << " created with maximum of "
-              << numCachedFileHandles(properties.get())
+              << hiveConfig_->numCachedFileHandles()
               << " cached file handles.";
   } else {
     LOG(INFO) << "Hive connector " << connectorId()
@@ -88,15 +81,11 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
   dwio::common::ReaderOptions options(connectorQueryCtx->memoryPool());
-  options.setMaxCoalesceBytes(
-      HiveConfig::maxCoalescedBytes(connectorQueryCtx->config()));
-  options.setMaxCoalesceDistance(
-      HiveConfig::maxCoalescedDistanceBytes(connectorQueryCtx->config()));
+  options.setMaxCoalesceBytes(hiveConfig_->maxCoalescedBytes());
+  options.setMaxCoalesceDistance(hiveConfig_->maxCoalescedDistanceBytes());
   options.setFileColumnNamesReadAsLowerCase(
-      HiveConfig::isFileColumnNamesReadAsLowerCase(
-          connectorQueryCtx->config()));
-  options.setUseColumnNamesForColumnMapping(
-      HiveConfig::isOrcUseColumnNames(connectorQueryCtx->config()));
+      hiveConfig_->isFileColumnNamesReadAsLowerCase());
+  options.setUseColumnNamesForColumnMapping(hiveConfig_->isOrcUseColumnNames());
 
   return std::make_unique<HiveDataSource>(
       outputType,
@@ -124,7 +113,7 @@ std::unique_ptr<DataSink> HiveConnector::createDataSink(
       hiveInsertHandle,
       connectorQueryCtx,
       commitStrategy,
-      connectorProperties());
+      hiveConfig_);
 }
 
 std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(

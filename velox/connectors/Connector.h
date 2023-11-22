@@ -329,18 +329,13 @@ class ConnectorQueryCtx {
 class Connector {
  public:
   explicit Connector(
-      const std::string& id,
-      std::shared_ptr<const Config> properties)
-      : id_(id), properties_(std::move(properties)) {}
+      const std::string& id)
+      : id_(id) {}
 
   virtual ~Connector() = default;
 
   const std::string& connectorId() const {
     return id_;
-  }
-
-  const std::shared_ptr<const Config>& connectorProperties() const {
-    return properties_;
   }
 
   // Returns true if this connector would accept a filter dynamically generated
@@ -391,8 +386,6 @@ class Connector {
   static folly::Synchronized<
       std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>
       trackers_;
-
-  const std::shared_ptr<const Config> properties_;
 };
 
 class ConnectorFactory {
@@ -410,7 +403,7 @@ class ConnectorFactory {
 
   virtual std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const Config> properties,
+      const std::unordered_map<std::string, std::string>& connectorConf,
       folly::Executor* FOLLY_NULLABLE executor = nullptr) = 0;
 
  private:
