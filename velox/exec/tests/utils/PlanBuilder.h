@@ -144,7 +144,8 @@ class PlanBuilder {
       const std::unordered_map<std::string, std::string>& columnAliases = {},
       const std::vector<std::string>& subfieldFilters = {},
       const std::string& remainingFilter = "",
-      const RowTypePtr& dataColumns = nullptr);
+      const RowTypePtr& dataColumns = nullptr,
+      bool isFilterPushdownEnabled = true);
 
   /// Add a TableScanNode to scan a TPC-H table.
   ///
@@ -209,6 +210,11 @@ class PlanBuilder {
       return *this;
     }
 
+    TableScanBuilder& isFilterPushdownEnabled(bool isFilterPushdownEnabled) {
+      isFilterPushdownEnabled_ = std::move(isFilterPushdownEnabled);
+      return *this;
+    }
+
     /// @param dataColumns can be different from 'outputType' for the purposes
     /// of testing queries using missing columns. It is used, if specified, for
     /// parseExpr call and as 'dataColumns' for the TableHandle. You supply more
@@ -269,6 +275,7 @@ class PlanBuilder {
     std::shared_ptr<connector::ConnectorTableHandle> tableHandle_;
     std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
         assignments_;
+    bool isFilterPushdownEnabled_;
   };
 
   /// Start a TableScanBuilder.

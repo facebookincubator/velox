@@ -215,6 +215,9 @@ void SelectiveColumnReader::getIntValues(
           VELOX_FAIL("Unsupported value size: {}", valueSize_);
       }
       break;
+    case TypeKind::TIMESTAMP:
+      getFlatValues<Timestamp, Timestamp>(rows, result, requestedType);
+      break;
     default:
       VELOX_FAIL(
           "Not a valid type for integer reader: {}", requestedType->toString());
