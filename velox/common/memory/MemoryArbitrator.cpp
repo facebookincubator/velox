@@ -18,6 +18,8 @@
 
 #include <utility>
 
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::memory {
@@ -169,6 +171,10 @@ uint64_t MemoryReclaimer::run(
   }
   stats.reclaimExecTimeUs += execTimeUs;
   stats.reclaimedBytes += bytes;
+  REPORT_ADD_HISTOGRAM_VALUE(
+      kCounterMemoryReclaimExecTimeMs, execTimeUs / 1000);
+  REPORT_ADD_HISTOGRAM_VALUE(
+      kCounterMemoryReclaimedBytesMB, bytes / (1024 * 1024));
   return bytes;
 }
 
