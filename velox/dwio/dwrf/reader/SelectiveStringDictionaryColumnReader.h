@@ -53,6 +53,14 @@ class SelectiveStringDictionaryColumnReader
 
   uint64_t skip(uint64_t numValues) override;
 
+  bool hasBulkPath() const override {
+    if (version_ == velox::dwrf::RleVersion_1) {
+      return true;
+    } else {
+      return false; // RLEv2 does't support FastPath yet
+    }
+  }
+
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
       override;
 

@@ -766,7 +766,6 @@ class FooterWrapper : public ProtoWrapperBase {
 
   const ::facebook::velox::dwrf::proto::ColumnStatistics& dwrfStatistics(
       int index) const {
-    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->statistics(index);
   }
 

@@ -135,6 +135,7 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
 void HiveConnectorFactory::initialize() {
   [[maybe_unused]] static bool once = []() {
     dwio::common::registerFileSinks();
+    dwrf::registerOrcReaderFactory();
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
     orc::registerOrcReaderFactory();
