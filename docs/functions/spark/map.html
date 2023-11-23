@@ -52,22 +52,13 @@
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="map">
-<span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#map" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns an empty map.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">map</span><span class="p">();</span> <span class="o">--</span> <span class="p">{}</span>
-</pre></div>
-</div>
-</dd></dl>
+<span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...)</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a map created using the given key/value pairs. Keys are not allowed to be null.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">map</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span> <span class="o">-&gt;</span> <span class="mi">4</span><span class="p">}</span>
 
-<dl class="spark function">
-<dt class="sig sig-object spark">
-<span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(K)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span></dt>
-<dd><blockquote>
-<div><p>Returns a map created using the given key/value arrays. Duplicate map key will cause exception.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">map</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span> <span class="o">-&gt;</span> <span class="mi">4</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="nb">map</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">array</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span> <span class="o">--</span> <span class="p">{[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]}</span>
 </pre></div>
 </div>
-</div></blockquote>
 </dd></dl>
 
 <dl class="spark function">
