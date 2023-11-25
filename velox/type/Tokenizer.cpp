@@ -17,15 +17,13 @@
 
 namespace facebook::velox::common {
 
-Tokenizer::Tokenizer(
-    const std::string& path,
-    const std::shared_ptr<Separators>& separators)
-    : path_(path), separators_(separators) {
+DefaultTokenizer::DefaultTokenizer(const std::string& path)
+    : path_(path), separators_(Separators::get()) {
   state = State::kNotReady;
   index_ = 0;
 }
 
-bool Tokenizer::hasNext() {
+bool DefaultTokenizer::hasNext() {
   switch (state) {
     case State::kDone:
       return false;
@@ -39,7 +37,7 @@ bool Tokenizer::hasNext() {
   return tryToComputeNext();
 }
 
-std::unique_ptr<Subfield::PathElement> Tokenizer::next() {
+std::unique_ptr<Subfield::PathElement> DefaultTokenizer::next() {
   if (!hasNext()) {
     VELOX_FAIL("No more tokens");
   }
@@ -47,11 +45,11 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::next() {
   return std::move(next_);
 }
 
-bool Tokenizer::hasNextCharacter() {
+bool DefaultTokenizer::hasNextCharacter() {
   return index_ < path_.length();
 }
 
-std::unique_ptr<Subfield::PathElement> Tokenizer::computeNext() {
+std::unique_ptr<Subfield::PathElement> DefaultTokenizer::computeNext() {
   if (!hasNextCharacter()) {
     state = State::kDone;
     return nullptr;
@@ -83,17 +81,17 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::computeNext() {
   VELOX_UNREACHABLE();
 }
 
-bool Tokenizer::tryMatchSeparator(char expected) {
+bool DefaultTokenizer::tryMatchSeparator(char expected) {
   return separators_->isSeparator(expected) && tryMatch(expected);
 }
 
-void Tokenizer::match(char expected) {
+void DefaultTokenizer::match(char expected) {
   if (!tryMatch(expected)) {
     invalidSubfieldPath();
   }
 }
 
-bool Tokenizer::tryMatch(char expected) {
+bool DefaultTokenizer::tryMatch(char expected) {
   if (!hasNextCharacter() || peekCharacter() != expected) {
     return false;
   }
@@ -101,15 +99,15 @@ bool Tokenizer::tryMatch(char expected) {
   return true;
 }
 
-void Tokenizer::nextCharacter() {
+void DefaultTokenizer::nextCharacter() {
   index_++;
 }
 
-char Tokenizer::peekCharacter() {
+char DefaultTokenizer::peekCharacter() {
   return path_[index_];
 }
 
-std::unique_ptr<Subfield::PathElement> Tokenizer::matchPathSegment() {
+std::unique_ptr<Subfield::PathElement> DefaultTokenizer::matchPathSegment() {
   // seek until we see a special character or whitespace
   int start = index_;
   while (hasNextCharacter() && !separators_->isSeparator(peekCharacter()) &&
@@ -128,7 +126,8 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchPathSegment() {
   return std::make_unique<Subfield::NestedField>(token);
 }
 
-std::unique_ptr<Subfield::PathElement> Tokenizer::matchUnquotedSubscript() {
+std::unique_ptr<Subfield::PathElement>
+DefaultTokenizer::matchUnquotedSubscript() {
   // seek until we see a special character or whitespace
   int start = index_;
   while (hasNextCharacter() && isUnquotedSubscriptCharacter(peekCharacter())) {
@@ -151,16 +150,17 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchUnquotedSubscript() {
   return std::make_unique<Subfield::LongSubscript>(index);
 }
 
-bool Tokenizer::isUnquotedPathCharacter(char c) {
+bool DefaultTokenizer::isUnquotedPathCharacter(char c) {
   return c == ':' || c == '$' || c == '-' || c == '/' || c == '@' || c == '|' ||
       c == '#' || c == '.' || isUnquotedSubscriptCharacter(c);
 }
 
-bool Tokenizer::isUnquotedSubscriptCharacter(char c) {
+bool DefaultTokenizer::isUnquotedSubscriptCharacter(char c) {
   return c == '-' || c == '_' || isalnum(c);
 }
 
-std::unique_ptr<Subfield::PathElement> Tokenizer::matchQuotedSubscript() {
+std::unique_ptr<Subfield::PathElement>
+DefaultTokenizer::matchQuotedSubscript() {
   // quote has already been matched
 
   // seek until we see the close quote
@@ -200,20 +200,21 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchQuotedSubscript() {
   return std::make_unique<Subfield::StringSubscript>(token);
 }
 
-std::unique_ptr<Subfield::PathElement> Tokenizer::matchWildcardSubscript() {
+std::unique_ptr<Subfield::PathElement>
+DefaultTokenizer::matchWildcardSubscript() {
   return std::make_unique<Subfield::AllSubscripts>();
 }
 
-void Tokenizer::invalidSubfieldPath() {
+void DefaultTokenizer::invalidSubfieldPath() {
   VELOX_FAIL("Invalid subfield path: {}", this->toString());
 }
 
-std::string Tokenizer::toString() {
+std::string DefaultTokenizer::toString() {
   return path_.substr(0, index_) + separators_->unicodeCaret +
       path_.substr(index_);
 }
 
-bool Tokenizer::tryToComputeNext() {
+bool DefaultTokenizer::tryToComputeNext() {
   state = State::kFailed; // temporary pessimism
   next_ = computeNext();
   if (state != State::kDone) {
@@ -221,5 +222,25 @@ bool Tokenizer::tryToComputeNext() {
     return true;
   }
   return false;
+}
+
+std::function<std::unique_ptr<Tokenizer>(const std::string&)>
+    Tokenizer::tokenizerFactory_ = nullptr;
+
+// static
+std::unique_ptr<Tokenizer> Tokenizer::getInstance(const std::string& path) {
+  if (!tokenizerFactory_) {
+    tokenizerFactory_ = [](const std::string& p) {
+      return std::make_unique<DefaultTokenizer>(p);
+    };
+  }
+  return tokenizerFactory_(path);
+}
+
+// static
+void Tokenizer::registerInstanceFactory(
+    std::function<std::unique_ptr<Tokenizer>(const std::string&)>
+        tokenizerFactory) {
+  tokenizerFactory_ = tokenizerFactory;
 }
 } // namespace facebook::velox::common
