@@ -53,13 +53,13 @@ class ParquetTpchTest : public testing::Test {
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(kHiveConnectorId, nullptr);
+            ->newConnector(kHiveConnectorId, {});
     connector::registerConnector(hiveConnector);
 
     auto tpchConnector =
         connector::getConnectorFactory(
             connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-            ->newConnector(kTpchConnectorId, nullptr);
+            ->newConnector(kTpchConnectorId, {});
     connector::registerConnector(tpchConnector);
 
     saveTpchTablesAsParquet();

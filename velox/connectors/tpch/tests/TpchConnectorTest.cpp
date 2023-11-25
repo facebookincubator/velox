@@ -39,7 +39,7 @@ class TpchConnectorTest : public exec::test::OperatorTestBase {
     auto tpchConnector =
         connector::getConnectorFactory(
             connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-            ->newConnector(kTpchConnectorId, nullptr);
+            ->newConnector(kTpchConnectorId, {});
     connector::registerConnector(tpchConnector);
   }
 

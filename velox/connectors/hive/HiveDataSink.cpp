@@ -290,14 +290,13 @@ HiveDataSink::HiveDataSink(
     std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
-    const std::shared_ptr<const Config>& connectorProperties)
+    const std::shared_ptr<const HiveConfig>& hiveConfig)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
       commitStrategy_(commitStrategy),
-      connectorProperties_(connectorProperties),
-      maxOpenWriters_(
-          HiveConfig::maxPartitionsPerWriters(connectorQueryCtx_->config())),
+      hiveConfig_(hiveConfig),
+      maxOpenWriters_(hiveConfig_->maxPartitionsPerWriters()),
       partitionChannels_(getPartitionChannels(insertTableHandle_)),
       partitionIdGenerator_(
           !partitionChannels_.empty() ? std::make_unique<PartitionIdGenerator>(
@@ -602,11 +601,10 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   }
   options.nonReclaimableSection =
       writerInfo_.back()->nonReclaimableSectionHolder.get();
-  options.maxStripeSize = std::optional(HiveConfig::getOrcWriterMaxStripeSize(
-      connectorQueryCtx_->config(), connectorProperties_.get()));
+  options.maxStripeSize =
+      std::optional(hiveConfig_->getOrcWriterMaxStripeSize());
   options.maxDictionaryMemory =
-      std::optional(HiveConfig::getOrcWriterMaxDictionaryMemory(
-          connectorQueryCtx_->config(), connectorProperties_.get()));
+      std::optional(hiveConfig_->getOrcWriterMaxDictionaryMemory());
   ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
 
   // Prevents the memory allocation during the writer creation.
@@ -615,7 +613,7 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
       dwio::common::FileSink::create(
           writePath,
           {.bufferWrite = false,
-           .connectorProperties = connectorProperties_,
+           .hiveConfig = hiveConfig_,
            .pool = writerInfo_.back()->sinkPool.get(),
            .metricLogger = dwio::common::MetricsLog::voidLog(),
            .stats = ioStats_.back().get()}),
@@ -649,8 +647,8 @@ HiveDataSink::maybeCreateBucketSortWriter(
   return std::make_unique<dwio::common::SortingWriter>(
       std::move(writer),
       std::move(sortBuffer),
-      HiveConfig::sortWriterMaxOutputRows(connectorQueryCtx_->config()),
-      HiveConfig::sortWriterMaxOutputBytes(connectorQueryCtx_->config()),
+      hiveConfig_->sortWriterMaxOutputRows(),
+      hiveConfig_->sortWriterMaxOutputBytes(),
       writerInfo_.back()->spillStats.get());
 }
 
@@ -735,24 +733,23 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
 HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
   if (insertTableHandle_->isInsertTable()) {
     if (insertTableHandle_->isPartitioned()) {
-      const auto insertBehavior = HiveConfig::insertExistingPartitionsBehavior(
-          connectorQueryCtx_->config());
+      const auto insertBehavior =
+          hiveConfig_->insertExistingPartitionsBehavior();
       switch (insertBehavior) {
-        case HiveConfig::InsertExistingPartitionsBehavior::kOverwrite:
+        case InsertExistingPartitionsBehavior::kOverwrite:
           return HiveWriterParameters::UpdateMode::kOverwrite;
-        case HiveConfig::InsertExistingPartitionsBehavior::kError:
+        case InsertExistingPartitionsBehavior::kError:
           return HiveWriterParameters::UpdateMode::kNew;
         default:
           VELOX_UNSUPPORTED(
               "Unsupported insert existing partitions behavior: {}",
-              HiveConfig::insertExistingPartitionsBehaviorString(
-                  insertBehavior));
+              insertExistingPartitionsBehaviorString(insertBehavior));
       }
     } else {
       if (insertTableHandle_->isBucketed()) {
         VELOX_USER_FAIL("Cannot insert into bucketed unpartitioned Hive table");
       }
-      if (HiveConfig::immutablePartitions(connectorProperties_.get())) {
+      if (hiveConfig_->immutablePartitions()) {
         VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");
       }
       return HiveWriterParameters::UpdateMode::kAppend;

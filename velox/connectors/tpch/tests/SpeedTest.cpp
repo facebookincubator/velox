@@ -59,7 +59,7 @@ class TpchSpeedTest {
     auto tpchConnector =
         connector::getConnectorFactory(
             connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-            ->newConnector(kTpchConnectorId_, nullptr);
+            ->newConnector(kTpchConnectorId_, {});
     connector::registerConnector(tpchConnector);
   }
 

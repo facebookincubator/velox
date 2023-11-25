@@ -258,14 +258,13 @@ class TpchBenchmark {
     configurationValues
         [connector::hive::HiveConfig::kMaxCoalescedDistanceBytes] =
             std::to_string(FLAGS_max_coalesced_distance_bytes);
-    auto properties =
-        std::make_shared<const core::MemConfig>(configurationValues);
 
     // Create hive connector with config...
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(kHiveConnectorId, properties, ioExecutor_.get());
+            ->newConnector(
+                kHiveConnectorId, configurationValues, ioExecutor_.get());
     connector::registerConnector(hiveConnector);
   }
 

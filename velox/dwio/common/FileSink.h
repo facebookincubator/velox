@@ -20,6 +20,7 @@
 
 #include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/dwio/common/Closeable.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/MetricsLog.h"
@@ -30,6 +31,7 @@ class Config;
 
 namespace facebook::velox::dwio::common {
 using namespace facebook::velox::io;
+using namespace facebook::velox::connector::hive;
 
 /// An abstract interface for providing a file write sink to different storage
 /// system backends.
@@ -40,7 +42,7 @@ class FileSink : public Closeable {
     bool bufferWrite{true};
     /// Connector properties are required to create a FileSink on FileSystems
     /// such as S3.
-    const std::shared_ptr<const Config>& connectorProperties{nullptr};
+    const std::shared_ptr<const HiveConfig>& hiveConfig{nullptr};
     memory::MemoryPool* pool{nullptr};
     MetricsLogPtr metricLogger{MetricsLog::voidLog()};
     IoStatistics* stats{nullptr};
@@ -48,7 +50,7 @@ class FileSink : public Closeable {
 
   FileSink(std::string name, const Options& options)
       : name_{std::move(name)},
-        connectorProperties_{options.connectorProperties},
+        hiveConfig_{options.hiveConfig},
         pool_(options.pool),
         metricLogger_{options.metricLogger},
         stats_{options.stats},
@@ -107,7 +109,7 @@ class FileSink : public Closeable {
       const std::function<uint64_t(const DataBuffer<char>&)>& callback);
 
   const std::string name_;
-  const std::shared_ptr<const Config> connectorProperties_;
+  const std::shared_ptr<const HiveConfig> hiveConfig_;
   memory::MemoryPool* const pool_;
   const MetricsLogPtr metricLogger_;
   IoStatistics* const stats_;

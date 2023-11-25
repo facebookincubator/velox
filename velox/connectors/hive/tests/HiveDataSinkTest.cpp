@@ -93,7 +93,6 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     connectorQueryCtx_ = std::make_unique<connector::ConnectorQueryCtx>(
         opPool_.get(),
         connectorPool_.get(),
-        connectorConfig_.get(),
         nullptr,
         nullptr,
         nullptr,
@@ -165,8 +164,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
 
   void setConnectorConfig(
       std::unordered_map<std::string, std::string> connectorConfig) {
-    connectorConfig_ =
-        std::make_shared<core::MemConfig>(std::move(connectorConfig));
+    connectorConfig_ = std::make_shared<HiveConfig>(std::move(connectorConfig));
   }
 
   void setConnectorQueryContext(
@@ -182,7 +180,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<memory::MemoryPool> connectorPool_;
   RowTypePtr rowType_;
   std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
-  std::shared_ptr<Config> connectorConfig_{std::make_unique<core::MemConfig>()};
+  std::shared_ptr<HiveConfig> connectorConfig_ = std::make_shared<HiveConfig>(
+      std::unordered_map<std::string, std::string>());
   std::unique_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
 };
 
@@ -633,7 +632,6 @@ TEST_F(HiveDataSinkTest, memoryReclaim) {
       auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
           opPool_.get(),
           connectorPool_.get(),
-          connectorConfig_.get(),
           spillConfig.get(),
           nullptr,
           nullptr,
@@ -646,7 +644,6 @@ TEST_F(HiveDataSinkTest, memoryReclaim) {
       auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
           opPool_.get(),
           connectorPool_.get(),
-          connectorConfig_.get(),
           nullptr,
           nullptr,
           nullptr,
@@ -779,7 +776,6 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
       auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
           opPool_.get(),
           connectorPool_.get(),
-          connectorConfig_.get(),
           spillConfig.get(),
           nullptr,
           nullptr,
@@ -792,7 +788,6 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
       auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
           opPool_.get(),
           connectorPool_.get(),
-          connectorConfig_.get(),
           nullptr,
           nullptr,
           nullptr,

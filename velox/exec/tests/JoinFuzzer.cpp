@@ -143,7 +143,7 @@ JoinFuzzer::JoinFuzzer(size_t initialSeed)
   auto hiveConnector =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kHiveConnectorId, nullptr);
+          ->newConnector(kHiveConnectorId, {});
   connector::registerConnector(hiveConnector);
 
   seed(initialSeed);

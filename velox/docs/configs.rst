@@ -360,11 +360,11 @@ Hive Connector
      - Type
      - Default Value
      - Description
-   * - max_partitions_per_writers
+   * - hive.max-partitions-per-writers
      - integer
      - 100
      - Maximum number of (bucketed) partitions per a single table writer instance.
-   * - insert_existing_partitions_behavior
+   * - insert-existing-partitions-behavior
      - string
      - ERROR
      - **Allowed values:** ``OVERWRITE``, ``ERROR``. The behavior on insert existing partitions. This property only derives
@@ -376,7 +376,7 @@ Hive Connector
      - false
      - True if appending data to an existing unpartitioned table is allowed. Currently this configuration does not
        support appending to existing partitions.
-   * - file_column_names_read_as_lower_case
+   * - file-column-names-read-as-lower-case
      - bool
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
@@ -389,21 +389,21 @@ Hive Connector
      - integer
      - 128MB
      - Maximum distance in bytes between chunks to be fetched that may be coalesced into a single request.
-   * - num_cached_file_handles
+   * - num-cached-file-handles
      - integer
      - 20000
      - Maximum number of entries in the file handle cache. The value must be non-negative. Zero value
        indicates infinite cache capacity.
-   * - file_handle_cache_enabled
+   * - file-handle-cache-enabled
      - bool
      - true
      - Enables caching of file handles if true. Disables caching if false. File handle cache should be
        disabled if files are not immutable, i.e. file content may change while file path stays the same.
-   * - sort_writer_max_output_rows
+   * - sort-writer-max-output-rows
      - integer
      - 1024
      - Maximum number of rows for sort writer in one batch of output. This is to limit the memory usage of sort writer.
-   * - sort_writer_max_output_bytes
+   * - sort-writer-max-output-bytes
      - integer
      - 10MB
      - Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.

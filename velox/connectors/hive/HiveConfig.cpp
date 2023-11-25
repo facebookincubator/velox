@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/HiveConfig.h"
+#include <core/QueryConfig.h>
 #include "velox/core/Config.h"
 #include "velox/core/QueryConfig.h"
 
@@ -22,35 +23,20 @@
 
 namespace facebook::velox::connector::hive {
 
-namespace {
-
-HiveConfig::InsertExistingPartitionsBehavior
-stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
+InsertExistingPartitionsBehavior stringToInsertExistingPartitionsBehavior(
+    const std::string& strValue) {
   auto upperValue = boost::algorithm::to_upper_copy(strValue);
   if (upperValue == "ERROR") {
-    return HiveConfig::InsertExistingPartitionsBehavior::kError;
+    return InsertExistingPartitionsBehavior::kError;
   }
   if (upperValue == "OVERWRITE") {
-    return HiveConfig::InsertExistingPartitionsBehavior::kOverwrite;
+    return InsertExistingPartitionsBehavior::kOverwrite;
   }
   VELOX_UNSUPPORTED(
       "Unsupported insert existing partitions behavior: {}.", strValue);
 }
 
-} // namespace
-
-// static
-HiveConfig::InsertExistingPartitionsBehavior
-HiveConfig::insertExistingPartitionsBehavior(const Config* config) {
-  const auto behavior =
-      config->get<std::string>(kInsertExistingPartitionsBehavior);
-  return behavior.has_value()
-      ? stringToInsertExistingPartitionsBehavior(behavior.value())
-      : InsertExistingPartitionsBehavior::kError;
-}
-
-// static
-std::string HiveConfig::insertExistingPartitionsBehaviorString(
+std::string insertExistingPartitionsBehaviorString(
     InsertExistingPartitionsBehavior behavior) {
   switch (behavior) {
     case InsertExistingPartitionsBehavior::kError:
@@ -62,166 +48,285 @@ std::string HiveConfig::insertExistingPartitionsBehaviorString(
   }
 }
 
-// static
-uint32_t HiveConfig::maxPartitionsPerWriters(const Config* config) {
-  return config->get<uint32_t>(kMaxPartitionsPerWriters, 100);
+InsertExistingPartitionsBehavior HiveConfig::insertExistingPartitionsBehavior()
+    const {
+  return insertExistingPartitionsBehavior_;
+}
+
+uint32_t HiveConfig::maxPartitionsPerWriters() const {
+  return maxPartitionsPerWriters_;
+}
+
+bool HiveConfig::immutablePartitions() const {
+  return immutablePartitions_;
+}
+
+bool HiveConfig::s3UseVirtualAddressing() const {
+  return s3PathStyleAccess_;
+}
+
+std::string HiveConfig::s3GetLogLevel() const {
+  return s3LogLevel_;
+}
+
+bool HiveConfig::s3UseSSL() const {
+  return s3SSLEnabled_;
+}
+
+bool HiveConfig::s3UseInstanceCredentials() const {
+  return s3UseInstanceCredentials_;
+}
+
+std::string HiveConfig::s3Endpoint() const {
+  return s3Endpoint_;
+}
+
+std::optional<std::string> HiveConfig::s3AccessKey() const {
+  return s3AwsAccessKey_;
+}
+
+std::optional<std::string> HiveConfig::s3SecretKey() const {
+  return s3AwsSecretKey_;
+}
+
+std::optional<std::string> HiveConfig::s3IAMRole() const {
+  return s3IamRole_;
+}
+
+std::string HiveConfig::s3IAMRoleSessionName() const {
+  return s3IamRoleSessionName_;
+}
+
+std::string HiveConfig::gcsEndpoint() const {
+  return GCSEndpoint_;
+}
+
+std::string HiveConfig::gcsScheme() const {
+  return GCSScheme_;
+}
+
+std::string HiveConfig::gcsCredentials() const {
+  return GCSCredentials_;
+}
+
+bool HiveConfig::isOrcUseColumnNames() const {
+  return orcUseColumnNames_;
+}
+
+bool HiveConfig::isFileColumnNamesReadAsLowerCase() const {
+  return fileColumnNamesReadAsLowerCase_;
+}
+
+int64_t HiveConfig::maxCoalescedBytes() const {
+  return maxCoalescedBytes_;
+}
+
+int32_t HiveConfig::maxCoalescedDistanceBytes() const {
+  return maxCoalescedDistanceBytes_;
+}
+
+int32_t HiveConfig::numCacheFileHandles() const {
+  return numCacheFileHandles_;
+}
+
+bool HiveConfig::isFileHandleCacheEnabled() const {
+  return enableFileHandleCache_;
+}
+
+uint32_t HiveConfig::sortWriterMaxOutputRows() const {
+  return sortWriterMaxOutputRows_;
+}
+
+uint64_t HiveConfig::sortWriterMaxOutputBytes() const {
+  return sortWriterMaxOutputBytes_;
+}
+
+uint64_t HiveConfig::getOrcWriterMaxStripeSize() const {
+  return orcWriterMaxStripeSize_;
+}
+
+uint64_t HiveConfig::getOrcWriterMaxDictionaryMemory() const {
+  return orcWriterMaxDictionaryMemory_;
 }
 
 // static
-bool HiveConfig::immutablePartitions(const Config* config) {
-  return config->get<bool>(kImmutablePartitions, false);
+void HiveConfig::setInsertExistingPartitionsBehavior(
+    HiveConfig* hiveConfig,
+    std::string insertExistingPartitionsBehavior) {
+  hiveConfig->insertExistingPartitionsBehavior_ =
+      stringToInsertExistingPartitionsBehavior(
+          insertExistingPartitionsBehavior);
 }
 
 // static
-bool HiveConfig::s3UseVirtualAddressing(const Config* config) {
-  return !config->get(kS3PathStyleAccess, false);
+void HiveConfig::setMaxPartitionsPerWriters(
+    HiveConfig* hiveConfig,
+    std::string maxPartitionsPerWriters) {
+  hiveConfig->maxPartitionsPerWriters_ =
+      folly::to<uint32_t>(maxPartitionsPerWriters);
 }
 
 // static
-std::string HiveConfig::s3GetLogLevel(const Config* config) {
-  return config->get(kS3LogLevel, std::string("FATAL"));
+void HiveConfig::setImmutablePartitions(
+    HiveConfig* hiveConfig,
+    std::string immutablePartitions) {
+  hiveConfig->immutablePartitions_ = folly::to<bool>(immutablePartitions);
 }
 
 // static
-bool HiveConfig::s3UseSSL(const Config* config) {
-  return config->get(kS3SSLEnabled, true);
+void HiveConfig::setS3PathStyleAccess(
+    HiveConfig* hiveConfig,
+    std::string s3PathStyleAccess) {
+  hiveConfig->s3PathStyleAccess_ = folly::to<bool>(s3PathStyleAccess);
 }
 
 // static
-bool HiveConfig::s3UseInstanceCredentials(const Config* config) {
-  return config->get(kS3UseInstanceCredentials, false);
+void HiveConfig::setS3LogLevel(HiveConfig* hiveConfig, std::string s3LogLevel) {
+  hiveConfig->s3LogLevel_ = folly::to<std::string>(s3LogLevel);
 }
 
 // static
-std::string HiveConfig::s3Endpoint(const Config* config) {
-  return config->get(kS3Endpoint, std::string(""));
+void HiveConfig::setS3SSLEnabled(
+    HiveConfig* hiveConfig,
+    std::string s3SSLEnabled) {
+  hiveConfig->s3SSLEnabled_ = folly::to<bool>(s3SSLEnabled);
 }
 
 // static
-std::optional<std::string> HiveConfig::s3AccessKey(const Config* config) {
-  if (config->isValueExists(kS3AwsAccessKey)) {
-    return config->get(kS3AwsAccessKey).value();
-  }
-  return {};
+void HiveConfig::setS3UseInstanceCredentials(
+    HiveConfig* hiveConfig,
+    std::string s3UseInstanceCredentials) {
+  hiveConfig->s3UseInstanceCredentials_ =
+      folly::to<bool>(s3UseInstanceCredentials);
 }
 
 // static
-std::optional<std::string> HiveConfig::s3SecretKey(const Config* config) {
-  if (config->isValueExists(kS3AwsSecretKey)) {
-    return config->get(kS3AwsSecretKey).value();
-  }
-  return {};
+void HiveConfig::setS3Endpoint(HiveConfig* hiveConfig, std::string s3Endpoint) {
+  hiveConfig->s3Endpoint_ = folly::to<std::string>(s3Endpoint);
 }
 
 // static
-std::optional<std::string> HiveConfig::s3IAMRole(const Config* config) {
-  if (config->isValueExists(kS3IamRole)) {
-    return config->get(kS3IamRole).value();
-  }
-  return {};
+void HiveConfig::setS3AwsAccessKey(
+    HiveConfig* hiveConfig,
+    std::string s3AwsAccessKey) {
+  hiveConfig->s3AwsAccessKey_ =
+      std::optional(folly::to<std::string>(s3AwsAccessKey));
 }
 
 // static
-std::string HiveConfig::s3IAMRoleSessionName(const Config* config) {
-  return config->get(kS3IamRoleSessionName, std::string("velox-session"));
+void HiveConfig::setS3AwsSecretKey(
+    HiveConfig* hiveConfig,
+    std::string s3AwsSecretKey) {
+  hiveConfig->s3AwsSecretKey_ =
+      std::optional(folly::to<std::string>(s3AwsSecretKey));
 }
 
 // static
-std::string HiveConfig::gcsEndpoint(const Config* config) {
-  return config->get<std::string>(kGCSEndpoint, std::string(""));
+void HiveConfig::setS3IamRole(HiveConfig* hiveConfig, std::string s3IamRole) {
+  hiveConfig->s3IamRole_ = std::optional(folly::to<std::string>(s3IamRole));
 }
 
 // static
-std::string HiveConfig::gcsScheme(const Config* config) {
-  return config->get<std::string>(kGCSScheme, std::string("https"));
+void HiveConfig::setS3IamRoleSessionName(
+    HiveConfig* hiveConfig,
+    std::string s3IamRoleSessionName) {
+  hiveConfig->s3IamRoleSessionName_ =
+      folly::to<std::string>(s3IamRoleSessionName);
 }
 
 // static
-std::string HiveConfig::gcsCredentials(const Config* config) {
-  return config->get<std::string>(kGCSCredentials, std::string(""));
+void HiveConfig::setGCSEndpoint(
+    HiveConfig* hiveConfig,
+    std::string GCSEndpoint) {
+  hiveConfig->GCSEndpoint_ = folly::to<std::string>(GCSEndpoint);
 }
 
-// static.
-bool HiveConfig::isOrcUseColumnNames(const Config* config) {
-  return config->get<bool>(kOrcUseColumnNames, false);
+// static
+void HiveConfig::setGCSScheme(HiveConfig* hiveConfig, std::string GCSScheme) {
+  hiveConfig->GCSScheme_ = folly::to<std::string>(GCSScheme);
 }
 
-// static.
-bool HiveConfig::isFileColumnNamesReadAsLowerCase(const Config* config) {
-  return config->get<bool>(kFileColumnNamesReadAsLowerCase, false);
+// static
+void HiveConfig::setGCSCredentials(
+    HiveConfig* hiveConfig,
+    std::string GCSCredentials) {
+  hiveConfig->GCSCredentials_ = folly::to<std::string>(GCSCredentials);
 }
 
-// static.
-int64_t HiveConfig::maxCoalescedBytes(const Config* config) {
-  return config->get<int64_t>(kMaxCoalescedBytes, 128 << 20);
+// static
+void HiveConfig::setOrcUseColumnNames(
+    HiveConfig* hiveConfig,
+    std::string orcUseColumnNames) {
+  hiveConfig->orcUseColumnNames_ = folly::to<bool>(orcUseColumnNames);
 }
 
-// static.
-int32_t HiveConfig::maxCoalescedDistanceBytes(const Config* config) {
-  return config->get<int32_t>(kMaxCoalescedDistanceBytes, 512 << 10);
+// static
+void HiveConfig::setFileColumnNamesReadAsLowerCase(
+    HiveConfig* hiveConfig,
+    std::string fileColumnNamesReadAsLowerCase) {
+  hiveConfig->fileColumnNamesReadAsLowerCase_ =
+      folly::to<bool>(fileColumnNamesReadAsLowerCase);
 }
 
-// static.
-int32_t HiveConfig::numCacheFileHandles(const Config* config) {
-  return config->get<int32_t>(kNumCacheFileHandles, 20'000);
+// static
+void HiveConfig::setMaxCoalescedBytes(
+    HiveConfig* hiveConfig,
+    std::string maxCoalescedBytes) {
+  hiveConfig->maxCoalescedBytes_ = folly::to<int64_t>(maxCoalescedBytes);
 }
 
-// static.
-bool HiveConfig::isFileHandleCacheEnabled(const Config* config) {
-  return config->get<bool>(kEnableFileHandleCache, true);
+// static
+void HiveConfig::setMaxCoalescedDistanceBytes(
+    HiveConfig* hiveConfig,
+    std::string maxCoalescedDistanceBytes) {
+  hiveConfig->maxCoalescedDistanceBytes_ =
+      folly::to<int32_t>(maxCoalescedDistanceBytes);
 }
 
-// static.
-uint32_t HiveConfig::sortWriterMaxOutputRows(const Config* config) {
-  return config->get<int32_t>(kSortWriterMaxOutputRows, 1024);
+// static
+void HiveConfig::setNumCacheFileHandles(
+    HiveConfig* hiveConfig,
+    std::string numCacheFileHandles) {
+  hiveConfig->numCacheFileHandles_ = folly::to<int32_t>(numCacheFileHandles);
 }
 
-// static.
-uint64_t HiveConfig::sortWriterMaxOutputBytes(const Config* config) {
-  return config->get<uint64_t>(kSortWriterMaxOutputBytes, 10UL << 20);
+// static
+void HiveConfig::setEnableFileHandleCache(
+    HiveConfig* hiveConfig,
+    std::string enableFileHandleCache) {
+  hiveConfig->enableFileHandleCache_ = folly::to<bool>(enableFileHandleCache);
 }
 
-uint64_t HiveConfig::getOrcWriterMaxStripeSize(
-    const Config* connectorQueryCtxConfig,
-    const Config* connectorPropertiesConfig) {
-  if (connectorQueryCtxConfig != nullptr &&
-      connectorQueryCtxConfig->isValueExists(kOrcWriterMaxStripeSize)) {
-    return toCapacity(
-        connectorQueryCtxConfig->get<std::string>(kOrcWriterMaxStripeSize)
-            .value(),
-        core::CapacityUnit::BYTE);
-  }
-  if (connectorPropertiesConfig != nullptr &&
-      connectorPropertiesConfig->isValueExists(kOrcWriterMaxStripeSizeConfig)) {
-    return toCapacity(
-        connectorPropertiesConfig
-            ->get<std::string>(kOrcWriterMaxStripeSizeConfig)
-            .value(),
-        core::CapacityUnit::BYTE);
-  }
-  return 64L * 1024L * 1024L;
+// static
+void HiveConfig::setSortWriterMaxOutputRows(
+    HiveConfig* hiveConfig,
+    std::string sortWriterMaxOutputRows) {
+  hiveConfig->sortWriterMaxOutputRows_ =
+      folly::to<int32_t>(sortWriterMaxOutputRows);
 }
 
-uint64_t HiveConfig::getOrcWriterMaxDictionaryMemory(
-    const Config* connectorQueryCtxConfig,
-    const Config* connectorPropertiesConfig) {
-  if (connectorQueryCtxConfig != nullptr &&
-      connectorQueryCtxConfig->isValueExists(kOrcWriterMaxDictionaryMemory)) {
-    return toCapacity(
-        connectorQueryCtxConfig->get<std::string>(kOrcWriterMaxDictionaryMemory)
-            .value(),
-        core::CapacityUnit::BYTE);
-  }
-  if (connectorPropertiesConfig != nullptr &&
-      connectorPropertiesConfig->isValueExists(
-          kOrcWriterMaxDictionaryMemoryConfig)) {
-    return toCapacity(
-        connectorPropertiesConfig
-            ->get<std::string>(kOrcWriterMaxDictionaryMemoryConfig)
-            .value(),
-        core::CapacityUnit::BYTE);
-  }
-  return 16L * 1024L * 1024L;
+// static
+void HiveConfig::setSortWriterMaxOutputBytes(
+    HiveConfig* hiveConfig,
+    std::string sortWriterMaxOutputBytes) {
+  hiveConfig->sortWriterMaxOutputBytes_ =
+      folly::to<uint64_t>(sortWriterMaxOutputBytes);
+}
+
+// static
+void HiveConfig::setOrcWriterMaxStripeSize(
+    HiveConfig* hiveConfig,
+    std::string orcWriterMaxStripeSize) {
+  hiveConfig->orcWriterMaxStripeSize_ =
+      folly::to<uint64_t>(orcWriterMaxStripeSize);
+}
+
+// static
+void HiveConfig::setOrcWriterMaxDictionaryMemory(
+    HiveConfig* hiveConfig,
+    std::string orcWriterMaxDictionaryMemory) {
+  hiveConfig->orcWriterMaxDictionaryMemory_ =
+      folly::to<uint64_t>(orcWriterMaxDictionaryMemory);
 }
 
 } // namespace facebook::velox::connector::hive

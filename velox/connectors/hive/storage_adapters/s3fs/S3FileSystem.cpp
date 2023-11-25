@@ -430,13 +430,13 @@ struct AwsInstance {
   }
 
   // Returns true iff the instance was newly initialized with config.
-  bool initialize(const Config* config) {
+  bool initialize(const HiveConfig* hiveConfig) {
     if (isFinalized_.load()) {
       VELOX_FAIL("Attempt to initialize S3 after it has been finalized.");
     }
     if (!isInitialized_.exchange(true)) {
       // Not already initialized.
-      doInitialize(config);
+      doInitialize(hiveConfig);
       return true;
     }
     return false;
@@ -468,9 +468,9 @@ struct AwsInstance {
   }
 
  private:
-  void doInitialize(const Config* config) {
+  void doInitialize(const HiveConfig* hiveConfig) {
     awsOptions_.loggingOptions.logLevel =
-        inferS3LogLevel(HiveConfig::s3GetLogLevel(config));
+        inferS3LogLevel(hiveConfig->s3GetLogLevel());
     // In some situations, curl triggers a SIGPIPE signal causing the entire
     // process to be terminated without any notification.
     // This behavior is seen via Prestissimo on AmazonLinux2 on AWS EC2.
@@ -493,8 +493,8 @@ AwsInstance* getAwsInstance() {
   return instance.get();
 }
 
-bool initializeS3(const Config* config) {
-  return getAwsInstance()->initialize(config);
+bool initializeS3(const HiveConfig* hiveConfig) {
+  return getAwsInstance()->initialize(hiveConfig);
 }
 
 static std::atomic<int> fileSystemCount = 0;
@@ -506,12 +506,12 @@ void finalizeS3() {
 
 class S3FileSystem::Impl {
  public:
-  Impl(const Config* config) : config_(config) {
+  Impl(const HiveConfig* hiveConfig) : hiveConfig_(hiveConfig) {
     VELOX_CHECK(getAwsInstance()->isInitialized(), "S3 is not initialized");
     Aws::Client::ClientConfiguration clientConfig;
-    clientConfig.endpointOverride = HiveConfig::s3Endpoint(config_);
+    clientConfig.endpointOverride = hiveConfig_->s3Endpoint();
 
-    if (HiveConfig::s3UseSSL(config_)) {
+    if (hiveConfig_->s3UseSSL()) {
       clientConfig.scheme = Aws::Http::Scheme::HTTPS;
     } else {
       clientConfig.scheme = Aws::Http::Scheme::HTTP;
@@ -523,7 +523,7 @@ class S3FileSystem::Impl {
         credentialsProvider,
         clientConfig,
         Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-        HiveConfig::s3UseVirtualAddressing(config_));
+        hiveConfig_->s3UseVirtualAddressing());
     ++fileSystemCount;
   }
 
@@ -607,13 +607,13 @@ class S3FileSystem::Impl {
   }
 
  private:
-  const Config* config_;
+  const HiveConfig* hiveConfig_;
   std::shared_ptr<Aws::S3::S3Client> client_;
 };
 
-S3FileSystem::S3FileSystem(std::shared_ptr<const Config> config)
-    : FileSystem(config) {
-  impl_ = std::make_shared<Impl>(config.get());
+S3FileSystem::S3FileSystem(std::shared_ptr<const HiveConfig> hiveConfig)
+    : FileSystem(hiveConfig) {
+  impl_ = std::make_shared<Impl>(hiveConfig.get());
 }
 
 std::string S3FileSystem::getLogLevelName() const {

@@ -17,8 +17,8 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
-#include "velox/core/PlanNode.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/core/PlanNode.h"
 
 namespace facebook::velox::dwio::common {
 class DataSink;

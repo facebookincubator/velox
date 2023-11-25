@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <folly/Conv.h>
+#include <glog/logging.h>
+#include <iostream>
 #include <optional>
 #include <string>
 
@@ -24,25 +27,90 @@ class Config;
 
 namespace facebook::velox::connector::hive {
 
+enum class InsertExistingPartitionsBehavior {
+  kError,
+  kOverwrite,
+};
+
+std::string insertExistingPartitionsBehaviorString(
+    InsertExistingPartitionsBehavior behavior);
+
 /// Hive connector configs.
 class HiveConfig {
  public:
-  enum class InsertExistingPartitionsBehavior {
-    kError,
-    kOverwrite,
+  HiveConfig(
+      const std::unordered_map<std::string, std::string>& connectorConf) {
+    for (auto config = connectorConf.begin(); config != connectorConf.end();
+         config++) {
+      if (configSetters.count(config->first) != 0) {
+        configSetters.at(config->first)(this, config->second);
+      } else {
+        LOG(ERROR) << "Invalid hive config:" << config->first << std::endl;
+        ;
+      }
+    }
   };
 
-  static std::string insertExistingPartitionsBehaviorString(
-      InsertExistingPartitionsBehavior behavior);
+  InsertExistingPartitionsBehavior insertExistingPartitionsBehavior() const;
+
+  uint32_t maxPartitionsPerWriters() const;
+
+  bool immutablePartitions() const;
+
+  bool s3UseVirtualAddressing() const;
+
+  std::string s3GetLogLevel() const;
+
+  bool s3UseSSL() const;
+
+  bool s3UseInstanceCredentials() const;
+
+  std::string s3Endpoint() const;
+
+  std::optional<std::string> s3AccessKey() const;
+
+  std::optional<std::string> s3SecretKey() const;
+
+  std::optional<std::string> s3IAMRole() const;
+
+  std::string s3IAMRoleSessionName() const;
+
+  std::string gcsEndpoint() const;
+
+  std::string gcsScheme() const;
+
+  std::string gcsCredentials() const;
+
+  bool isOrcUseColumnNames() const;
+
+  bool isFileColumnNamesReadAsLowerCase() const;
+
+  int64_t maxCoalescedBytes() const;
+
+  int32_t maxCoalescedDistanceBytes() const;
+
+  int32_t numCacheFileHandles() const;
+
+  bool isFileHandleCacheEnabled() const;
+
+  uint64_t fileWriterFlushThresholdBytes() const;
+
+  uint32_t sortWriterMaxOutputRows() const;
+
+  uint64_t sortWriterMaxOutputBytes() const;
+
+  uint64_t getOrcWriterMaxStripeSize() const;
+
+  uint64_t getOrcWriterMaxDictionaryMemory() const;
 
   /// Behavior on insert into existing partitions.
   static constexpr const char* kInsertExistingPartitionsBehavior =
-      "insert_existing_partitions_behavior";
+      "insert-existing-partitions-behavior";
 
   /// Maximum number of (bucketed) partitions per a single table writer
   /// instance.
   static constexpr const char* kMaxPartitionsPerWriters =
-      "max_partitions_per_writers";
+      "max-partitions-per-writers";
 
   /// Whether new data can be inserted into an unpartition table.
   /// Velox currently does not support appending data to existing partitions.
@@ -105,84 +173,170 @@ class HiveConfig {
       "max-coalesced-distance-bytes";
 
   /// Maximum number of entries in the file handle cache.
-  static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
+  static constexpr const char* kNumCacheFileHandles = "num-cached-file-handles";
 
   /// Enable file handle cache.
   static constexpr const char* kEnableFileHandleCache =
-      "file_handle_cache_enabled";
+      "file-handle-cache-enabled";
 
-  // TODO: Refactor and merge config and session property.
   static constexpr const char* kOrcWriterMaxStripeSize =
-      "orc_optimized_writer_max_stripe_size";
-  static constexpr const char* kOrcWriterMaxStripeSizeConfig =
       "hive.orc.writer.stripe-max-size";
 
   static constexpr const char* kOrcWriterMaxDictionaryMemory =
-      "orc_optimized_writer_max_dictionary_memory";
-  static constexpr const char* kOrcWriterMaxDictionaryMemoryConfig =
       "hive.orc.writer.dictionary-max-memory";
 
   static constexpr const char* kSortWriterMaxOutputRows =
-      "sort_writer_max_output_rows";
+      "sort-writer-max-output-rows";
   static constexpr const char* kSortWriterMaxOutputBytes =
-      "sort_writer_max_output_bytes";
+      "sort-writer-max-output-bytes";
 
-  static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
-      const Config* config);
+ private:
+  static void setInsertExistingPartitionsBehavior(
+      HiveConfig* hiveConfig,
+      std::string insertExistingPartitionsBehavior);
 
-  static uint32_t maxPartitionsPerWriters(const Config* config);
+  static void setMaxPartitionsPerWriters(
+      HiveConfig* hiveConfig,
+      std::string maxPartitionsPerWriters);
 
-  static bool immutablePartitions(const Config* config);
+  static void setImmutablePartitions(
+      HiveConfig* hiveConfig,
+      std::string immutablePartitions);
 
-  static bool s3UseVirtualAddressing(const Config* config);
+  static void setS3PathStyleAccess(
+      HiveConfig* hiveConfig,
+      std::string s3PathStyleAccess);
 
-  static std::string s3GetLogLevel(const Config* config);
+  static void setS3LogLevel(HiveConfig* hiveConfig, std::string s3LogLevel);
 
-  static bool s3UseSSL(const Config* config);
+  static void setS3SSLEnabled(HiveConfig* hiveConfig, std::string s3SSLEnabled);
 
-  static bool s3UseInstanceCredentials(const Config* config);
+  static void setS3UseInstanceCredentials(
+      HiveConfig* hiveConfig,
+      std::string s3UseInstanceCredentials);
 
-  static std::string s3Endpoint(const Config* config);
+  static void setS3Endpoint(HiveConfig* hiveConfig, std::string s3Endpoint);
 
-  static std::optional<std::string> s3AccessKey(const Config* config);
+  static void setS3AwsAccessKey(
+      HiveConfig* hiveConfig,
+      std::string s3AwsAccessKey);
 
-  static std::optional<std::string> s3SecretKey(const Config* config);
+  static void setS3AwsSecretKey(
+      HiveConfig* hiveConfig,
+      std::string s3AwsSecretKey);
 
-  static std::optional<std::string> s3IAMRole(const Config* config);
+  static void setS3IamRole(HiveConfig* hiveConfig, std::string s3IamRole);
 
-  static std::string s3IAMRoleSessionName(const Config* config);
+  static void setS3IamRoleSessionName(
+      HiveConfig* hiveConfig,
+      std::string s3IamRoleSessionName);
 
-  static std::string gcsEndpoint(const Config* config);
+  static void setGCSEndpoint(HiveConfig* hiveConfig, std::string GCSEndpoint);
 
-  static std::string gcsScheme(const Config* config);
+  static void setGCSScheme(HiveConfig* hiveConfig, std::string GCSScheme);
 
-  static std::string gcsCredentials(const Config* config);
+  static void setGCSCredentials(
+      HiveConfig* hiveConfig,
+      std::string GCSCredentials);
 
-  static bool isOrcUseColumnNames(const Config* config);
+  static void setOrcUseColumnNames(
+      HiveConfig* hiveConfig,
+      std::string orcUseColumnNames);
 
-  static bool isFileColumnNamesReadAsLowerCase(const Config* config);
+  static void setFileColumnNamesReadAsLowerCase(
+      HiveConfig* hiveConfig,
+      std::string fileColumnNamesReadAsLowerCase);
 
-  static int64_t maxCoalescedBytes(const Config* config);
+  static void setMaxCoalescedBytes(
+      HiveConfig* hiveConfig,
+      std::string maxCoalescedBytes);
 
-  static int32_t maxCoalescedDistanceBytes(const Config* config);
+  static void setMaxCoalescedDistanceBytes(
+      HiveConfig* hiveConfig,
+      std::string maxCoalescedDistanceBytes);
 
-  static int32_t numCacheFileHandles(const Config* config);
+  static void setNumCacheFileHandles(
+      HiveConfig* hiveConfig,
+      std::string numCacheFileHandles);
 
-  static bool isFileHandleCacheEnabled(const Config* config);
+  // static
+  static void setEnableFileHandleCache(
+      HiveConfig* hiveConfig,
+      std::string enableFileHandleCache);
 
-  static uint64_t fileWriterFlushThresholdBytes(const Config* config);
+  static void setSortWriterMaxOutputRows(
+      HiveConfig* hiveConfig,
+      std::string sortWriterMaxOutputRows);
 
-  static uint32_t sortWriterMaxOutputRows(const Config* config);
+  static void setSortWriterMaxOutputBytes(
+      HiveConfig* hiveConfig,
+      std::string sortWriterMaxOutputBytes);
 
-  static uint64_t sortWriterMaxOutputBytes(const Config* config);
+  // static
+  static void setOrcWriterMaxStripeSize(
+      HiveConfig* hiveConfig,
+      std::string orcWriterMaxStripeSize);
 
-  static uint64_t getOrcWriterMaxStripeSize(
-      const Config* connectorQueryCtxConfig,
-      const Config* connectorPropertiesConfig);
+  static void setOrcWriterMaxDictionaryMemory(
+      HiveConfig* hiveConfig,
+      std::string orcWriterMaxDictionaryMemory);
 
-  static uint64_t getOrcWriterMaxDictionaryMemory(
-      const Config* connectorQueryCtxConfig,
-      const Config* connectorPropertiesConfig);
+  InsertExistingPartitionsBehavior insertExistingPartitionsBehavior_ =
+      InsertExistingPartitionsBehavior::kError;
+  uint32_t maxPartitionsPerWriters_ = 100;
+  bool immutablePartitions_ = false;
+  bool s3PathStyleAccess_ = false;
+  std::string s3LogLevel_ = "FATAL";
+  bool s3SSLEnabled_ = true;
+  bool s3UseInstanceCredentials_ = false;
+  std::string s3Endpoint_ = "";
+  std::optional<std::string> s3AwsAccessKey_{};
+  std::optional<std::string> s3AwsSecretKey_{};
+  std::optional<std::string> s3IamRole_{};
+  std::string s3IamRoleSessionName_ = "velox-session";
+  std::string GCSEndpoint_ = "";
+  std::string GCSScheme_ = "https";
+  std::string GCSCredentials_ = "";
+  bool orcUseColumnNames_ = false;
+  bool fileColumnNamesReadAsLowerCase_ = false;
+  int64_t maxCoalescedBytes_ = 128 << 20;
+  int32_t maxCoalescedDistanceBytes_ = 512 << 10;
+  int32_t numCacheFileHandles_ = 20'000;
+  bool enableFileHandleCache_ = true;
+  int32_t sortWriterMaxOutputRows_ = 1024;
+  uint64_t sortWriterMaxOutputBytes_ = 10UL << 20;
+  uint64_t orcWriterMaxStripeSize_ = 64L * 1024L * 1024L;
+  uint64_t orcWriterMaxDictionaryMemory_ = 16L * 1024L * 1024L;
+
+  std::unordered_map<std::string, std::function<void(HiveConfig*, std::string)>>
+      configSetters = {
+          {kInsertExistingPartitionsBehavior,
+           setInsertExistingPartitionsBehavior},
+          {kMaxPartitionsPerWriters, setMaxPartitionsPerWriters},
+          {kImmutablePartitions, setImmutablePartitions},
+          {kS3PathStyleAccess, setS3PathStyleAccess},
+          {kS3LogLevel, setS3LogLevel},
+          {kS3SSLEnabled, setS3SSLEnabled},
+          {kS3UseInstanceCredentials, setS3UseInstanceCredentials},
+          {kS3Endpoint, setS3Endpoint},
+          {kS3AwsAccessKey, setS3AwsAccessKey},
+          {kS3AwsSecretKey, setS3AwsSecretKey},
+          {kS3IamRole, setS3IamRole},
+          {kS3IamRoleSessionName, setS3IamRoleSessionName},
+          {kGCSEndpoint, setGCSEndpoint},
+          {kGCSScheme, setGCSScheme},
+          {kGCSCredentials, setGCSCredentials},
+          {kOrcUseColumnNames, setOrcUseColumnNames},
+          {kFileColumnNamesReadAsLowerCase, setFileColumnNamesReadAsLowerCase},
+          {kMaxCoalescedBytes, setMaxCoalescedBytes},
+          {kMaxCoalescedDistanceBytes, setMaxCoalescedDistanceBytes},
+          {kNumCacheFileHandles, setNumCacheFileHandles},
+          {kEnableFileHandleCache, setEnableFileHandleCache},
+          {kOrcWriterMaxStripeSize, setOrcWriterMaxStripeSize},
+          {kOrcWriterMaxDictionaryMemory, setOrcWriterMaxDictionaryMemory},
+          {kSortWriterMaxOutputRows, setSortWriterMaxOutputRows},
+          {kSortWriterMaxOutputBytes, setSortWriterMaxOutputBytes},
+  };
 };
 
 } // namespace facebook::velox::connector::hive

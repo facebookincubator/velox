@@ -133,8 +133,7 @@ class TestDataSource : public connector::DataSource {
 
 class TestConnector : public connector::Connector {
  public:
-  TestConnector(const std::string& id, std::shared_ptr<const Config> properties)
-      : connector::Connector(id, std::move(properties)) {}
+  TestConnector(const std::string& id) : connector::Connector(id) {}
 
   std::unique_ptr<connector::DataSource> createDataSource(
       const RowTypePtr& /* outputType */,
@@ -164,9 +163,9 @@ class TestConnectorFactory : public connector::ConnectorFactory {
 
   std::shared_ptr<connector::Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const Config> properties,
+      const std::unordered_map<std::string, std::string>& connectorConf,
       folly::Executor* /* executor */) override {
-    return std::make_shared<TestConnector>(id, std::move(properties));
+    return std::make_shared<TestConnector>(id);
   }
 };
 } // namespace
@@ -179,7 +178,7 @@ class AsyncConnectorTest : public OperatorTestBase {
         std::make_shared<TestConnectorFactory>());
     auto testConnector =
         connector::getConnectorFactory(TestConnectorFactory::kTestConnectorName)
-            ->newConnector(kTestConnectorId, nullptr, nullptr);
+            ->newConnector(kTestConnectorId, {}, {});
     connector::registerConnector(testConnector);
   }
 

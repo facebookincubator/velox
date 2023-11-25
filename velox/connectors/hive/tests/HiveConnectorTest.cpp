@@ -65,16 +65,16 @@ groupSubfields(const std::vector<Subfield>& subfields) {
 
 TEST_F(HiveConnectorTest, hiveConfig) {
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
-          HiveConfig::InsertExistingPartitionsBehavior::kError),
+      insertExistingPartitionsBehaviorString(
+          InsertExistingPartitionsBehavior::kError),
       "ERROR");
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
-          HiveConfig::InsertExistingPartitionsBehavior::kOverwrite),
+      insertExistingPartitionsBehaviorString(
+          InsertExistingPartitionsBehavior::kOverwrite),
       "OVERWRITE");
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
-          static_cast<HiveConfig::InsertExistingPartitionsBehavior>(100)),
+      insertExistingPartitionsBehaviorString(
+          static_cast<InsertExistingPartitionsBehavior>(100)),
       "UNKNOWN BEHAVIOR 100");
 }
 

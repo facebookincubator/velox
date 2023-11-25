@@ -17,10 +17,12 @@
 #pragma once
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/HiveConfig.h"
 
 namespace facebook::velox::filesystems {
+using namespace facebook::velox::connector::hive;
 
-bool initializeS3(const Config* config);
+bool initializeS3(const HiveConfig* hiveConfigconfig);
 
 void finalizeS3();
 
@@ -29,7 +31,7 @@ void finalizeS3();
 /// type of file can be constructed based on a filename.
 class S3FileSystem : public FileSystem {
  public:
-  explicit S3FileSystem(std::shared_ptr<const Config> config);
+  explicit S3FileSystem(std::shared_ptr<const HiveConfig> hiveConfig);
 
   std::string name() const override;
 

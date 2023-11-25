@@ -15,6 +15,7 @@
  */
 
 #ifdef VELOX_ENABLE_S3
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/core/Config.h"
@@ -26,6 +27,7 @@
 namespace facebook::velox::filesystems {
 
 #ifdef VELOX_ENABLE_S3
+using namespace facebook::velox::connector::hive;
 folly::once_flag S3FSInstantiationFlag;
 
 // Only one instance of S3FileSystem is supported for now.
@@ -35,22 +37,24 @@ static std::shared_ptr<S3FileSystem> s3fs = nullptr;
 std::function<std::shared_ptr<
     FileSystem>(std::shared_ptr<const Config>, std::string_view)>
 fileSystemGenerator() {
-  static auto filesystemGenerator = [](std::shared_ptr<const Config> properties,
-                                       std::string_view filePath) {
-    folly::call_once(S3FSInstantiationFlag, [&properties]() {
-      std::shared_ptr<S3FileSystem> fs;
-      if (properties != nullptr) {
-        initializeS3(properties.get());
-        fs = std::make_shared<S3FileSystem>(properties);
-      } else {
-        auto config = std::make_shared<core::MemConfig>();
-        initializeS3(config.get());
-        fs = std::make_shared<S3FileSystem>(config);
-      }
-      s3fs = fs;
-    });
-    return s3fs;
-  };
+  static auto filesystemGenerator =
+      [](std::shared_ptr<const HiveConfig> hiveConfig,
+         std::string_view filePath) {
+        folly::call_once(S3FSInstantiationFlag, [&hiveConfig]() {
+          std::shared_ptr<S3FileSystem> fs;
+          if (hiveConfig != nullptr) {
+            initializeS3(hiveConfig.get());
+            fs = std::make_shared<S3FileSystem>(hiveConfig);
+          } else {
+            auto hiveConfig = std::make_shared<HiveConfig>(
+                std::unordered_map<std::string, std::string>());
+            initializeS3(hiveConfig.get());
+            fs = std::make_shared<S3FileSystem>(hiveConfig);
+          }
+          s3fs = fs;
+        });
+        return s3fs;
+      };
   return filesystemGenerator;
 }
 
@@ -63,8 +67,7 @@ s3WriteFileSinkGenerator() {
          const velox::dwio::common::FileSink::Options& options)
       -> std::unique_ptr<dwio::common::WriteFileSink> {
     if (isS3File(fileURI)) {
-      auto fileSystem =
-          filesystems::getFileSystem(fileURI, options.connectorProperties);
+      auto fileSystem = filesystems::getFileSystem(fileURI, options.hiveConfig);
       return std::make_unique<dwio::common::WriteFileSink>(
           fileSystem->openFileForWrite(fileURI, {{}, options.pool}),
           fileURI,

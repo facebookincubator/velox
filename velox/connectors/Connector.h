@@ -237,7 +237,6 @@ class ConnectorQueryCtx {
   ConnectorQueryCtx(
       memory::MemoryPool* operatorPool,
       memory::MemoryPool* connectorPool,
-      const Config* connectorConfig,
       const common::SpillConfig* spillConfig,
       std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
       cache::AsyncDataCache* cache,
@@ -247,7 +246,6 @@ class ConnectorQueryCtx {
       int driverId)
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
-        config_(connectorConfig),
         spillConfig_(spillConfig),
         expressionEvaluator_(std::move(expressionEvaluator)),
         cache_(cache),
@@ -256,7 +254,6 @@ class ConnectorQueryCtx {
         taskId_(taskId),
         driverId_(driverId),
         planNodeId_(planNodeId) {
-    VELOX_CHECK_NOT_NULL(connectorConfig);
   }
 
   /// Returns the associated operator's memory pool which is a leaf kind of
@@ -270,10 +267,6 @@ class ConnectorQueryCtx {
   /// memory pool management, such as HiveDataSink.
   memory::MemoryPool* connectorMemoryPool() const {
     return connectorPool_;
-  }
-
-  const Config* config() const {
-    return config_;
   }
 
   const common::SpillConfig* spillConfig() const {
@@ -315,7 +308,6 @@ class ConnectorQueryCtx {
  private:
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
-  const Config* config_;
   const common::SpillConfig* const spillConfig_;
   std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
   cache::AsyncDataCache* cache_;
@@ -328,9 +320,7 @@ class ConnectorQueryCtx {
 
 class Connector {
  public:
-  explicit Connector(
-      const std::string& id)
-      : id_(id) {}
+  explicit Connector(const std::string& id) : id_(id) {}
 
   virtual ~Connector() = default;
 
