@@ -114,8 +114,9 @@ class MapFunction : public exec::VectorFunction {
       offset += mapSize;
     });
 
-    keysResult->resize(baseOffset + rows.end() * mapSize);
-    valuesResult->resize(baseOffset + rows.end() * mapSize);
+    const auto resultSize = baseOffset + rows.countSelected() * mapSize;
+    keysResult->resize(resultSize);
+    valuesResult->resize(resultSize);
     setKeysAndValuesResult(
         mapSize, baseOffset, args, keysResult, valuesResult, context, rows);
   }
