@@ -172,9 +172,8 @@ uint64_t MemoryReclaimer::run(
   stats.reclaimExecTimeUs += execTimeUs;
   stats.reclaimedBytes += bytes;
   REPORT_ADD_HISTOGRAM_VALUE(
-      kCounterMemoryReclaimExecTimeMs, execTimeUs / 1000);
-  REPORT_ADD_HISTOGRAM_VALUE(
-      kCounterMemoryReclaimedBytesMB, bytes / (1024 * 1024));
+      kCounterMemoryReclaimExecTimeMs, execTimeUs / 1'000);
+  REPORT_ADD_STAT_VALUE(kCounterMemoryReclaimedBytes, bytes);
   return bytes;
 }
 

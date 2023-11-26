@@ -34,8 +34,8 @@ constexpr folly::StringPiece kCounterCacheShrinkTimeMs{"velox.cache_shrink_ms"};
 constexpr folly::StringPiece kCounterMemoryReclaimExecTimeMs{
     "velox.memory_reclaim_exec_ms"};
 
-constexpr folly::StringPiece kCounterMemoryReclaimedBytesMB{
-    "velox.memory_reclaim_bytes_mb"};
+constexpr folly::StringPiece kCounterMemoryReclaimedBytes{
+    "velox.memory_reclaim_bytes"};
 
 constexpr folly::StringPiece kCounterMemoryReclaimWaitTimeMs{
     "velox.memory_reclaim_wait_ms"};

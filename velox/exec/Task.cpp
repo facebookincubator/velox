@@ -2558,7 +2558,7 @@ uint64_t Task::MemoryReclaimer::reclaim(
   }
   stats.reclaimWaitTimeUs += reclaimWaitTimeUs;
   REPORT_ADD_HISTOGRAM_VALUE(
-      kCounterMemoryReclaimWaitTimeMs, reclaimWaitTimeUs / 1000);
+      kCounterMemoryReclaimWaitTimeMs, reclaimWaitTimeUs / 1'000);
 
   auto guard = folly::makeGuard([&]() {
     try {
