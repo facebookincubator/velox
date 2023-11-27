@@ -239,13 +239,57 @@ void Writer::write(const VectorPtr& data) {
     }
   }
 
-  auto bytes = data->estimateFlatSize();
-  auto numRows = data->size();
   if (flushPolicy_->shouldFlush(getStripeProgress(
           arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
     flush();
   }
 
+  auto numRows = data->size();
+  int64_t appendedRows = 0;
+  if (arrowContext_->stagingRows > 0) {
+    if (numRows <=
+        flushPolicy_->rowsInRowGroup() - arrowContext_->stagingRows) {
+      stageBatch(recordBatch, numRows, data->estimateFlatSize());
+      return;
+    }
+    appendedRows += flushPolicy_->rowsInRowGroup() - arrowContext_->stagingRows;
+    // Slice and stage this batch to make stagingRows reach to rowsInRowGroup.
+    stageBatch(
+        recordBatch->Slice(0, appendedRows),
+        appendedRows,
+        data->slice(0, appendedRows)->estimateFlatSize());
+    numRows -= appendedRows;
+  }
+  // Slice the remaining rows.
+  while (numRows > 0) {
+    // Flush before staging next chunks.
+    if (flushPolicy_->shouldFlush(getStripeProgress(
+            arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
+      flush();
+    }
+    // If remaining rows doesn't exceed "rowsInRowGroup", stage them and return.
+    // Otherwise, slice and stage a "rowsInRowGroup" sized chunk and continue.
+    if (numRows <= flushPolicy_->rowsInRowGroup()) {
+      stageBatch(
+          recordBatch->Slice(appendedRows, numRows),
+          numRows,
+          data->slice(appendedRows, numRows)->estimateFlatSize());
+      return;
+    }
+    stageBatch(
+        recordBatch->Slice(appendedRows, flushPolicy_->rowsInRowGroup()),
+        flushPolicy_->rowsInRowGroup(),
+        data->slice(appendedRows, flushPolicy_->rowsInRowGroup())
+            ->estimateFlatSize());
+    appendedRows += flushPolicy_->rowsInRowGroup();
+    numRows -= flushPolicy_->rowsInRowGroup();
+  }
+}
+
+void Writer::stageBatch(
+    const std::shared_ptr<::arrow::RecordBatch>& recordBatch,
+    uint64_t numRows,
+    int64_t bytes) {
   for (int colIdx = 0; colIdx < recordBatch->num_columns(); colIdx++) {
     arrowContext_->stagingChunks.at(colIdx).push_back(
         recordBatch->column(colIdx));

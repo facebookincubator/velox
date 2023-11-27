@@ -74,3 +74,27 @@ TEST_F(SinkTest, abort) {
   writer->abort();
   ASSERT_EQ(size, fs::file_size(filePath));
 }
+
+TEST_F(SinkTest, fixedRowsRowGroup) {
+  auto batchesSmall = createBatches(ROW({INTEGER(), VARCHAR()}), 10, 5);
+  auto batchesLarge = createBatches(ROW({INTEGER(), VARCHAR()}), 11, 17);
+  auto filePath =
+      fs::path(fmt::format("{}/test_fixed_row_groups.txt", tempPath_->path));
+  auto sink = createSink(filePath.string());
+  auto sinkPtr = sink.get();
+  auto writer = createWriter(std::move(sink), [&]() {
+    return std::make_unique<LambdaFlushPolicy>(
+        10, kBytesInRowGroup, [&]() { return false; });
+  });
+
+  for (auto i = 0; i < batchesSmall.size(); ++i) {
+    writer->write(batchesSmall[i]);
+    writer->write(batchesLarge[i]);
+  }
+  writer->write(batchesLarge.back());
+  writer->close();
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(filePath.string(), readerOptions);
+  ASSERT_EQ(reader->numberOfRowGroups(), 24);
+}

@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <arrow/record_batch.h>
+
 #include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/FileSink.h"
@@ -43,7 +45,7 @@ class DefaultFlushPolicy : public dwio::common::FlushPolicy {
 
   bool shouldFlush(
       const dwio::common::StripeProgress& stripeProgress) override {
-    return stripeProgress.stripeRowCount >= rowsInRowGroup_ ||
+    return stripeProgress.stripeRowCount == rowsInRowGroup_ ||
         stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
   }
 
@@ -146,6 +148,11 @@ class Writer : public dwio::common::Writer {
   std::shared_ptr<ArrowContext> arrowContext_;
 
   std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
+
+  void stageBatch(
+      const std::shared_ptr<::arrow::RecordBatch>& recordBatch,
+      uint64_t numRows,
+      int64_t bytes);
 };
 
 class ParquetWriterFactory : public dwio::common::WriterFactory {
