@@ -32,32 +32,21 @@ std::shared_ptr<facebook::velox::common::ScanSpec> makeScanSpec(
   return scanSpec;
 }
 
-serializer::presto::PrestoVectorSerde::PrestoOptions getParamSerdeOptions(
-    const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions) {
-  const bool useLosslessTimestamp =
-      serdeOptions == nullptr ? false : serdeOptions->useLosslessTimestamp;
-  // use none compression
-  common::CompressionKind kind = CompressionKind::CompressionKind_NONE;
-  serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions{
-      useLosslessTimestamp, kind};
-  return paramOptions;
-}
-
 void serialize(
     const RowVectorPtr& rowVector,
     std::ostream* output,
-    std::unique_ptr<serializer::presto::PrestoVectorSerde>& serde_,
-    std::shared_ptr<facebook::velox::memory::MemoryPool> pool_) {
+    std::unique_ptr<serializer::presto::PrestoVectorSerde>& serde,
+    std::shared_ptr<facebook::velox::memory::MemoryPool> pool) {
+  const bool useLosslessTimestamp = true;
   serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions{
-      true, CompressionKind::CompressionKind_NONE};
+      useLosslessTimestamp, CompressionKind::CompressionKind_NONE};
   auto streamInitialSize = output->tellp();
-  // sanityCheckEstimateSerializedSize(rowVector);
 
-  auto arena = std::make_unique<StreamArena>(pool_.get());
+  auto arena = std::make_unique<StreamArena>(pool.get());
   auto rowType = asRowType(rowVector->type());
   auto numRows = rowVector->size();
   auto serializer =
-      serde_->createSerializer(rowType, numRows, arena.get(), &paramOptions);
+      serde->createSerializer(rowType, numRows, arena.get(), &paramOptions);
 
   serializer->append(rowVector);
   auto size = serializer->maxSerializedSize();
@@ -102,15 +91,14 @@ int main(int argc, char** argv) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   std::ofstream ostrm(argv[2], std::ios::binary);
-  auto serde_ = std::make_unique<serializer::presto::PrestoVectorSerde>();
+  auto serde = std::make_unique<serializer::presto::PrestoVectorSerde>();
   VectorPtr result = BaseVector::create(outputType, 0, pool.get());
+
+  // Hack: convert VectorPtr to RowVectorPtr
   RowVectorPtr ptr(result->as<RowVector>(), [](RowVector*) {});
 
   while (rowReader->next(500, result)) {
-    // for (vector_size_t i = 0; i < result->size(); i++) {
-    //   std::cout << result->toString(i) << std::endl;
-    // }
-    serialize(ptr, &ostrm, serde_, pool);
+    serialize(ptr, &ostrm, serde, pool);
   }
   return 0;
 }
