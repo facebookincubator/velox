@@ -22,6 +22,8 @@ JSON Functions
 
 .. spark:function:: get_json_object(json, path) -> varchar
 
-    Extracts a json object from path::
+    Extracts a json object from ``path``. Returns NULL if it finds json string
+    is malformed. ::
 
-        SELECT get_json_object('{"a":"b"}', '$.a'); -- b
+        SELECT get_json_object('{"a":"b"}', '$.a'); -- 'b'
+        SELECT get_json_object('{"a":{"b":"c"}}', '$.a'); -- '{"b":"c"}'
