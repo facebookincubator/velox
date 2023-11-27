@@ -44,13 +44,42 @@
             
   <section id="url-functions">
 <h1>URL Functions<a class="headerlink" href="#url-functions" title="Permalink to this heading">¶</a></h1>
-<section id="extraction-functions">
-<h2>Extraction Functions<a class="headerlink" href="#extraction-functions" title="Permalink to this heading">¶</a></h2>
-<p>The URL extraction functions extract components from HTTP URLs (or any valid URIs conforming to <a class="reference external" href="https://tools.ietf.org/html/rfc2396.html">RFC 2396</a>). The following syntax is supported:</p>
+<section id="introduction">
+<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h2>
+<p>The URL extraction functions extract components from HTTP URLs (or any valid URIs conforming to <a class="reference external" href="https://tools.ietf.org/html/rfc3986.html">RFC 3986</a>). The following syntax is supported:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="o">[</span>protocol:<span class="o">][</span>//host<span class="o">[</span>:port<span class="o">]][</span>path<span class="o">][</span>?query<span class="o">][</span><span class="c1">#fragment]</span>
 </pre></div>
 </div>
 <p>The extracted components do not contain URI syntax separators such as <code class="docutils literal notranslate"><span class="pre">:</span></code> , <code class="docutils literal notranslate"><span class="pre">?</span></code> and <code class="docutils literal notranslate"><span class="pre">#</span></code>.</p>
+<p>Consider for example the below URI:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>http://www.ics.uci.edu/pub/ietf/uri/?k1=v1#Related
+
+scheme    = http
+authority = www.ics.uci.edu
+path      = /pub/ietf/uri/
+query     = k1=v1
+fragment  = Related
+</pre></div>
+</div>
+</section>
+<section id="invalid-uri-s">
+<h2>Invalid URI’s<a class="headerlink" href="#invalid-uri-s" title="Permalink to this heading">¶</a></h2>
+<p>Well formed URI’s should not contain ascii whitespace. <a class="reference external" href="https://www.rfc-editor.org/rfc/rfc3986#section-2.1">Percent-encoded URI’s</a> should be followed by two hexadecimal
+digits after the percent character “%”. All the url extract functions will return null when passed an invalid uri.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Examples of url functions with Invalid URI&#39;s.</span>
+
+<span class="c1"># Invalid URI due to whitespace</span>
+<span class="n">SELECT</span> <span class="n">url_extract_path</span><span class="p">(</span><span class="s1">&#39;foo &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">url_extract_host</span><span class="p">(</span><span class="s1">&#39;http://www.foo.com &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
+
+<span class="c1"># Invalid URI due to improper escaping of &#39;%&#39;</span>
+<span class="n">SELECT</span> <span class="n">url_extract_path</span><span class="p">(</span><span class="s1">&#39;https://www.ucu.edu.uy/agenda/evento/</span><span class="si">%%</span><span class="s1">UCUrlCompartir</span><span class="si">%%</span><span class="s1">&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">url_extract_host</span><span class="p">(</span><span class="s1">&#39;https://www.ucu.edu.uy/agenda/evento/</span><span class="si">%%</span><span class="s1">UCUrlCompartir</span><span class="si">%%</span><span class="s1">&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="extraction-functions">
+<h2>Extraction Functions<a class="headerlink" href="#extraction-functions" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="url_extract_fragment">
 <span class="sig-name descname"><span class="pre">url_extract_fragment</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_fragment" title="Permalink to this definition">¶</a></dt>
@@ -132,6 +161,8 @@ This function is the inverse of <a class="reference internal" href="#url_encode"
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">URL Functions</a><ul>
+<li><a class="reference internal" href="#introduction">Introduction</a></li>
+<li><a class="reference internal" href="#invalid-uri-s">Invalid URI’s</a></li>
 <li><a class="reference internal" href="#extraction-functions">Extraction Functions</a></li>
 <li><a class="reference internal" href="#encoding-functions">Encoding Functions</a></li>
 </ul>
