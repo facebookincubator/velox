@@ -50,6 +50,7 @@ TableWriteNode              TableWrite
 TableWriteMergeNode         TableWriteMerge
 PartitionedOutputNode       PartitionedOutput
 ExchangeNode                Exchange                                         Y
+ExpandNode                  Expand
 MergeExchangeNode           MergeExchange                                    Y
 ValuesNode                  Values                                           Y
 LocalMergeNode              LocalMerge
@@ -291,6 +292,82 @@ Note: Presto allows multiple global grouping sets in a single SQL query.
 
 Hence, globalGroupingSets is a vector of groupIds.
 
+.. _ExpandNode:
+
+ExpandNode
+~~~~~~~~~~~
+
+For each input row, generates N rows with M columns according to specified 'projections'.
+'projections' is an N x M matrix of expressions: a vector of N rows each having M columns.
+Each expression is either a column reference or a constant. Both null and non-null constants are allowed.
+'names' is a list of M new column names. The semantic of this operator matches Spark. Using project and unnest can be
+employed to implement the expand functionality. However, the performance is suboptimal when creating an array
+constructor within the Project operation.
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - projections
+     - A vector of N rows each having M columns. Each expression is either a column reference or a constant.
+   * - names
+     - A list of new column names.
+
+ExpandNode is typically used to compute GROUPING SETS, CUBE, ROLLUP and COUNT DISTINCT.   
+
+To illustrate how ExpandNode works so lets examine the following SQL query:
+
+.. code-block:: sql
+
+  Select sum(l_suppkey) from lineitem where group by ROLLUP(l_orderkey, l_partkey);
+
+In the planning phase, Spark generates an Expand operator with the following projection list:
+
+.. code-block::
+
+  [l_suppkey, l_orderkey, l_partkey, 0],
+  [l_suppkey, l_orderkey, null,      1],
+  [l_suppkey, null,       null,      3]
+
+For example, if the input rows are as follows:
+
+.. code-block::
+
+  l_suppkey l_orderkey l_partkey
+  A         B          C     
+  D         E          F      
+  H         I          G
+
+After the computation by the ExpandNode, each row will generate 3 rows of data. So there will be a total of 9 rows of data:
+
+.. code-block::
+
+  l_suppkey l_orderkey l_partkey grouping_id_0 
+  A         B          C         0
+  A         B          null      1
+  A         null       null      3
+  D         E          F         0
+  D         E          null      1
+  D         null       null      3
+  H         I          G         0
+  H         I          null      1
+  H         null       null      3
+
+Then, these 9 rows of data are grouped by (l_orderkey, l_partkey), and the result of calculating count(l_suppkey) is:
+
+.. code-block::
+
+  count(l_suppkey)
+  1
+  1
+  1
+  1
+  1
+  1
+  3
 
 .. _GroupIdNode:
 
