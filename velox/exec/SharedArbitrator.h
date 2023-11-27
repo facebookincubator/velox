@@ -21,9 +21,8 @@
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/memory/Memory.h"
 
-using namespace facebook::velox::memory;
-
 namespace facebook::velox::exec {
+using namespace facebook::velox::memory;
 
 /// Used to achieve dynamic memory sharing among running queries. When a
 /// memory pool exceeds its current memory capacity, the arbitrator tries to
