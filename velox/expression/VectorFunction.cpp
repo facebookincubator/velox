@@ -91,14 +91,15 @@ std::shared_ptr<VectorFunction> getVectorFunction(
 
 /// Registers a new vector function. When overwrite = true, previous functions
 /// with the given name will be replaced.
-/// Returns true iff an insertion actually happened
+/// Returns true iff an insertion actually happened.
+/// Throws an exception if the provided name is empty.
 bool registerStatefulVectorFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
     VectorFunctionFactory factory,
     VectorFunctionMetadata metadata,
     bool overwrite) {
-  VELOX_CHECK_NE(name, "", "Cannot register a function without a name.")
+  VELOX_CHECK(!name.empty(), "Cannot register a function without a name.")
   auto sanitizedName = sanitizeName(name);
 
   if (overwrite) {
