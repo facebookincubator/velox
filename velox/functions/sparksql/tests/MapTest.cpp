@@ -211,5 +211,23 @@ TEST_F(MapTest, complexTypes) {
        makeArrayVector<int64_t>({{1, 2}, {4, 6}})},
       arrayMapResult1);
 }
+
+TEST_F(MapTest, resultSize) {
+  auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
+  auto inputVector2 = makeNullableFlatVector<int64_t>({4, 5, 6});
+  const RowVectorPtr& input1 = makeRowVector({inputVector1, inputVector1});
+  exec::ExprSet exprSet(
+      {makeTypedExpr("map(c0, c1)", asRowType(input1->type()))}, &execCtx_);
+  exec::EvalCtx context1(&execCtx_, &exprSet, input1.get());
+  std::vector<VectorPtr> result(1);
+  SelectivityVector defaultRows(input1->size());
+  exprSet.eval(defaultRows, context1, result);
+  const RowVectorPtr& input2 = makeRowVector({inputVector2, inputVector2});
+  exec::EvalCtx context2(&execCtx_, &exprSet, input2.get());
+  exprSet.eval(defaultRows, context2, result);
+  const MapVector* mapVector = result[0]->as<MapVector>();
+  ASSERT_EQ(6, mapVector->mapKeys()->size());
+  ASSERT_EQ(6, mapVector->mapValues()->size());
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
