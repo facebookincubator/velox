@@ -1294,6 +1294,12 @@ struct FromISO8601DateFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Varchar>& isoDateStr) {
+
+    // yyyy-mm-dd
+    if ((int)isoDateStr.size() > 10)
+    {
+      VELOX_USER_FAIL("Input must be an ISO-formatted date string, in format YYYY-MM-DD", isoDateStr);
+    }
     int len = std::min((int)isoDateStr.size(), 10);
     result = len < 10 ? DATE()->toDays(isoDateStr)
                       : DATE()->toDays(isoDateStr.getString().substr(0, 10));

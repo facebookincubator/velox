@@ -3511,6 +3511,7 @@ TEST_F(DateTimeFunctionsTest, fromISO8601FunctionDate) {
   EXPECT_EQ(-2, fromISODate("1969-12-30T19:00:00.000-05:00"));
   EXPECT_EQ(-719528, fromISODate("0000-01-01T00:00:00.000+00:00"));
   EXPECT_EQ(2932896, fromISODate("9999-12-31:23:59.999+00:00"));
+  EXPECT_EQ(2932896, fromISODate("9999-12-31:23:59.999+00:00"));
 
   VELOX_ASSERT_THROW(
       fromISODate("abcdefghijklmn"),
