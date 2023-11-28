@@ -82,6 +82,8 @@ class HiveDataSource : public DataSource {
       const RowTypePtr& dataColumns,
       const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
           partitionKeys,
+      const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
+          metadataColumns,
       memory::MemoryPool* pool);
 
   // Internal API, made public to be accessible in unit tests.  Do not use in
@@ -116,6 +118,11 @@ class HiveDataSource : public DataSource {
   // name.
   std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
       partitionKeys_;
+
+  // Column handles for the metadata columns keyed on metadata column
+  // name.
+  std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
+      metadataColumns_;
 
  private:
   // Evaluates remainingFilter_ on the specified vector. Returns number of rows

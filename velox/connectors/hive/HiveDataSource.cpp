@@ -382,6 +382,9 @@ HiveDataSource::HiveDataSource(
     if (handle->columnType() == HiveColumnHandle::ColumnType::kPartitionKey) {
       partitionKeys_.emplace(handle->name(), handle);
     }
+    if (handle->columnType() == HiveColumnHandle::ColumnType::kMetadata) {
+      metadataColumns_.emplace(handle->name(), handle);
+    }
   }
 
   std::vector<std::string> readerRowNames;
@@ -468,6 +471,7 @@ HiveDataSource::HiveDataSource(
       filters,
       hiveTableHandle_->dataColumns(),
       partitionKeys_,
+      metadataColumns_,
       pool_);
   if (remainingFilter) {
     metadataFilter_ = std::make_shared<common::MetadataFilter>(
@@ -724,6 +728,8 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         partitionKeys,
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
+    metadataColumns,
     memory::MemoryPool* pool) {
   auto spec = std::make_shared<common::ScanSpec>("root");
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
@@ -782,7 +788,7 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     // $bucket column. This filter is redundant and needs to be removed.
     // TODO Remove this check when Presto is fixed to not specify a filter
     // on $path and $bucket column.
-    if (auto name = pair.first.toString(); name == kPath || name == kBucket) {
+    if (auto name = pair.first.toString(); name == kPath || name == kBucket || metadataColumns.count(name) != 0) {
       continue;
     }
     auto fieldSpec = spec->getOrCreateChild(pair.first);

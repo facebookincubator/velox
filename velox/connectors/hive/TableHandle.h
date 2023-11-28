@@ -28,7 +28,7 @@ using SubfieldFilters =
 
 class HiveColumnHandle : public ColumnHandle {
  public:
-  enum class ColumnType { kPartitionKey, kRegular, kSynthesized };
+  enum class ColumnType { kPartitionKey, kRegular, kSynthesized, kMetadata };
 
   /// NOTE: 'dataType' is the column type in target write table. 'hiveType' is
   /// converted type of the corresponding column in source table which might not

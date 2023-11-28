@@ -204,9 +204,18 @@ std::vector<TypePtr> SplitReader::adaptColumns(
     auto* childSpec = childrenSpecs[i].get();
     const std::string& fieldName = childSpec->fieldName();
 
-    auto iter = hiveSplit_->partitionKeys.find(fieldName);
-    if (iter != hiveSplit_->partitionKeys.end()) {
-      setPartitionValue(childSpec, fieldName, iter->second);
+    auto partitionKey = hiveSplit_->partitionKeys.find(fieldName);
+    auto metadataColumn = hiveSplit_->metadataColumns.find(fieldName);
+    if (partitionKey != hiveSplit_->partitionKeys.end()) {
+      setPartitionValue(childSpec, fieldName, partitionKey->second);
+    } else if (metadataColumn != hiveSplit_->metadataColumns.end()) {
+            auto metadataColumnOutputType =
+          readerOutputType_->childAt(readerOutputType_->getChildIdx(fieldName));
+      auto constValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          convertFromString,
+          metadataColumnOutputType->kind(),
+          std::make_optional(metadataColumn->second));
+      setConstantValue(childSpec, metadataColumnOutputType, constValue);
     } else if (fieldName == kPath) {
       setConstantValue(
           childSpec, VARCHAR(), velox::variant(hiveSplit_->filePath));
