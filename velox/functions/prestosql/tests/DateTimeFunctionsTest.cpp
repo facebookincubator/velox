@@ -20,6 +20,7 @@
 #include "velox/external/date/tz.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 using namespace facebook::velox;
@@ -3786,4 +3787,137 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeDouble) {
       "2021-06-15 09:11:45.000",
   });
   assertEqualVectors(expected, actual);
+}
+TEST_F(DateTimeFunctionsTest, toISO8601TestDate) {
+  const auto toISO8601 = [&](std::optional<int32_t> date) {
+    return evaluateOnce<std::string, int32_t>(
+        "to_iso8601(c0)", {date}, {DATE()});
+  };
+
+  EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(DATE()->toDays("1970-01-01")));
+  EXPECT_EQ("2020-02-05T00:00:00.000", toISO8601(DATE()->toDays("2020-02-05")));
+  EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(DATE()->toDays("1919-11-28")));
+  EXPECT_EQ("4653-07-01T00:00:00.000", toISO8601(DATE()->toDays("4653-07-01")));
+  EXPECT_EQ("1844-10-14T00:00:00.000", toISO8601(DATE()->toDays("1844-10-14")));
+}
+
+TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
+  static const int kSecondsInMinute = 60;
+  static const int kSecondsInHour = 3'600;
+  static const int64_t kSecondsInDay = 86'400;
+  static const uint64_t kNanosInSecond = 1'000'000'000;
+
+  const auto toISO8601 = [&](std::optional<Timestamp> timestamp) {
+    return evaluateOnce<std::string>("to_iso8601(c0)", timestamp);
+  };
+
+  auto getTimestamp = [](const std::string& timestampStr) {
+    return util::fromTimestampString(StringView{timestampStr});
+  };
+
+  EXPECT_EQ(
+      "1970-01-01T00:00:00.000",
+      toISO8601(getTimestamp("1970-01-01 00:00:00")));
+  EXPECT_EQ(
+      "1970-01-01T03:19:58.000",
+      toISO8601(getTimestamp("1970-01-01 03:19:58")));
+  EXPECT_EQ(
+      "1970-01-01T23:59:59.000",
+      toISO8601(getTimestamp("1970-01-01 23:59:59")));
+  EXPECT_EQ(
+      "1970-01-01T23:59:59.999",
+      toISO8601(getTimestamp("1970-01-01 23:59:59.999")));
+
+  EXPECT_EQ(
+      "2020-02-05T00:00:00.000",
+      toISO8601(getTimestamp("2020-02-05 00:00:00")));
+  EXPECT_EQ(
+      "2020-02-05T14:27:39.000",
+      toISO8601(getTimestamp("2020-02-05 14:27:39")));
+  EXPECT_EQ(
+      "2020-02-05T23:59:59.000",
+      toISO8601(getTimestamp("2020-02-05 23:59:59")));
+  EXPECT_EQ(
+      "2020-02-05T23:59:59.999",
+      toISO8601(getTimestamp("2020-02-05 23:59:59.999")));
+
+  EXPECT_EQ(
+      "1919-11-28T00:00:00.000",
+      toISO8601(getTimestamp("1919-11-28 00:00:00")));
+  EXPECT_EQ(
+      "1919-11-28T23:59:59.000",
+      toISO8601(getTimestamp("1919-11-28 23:59:59")));
+  EXPECT_EQ(
+      "1919-11-28T23:59:59.999",
+      toISO8601(getTimestamp("1919-11-28 23:59:59.999")));
+}
+
+TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
+  static const int kSecondsInMinute = 60;
+  static const int kSecondsInHour = 3'600;
+  static const int64_t kSecondsInDay = 86'400;
+  static const uint64_t kNanosInSecond = 1'000'000'000;
+
+  const auto toISO8601 = [&](std::optional<int64_t> timestamp,
+                             const std::optional<std::string>& timeZoneName) {
+    return evaluateWithTimestampWithTimezone<std::string>(
+        "to_iso8601(c0)", timestamp, timeZoneName);
+  };
+
+  EXPECT_EQ(
+      "2020-02-05T22:31:07.000-08:00",
+      toISO8601(
+          (18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000,
+          "America/Los_Angeles"));
+  EXPECT_EQ(
+      "2020-02-05T22:31:07.000+08:00",
+      toISO8601(
+          (18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000,
+          "Asia/Brunei"));
+  EXPECT_EQ(
+      "2020-02-05T22:31:07.000-08:00",
+      toISO8601(
+          (18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000, "-08:00"));
+  EXPECT_EQ(
+      "2020-02-05T22:31:07.000+08:00",
+      toISO8601(
+          (18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000, "+08:00"));
+
+  EXPECT_EQ("1970-01-01T00:00:00.000+00:00", toISO8601(0, "+00:00"));
+  EXPECT_EQ("1970-01-01T00:00:00.000+00:00", toISO8601(0, "Africa/Abidjan"));
+
+  EXPECT_EQ(
+      "1970-01-01T03:19:58.000+00:00",
+      toISO8601(
+          (3 * kSecondsInHour + 19 * kSecondsInMinute + 58) * 1'000, "+00:00"));
+
+  EXPECT_EQ(
+      "1970-01-01T03:19:58.000-06:00",
+      toISO8601(
+          (3 * kSecondsInHour + 19 * kSecondsInMinute + 58) * 1'000, "-06:00"));
+
+  EXPECT_EQ(
+      "1969-12-31T19:00:00.000-05:00",
+      toISO8601((-1 * kSecondsInDay + 19 * kSecondsInHour) * 1000, "-05:00"));
+  EXPECT_EQ(
+      "1969-12-31T19:00:00.000-05:00",
+      toISO8601(
+          (-1 * kSecondsInDay + 19 * kSecondsInHour) * 1000,
+          "America/New_York"));
+
+  // Last second of day 0
+  EXPECT_EQ(
+      "1970-01-01T23:59:59.000+03:00",
+      toISO8601((kSecondsInDay - 1) * 1'000, "+03:00"));
+
+  // Last second of day 18297
+  EXPECT_EQ(
+      "2020-02-05T23:59:59.000-11:00",
+      toISO8601((18297 * kSecondsInDay + kSecondsInDay - 1) * 1'000, "-11:00"));
+
+  // Last second of day -18297
+  EXPECT_EQ(
+      "1919-11-28T23:59:59.000+12:00",
+      toISO8601(
+          (-18297 * kSecondsInDay + kSecondsInDay - 1) * 1'000, "+12:00"));
 }

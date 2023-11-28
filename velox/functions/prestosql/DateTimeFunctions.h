@@ -16,6 +16,7 @@
 #pragma once
 
 #include <string_view>
+#include "velox/external/date/tz.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -1334,6 +1335,124 @@ struct CurrentDateFunction {
             localTimepoint(std::chrono::milliseconds(now.toMillis()));
     result = std::chrono::floor<date::days>((localTimepoint).time_since_epoch())
                  .count();
+  }
+};
+
+template <typename T>
+struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::string dateToISOstringHelper(int32_t date) {
+    // conversion of days-since-epoch to civil date follows
+    // algorithm here: http://howardhinnant.github.io/date_algorithms.html
+
+    auto z = date;
+    z += 719468;
+    const int era = (z >= 0 ? z : z - 146096) / 146097;
+    const unsigned doe = static_cast<unsigned>(z - era * 146097); // [0, 146096]
+    const unsigned yoe =
+        (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    int y = static_cast<int>(yoe) + era * 400;
+    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    const unsigned mp = (5 * doy + 2) / 153; // [0, 11]
+    const unsigned d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    const unsigned m = mp + (mp < 10 ? 3 : -9);
+    y += (m <= 2);
+
+    // ISO 8601: "2011-10-05T14:48:00.000Z"
+    auto yStr = std::to_string(y);
+    auto mStr = (m < 10) ? "0" + std::to_string(m) : std::to_string(m);
+    auto dStr = (m < 10) ? "0" + std::to_string(d) : std::to_string(d);
+    return (yStr + "-" + mStr + "-" + dStr + "T" + "00:00:00.000");
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+    auto isoStr = dateToISOstringHelper(date);
+    result.resize(isoStr.size());
+    result = isoStr;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Timestamp>& timestamp) {
+    // timestamp.toString() returns in format
+    // "1919-11-28T00:00:00.000000000"
+    // truncate nanosecond precision for ISO 8601 string
+    result = timestamp.toString().substr(0, 23);
+    result.resize(23);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    const auto milliseconds = *timestampWithTimezone.template at<0>();
+    Timestamp timestamp = Timestamp::fromMillis(milliseconds);
+    auto tsStr = timestamp.toString().substr(0, 23);
+
+    // Get the given timezone name
+    auto timezone =
+        util::getTimeZoneName(*timestampWithTimezone.template at<1>());
+
+    // Some processing required if alphabetical timezone name was input,
+    // as ISO8601 output should contain timezone as UTC offset
+    if (isalpha(timezone[0])) {
+      // Get offset in seconds with GMT and convert to hour & minute
+      // auto offset = this->getGMTOffsetSec(timestampWithTimezone);
+
+      // cctz::time_zone cctz_time_zone;
+      // load_time_zone(timezone, &cctz_time_zone);
+
+      std::time_t t = timestamp.getSeconds();
+      auto nanos = timestamp.getNanos();
+
+      struct tm *date = std::gmtime( &t );
+
+      // // Converts the input civil time in timezone[0] to an absolute time.
+      // const auto absolute_time =
+      // cctz::convert(cctz::civil_second(1900 + date->tm_year, 1 + date->tm_mon, date->tm_mday, date->tm_hour, date->tm_min, date->tm_sec), cctz_time_zone);
+      // // const auto absolute_time =
+      // // cctz::convert(cctz::civil_second(2001, 7, 22, 3, 4, 5), cctz_time_zone);
+
+      // // RESULT #1
+      // // working cctz result
+      // result = cctz::format("%Y-%m-%dT%H:%M:%S.000%Ez", absolute_time, cctz_time_zone);
+
+      //const Clock::duration ts_duration = std::chrono::seconds(timestamp.getSeconds());
+      //const TimePoint ts_time_point(ts_duration);
+
+      // using local_seconds = date::local_time<std::chrono::seconds>;
+      std::chrono::system_clock::time_point tp{std::chrono::seconds{timestamp.getSeconds()}};
+      auto localDate = date::make_zoned(date::current_zone(), tp);
+      auto remoteDate = date::make_zoned(timezone, tp);
+      // result = format("%a, %b %d, %Y at %I:%M %p %Z", remoteDate);
+
+      char timeString[std::size("yyyy-mm-ddThh:mm:ssZ")];
+      std::strftime(std::data(timeString), std::size(timeString),
+                  "%FT%T", date);
+
+      auto offsetStr = format("%z", remoteDate);
+
+      // can we do this without parsing the input timestamp twice (as local and remote dates)? 
+      // remote date is inevitable, to obtain correct offset, but it seems possible 
+      // to directly convert input seconds (timestamp[0]) -> ISO date string.
+
+      // long epoch = 1609330278454;
+      // sys_time<milliseconds> tp{milliseconds{epoch}};
+      // cout << format("%Y/%m/%d,%T", tp) << '\n';
+
+      // std::chrono::milliseconds tp2 = timestamp.getSeconds() * 1000;
+      // result = date::format("%FT%T", tp2);
+
+      // result = std::to_string(1900 + date->tm_year) + "-" + std::to_string(1 + date->tm_mon) + "-" + std::to_string(date->tm_mday) + "T" + std::to_string(date->tm_hour) + ":" + std::to_string(date->tm_min) + ":" + std::to_string(date->tm_sec) + format("%z", remoteDate);
+
+      // RESULT #2
+      // mostly working howard-date result (only nanosecond padding to 3 digits not present)
+      result = timeString + std::string(".") + std::to_string(nanos) + offsetStr.substr(0,3) + ":" + offsetStr.substr(3);
+    } else {
+      result = tsStr + timezone;
+    }
   }
 };
 
