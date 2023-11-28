@@ -85,6 +85,48 @@ the entire string by anchoring the pattern using <code class="docutils literal n
 </div>
 </dd></dl>
 
+<dl class="spark function">
+<dt class="sig sig-object spark" id="regex_replace">
+<span class="sig-name descname"><span class="pre">regex_replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regex_replace" title="Permalink to this definition">¶</a></dt>
+<dd><p>Replaces all substrings in <code class="docutils literal notranslate"><span class="pre">string</span></code> that match the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> with the string <code class="docutils literal notranslate"><span class="pre">overwrite</span></code>. If no match is found, the original string is returned as is.
+There is a limit to the number of unique regexes to be compiled per function call, which is 20.</p>
+<p>Parameters:</p>
+<ul class="simple">
+<li><p><strong>string</strong>: The string to be searched.</p></li>
+<li><p><strong>pattern</strong>: The regular expression pattern that is searched for in the string.</p></li>
+<li><p><strong>overwrite</strong>: The string that replaces the substrings in <code class="docutils literal notranslate"><span class="pre">string</span></code> that match the <code class="docutils literal notranslate"><span class="pre">pattern</span></code>.</p></li>
+</ul>
+<p>Examples:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regex_replace</span><span class="p">(</span><span class="s1">&#39;Hello, World!&#39;</span><span class="p">,</span> <span class="s1">&#39;l&#39;</span><span class="p">,</span> <span class="s1">&#39;L&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;HeLLo, WorLd!&#39;</span>
+<span class="n">SELECT</span> <span class="n">regex_replace</span><span class="p">(</span><span class="s1">&#39;300-300&#39;</span><span class="p">,</span> <span class="s1">&#39;(</span><span class="se">\\</span><span class="s1">d+)-(</span><span class="se">\\</span><span class="s1">d+)&#39;</span><span class="p">,</span> <span class="s1">&#39;400&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;400&#39;</span>
+<span class="n">SELECT</span> <span class="n">regex_replace</span><span class="p">(</span><span class="s1">&#39;300-300&#39;</span><span class="p">,</span> <span class="s1">&#39;(</span><span class="se">\\</span><span class="s1">d+)&#39;</span><span class="p">,</span> <span class="s1">&#39;400&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;400-400&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">regex_replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">position</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span></dt>
+<dd><p>Replaces all substrings in <code class="docutils literal notranslate"><span class="pre">string</span></code> that match the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> with the string <code class="docutils literal notranslate"><span class="pre">overwrite</span></code> starting from the specified <code class="docutils literal notranslate"><span class="pre">position</span></code>. If the <code class="docutils literal notranslate"><span class="pre">position</span></code> is less than one, the function returns an error. If <code class="docutils literal notranslate"><span class="pre">position</span></code> is greater than the length of <code class="docutils literal notranslate"><span class="pre">string</span></code>, the function returns the original <code class="docutils literal notranslate"><span class="pre">string</span></code> without any modifications.
+There is a limit to the number of unique regexes to be compiled per function call, which is 20.</p>
+<p>This function is 1-indexed, meaning the position of the first character is 1.
+Parameters:</p>
+<ul class="simple">
+<li><p><strong>string</strong>: The string to be searched.</p></li>
+<li><p><strong>pattern</strong>: The regular expression pattern that is searched for in the string.</p></li>
+<li><p><strong>overwrite</strong>: The string that replaces the substrings in <code class="docutils literal notranslate"><span class="pre">string</span></code> that match the <code class="docutils literal notranslate"><span class="pre">pattern</span></code>.</p></li>
+<li><p><strong>position</strong>: The position to start from in terms of number of characters. 1 means to start from the beginning of the string. 3 means to start from the 3rd character. Positions less than one, the function will throw an error. If <code class="docutils literal notranslate"><span class="pre">position</span></code> is greater than the length of <code class="docutils literal notranslate"><span class="pre">string</span></code>, the function returns the original <code class="docutils literal notranslate"><span class="pre">string</span></code> without any modifications.</p></li>
+</ul>
+<p>Examples:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regex_replace</span><span class="p">(</span><span class="s1">&#39;Hello, World!&#39;</span><span class="p">,</span> <span class="s1">&#39;l&#39;</span><span class="p">,</span> <span class="s1">&#39;L&#39;</span><span class="p">,</span> <span class="mi">6</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Hello, WorLd!&#39;</span>
+
+<span class="n">SELECT</span> <span class="n">regex_replace</span><span class="p">(</span><span class="s1">&#39;Hello, World!&#39;</span><span class="p">,</span> <span class="s1">&#39;l&#39;</span><span class="p">,</span> <span class="s1">&#39;L&#39;</span><span class="p">,</span> <span class="o">-</span><span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Hello, World!&#39;</span>
+
+<span class="n">SELECT</span> <span class="n">regex_replace</span><span class="p">(</span><span class="s1">&#39;Hello, World!&#39;</span><span class="p">,</span> <span class="s1">&#39;l&#39;</span><span class="p">,</span> <span class="s1">&#39;L&#39;</span><span class="p">,</span> <span class="mi">100</span><span class="p">);</span> <span class="o">--</span> <span class="n">ERROR</span><span class="p">:</span> <span class="n">Position</span> <span class="n">exceeds</span> <span class="n">string</span> <span class="n">length</span><span class="o">.</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 
 
