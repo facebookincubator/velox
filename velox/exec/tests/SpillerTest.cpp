@@ -120,7 +120,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         compressionKind_(param.compressionKind),
         hashBits_(
             0,
-            (type_ == Spiller::Type::kOrderBy ||
+            (type_ == Spiller::Type::kOrderByInput ||
              type_ == Spiller::Type::kAggregateOutput ||
              type_ == Spiller::Type::kAggregateInput)
                 ? 0
@@ -384,7 +384,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     }
   }
 
-  void setupSpillContainer(RowTypePtr rowType, int32_t numKeys) {
+  void setupSpillContainer(const RowTypePtr& rowType, int32_t numKeys) {
     const auto& childTypes = rowType->children();
     std::vector<TypePtr> keys(childTypes.begin(), childTypes.begin() + numKeys);
     std::vector<TypePtr> dependents;
@@ -396,7 +396,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     rowType_ = rowType;
   }
 
-  void writeSpillData(std::vector<RowVectorPtr> batches) {
+  void writeSpillData(const std::vector<RowVectorPtr>& batches) {
     vector_size_t numRows = 0;
     for (const auto& batch : batches) {
       numRows += batch->size();
@@ -490,7 +490,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           pool_.get(),
           executor());
     } else if (
-        type_ == Spiller::Type::kOrderBy ||
+        type_ == Spiller::Type::kOrderByInput ||
         type_ == Spiller::Type::kAggregateInput) {
       // We spill 'data' in one partition in type of kOrderBy, otherwise in 4
       // partitions.
@@ -1093,7 +1093,7 @@ TEST_P(NoHashJoin, error) {
 }
 
 TEST_P(AllTypes, nonSortedSpillFunctions) {
-  if (type_ == Spiller::Type::kOrderBy ||
+  if (type_ == Spiller::Type::kOrderByInput ||
       type_ == Spiller::Type::kAggregateInput ||
       type_ == Spiller::Type::kAggregateOutput) {
     setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
@@ -1136,7 +1136,7 @@ class HashJoinBuildOnly : public SpillerTest,
             {Spiller::Type::kAggregateInput,
              Spiller::Type::kAggregateOutput,
              Spiller::Type::kHashJoinProbe,
-             Spiller::Type::kOrderBy}}
+             Spiller::Type::kOrderByInput}}
         .getTestParams();
   }
 };
@@ -1227,7 +1227,7 @@ class AggregationOutputOnly : public SpillerTest,
             {Spiller::Type::kAggregateInput,
              Spiller::Type::kHashJoinBuild,
              Spiller::Type::kHashJoinProbe,
-             Spiller::Type::kOrderBy}}
+             Spiller::Type::kOrderByInput}}
         .getTestParams();
   }
 };

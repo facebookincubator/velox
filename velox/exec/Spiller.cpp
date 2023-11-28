@@ -61,7 +61,7 @@ Spiller::Spiller(
           executor,
           writeFileOptions) {
   VELOX_CHECK(
-      type_ == Type::kOrderBy || type_ == Type::kAggregateInput,
+      type_ == Type::kOrderByInput || type_ == Type::kAggregateInput,
       "Unexpected spiller type: {}",
       typeName(type_));
   VELOX_CHECK_EQ(state_.maxPartitions(), 1);
@@ -94,9 +94,8 @@ Spiller::Spiller(
           pool,
           executor,
           writeFileOptions) {
-  VELOX_CHECK_EQ(
-      type,
-      Type::kAggregateOutput,
+  VELOX_CHECK(
+      type_ == Type::kAggregateOutput || type_ == Type::kOrderByOutput,
       "Unexpected spiller type: {}",
       typeName(type_));
   VELOX_CHECK_EQ(state_.maxPartitions(), 1);
@@ -485,13 +484,22 @@ void Spiller::spill(const RowContainerIterator* startRowIter) {
 
   // Marks all the partitions have been spilled as we don't support fine-grained
   // spilling as for now.
-  for (auto partition = 0; partition < state_.maxPartitions(); ++partition) {
-    if (!state_.isPartitionSpilled(partition)) {
-      state_.setPartitionSpilled(partition);
-    }
-  }
+  markAllPartitionsSpilled();
 
   fillSpillRuns(startRowIter);
+  runSpill();
+  checkEmptySpillRuns();
+}
+
+void Spiller::spill(std::vector<char*> rows) {
+  CHECK_NOT_FINALIZED();
+  VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
+
+  // Marks all the partitions have been spilled as we don't support fine-grained
+  // spilling as for now.
+  markAllPartitionsSpilled();
+
+  fillSpillRuns(rows);
   runSpill();
   checkEmptySpillRuns();
 }
@@ -499,6 +507,14 @@ void Spiller::spill(const RowContainerIterator* startRowIter) {
 void Spiller::checkEmptySpillRuns() const {
   for (const auto& spillRun : spillRuns_) {
     VELOX_CHECK(spillRun.rows.empty());
+  }
+}
+
+void Spiller::markAllPartitionsSpilled() {
+  for (auto partition = 0; partition < state_.maxPartitions(); ++partition) {
+    if (!state_.isPartitionSpilled(partition)) {
+      state_.setPartitionSpilled(partition);
+    }
   }
 }
 
@@ -552,6 +568,33 @@ void Spiller::finalizeSpill() {
   finalized_ = true;
 }
 
+void Spiller::fillSpillRuns(
+    std::vector<char*>& rows,
+    int32_t numRows,
+    std::vector<uint64_t>& hashes,
+    bool isSinglePartition) {
+  // Calculate hashes for this batch of spill candidates.
+  auto rowSet = folly::Range<char**>(rows.data(), numRows);
+
+  if (!isSinglePartition) {
+    for (auto i = 0; i < container_->keyTypes().size(); ++i) {
+      container_->hash(i, rowSet, i > 0, hashes.data());
+    }
+  }
+
+  // Put each in its run.
+  for (auto i = 0; i < numRows; ++i) {
+    // TODO: consider to cache the hash bits in row container so we only
+    // need to calculate them once.
+    const auto partition = isSinglePartition
+        ? 0
+        : bits_.partition(hashes[i], state_.maxPartitions());
+    VELOX_DCHECK_GE(partition, 0);
+    spillRuns_[partition].rows.push_back(rows[i]);
+    spillRuns_[partition].numBytes += container_->rowSize(rows[i]);
+  }
+}
+
 void Spiller::fillSpillRuns(const RowContainerIterator* startRowIter) {
   checkEmptySpillRuns();
 
@@ -570,30 +613,24 @@ void Spiller::fillSpillRuns(const RowContainerIterator* startRowIter) {
     for (;;) {
       auto numRows = container_->listRows(
           &iterator, rows.size(), RowContainer::kUnlimited, rows.data());
-      // Calculate hashes for this batch of spill candidates.
-      auto rowSet = folly::Range<char**>(rows.data(), numRows);
-
-      if (!isSinglePartition) {
-        for (auto i = 0; i < container_->keyTypes().size(); ++i) {
-          container_->hash(i, rowSet, i > 0, hashes.data());
-        }
-      }
-
-      // Put each in its run.
-      for (auto i = 0; i < numRows; ++i) {
-        // TODO: consider to cache the hash bits in row container so we only
-        // need to calculate them once.
-        const auto partition = isSinglePartition
-            ? 0
-            : bits_.partition(hashes[i], state_.maxPartitions());
-        VELOX_DCHECK_GE(partition, 0);
-        spillRuns_[partition].rows.push_back(rows[i]);
-        spillRuns_[partition].numBytes += container_->rowSize(rows[i]);
-      }
+      fillSpillRuns(rows, numRows, hashes, isSinglePartition);
       if (numRows == 0) {
         break;
       }
     }
+  }
+  updateSpillFillTime(execTimeUs);
+}
+
+void Spiller::fillSpillRuns(std::vector<char*>& rows) {
+  checkEmptySpillRuns();
+  uint64_t execTimeUs{0};
+  {
+    MicrosecondTimer timer(&execTimeUs);
+    auto numRows = rows.size();
+    std::vector<uint64_t> hashes(numRows);
+    const bool isSinglePartition = bits_.numPartitions() == 1;
+    fillSpillRuns(rows, numRows, hashes, isSinglePartition);
   }
   updateSpillFillTime(execTimeUs);
 }
@@ -610,7 +647,7 @@ std::string Spiller::toString() const {
 // static
 std::string Spiller::typeName(Type type) {
   switch (type) {
-    case Type::kOrderBy:
+    case Type::kOrderByInput:
       return "ORDER_BY";
     case Type::kHashJoinBuild:
       return "HASH_JOIN_BUILD";

@@ -58,6 +58,10 @@ class SortBuffer {
   /// Invoked to spill all the rows from 'data_'.
   void spill();
 
+  /// Invoked to spill the rest of the rows from 'data_' during output
+  /// processing, it should actually spill at most once.
+  void spillOutput();
+
   memory::MemoryPool* pool() const {
     return pool_;
   }
