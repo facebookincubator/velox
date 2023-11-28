@@ -99,12 +99,10 @@ class MapFunction : public exec::VectorFunction {
     auto rawOffsets = offsets->asMutable<int32_t>();
 
     // Setting keys and value elements
-    auto keysResult = mapResult->mapKeys();
-    auto valuesResult = mapResult->mapValues();
-    auto baseOffset = keysResult->size();
-    VELOX_CHECK(
-        baseOffset == valuesResult->size(),
-        "Map keys size must equal values size.");
+    auto& keysResult = mapResult->mapKeys();
+    auto& valuesResult = mapResult->mapValues();
+    const auto baseOffset =
+        std::max<vector_size_t>(keysResult->size(), valuesResult->size());
 
     // Setting size and offsets
     vector_size_t offset = baseOffset;
@@ -114,9 +112,8 @@ class MapFunction : public exec::VectorFunction {
       offset += mapSize;
     });
 
-    const auto resultSize = baseOffset + rows.countSelected() * mapSize;
-    keysResult->resize(resultSize);
-    valuesResult->resize(resultSize);
+    keysResult->resize(offset);
+    valuesResult->resize(offset);
     setKeysAndValuesResult(
         mapSize, baseOffset, args, keysResult, valuesResult, context, rows);
   }
