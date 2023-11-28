@@ -146,20 +146,6 @@ class PlanBuilder {
       const std::string& remainingFilter = "",
       const RowTypePtr& dataColumns = nullptr);
 
-  /// Add a TableScanNode using a connector-specific table handle and
-  /// assignments. Supports any connector, not just Hive connector.
-  ///
-  /// @param outputType List of column names and types to project out. Column
-  /// names should match the keys in the 'assignments' map. The 'assignments'
-  /// map may contain more columns then 'outputType' if some columns are only
-  /// used by pushed-down filters.
-  PlanBuilder& tableScan(
-      const RowTypePtr& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& assignments);
-
   /// Add a TableScanNode to scan a TPC-H table.
   ///
   /// @param tpchTableHandle The handle that specifies the target TPC-H table
