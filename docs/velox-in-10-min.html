@@ -311,7 +311,7 @@ files. TPC-H connector generates TPC-H tables on the fly.</p>
 <p>Let’s read from TPC-H nation table. We need to use a TableScan plan node and
 provide a split.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
-<span class="w">           </span><span class="p">.</span><span class="n">tableScan</span><span class="p">(</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">tpchTableScan</span><span class="p">(</span><span class="w"></span>
 <span class="w">               </span><span class="n">tpch</span><span class="o">::</span><span class="n">Table</span><span class="o">::</span><span class="n">TBL_NATION</span><span class="p">,</span><span class="w"></span>
 <span class="w">               </span><span class="p">{</span><span class="s">&quot;n_nationkey&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;n_name&quot;</span><span class="p">},</span><span class="w"></span>
 <span class="w">               </span><span class="mi">1</span><span class="w"> </span><span class="cm">/*scaleFactor*/</span><span class="p">)</span><span class="w"></span>
@@ -351,14 +351,14 @@ IDs.</p>
 <span class="n">core</span><span class="o">::</span><span class="n">PlanNodeId</span><span class="w"> </span><span class="n">nationScanId</span><span class="p">;</span><span class="w"></span>
 <span class="n">core</span><span class="o">::</span><span class="n">PlanNodeId</span><span class="w"> </span><span class="n">regionScanId</span><span class="p">;</span><span class="w"></span>
 <span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">(</span><span class="n">planNodeIdGenerator</span><span class="p">)</span><span class="w"></span>
-<span class="w">           </span><span class="p">.</span><span class="n">tableScan</span><span class="p">(</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">tpchTableScan</span><span class="p">(</span><span class="w"></span>
 <span class="w">               </span><span class="n">tpch</span><span class="o">::</span><span class="n">Table</span><span class="o">::</span><span class="n">TBL_NATION</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;n_regionkey&quot;</span><span class="p">},</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="cm">/*scaleFactor*/</span><span class="p">)</span><span class="w"></span>
 <span class="w">           </span><span class="p">.</span><span class="n">capturePlanNodeId</span><span class="p">(</span><span class="n">nationScanId</span><span class="p">)</span><span class="w"></span>
 <span class="w">           </span><span class="p">.</span><span class="n">hashJoin</span><span class="p">(</span><span class="w"></span>
 <span class="w">               </span><span class="p">{</span><span class="s">&quot;n_regionkey&quot;</span><span class="p">},</span><span class="w"></span>
 <span class="w">               </span><span class="p">{</span><span class="s">&quot;r_regionkey&quot;</span><span class="p">},</span><span class="w"></span>
 <span class="w">               </span><span class="n">PlanBuilder</span><span class="p">(</span><span class="n">planNodeIdGenerator</span><span class="p">)</span><span class="w"></span>
-<span class="w">                   </span><span class="p">.</span><span class="n">tableScan</span><span class="p">(</span><span class="w"></span>
+<span class="w">                   </span><span class="p">.</span><span class="n">tpchTableScan</span><span class="p">(</span><span class="w"></span>
 <span class="w">                       </span><span class="n">tpch</span><span class="o">::</span><span class="n">Table</span><span class="o">::</span><span class="n">TBL_REGION</span><span class="p">,</span><span class="w"></span>
 <span class="w">                       </span><span class="p">{</span><span class="s">&quot;r_regionkey&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;r_name&quot;</span><span class="p">},</span><span class="w"></span>
 <span class="w">                       </span><span class="mi">1</span><span class="w"> </span><span class="cm">/*scaleFactor*/</span><span class="p">)</span><span class="w"></span>
