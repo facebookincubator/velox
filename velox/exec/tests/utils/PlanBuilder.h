@@ -649,9 +649,7 @@ class PlanBuilder {
   ///             {"null", "null", "a", "b", "2"}})
   ///
   ///
-  PlanBuilder& expand(
-      const std::vector<std::vector<std::string>>& projections,
-      TypePtr groupIdColumnType = BIGINT());
+  PlanBuilder& expand(const std::vector<std::vector<std::string>>& projections);
 
   /// Add a LocalMergeNode using specified ORDER BY clauses.
   ///

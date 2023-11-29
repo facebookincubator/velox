@@ -931,8 +931,7 @@ PlanBuilder& PlanBuilder::localMerge(const std::vector<std::string>& keys) {
 }
 
 PlanBuilder& PlanBuilder::expand(
-    const std::vector<std::vector<std::string>>& projections,
-    TypePtr groupIdColumnType) {
+    const std::vector<std::vector<std::string>>& projections) {
   VELOX_CHECK(!projections.empty(), "projections must not be empty.");
   const auto numColumns = projections[0].size();
   const auto numRows = projections.size();
@@ -977,7 +976,7 @@ PlanBuilder& PlanBuilder::expand(
               constantExpr->value()));
         } else {
           projectExpr.push_back(std::make_shared<core::ConstantTypedExpr>(
-              groupIdColumnType, constantExpr->value()));
+              constantExpr->type(), constantExpr->value()));
         }
       } else {
         projectExpr.push_back(typedExpression);
