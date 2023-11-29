@@ -26,7 +26,7 @@ namespace facebook::velox::exec {
 /// If cannotHaveFieldName = false, check if the first word is a field name and
 /// the remaining words are a Velox type.
 TypeSignaturePtr inferTypeWithSpaces(
-    std::vector<std::string>& words,
-    bool cannotHaveFieldName = true);
+    const std::vector<std::string>& words,
+    bool canHaveFieldName = false);
 
 } // namespace facebook::velox::exec

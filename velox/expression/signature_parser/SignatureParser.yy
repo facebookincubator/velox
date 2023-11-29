@@ -27,8 +27,8 @@
     #define yylex(x) scanner->lex(x)
 }
 
-%token               LPAREN RPAREN COMMA ARRAY MAP ROW FUNCTION DECIMAL
-%token <std::string> WORD VARIABLE QUOTED_ID
+%token               LPAREN RPAREN COMMA ARRAY MAP ROW FUNCTION
+%token <std::string> WORD VARIABLE QUOTED_ID DECIMAL
 %token YYEOF         0
 
 %nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type
@@ -56,14 +56,14 @@ special_type : array_type                  { $$ = $1; }
 
 named_type : QUOTED_ID type          { $1.erase(0, 1); $1.pop_back(); $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($2->baseName(), $2->parameters(), $1)); }  // Remove the quotes.
            | WORD special_type       { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($2->baseName(), $2->parameters(), $1)); }
-           | type_with_spaces        { $$ = inferTypeWithSpaces($1, false); }
+           | type_with_spaces        { $$ = inferTypeWithSpaces($1, true); }
            ;
 
 type_with_spaces : type_with_spaces WORD { $1.push_back($2); $$ = std::move($1); }
                  | WORD WORD             { $$.push_back($1); $$.push_back($2); }
                  ;
 
-decimal_type : DECIMAL LPAREN WORD COMMA WORD RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("decimal", { exec::TypeSignature($3, {}), exec::TypeSignature($5, {}) })); }
+decimal_type : DECIMAL LPAREN WORD COMMA WORD RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { exec::TypeSignature($3, {}), exec::TypeSignature($5, {}) })); }
              ;
 
 type_list : type                   { $$.push_back(*($1)); }

@@ -21,16 +21,16 @@
 namespace facebook::velox::exec {
 
 TypeSignaturePtr inferTypeWithSpaces(
-    std::vector<std::string>& words,
-    bool cannotHaveFieldName) {
+    const std::vector<std::string>& words,
+    bool canHaveFieldName) {
   VELOX_CHECK_GE(words.size(), 2);
-  std::string fieldName = words[0];
-  std::string typeName = words[1];
+  const auto& fieldName = words[0];
+  auto typeName = words[1];
   for (int i = 2; i < words.size(); ++i) {
     typeName = fmt::format("{} {}", typeName, words[i]);
   }
-  auto allWords = fmt::format("{} {}", fieldName, typeName);
-  if (hasType(allWords) || cannotHaveFieldName) {
+  const auto allWords = fmt::format("{} {}", fieldName, typeName);
+  if (hasType(allWords) || !canHaveFieldName) {
     return std::make_shared<exec::TypeSignature>(
         exec::TypeSignature(allWords, {}));
   }

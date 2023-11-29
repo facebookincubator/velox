@@ -18,7 +18,6 @@
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::exec {
-
 void toAppend(
     const facebook::velox::exec::TypeSignature& signature,
     std::string* result) {

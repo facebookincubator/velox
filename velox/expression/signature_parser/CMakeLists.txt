@@ -19,7 +19,8 @@ endif()
 bison_target(
   SignatureParser SignatureParser.yy
   ${CMAKE_CURRENT_BINARY_DIR}/SignatureParser.yy.cc
-  DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/SignatureParser.yy.h COMPILE_FLAGS "-Werror -Wno-deprecated")
+  DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/SignatureParser.yy.h
+  COMPILE_FLAGS "-Werror -Wno-deprecated")
 
 flex_target(
   SignatureParserScanner SignatureParser.ll

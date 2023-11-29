@@ -58,7 +58,7 @@ class TypeFactories : public CustomTypeFactories {
   TypePtr type_;
 };
 
-class TestTypeSignature : public ::testing::Test {
+class TypeParserTest : public ::testing::Test {
  private:
   void SetUp() override {
     // Register custom types with and without spaces.
@@ -69,25 +69,25 @@ class TestTypeSignature : public ::testing::Test {
   }
 };
 
-TEST_F(TestTypeSignature, booleanType) {
+TEST_F(TypeParserTest, booleanType) {
   ASSERT_EQ(*parseType("boolean"), *BOOLEAN());
 }
 
-TEST_F(TestTypeSignature, integerType) {
+TEST_F(TypeParserTest, integerType) {
   ASSERT_EQ(*parseType("int"), *INTEGER());
   ASSERT_EQ(*parseType("integer"), *INTEGER());
 }
 
-TEST_F(TestTypeSignature, varcharType) {
+TEST_F(TypeParserTest, varcharType) {
   ASSERT_EQ(*parseType("varchar"), *VARCHAR());
   ASSERT_EQ(*parseType("varchar(4)"), *VARCHAR());
 }
 
-TEST_F(TestTypeSignature, varbinary) {
+TEST_F(TypeParserTest, varbinary) {
   ASSERT_EQ(*parseType("varbinary"), *VARBINARY());
 }
 
-TEST_F(TestTypeSignature, arrayType) {
+TEST_F(TypeParserTest, arrayType) {
   ASSERT_EQ(*parseType("array(bigint)"), *ARRAY(BIGINT()));
 
   ASSERT_EQ(*parseType("array(int)"), *ARRAY(INTEGER()));
@@ -104,7 +104,7 @@ TEST_F(TestTypeSignature, arrayType) {
   ASSERT_EQ(*parseType("array(DECIMAL(10,5))"), *ARRAY(DECIMAL(10, 5)));
 }
 
-TEST_F(TestTypeSignature, mapType) {
+TEST_F(TypeParserTest, mapType) {
   ASSERT_EQ(*parseType("map(bigint,bigint)"), *MAP(BIGINT(), BIGINT()));
 
   ASSERT_EQ(
@@ -135,7 +135,7 @@ TEST_F(TestTypeSignature, mapType) {
       *MAP(DECIMAL(10, 5), DECIMAL(20, 4)));
 }
 
-TEST_F(TestTypeSignature, invalidType) {
+TEST_F(TypeParserTest, invalidType) {
   VELOX_ASSERT_THROW(
       parseType("blah()"), "Failed to parse type [blah]. Type not registered.");
 
@@ -151,7 +151,7 @@ TEST_F(TestTypeSignature, invalidType) {
       "Failed to parse type [rowxxx]. Type not registered.");
 }
 
-TEST_F(TestTypeSignature, rowType) {
+TEST_F(TypeParserTest, rowType) {
   ASSERT_EQ(
       *parseType("row(a bigint,b varchar,c real)"),
       *ROW({"a", "b", "c"}, {BIGINT(), VARCHAR(), REAL()}));
@@ -220,7 +220,7 @@ TEST_F(TestTypeSignature, rowType) {
   ASSERT_EQ(*parseType("row(col iNt)"), *ROW({"col"}, {INTEGER()}));
 }
 
-TEST_F(TestTypeSignature, typesWithSpaces) {
+TEST_F(TypeParserTest, typesWithSpaces) {
   // Type is not registered.
   VELOX_ASSERT_THROW(
       parseType("row(time time with time zone)"),
@@ -261,7 +261,7 @@ TEST_F(TestTypeSignature, typesWithSpaces) {
       "Failed to parse type [timestamp timestamp with time zone]. Type not registered.");
 }
 
-TEST_F(TestTypeSignature, intervalYearToMonthType) {
+TEST_F(TypeParserTest, intervalYearToMonthType) {
   ASSERT_EQ(
       *parseType("row(interval interval year to month)"),
       *ROW({"interval"}, {INTERVAL_YEAR_MONTH()}));
@@ -270,7 +270,7 @@ TEST_F(TestTypeSignature, intervalYearToMonthType) {
       *parseType("row(interval year to month)"), *ROW({INTERVAL_YEAR_MONTH()}));
 }
 
-TEST_F(TestTypeSignature, functionType) {
+TEST_F(TypeParserTest, functionType) {
   ASSERT_EQ(
       *parseType("function(bigint,bigint,bigint)"),
       *FUNCTION({BIGINT(), BIGINT()}, BIGINT()));
@@ -279,7 +279,7 @@ TEST_F(TestTypeSignature, functionType) {
       *FUNCTION({BIGINT(), ARRAY(VARCHAR())}, VARCHAR()));
 }
 
-TEST_F(TestTypeSignature, decimalType) {
+TEST_F(TypeParserTest, decimalType) {
   ASSERT_EQ(*parseType("decimal(10, 5)"), *DECIMAL(10, 5));
   ASSERT_EQ(*parseType("decimal(20,10)"), *DECIMAL(20, 10));
 
