@@ -91,10 +91,10 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
     computeCapacity();
-    auto mayHaveNulls = decodedRaw_.mayHaveNulls();
+
     rows.applyToSelected([&](vector_size_t row) {
-      if (mayHaveNulls) {
-        checkBloomFilterNotNull(decodedRaw_, row);
+      if (decodedRaw_.isNullAt(row)) {
+        return;
       }
       auto group = groups[row];
       auto tracker = trackRowSize(group);
@@ -135,17 +135,17 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     accumulator->init(capacity_);
     if (decodedRaw_.isConstantMapping()) {
       // All values are same, just do for the first.
-      checkBloomFilterNotNull(decodedRaw_, 0);
-      accumulator->insert(decodedRaw_.valueAt<int64_t>(0));
-      return;
-    }
-    auto mayHaveNulls = decodedRaw_.mayHaveNulls();
-    rows.applyToSelected([&](vector_size_t row) {
-      if (mayHaveNulls) {
-        checkBloomFilterNotNull(decodedRaw_, row);
+      if (!decodedRaw_.isNullAt(0)) {
+        accumulator->insert(decodedRaw_.valueAt<int64_t>(0));
       }
-      accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
-    });
+    } else {
+      rows.applyToSelected([&](vector_size_t row) {
+        if (decodedRaw_.isNullAt(row)) {
+          return;
+        }
+        accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
+      });
+    };
   }
 
   void addSingleGroupIntermediateResults(

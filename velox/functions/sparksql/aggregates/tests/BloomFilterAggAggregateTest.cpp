@@ -71,14 +71,12 @@ TEST_F(BloomFilterAggAggregateTest, emptyInput) {
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
 }
 
-TEST_F(BloomFilterAggAggregateTest, nullBloomFilter) {
-  auto vectors = {makeRowVector({makeAllNullFlatVector<int64_t>(2)})};
-  auto expectedFake = {makeRowVector(
-      {makeNullableFlatVector<StringView>({std::nullopt}, VARBINARY())})};
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expectedFake),
-      "First argument of bloom_filter_agg cannot be null");
+TEST_F(BloomFilterAggAggregateTest, nullInput) {
+  auto vectors = {makeRowVector(
+      {makeFlatVector<int64_t>(100, [](vector_size_t row) { return row % 9; }),
+       makeAllNullFlatVector<int64_t>(1)})};
+  auto expected = {makeRowVector({getSerializedBloomFilter(4)})};
+  testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
 }
 
 TEST_F(BloomFilterAggAggregateTest, config) {
