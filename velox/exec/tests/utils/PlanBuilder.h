@@ -166,7 +166,7 @@ class PlanBuilder {
   /// and scale factor.
   /// @param columnNames The columns to be returned from that table.
   /// @param scaleFactor The TPC-H scale factor.
-  PlanBuilder& tableScan(
+  PlanBuilder& tpchTableScan(
       tpch::Table table,
       std::vector<std::string>&& columnNames,
       double scaleFactor = 1);
@@ -338,6 +338,12 @@ class PlanBuilder {
   ///
   /// will produce projected columns named sum_ab, c and p2.
   PlanBuilder& project(const std::vector<std::string>& projections);
+
+  /// Add a ProjectNode to keep all existing columns and append more columns
+  /// using specified expressions.
+  /// @param newColumns A list of one or more expressions to use for computing
+  /// additional columns.
+  PlanBuilder& appendColumns(const std::vector<std::string>& newColumns);
 
   /// Variation of project that takes untyped expressions.  Used for access
   /// deeply nested types, in which case Duck DB often fails to parse or infer
