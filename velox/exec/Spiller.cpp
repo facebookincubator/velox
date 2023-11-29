@@ -495,7 +495,10 @@ void Spiller::spill(const RowContainerIterator* startRowIter) {
 
 void Spiller::spill(std::vector<char*> rows) {
   CHECK_NOT_FINALIZED();
-  VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
+  VELOX_CHECK_EQ(type_, Type::kOrderByOutput);
+  if (rows.empty()) {
+    return;
+  }
 
   // Marks all the partitions have been spilled as we don't support fine-grained
   // spilling as for now.

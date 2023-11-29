@@ -121,7 +121,10 @@ class Spiller {
   /// The caller needs to erase them from the row container.
   void spill(const RowContainerIterator& startRowIter);
 
-  /// Invoked to spill. Spill all rows pointed by the pointers in sortedRows.
+  /// Invoked to spill.Spill all rows pointed by the pointers in sortedRows.This
+  /// is only used by 'kOrderByOutput' spiller type to spill during the order by
+  /// output processing. Similarly, the spilled rows still stays in the row
+  /// container.The caller needs to erase them from the row container.
   void spill(std::vector<char*> sortedRows);
 
   /// Append 'spillVector' into the spill file of given 'partition'. It is now
