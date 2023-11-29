@@ -86,7 +86,8 @@ add_library(
   WindowFunction.cpp
   WindowPartition.cpp
   AssignUniqueId.cpp
-  PartitionFunction.cpp)
+  PartitionFunction.cpp
+  MergingVectorOutput.cpp)
 
 target_link_libraries(
   velox_exec

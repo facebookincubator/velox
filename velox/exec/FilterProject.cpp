@@ -53,7 +53,13 @@ FilterProject::FilterProject(
           "FilterProject"),
       hasFilter_(filter != nullptr),
       project_(project),
-      filter_(filter) {}
+      filter_(filter),
+      mergingVectorOutput_(std::make_shared<MergingVectorOutput>(
+          operatorCtx_->pool(),
+          driverCtx->queryConfig().preferredOutputBatchBytes(),
+          driverCtx->queryConfig().preferredOutputBatchRows(),
+          driverCtx->queryConfig().minOutputBatchBytes(),
+          driverCtx->queryConfig().minOutputBatchRows())) {}
 
 void FilterProject::initialize() {
   Operator::initialize();
@@ -117,11 +123,26 @@ bool FilterProject::allInputProcessed() {
   return false;
 }
 
+bool FilterProject::needsInput() const {
+  return !input_ && mergingVectorOutput_->needsInput();
+}
+
+void FilterProject::noMoreInput() {
+  Operator::noMoreInput();
+  mergingVectorOutput_->noMoreInput();
+}
+
 bool FilterProject::isFinished() {
-  return noMoreInput_ && allInputProcessed();
+  return noMoreInput_ && allInputProcessed() &&
+      mergingVectorOutput_->isFinished();
 }
 
 RowVectorPtr FilterProject::getOutput() {
+  auto output = mergingVectorOutput_->getOutput();
+  if (output) {
+    return output;
+  }
+
   if (allInputProcessed()) {
     return nullptr;
   }
@@ -144,7 +165,8 @@ RowVectorPtr FilterProject::getOutput() {
     VELOX_CHECK(!isIdentityProjection_);
     auto results = project(*rows, evalCtx);
 
-    return fillOutput(size, nullptr, results);
+    mergingVectorOutput_->addVector(fillOutput(size, nullptr, results));
+    return mergingVectorOutput_->getOutput();
   }
 
   // evaluate filter
@@ -166,10 +188,11 @@ RowVectorPtr FilterProject::getOutput() {
     results = project(*rows, evalCtx);
   }
 
-  return fillOutput(
+  mergingVectorOutput_->addVector(fillOutput(
       numOut,
       allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices,
-      results);
+      results));
+  return mergingVectorOutput_->getOutput();
 }
 
 std::vector<VectorPtr> FilterProject::project(

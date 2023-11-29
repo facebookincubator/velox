@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/MergingVectorOutput.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
@@ -37,9 +38,9 @@ class FilterProject : public Operator {
     return true;
   }
 
-  bool needsInput() const override {
-    return !input_;
-  }
+  bool needsInput() const override;
+
+  void noMoreInput() override;
 
   void addInput(RowVectorPtr input) override;
 
@@ -99,6 +100,8 @@ class FilterProject : public Operator {
   // initialization, they will be reset, and initialized_ will be set to true.
   std::shared_ptr<const core::ProjectNode> project_;
   std::shared_ptr<const core::FilterNode> filter_;
+  std::shared_ptr<MergingVectorOutput> mergingVectorOutput_;
+
   bool initialized_{false};
 
   std::unique_ptr<ExprSet> exprs_;
