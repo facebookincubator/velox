@@ -177,6 +177,14 @@ class BaseVector {
     return type_;
   }
 
+  void setType(TypePtr type) {
+    VELOX_CHECK_NOT_NULL(type);
+    VELOX_CHECK(
+        type_->kindEquals(type),
+        "The set type should be kindEquals() with type_ except names");
+    type_ = type;
+  }
+
   TypeKind typeKind() const {
     return typeKind_;
   }
@@ -868,7 +876,7 @@ class BaseVector {
     return sliceBuffer(*BOOLEAN(), nulls_, offset, length, pool_);
   }
 
-  const TypePtr type_;
+  TypePtr type_;
   const TypeKind typeKind_;
   const VectorEncoding::Simple encoding_;
   BufferPtr nulls_;

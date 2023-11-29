@@ -3535,5 +3535,13 @@ TEST_F(VectorTest, hashAll) {
   }
 }
 
+TEST_F(VectorTest, setType) {
+  auto type = ROW({"aa"}, {BIGINT()});
+  VectorPtr vector = BaseVector::create(type, 1'000, pool());
+  auto newType = ROW({"bb"}, {BIGINT()});
+  vector->setType(newType);
+  EXPECT_EQ(vector->type()->toString(), newType->toString());
+}
+
 } // namespace
 } // namespace facebook::velox
