@@ -446,9 +446,11 @@ void Spiller::runSpill() {
     VELOX_CHECK_EQ(numWritten, run.rows.size());
     run.clear();
     // When a sorted run ends, we start with a new file next time. For
-    // aggregation output spiller, we expect only one spill call to spill all
-    // the rows starting from the specified row offset.
-    if (needSort() || (type_ == Spiller::Type::kAggregateOutput)) {
+    // aggregation output / orderby output spiller, we expect only one spill
+    // call to spill all the rows starting from the specified row offset.
+    if (needSort() ||
+        (type_ == Spiller::Type::kAggregateOutput ||
+         type_ == Spiller::Type::kOrderByOutput)) {
       state_.finishFile(partition);
     }
   }
@@ -466,7 +468,7 @@ void Spiller::updateSpillSortTime(uint64_t timeUs) {
 
 bool Spiller::needSort() const {
   return type_ != Type::kHashJoinProbe && type_ != Type::kHashJoinBuild &&
-      type_ != Type::kAggregateOutput;
+      type_ != Type::kAggregateOutput && type_ != Type::kOrderByOutput;
 }
 
 void Spiller::spill() {
@@ -648,7 +650,9 @@ std::string Spiller::toString() const {
 std::string Spiller::typeName(Type type) {
   switch (type) {
     case Type::kOrderByInput:
-      return "ORDER_BY";
+      return "ORDER_BY_INPUT";
+    case Type::kOrderByOutput:
+      return "ORDER_BY_OUTPUT";
     case Type::kHashJoinBuild:
       return "HASH_JOIN_BUILD";
     case Type::kHashJoinProbe:

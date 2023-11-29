@@ -42,6 +42,7 @@ class Spiller {
     // Number of spiller types.
     kNumTypes = 6,
   };
+
   static std::string typeName(Type);
 
   using SpillRows = std::vector<char*, memory::StlAllocator<char*>>;

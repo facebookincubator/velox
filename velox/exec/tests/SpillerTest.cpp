@@ -121,6 +121,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         hashBits_(
             0,
             (type_ == Spiller::Type::kOrderByInput ||
+             type_ == Spiller::Type::kOrderByOutput ||
              type_ == Spiller::Type::kAggregateOutput ||
              type_ == Spiller::Type::kAggregateInput)
                 ? 0
@@ -450,7 +451,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     // NOTE: for aggregation output type, we expect the merge read to produce
     // the output rows in the same order of the row insertion. So do need the
     // sort for testing.
-    if (type_ == Spiller::Type::kAggregateOutput) {
+    if (type_ == Spiller::Type::kAggregateOutput ||
+        type_ == Spiller::Type::kOrderByOutput) {
       return;
     }
     for (auto& partition : partitions_) {
@@ -506,7 +508,9 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           compressionKind_,
           pool_.get(),
           executor());
-    } else if (type_ == Spiller::Type::kAggregateOutput) {
+    } else if (
+        type_ == Spiller::Type::kAggregateOutput ||
+        type_ == Spiller::Type::kOrderByOutput) {
       spiller_ = std::make_unique<Spiller>(
           type_,
           rowContainer_.get(),
@@ -1044,7 +1048,9 @@ class NoHashJoin : public SpillerTest,
   static std::vector<TestParam> getTestParams() {
     return TestParamsBuilder{
         .typesToExclude =
-            {Spiller::Type::kHashJoinProbe, Spiller::Type::kHashJoinBuild}}
+            {Spiller::Type::kHashJoinProbe,
+             Spiller::Type::kHashJoinBuild,
+             Spiller::Type::kOrderByOutput}}
         .getTestParams();
   }
 };
@@ -1094,6 +1100,7 @@ TEST_P(NoHashJoin, error) {
 
 TEST_P(AllTypes, nonSortedSpillFunctions) {
   if (type_ == Spiller::Type::kOrderByInput ||
+      type_ == Spiller::Type::kOrderByOutput ||
       type_ == Spiller::Type::kAggregateInput ||
       type_ == Spiller::Type::kAggregateOutput) {
     setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
@@ -1113,6 +1120,7 @@ TEST_P(AllTypes, nonSortedSpillFunctions) {
     verifySortedSpillData(spillPartitionSet.begin()->second.get());
     return;
   }
+
   testNonSortedSpill(1, 1000, 1, 1);
   testNonSortedSpill(1, 1000, 10, 1);
   testNonSortedSpill(1, 1000, 1, 1'000'000'000);
@@ -1136,7 +1144,8 @@ class HashJoinBuildOnly : public SpillerTest,
             {Spiller::Type::kAggregateInput,
              Spiller::Type::kAggregateOutput,
              Spiller::Type::kHashJoinProbe,
-             Spiller::Type::kOrderByInput}}
+             Spiller::Type::kOrderByInput,
+             Spiller::Type::kOrderByOutput}}
         .getTestParams();
   }
 };
@@ -1227,7 +1236,8 @@ class AggregationOutputOnly : public SpillerTest,
             {Spiller::Type::kAggregateInput,
              Spiller::Type::kHashJoinBuild,
              Spiller::Type::kHashJoinProbe,
-             Spiller::Type::kOrderByInput}}
+             Spiller::Type::kOrderByInput,
+             Spiller::Type::kOrderByOutput}}
         .getTestParams();
   }
 };
