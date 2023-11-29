@@ -70,12 +70,12 @@ struct TestParam {
 struct TestParamsBuilder {
   std::vector<TestParam> getTestParams() {
     std::vector<TestParam> params;
-    auto spillerTypes = static_cast<int8_t>(Spiller::Type::kNumTypes);
-    for (int i = 0; i < spillerTypes; ++i) {
+    const auto numSpillerTypes = static_cast<int8_t>(Spiller::Type::kNumTypes);
+    for (int i = 0; i < numSpillerTypes; ++i) {
       const auto type = static_cast<Spiller::Type>(i);
       if (typesToExclude.find(type) == typesToExclude.end()) {
         common::CompressionKind compressionKind =
-            static_cast<common::CompressionKind>(spillerTypes % 6);
+            static_cast<common::CompressionKind>(numSpillerTypes % 6);
         for (int poolSize : {0, 8}) {
           params.emplace_back(type, poolSize, compressionKind);
         }
