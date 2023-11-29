@@ -37,7 +37,7 @@ class Spiller {
     kHashJoinProbe = 3,
     // Used for order by.
     kOrderBy = 4,
-    // Num of spiller types
+    // Number of spiller types.
     kNumTypes = 5,
   };
   static std::string typeName(Type);
