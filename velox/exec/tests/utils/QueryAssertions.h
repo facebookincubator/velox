@@ -17,9 +17,9 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/Cursor.h"
-#include "velox/external/duckdb/duckdb.hpp"
-#include "velox/external/duckdb/tpch/include/tpch-extension.hpp"
 #include "velox/vector/ComplexVector.h"
+
+#include <duckdb.hpp> // @manual
 
 namespace facebook::velox::exec::test {
 
@@ -47,7 +47,7 @@ class DuckDbQueryRunner {
 
   MaterializedRowMultiset execute(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType) {
+      const RowTypePtr& resultRowType) {
     MaterializedRowMultiset allRows;
     execute(
         sql,
@@ -61,7 +61,7 @@ class DuckDbQueryRunner {
 
   std::vector<MaterializedRow> executeOrdered(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType) {
+      const RowTypePtr& resultRowType) {
     std::vector<MaterializedRow> allRows;
     execute(
         sql,
@@ -77,7 +77,7 @@ class DuckDbQueryRunner {
 
   void execute(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType,
+      const RowTypePtr& resultRowType,
       std::function<void(std::vector<MaterializedRow>&)> resultCallback);
 };
 
@@ -155,13 +155,13 @@ void assertEmptyResults(const std::vector<RowVectorPtr>& results);
 
 void assertResults(
     const std::vector<RowVectorPtr>& results,
-    const std::shared_ptr<const RowType>& resultType,
+    const RowTypePtr& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner);
 
 void assertResultsOrdered(
     const std::vector<RowVectorPtr>& results,
-    const std::shared_ptr<const RowType>& resultType,
+    const RowTypePtr& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
     const std::vector<uint32_t>& sortingKeys);
@@ -202,7 +202,8 @@ bool assertEqualResults(
     const std::vector<RowVectorPtr>& actual);
 
 bool assertEqualResults(
-    const MaterializedRowMultiset& expected,
+    const MaterializedRowMultiset& expectedRows,
+    const TypePtr& expectedRowType,
     const std::vector<RowVectorPtr>& actual);
 
 /// Ensure both datasets have the same type and number of rows.

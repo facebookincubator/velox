@@ -50,12 +50,10 @@ OperatorCtx::createConnectorQueryCtx(
     const std::string& connectorId,
     const std::string& planNodeId,
     memory::MemoryPool* connectorPool,
-    memory::SetMemoryReclaimer setMemoryReclaimer,
     const common::SpillConfig* spillConfig) const {
   return std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
       connectorPool,
-      std::move(setMemoryReclaimer),
       driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
       spillConfig,
       std::make_unique<SimpleExpressionEvaluator>(
@@ -85,9 +83,7 @@ Operator::Operator(
           operatorId,
           driverCtx->pipelineId,
           std::move(planNodeId),
-          std::move(operatorType)}) {
-  maybeSetReclaimer();
-}
+          std::move(operatorType)}) {}
 
 void Operator::maybeSetReclaimer() {
   VELOX_CHECK_NULL(pool()->reclaimer());
@@ -141,7 +137,14 @@ std::unique_ptr<JoinBridge> Operator::joinBridgeFromPlanNode(
 
 void Operator::initialize() {
   VELOX_CHECK(!initialized_);
+  VELOX_CHECK_EQ(
+      pool()->currentBytes(),
+      0,
+      "Unexpected memory usage {} from pool {} before operator init",
+      succinctBytes(pool()->currentBytes()),
+      pool()->name());
   initialized_ = true;
+  maybeSetReclaimer();
 }
 
 // static
@@ -196,7 +199,8 @@ static bool isSequence(
 
 RowVectorPtr Operator::fillOutput(
     vector_size_t size,
-    const BufferPtr& mapping) {
+    const BufferPtr& mapping,
+    const std::vector<VectorPtr>& results) {
   bool wrapResults = true;
   if (size == input_->size() &&
       (!mapping || isSequence(mapping->as<vector_size_t>(), 0, size))) {
@@ -215,7 +219,7 @@ RowVectorPtr Operator::fillOutput(
       wrapResults ? mapping : nullptr);
   projectChildren(
       projectedChildren,
-      results_,
+      results,
       resultProjections_,
       size,
       wrapResults ? mapping : nullptr);
@@ -228,15 +232,24 @@ RowVectorPtr Operator::fillOutput(
       std::move(projectedChildren));
 }
 
+RowVectorPtr Operator::fillOutput(
+    vector_size_t size,
+    const BufferPtr& mapping) {
+  return fillOutput(size, mapping, results_);
+}
+
 OperatorStats Operator::stats(bool clear) {
+  OperatorStats stats;
   if (!clear) {
-    return *stats_.rlock();
+    stats = *stats_.rlock();
+  } else {
+    auto lockedStats = stats_.wlock();
+    stats = *lockedStats;
+    lockedStats->clear();
   }
 
-  auto lockedStats = stats_.wlock();
-  OperatorStats ret{*lockedStats};
-  lockedStats->clear();
-  return ret;
+  stats.memoryStats = MemoryStats::memStatsFromPool(pool());
+  return stats;
 }
 
 uint32_t Operator::outputBatchRows(
@@ -280,7 +293,7 @@ void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
       fmt::format("blocked{}Times", blockReason), RuntimeCounter(1));
 }
 
-void Operator::recordSpillStats(const SpillStats& spillStats) {
+void Operator::recordSpillStats(const common::SpillStats& spillStats) {
   VELOX_CHECK(noMoreInput_);
   auto lockedStats = stats_.wlock();
   lockedStats->spilledInputBytes += spillStats.spilledInputBytes;
@@ -338,10 +351,11 @@ void Operator::recordSpillStats(const SpillStats& spillStats) {
                 Timestamp::kNanosecondsInMicrosecond),
             RuntimeCounter::Unit::kNanos});
   }
-  if (numSpillRuns_ != 0) {
+  if (spillStats.spillRuns != 0) {
     lockedStats->addRuntimeStat(
-        "spillRuns", RuntimeCounter{static_cast<int64_t>(numSpillRuns_)});
-    updateGlobalSpillRunStats(numSpillRuns_);
+        "spillRuns",
+        RuntimeCounter{static_cast<int64_t>(spillStats.spillRuns)});
+    common::updateGlobalSpillRunStats(spillStats.spillRuns);
   }
 
   if (spillStats.spillMaxLevelExceededCount != 0) {
@@ -349,7 +363,7 @@ void Operator::recordSpillStats(const SpillStats& spillStats) {
         "exceededMaxSpillLevel",
         RuntimeCounter{
             static_cast<int64_t>(spillStats.spillMaxLevelExceededCount)});
-    updateGlobalMaxSpillLevelExceededCount(
+    common::updateGlobalMaxSpillLevelExceededCount(
         spillStats.spillMaxLevelExceededCount);
   }
 }
@@ -585,8 +599,28 @@ uint64_t Operator::MemoryReclaimer::reclaim(
   TestValue::adjust(
       "facebook::velox::exec::Operator::MemoryReclaimer::reclaim", pool);
 
-  op_->reclaim(targetBytes, stats);
-  return pool->shrink(targetBytes);
+  // NOTE: we can't reclaim memory from an operator which is under
+  // non-reclaimable section.
+  if (op_->nonReclaimableSection_) {
+    // TODO: reduce the log frequency if it is too verbose.
+    ++stats.numNonReclaimableAttempts;
+    LOG(WARNING) << "Can't reclaim from memory pool " << pool->name()
+                 << " which is under non-reclaimable section, memory usage: "
+                 << succinctBytes(pool->currentBytes())
+                 << ", reservation: " << succinctBytes(pool->reservedBytes());
+    return 0;
+  }
+
+  RuntimeStatWriterScopeGuard opStatsGuard(op_);
+
+  auto reclaimBytes = memory::MemoryReclaimer::run(
+      [&]() {
+        op_->reclaim(targetBytes, stats);
+        return pool->shrink(targetBytes);
+      },
+      stats);
+
+  return reclaimBytes;
 }
 
 void Operator::MemoryReclaimer::abort(

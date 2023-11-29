@@ -22,6 +22,7 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <gtest/gtest.h>
+#include <optional>
 
 namespace facebook::velox::test {
 
@@ -51,9 +52,6 @@ class VectorTestBase {
   VectorTestBase() = default;
 
   ~VectorTestBase();
-
-  template <typename T>
-  using EvalType = typename CppToType<T>::NativeType;
 
   static std::shared_ptr<const RowType> makeRowType(
       std::vector<std::shared_ptr<const Type>>&& types) {
@@ -130,27 +128,14 @@ class VectorTestBase {
     return vectorMaker_.rowVector(rowType, size);
   }
 
-  /// Splits input vector into 2. First half of rows goes to first vector, the
-  /// rest to the second vector. Input vector must have at least 2 rows.
-  /// @return 2 vectors
-  std::vector<RowVectorPtr> split(const RowVectorPtr& vector);
+  /// Splits input vector into 'n' vectors evenly. Input vector must have at
+  /// least 'n' rows.
+  /// @return 'n' vectors
+  std::vector<RowVectorPtr> split(const RowVectorPtr& vector, int32_t n = 2);
 
-  // Returns a one element ArrayVector with 'vector' as elements of array at 0.
-  VectorPtr asArray(VectorPtr vector) {
-    BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(
-        1, vector->pool(), vector->size());
-    BufferPtr offsets =
-        AlignedBuffer::allocate<vector_size_t>(1, vector->pool(), 0);
-    return std::make_shared<ArrayVector>(
-        vector->pool(),
-        ARRAY(vector->type()),
-        BufferPtr(nullptr),
-        1,
-        offsets,
-        sizes,
-        vector,
-        0);
-  }
+  /// Returns a one element ArrayVector with 'elements' as elements of array at
+  /// 0.
+  VectorPtr asArray(VectorPtr elements);
 
   template <typename T>
   FlatVectorPtr<EvalType<T>> makeFlatVector(
@@ -722,6 +707,47 @@ class VectorTestBase {
 
   memory::MemoryPool* pool() const {
     return pool_.get();
+  }
+
+  // Create LazyVector that produces a flat vector and asserts that is is being
+  // loaded for a specific set of rows.
+  template <typename T>
+  std::shared_ptr<LazyVector> makeLazyFlatVector(
+      vector_size_t size,
+      std::function<T(vector_size_t /*row*/)> valueAt,
+      std::function<bool(vector_size_t /*row*/)> isNullAt =
+          [](vector_size_t row) { return false; },
+      std::optional<vector_size_t> expectedSize = std::nullopt,
+      const std::optional<
+          std::function<vector_size_t(vector_size_t /*index*/)>>&
+          expectedRowAt = std::nullopt) {
+    return std::make_shared<LazyVector>(
+        pool(),
+        CppToType<T>::create(),
+        size,
+        std::make_unique<SimpleVectorLoader>([=](RowSet rows) {
+          if (expectedSize.has_value()) {
+            VELOX_CHECK_EQ(rows.size(), *expectedSize);
+          }
+          if (expectedRowAt.has_value()) {
+            for (auto i = 0; i < rows.size(); i++) {
+              VELOX_CHECK_EQ(rows[i], (*expectedRowAt)(i));
+            }
+          }
+          return makeFlatVector<T>(size, valueAt, isNullAt);
+        }));
+  }
+
+  VectorPtr wrapInLazyDictionary(VectorPtr vector) {
+    return std::make_shared<LazyVector>(
+        pool(),
+        vector->type(),
+        vector->size(),
+        std::make_unique<SimpleVectorLoader>([=](RowSet /*rows*/) {
+          auto indices =
+              makeIndices(vector->size(), [](auto row) { return row; });
+          return wrapInDictionary(indices, vector->size(), vector);
+        }));
   }
 
   std::shared_ptr<memory::MemoryPool> rootPool_{

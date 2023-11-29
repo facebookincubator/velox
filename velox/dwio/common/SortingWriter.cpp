@@ -20,28 +20,135 @@ namespace facebook::velox::dwio::common {
 
 SortingWriter::SortingWriter(
     std::unique_ptr<Writer> writer,
-    std::unique_ptr<exec::SortBuffer> sortBuffer)
-    : outputWriter_(std::move(writer)), sortBuffer_(std::move(sortBuffer)) {}
+    std::unique_ptr<exec::SortBuffer> sortBuffer,
+    uint32_t maxOutputRowsConfig,
+    uint64_t maxOutputBytesConfig,
+    velox::common::SpillStats* spillStats)
+    : outputWriter_(std::move(writer)),
+      maxOutputRowsConfig_(maxOutputRowsConfig),
+      maxOutputBytesConfig_(maxOutputBytesConfig),
+      sortPool_(sortBuffer->pool()),
+      canReclaim_(sortBuffer->canSpill()),
+      spillStats_(spillStats),
+      sortBuffer_(std::move(sortBuffer)) {
+  VELOX_CHECK_GT(maxOutputRowsConfig_, 0);
+  VELOX_CHECK_GT(maxOutputBytesConfig_, 0);
+  VELOX_CHECK_NOT_NULL(spillStats_);
+  if (sortPool_->parent()->reclaimer() != nullptr) {
+    sortPool_->setReclaimer(MemoryReclaimer::create(this));
+  }
+  setState(State::kRunning);
+}
+
+SortingWriter::~SortingWriter() {
+  sortPool_->release();
+}
 
 void SortingWriter::write(const VectorPtr& data) {
+  checkRunning();
   sortBuffer_->addInput(data);
 }
 
-void SortingWriter::flush() {}
+void SortingWriter::flush() {
+  checkRunning();
+  outputWriter_->flush();
+}
 
 void SortingWriter::close() {
+  setState(State::kClosed);
+
   sortBuffer_->noMoreInput();
-  RowVectorPtr output = sortBuffer_->getOutput();
+  const auto maxOutputBatchRows = outputBatchRows();
+  RowVectorPtr output = sortBuffer_->getOutput(maxOutputBatchRows);
   while (output != nullptr) {
     outputWriter_->write(output);
-    output = sortBuffer_->getOutput();
+    output = sortBuffer_->getOutput(maxOutputBatchRows);
   }
+  auto spillStatsOr = sortBuffer_->spilledStats();
+  if (spillStatsOr.has_value()) {
+    VELOX_CHECK(canReclaim_);
+    *spillStats_ = spillStatsOr.value();
+  }
+  sortBuffer_.reset();
+  sortPool_->release();
   outputWriter_->close();
 }
 
 void SortingWriter::abort() {
+  setState(State::kAborted);
+
   sortBuffer_.reset();
+  sortPool_->release();
   outputWriter_->abort();
 }
 
+bool SortingWriter::canReclaim() const {
+  return canReclaim_;
+}
+
+uint64_t SortingWriter::reclaim(
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
+  if (!canReclaim_) {
+    return 0;
+  }
+
+  if (!isRunning()) {
+    LOG(WARNING) << "Can't reclaim from a not running hive sort writer pool: "
+                 << sortPool_->name() << ", state: " << state()
+                 << "used memory: " << succinctBytes(sortPool_->currentBytes())
+                 << ", reserved memory: "
+                 << succinctBytes(sortPool_->reservedBytes());
+    ++stats.numNonReclaimableAttempts;
+    return 0;
+  }
+  VELOX_CHECK_NOT_NULL(sortBuffer_);
+
+  auto reclaimBytes = memory::MemoryReclaimer::run(
+      [&]() {
+        sortBuffer_->spill();
+        sortPool_->release();
+        return sortPool_->shrink(targetBytes);
+      },
+      stats);
+
+  return reclaimBytes;
+}
+
+uint32_t SortingWriter::outputBatchRows() {
+  uint32_t estimatedMaxOutputRows = UINT_MAX;
+  if (sortBuffer_->estimateOutputRowSize().has_value() &&
+      sortBuffer_->estimateOutputRowSize().value() != 0) {
+    estimatedMaxOutputRows =
+        maxOutputBytesConfig_ / sortBuffer_->estimateOutputRowSize().value();
+  }
+  return std::min(estimatedMaxOutputRows, maxOutputRowsConfig_);
+}
+
+std::unique_ptr<memory::MemoryReclaimer> SortingWriter::MemoryReclaimer::create(
+    SortingWriter* writer) {
+  return std::unique_ptr<memory::MemoryReclaimer>(new MemoryReclaimer(writer));
+}
+
+bool SortingWriter::MemoryReclaimer::reclaimableBytes(
+    const memory::MemoryPool& pool,
+    uint64_t& reclaimableBytes) const {
+  VELOX_CHECK_EQ(pool.name(), writer_->sortPool_->name());
+
+  reclaimableBytes = 0;
+  if (!writer_->canReclaim()) {
+    return false;
+  }
+  reclaimableBytes = pool.currentBytes();
+  return true;
+}
+
+uint64_t SortingWriter::MemoryReclaimer::reclaim(
+    memory::MemoryPool* pool,
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
+  VELOX_CHECK_EQ(pool->name(), writer_->sortPool_->name());
+
+  return writer_->reclaim(targetBytes, stats);
+}
 } // namespace facebook::velox::dwio::common

@@ -43,6 +43,10 @@ class TypedDistinctAggregations : public DistinctAggregations {
         sizeof(AccumulatorType),
         false, // usesExternalMemory
         1, // alignment
+        nullptr,
+        [](folly::Range<char**> /*groups*/, VectorPtr& /*result*/) {
+          VELOX_UNREACHABLE();
+        },
         [this](folly::Range<char**> groups) {
           for (auto* group : groups) {
             auto* accumulator =

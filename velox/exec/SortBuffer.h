@@ -34,10 +34,8 @@ class SortBuffer {
       const RowTypePtr& input,
       const std::vector<column_index_t>& sortColumnIndices,
       const std::vector<CompareFlags>& sortCompareFlags,
-      uint32_t outputBatchSize,
       velox::memory::MemoryPool* pool,
       tsan_atomic<bool>* nonReclaimableSection,
-      uint32_t* numSpillRuns,
       const common::SpillConfig* spillConfig = nullptr,
       uint64_t spillMemoryThreshold = 0);
 
@@ -50,41 +48,46 @@ class SortBuffer {
   void noMoreInput();
 
   /// Returns the sorted output rows in batch.
-  RowVectorPtr getOutput();
+  RowVectorPtr getOutput(uint32_t maxOutputRows);
 
-  /// Invoked to spill from 'data_' to disk with specified targets.
-  ///
-  /// NOTE: if either 'targetRows' or 'targetBytes' is zero, then we spill all
-  /// the rows from 'data_'.
-  void spill(int64_t targetRows, int64_t targetBytes);
+  /// Indicates if this sort buffer can spill or not.
+  bool canSpill() const {
+    return spillConfig_ != nullptr;
+  }
+
+  /// Invoked to spill all the rows from 'data_'.
+  void spill();
+
+  memory::MemoryPool* pool() const {
+    return pool_;
+  }
 
   /// Returns the spiller stats including total bytes and rows spilled so far.
-  std::optional<SpillStats> spilledStats() const {
+  std::optional<common::SpillStats> spilledStats() const {
     if (spiller_ == nullptr) {
       return std::nullopt;
     }
     return spiller_->stats();
   }
 
+  std::optional<uint64_t> estimateOutputRowSize() const;
+
  private:
   // Ensures there is sufficient memory reserved to process 'input'.
   void ensureInputFits(const VectorPtr& input);
+  void updateEstimatedOutputRowSize();
   // Invoked to initialize or reset the reusable output buffer to get output.
-  void prepareOutput();
+  void prepareOutput(uint32_t maxOutputRows);
   void getOutputWithoutSpill();
   void getOutputWithSpill();
 
   const RowTypePtr input_;
   const std::vector<CompareFlags> sortCompareFlags_;
-  // Maximum number of rows to return in one output batch.
-  const uint32_t outputBatchSize_;
   velox::memory::MemoryPool* const pool_;
   // The flag is passed from the associated operator such as OrderBy or
   // TableWriter to indicate if this sort buffer object is under non-reclaimable
   // execution section or not.
   tsan_atomic<bool>* const nonReclaimableSection_;
-  // A recorder for number of spill runs passed in from order by operator.
-  uint32_t* const numSpillRuns_;
   const common::SpillConfig* const spillConfig_;
   // The maximum size that an SortBuffer can hold in memory before spilling.
   // Zero indicates no limit.
@@ -119,6 +122,9 @@ class SortBuffer {
 
   // Reusable output vector.
   RowVectorPtr output_;
+  // Estimated size of a single output row by using the max
+  // 'data_->estimateRowSize()' across all accumulated data set.
+  std::optional<uint64_t> estimatedOutputRowSize_{};
   // The number of rows that has been returned.
   size_t numOutputRows_{0};
 };

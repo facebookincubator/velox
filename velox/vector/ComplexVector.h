@@ -116,13 +116,31 @@ class RowVector : public BaseVector {
 
   /// Get the child vector at a given offset.
   VectorPtr& childAt(column_index_t index) {
-    VELOX_USER_CHECK_LT(index, childrenSize_);
+    VELOX_CHECK_LT(
+        index,
+        childrenSize_,
+        "Trying to access non-existing child in RowVector: {}",
+        toString());
     return children_[index];
   }
 
   const VectorPtr& childAt(column_index_t index) const {
-    VELOX_USER_CHECK_LT(index, childrenSize_);
+    VELOX_CHECK_LT(
+        index,
+        childrenSize_,
+        "Trying to access non-existing child in RowVector: {}",
+        toString());
     return children_[index];
+  }
+
+  /// Returns child vector for the specified field name. Throws if field with
+  /// specified name doesn't exist.
+  VectorPtr& childAt(const std::string& name) {
+    return children_[type_->asRow().getChildIdx(name)];
+  }
+
+  const VectorPtr& childAt(const std::string& name) const {
+    return children_[type_->asRow().getChildIdx(name)];
   }
 
   std::vector<VectorPtr>& children() {
@@ -195,6 +213,17 @@ class RowVector : public BaseVector {
   void updateContainsLazyNotLoaded() const;
 
   void validate(const VectorValidateOptions& options) const override;
+
+  /// Only calls BaseVector::resize and doesnt resize the children.
+  /// This function is present for backwards compatibility,
+  /// until the few places that require it are migrated over.
+  void unsafeResize(vector_size_t newSize, bool setNotNull = true);
+
+  /// Resizes the parent row container and also recursively resizes the
+  /// children. Note that this function will throw if the children are not
+  /// uniquely referenced by the parent when increasing the size.
+  /// Note : If the child is null, then it will stay null after the resize.
+  void resize(vector_size_t newSize, bool setNotNull = true) override;
 
  private:
   vector_size_t childSize() const {

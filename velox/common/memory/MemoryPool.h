@@ -531,6 +531,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// NOTE: this flag is only set for a root memory pool if it has memory
   /// reclaimer. We process a query abort request from the root memory pool.
   std::atomic<bool> aborted_{false};
+  /// Saves the aborted error exception which is only set if 'aborted_' is true.
+  std::exception_ptr abortError_{nullptr};
 
   mutable folly::SharedMutex poolMutex_;
   // NOTE: we use raw pointer instead of weak pointer here to minimize
@@ -676,6 +678,10 @@ class MemoryPoolImpl : public MemoryPool {
 
   MemoryAllocator* testingAllocator() const {
     return allocator_;
+  }
+
+  uint64_t testingMinReservationBytes() const {
+    return minReservationBytes_;
   }
 
   /// Structure to store allocation details in debug mode.
@@ -873,6 +879,13 @@ class MemoryPoolImpl : public MemoryPool {
       VELOX_FAIL("Bad memory usage track state: {}", toStringLocked());
     }
   }
+
+  void setAbortError(const std::exception_ptr& error);
+
+  // Check if this memory pool has been aborted. If already aborted, we rethrow
+  // the preserved abort error to prevent this pool from triggering additional
+  // memory arbitration. The associated query should also abort soon.
+  void checkIfAborted() const;
 
   Stats statsLocked() const;
 

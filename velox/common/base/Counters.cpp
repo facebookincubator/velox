@@ -24,6 +24,28 @@ void registerVeloxCounters() {
   // P50, P90, P99, and P100.
   REPORT_ADD_HISTOGRAM_EXPORT_PERCENTILE(
       kCounterHiveFileHandleGenerateLatencyMs, 10, 0, 100000, 50, 90, 99, 100);
+
+  REPORT_ADD_STAT_EXPORT_TYPE(
+      kCounterCacheShrinkCount, facebook::velox::StatType::COUNT);
+
+  // Track cache shrink latency in range of [0, 100s] and reports P50, P90, P99,
+  // and P100.
+  REPORT_ADD_HISTOGRAM_EXPORT_PERCENTILE(
+      kCounterCacheShrinkTimeMs, 10, 0, 100'000, 50, 90, 99, 100);
+
+  // Track memory reclaim exec time in range of [0, 600s] and reports
+  // P50, P90, P99, and P100.
+  REPORT_ADD_HISTOGRAM_EXPORT_PERCENTILE(
+      kCounterMemoryReclaimExecTimeMs, 20, 0, 600'000, 50, 90, 99, 100);
+
+  // Track memory reclaim task wait time in range of [0, 60s] and reports
+  // P50, P90, P99, and P100.
+  REPORT_ADD_HISTOGRAM_EXPORT_PERCENTILE(
+      kCounterMemoryReclaimWaitTimeMs, 10, 0, 60'000, 50, 90, 99, 100);
+
+  // Track memory reclaim bytes.
+  REPORT_ADD_STAT_EXPORT_TYPE(
+      kCounterMemoryReclaimedBytes, facebook::velox::StatType::SUM);
 }
 
 } // namespace facebook::velox

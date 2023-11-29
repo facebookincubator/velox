@@ -146,6 +146,7 @@ class MemoryAllocator;
 class Cache {
  public:
   virtual ~Cache() = default;
+
   /// This method should be implemented so that it tries to
   /// accommodate the passed in 'allocate' by freeing up space from
   /// 'this' if needed. 'numPages' is the number of pages 'allocate
@@ -158,8 +159,23 @@ class Cache {
       memory::MachinePageCount numPages,
       std::function<bool(Allocation&)> allocate) = 0;
 
+  /// This method is implemented to shrink the cache space with the specified
+  /// 'targetBytes'. The method returns the actually freed cache space in bytes.
+  virtual uint64_t shrink(uint64_t targetBytes) = 0;
+
   virtual MemoryAllocator* allocator() const = 0;
 };
+
+/// Sets a thread level failure message describing cache state. Used
+/// for example to expose why space could not be freed from
+/// cache. This is defined here with the abstract Cache base class
+/// and not the cache implementation because allocator cannot depend
+/// on cache.
+void setCacheFailureMessage(std::string message);
+
+/// Returns and clears a thread local message set with
+/// setCacheFailuremessage().
+std::string getAndClearCacheFailureMessage();
 
 /// This class provides interface for the actual memory allocations from memory
 /// pool. It allocates runs of machine pages from predefined size classes, and
@@ -317,6 +333,12 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// reallocateBytes.
   virtual void freeBytes(void* p, uint64_t size) noexcept = 0;
 
+  /// Unmaps the unused memory space to return the backing physical pages back
+  /// to the operating system. This only works for MmapAllocator implementation
+  /// which manages the physical memory on its own by mmap. The function returns
+  /// the number of actual unmapped physical pages.
+  virtual MachinePageCount unmap(MachinePageCount targetPages) = 0;
+
   /// Checks internal consistency of allocation data structures. Returns true if
   /// OK.
   virtual bool checkConsistency() const = 0;
@@ -386,6 +408,15 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     injectedFailure_ = InjectedFailure::kNone;
     isPersistentFailureInjection_ = false;
   }
+
+  /// Sets a thread level failure message describing the reason for the last
+  /// allocation failure.
+  void setAllocatorFailureMessage(std::string message);
+
+  /// Returns extra information after returning false from any of the allocate
+  /// functions. The error message is scoped to the most recent call on the
+  /// thread. The message is cleared after return.
+  std::string getAndClearFailureMessage();
 
  protected:
   explicit MemoryAllocator() = default;

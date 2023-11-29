@@ -319,6 +319,33 @@ const folly::F14FastMap<std::string, uint32_t> createdChildrenIndex(
   }
   return index;
 }
+
+std::string namesAndTypesToString(
+    const std::vector<std::string>& names,
+    const std::vector<TypePtr>& types) {
+  std::stringstream ss;
+  ss << "[names: {";
+  if (!names.empty()) {
+    for (const auto& name : names) {
+      ss << "'" << name << "', ";
+    }
+    ss.seekp(-2, std::ios_base::cur);
+  } else {
+    ss << " ";
+  }
+  ss << "}, types: {";
+  if (!types.empty()) {
+    for (const auto& type : types) {
+      ss << (type ? type->toString() : "NULL") << ", ";
+    }
+    ss.seekp(-2, std::ios_base::cur);
+  } else {
+    ss << " ";
+  }
+  ss << "}]";
+  return ss.str();
+}
+
 } // namespace
 
 RowType::RowType(std::vector<std::string>&& names, std::vector<TypePtr>&& types)
@@ -327,10 +354,16 @@ RowType::RowType(std::vector<std::string>&& names, std::vector<TypePtr>&& types)
       parameters_{createTypeParameters(children_)},
       // TODO: lazily initialize index on first access instead.
       childrenIndices_{createdChildrenIndex(names_)} {
-  VELOX_USER_CHECK_EQ(
-      names_.size(), children_.size(), "Mismatch names/types sizes");
+  VELOX_CHECK_EQ(
+      names_.size(),
+      children_.size(),
+      "Mismatch names/types sizes: {}",
+      namesAndTypesToString(names_, children_));
   for (auto& child : children_) {
-    VELOX_CHECK_NOT_NULL(child, "Child types cannot be null");
+    VELOX_CHECK_NOT_NULL(
+        child,
+        "Child types cannot be null: {}",
+        namesAndTypesToString(names_, children_));
   }
 }
 
@@ -985,10 +1018,12 @@ std::string DateType::toString(int32_t days) const {
   int64_t daySeconds = days * (int64_t)(86400);
   std::tm tmValue;
   VELOX_CHECK(
-      epochToUtc(daySeconds, tmValue), "Can't convert days to dates: {}", days);
+      Timestamp::epochToUtc(daySeconds, tmValue),
+      "Can't convert days to dates: {}",
+      days);
   TimestampToStringOptions options;
-  options.dateOnly = true;
-  return tmToString(tmValue, 0, options);
+  options.mode = TimestampToStringOptions::Mode::kDateOnly;
+  return Timestamp::tmToString(tmValue, 0, options);
 }
 
 int32_t DateType::toDays(folly::StringPiece in) const {

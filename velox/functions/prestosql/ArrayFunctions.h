@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <type_traits>
+
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/CheckedArithmetic.h"
@@ -25,6 +27,8 @@ namespace facebook::velox::functions {
 template <typename TExecCtx, bool isMax>
 struct ArrayMinMaxFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
 
   template <typename T>
   void update(T& currentValue, const T& candidateValue) {
@@ -45,11 +49,60 @@ struct ArrayMinMaxFunction {
   }
 
   void assign(out_type<Varchar>& out, const arg_type<Varchar>& value) {
-    // TODO: reuse strings once support landed.
-    out.resize(value.size());
-    if (value.size() != 0) {
-      std::memcpy(out.data(), value.data(), value.size());
+    out.setNoCopy(value);
+  }
+
+  template <typename TReturn, typename TInput>
+  bool callForFloatOrDouble(TReturn& out, const TInput& array) {
+    bool hasNull = false;
+    auto it = array.begin();
+
+    // Find the first non-null item (if any)
+    while (it != array.end()) {
+      if (it->has_value()) {
+        break;
+      }
+
+      hasNull = true;
+      ++it;
     }
+
+    // Return false if end of array is reached without finding a non-null item.
+    if (it == array.end()) {
+      return false;
+    }
+
+    // If first non-null item is NAN, return immediately.
+    auto currentValue = it->value();
+    if (std::isnan(currentValue)) {
+      assign(out, currentValue);
+      return true;
+    }
+
+    ++it;
+    while (it != array.end()) {
+      if (it->has_value()) {
+        auto newValue = it->value();
+        if (std::isnan(newValue)) {
+          assign(out, newValue);
+          return true;
+        }
+        update(currentValue, newValue);
+      } else {
+        hasNull = true;
+      }
+      ++it;
+    }
+
+    // If we found a null, return false. Note that, if we found
+    // a NAN, the function will return at earlier stage as soon as
+    // a NAN is observed.
+    if (hasNull) {
+      return false;
+    }
+
+    assign(out, currentValue);
+    return true;
   }
 
   template <typename TReturn, typename TInput>
@@ -57,6 +110,11 @@ struct ArrayMinMaxFunction {
     // Result is null if array is empty.
     if (array.size() == 0) {
       return false;
+    }
+
+    if constexpr (
+        std::is_same_v<TReturn, float> || std::is_same_v<TReturn, double>) {
+      return callForFloatOrDouble(out, array);
     }
 
     if (!array.mayHaveNulls()) {
@@ -102,7 +160,8 @@ struct ArrayJoinFunction {
 
   template <typename C>
   void writeValue(out_type<velox::Varchar>& result, const C& value) {
-    result += util::Converter<TypeKind::VARCHAR, void, false>::cast(value);
+    result +=
+        util::Converter<TypeKind::VARCHAR, void, false, false>::cast(value);
   }
 
   template <typename C>
@@ -487,16 +546,16 @@ struct ArrayNormalizeFunction {
 ///
 ///  Note:
 ///   - For compatibility with Presto a maximum arity of 254 is enforced.
-template <typename T>
+template <typename TExec, typename T>
 struct ArrayConcatFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T)
+  VELOX_DEFINE_FUNCTION_TYPES(TExec)
 
   static constexpr int32_t kMinArity = 2;
   static constexpr int32_t kMaxArity = 254;
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Array<Generic<T1>>>& out,
-      const arg_type<Variadic<Array<Generic<T1>>>>& arrays) {
+  void call(
+      out_type<Array<T>>& out,
+      const arg_type<Variadic<Array<T>>>& arrays) {
     VELOX_USER_CHECK_GE(
         arrays.size(),
         kMinArity,
@@ -514,23 +573,33 @@ struct ArrayConcatFunction {
     }
   }
 
-  void call(
-      out_type<Array<Generic<T1>>>& out,
-      const arg_type<Array<Generic<T1>>>& array,
-      const arg_type<Generic<T1>>& element) {
-    out.reserve(array.size() + 1);
-    out.add_items(array);
-    auto& newItem = out.add_item();
-    newItem.copy_from(element);
+  template <typename B, typename U>
+  void assignElement(B& out, const U& input) {
+    if constexpr (SimpleTypeTrait<T>::isPrimitiveType) {
+      // Primitives we just assign. copy_from not defined for primitives.
+      out = input;
+    } else {
+      out.copy_from(input);
+    }
   }
 
   void call(
-      out_type<Array<Generic<T1>>>& out,
-      const arg_type<Generic<T1>>& element,
-      const arg_type<Array<Generic<T1>>>& array) {
+      out_type<Array<T>>& out,
+      const arg_type<Array<T>>& array,
+      const arg_type<T>& element) {
+    out.reserve(array.size() + 1);
+    out.add_items(array);
+    auto& newItem = out.add_item();
+    assignElement(newItem, element);
+  }
+
+  void call(
+      out_type<Array<T>>& out,
+      const arg_type<T>& element,
+      const arg_type<Array<T>>& array) {
     out.reserve(array.size() + 1);
     auto& newItem = out.add_item();
-    newItem.copy_from(element);
+    assignElement(newItem, element);
     out.add_items(array);
   }
 };
@@ -772,8 +841,8 @@ struct ArrayRemoveFunction {
       out_type<Array<Generic<T1>>>& out,
       const arg_type<Array<Generic<T1>>>& array,
       const arg_type<Generic<T1>>& element) {
-    static constexpr CompareFlags kFlags = {
-        false, false, true, CompareFlags::NullHandlingMode::StopAtNull};
+    static constexpr CompareFlags kFlags =
+        CompareFlags::equality(CompareFlags::NullHandlingMode::kStopAtNull);
     std::vector<std::optional<exec::GenericView>> toCopyItems;
     for (const auto& item : array) {
       if (item.has_value()) {

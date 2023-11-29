@@ -38,14 +38,14 @@ DEFINE_string(
 
 int main(int argc, char** argv) {
   facebook::velox::functions::aggregate::sparksql::registerAggregateFunctions(
-      "");
+      "", false);
 
   ::testing::InitGoogleTest(&argc, argv);
 
   // Calls common init functions in the necessary order, initializing
   // singletons, installing proper signal handlers for better debugging
   // experience, and initialize glog and gflags.
-  folly::init(&argc, &argv);
+  folly::Init init(&argc, &argv);
 
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable. Constant argument of bloom_filter_agg cause
@@ -57,24 +57,25 @@ int main(int argc, char** argv) {
   // doesn't depend on the order of inputs. If such transformation exists, it
   // can be specified to be used for results verification. If no transformation
   // is specified, results are not verified.
-  std::unordered_map<std::string, std::string> customVerificationFunctions = {
-      {"last", ""},
-      {"last_ignore_null", ""},
-      {"first", ""},
-      {"first_ignore_null", ""},
-      // TODO: Skip result verification of companion functions that return
-      // complex types that contain floating-point fields for now, until we
-      // fix test utilities in QueryAssertions to tolerate floating-point
-      // imprecision in complex types.
-      // https://github.com/facebookincubator/velox/issues/4481
-      {"avg_partial", ""},
-      {"avg_merge", ""},
-      {"max_by", ""},
-      {"min_by", ""}};
+  std::unordered_map<
+      std::string,
+      std::shared_ptr<facebook::velox::exec::test::ResultVerifier>>
+      customVerificationFunctions = {
+          {"last", nullptr},
+          {"last_ignore_null", nullptr},
+          {"first", nullptr},
+          {"first_ignore_null", nullptr},
+          {"max_by", nullptr},
+          {"min_by", nullptr}};
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
   auto duckQueryRunner =
       std::make_unique<facebook::velox::exec::test::DuckQueryRunner>();
+  duckQueryRunner->disableAggregateFunctions({
+      // https://github.com/facebookincubator/velox/issues/7677
+      "max_by",
+      "min_by",
+  });
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
 

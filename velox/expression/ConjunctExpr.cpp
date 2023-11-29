@@ -15,6 +15,7 @@
  */
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/BooleanMix.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/expression/ScopedVarSetter.h"
 
 namespace facebook::velox::exec {
@@ -135,6 +136,14 @@ void ConjunctExpr::evalSpecialForm(
     }
 
     SelectivityTimer timer(selectivity_[inputOrder_[i]], numActive);
+    if (evaluatesArgumentsOnNonIncreasingSelection()) {
+      // Exclude loading rows that we know for sure will have a false result.
+      for (auto* field : inputs_[inputOrder_[i]]->distinctFields()) {
+        if (multiplyReferencedFields_.count(field) > 0) {
+          context.ensureFieldLoaded(field->index(context), *activeRows);
+        }
+      }
+    }
     inputs_[inputOrder_[i]]->eval(*activeRows, context, inputResult);
     if (context.errors()) {
       handleErrors = true;
@@ -193,6 +202,59 @@ void ConjunctExpr::maybeReorderInputs() {
   }
 }
 
+namespace {
+// helper functions for conjuncts operating on values, nulls and active rows a
+// word at a time.
+inline void setFalseForOne(uint64_t active, uint64_t source, uint64_t& target) {
+  target &= ~active | ~source;
+}
+
+inline void setTrueForOne(uint64_t active, uint64_t source, uint64_t& target) {
+  target |= active & source;
+}
+
+inline void
+setPresentForOne(uint64_t active, uint64_t source, uint64_t& target) {
+  target |= active & source;
+}
+
+inline void
+setNonPresentForOne(uint64_t active, uint64_t source, uint64_t& target) {
+  target &= ~active | ~source;
+}
+
+inline void updateAnd(
+    uint64_t& resultValue,
+    uint64_t& resultPresent,
+    uint64_t& active,
+    uint64_t testValue,
+    uint64_t testPresent) {
+  auto testFalse = ~testValue & testPresent;
+  setFalseForOne(active, testFalse, resultValue);
+  setPresentForOne(active, testFalse, resultPresent);
+  auto resultTrue = resultValue & resultPresent;
+  setNonPresentForOne(
+      active, resultPresent & resultTrue & ~testPresent, resultPresent);
+  active &= ~testFalse;
+}
+
+inline void updateOr(
+    uint64_t& resultValue,
+    uint64_t& resultPresent,
+    uint64_t& active,
+    uint64_t testValue,
+    uint64_t testPresent) {
+  auto testTrue = testValue & testPresent;
+  setTrueForOne(active, testTrue, resultValue);
+  setPresentForOne(active, testTrue, resultPresent);
+  auto resultFalse = ~resultValue & resultPresent;
+  setNonPresentForOne(
+      active, resultPresent & resultFalse & ~testPresent, resultPresent);
+  active &= ~testTrue;
+}
+
+} // namespace
+
 void ConjunctExpr::updateResult(
     BaseVector* inputResult,
     EvalCtx& context,
@@ -211,7 +273,7 @@ void ConjunctExpr::updateResult(
       &values,
       &nulls)) {
     case BooleanMix::kAllNull:
-      result->addNulls(nullptr, *activeRows);
+      result->addNulls(*activeRows);
       return;
     case BooleanMix::kAllFalse:
       if (isAnd_) {
@@ -246,24 +308,77 @@ void ConjunctExpr::updateResult(
       }
       return;
     default: {
-      bits::forEachSetBit(
-          activeRows->asRange().bits(),
-          activeRows->begin(),
-          activeRows->end(),
-          [&](int32_t row) {
-            if (nulls && bits::isBitNull(nulls, row)) {
-              result->setNull(row, true);
-            } else {
-              bool isTrue = bits::isBitSet(values, row);
-              if (isAnd_ && !isTrue) {
-                result->set(row, false);
-                activeRows->setValid(row, false);
-              } else if (!isAnd_ && isTrue) {
-                result->set(row, true);
-                activeRows->setValid(row, false);
+      uint64_t* resultValues = result->mutableRawValues<uint64_t>();
+      uint64_t* resultNulls = nullptr;
+      if (nulls || result->mayHaveNulls()) {
+        resultNulls = result->mutableRawNulls();
+      }
+      auto* activeBits = activeRows->asMutableRange().bits();
+      if (isAnd_) {
+        bits::forEachWord(
+            activeRows->begin(),
+            activeRows->end(),
+            [&](int32_t index, uint64_t mask) {
+              uint64_t nullWord =
+                  resultNulls ? resultNulls[index] : bits::kNotNull64;
+              uint64_t activeWord = activeBits[index] & mask;
+              updateAnd(
+                  resultValues[index],
+                  nullWord,
+                  activeWord,
+                  values[index],
+                  nulls ? nulls[index] : bits::kNotNull64);
+              if (resultNulls) {
+                resultNulls[index] = nullWord;
               }
-            }
-          });
+              activeBits[index] &= ~mask | activeWord;
+            },
+            [&](int32_t index) {
+              uint64_t nullWord =
+                  resultNulls ? resultNulls[index] : bits::kNotNull64;
+              updateAnd(
+                  resultValues[index],
+                  nullWord,
+                  activeBits[index],
+                  values[index],
+                  nulls ? nulls[index] : bits::kNotNull64);
+              if (resultNulls) {
+                resultNulls[index] = nullWord;
+              }
+            });
+      } else {
+        bits::forEachWord(
+            activeRows->begin(),
+            activeRows->end(),
+            [&](int32_t index, uint64_t mask) {
+              uint64_t nullWord =
+                  resultNulls ? resultNulls[index] : bits::kNotNull64;
+              uint64_t activeWord = activeBits[index] & mask;
+              updateOr(
+                  resultValues[index],
+                  nullWord,
+                  activeWord,
+                  values[index],
+                  nulls ? nulls[index] : bits::kNotNull64);
+              if (resultNulls) {
+                resultNulls[index] = nullWord;
+              }
+              activeBits[index] &= ~mask | activeWord;
+            },
+            [&](int32_t index) {
+              uint64_t nullWord =
+                  resultNulls ? resultNulls[index] : bits::kNotNull64;
+              updateOr(
+                  resultValues[index],
+                  nullWord,
+                  activeBits[index],
+                  values[index],
+                  nulls ? nulls[index] : bits::kNotNull64);
+              if (resultNulls) {
+                resultNulls[index] = nullWord;
+              }
+            });
+      }
       activeRows->updateBounds();
     }
   }

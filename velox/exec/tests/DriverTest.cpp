@@ -265,7 +265,7 @@ class DriverTest : public OperatorTestBase {
         [](RowVectorPtr /*unused*/, ContinueFuture* /*unused*/) {
           return exec::BlockingReason::kNotBlocked;
         });
-    task->start(task, numDrivers, 1);
+    task->start(numDrivers, 1);
     return task;
   }
 
@@ -1338,4 +1338,28 @@ DEBUG_ONLY_TEST_F(DriverTest, driverThreadContext) {
   auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                   .assertResults("SELECT * FROM tmp");
   ASSERT_EQ(task.get(), capturedTask);
+}
+
+DEBUG_ONLY_TEST_F(DriverTest, nonReclaimableSection) {
+  // The driver framework will set non-reclaimable section flag when start
+  // executing operator method.
+  // Checks before getOutput method called.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(const exec::Values*)>([&](const exec::Values* values) {
+        ASSERT_FALSE(values->testingNonReclaimable());
+      }));
+  // Checks inside getOutput method execution.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(const exec::Values*)>([&](const exec::Values* values) {
+        ASSERT_TRUE(values->testingNonReclaimable());
+      }));
+
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 2; ++i) {
+    batches.push_back(makeRowVector({makeFlatVector<int32_t>({1, 2, 3})}));
+  }
+  auto plan = PlanBuilder().values(batches).planNode();
+  ASSERT_NO_THROW(AssertQueryBuilder(plan).copyResults(pool()));
 }

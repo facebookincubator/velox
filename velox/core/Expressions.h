@@ -23,8 +23,7 @@ namespace facebook::velox::core {
 
 class InputTypedExpr : public ITypedExpr {
  public:
-  InputTypedExpr(std::shared_ptr<const Type> type)
-      : ITypedExpr{std::move(type)} {}
+  explicit InputTypedExpr(TypePtr type) : ITypedExpr{std::move(type)} {}
 
   bool operator==(const ITypedExpr& other) const final {
     const auto* casted = dynamic_cast<const InputTypedExpr*>(&other);
@@ -55,7 +54,7 @@ class ConstantTypedExpr : public ITypedExpr {
  public:
   // Creates constant expression. For complex types, only
   // variant::null() value is supported.
-  ConstantTypedExpr(std::shared_ptr<const Type> type, variant value)
+  ConstantTypedExpr(TypePtr type, variant value)
       : ITypedExpr{std::move(type)}, value_{std::move(value)} {}
 
   // Creates constant expression of scalar or complex type. The value comes from
@@ -87,7 +86,7 @@ class ConstantTypedExpr : public ITypedExpr {
     return valueVector_ != nullptr;
   }
 
-  // Returns scalar value as variant if hasValueVector() is false.
+  /// Returns scalar value as variant if hasValueVector() is false.
   const variant& value() const {
     return value_;
   }
@@ -161,14 +160,46 @@ class ConstantTypedExpr : public ITypedExpr {
   const VectorPtr valueVector_;
 };
 
+/// Evaluates a scalar function or a special form.
+///
+/// Supported special forms are: and, or, cast, try_cast, coalesce, if, switch,
+/// try. See registerFunctionCallToSpecialForms in
+/// expression/RegisterSpecialForm.h for the up-to-date list.
+///
+/// Regular functions have the following properties: (1) return type is fully
+/// defined by function name and input types; (2) during evaluation all function
+/// arguments are evaluated first before the function itself is evaluated on the
+/// results, a failure to evaluate function argument prevents the function from
+/// being evaluated.
+///
+/// Special forms are different from regular scalar functions as they do not
+/// always have the above properties.
+///
+/// - CAST doesn't have (1): return type is not defined by input type as it is
+/// possible to cast VARCHAR to INTEGER, BOOLEAN, and many other types.
+/// - Conjuncts AND, OR don't have (2): these have logic to stop evaluating
+/// arguments if the outcome is already decided. For example, a > 10 AND b < 3
+/// applied to a = 0 and b = 0 is fully decided after evaluating a > 10. The
+/// result is FALSE. This is important not only from efficiency standpoint, but
+/// semantically as well. Not evaluating unnecessary arguments implicitly
+/// suppresses the errors that might have happened if evaluation proceeded. For
+/// example, a > 10 AND b / a > 1 would fail if both expressions were evaluated
+/// on a = 0.
+/// - Coalesce, if, switch also don't have (2): these also have logic to stop
+/// evaluating arguments if the outcome is already decided.
+/// - TRY doesn't have (2) either: it needs to capture and suppress errors
+/// received while evaluating the input.
 class CallTypedExpr : public ITypedExpr {
  public:
+  /// @param type Return type.
+  /// @param inputs List of input expressions. May be empty.
+  /// @param name Name of the function or special form.
   CallTypedExpr(
-      std::shared_ptr<const Type> type,
+      TypePtr type,
       std::vector<TypedExprPtr> inputs,
-      std::string funcName)
+      std::string name)
       : ITypedExpr{std::move(type), std::move(inputs)},
-        name_(std::move(funcName)) {}
+        name_(std::move(name)) {}
 
   virtual const std::string& name() const {
     return name_;
@@ -206,17 +237,21 @@ class CallTypedExpr : public ITypedExpr {
     if (!casted) {
       return false;
     }
-    if (casted->name() != this->name()) {
+    return operator==(*casted);
+  }
+
+  bool operator==(const CallTypedExpr& other) const {
+    if (other.name() != this->name()) {
       return false;
     }
-    if (*casted->type() != *this->type()) {
+    if (*other.type() != *this->type()) {
       return false;
     }
     return std::equal(
         this->inputs().begin(),
         this->inputs().end(),
-        casted->inputs().begin(),
-        casted->inputs().end(),
+        other.inputs().begin(),
+        other.inputs().end(),
         [](const auto& p1, const auto& p2) { return *p1 == *p2; });
   }
 
@@ -301,17 +336,21 @@ class FieldAccessTypedExpr : public ITypedExpr {
     if (!casted) {
       return false;
     }
-    if (casted->name_ != this->name_) {
+    return operator==(*casted);
+  }
+
+  bool operator==(const FieldAccessTypedExpr& other) const {
+    if (other.name_ != this->name_) {
       return false;
     }
-    if (*casted->type() != *this->type()) {
+    if (*other.type() != *this->type()) {
       return false;
     }
     return std::equal(
         this->inputs().begin(),
         this->inputs().end(),
-        casted->inputs().begin(),
-        casted->inputs().end(),
+        other.inputs().begin(),
+        other.inputs().end(),
         [](const auto& p1, const auto& p2) { return *p1 == *p2; });
   }
 
@@ -375,14 +414,18 @@ class DereferenceTypedExpr : public ITypedExpr {
     if (!casted) {
       return false;
     }
-    if (casted->index_ != this->index_) {
+    return operator==(*casted);
+  }
+
+  bool operator==(const DereferenceTypedExpr& other) const {
+    if (other.index_ != this->index_) {
       return false;
     }
     return std::equal(
         this->inputs().begin(),
         this->inputs().end(),
-        casted->inputs().begin(),
-        casted->inputs().end(),
+        other.inputs().begin(),
+        other.inputs().end(),
         [](const auto& p1, const auto& p2) { return *p1 == *p2; });
   }
 
@@ -396,9 +439,7 @@ class DereferenceTypedExpr : public ITypedExpr {
 
 using DereferenceTypedExprPtr = std::shared_ptr<const DereferenceTypedExpr>;
 
-/*
- * Evaluates a list of expressions to produce a row.
- */
+/// Evaluates a list of expressions to produce a row.
 class ConcatTypedExpr : public ITypedExpr {
  public:
   ConcatTypedExpr(
@@ -437,14 +478,18 @@ class ConcatTypedExpr : public ITypedExpr {
     if (!casted) {
       return false;
     }
-    if (*casted->type() != *this->type()) {
+    return operator==(*casted);
+  }
+
+  bool operator==(const ConcatTypedExpr& other) const {
+    if (*other.type() != *this->type()) {
       return false;
     }
     return std::equal(
         this->inputs().begin(),
         this->inputs().end(),
-        casted->inputs().begin(),
-        casted->inputs().end(),
+        other.inputs().begin(),
+        other.inputs().end(),
         [](const auto& p1, const auto& p2) { return *p1 == *p2; });
   }
 
@@ -453,10 +498,10 @@ class ConcatTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
-  static std::shared_ptr<const Type> toType(
+  static TypePtr toType(
       const std::vector<std::string>& names,
       const std::vector<TypedExprPtr>& expressions) {
-    std::vector<std::shared_ptr<const Type>> children{};
+    std::vector<TypePtr> children{};
     std::vector<std::string> namesCopy{};
     for (size_t i = 0; i < names.size(); ++i) {
       namesCopy.push_back(names.at(i));
@@ -470,7 +515,7 @@ class LambdaTypedExpr : public ITypedExpr {
  public:
   LambdaTypedExpr(RowTypePtr signature, TypedExprPtr body)
       : ITypedExpr(std::make_shared<FunctionType>(
-            std::vector<std::shared_ptr<const Type>>(signature->children()),
+            std::vector<TypePtr>(signature->children()),
             body->type())),
         signature_(signature),
         body_(body) {}
@@ -527,13 +572,28 @@ class LambdaTypedExpr : public ITypedExpr {
 
 using LambdaTypedExprPtr = std::shared_ptr<const LambdaTypedExpr>;
 
+/// Converts input values to specified type.
 class CastTypedExpr : public ITypedExpr {
  public:
+  /// @param type Type to convert to. This is the return type of the CAST
+  /// expresion.
+  /// @param input Single input. The type of input is referred to as from-type
+  /// and expected to be different from to-type.
+  /// @param nullOnFailure Whether to suppress cast errors and return null.
   CastTypedExpr(
-      const std::shared_ptr<const Type>& type,
+      const TypePtr& type,
+      const TypedExprPtr& input,
+      bool nullOnFailure)
+      : ITypedExpr{type, {input}}, nullOnFailure_(nullOnFailure) {}
+
+  CastTypedExpr(
+      const TypePtr& type,
       const std::vector<TypedExprPtr>& inputs,
       bool nullOnFailure)
-      : ITypedExpr{type, inputs}, nullOnFailure_(nullOnFailure) {}
+      : ITypedExpr{type, inputs}, nullOnFailure_(nullOnFailure) {
+    VELOX_USER_CHECK_EQ(
+        1, inputs.size(), "Cast expression requires exactly one input");
+  }
 
   TypedExprPtr rewriteInputNames(
       const std::unordered_map<std::string, TypedExprPtr>& mapping)
@@ -580,9 +640,9 @@ class CastTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
-  // This flag prevents throws and instead returns
-  // null on cast failure
+  // Suppress exception and return null on failure to cast.
   const bool nullOnFailure_;
 };
 
+using CastTypedExprPtr = std::shared_ptr<const CastTypedExpr>;
 } // namespace facebook::velox::core

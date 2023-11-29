@@ -13,9 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -23,7 +27,12 @@ namespace facebook::velox::exec {
 
 namespace {
 
-class TopNRowNumberTest : public OperatorTestBase {};
+class TopNRowNumberTest : public OperatorTestBase {
+ protected:
+  TopNRowNumberTest() {
+    filesystems::registerLocalFileSystem();
+  }
+};
 
 TEST_F(TopNRowNumberTest, basic) {
   auto data = makeRowVector({
@@ -83,41 +92,73 @@ TEST_F(TopNRowNumberTest, basic) {
 }
 
 TEST_F(TopNRowNumberTest, largeOutput) {
+  // Make 10 vectors. Use different types for partitioning key, sorting key and
+  // data. Use order of columns different from partitioning keys, followed by
+  // sorting keys, followed by data.
   const vector_size_t size = 10'000;
-  auto data = makeRowVector({
-      // Partitioning key.
-      makeFlatVector<int64_t>(size, [](auto row) { return row % 7; }),
-      // Sorting key.
-      makeFlatVector<int64_t>(size, [](auto row) { return (size - row) * 10; }),
-      // Data.
-      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
-  });
+  auto data = split(
+      makeRowVector(
+          {"d", "p", "s"},
+          {
+              // Data.
+              makeFlatVector<float>(size, [](auto row) { return row; }),
+              // Partitioning key.
+              makeFlatVector<int16_t>(size, [](auto row) { return row % 7; }),
+              // Sorting key.
+              makeFlatVector<int32_t>(
+                  size, [](auto row) { return (size - row) * 10; }),
+          }),
+      10);
 
-  createDuckDbTable({data});
+  createDuckDbTable(data);
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
 
   auto testLimit = [&](auto limit) {
+    SCOPED_TRACE(fmt::format("Limit: {}", limit));
+    core::PlanNodeId topNRowNumberId;
     auto plan = PlanBuilder()
-                    .values({data})
-                    .topNRowNumber({"c0"}, {"c1"}, limit, true)
+                    .values(data)
+                    .topNRowNumber({"p"}, {"s"}, limit, true)
+                    .capturePlanNodeId(topNRowNumberId)
                     .planNode();
 
+    auto sql = fmt::format(
+        "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
+        " WHERE rn <= {}",
+        limit);
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-        .assertResults(fmt::format(
-            "SELECT * FROM (SELECT *, row_number() over (partition by c0 order by c1) as rn FROM tmp) "
-            " WHERE rn <= {}",
-            limit));
+        .assertResults(sql);
+
+    // Spilling.
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+            .config(core::QueryConfig::kTestingSpillPct, "100")
+            .config(core::QueryConfig::kSpillEnabled, "true")
+            .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+            .spillDirectory(spillDirectory->path)
+            .assertResults(sql);
+
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    const auto& stats = taskStats.at(topNRowNumberId);
+
+    ASSERT_GT(stats.spilledBytes, 0);
+    ASSERT_GT(stats.spilledRows, 0);
+    ASSERT_GT(stats.spilledFiles, 0);
+    ASSERT_GT(stats.spilledPartitions, 0);
 
     // No partitioning keys.
     plan = PlanBuilder()
-               .values({data})
-               .topNRowNumber({}, {"c1"}, limit, true)
+               .values(data)
+               .topNRowNumber({}, {"s"}, limit, true)
                .planNode();
 
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
         .assertResults(fmt::format(
-            "SELECT * FROM (SELECT *, row_number() over (order by c1) as rn FROM tmp) "
+            "SELECT * FROM (SELECT *, row_number() over (order by s) as rn FROM tmp) "
             " WHERE rn <= {}",
             limit));
   };
@@ -131,39 +172,162 @@ TEST_F(TopNRowNumberTest, largeOutput) {
 
 TEST_F(TopNRowNumberTest, manyPartitions) {
   const vector_size_t size = 10'000;
-  auto data = makeRowVector({
-      // Partitioning key.
-      makeFlatVector<int64_t>(
-          size, [](auto row) { return row / 2; }, nullEvery(7)),
-      // Sorting key.
-      makeFlatVector<int64_t>(
-          size,
-          [](auto row) { return (size - row) * 10; },
-          [](auto row) { return row == 123; }),
-      // Data.
-      makeFlatVector<int64_t>(
-          size, [](auto row) { return row; }, nullEvery(11)),
-  });
+  auto data = split(
+      makeRowVector(
+          {"d", "s", "p"},
+          {
+              // Data.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row; }, nullEvery(11)),
+              // Sorting key.
+              makeFlatVector<int64_t>(
+                  size,
+                  [](auto row) { return (size - row) * 10; },
+                  [](auto row) { return row == 123; }),
+              // Partitioning key. Make sure to spread rows from the same
+              // partition across multiple batches to trigger de-dup logic when
+              // reading back spilled data.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row % 5'000; }, nullEvery(7)),
+          }),
+      10);
 
-  createDuckDbTable({data});
+  createDuckDbTable(data);
 
-  auto testLimit = [&](auto limit) {
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+
+  auto testLimit = [&](auto limit, size_t outputBatchBytes = 1024) {
+    SCOPED_TRACE(fmt::format("Limit: {}", limit));
+    core::PlanNodeId topNRowNumberId;
     auto plan = PlanBuilder()
-                    .values({data})
-                    .topNRowNumber({"c0"}, {"c1"}, limit, true)
+                    .values(data)
+                    .topNRowNumber({"p"}, {"s"}, limit, true)
+                    .capturePlanNodeId(topNRowNumberId)
                     .planNode();
 
-    assertQuery(
-        plan,
-        fmt::format(
-            "SELECT * FROM (SELECT *, row_number() over (partition by c0 order by c1) as rn FROM tmp) "
-            " WHERE rn <= {}",
-            limit));
+    auto sql = fmt::format(
+        "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
+        " WHERE rn <= {}",
+        limit);
+    assertQuery(plan, sql);
+
+    // Spilling.
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchBytes,
+                fmt::format("{}", outputBatchBytes))
+            .config(core::QueryConfig::kTestingSpillPct, "100")
+            .config(core::QueryConfig::kSpillEnabled, "true")
+            .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+            .spillDirectory(spillDirectory->path)
+            .assertResults(sql);
+
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    const auto& stats = taskStats.at(topNRowNumberId);
+
+    ASSERT_GT(stats.spilledBytes, 0);
+    ASSERT_GT(stats.spilledRows, 0);
+    ASSERT_GT(stats.spilledFiles, 0);
+    ASSERT_GT(stats.spilledPartitions, 0);
   };
 
   testLimit(1);
   testLimit(2);
   testLimit(100);
+
+  testLimit(1, 1);
+}
+
+TEST_F(TopNRowNumberTest, abandonPartialEarly) {
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int64_t>(1'000, [](auto row) { return row % 10; }),
+          makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId topNRowNumberId;
+  auto runPlan = [&](int32_t minRows) {
+    auto plan = PlanBuilder()
+                    .values(split(data, 10))
+                    .topNRowNumber({"p"}, {"s"}, 99, false)
+                    .capturePlanNodeId(topNRowNumberId)
+                    .topNRowNumber({"p"}, {"s"}, 99, true)
+                    .planNode();
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kAbandonPartialTopNRowNumberMinRows,
+                fmt::format("{}", minRows))
+            .config(core::QueryConfig::kAbandonPartialTopNRowNumberMinPct, "80")
+            .assertResults(
+                "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
+                "WHERE rn <= 99");
+
+    return exec::toPlanStats(task->taskStats());
+  };
+
+  // Partial operator is abandoned after 2 input batches.
+  {
+    auto taskStats = runPlan(100);
+    const auto& stats = taskStats.at(topNRowNumberId);
+    ASSERT_EQ(stats.outputRows, 1'000);
+    ASSERT_EQ(stats.customStats.at("abandonedPartial").sum, 1);
+  }
+
+  // Partial operator continues for all of input.
+  {
+    auto taskStats = runPlan(100'000);
+    const auto& stats = taskStats.at(topNRowNumberId);
+    ASSERT_EQ(stats.outputRows, 990);
+    ASSERT_EQ(stats.customStats.count("abandonedPartial"), 0);
+  }
+}
+
+TEST_F(TopNRowNumberTest, planNodeValidation) {
+  auto data = makeRowVector(
+      ROW({"a", "b", "c", "d", "e"},
+          {
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+          }),
+      10);
+
+  auto plan = [&](const std::vector<std::string>& partitionKeys,
+                  const std::vector<std::string>& sortingKeys,
+                  int32_t limit = 10) {
+    PlanBuilder()
+        .values({data})
+        .topNRowNumber(partitionKeys, sortingKeys, limit, true)
+        .planNode();
+  };
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "a"}, {"b"}),
+      "Partitioning keys must be unique. Found duplicate key: a");
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "b"}, {"c", "d", "c"}),
+      "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: c");
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "b"}, {"c", "b"}),
+      "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: b");
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "b"}, {}), "Number of sorting keys must be greater than zero");
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "b"}, {"c"}, -5), "Limit must be greater than zero");
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "b"}, {"c"}, 0), "Limit must be greater than zero");
 }
 
 } // namespace

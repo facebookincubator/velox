@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/exec/SharedArbitrator.h"
 
 DECLARE_int32(velox_memory_num_shared_leaf_pools);
 DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
@@ -41,7 +42,7 @@ MemoryManager& toMemoryManager(MemoryManager& manager) {
 class MemoryManagerTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
-    MemoryArbitrator::registerAllFactories();
+    exec::SharedArbitrator::registerFactory();
   }
 
   inline static const std::string arbitratorKind_{"SHARED"};
@@ -96,7 +97,15 @@ TEST_F(MemoryManagerTest, Ctor) {
     ASSERT_EQ(arbitrator->stats().maxCapacityBytes, kCapacity);
     ASSERT_EQ(
         manager.toString(),
-        "Memory Manager[capacity 4.00GB alignment 64B usedBytes 0B number of pools 0\nList of root pools:\n\t__default_root__\nMemory Allocator[MALLOC capacity 4.00GB allocated bytes 0 allocated pages 0 mapped pages 0]\nARBITRATOR[SHARED CAPACITY[4.00GB] STATS[numRequests 0 numSucceeded 0 numAborted 0 numFailures 0 numNonReclaimableAttempts 0 queueTime 0us arbitrationTime 0us reclaimTime 0us shrunkMemory 0B reclaimedMemory 0B maxCapacity 4.00GB freeCapacity 4.00GB]]]");
+        "Memory Manager[capacity 4.00GB alignment 64B usedBytes 0B number of "
+        "pools 0\nList of root pools:\n\t__default_root__\n"
+        "Memory Allocator[MALLOC capacity 4.00GB allocated bytes 0 "
+        "allocated pages 0 mapped pages 0]\n"
+        "ARBITRATOR[SHARED CAPACITY[4.00GB] STATS[numRequests 0 numSucceeded 0 "
+        "numAborted 0 numFailures 0 numNonReclaimableAttempts 0 "
+        "numReserves 0 numReleases 0 queueTime 0us "
+        "arbitrationTime 0us reclaimTime 0us shrunkMemory 0B "
+        "reclaimedMemory 0B maxCapacity 4.00GB freeCapacity 4.00GB]]]");
   }
   {
     // Test construction failure due to inconsistent allocator capacity setting.

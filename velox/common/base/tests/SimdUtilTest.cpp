@@ -16,6 +16,8 @@
 
 #include "velox/common/base/SimdUtil.h"
 #include <folly/Random.h>
+#include "velox/common/base/RawVector.h"
+#include "velox/common/time/Timer.h"
 
 #include <gtest/gtest.h>
 
@@ -207,6 +209,58 @@ TEST_F(SimdUtilTest, gatherBits) {
     EXPECT_EQ(bits::isBitSet(&bits, i), bits::isBitSet(data, vindex.get(i)));
   }
   EXPECT_FALSE(bits::isBitSet(&bits, N - 1));
+
+  uint64_t source = 0x123456789abcdefLU;
+  raw_vector<int32_t> bitIndices;
+  uint64_t result = 0;
+  for (auto i = 61; i >= 0; i -= 2) {
+    bitIndices.push_back(i);
+  }
+  simd::gatherBits(
+      &source,
+      folly::Range<int32_t*>(bitIndices.data(), bitIndices.size()),
+      &result);
+  for (auto i = 0; i < bitIndices.size(); ++i) {
+    EXPECT_EQ(
+        bits::isBitSet(&source, bitIndices[i]), bits::isBitSet(&result, i));
+  }
+}
+
+TEST_F(SimdUtilTest, transpose) {
+  constexpr int32_t kMaxSize = 100;
+  std::vector<int32_t> data32(kMaxSize);
+  std::vector<int64_t> data64(kMaxSize);
+  raw_vector<int32_t> indices(kMaxSize);
+  constexpr int64_t kMagic = 0x4fe12LU;
+  // indices are scattered over 0..kMaxSize - 1.
+  for (auto i = 0; i < kMaxSize; ++i) {
+    indices[i] = ((i * kMagic) & 0xffffff) % indices.size();
+    data32[i] = i;
+    data64[i] = static_cast<int64_t>(i) << 32;
+  }
+  for (auto size = 1; size < kMaxSize; ++size) {
+    std::vector<int32_t> result32(kMaxSize + 1, -1);
+    simd::transpose(
+        data32.data(),
+        folly::Range<const int32_t*>(indices.data(), size),
+        result32.data());
+    for (auto i = 0; i < size; ++i) {
+      EXPECT_EQ(data32[indices[i]], result32[i]);
+    }
+    // See that there is no write past 'size'.
+    EXPECT_EQ(-1, result32[size]);
+
+    std::vector<int64_t> result64(kMaxSize + 1, -1);
+    simd::transpose(
+        data64.data(),
+        folly::Range<const int32_t*>(indices.data(), size),
+        result64.data());
+    for (auto i = 0; i < size; ++i) {
+      EXPECT_EQ(data64[indices[i]], result64[i]);
+    }
+    // See that there is no write past 'size'.
+    EXPECT_EQ(-1, result64[size]);
+  }
 }
 
 namespace {
@@ -377,26 +431,112 @@ TEST_F(SimdUtilTest, reinterpretBatch) {
 }
 
 TEST_F(SimdUtilTest, memEqual) {
-  constexpr int32_t kSize = 132;
-  struct {
-    char x[kSize];
-    char y[kSize];
-    char padding[sizeof(xsimd::batch<uint8_t>)];
-  } data;
-  memset(&data, 11, sizeof(data));
-  EXPECT_TRUE(simd::memEqualUnsafe(data.x, data.y, kSize));
-  EXPECT_TRUE(simd::memEqualUnsafe(data.x, data.y, 17));
-  EXPECT_TRUE(simd::memEqualUnsafe(data.x, data.y, 32));
-  EXPECT_TRUE(simd::memEqualUnsafe(data.x, data.y, 33));
+  constexpr int32_t kSize = 200;
+  constexpr int32_t kPad = xsimd::batch<int32_t>::size;
+  std::string s1;
+  std::string s2;
+  s1.resize(kSize + kPad);
+  s2.resize(kSize + kPad);
+  for (auto i = 0; i < kSize; ++i) {
+    EXPECT_TRUE(simd::memEqual(s1.data(), s2.data(), i));
 
-  // Make data at 67 not equal.
-  data.y[67] = 0;
-  EXPECT_TRUE(simd::memEqualUnsafe(data.x, data.y, 67));
-  EXPECT_FALSE(simd::memEqualUnsafe(data.x, data.y, 68));
+    // Change a byte right after the compared range and check equals.
+    ++s2[i];
+    EXPECT_TRUE(simd::memEqual(s1.data(), s2.data(), i));
+    --s2[i];
 
-  // Redo the test offset by 1 to test unaligned.
-  EXPECT_TRUE(simd::memEqualUnsafe(&data.x[1], &data.y[1], 66));
-  EXPECT_FALSE(simd::memEqualUnsafe(&data.x[1], &data.y[1], 67));
+    if (i > 0) {
+      // Change the last byte in range and assert not equal
+      ++s2[i - 1];
+      EXPECT_FALSE(simd::memEqual(s1.data(), s2.data(), i));
+      // Try the same, starting at unaligned address.
+      if (i > 1) {
+        EXPECT_FALSE(simd::memEqual(s1.data() + 1, s2.data() + 1, i - 1));
+      }
+      --s2[i - 1];
+
+      // Change in the middle and check false.
+      ++s1[i / 2];
+      EXPECT_FALSE(simd::memEqual(s1.data(), s2.data(), i));
+      --s1[i / 2];
+    }
+  }
+}
+
+TEST_F(SimdUtilTest, memcpyTime) {
+  constexpr int64_t kMaxMove = 128;
+  constexpr int64_t kSize = (128 << 20) + kMaxMove;
+  constexpr uint64_t kSizeMask = (128 << 20) - 1;
+  constexpr int32_t kMoveMask = kMaxMove - 1;
+  constexpr uint64_t kMagic1 = 0x5231871;
+  constexpr uint64_t kMagic3 = 0xfae1;
+  constexpr uint64_t kMagic2 = 0x817952491;
+  std::vector<char> dataV(kSize);
+
+  auto data = dataV.data();
+  uint64_t simd = 0;
+  uint64_t sys = 0;
+  {
+    MicrosecondTimer t(&simd);
+    for (auto ctr = 0; ctr < 100; ++ctr) {
+      for (auto i = 0; i < 10000; ++i) {
+        char* from = data + ((i * kMagic1) & kSizeMask);
+        char* to = data + ((i * kMagic2) & kSizeMask);
+        int32_t size = (i * kMagic3) % kMoveMask;
+        simd::memcpy(to, from, size);
+      }
+    }
+  }
+  {
+    MicrosecondTimer t(&sys);
+    for (auto ctr = 0; ctr < 100; ++ctr) {
+      for (auto i = 0; i < 10000; ++i) {
+        char* from = data + ((i * kMagic1) & kSizeMask);
+        char* to = data + ((i * kMagic2) & kSizeMask);
+        int32_t size = (i * kMagic3) % kMoveMask;
+        ::memcpy(to, from, size);
+      }
+    }
+  }
+  LOG(INFO) << "simd=" << simd << " sys=" << sys;
+}
+
+TEST_F(SimdUtilTest, memcmpTime) {
+  constexpr int64_t kMaxCompare = 64;
+  constexpr int64_t kSize = (128 << 20) + kMaxCompare;
+  constexpr uint64_t kSizeMask = (128 << 20) - 1;
+  constexpr int32_t kCmpMask = kMaxCompare - 1;
+  constexpr uint64_t kMagic1 = 0x5231871;
+  constexpr uint64_t kMagic3 = 0xfae1;
+  constexpr uint64_t kMagic2 = 0x817952491;
+  std::vector<char> dataV(kSize);
+
+  auto data = dataV.data();
+  uint64_t simd = 0;
+  uint64_t sys = 0;
+  {
+    MicrosecondTimer t(&simd);
+    for (auto ctr = 0; ctr < 100; ++ctr) {
+      for (auto i = 0; i < 10000; ++i) {
+        char* from = data + ((i * kMagic1) & kSizeMask);
+        char* to = data + ((i * kMagic2) & kSizeMask);
+        int32_t size = (i * kMagic3) % kCmpMask;
+        ASSERT_TRUE(simd::memEqual(to, from, size));
+      }
+    }
+  }
+  {
+    MicrosecondTimer t(&sys);
+    for (auto ctr = 0; ctr < 100; ++ctr) {
+      for (auto i = 0; i < 10000; ++i) {
+        char* from = data + ((i * kMagic1) & kSizeMask);
+        char* to = data + ((i * kMagic2) & kSizeMask);
+        int32_t size = (i * kMagic3) % kCmpMask;
+        ASSERT_EQ(0, ::memcmp(to, from, size));
+      }
+    }
+  }
+  LOG(INFO) << "simd=" << simd << " sys=" << sys;
 }
 
 } // namespace

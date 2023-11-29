@@ -250,7 +250,6 @@ struct StringView {
       const int32_t* indices,
       int32_t numStrings);
 
- private:
   inline int64_t sizeAndPrefixAsInt64() const {
     return reinterpret_cast<const int64_t*>(this)[0];
   }
@@ -259,6 +258,7 @@ struct StringView {
     return reinterpret_cast<const int64_t*>(this)[1];
   }
 
+ private:
   int32_t prefixAsInt() const {
     return *reinterpret_cast<const int32_t*>(&prefix_);
   }
@@ -296,8 +296,7 @@ namespace folly {
 template <>
 struct hasher<::facebook::velox::StringView> {
   size_t operator()(const ::facebook::velox::StringView view) const {
-    return hash::SpookyHashV2::Hash64(view.data(), view.size(), 0);
-    // return facebook::velox::bits::hashBytes(1, view.data(), view.size());
+    return facebook::velox::bits::hashBytes(1, view.data(), view.size());
   }
 };
 

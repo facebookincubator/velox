@@ -47,6 +47,8 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
   cpuWallTiming.add(stats.getOutputTiming);
   cpuWallTiming.add(stats.finishTiming);
 
+  backgroundTiming.add(stats.backgroundTiming);
+
   blockedWallNanos += stats.blockedWallNanos;
 
   peakMemoryBytes += stats.memoryStats.peakTotalMemoryReservation;
@@ -102,6 +104,12 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
   if (numSplits > 0) {
     out << ", Splits: " << numSplits;
   }
+
+  if (spilledRows > 0) {
+    out << ", Spilled: " << spilledRows << " rows ("
+        << succinctBytes(spilledBytes) << ", " << spilledFiles << " files)";
+  }
+
   return out.str();
 }
 

@@ -21,6 +21,11 @@ add_executable(
   BitwiseTest.cpp
   ComparisonsTest.cpp
   DateTimeFunctionsTest.cpp
+  DecimalArithmeticTest.cpp
+  DecimalCompareTest.cpp
+  DecimalRoundTest.cpp
+  DecimalUtilTest.cpp
+  MakeDecimalTest.cpp
   ElementAtTest.cpp
   HashTest.cpp
   InTest.cpp
@@ -33,6 +38,7 @@ add_executable(
   SortArrayTest.cpp
   SplitFunctionsTest.cpp
   StringTest.cpp
+  UnscaledValueFunctionTest.cpp
   XxHash64Test.cpp)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)

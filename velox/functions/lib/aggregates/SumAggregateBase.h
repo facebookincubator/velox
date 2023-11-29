@@ -22,7 +22,11 @@
 
 namespace facebook::velox::functions::aggregate {
 
-template <typename TInput, typename TAccumulator, typename ResultType>
+template <
+    typename TInput,
+    typename TAccumulator,
+    typename ResultType,
+    bool Overflow>
 class SumAggregateBase
     : public SimpleNumericAggregate<TInput, TAccumulator, ResultType> {
   using BaseAggregate =
@@ -129,7 +133,7 @@ class SumAggregateBase
 
     if (mayPushdown && arg->isLazy()) {
       BaseAggregate::template pushdown<
-          facebook::velox::aggregate::SumHook<TValue, TData>>(
+          facebook::velox::aggregate::SumHook<TValue, TData, Overflow>>(
           groups, rows, arg);
       return;
     }
@@ -150,6 +154,7 @@ class SumAggregateBase
   template <typename TData>
   static void updateSingleValue(TData& result, TData value) {
     if constexpr (
+        (std::is_same_v<TData, int64_t> && Overflow) ||
         std::is_same_v<TData, double> || std::is_same_v<TData, float>) {
       result += value;
     } else {
@@ -160,6 +165,7 @@ class SumAggregateBase
   template <typename TData>
   static void updateDuplicateValues(TData& result, TData value, int n) {
     if constexpr (
+        (std::is_same_v<TData, int64_t> && Overflow) ||
         std::is_same_v<TData, double> || std::is_same_v<TData, float>) {
       result += n * value;
     } else {
@@ -179,19 +185,11 @@ class DecimalSumAggregate
 
   virtual int128_t computeFinalValue(
       functions::aggregate::LongDecimalWithOverflowState* accumulator) final {
-    // Value is valid if the conditions below are true.
-    int128_t sum = accumulator->sum;
-    if ((accumulator->overflow == 1 && accumulator->sum < 0) ||
-        (accumulator->overflow == -1 && accumulator->sum > 0)) {
-      sum = static_cast<int128_t>(
-          DecimalUtil::kOverflowMultiplier * accumulator->overflow +
-          accumulator->sum);
-    } else {
-      VELOX_CHECK(accumulator->overflow == 0, "Decimal overflow");
-    }
-
-    DecimalUtil::valueInRange(sum);
-    return sum;
+    auto sum = DecimalUtil::adjustSumForOverflow(
+        accumulator->sum, accumulator->overflow);
+    VELOX_USER_CHECK(sum.has_value(), "Decimal overflow");
+    DecimalUtil::valueInRange(sum.value());
+    return sum.value();
   }
 };
 

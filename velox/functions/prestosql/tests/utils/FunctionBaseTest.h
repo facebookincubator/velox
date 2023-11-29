@@ -197,8 +197,9 @@ class FunctionBaseTest : public testing::Test,
       const RowVectorPtr rowVectorPtr,
       const std::optional<SelectivityVector>& rows = std::nullopt,
       const TypePtr& resultType = nullptr) {
-    auto result = evaluate<SimpleVector<EvalType<ReturnType>>>(
-        expr, rowVectorPtr, rows, resultType);
+    auto result =
+        evaluate<SimpleVector<facebook::velox::test::EvalType<ReturnType>>>(
+            expr, rowVectorPtr, rows, resultType);
     return result->isNullAt(0) ? std::optional<ReturnType>{}
                                : ReturnType(result->valueAt(0));
   }
@@ -248,6 +249,14 @@ class FunctionBaseTest : public testing::Test,
   /// Returns a set of signatures for a given function serialized to strings.
   static std::unordered_set<std::string> getSignatureStrings(
       const std::string& functionName);
+
+  /// Given an expression, a list of inputs and expected results, generate
+  /// dictionary-encoded and constant-encoded vectors, evaluate the expression
+  /// and verify the results.
+  void testEncodings(
+      const core::TypedExprPtr& expr,
+      const std::vector<VectorPtr>& inputs,
+      const VectorPtr& expected);
 
   std::shared_ptr<core::QueryCtx> queryCtx_{
       std::make_shared<core::QueryCtx>(executor_.get())};

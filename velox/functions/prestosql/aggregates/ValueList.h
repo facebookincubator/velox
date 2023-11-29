@@ -108,6 +108,9 @@ class ValueList {
   // Number of values added, including nulls.
   uint32_t size_{0};
 
+  // Bytes added. Used to control allocation of reserve for future appends.
+  int32_t bytes_{0};
+
   // Last nulls word. 'size_ % 64' is the null bit for the next element.
   uint64_t lastNulls_{0};
 };
@@ -123,8 +126,8 @@ class ValueListReader {
   const vector_size_t size_;
   const vector_size_t lastNullsStart_;
   const uint64_t lastNulls_;
-  ByteStream dataStream_;
-  ByteStream nullsStream_;
+  ByteInputStream dataStream_;
+  ByteInputStream nullsStream_;
   uint64_t nulls_;
   vector_size_t pos_{0};
 };

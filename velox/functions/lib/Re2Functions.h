@@ -39,10 +39,23 @@ enum class PatternKind {
   kPrefix,
   /// Fixed pattern preceded by one or more '%', such as '%foo', '%%%hello'.
   kSuffix,
+  /// Patterns matching '%{c0}%', such as '%foo%%', '%%%hello%'.
+  kSubstring,
   /// Patterns which do not fit any of the above types, such as 'hello_world',
   /// '_presto%'.
   kGeneric,
 };
+
+struct PatternMetadata {
+  PatternKind patternKind;
+  // Contains the length of the fixed pattern for patterns of kind kFixed,
+  // kPrefix, and kSuffix. Contains the count of wildcard character '_' for
+  // patterns of kind kExactlyN and kAtLeastN. Contains 0 otherwise.
+  vector_size_t length;
+  // Contains the fixed pattern in patterns of kind kSubstring.
+  std::string fixedPattern = "";
+};
+inline const int kMaxCompiledRegexes = 20;
 
 /// The functions in this file use RE2 as the regex engine. RE2 is fast, but
 /// supports only a subset of PCRE syntax and in particular does not support
@@ -102,7 +115,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures();
 /// prefix, and suffix patterns. Return the pair {pattern kind, number of '_'
 /// characters} for patterns with wildcard characters only. Return
 /// {kGenericPattern, 0} for generic patterns).
-std::pair<PatternKind, vector_size_t> determinePatternKind(StringView pattern);
+PatternMetadata determinePatternKind(StringView pattern);
 
 std::shared_ptr<exec::VectorFunction> makeLike(
     const std::string& name,

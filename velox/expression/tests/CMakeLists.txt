@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_expression_test_utility ArgumentTypeFuzzer.cpp
-                                          FuzzerToolkit.cpp)
-
-target_link_libraries(velox_expression_test_utility velox_type
-                      velox_expression_functions gtest)
+add_subdirectory(utils)
 
 add_executable(
   velox_expression_test
@@ -30,6 +26,7 @@ add_executable(
   ExprStatsTest.cpp
   CastExprTest.cpp
   CoalesceTest.cpp
+  ConjunctTest.cpp
   ConstantFlatVectorReaderTest.cpp
   MapWriterTest.cpp
   ArrayWriterTest.cpp

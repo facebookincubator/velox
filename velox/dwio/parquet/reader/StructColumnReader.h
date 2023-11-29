@@ -17,15 +17,23 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
-#include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
+
+namespace facebook::velox::dwio::common {
+class BufferedInput;
+}
 
 namespace facebook::velox::parquet {
+
+enum class LevelMode;
+class PageReader;
+class ParquetParams;
 
 class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
  public:
   StructColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec);
 
@@ -84,7 +92,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
 
   // The level information for extracting nulls for 'this' from the
   // repdefs in a leaf PageReader.
-  ::parquet::internal::LevelInfo levelInfo_;
+  arrow::LevelInfo levelInfo_;
 };
 
 } // namespace facebook::velox::parquet

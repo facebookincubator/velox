@@ -17,7 +17,7 @@
 
 #include <folly/Random.h>
 #include "velox/exec/Operator.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
@@ -28,8 +28,12 @@ class Destination {
   Destination(
       const std::string& taskId,
       int destination,
-      memory::MemoryPool* pool)
-      : taskId_(taskId), destination_(destination), pool_(pool) {
+      memory::MemoryPool* pool,
+      bool eagerFlush)
+      : taskId_(taskId),
+        destination_(destination),
+        pool_(pool),
+        eagerFlush_(eagerFlush) {
     setTargetSizePct();
   }
 
@@ -54,13 +58,13 @@ class Destination {
       uint64_t maxBytes,
       const std::vector<vector_size_t>& sizes,
       const RowVectorPtr& output,
-      PartitionedOutputBufferManager& bufferManager,
+      OutputBufferManager& bufferManager,
       const std::function<void()>& bufferReleaseFn,
       bool* atEnd,
       ContinueFuture* future);
 
   BlockingReason flush(
-      PartitionedOutputBufferManager& bufferManager,
+      OutputBufferManager& bufferManager,
       const std::function<void()>& bufferReleaseFn,
       ContinueFuture* future);
 
@@ -93,6 +97,8 @@ class Destination {
   const std::string taskId_;
   const int destination_;
   memory::MemoryPool* const pool_;
+  const bool eagerFlush_;
+
   // Bytes serialized in 'current_'
   uint64_t bytesInCurrent_{0};
   // Number of rows serialized in 'current_'
@@ -145,7 +151,8 @@ class PartitionedOutput : public Operator {
   PartitionedOutput(
       int32_t operatorId,
       DriverCtx* ctx,
-      const std::shared_ptr<const core::PartitionedOutputNode>& planNode);
+      const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
+      bool eagerFlush);
 
   void addInput(RowVectorPtr input) override;
 
@@ -193,9 +200,10 @@ class PartitionedOutput : public Operator {
   std::unique_ptr<core::PartitionFunction> partitionFunction_;
   // Empty if column order in the output is exactly the same as in input.
   const std::vector<column_index_t> outputChannels_;
-  const std::weak_ptr<exec::PartitionedOutputBufferManager> bufferManager_;
+  const std::weak_ptr<exec::OutputBufferManager> bufferManager_;
   const std::function<void()> bufferReleaseFn_;
   const int64_t maxBufferedBytes_;
+  const bool eagerFlush_;
 
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
   ContinueFuture future_;

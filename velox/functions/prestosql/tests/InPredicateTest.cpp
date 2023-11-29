@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox::test;
@@ -219,6 +220,12 @@ class InPredicateTest : public FunctionBaseTest {
     assertEqualVectors(constNull, result);
   }
 
+  static core::TypedExprPtr field(
+      const TypePtr& type,
+      const std::string& name) {
+    return std::make_shared<core::FieldAccessTypedExpr>(type, name);
+  }
+
   core::TypedExprPtr makeInExpression(const VectorPtr& values) {
     BufferPtr offsets = allocateOffsets(1, pool());
     BufferPtr sizes = allocateSizes(1, pool());
@@ -228,7 +235,7 @@ class InPredicateTest : public FunctionBaseTest {
     return std::make_shared<core::CallTypedExpr>(
         BOOLEAN(),
         std::vector<core::TypedExprPtr>{
-            std::make_shared<core::FieldAccessTypedExpr>(values->type(), "c0"),
+            field(values->type(), "c0"),
             std::make_shared<core::ConstantTypedExpr>(
                 std::make_shared<ArrayVector>(
                     pool(),
@@ -912,6 +919,36 @@ TEST_F(InPredicateTest, structs) {
 
   auto expected = makeFlatVector<bool>({true, false, true, false, true, false});
   auto result = evaluate(inExpr, {data});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, nonConstantInList) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>({1, 2, 3, 4, std::nullopt}),
+      makeNullableFlatVector<int32_t>({1, 1, 1, std::nullopt, 1}),
+      makeNullableFlatVector<int32_t>({2, 3, std::nullopt, 2, 2}),
+      makeNullableFlatVector<int32_t>({3, 5, 3, 3, 3}),
+  });
+
+  auto expected = makeNullableFlatVector<bool>({
+      true, // 1 in (1, 2, 3)
+      false, // 2 in (1, 3, 5)
+      true, // 3 in (1, null, 3)
+      std::nullopt, // 4 in (null, 2, 3)
+      std::nullopt, // null in (1, 2, 3)
+  });
+
+  auto in = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          field(INTEGER(), "c0"),
+          field(INTEGER(), "c1"),
+          field(INTEGER(), "c2"),
+          field(INTEGER(), "c3"),
+      },
+      "in");
+
+  auto result = evaluate(in, data);
   assertEqualVectors(expected, result);
 }
 

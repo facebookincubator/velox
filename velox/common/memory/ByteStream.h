@@ -19,6 +19,7 @@
 #include "velox/type/Type.h"
 
 #include <folly/io/IOBuf.h>
+#include <memory>
 
 namespace facebook::velox {
 
@@ -88,79 +89,60 @@ class OStreamOutputStream : public OutputStream {
   std::ostream* out_;
 };
 
-/// Stream over a chain of ByteRanges. Provides read, write and
-/// comparison for equality between stream contents and memory. Used
-/// for streams in repartitioning or for complex variable length data
-/// in hash tables. The stream is seekable and supports overwriting of
-/// previous content, for example, writing a message body and then
-/// seeking back to start to write a length header.
-class ByteStream {
+/// Read-only stream over one or more byte buffers.
+class ByteInputStream {
+ protected:
+  /// TODO Remove after refactoring SpillInput.
+  ByteInputStream() {}
+
  public:
-  /// For input.
-  ByteStream() : isBits_(false), isReverseBitOrder_(false) {}
-  virtual ~ByteStream() = default;
-
-  /// For output.
-  ByteStream(
-      StreamArena* arena,
-      bool isBits = false,
-      bool isReverseBitOrder = false)
-      : arena_(arena), isBits_(isBits), isReverseBitOrder_(isReverseBitOrder) {}
-
-  ByteStream(const ByteStream& other) = delete;
-
-  void operator=(const ByteStream& other) = delete;
-
-  void resetInput(std::vector<ByteRange>&& ranges) {
-    ranges_ = std::move(ranges);
+  explicit ByteInputStream(std::vector<ByteRange> ranges)
+      : ranges_{std::move(ranges)} {
+    VELOX_CHECK(!ranges_.empty());
     current_ = &ranges_[0];
-    lastRangeEnd_ = ranges_.back().size;
   }
 
-  void setRange(ByteRange range) {
-    ranges_.resize(1);
-    ranges_[0] = range;
-    current_ = ranges_.data();
-    lastRangeEnd_ = ranges_[0].size;
+  /// Disable copy constructor.
+  ByteInputStream(const ByteInputStream&) = delete;
+
+  /// Disable copy assignment operator.
+  ByteInputStream& operator=(const ByteInputStream& other) = delete;
+
+  /// Enable move constructor.
+  ByteInputStream(ByteInputStream&& other) noexcept
+      : ranges_{std::move(other.ranges_)}, current_{other.current_} {}
+
+  /// Enable move assignment operator.
+  ByteInputStream& operator=(ByteInputStream&& other) noexcept {
+    if (this != &other) {
+      ranges_ = std::move(other.ranges_);
+      current_ = other.current_;
+      other.current_ = nullptr;
+    }
+    return *this;
   }
 
-  const std::vector<ByteRange>& ranges() const {
-    return ranges_;
-  }
+  /// TODO Remove after refactoring SpillInput.
+  virtual ~ByteInputStream() = default;
 
-  void startWrite(int32_t initialSize) {
-    extend(initialSize);
-  }
+  /// Returns total number of bytes available in the stream.
+  size_t size() const;
 
-  void seek(int32_t range, int32_t position) {
-    current_ = &ranges_[range];
-    current_->position = position;
-  }
+  /// Returns true if all input has been read.
+  ///
+  /// TODO: Remove 'virtual' after refactoring SpillInput.
+  virtual bool atEnd() const;
 
+  /// Returns current position (number of bytes from the start) in the stream.
   std::streampos tellp() const;
 
-  void seekp(std::streampos position);
-
-  /// Returns the size written into ranges_. This is the sum of the
-  /// capacities of non-last ranges + the greatest write position of
-  /// the last range.
-  size_t size() const;
+  /// Moves current position to specified one.
+  void seekp(std::streampos pos);
 
   /// Returns the remaining size left from current reading position.
   size_t remainingSize() const;
 
-  /// For input. Returns true if all input has been read.
-  bool atEnd() const;
-
-  int32_t lastRangeEnd() {
-    updateEnd();
-    return lastRangeEnd_;
-  }
-
-  /// Sets 'current_' to point to the next range of input.  // The
-  /// input is consecutive ByteRanges in 'ranges_' for the base class
-  /// but any view over external buffers can be made by specialization.
-  virtual void next(bool throwIfPastEnd = true);
+  std::string toString() const;
 
   uint8_t readByte();
 
@@ -197,10 +179,90 @@ class ByteStream {
 
   void skip(int32_t size);
 
+ protected:
+  /// Sets 'current_' to point to the next range of input.  // The
+  /// input is consecutive ByteRanges in 'ranges_' for the base class
+  /// but any view over external buffers can be made by specialization.
+  ///
+  /// TODO: Remove 'virtual' after refactoring SpillInput.
+  virtual void next(bool throwIfPastEnd = true);
+
+  // TODO: Remove  after refactoring SpillInput.
+  const std::vector<ByteRange>& ranges() const {
+    return ranges_;
+  }
+
+  // TODO: Remove  after refactoring SpillInput.
+  void setRange(ByteRange range) {
+    ranges_.resize(1);
+    ranges_[0] = range;
+    current_ = ranges_.data();
+  }
+
+ private:
+  std::vector<ByteRange> ranges_;
+
+  // Pointer to the current element of 'ranges_'.
+  ByteRange* current_{nullptr};
+};
+
+/// Stream over a chain of ByteRanges. Provides read, write and
+/// comparison for equality between stream contents and memory. Used
+/// for streams in repartitioning or for complex variable length data
+/// in hash tables. The stream is seekable and supports overwriting of
+/// previous content, for example, writing a message body and then
+/// seeking back to start to write a length header.
+class ByteStream {
+ public:
+  /// For output.
+  ByteStream(
+      StreamArena* arena,
+      bool isBits = false,
+      bool isReverseBitOrder = false)
+      : arena_(arena), isBits_(isBits), isReverseBitOrder_(isReverseBitOrder) {}
+
+  ByteStream(const ByteStream& other) = delete;
+
+  void operator=(const ByteStream& other) = delete;
+
+  void setRange(ByteRange range) {
+    ranges_.resize(1);
+    ranges_[0] = range;
+    current_ = ranges_.data();
+    lastRangeEnd_ = ranges_[0].size;
+  }
+
+  const std::vector<ByteRange>& ranges() const {
+    return ranges_;
+  }
+
+  void startWrite(int32_t initialSize) {
+    extend(initialSize);
+  }
+
+  void seek(int32_t range, int32_t position) {
+    current_ = &ranges_[range];
+    current_->position = position;
+  }
+
+  std::streampos tellp() const;
+
+  void seekp(std::streampos position);
+
+  /// Returns the size written into ranges_. This is the sum of the
+  /// capacities of non-last ranges + the greatest write position of
+  /// the last range.
+  size_t size() const;
+
+  int32_t lastRangeEnd() {
+    updateEnd();
+    return lastRangeEnd_;
+  }
+
   template <typename T>
   void append(folly::Range<const T*> values) {
     if (current_->position + sizeof(T) * values.size() > current_->size) {
-      appendStringPiece(folly::StringPiece(
+      appendStringView(std::string_view(
           reinterpret_cast<const char*>(&values[0]),
           values.size() * sizeof(T)));
       return;
@@ -218,7 +280,9 @@ class ByteStream {
 
   void appendBool(bool value, int32_t count);
 
-  void appendStringPiece(folly::StringPiece value);
+  void appendStringView(StringView value);
+
+  void appendStringView(std::string_view value);
 
   template <typename T>
   void appendOne(const T& value) {
@@ -276,14 +340,14 @@ class ByteStream {
 };
 
 template <>
-inline Timestamp ByteStream::read<Timestamp>() {
+inline Timestamp ByteInputStream::read<Timestamp>() {
   Timestamp value;
   readBytes(reinterpret_cast<uint8_t*>(&value), sizeof(value));
   return value;
 }
 
 template <>
-inline int128_t ByteStream::read<int128_t>() {
+inline int128_t ByteInputStream::read<int128_t>() {
   int128_t value;
   readBytes(reinterpret_cast<uint8_t*>(&value), sizeof(value));
   return value;
@@ -302,7 +366,7 @@ class IOBufOutputStream : public OutputStream {
   }
 
   void write(const char* s, std::streamsize count) override {
-    out_->appendStringPiece(folly::StringPiece(s, count));
+    out_->appendStringView(std::string_view(s, count));
     if (listener_) {
       listener_->onWrite(s, count);
     }

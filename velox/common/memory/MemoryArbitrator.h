@@ -21,6 +21,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/time/Timer.h"
 
 namespace facebook::velox::memory {
 
@@ -74,26 +75,20 @@ class MemoryArbitrator {
   using Factory = std::function<std::unique_ptr<MemoryArbitrator>(
       const MemoryArbitrator::Config& config)>;
 
-  /// Register factory for a specific 'kind' of memory arbitrator
+  /// Registers factory for a specific 'kind' of memory arbitrator
   /// MemoryArbitrator::Create looks up the registry to find the factory to
   /// create arbitrator instance based on the kind specified in arbitrator
   /// config.
   ///
   /// NOTE: we only allow the same 'kind' of memory arbitrator to be registered
-  /// once. The function throws an error if 'kind' is already registered.
-  static void registerFactory(const std::string& kind, Factory factory);
+  /// once. The function returns false if 'kind' is already registered.
+  static bool registerFactory(const std::string& kind, Factory factory);
 
-  /// Unregister the registered factory for a specifc kind.
+  /// Unregisters the registered factory for a specifc kind.
   ///
   /// NOTE: the function throws if the specified arbitrator 'kind' is not
   /// registered.
   static void unregisterFactory(const std::string& kind);
-
-  /// Register all the supported memory arbitrator kinds.
-  static void registerAllFactories();
-
-  /// Unregister all the supported memory arbitrator kinds.
-  static void unregisterAllFactories();
 
   /// Invoked by the memory manager to create an instance of memory arbitrator
   /// based on the kind specified in 'config'. The arbitrator kind must be
@@ -179,6 +174,10 @@ class MemoryArbitrator {
     /// The total number of times of the reclaim attempts that end up failing
     /// due to reclaiming at non-reclaimable stage.
     uint64_t numNonReclaimableAttempts{0};
+    /// The total number of memory reservations.
+    uint64_t numReserves{0};
+    /// The total number of memory releases.
+    uint64_t numReleases{0};
 
     Stats(
         uint64_t _numRequests,
@@ -192,7 +191,9 @@ class MemoryArbitrator {
         uint64_t _maxCapacityBytes,
         uint64_t _freeCapacityBytes,
         uint64_t _reclaimTimeUs,
-        uint64_t _numNonReclaimableAttempts);
+        uint64_t _numNonReclaimableAttempts,
+        uint64_t _numReserves,
+        uint64_t _numReleases);
 
     Stats() = default;
 
@@ -262,6 +263,15 @@ class MemoryReclaimer {
     /// due to reclaiming at non-reclaimable stage.
     uint64_t numNonReclaimableAttempts{0};
 
+    /// The total execution time to do the reclaim in microseconds.
+    uint64_t reclaimExecTimeUs{0};
+
+    /// The total reclaimed memory bytes.
+    uint64_t reclaimedBytes{0};
+
+    /// The total time of task pause during reclaim in microseconds.
+    uint64_t reclaimWaitTimeUs{0};
+
     void reset();
 
     bool operator==(const Stats& other) const;
@@ -271,6 +281,8 @@ class MemoryReclaimer {
   virtual ~MemoryReclaimer() = default;
 
   static std::unique_ptr<MemoryReclaimer> create();
+
+  static uint64_t run(const std::function<uint64_t()>& func, Stats& stats);
 
   /// Invoked by the memory arbitrator before entering the memory arbitration
   /// processing. The default implementation does nothing but user can override

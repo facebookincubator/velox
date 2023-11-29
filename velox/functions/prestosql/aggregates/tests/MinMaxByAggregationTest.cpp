@@ -16,7 +16,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -618,11 +618,9 @@ TEST_P(
     MinMaxByGlobalByAggregationTest,
     randomMaxByGlobalByWithDistinctCompareValue) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
-      GetParam().valueType == TypeKind::TIMESTAMP) {
+      GetParam().valueType == TypeKind::TIMESTAMP ||
+      GetParam().comparisonType == TypeKind::BOOLEAN) {
     return;
-  }
-  if (GetParam().comparisonType == TypeKind::BOOLEAN) {
-    GTEST_SKIP() << "Boolean comparison type is not supported in this test.";
   }
 
   // Enable disk spilling test with distinct comparison values.
@@ -1060,11 +1058,9 @@ TEST_P(
     MinMaxByGroupByAggregationTest,
     randomMinMaxByGroupByWithDistinctCompareValue) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
-      GetParam().valueType == TypeKind::TIMESTAMP) {
+      GetParam().valueType == TypeKind::TIMESTAMP ||
+      GetParam().comparisonType == TypeKind::BOOLEAN) {
     return;
-  }
-  if (GetParam().comparisonType == TypeKind::BOOLEAN) {
-    GTEST_SKIP() << "Boolean comparison type is not supported in this test.";
   }
 
   // Enable disk spilling test with distinct comparison values.
@@ -1255,33 +1251,6 @@ TEST_F(MinMaxByComplexTypes, arrayCompare) {
       {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
 }
 
-TEST_F(MinMaxByComplexTypes, mapCompare) {
-  auto data = makeRowVector({
-      makeArrayVector<int64_t>({
-          {1, 2, 3},
-          {4, 5},
-          {6, 7, 8},
-      }),
-      makeNullableMapVector<int64_t, int64_t>({
-          {{{1, 1}, {2, 2}}},
-          {{{1, 1}, {2, 3}}},
-          {{{4, 50}}},
-      }),
-  });
-
-  auto expected = makeRowVector({
-      makeArrayVector<int64_t>({
-          {1, 2, 3},
-      }),
-      makeArrayVector<int64_t>({
-          {6, 7, 8},
-      }),
-  });
-
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
-}
-
 TEST_F(MinMaxByComplexTypes, rowCompare) {
   auto data = makeRowVector({
       makeArrayVector<int64_t>({
@@ -1369,6 +1338,29 @@ TEST_F(MinMaxByComplexTypes, rowCheckNull) {
         {"c2"},
         {expr},
         "ROW comparison not supported for values that contain nulls");
+  }
+}
+
+TEST_F(MinMaxByComplexTypes, failOnUnorderableType) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+      makeAllNullMapVector(5, VARCHAR(), BIGINT()),
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+  });
+
+  static const std::string kErrorMessage =
+      "Aggregate function signature is not supported";
+  for (const auto& expr : {"min_by(c0, c1)", "min_by(c0, c1)"}) {
+    {
+      auto builder = PlanBuilder().values({data});
+      VELOX_ASSERT_THROW(builder.singleAggregation({}, {expr}), kErrorMessage);
+    }
+
+    {
+      auto builder = PlanBuilder().values({data});
+      VELOX_ASSERT_THROW(
+          builder.singleAggregation({"c2"}, {expr}), kErrorMessage);
+    }
   }
 }
 

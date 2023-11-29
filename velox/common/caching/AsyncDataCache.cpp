@@ -18,7 +18,8 @@
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 
-#include <folly/executors/QueuedImmediateExecutor.h>
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/caching/FileIds.h"
 
@@ -329,25 +330,28 @@ void CacheShard::removeEntryLocked(AsyncDataCacheEntry* entry) {
     cache_->incrementCachedPages(-numPages);
     cache_->allocator()->freeNonContiguous(entry->data());
   }
+  entry->tinyData_.clear();
+  entry->tinyData_.shrink_to_fit();
+  entry->size_ = 0;
 }
 
-void CacheShard::evict(
+uint64_t CacheShard::evict(
     uint64_t bytesToFree,
     bool evictAllUnpinned,
-    int32_t pagesToAcquire,
+    MachinePageCount pagesToAcquire,
     memory::Allocation& acquired) {
-  int64_t tinyFreed = 0;
-  int64_t largeFreed = 0;
-  int32_t evictSaveableSkipped = 0;
-  auto ssdCache = cache_->ssdCache();
-  bool skipSsdSaveable = ssdCache && ssdCache->writeInProgress();
+  auto* ssdCache = cache_->ssdCache();
+  const bool skipSsdSaveable = ssdCache && ssdCache->writeInProgress();
   auto now = accessTime();
   std::vector<memory::Allocation> toFree;
+  int64_t tinyEvicted = 0;
+  int64_t largeEvicted = 0;
+  int32_t evictSaveableSkipped = 0;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    int size = entries_.size();
-    if (!size) {
-      return;
+    const size_t size = entries_.size();
+    if (size == 0) {
+      return 0;
     }
     int32_t counter = 0;
     int32_t numChecked = 0;
@@ -360,13 +364,15 @@ void CacheShard::evict(
       } else {
         ++entryIndex;
       }
+
       ++numEvictChecks_;
+      ++clockHand_;
       auto candidate = iter->get();
-      if (!candidate) {
+      if (candidate == nullptr) {
         continue;
       }
+
       ++numChecked;
-      ++clockHand_;
       if (evictionThreshold_ == kNoThreshold ||
           eventCounter_ > entries_.size() / 4 ||
           numChecked > entries_.size() / 8) {
@@ -375,17 +381,18 @@ void CacheShard::evict(
         numChecked = 0;
         eventCounter_ = 0;
       }
+
       int32_t score = 0;
       if (candidate->numPins_ == 0 &&
           (!candidate->key_.fileNum.hasValue() || evictAllUnpinned ||
            (score = candidate->score(now)) >= evictionThreshold_)) {
-        if (skipSsdSaveable && candidate->ssdSaveable_ && !evictAllUnpinned) {
+        if (skipSsdSaveable && candidate->ssdSaveable() && !evictAllUnpinned) {
           ++evictSaveableSkipped;
           continue;
         }
-        largeFreed += candidate->data_.byteSize();
+        largeEvicted += candidate->data_.byteSize();
         if (pagesToAcquire > 0) {
-          auto candidatePages = candidate->data().numPages();
+          const auto candidatePages = candidate->data().numPages();
           pagesToAcquire = candidatePages > pagesToAcquire
               ? 0
               : pagesToAcquire - candidatePages;
@@ -394,36 +401,43 @@ void CacheShard::evict(
         } else {
           toFree.push_back(std::move(candidate->data()));
         }
-        removeEntryLocked(candidate);
-        emptySlots_.push_back(entryIndex);
-        tinyFreed += candidate->tinyData_.size();
+        tinyEvicted += candidate->tinyData_.size();
         candidate->tinyData_.clear();
         candidate->tinyData_.shrink_to_fit();
         candidate->size_ = 0;
+
+        removeEntryLocked(candidate);
+        emptySlots_.push_back(entryIndex);
         tryAddFreeEntry(std::move(*iter));
         ++numEvict_;
-        if (score) {
+        if (score > 0) {
           sumEvictScore_ += score;
         }
-        if (largeFreed + tinyFreed > bytesToFree) {
+        if (largeEvicted + tinyEvicted > bytesToFree) {
           break;
         }
       }
     }
   }
+
   ClockTimer t(allocClocks_);
   freeAllocations(toFree);
   cache_->incrementCachedPages(
-      -largeFreed / static_cast<int32_t>(memory::AllocationTraits::kPageSize));
-  if (evictSaveableSkipped && ssdCache && ssdCache->startWrite()) {
-    // Rare. May occur if SSD is unusually slow. Useful for  diagnostics.
-    VELOX_SSD_CACHE_LOG(INFO)
-        << "Start save for old saveable, skipped " << cache_->numSkippedSaves();
-    cache_->numSkippedSaves() = 0;
-    cache_->saveToSsd();
-  } else if (evictSaveableSkipped) {
-    ++cache_->numSkippedSaves();
+      -memory::AllocationTraits::numPages(largeEvicted));
+  if (evictSaveableSkipped) {
+    VELOX_CHECK_NOT_NULL(ssdCache);
+    if (ssdCache->startWrite()) {
+      // Rare. May occur if SSD is unusually slow. Useful for diagnostics.
+      VELOX_SSD_CACHE_LOG(INFO) << "Start save for old saveable, skipped "
+                                << cache_->numSkippedSaves();
+      cache_->numSkippedSaves() = 0;
+      cache_->saveToSsd();
+    } else {
+      ++cache_->numSkippedSaves();
+    }
   }
+
+  return largeEvicted + tinyEvicted;
 }
 
 void CacheShard::tryAddFreeEntry(std::unique_ptr<AsyncDataCacheEntry>&& entry) {
@@ -471,8 +485,12 @@ void CacheShard::updateStats(CacheStats& stats) {
       ++stats.numEmptyEntries;
       continue;
     } else if (entry->isExclusive()) {
+      stats.exclusivePinnedBytes +=
+          entry->data().byteSize() + entry->tinyData_.capacity();
       ++stats.numExclusive;
     } else if (entry->isShared()) {
+      stats.sharedPinnedBytes +=
+          entry->data().byteSize() + entry->tinyData_.capacity();
       ++stats.numShared;
     }
     if (entry->isPrefetch_) {
@@ -482,8 +500,10 @@ void CacheShard::updateStats(CacheStats& stats) {
     ++stats.numEntries;
     stats.tinySize += entry->tinyData_.size();
     stats.tinyPadding += entry->tinyData_.capacity() - entry->tinyData_.size();
-    stats.largeSize += entry->size_;
-    stats.largePadding += entry->data_.byteSize() - entry->size_;
+    if (entry->tinyData_.empty()) {
+      stats.largeSize += entry->size_;
+      stats.largePadding += entry->data_.byteSize() - entry->size_;
+    }
   }
   stats.numHit += numHit_;
   stats.hitBytes += hitBytes_;
@@ -504,7 +524,7 @@ void CacheShard::appendSsdSaveable(std::vector<CachePin>& pins) {
   VELOX_CHECK(cache_->ssdCache()->writeInProgress());
   for (auto& entry : entries_) {
     if (entry && !entry->ssdFile_ && !entry->isExclusive() &&
-        entry->ssdSaveable_) {
+        entry->ssdSaveable()) {
       CachePin pin;
       ++entry->numPins_;
       pin.setEntry(entry.get());
@@ -659,7 +679,7 @@ bool AsyncDataCache::makeSpace(
     // with 'evictAllUnpinned' set to true.
     shards_[shardCounter_ & (kShardMask)]->evict(
         memory::AllocationTraits::pageBytes(
-            std::max<int32_t>(kMinEvictPages, numPages) * sizeMultiplier),
+            std::max<uint64_t>(kMinEvictPages, numPages) * sizeMultiplier),
         nthAttempt >= kNumShards,
         numPagesToAcquire,
         acquired);
@@ -667,7 +687,49 @@ bool AsyncDataCache::makeSpace(
       sizeMultiplier *= 2;
     }
   }
+  memory::setCacheFailureMessage(
+      fmt::format("Failed to evict from cache state: {}", toString(false)));
   return false;
+}
+
+uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
+  VELOX_CHECK_GT(targetBytes, 0);
+
+  REPORT_ADD_STAT_VALUE(kCounterCacheShrinkCount);
+  LOG(INFO) << "Try to shrink cache to free up "
+            << velox::succinctBytes(targetBytes) << "  memory";
+
+  const uint64_t minBytesToEvict = 8UL << 20;
+  uint64_t evictedBytes{0};
+  uint64_t shrinkTimeUs{0};
+  {
+    MicrosecondTimer timer(&shrinkTimeUs);
+    for (int shard = 0; shard < shards_.size(); ++shard) {
+      memory::Allocation unused;
+      evictedBytes += shards_[shardCounter_++ & (kShardMask)]->evict(
+          std::max<uint64_t>(minBytesToEvict, targetBytes - evictedBytes),
+          // Cache shrink is triggered when server is under low memory pressure
+          // so need to free up memory as soon as possible. So we always avoid
+          // triggering ssd save to accelerate the cache evictions.
+          true,
+          0,
+          unused);
+      VELOX_CHECK(unused.empty());
+      if (evictedBytes >= targetBytes) {
+        break;
+      }
+    }
+    // Call unmap to free up to 'targetBytes' unused memory space back to
+    // operating system after shrink.
+    allocator_->unmap(memory::AllocationTraits::numPages(targetBytes));
+  }
+
+  REPORT_ADD_HISTOGRAM_VALUE(kCounterCacheShrinkTimeMs, shrinkTimeUs / 1'000);
+  LOG(INFO) << "Freed " << velox::succinctBytes(evictedBytes)
+            << " cache memory, spent " << velox::succinctMicros(shrinkTimeUs)
+            << "\n"
+            << toString();
+  return evictedBytes;
 }
 
 bool AsyncDataCache::canTryAllocate(
@@ -683,11 +745,11 @@ bool AsyncDataCache::canTryAllocate(
 
 void AsyncDataCache::backoff(int32_t counter) {
   size_t seed = folly::hasher<uint16_t>()(++backoffCounter_);
-  const auto usec = (seed & 0xfff) * (counter & 0x1f);
+  const auto usecs = (seed & 0xfff) * (counter & 0x1f);
   VELOX_CACHE_LOG_EVERY_MS(INFO, 1'000)
-      << "Backoff in allocation contention for " << succinctMicros(usec);
+      << "Backoff in allocation contention for " << succinctMicros(usecs);
 
-  std::this_thread::sleep_for(std::chrono::microseconds(usec)); // NOLINT
+  std::this_thread::sleep_for(std::chrono::microseconds(usecs)); // NOLINT
 }
 
 void AsyncDataCache::incrementNew(uint64_t size) {
@@ -744,22 +806,24 @@ CacheStats AsyncDataCache::refreshStats() const {
 
 void AsyncDataCache::clear() {
   for (auto& shard : shards_) {
-    memory::Allocation acquired;
-    shard->evict(std::numeric_limits<int32_t>::max(), true, 0, acquired);
-    VELOX_CHECK(acquired.empty());
+    memory::Allocation unused;
+    shard->evict(std::numeric_limits<uint64_t>::max(), true, 0, unused);
+    VELOX_CHECK(unused.empty());
   }
 }
 
-std::string AsyncDataCache::toString() const {
+std::string AsyncDataCache::toString(bool details) const {
   auto stats = refreshStats();
   std::stringstream out;
   out << "AsyncDataCache:\n"
       << stats.toString() << "\n"
       << "Allocated pages: " << allocator_->numAllocated()
       << " cached pages: " << cachedPages_ << "\n";
-  out << "Backing: " << allocator_->toString();
-  if (ssdCache_) {
-    out << "\nSSD: " << ssdCache_->toString();
+  if (details) {
+    out << "Backing: " << allocator_->toString();
+    if (ssdCache_) {
+      out << "\nSSD: " << ssdCache_->toString();
+    }
   }
   return out.str();
 }
@@ -775,6 +839,8 @@ std::string CacheStats::toString() const {
       // Cache entries
       << "Cache entries: " << numEntries << " read pins: " << numShared
       << " write pins: " << numExclusive
+      << " pinned shared: " << succinctBytes(sharedPinnedBytes)
+      << " pinned exclusive: " << succinctBytes(exclusivePinnedBytes) << "\n"
       << " num write wait: " << numWaitExclusive
       << " empty entries: " << numEmptyEntries
       << "\n"

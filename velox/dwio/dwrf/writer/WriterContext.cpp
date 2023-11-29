@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/writer/WriterContext.h"
+#include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::dwrf {
 namespace {
@@ -24,14 +25,16 @@ constexpr uint32_t MIN_INDEX_STRIDE = 1000;
 WriterContext::WriterContext(
     const std::shared_ptr<const Config>& config,
     std::shared_ptr<memory::MemoryPool> pool,
-    const memory::SetMemoryReclaimer& setReclaimer,
     const dwio::common::MetricsLogPtr& metricLogger,
     std::unique_ptr<encryption::EncryptionHandler> handler)
     : config_{config},
       pool_{std::move(pool)},
-      dictionaryPool_{pool_->addLeafChild(".dictionary")},
-      outputStreamPool_{pool_->addLeafChild(".compression")},
-      generalPool_{pool_->addLeafChild(".general")},
+      dictionaryPool_{
+          pool_->addLeafChild(fmt::format("{}.dictionary", pool_->name()))},
+      outputStreamPool_{
+          pool_->addLeafChild(fmt::format("{}.compression", pool_->name()))},
+      generalPool_{
+          pool_->addLeafChild(fmt::format("{}.general", pool_->name()))},
       indexEnabled_{getConfig(Config::CREATE_INDEX)},
       indexStride_{getConfig(Config::ROW_INDEX_STRIDE)},
       compression_{getConfig(Config::COMPRESSION)},
@@ -47,11 +50,6 @@ WriterContext::WriterContext(
       // pass down the metric log.
       metricLogger_{metricLogger},
       handler_{std::move(handler)} {
-  if (setReclaimer != nullptr) {
-    setReclaimer(dictionaryPool_.get());
-    setReclaimer(outputStreamPool_.get());
-    setReclaimer(generalPool_.get());
-  }
   const bool forceLowMemoryMode{getConfig(Config::FORCE_LOW_MEMORY_MODE)};
   const bool disableLowMemoryMode{getConfig(Config::DISABLE_LOW_MEMORY_MODE)};
   VELOX_CHECK(!(forceLowMemoryMode && disableLowMemoryMode));
@@ -64,10 +62,10 @@ WriterContext::WriterContext(
   }
   validateConfigs();
   VLOG(2) << fmt::format("Compression config: {}", compression_);
-  if (compression_ != common::CompressionKind_NONE) {
-    compressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
-        *generalPool_, compressionBlockSize_ + PAGE_HEADER_SIZE);
-  }
+}
+
+WriterContext::~WriterContext() {
+  releaseMemoryReservation();
 }
 
 void WriterContext::validateConfigs() const {
@@ -86,6 +84,14 @@ void WriterContext::validateConfigs() const {
   VELOX_CHECK_GE(
       getConfig(Config::COMPRESSION_BLOCK_SIZE_EXTEND_RATIO),
       dwio::common::MIN_PAGE_GROW_RATIO);
+}
+
+void WriterContext::initBuffer() {
+  VELOX_CHECK_NULL(compressionBuffer_);
+  if (compression_ != common::CompressionKind_NONE) {
+    compressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
+        *generalPool_, compressionBlockSize_ + PAGE_HEADER_SIZE);
+  }
 }
 
 memory::MemoryPool& WriterContext::getMemoryPool(
@@ -120,5 +126,28 @@ int64_t WriterContext::getTotalMemoryUsage() const {
   return getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM) +
       getMemoryUsage(MemoryUsageCategory::DICTIONARY) +
       getMemoryUsage(MemoryUsageCategory::GENERAL);
+}
+
+int64_t WriterContext::availableMemoryReservation() const {
+  return dictionaryPool_->availableReservation() +
+      outputStreamPool_->availableReservation() +
+      generalPool_->availableReservation();
+}
+
+void WriterContext::releaseMemoryReservation() {
+  dictionaryPool_->release();
+  outputStreamPool_->release();
+  generalPool_->release();
+}
+
+void WriterContext::abort() {
+  compressionBuffer_.reset();
+  physicalSizeAggregators_.clear();
+  streams_.clear();
+  dictEncoders_.clear();
+  decodedVectorPool_.clear();
+  decodedVectorPool_.shrink_to_fit();
+  selectivityVector_.reset();
+  releaseMemoryReservation();
 }
 } // namespace facebook::velox::dwrf
