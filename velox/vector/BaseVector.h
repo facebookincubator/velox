@@ -177,11 +177,17 @@ class BaseVector {
     return type_;
   }
 
-  void setType(TypePtr type) {
+  // Update the type_ with the new type. The new type can have a different
+  // logical representation while maintaining the same physical type.
+  // Additionally, note that this method is mutating, so ensure that the vector
+  // is writable before calling it.
+  void setType(const TypePtr& type) {
     VELOX_CHECK_NOT_NULL(type);
     VELOX_CHECK(
         type_->kindEquals(type),
-        "The set type should be kindEquals() with type_ except names");
+        "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
+        type_,
+        type);
     type_ = type;
   }
 
