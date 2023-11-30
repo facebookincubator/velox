@@ -153,6 +153,11 @@ within the window partition.</p>
 </section>
 <section id="value-functions">
 <h3>Value functions<a class="headerlink" href="#value-functions" title="Permalink to this heading">¶</a></h3>
+<p>Value functions provide an option to specify how null values should be treated when evaluating the
+function. Nulls can either be ignored (<code class="docutils literal notranslate"><span class="pre">IGNORE</span> <span class="pre">NULLS</span></code>) or respected (<code class="docutils literal notranslate"><span class="pre">RESPECT</span> <span class="pre">NULLS</span></code>). By default,
+null values are respected. If <code class="docutils literal notranslate"><span class="pre">IGNORE</span> <span class="pre">NULLS</span></code> is specified, all rows where the value expression is
+null are excluded from the calculation. If <code class="docutils literal notranslate"><span class="pre">IGNORE</span> <span class="pre">NULLS</span></code> is specified and the value expression is
+null for all rows, the <code class="docutils literal notranslate"><span class="pre">default_value</span></code> is returned, or if it is not specified, <code class="docutils literal notranslate"><span class="pre">null</span></code> is returned.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="first_value">
 <span class="sig-name descname"><span class="pre">first_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#first_value" title="Permalink to this definition">¶</a></dt>
@@ -178,19 +183,29 @@ returned. It is an error for the offset to be zero or negative.</p>
 <span class="sig-name descname"><span class="pre">lag</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">default_value</span></span></em><span class="optional">]</span><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#lag" title="Permalink to this definition">¶</a></dt>
 <dd></dd></dl>
 
-<p>Returns the value at <code class="docutils literal notranslate"><span class="pre">offset</span></code> rows before the current row in the partition. If
-there is no such row, the <code class="docutils literal notranslate"><span class="pre">default_value</span></code> is returned, or if it is not
-specified <code class="docutils literal notranslate"><span class="pre">null</span></code> is returned. Offsets start at <code class="docutils literal notranslate"><span class="pre">0</span></code>, which is the current
-row. The default <code class="docutils literal notranslate"><span class="pre">offset</span></code> is <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
+<p>Returns the value at <code class="docutils literal notranslate"><span class="pre">offset</span></code> rows before the current row in the window partition.
+Offsets start at <code class="docutils literal notranslate"><span class="pre">0</span></code>, which is the current row. The default <code class="docutils literal notranslate"><span class="pre">offset</span></code> is <code class="docutils literal notranslate"><span class="pre">1</span></code>.
+The offset can be a constant value or a column reference. If the offset is <code class="docutils literal notranslate"><span class="pre">null</span></code>, <code class="docutils literal notranslate"><span class="pre">null</span></code> is
+returned. If the offset refers to a row that is not within the partition, the
+<code class="docutils literal notranslate"><span class="pre">default_value</span></code> is returned, or if <code class="docutils literal notranslate"><span class="pre">default_value</span></code> is not specified <code class="docutils literal notranslate"><span class="pre">null</span></code>
+is returned.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">IGNORE</span> <span class="pre">NULLS</span></code> is specified, <code class="docutils literal notranslate"><span class="pre">null</span></code> values are ignored during offset counting.
+If not enough non-null values are found during offset counting, <code class="docutils literal notranslate"><span class="pre">default_value</span></code>
+is returned.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="lead">
 <span class="sig-name descname"><span class="pre">lead</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">default_value</span></span></em><span class="optional">]</span><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#lead" title="Permalink to this definition">¶</a></dt>
 <dd></dd></dl>
 
-<p>Returns the value at <code class="docutils literal notranslate"><span class="pre">offset</span></code> rows after the current row in the partition. If
-there is no such row, the <code class="docutils literal notranslate"><span class="pre">default_value</span></code> is returned, or if it is not
-specified <code class="docutils literal notranslate"><span class="pre">null</span></code> is returned. Offsets start at <code class="docutils literal notranslate"><span class="pre">0</span></code>, which is the current
-row. The default <code class="docutils literal notranslate"><span class="pre">offset</span></code> is <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
+<p>Returns the value at <code class="docutils literal notranslate"><span class="pre">offset</span></code> rows after the current row in the window partition.
+Offsets start at <code class="docutils literal notranslate"><span class="pre">0</span></code>, which is the current row. The default <code class="docutils literal notranslate"><span class="pre">offset</span></code> is <code class="docutils literal notranslate"><span class="pre">1</span></code>.
+The offset can be a constant value or a column reference. If the offset is <code class="docutils literal notranslate"><span class="pre">null</span></code>, <code class="docutils literal notranslate"><span class="pre">null</span></code> is
+returned. If the offset refers to a row that is not within the partition, the
+<code class="docutils literal notranslate"><span class="pre">default_value</span></code> is returned, or if <code class="docutils literal notranslate"><span class="pre">default_value</span></code> is not specified <code class="docutils literal notranslate"><span class="pre">null</span></code>
+is returned.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">IGNORE</span> <span class="pre">NULLS</span></code> is specified, <code class="docutils literal notranslate"><span class="pre">null</span></code> values are ignored during offset counting.
+If not enough non-null values are found during offset counting, <code class="docutils literal notranslate"><span class="pre">default_value</span></code>
+is returned.</p>
 </section>
 <section id="aggregate-functions">
 <h3>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h3>
