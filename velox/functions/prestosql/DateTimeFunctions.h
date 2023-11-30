@@ -1391,65 +1391,20 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
     Timestamp timestamp = Timestamp::fromMillis(milliseconds);
     auto tsStr = timestamp.toString().substr(0, 23);
 
-    // Get the given timezone name
     auto timezone =
         util::getTimeZoneName(*timestampWithTimezone.template at<1>());
 
-    // Some processing required if alphabetical timezone name was input,
-    // as ISO8601 output should contain timezone as UTC offset
+    // ISO8601 output should contain timezone as UTC offset.
     if (isalpha(timezone[0])) {
-      // Get offset in seconds with GMT and convert to hour & minute
-      // auto offset = this->getGMTOffsetSec(timestampWithTimezone);
-
-      // cctz::time_zone cctz_time_zone;
-      // load_time_zone(timezone, &cctz_time_zone);
 
       std::time_t t = timestamp.getSeconds();
-      auto nanos = timestamp.getNanos();
-
-      struct tm *date = std::gmtime( &t );
-
-      // // Converts the input civil time in timezone[0] to an absolute time.
-      // const auto absolute_time =
-      // cctz::convert(cctz::civil_second(1900 + date->tm_year, 1 + date->tm_mon, date->tm_mday, date->tm_hour, date->tm_min, date->tm_sec), cctz_time_zone);
-      // // const auto absolute_time =
-      // // cctz::convert(cctz::civil_second(2001, 7, 22, 3, 4, 5), cctz_time_zone);
-
-      // // RESULT #1
-      // // working cctz result
-      // result = cctz::format("%Y-%m-%dT%H:%M:%S.000%Ez", absolute_time, cctz_time_zone);
-
-      //const Clock::duration ts_duration = std::chrono::seconds(timestamp.getSeconds());
-      //const TimePoint ts_time_point(ts_duration);
-
-      // using local_seconds = date::local_time<std::chrono::seconds>;
       std::chrono::system_clock::time_point tp{std::chrono::seconds{timestamp.getSeconds()}};
-      auto localDate = date::make_zoned(date::current_zone(), tp);
       auto remoteDate = date::make_zoned(timezone, tp);
-      // result = format("%a, %b %d, %Y at %I:%M %p %Z", remoteDate);
-
-      char timeString[std::size("yyyy-mm-ddThh:mm:ssZ")];
-      std::strftime(std::data(timeString), std::size(timeString),
-                  "%FT%T", date);
 
       auto offsetStr = format("%z", remoteDate);
+      auto fullOutputStr = format("%FT%T%z", remoteDate);
 
-      // can we do this without parsing the input timestamp twice (as local and remote dates)? 
-      // remote date is inevitable, to obtain correct offset, but it seems possible 
-      // to directly convert input seconds (timestamp[0]) -> ISO date string.
-
-      // long epoch = 1609330278454;
-      // sys_time<milliseconds> tp{milliseconds{epoch}};
-      // cout << format("%Y/%m/%d,%T", tp) << '\n';
-
-      // std::chrono::milliseconds tp2 = timestamp.getSeconds() * 1000;
-      // result = date::format("%FT%T", tp2);
-
-      // result = std::to_string(1900 + date->tm_year) + "-" + std::to_string(1 + date->tm_mon) + "-" + std::to_string(date->tm_mday) + "T" + std::to_string(date->tm_hour) + ":" + std::to_string(date->tm_min) + ":" + std::to_string(date->tm_sec) + format("%z", remoteDate);
-
-      // RESULT #2
-      // mostly working howard-date result (only nanosecond padding to 3 digits not present)
-      result = timeString + std::string(".") + std::to_string(nanos) + offsetStr.substr(0,3) + ":" + offsetStr.substr(3);
+      result = fullOutputStr.substr(0, 23) + fullOutputStr.substr(26, 3) + ":" + fullOutputStr.substr(29, 2);
     } else {
       result = tsStr + timezone;
     }
