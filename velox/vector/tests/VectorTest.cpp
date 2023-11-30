@@ -3538,13 +3538,25 @@ TEST_F(VectorTest, hashAll) {
 TEST_F(VectorTest, setType) {
   auto type = ROW({"aa"}, {BIGINT()});
   auto vector = BaseVector::create(type, 1'000, pool());
+
   auto newType = ROW({"bb"}, {BIGINT()});
   vector->setType(newType);
   EXPECT_EQ(vector->type()->toString(), newType->toString());
+
   auto failedType = ROW({"bb"}, {VARCHAR()});
   VELOX_ASSERT_RUNTIME_THROW(
       vector->setType(failedType),
       "Cannot change vector type from ROW<bb:BIGINT> to ROW<bb:VARCHAR>. The old and new types can be different logical types, but the underlying physical types must match.")
+}
+
+TEST_F(VectorTest, setNestType) {
+  auto type = ROW({"nest3"}, {ROW({"nest2"}, {ROW({"nest1"}, {BIGINT()})})});
+  auto vector = BaseVector::create(type, 1'000, pool());
+
+  auto newType =
+      ROW({"newnest3"}, {ROW({"newnest2"}, {ROW({"newnest1"}, {BIGINT()})})});
+  vector->setType(newType);
+  EXPECT_EQ(vector->type()->toString(), newType->toString());
 }
 
 } // namespace

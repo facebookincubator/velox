@@ -177,10 +177,10 @@ class BaseVector {
     return type_;
   }
 
-  // Update the type_ with the new type. The new type can have a different
+  // Changes vector type. The new type can have a different
   // logical representation while maintaining the same physical type.
-  // Additionally, note that this method is mutating, so ensure that the vector
-  // is writable before calling it.
+  // Additionally, note that the caller must ensure that this vector is not
+  // shared, i.e. singly-referenced.
   void setType(const TypePtr& type) {
     VELOX_CHECK_NOT_NULL(type);
     VELOX_CHECK(
