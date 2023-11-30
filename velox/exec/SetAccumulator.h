@@ -35,23 +35,40 @@ template <
     typename EqualTo = std::equal_to<T>>
 struct SetAccumulator {
   bool hasNull{false};
-  folly::F14FastSet<T, Hash, EqualTo, AlignedStlAllocator<T, 16>> uniqueValues;
+  vector_size_t nullIndex{0};
+  folly::F14FastMap<
+      T,
+      int32_t,
+      Hash,
+      EqualTo,
+      AlignedStlAllocator<std::pair<const T, vector_size_t>, 16>>
+      uniqueValues;
 
   SetAccumulator(const TypePtr& /*type*/, HashStringAllocator* allocator)
-      : uniqueValues{AlignedStlAllocator<T, 16>(allocator)} {}
+      : uniqueValues{AlignedStlAllocator<std::pair<const T, vector_size_t>, 16>(
+            allocator)} {}
 
   SetAccumulator(Hash hash, EqualTo equalTo, HashStringAllocator* allocator)
-      : uniqueValues{0, hash, equalTo, AlignedStlAllocator<T, 16>(allocator)} {}
+      : uniqueValues{
+            0,
+            hash,
+            equalTo,
+            AlignedStlAllocator<std::pair<const T, vector_size_t>, 16>(
+                allocator)} {}
 
   /// Adds value if new. No-op if the value was added before.
   void addValue(
       const DecodedVector& decoded,
       vector_size_t index,
       HashStringAllocator* /*allocator*/) {
+    auto cnt = uniqueValues.size();
     if (decoded.isNullAt(index)) {
-      hasNull = true;
+      if (!hasNull) {
+        hasNull = true;
+        nullIndex = cnt;
+      }
     } else {
-      uniqueValues.insert(decoded.valueAt<T>(index));
+      uniqueValues.insert({decoded.valueAt<T>(index), hasNull ? cnt + 1 : cnt});
     }
   }
 
@@ -77,16 +94,15 @@ struct SetAccumulator {
   /// Copies the unique values and null into the specified vector starting at
   /// the specified offset.
   vector_size_t extractValues(FlatVector<T>& values, vector_size_t offset) {
-    vector_size_t index = offset;
     for (auto value : uniqueValues) {
-      values.set(index++, value);
+      values.set(offset + value.second, value.first);
     }
 
     if (hasNull) {
-      values.setNull(index++, true);
+      values.setNull(nullIndex, true);
     }
 
-    return index - offset;
+    return hasNull ? uniqueValues.size() + 1 : uniqueValues.size();
   }
 
   void free(HashStringAllocator& allocator) {
@@ -110,8 +126,12 @@ struct StringViewSetAccumulator {
       const DecodedVector& decoded,
       vector_size_t index,
       HashStringAllocator* allocator) {
+    auto cnt = base.uniqueValues.size();
     if (decoded.isNullAt(index)) {
-      base.hasNull = true;
+      if (!base.hasNull) {
+        base.hasNull = true;
+        base.nullIndex = cnt;
+      }
     } else {
       auto value = decoded.valueAt<StringView>(index);
       if (!value.isInline()) {
@@ -120,7 +140,7 @@ struct StringViewSetAccumulator {
         }
         value = strings.append(value, *allocator);
       }
-      base.uniqueValues.insert(value);
+      base.uniqueValues.insert({value, base.hasNull ? cnt + 1 : cnt});
     }
   }
 
@@ -176,12 +196,17 @@ struct ComplexTypeSetAccumulator {
       const DecodedVector& decoded,
       vector_size_t index,
       HashStringAllocator* allocator) {
+    auto cnt = base.uniqueValues.size();
     if (decoded.isNullAt(index)) {
-      base.hasNull = true;
+      if (!base.hasNull) {
+        base.hasNull = true;
+        base.nullIndex = cnt;
+      }
     } else {
       auto position = values.append(decoded, index, allocator);
 
-      if (!base.uniqueValues.insert(position).second) {
+      if (!base.uniqueValues.insert({position, base.hasNull ? cnt + 1 : cnt})
+               .second) {
         values.removeLast(position);
       }
     }
@@ -205,16 +230,19 @@ struct ComplexTypeSetAccumulator {
   }
 
   vector_size_t extractValues(BaseVector& values, vector_size_t offset) {
-    vector_size_t index = offset;
+    vector_size_t numValues = 0;
     for (const auto& position : base.uniqueValues) {
-      AddressableNonNullValueList::read(position, values, index++);
+      AddressableNonNullValueList::read(
+          position.first, values, position.second);
+      numValues++;
     }
 
     if (base.hasNull) {
-      values.setNull(index++, true);
+      values.setNull(base.nullIndex, true);
+      numValues++;
     }
 
-    return index - offset;
+    return numValues;
   }
 
   void free(HashStringAllocator& allocator) {

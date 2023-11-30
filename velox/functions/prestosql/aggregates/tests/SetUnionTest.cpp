@@ -225,5 +225,73 @@ TEST_F(SetUnionTest, groupBy) {
       {expected});
 }
 
+TEST_F(SetUnionTest, maintainOrdering) {
+  // Presto maintains input order for Single aggregations in set_union.
+
+  auto data = makeRowVector({
+      makeNullableArrayVector<int32_t>({
+          {},
+          {1, 2, 3},
+          {1, 2, std::nullopt},
+          {2, 3, 4, 5},
+          {6, 7},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeNullableArrayVector<int32_t>({
+          {1, 2, 3, std::nullopt, 4, 5, 6, 7},
+      }),
+  });
+
+  testAggregations({data}, {}, {"set_union(c0)"}, {}, {expected});
+
+  // Strings.
+  data = makeRowVector({
+      makeNullableArrayVector<StringView>({
+          {},
+          {"abc", "bxy", "cde"},
+          {"abc", "bxy"},
+          {"cdef", "hijk", std::nullopt},
+          {"abc", "some very long string to test long strings"},
+      }),
+  });
+
+  expected = makeRowVector({
+      makeNullableArrayVector<StringView>({
+          {"abc",
+           "bxy",
+           "cde",
+           "cdef",
+           "hijk",
+           std::nullopt,
+           "some very long string to test long strings"},
+      }),
+  });
+
+  testAggregations({data}, {}, {"set_union(c0)"}, {}, {expected});
+
+  // Complex types.
+
+  // Below is equivalent to:
+  // Select set_union(x) from
+  // (VALUES array[array [1, 2], array[5, 6], NULL], array[ array[3,4],
+  //  array[7, 8], NULL] ) as t(x);
+
+  data = makeRowVector({
+      makeNullableNestedArrayVector<int32_t>(
+          {{{{{1, 2}}, {{5, 6}}, std::nullopt}},
+           {{{{3, 4}}, {{7, 8}}, std::nullopt}}}),
+  });
+
+  expected = makeRowVector({
+      makeNullableNestedArrayVector<int32_t>({
+          {{{{1, 2}}, {{5, 6}}, std::nullopt, {{3, 4}}, {{7, 8}}}},
+      }),
+  });
+
+  testAggregations({data}, {}, {"set_union(c0)"}, {}, {expected});
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test
