@@ -47,7 +47,7 @@ TEST_F(ExpandTest, groupingSets) {
           .values({data})
           .expand(
               {{"k1",
-                "null as k2",
+                "null::bigint as k2",
                 "a",
                 "b",
                 "0 as group_id_0",
@@ -125,18 +125,16 @@ TEST_F(ExpandTest, countDistinct) {
       PlanBuilder()
           .values({data})
           .expand(
-              {{"k1 as foo", "k2", "a", "b", "0 as group_id_0"},
-               {"k1", "null", "a", "b", "1"},
-               {"null", "null", "a", "b", "2"}})
+              {{"a", "null::varchar as b", "1 as group_id_0"},
+               {"null", "b", "2"}})
+          .singleAggregation({"a", "b", "group_id_0"}, {})
           .singleAggregation(
-              {"foo", "k2", "group_id_0"},
+              {},
               {"count(distinct a) as count_a", "count(distinct b) as count_b"})
           .project({"count_a", "count_b"})
           .planNode();
 
-  assertQuery(
-      plan,
-      "SELECT count(distinct a), count(distinct b) FROM tmp GROUP BY ROLLUP (k1, k2)");
+  assertQuery(plan, "SELECT count(distinct a), count(distinct b) FROM tmp");
 }
 
 TEST_F(ExpandTest, invalidUseCases) {
@@ -149,11 +147,11 @@ TEST_F(ExpandTest, invalidUseCases) {
           {{"k1", "k1", "a", "b", "0 as group_id_0"},
            {"k1", "null", "a", "b", "1"},
            {"null", "null", "a", "b", "2"}}),
-      fmt::format("Found duplicate column name in Expand plan node: k1."));
+      "Found duplicate column name in Expand plan node: k1.");
 
   VELOX_ASSERT_RUNTIME_THROW(
       PlanBuilder().values({data}).expand({}),
-      fmt::format("projections must not be empty."));
+      "projections must not be empty.");
 }
 
 } // namespace facebook::velox::exec

@@ -935,58 +935,50 @@ PlanBuilder& PlanBuilder::expand(
   VELOX_CHECK(!projections.empty(), "projections must not be empty.");
   const auto numColumns = projections[0].size();
   const auto numRows = projections.size();
-  std::vector<std::string> aliasNames;
-  aliasNames.reserve(numColumns);
-  std::vector<std::string> originalNames;
-  originalNames.reserve(numColumns);
-  std::vector<TypePtr> types;
-  types.reserve(numColumns);
-  const auto& inputRowType = planNode_->outputType();
+  std::vector<std::string> aliases;
+  aliases.reserve(numColumns);
 
   std::vector<std::vector<core::TypedExprPtr>> projectExprs;
   projectExprs.reserve(projections.size());
 
   for (auto i = 0; i < numRows; i++) {
     std::vector<core::TypedExprPtr> projectExpr;
+    VELOX_CHECK_EQ(numColumns, projections[i].size())
     for (auto j = 0; j < numColumns; j++) {
       auto untypedExpression = parse::parseExpr(projections[i][j], options_);
       auto typedExpression = inferTypes(untypedExpression);
 
       if (i == 0) {
-        if (auto fieldExpr = dynamic_cast<const core::FieldAccessExpr*>(
-                untypedExpression.get())) {
-          if (fieldExpr->alias().has_value()) {
-            aliasNames.push_back(fieldExpr->alias().value());
-          } else {
-            aliasNames.push_back(fieldExpr->getFieldName());
-          }
-          originalNames.push_back(fieldExpr->getFieldName());
-        } else if (untypedExpression->alias().has_value()) {
-          aliasNames.push_back(untypedExpression->alias().value());
-          originalNames.push_back(untypedExpression->alias().value());
-        }
-      }
-
-      auto constantExpr =
-          dynamic_cast<const core::ConstantExpr*>(untypedExpression.get());
-      if (constantExpr) {
-        if (constantExpr->value().isNull()) {
-          projectExpr.push_back(std::make_shared<core::ConstantTypedExpr>(
-              field(inputRowType, originalNames[j])->type(),
-              constantExpr->value()));
+        if (untypedExpression->alias().has_value()) {
+          aliases.push_back(untypedExpression->alias().value());
         } else {
-          projectExpr.push_back(std::make_shared<core::ConstantTypedExpr>(
-              constantExpr->type(), constantExpr->value()));
+          auto fieldExpr = dynamic_cast<const core::FieldAccessExpr*>(
+              untypedExpression.get());
+          VELOX_CHECK_NOT_NULL(fieldExpr);
+          aliases.push_back(fieldExpr->getFieldName());
         }
-      } else {
         projectExpr.push_back(typedExpression);
+      } else {
+        // The types of values in 2nd and subsequent rows must much types in the
+        //  1st row.
+        const auto& expectedType = projectExprs[0][j]->type();
+        if (typedExpression->type()->equivalent(*expectedType)) {
+          projectExpr.push_back(typedExpression);
+        } else {
+          auto constantExpr =
+              dynamic_cast<const core::ConstantExpr*>(untypedExpression.get());
+          VELOX_CHECK_NOT_NULL(constantExpr);
+          VELOX_CHECK(constantExpr->value().isNull());
+          projectExpr.push_back(std::make_shared<core::ConstantTypedExpr>(
+              expectedType, variant::null(expectedType->kind())));
+        }
       }
     }
     projectExprs.push_back(projectExpr);
   }
 
   planNode_ = std::make_shared<core::ExpandNode>(
-      nextPlanNodeId(), projectExprs, std::move(aliasNames), planNode_);
+      nextPlanNodeId(), projectExprs, std::move(aliases), planNode_);
 
   return *this;
 }
