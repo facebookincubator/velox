@@ -95,7 +95,8 @@ class ReaderBase {
       uint32_t maxRepeat,
       uint32_t maxDefine,
       uint32_t& schemaIdx,
-      uint32_t& columnIdx) const;
+      uint32_t& columnIdx,
+      uint32_t parentSchemaIdx) const;
 
   TypePtr convertType(const thrift::SchemaElement& schemaElement) const;
 
@@ -213,7 +214,7 @@ void ReaderBase::initializeSchema() {
   uint32_t columnIdx = 0;
   uint32_t maxSchemaElementIdx = fileMetaData_->schema.size() - 1;
   schemaWithId_ = getParquetColumnInfo(
-      maxSchemaElementIdx, maxRepeat, maxDefine, schemaIdx, columnIdx);
+      maxSchemaElementIdx, maxRepeat, maxDefine, schemaIdx, columnIdx, 0);
   schema_ = createRowType(
       schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
 }
@@ -223,13 +224,15 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     uint32_t maxRepeat,
     uint32_t maxDefine,
     uint32_t& schemaIdx,
-    uint32_t& columnIdx) const {
+    uint32_t& columnIdx,
+    uint32_t parentSchemaIdx) const {
   VELOX_CHECK(fileMetaData_ != nullptr);
   VELOX_CHECK_LT(schemaIdx, fileMetaData_->schema.size());
 
   auto& schema = fileMetaData_->schema;
   uint32_t curSchemaIdx = schemaIdx;
   auto& schemaElement = schema[curSchemaIdx];
+  auto& parentSchemaElement = schema[parentSchemaIdx];
 
   if (schemaElement.__isset.repetition_type) {
     if (schemaElement.repetition_type !=
@@ -255,7 +258,12 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
       auto child = getParquetColumnInfo(
-          maxSchemaElementIdx, maxRepeat, maxDefine, ++schemaIdx, columnIdx);
+          maxSchemaElementIdx,
+          maxRepeat,
+          maxDefine,
+          ++schemaIdx,
+          columnIdx,
+          curSchemaIdx);
       children.push_back(child);
     }
     VELOX_CHECK(!children.empty());
@@ -264,8 +272,8 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
       switch (schemaElement.converted_type) {
         case thrift::ConvertedType::LIST:
         case thrift::ConvertedType::MAP: {
-          auto element = children.at(0)->getChildren();
           VELOX_CHECK_EQ(children.size(), 1);
+          auto element = children.at(0)->getChildren();
           return std::make_shared<const ParquetTypeWithId>(
               children[0]->type(),
               std::move(element),
@@ -279,24 +287,44 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               maxDefine);
         }
         case thrift::ConvertedType::MAP_KEY_VALUE: {
-          // child of MAP
-          VELOX_CHECK_EQ(
-              schemaElement.repetition_type,
-              thrift::FieldRepetitionType::REPEATED);
-          assert(children.size() == 2);
-          auto childrenCopy = children;
-          return std::make_shared<const ParquetTypeWithId>(
-              TypeFactory<TypeKind::MAP>::create(
-                  children[0]->type(), children[1]->type()),
-              std::move(childrenCopy),
-              curSchemaIdx, // TODO: there are holes in the ids
-              maxSchemaElementIdx,
-              ParquetTypeWithId::kNonLeaf, // columnIdx,
-              std::move(name),
-              std::nullopt,
-              std::nullopt,
-              maxRepeat,
-              maxDefine);
+          if (parentSchemaElement.converted_type !=
+              thrift::ConvertedType::MAP) {
+            // MAP_KEY_VALUE is incorrectly used in place of MAP
+            // Backward-compatibility rules described in spec
+            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#backward-compatibility-rules-1
+            VELOX_CHECK_EQ(children.size(), 1);
+            auto element = children.at(0)->getChildren();
+            return std::make_shared<const ParquetTypeWithId>(
+                children[0]->type(),
+                std::move(element),
+                curSchemaIdx, // TODO: there are holes in the ids
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                maxRepeat + 1,
+                maxDefine);
+          } else {
+            // child of MAP
+            VELOX_CHECK_EQ(
+                schemaElement.repetition_type,
+                thrift::FieldRepetitionType::REPEATED);
+            assert(children.size() == 2);
+            auto childrenCopy = children;
+            return std::make_shared<const ParquetTypeWithId>(
+                TypeFactory<TypeKind::MAP>::create(
+                    children[0]->type(), children[1]->type()),
+                std::move(childrenCopy),
+                curSchemaIdx, // TODO: there are holes in the ids
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                maxRepeat,
+                maxDefine);
+          }
         }
         default:
           VELOX_UNSUPPORTED(

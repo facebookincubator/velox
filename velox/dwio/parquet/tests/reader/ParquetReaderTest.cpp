@@ -844,3 +844,39 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
     }
   }
 }
+
+TEST_F(ParquetReaderTest, parseMapKeyValue) {
+  // Some existing data incorrectly used MAP_KEY_VALUE in place of MAP.
+  // For backward-compatibility, a group annotated with MAP_KEY_VALUE that is
+  // not contained by a MAP-annotated group should be handled as a MAP-annotated
+  // group. Details in
+  // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#backward-compatibility-rules-1
+  // Following is the schema in sample file
+  //  message hive_schema {
+  //    optional group test (MAP_KEY_VALUE) {
+  //      repeated group map {
+  //        required binary key (STRING);
+  //        optional int64 value;
+  //    }
+  //  }
+  const std::string filename("backward_compatible_map_key_value.parquet");
+  const std::string sample(getExampleFilePath(filename));
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  auto reader = createReader(sample, readerOptions);
+
+  EXPECT_EQ(reader->numberOfRows(), 1ULL);
+
+  auto root_hive_schema = reader->typeWithId();
+  EXPECT_EQ(root_hive_schema->size(), 1ULL);
+
+  auto test_map = root_hive_schema->childAt(0);
+  EXPECT_EQ(test_map->type()->kind(), TypeKind::MAP);
+  EXPECT_EQ(root_hive_schema->childByName("test"), test_map);
+
+  auto key = test_map->childAt(0);
+  EXPECT_EQ(key->type()->kind(), TypeKind::VARCHAR);
+
+  auto value = test_map->childAt(1);
+  EXPECT_EQ(value->type()->kind(), TypeKind::BIGINT);
+}
