@@ -121,7 +121,7 @@ PlanBuilder& PlanBuilder::tableScan(
       .endTableScan();
 }
 
-PlanBuilder& PlanBuilder::tableScan(
+PlanBuilder& PlanBuilder::tpchTableScan(
     tpch::Table table,
     std::vector<std::string>&& columnNames,
     double scaleFactor) {
@@ -321,6 +321,17 @@ PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
     expressions.push_back(parse::parseExpr(projections[i], options_));
   }
   return projectExpressions(expressions);
+}
+
+PlanBuilder& PlanBuilder::appendColumns(
+    const std::vector<std::string>& newColumns) {
+  VELOX_CHECK_NOT_NULL(planNode_, "Project cannot be the source node");
+  std::vector<std::string> allProjections = planNode_->outputType()->names();
+  for (const auto& column : newColumns) {
+    allProjections.push_back(column);
+  }
+
+  return project(allProjections);
 }
 
 PlanBuilder& PlanBuilder::optionalFilter(const std::string& optionalFilter) {

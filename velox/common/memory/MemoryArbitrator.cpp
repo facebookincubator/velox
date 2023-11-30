@@ -18,6 +18,8 @@
 
 #include <utility>
 
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::memory {
@@ -29,9 +31,10 @@ class FactoryRegistry {
       const std::string& kind,
       MemoryArbitrator::Factory factory) {
     std::lock_guard<std::mutex> l(mutex_);
-    if (map_.find(kind) != map_.end()) {
-      return false;
-    }
+    VELOX_USER_CHECK(
+        map_.find(kind) == map_.end(),
+        "Arbitrator factory for kind {} is already registered",
+        kind);
     map_[kind] = std::move(factory);
     return true;
   }
@@ -169,6 +172,9 @@ uint64_t MemoryReclaimer::run(
   }
   stats.reclaimExecTimeUs += execTimeUs;
   stats.reclaimedBytes += bytes;
+  REPORT_ADD_HISTOGRAM_VALUE(
+      kCounterMemoryReclaimExecTimeMs, execTimeUs / 1'000);
+  REPORT_ADD_STAT_VALUE(kCounterMemoryReclaimedBytes, bytes);
   return bytes;
 }
 
@@ -190,8 +196,11 @@ bool MemoryReclaimer::reclaimableBytes(
   return reclaimable;
 }
 
-uint64_t
-MemoryReclaimer::reclaim(MemoryPool* pool, uint64_t targetBytes, Stats& stats) {
+uint64_t MemoryReclaimer::reclaim(
+    MemoryPool* pool,
+    uint64_t targetBytes,
+    uint64_t maxWaitMs,
+    Stats& stats) {
   if (pool->kind() == MemoryPool::Kind::kLeaf) {
     return 0;
   }
@@ -224,7 +233,7 @@ MemoryReclaimer::reclaim(MemoryPool* pool, uint64_t targetBytes, Stats& stats) {
 
   uint64_t reclaimedBytes{0};
   for (const auto& candidate : candidates) {
-    const auto bytes = candidate.pool->reclaim(targetBytes, stats);
+    const auto bytes = candidate.pool->reclaim(targetBytes, maxWaitMs, stats);
     reclaimedBytes += bytes;
     if (targetBytes != 0) {
       if (bytes >= targetBytes) {
