@@ -123,12 +123,33 @@ std::shared_ptr<exec::VectorFunction> makeGreaterThanOrEqual(
 
 inline std::vector<std::shared_ptr<exec::FunctionSignature>>
 comparisonSignatures() {
-  return {exec::FunctionSignatureBuilder()
-              .typeVariable("T")
-              .returnType("boolean")
-              .argumentType("T")
-              .argumentType("T")
-              .build()};
+  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
+  signatures.push_back(exec::FunctionSignatureBuilder()
+                           .integerVariable("a_precision")
+                           .integerVariable("a_scale")
+                           .returnType("boolean")
+                           .argumentType("DECIMAL(a_precision, a_scale)")
+                           .argumentType("DECIMAL(a_precision, a_scale)")
+                           .build());
+  for (const auto& inputType :
+       {"tinyint",
+        "smallint",
+        "integer",
+        "bigint",
+        "hugeint",
+        "real",
+        "double",
+        "boolean",
+        "varchar",
+        "varbinary",
+        "timestamp"}) {
+    signatures.push_back(exec::FunctionSignatureBuilder()
+                             .returnType("boolean")
+                             .argumentType(inputType)
+                             .argumentType(inputType)
+                             .build());
+  }
+  return signatures;
 }
 
 template <typename T>
@@ -142,16 +163,6 @@ struct BetweenFunction {
     result = value >= low && value <= high;
   }
 };
-
-inline std::vector<std::shared_ptr<exec::FunctionSignature>>
-equalNullSafeSignatures() {
-  return {exec::FunctionSignatureBuilder()
-              .typeVariable("T")
-              .returnType("boolean")
-              .argumentType("T")
-              .argumentType("T")
-              .build()};
-}
 
 std::shared_ptr<exec::VectorFunction> makeEqualToNullSafe(
     const std::string& name,

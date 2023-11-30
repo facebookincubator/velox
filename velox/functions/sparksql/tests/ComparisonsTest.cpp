@@ -365,5 +365,35 @@ TEST_F(ComparisonsTest, boolean) {
       inputs,
       makeNullableFlatVector<bool>({true, false, true, true, std::nullopt}));
 }
+
+TEST_F(ComparisonsTest, notSupportedTypes) {
+  const auto& candidateFuncs = {
+      "equalnullsafe",
+      "equalto",
+      "lessthan",
+      "lessthanorequal",
+      "greaterthan",
+      "greaterthanorequal"};
+  auto arrayData = makeArrayVectorFromJson<int64_t>({"[1, 2, 3]"});
+  auto mapData = makeMapVectorFromJson<int64_t, int64_t>({"{1: 1}"});
+  auto rowData = makeRowVector({arrayData});
+  std::vector<VectorPtr> unsupportedTypeData = {arrayData, mapData, rowData};
+  auto testFails = [&](const std::string& func, const VectorPtr& vector) {
+    VELOX_ASSERT_USER_THROW(
+        evaluate<MapVector>(
+            fmt::format("{}(c1, c0)", func), makeRowVector({vector, vector})),
+        fmt::format(
+            "Scalar function signature is not supported: {}({}, {})",
+            func,
+            vector->type()->toString(),
+            vector->type()->toString()));
+  };
+
+  for (const auto& func : candidateFuncs) {
+    for (const auto& data : unsupportedTypeData) {
+      testFails(func, data);
+    }
+  }
+}
 } // namespace
 }; // namespace facebook::velox::functions::sparksql::test
