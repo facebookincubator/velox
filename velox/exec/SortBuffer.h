@@ -85,6 +85,10 @@ class SortBuffer {
   void getOutputWithoutSpill();
   void getOutputWithSpill();
 
+  // Finish spill, and we shouldn't get any rows from non-spilled partition as
+  // there is only one hash partition for SortBuffer.
+  void finishSpill();
+
   const RowTypePtr input_;
   const std::vector<CompareFlags> sortCompareFlags_;
   velox::memory::MemoryPool* const pool_;

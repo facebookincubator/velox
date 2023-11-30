@@ -133,11 +133,7 @@ void SortBuffer::noMoreInput() {
     // for now.
     spill();
 
-    // Finish spill, and we shouldn't get any rows from non-spilled partition as
-    // there is only one hash partition for SortBuffer.
-    VELOX_CHECK_NULL(spillMerger_);
-    auto spillPartition = spiller_->finishSpill();
-    spillMerger_ = spillPartition.createOrderedReader(pool());
+    finishSpill();
   }
 
   // Releases the unused memory reservation after procesing input.
@@ -222,14 +218,9 @@ void SortBuffer::spillOutput() {
   auto spillRows = std::vector<char*>(
       sortedRows_.begin() + numOutputRows_, sortedRows_.end());
   spiller_->spill(std::move(spillRows));
-  // Finish spill, and we shouldn't get any rows from non-spilled partition as
-  // there is only one hash partition for SortBuffer.
-  VELOX_CHECK_NULL(spillMerger_);
-  auto spillPartition = spiller_->finishSpill();
-  spillMerger_ = spillPartition.createOrderedReader(pool());
-
   data_->clear();
   sortedRows_.clear();
+  finishSpill();
 }
 
 std::optional<uint64_t> SortBuffer::estimateOutputRowSize() const {
@@ -404,6 +395,12 @@ void SortBuffer::getOutputWithSpill() {
   }
 
   numOutputRows_ += output_->size();
+}
+
+void SortBuffer::finishSpill() {
+  VELOX_CHECK_NULL(spillMerger_);
+  auto spillPartition = spiller_->finishSpill();
+  spillMerger_ = spillPartition.createOrderedReader(pool());
 }
 
 } // namespace facebook::velox::exec
