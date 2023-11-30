@@ -121,11 +121,11 @@ class Spiller {
   /// The caller needs to erase them from the row container.
   void spill(const RowContainerIterator& startRowIter);
 
-  /// Invoked to spill.Spill all rows pointed by the pointers in sortedRows.This
-  /// is only used by 'kOrderByOutput' spiller type to spill during the order by
+  /// Invoked to spill all the rows pointed by rows. This is used by
+  /// 'kOrderByOutput' spiller type to spill during the order by
   /// output processing. Similarly, the spilled rows still stays in the row
-  /// container.The caller needs to erase them from the row container.
-  void spill(std::vector<char*> sortedRows);
+  /// container. The caller needs to erase them from the row container.
+  void spill(std::vector<char*> rows);
 
   /// Append 'spillVector' into the spill file of given 'partition'. It is now
   /// only used by the spilling operator which doesn't need data sort, such as
@@ -283,6 +283,8 @@ class Spiller {
 
   void checkEmptySpillRuns() const;
 
+  /// Marks all the partitions have been spilled as we don't support
+  /// fine-grained spilling as for now.
   void markAllPartitionsSpilled();
 
   // Prepares spill runs for the spillable data from all the hash partitions.
@@ -290,15 +292,8 @@ class Spiller {
   // pointed by 'startRowIter'.
   void fillSpillRuns(const RowContainerIterator* startRowIter = nullptr);
 
-  /// Prepares spill runs for the spillable data from all the hash partitions.
-  void fillSpillRuns(std::vector<char*>& rows);
-
   /// Prepares spill runs for the spillable data from the rows.
-  void fillSpillRuns(
-      std::vector<char*>& rows,
-      int32_t numRows,
-      std::vector<uint64_t>& hashes,
-      bool isSinglePartition);
+  void fillSinglePartition(std::vector<char*>& rows);
 
   // Writes out all the rows collected in spillRuns_.
   void runSpill();

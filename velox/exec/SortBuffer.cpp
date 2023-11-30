@@ -222,6 +222,12 @@ void SortBuffer::spillOutput() {
   auto spillRows = std::vector<char*>(
       sortedRows_.begin() + numOutputRows_, sortedRows_.end());
   spiller_->spill(std::move(spillRows));
+  // Finish spill, and we shouldn't get any rows from non-spilled partition as
+  // there is only one hash partition for SortBuffer.
+  VELOX_CHECK_NULL(spillMerger_);
+  auto spillPartition = spiller_->finishSpill();
+  spillMerger_ = spillPartition.createOrderedReader(pool());
+
   data_->clear();
   sortedRows_.clear();
 }

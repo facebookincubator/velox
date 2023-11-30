@@ -484,8 +484,6 @@ void Spiller::spill(const RowContainerIterator* startRowIter) {
   CHECK_NOT_FINALIZED();
   VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
 
-  // Marks all the partitions have been spilled as we don't support fine-grained
-  // spilling as for now.
   markAllPartitionsSpilled();
 
   fillSpillRuns(startRowIter);
@@ -500,11 +498,9 @@ void Spiller::spill(std::vector<char*> rows) {
     return;
   }
 
-  // Marks all the partitions have been spilled as we don't support fine-grained
-  // spilling as for now.
   markAllPartitionsSpilled();
 
-  fillSpillRuns(rows);
+  fillSinglePartition(rows);
   runSpill();
   checkEmptySpillRuns();
 }
@@ -573,33 +569,6 @@ void Spiller::finalizeSpill() {
   finalized_ = true;
 }
 
-void Spiller::fillSpillRuns(
-    std::vector<char*>& rows,
-    int32_t numRows,
-    std::vector<uint64_t>& hashes,
-    bool isSinglePartition) {
-  // Calculate hashes for this batch of spill candidates.
-  auto rowSet = folly::Range<char**>(rows.data(), numRows);
-
-  if (!isSinglePartition) {
-    for (auto i = 0; i < container_->keyTypes().size(); ++i) {
-      container_->hash(i, rowSet, i > 0, hashes.data());
-    }
-  }
-
-  // Put each in its run.
-  for (auto i = 0; i < numRows; ++i) {
-    // TODO: consider to cache the hash bits in row container so we only
-    // need to calculate them once.
-    const auto partition = isSinglePartition
-        ? 0
-        : bits_.partition(hashes[i], state_.maxPartitions());
-    VELOX_DCHECK_GE(partition, 0);
-    spillRuns_[partition].rows.push_back(rows[i]);
-    spillRuns_[partition].numBytes += container_->rowSize(rows[i]);
-  }
-}
-
 void Spiller::fillSpillRuns(const RowContainerIterator* startRowIter) {
   checkEmptySpillRuns();
 
@@ -618,7 +587,26 @@ void Spiller::fillSpillRuns(const RowContainerIterator* startRowIter) {
     for (;;) {
       auto numRows = container_->listRows(
           &iterator, rows.size(), RowContainer::kUnlimited, rows.data());
-      fillSpillRuns(rows, numRows, hashes, isSinglePartition);
+      // Calculate hashes for this batch of spill candidates.
+      auto rowSet = folly::Range<char**>(rows.data(), numRows);
+
+      if (!isSinglePartition) {
+        for (auto i = 0; i < container_->keyTypes().size(); ++i) {
+          container_->hash(i, rowSet, i > 0, hashes.data());
+        }
+      }
+
+      // Put each in its run.
+      for (auto i = 0; i < numRows; ++i) {
+        // TODO: consider to cache the hash bits in row container so we only
+        // need to calculate them once.
+        const auto partition = isSinglePartition
+            ? 0
+            : bits_.partition(hashes[i], state_.maxPartitions());
+        VELOX_DCHECK_GE(partition, 0);
+        spillRuns_[partition].rows.push_back(rows[i]);
+        spillRuns_[partition].numBytes += container_->rowSize(rows[i]);
+      }
       if (numRows == 0) {
         break;
       }
@@ -627,15 +615,17 @@ void Spiller::fillSpillRuns(const RowContainerIterator* startRowIter) {
   updateSpillFillTime(execTimeUs);
 }
 
-void Spiller::fillSpillRuns(std::vector<char*>& rows) {
+void Spiller::fillSinglePartition(std::vector<char*>& rows) {
+  VELOX_CHECK_EQ(bits_.numPartitions(), 1);
   checkEmptySpillRuns();
   uint64_t execTimeUs{0};
   {
     MicrosecondTimer timer(&execTimeUs);
-    auto numRows = rows.size();
-    std::vector<uint64_t> hashes(numRows);
-    const bool isSinglePartition = bits_.numPartitions() == 1;
-    fillSpillRuns(rows, numRows, hashes, isSinglePartition);
+    spillRuns_[0].rows =
+        SpillRows(rows.begin(), rows.end(), spillRuns_[0].rows.get_allocator());
+    for (auto row : rows) {
+      spillRuns_[0].numBytes += container_->rowSize(row);
+    }
   }
   updateSpillFillTime(execTimeUs);
 }

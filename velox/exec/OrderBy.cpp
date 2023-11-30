@@ -84,18 +84,11 @@ void OrderBy::reclaim(
   // non-reclaimable execution section.
   if (noMoreInput_) {
     sortBuffer_->spillOutput();
-    // TODO: reduce the log frequency if it is too verbose.
-    LOG(WARNING)
-        << "Can't reclaim from order by operator which has started producing output: "
-        << pool()->name()
-        << ", usage: " << succinctBytes(pool()->currentBytes())
-        << ", reservation: " << succinctBytes(pool()->reservedBytes());
-    return;
+  } else {
+    // TODO: support fine-grain disk spilling based on 'targetBytes' after
+    // having row container memory compaction support later.
+    sortBuffer_->spill();
   }
-
-  // TODO: support fine-grain disk spilling based on 'targetBytes' after having
-  // row container memory compaction support later.
-  sortBuffer_->spill();
   // Release the minimum reserved memory.
   pool()->release();
 }
