@@ -24,6 +24,7 @@
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/external/date/tz.h"
 
 namespace facebook::velox::functions {
 
@@ -1303,6 +1304,16 @@ struct FromISO8601DateFunction {
     int len = std::min((int)isoDateStr.size(), 10);
     result = len < 10 ? DATE()->toDays(isoDateStr)
                       : DATE()->toDays(isoDateStr.getString().substr(0, 10));
+
+    // auto tp = date::to_sys_time(isoDateStr);
+    // date epoch = year(1970)/jan/day(1);
+    // days d = tp - epoch;
+
+    // date::microseconds d;
+    // isoDateStr >> date::parse("%F", d); // Must use duration type for time     
+    
+    auto daysSinceEpoch = DateTimeFormatter::parseDays(isoDateStr);
+    result = daysSinceEpoch;
   }
 };
 

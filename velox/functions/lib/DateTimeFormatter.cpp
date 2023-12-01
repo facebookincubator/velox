@@ -1189,6 +1189,84 @@ DateTimeResult DateTimeFormatter::parse(const std::string_view& input) const {
       util::fromDatetime(daysSinceEpoch, microsSinceMidnight), date.timezoneId};
 }
 
+int64_t DateTimeFormatter::parseDays(const std::string_view& input) const {
+  Date date;
+  const char* cur = input.data();
+  const char* end = cur + input.size();
+
+  for (int i = 0; i < tokens_.size(); i++) {
+    auto& tok = tokens_[i];
+    switch (tok.type) {
+      case DateTimeToken::Type::kLiteral:
+        if (tok.literal.size() > end - cur ||
+            std::memcmp(cur, tok.literal.data(), tok.literal.size()) != 0) {
+          parseFail(input, cur, end);
+        }
+        cur += tok.literal.size();
+        break;
+      case DateTimeToken::Type::kPattern:
+        if (i + 1 < tokens_.size() &&
+            tokens_[i + 1].type == DateTimeToken::Type::kPattern) {
+          parseFromPattern(tok.pattern, input, cur, end, date, true, type_);
+        } else {
+          parseFromPattern(tok.pattern, input, cur, end, date, false, type_);
+        }
+        break;
+    }
+  }
+
+  // Ensure all input was consumed.
+  if (cur < end) {
+    parseFail(input, cur, end);
+  }
+
+  // Era is BC and year of era is provided
+  if (date.isYearOfEra && !date.isAd) {
+    date.year = -1 * (date.year - 1);
+  }
+
+  if (date.isHourOfHalfDay) {
+    if (!date.isAm) {
+      date.hour += 12;
+    }
+  }
+
+  // Ensure all day of month values are valid for ending month value
+  for (int i = 0; i < date.dayOfMonthValues.size(); i++) {
+    if (!util::isValidDate(date.year, date.month, date.dayOfMonthValues[i])) {
+      VELOX_USER_FAIL(
+          "Value {} for dayOfMonth must be in the range [1,{}]",
+          date.dayOfMonthValues[i],
+          util::getMaxDayOfMonth(date.year, date.month));
+    }
+  }
+
+  // Ensure all day of year values are valid for ending year value
+  for (int i = 0; i < date.dayOfYearValues.size(); i++) {
+    if (!util::isValidDayOfYear(date.year, date.dayOfYearValues[i])) {
+      VELOX_USER_FAIL(
+          "Value {} for dayOfMonth must be in the range [1,{}]",
+          date.dayOfYearValues[i],
+          util::isLeapYear(date.year) ? 366 : 365);
+    }
+  }
+
+  // Convert the parsed date/time into a timestamp.
+  int64_t daysSinceEpoch;
+  if (date.weekDateFormat) {
+    daysSinceEpoch =
+        util::daysSinceEpochFromWeekDate(date.year, date.week, date.dayOfWeek);
+  } else if (date.dayOfYearFormat) {
+    daysSinceEpoch =
+        util::daysSinceEpochFromDayOfYear(date.year, date.dayOfYear);
+  } else {
+    daysSinceEpoch =
+        util::daysSinceEpochFromDate(date.year, date.month, date.day);
+  }
+
+  return daysSinceEpoch;
+}
+
 std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
     const std::string_view& format) {
   if (format.empty()) {
