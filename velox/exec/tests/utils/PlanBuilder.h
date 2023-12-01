@@ -643,7 +643,7 @@ class PlanBuilder {
   /// For example,
   ///
   ///     .expand(
-  ///            {{"k1", "null: bigint k2", "a", "b", "0 as group_id_0"}, //
+  ///            {{"k1", "null:: bigint k2", "a", "b", "0 as gid"}, //
   ///            Column name will be extracted from the first projection. If the
   ///            column is null, it is also necessary to specify the column
   ///            type.

@@ -199,9 +199,9 @@ TEST_F(PlanNodeSerdeTest, expand) {
   auto plan = PlanBuilder()
                   .values({data_})
                   .expand(
-                      {{"c0", "c1", "c2", "0 as group_id_0"},
-                       {"c0", "c1", "null as c2", "1  as group_id_0"},
-                       {"c0", "null as c1", "null as c2", "2  as group_id_0"}})
+                      {{"c0", "c1", "c2", "0 as gid"},
+                       {"c0", "c1", "null as c2", "1  as gid"},
+                       {"c0", "null as c1", "null as c2", "2  as gid"}})
                   .planNode();
   testSerde(plan);
 }

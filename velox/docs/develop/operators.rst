@@ -322,7 +322,7 @@ To illustrate how ExpandNode works lets examine the following SQL query:
 
 .. code-block:: sql
 
-  SELECT l_orderkey, l_partkey, sum(l_suppkey) FROM lineitem GROUP BY ROLLUP(l_orderkey, l_partkey);
+  SELECT l_orderkey, l_partkey, count(l_suppkey) FROM lineitem GROUP BY ROLLUP(l_orderkey, l_partkey);
 
 In the planning phase, Spark generates an Expand operator with the following projection list:
 
@@ -332,7 +332,7 @@ In the planning phase, Spark generates an Expand operator with the following pro
   [l_suppkey, l_orderkey, null,      1],
   [l_suppkey, null,       null,      3]
 
-Note: The grouping_id_0 in Spark is calculated based on a bitmask. If a certain column is selected, the bit value is assigned as 0; otherwise, it is assigned as 1. Therefore, the binary representation of the first row is (000), resulting in 0. The binary representation of the second row is (001), resulting in 1. The binary representation of the third row is (011), resulting in 3.
+Note: The last column serves as a special group ID, indicating the grouping set to which each row belongs. In Spark, this ID is calculated using a bitmask. If a certain column is selected, the bit value is assigned as 0; otherwise, it is assigned as 1. Therefore, the binary representation of the first row is (000), resulting in 0. The binary representation of the second row is (001), resulting in 1. The binary representation of the third row is (011), resulting in 3.
 
 For example, if the input rows are:
 
@@ -358,7 +358,7 @@ After the computation by the ExpandNode, each row will generate 3 rows of data. 
   38        3          null      1
   38        null       null      3
 
-Then, these 9 rows of data are grouped by (l_orderkey, l_partkey, grouping_id_0), and the result of calculating l_orderkey, l_partkey, count(l_suppkey) is:
+Aggregation operator that follows, groups these 9 rows by (l_orderkey, l_partkey, grouping_id_0) and computes count(l_suppkey):
 
 .. code-block::
 
@@ -371,7 +371,7 @@ Then, these 9 rows of data are grouped by (l_orderkey, l_partkey, grouping_id_0)
   3          null      1
   3          22        1
 
-The following SQL query explain how the COUNT DISTINCT works with Expand in Spark:
+Another example would be COUNT DISTINCT query.
 
 .. code-block:: sql
 
@@ -405,7 +405,19 @@ After the computation by the ExpandNode, each row will generate 2 rows of data. 
   38        null      1
   null      22        2
 
-Then, these 6 rows of data are grouped by grouping_id_0, and the result of calculating COUNT(DISTINCT l_suppkey), COUNT(DISTINCT l_partkey) is:
+Aggregation operator that follows, groups these rows by (l_suppkey, l_partkey, grouping_id_0) and produces::
+
+.. code-block::
+
+  l_suppkey l_partkey grouping_id_0 
+  93        null      1
+  75        null      1
+  38        null      1
+  null      673       2
+  null      674       2
+  null      22        2
+
+Another Aggregation operator that follows, computes global count(l_suppkey) and count(l_partkey) producing final result:
 
 .. code-block::
 

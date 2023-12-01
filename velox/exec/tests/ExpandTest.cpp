@@ -22,6 +22,7 @@ using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::exec {
 
+namespace {
 class ExpandTest : public OperatorTestBase {
  public:
   RowVectorPtr makeRowVectorData(vector_size_t size) {
@@ -36,6 +37,7 @@ class ExpandTest : public OperatorTestBase {
         });
   }
 };
+} // anonymous namespace
 
 TEST_F(ExpandTest, groupingSets) {
   auto data = makeRowVectorData(1'000);
