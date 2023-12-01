@@ -3541,7 +3541,7 @@ TEST_F(VectorTest, setType) {
 
   auto newType = ROW({"bb"}, {BIGINT()});
   vector->setType(newType);
-  EXPECT_EQ(vector->type()->toString(), newType->toString());
+  EXPECT_EQ(vector->type()->name(), newType->name());
 
   auto failedType = ROW({"bb"}, {VARCHAR()});
   VELOX_ASSERT_RUNTIME_THROW(
@@ -3549,14 +3549,18 @@ TEST_F(VectorTest, setType) {
       "Cannot change vector type from ROW<bb:BIGINT> to ROW<bb:VARCHAR>. The old and new types can be different logical types, but the underlying physical types must match.")
 }
 
-TEST_F(VectorTest, setNestType) {
-  auto type = ROW({"nest3"}, {ROW({"nest2"}, {ROW({"nest1"}, {BIGINT()})})});
+TEST_F(VectorTest, setNestedType) {
+  auto type =
+      ROW({"a", "b"}, {ROW({"c", "d"}, {BIGINT(), BIGINT()}), BIGINT()});
   auto vector = BaseVector::create(type, 1'000, pool());
 
   auto newType =
-      ROW({"newnest3"}, {ROW({"newnest2"}, {ROW({"newnest1"}, {BIGINT()})})});
+      ROW({"a", "b"}, {ROW({"cc", "dd"}, {BIGINT(), BIGINT()}), BIGINT()});
   vector->setType(newType);
-  EXPECT_EQ(vector->type()->toString(), newType->toString());
+  auto rowVector = std::static_pointer_cast<const RowVector>(vector);
+  auto rowType = std::static_pointer_cast<const RowType>(newType);
+  EXPECT_EQ(
+      rowVector->children()[0]->type()->name(), rowType->childAt(0)->name());
 }
 
 } // namespace

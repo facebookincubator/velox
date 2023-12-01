@@ -181,7 +181,7 @@ class BaseVector {
   // logical representation while maintaining the same physical type.
   // Additionally, note that the caller must ensure that this vector is not
   // shared, i.e. singly-referenced.
-  void setType(const TypePtr& type) {
+  virtual void setType(const TypePtr& type) {
     VELOX_CHECK_NOT_NULL(type);
     VELOX_CHECK(
         type_->kindEquals(type),

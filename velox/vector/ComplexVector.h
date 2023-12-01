@@ -101,6 +101,21 @@ class RowVector : public BaseVector {
     return const_cast<RowVector*>(this)->loadedVector();
   }
 
+  void setType(const TypePtr& type) override {
+    VELOX_CHECK_NOT_NULL(type);
+    VELOX_CHECK(
+        type_->kindEquals(type),
+        "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
+        type_,
+        type);
+    type_ = type;
+
+    auto rowType = std::dynamic_pointer_cast<const RowType>(type_);
+    for (auto i = 0; i < childrenSize_; i++) {
+      children_[i]->setType(rowType->childAt(i));
+    }
+  }
+
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
   /// Return the number of child vectors.
