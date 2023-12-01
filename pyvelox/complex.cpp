@@ -69,7 +69,7 @@ void constructType(const variant& v, TypePtr& type, ElementCounter& counter) {
 
   if (v.isNull()) {
     // since the variant is NULL, we can't infer the data type
-    // of it's infer, thus it maybe UNKNOWN or INVALID at this stage
+    // thus it maybe UNKNOWN or INVALID at this stage
     // which implies further investigation is required
     if (v.kind() != TypeKind::UNKNOWN && v.kind() != TypeKind::INVALID &&
         v.kind() != type->kind()) {
