@@ -75,13 +75,13 @@ TEST_F(ExpandTest, cube) {
       PlanBuilder()
           .values({data})
           .expand({
-              {"k1", "k2", "a", "b", "0 as group_id_0"},
+              {"k1", "k2", "a", "b", "0 as gid"},
               {"k1", "null", "a", "b", "1"},
               {"null", "k2", "a", "b", "2"},
               {"null", "null", "a", "b", "3"},
           })
           .singleAggregation(
-              {"k1", "k2", "group_id_0"},
+              {"k1", "k2", "gid"},
               {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
           .project({"k1", "k2", "count_1", "sum_a", "max_b"})
           .planNode();
@@ -101,11 +101,11 @@ TEST_F(ExpandTest, rollup) {
       PlanBuilder()
           .values({data})
           .expand(
-              {{"k1 as foo", "k2", "a", "b", "0 as group_id_0"},
+              {{"k1 as foo", "k2", "a", "b", "0 as gid"},
                {"k1", "null", "a", "b", "1"},
                {"null", "null", "a", "b", "2"}})
           .singleAggregation(
-              {"foo", "k2", "group_id_0"},
+              {"foo", "k2", "gid"},
               {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
           .project({"foo", "k2", "count_1", "sum_a", "max_b"})
           .planNode();
@@ -124,14 +124,9 @@ TEST_F(ExpandTest, countDistinct) {
   auto plan =
       PlanBuilder()
           .values({data})
-          .expand(
-              {{"a", "null::varchar as b", "1 as group_id_0"},
-               {"null", "b", "2"}})
-          .singleAggregation({"a", "b", "group_id_0"}, {})
-          .singleAggregation(
-              {},
-              {"count(distinct a) as count_a", "count(distinct b) as count_b"})
-          .project({"count_a", "count_b"})
+          .expand({{"a", "null::varchar as b", "1 as gid"}, {"null", "b", "2"}})
+          .singleAggregation({"a", "b", "gid"}, {})
+          .singleAggregation({}, {"count(a) as count_a", "count(b) as count_b"})
           .planNode();
 
   assertQuery(plan, "SELECT count(distinct a), count(distinct b) FROM tmp");
@@ -144,7 +139,7 @@ TEST_F(ExpandTest, invalidUseCases) {
 
   VELOX_ASSERT_USER_THROW(
       PlanBuilder().values({data}).expand(
-          {{"k1", "k1", "a", "b", "0 as group_id_0"},
+          {{"k1", "k1", "a", "b", "0 as gid"},
            {"k1", "null", "a", "b", "1"},
            {"null", "null", "a", "b", "2"}}),
       "Found duplicate column name in Expand plan node: k1.");
