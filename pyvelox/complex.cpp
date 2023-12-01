@@ -121,7 +121,7 @@ void constructType(const variant& v, TypePtr& type, ElementCounter& counter) {
 // In the default case where the variant is a scalar type, the
 // setElementInFlatVector is called without any further recursion.
 static void insertVariantIntoVector(
-    TypeKind& typeKind,
+    const TypeKind& typeKind,
     const variant& v,
     VectorPtr& vector,
     ElementCounter& counter) {
@@ -141,9 +141,9 @@ static void insertVariantIntoVector(
         asArray->setOffsetAndSize(
             counter.insertedElements, offset, elements.size());
         for (const variant& elt : elements) {
-          auto elt_type = elt.kind();
+          auto eltKind = elt.kind();
           insertVariantIntoVector(
-              elt_type, elt, asArray->elements(), counter.children[0]);
+              eltKind, elt, asArray->elements(), counter.children[0]);
         }
 
         break;
