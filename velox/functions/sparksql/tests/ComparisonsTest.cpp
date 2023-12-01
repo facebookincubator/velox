@@ -367,7 +367,7 @@ TEST_F(ComparisonsTest, dateTypes) {
   std::vector<VectorPtr> dateInputs = {
       makeNullableFlatVector<int32_t>({126, 128, std::nullopt}, DATE()),
       makeNullableFlatVector<int32_t>({126, 127, std::nullopt}, DATE())};
- std::vector<VectorPtr> intervalDayInputs = {
+  std::vector<VectorPtr> intervalDayInputs = {
       makeNullableFlatVector<int64_t>(
           {126, 128, std::nullopt}, INTERVAL_DAY_TIME()),
       makeNullableFlatVector<int64_t>(
