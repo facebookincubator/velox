@@ -30,6 +30,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       IntervalDayTime,
       IntervalDayTime,
       IntervalDayTime>({prefix + "plus"});
+  registerBinaryFloatingPoint<PlusFunctionWrong>({prefix + "plus_wrong"});
+
   registerBinaryFloatingPoint<MinusFunction>({prefix + "minus"});
   registerFunction<
       MinusFunction,

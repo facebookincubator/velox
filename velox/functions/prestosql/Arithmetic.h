@@ -55,6 +55,16 @@ struct PlusFunction {
 };
 
 template <typename T>
+struct PlusFunctionWrong {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void
+  call(TInput& result, const TInput& a, const TInput& b) {
+    VELOX_CHECK(false);
+    result = plus(a, b);
+  }
+};
+
+template <typename T>
 struct MinusFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void
