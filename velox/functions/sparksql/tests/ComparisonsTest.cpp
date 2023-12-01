@@ -364,6 +364,20 @@ TEST_F(ComparisonsTest, boolean) {
 }
 
 TEST_F(ComparisonsTest, dateTypes) {
+  std::vector<VectorPtr> dateInputs = {
+      makeNullableFlatVector<int32_t>({126, 128, std::nullopt}, DATE()),
+      makeNullableFlatVector<int32_t>({126, 127, std::nullopt}, DATE())};
+ std::vector<VectorPtr> intervalDayInputs = {
+      makeNullableFlatVector<int64_t>(
+          {126, 128, std::nullopt}, INTERVAL_DAY_TIME()),
+      makeNullableFlatVector<int64_t>(
+          {126, 127, std::nullopt}, INTERVAL_DAY_TIME())};
+  std::vector<VectorPtr> intervalYearInputs = {
+      makeNullableFlatVector<int32_t>(
+          {1, 2, std::nullopt}, INTERVAL_YEAR_MONTH()),
+      makeNullableFlatVector<int32_t>(
+          {1, 1, std::nullopt}, INTERVAL_YEAR_MONTH())};
+
   auto test = [&](std::vector<VectorPtr>& inputs) {
     runAndCompare(
         "equalnullsafe", inputs, makeFlatVector<bool>({true, false, true}));
@@ -388,22 +402,12 @@ TEST_F(ComparisonsTest, dateTypes) {
         inputs,
         makeNullableFlatVector<bool>({true, true, std::nullopt}));
   };
-  std::vector<VectorPtr> dateInputs = {
-      makeNullableFlatVector<int32_t>({126, 128, std::nullopt}, DATE()),
-      makeNullableFlatVector<int32_t>({126, 127, std::nullopt}, DATE())};
-  std::vector<VectorPtr> intervalYearInputs = {
-      makeNullableFlatVector<int32_t>(
-          {1, 2, std::nullopt}, INTERVAL_YEAR_MONTH()),
-      makeNullableFlatVector<int32_t>(
-          {1, 1, std::nullopt}, INTERVAL_YEAR_MONTH())};
-  std::vector<VectorPtr> intervalDayInputs = {
-      makeNullableFlatVector<int64_t>(
-          {126, 128, std::nullopt}, INTERVAL_DAY_TIME()),
-      makeNullableFlatVector<int64_t>(
-          {126, 127, std::nullopt}, INTERVAL_DAY_TIME())};
+
   test(dateInputs);
-  test(intervalYearInputs);
+
   test(intervalDayInputs);
+
+  test(intervalYearInputs);
 }
 
 TEST_F(ComparisonsTest, notSupportedTypes) {
