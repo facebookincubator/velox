@@ -29,6 +29,9 @@ extern void registerElementAtFunction(
 // Special form functions don't have any prefix.
 void registerAllSpecialFormGeneralFunctions() {
   exec::registerFunctionCallToSpecialForms();
+  // trigger pr fuzzer test.
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_in, "inWrong");
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_in, "in");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, "row_constructor");
   registerIsNullFunction("is_null");

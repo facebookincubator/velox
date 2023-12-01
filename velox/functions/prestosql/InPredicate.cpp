@@ -39,7 +39,7 @@ class GenericInPredicate : public exec::VectorFunction {
     context.ensureWritable(rows, BOOLEAN(), result);
     result->clearNulls(rows);
     auto* boolResult = result->asUnchecked<FlatVector<bool>>();
-
+    VELOX_CHECK(false);
     context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
       if (value->isNullAt(row)) {
         boolResult->setNull(row, true);
