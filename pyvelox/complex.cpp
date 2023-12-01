@@ -57,7 +57,14 @@ void setElementInFlatVector(
   asFlat->set(idx, NativeType{v.value<NativeType>()});
 }
 
-void constructType(TypePtr& type, const variant& v, ElementCounter& counter) {
+// Function responsible to construct the type for the passed variant
+// for a complex vector. It is supposed to run a recursive call with a
+// pre-instantiated TypePtr, the target variant and the counter. The
+// passed variant is checked for its data type, and for any complex
+// type involved, the function is called again. The counter here is used
+// to keep in track of the number of elements inserted and the number of
+// types of elements allowed if a complex vector is involved in the variant.
+void constructType(const variant& v, TypePtr& type, ElementCounter& counter) {
   ++counter.totalElements;
 
   if (v.isNull()) {
@@ -83,7 +90,7 @@ void constructType(TypePtr& type, const variant& v, ElementCounter& counter) {
         auto asArray = v.array();
         TypePtr childType = createType(TypeKind::UNKNOWN, {});
         for (const auto& element : asArray) {
-          constructType(childType, element, counter.children[0]);
+          constructType(element, childType, counter.children[0]);
         }
 
         // if child's type still remains Unknown, implies all the
@@ -153,7 +160,7 @@ VectorPtr variantsToVector(
   ElementCounter counter;
   TypePtr type = createType(TypeKind::UNKNOWN, {});
   for (const auto& variant : variants) {
-    constructType(type, variant, counter);
+    constructType(variant, type, counter);
   }
   VectorPtr resultVector =
       BaseVector::create(std::move(type), variants.size(), pool);
