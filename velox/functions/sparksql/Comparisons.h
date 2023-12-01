@@ -124,30 +124,32 @@ std::shared_ptr<exec::VectorFunction> makeGreaterThanOrEqual(
 inline std::vector<std::shared_ptr<exec::FunctionSignature>>
 comparisonSignatures() {
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-  signatures.push_back(exec::FunctionSignatureBuilder()
-                           .integerVariable("a_precision")
-                           .integerVariable("a_scale")
-                           .returnType("boolean")
-                           .argumentType("DECIMAL(a_precision, a_scale)")
-                           .argumentType("DECIMAL(a_precision, a_scale)")
-                           .build());
+  signatures.emplace_back(exec::FunctionSignatureBuilder()
+                              .integerVariable("a_precision")
+                              .integerVariable("a_scale")
+                              .returnType("boolean")
+                              .argumentType("DECIMAL(a_precision, a_scale)")
+                              .argumentType("DECIMAL(a_precision, a_scale)")
+                              .build());
   for (const auto& inputType :
        {"tinyint",
         "smallint",
         "integer",
         "bigint",
-        "hugeint",
         "real",
         "double",
         "boolean",
         "varchar",
         "varbinary",
-        "timestamp"}) {
-    signatures.push_back(exec::FunctionSignatureBuilder()
-                             .returnType("boolean")
-                             .argumentType(inputType)
-                             .argumentType(inputType)
-                             .build());
+        "timestamp",
+        "date",
+        "interval day to second",
+        "interval year to month"}) {
+    signatures.emplace_back(exec::FunctionSignatureBuilder()
+                                .returnType("boolean")
+                                .argumentType(inputType)
+                                .argumentType(inputType)
+                                .build());
   }
   return signatures;
 }
