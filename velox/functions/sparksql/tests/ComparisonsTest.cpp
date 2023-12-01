@@ -67,11 +67,11 @@ class ComparisonsTest : public SparkFunctionBaseTest {
   }
 
   void runAndCompare(
-      const std::string& funcStr,
-      std::vector<VectorPtr>& input,
-      VectorPtr expectedResult) {
+      const std::string& functionName,
+      const std::vector<VectorPtr>& input,
+      const VectorPtr& expectedResult) {
     auto actual = evaluate<SimpleVector<bool>>(
-        fmt::format("{}(c0, c1)", funcStr), makeRowVector(input));
+        fmt::format("{}(c0, c1)", functionName), makeRowVector(input));
     facebook::velox::test::assertEqualVectors(expectedResult, actual);
   };
 };
@@ -135,7 +135,7 @@ TEST_F(ComparisonsTest, between) {
   EXPECT_EQ(between<double>(kInf, -kInf, kNaN), false);
 }
 
-TEST_F(ComparisonsTest, testdecimal) {
+TEST_F(ComparisonsTest, decimal) {
   std::vector<VectorPtr> inputs = {
       makeNullableFlatVector<int64_t>(
           {1, std::nullopt, 3, -2, std::nullopt, 4}, DECIMAL(10, 5)),
@@ -335,7 +335,7 @@ TEST_F(ComparisonsTest, greaterthanorequal) {
   EXPECT_EQ(greaterthanorequal<float>(kInf, kNaN), false);
 }
 
-TEST_F(ComparisonsTest, testBool) {
+TEST_F(ComparisonsTest, boolean) {
   std::vector<VectorPtr> inputs = {
       makeNullableFlatVector<bool>({true, false, false, true, std::nullopt}),
       makeNullableFlatVector<bool>({false, true, false, true, std::nullopt})};
