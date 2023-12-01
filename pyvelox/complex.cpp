@@ -24,12 +24,19 @@ namespace facebook::velox::py {
 using namespace velox;
 namespace py = pybind11;
 
+namespace {
+// Structure used to keep check on the number
+// of constituent elements. Attributes totalElements
+// and insertedElements keeps the length of the vector, and
+// the number of elements inserted during the operation
+// respectively.
 struct ElementCounter {
   vector_size_t insertedElements =
       0; // to track the elements already in the vector
   vector_size_t totalElements = 0;
   std::vector<ElementCounter> children;
 };
+} // namespace
 
 void checkOrAssignType(TypePtr& type, const std::function<TypePtr()>& func) {
   if (type->kind() == TypeKind::UNKNOWN) {
