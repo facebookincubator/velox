@@ -804,6 +804,31 @@ class HashJoinTest : public HiveConnectorTestBase {
     return stats[operatorIndex].runtimeStats[statsName];
   }
 
+  std::vector<RowVectorPtr> createBuildVectors(
+      int numVectors,
+      const VectorFuzzer::Options& options) {
+    return createVectors(buildType_, numVectors, options);
+  }
+
+  std::vector<RowVectorPtr> createProbeVectors(
+      int numVectors,
+      const VectorFuzzer::Options& options) {
+    return createVectors(probeType_, numVectors, options);
+  }
+
+  std::vector<RowVectorPtr> createVectors(
+      const RowTypePtr& rowType,
+      int numVectors,
+      const VectorFuzzer::Options& options) {
+    VectorFuzzer fuzzer(options, pool());
+    std::vector<RowVectorPtr> vectors;
+    vectors.reserve(numVectors);
+    for (int32_t i = 0; i < numVectors; ++i) {
+      vectors.push_back(fuzzer.fuzzInputRow(rowType));
+    }
+    return vectors;
+  }
+
   static core::JoinType flipJoinType(core::JoinType joinType) {
     switch (joinType) {
       case core::JoinType::kInner:
@@ -6133,5 +6158,45 @@ TEST_F(HashJoinTest, exceededMaxSpillLevel) {
   ASSERT_EQ(
       common::globalSpillStats().spillMaxLevelExceededCount,
       exceededMaxSpillLevelCount + 4);
+}
+
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, hashTableBuildError) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 1'000;
+  const auto buildVectors = createBuildVectors(10, options);
+  const auto probeVectors = createProbeVectors(5, options);
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors, false)
+                  .hashJoin(
+                      {"t_k1"},
+                      {"u_k1"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors, false)
+                          .planNode(),
+                      "",
+                      concat(probeType_->names(), buildType_->names()))
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashBuild::ensureTableFits",
+      std::function<void(exec::HashBuild*)>(
+          ([&](exec::HashBuild* /*unused*/) { VELOX_FAIL("inject error"); })));
+
+  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  VELOX_ASSERT_THROW(
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .numDrivers(numDrivers_)
+          .planNode(plan)
+          .injectSpill(false)
+          .spillDirectory(tempDirectory->path)
+          .referenceQuery(
+              "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+          .run(),
+      "inject error");
 }
 } // namespace

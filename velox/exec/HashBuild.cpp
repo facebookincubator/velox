@@ -749,19 +749,26 @@ bool HashBuild::finishHashBuild() {
 
   TestValue::adjust("facebook::velox::exec::HashBuild::finishHashBuild", this);
 
-  auto promisesGuard = folly::makeGuard([&]() {
-    // Realize the promises so that the other Drivers (which were not
-    // the last to finish) can continue from the barrier and finish.
-    peers.clear();
-    for (auto& promise : promises) {
-      promise.setValue();
-    }
-  });
+  buildHashTable(peers);
 
+  // Realize the promises so that the other Drivers (which were not the last to
+  // finish) can continue from the barrier and finish.
+  //
+  // NOTE: if 'buildHashTable' throws, the hash join bridge might be left in an
+  // inconsistent state so that we should not fulfill promises here. The task
+  // terminate process should be able to close other build drivers properly.
+  for (auto& promise : promises) {
+    promise.setValue();
+  }
+  return true;
+}
+
+void HashBuild::buildHashTable(
+    const std::vector<std::shared_ptr<Driver>>& peers) {
   if (joinHasNullKeys_ && isAntiJoin(joinType_) && nullAware_ &&
       !joinNode_->filter()) {
     joinBridge_->setAntiJoinHasNullKeys();
-    return true;
+    return;
   }
 
   std::vector<HashBuild*> otherBuilds;
@@ -775,7 +782,7 @@ bool HashBuild::finishHashBuild() {
       joinHasNullKeys_ = true;
       if (isAntiJoin(joinType_) && nullAware_ && !joinNode_->filter()) {
         joinBridge_->setAntiJoinHasNullKeys();
-        return true;
+        return;
       }
     }
     numRows += build->table_->rows()->numRows();
@@ -829,7 +836,6 @@ bool HashBuild::finishHashBuild() {
   // Release the unused memory reservation since we have finished the merged
   // table build.
   pool()->release();
-  return true;
 }
 
 void HashBuild::recordSpillStats() {

@@ -98,10 +98,15 @@ class HashBuild final : public Operator {
   // Invoked when operator has finished processing the build input and wait for
   // all the other drivers to finish the processing. The last driver that
   // reaches to the hash build barrier, is responsible to build the hash table
-  // merged from all the other drivers. If the disk spilling is enabled, the
-  // last driver will also restart 'spillGroup_' and add a new hash build
-  // barrier for the next round of hash table build operation if it needs.
+  // merged from all the other drivers.
   bool finishHashBuild();
+
+  // Invoked to build the hash table merged from all the other drivers, and send
+  // the built table to the hash probe operators through the hash join bridge.
+  // If the disk spilling is enabled, the last driver will also restart
+  // 'spillGroup_' and add a new hash build barrier for the next round of hash
+  // table build operation if it needs.
+  void buildHashTable(const std::vector<std::shared_ptr<Driver>>& peers);
 
   // Invoked after the hash table has been built. It waits for any spill data to
   // process after the probe side has finished processing the previously built
