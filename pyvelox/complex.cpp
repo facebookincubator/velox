@@ -121,14 +121,13 @@ void constructType(const variant& v, TypePtr& type, ElementCounter& counter) {
 // In the default case where the variant is a scalar type, the
 // setElementInFlatVector is called without any further recursion.
 static void insertVariantIntoVector(
-    const TypeKind& typeKind,
     const variant& v,
     VectorPtr& vector,
     ElementCounter& counter) {
   if (v.isNull()) {
     vector->setNull(counter.insertedElements, true);
   } else {
-    switch (typeKind) {
+    switch (v.kind()) {
       case TypeKind::ARRAY: {
         auto asArray = vector->as<ArrayVector>();
         asArray->elements()->resize(counter.children[0].totalElements);
@@ -141,9 +140,8 @@ static void insertVariantIntoVector(
         asArray->setOffsetAndSize(
             counter.insertedElements, offset, elements.size());
         for (const variant& elt : elements) {
-          auto eltKind = elt.kind();
           insertVariantIntoVector(
-              eltKind, elt, asArray->elements(), counter.children[0]);
+              elt, asArray->elements(), counter.children[0]);
         }
 
         break;
@@ -151,7 +149,7 @@ static void insertVariantIntoVector(
       default: {
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             setElementInFlatVector,
-            typeKind,
+            v.kind(),
             counter.insertedElements,
             v,
             vector);
@@ -173,8 +171,7 @@ VectorPtr variantsToVector(
   VectorPtr resultVector =
       BaseVector::create(std::move(type), variants.size(), pool);
   for (const variant& v : variants) {
-    auto typeKind = v.kind();
-    insertVariantIntoVector(typeKind, v, resultVector, counter);
+    insertVariantIntoVector(v, resultVector, counter);
   }
   return resultVector;
 }
