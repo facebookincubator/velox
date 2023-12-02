@@ -15,6 +15,10 @@
 name: "Scheduled Fuzzer Jobs"
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/scheduled.yml"
+
   schedule:
     - cron: '0 3 * * *'
 
@@ -39,6 +43,9 @@ jobs:
 
       - name: "Install dependencies"
         run: source ./scripts/setup-ubuntu.sh
+
+      - name: "Install mold as default linker"
+        uses: rui314/setup-mold@v1
 
       - name: "Build"
         run: |
