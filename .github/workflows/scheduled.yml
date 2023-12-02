@@ -28,7 +28,7 @@ defaults:
 
 jobs:
   linux-presto-fuzzer-run:
-    runs-on: 16-core
+    runs-on: 8-core
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
@@ -83,7 +83,7 @@ jobs:
 
 
   linux-spark-fuzzer-run:
-    runs-on: 16-core
+    runs-on: 8-core
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
@@ -152,7 +152,7 @@ jobs:
 
 
   linux-aggregate-fuzzer-run:
-    runs-on: 16-core
+    runs-on: 8-core
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
@@ -195,7 +195,7 @@ jobs:
             /tmp/aggregate_fuzzer_repro
 
   linux-join-fuzzer-run:
-    runs-on: 16-core
+    runs-on: 8-core
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
