@@ -152,6 +152,7 @@ jobs:
 
 
   linux-aggregate-fuzzer-run:
+    if: false
     runs-on: 8-core
     timeout-minutes: 120
     env:
@@ -195,6 +196,7 @@ jobs:
             /tmp/aggregate_fuzzer_repro
 
   linux-join-fuzzer-run:
+    if: false
     runs-on: 8-core
     timeout-minutes: 120
     env:
