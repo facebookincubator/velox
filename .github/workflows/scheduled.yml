@@ -123,6 +123,7 @@ jobs:
         run: |
           mkdir -p /tmp/fuzzer_repro/
           chmod -R 777 /tmp/fuzzer_repro
+          chmod +x velox_expression_fuzzer_test 
           ./velox_expression_fuzzer_test \
                 --seed ${RANDOM} \
                 --enable_variadic_signatures \
@@ -162,6 +163,7 @@ jobs:
         run: |
           mkdir -p /tmp/spark_fuzzer_repro/
             chmod -R 777 /tmp/spark_fuzzer_repro
+            chmod +x spark_expression_fuzzer_test 
             ./spark_expression_fuzzer_test \
                 --seed ${RANDOM} \
                 --enable_variadic_signatures \
@@ -188,6 +190,7 @@ jobs:
         run: |
           mkdir -p /tmp/spark_aggregate_fuzzer_repro/
           chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
+          chmod +x spark_aggregation_fuzzer_test
           ./spark_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec 1800 \
@@ -221,7 +224,8 @@ jobs:
           mkdir -p /tmp/aggregate_fuzzer_repro/
             rm -rfv /tmp/aggregate_fuzzer_repro/*
             chmod -R 777 /tmp/aggregate_fuzzer_repro
-            _build/debug/velox/exec/tests/velox_aggregation_fuzzer_test \
+            chmod +x velox_aggregation_fuzzer_test
+            ./velox_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec 1800 \
                 --logtostderr=1 \
@@ -253,6 +257,7 @@ jobs:
           mkdir -p /tmp/join_fuzzer_repro/
           rm -rfv /tmp/join_fuzzer_repro/*
           chmod -R 777 /tmp/join_fuzzer_repro
+          chmod +x velox_join_fuzzer_test 
           ./velox_join_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec 1800 \
