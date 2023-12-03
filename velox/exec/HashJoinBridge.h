@@ -75,8 +75,7 @@ class HashJoinBridge : public JoinBridge {
   /// HashBuild operators. If HashProbe operator calls this early, 'future' will
   /// be set to wait asynchronously, otherwise the built table along with
   /// optional spilling related information will be returned in HashBuildResult.
-  std::optional<HashBuildResult> tableOrFuture(
-      ContinueFuture* FOLLY_NONNULL future);
+  std::optional<HashBuildResult> tableOrFuture(ContinueFuture* future);
 
   /// Invoked by HashProbe operator after finishes probing the built table to
   /// set one of the previously spilled partition to restore. The HashBuild
@@ -102,8 +101,7 @@ class HashJoinBridge : public JoinBridge {
   /// If HashBuild operator calls this early, 'future' will be set to wait
   /// asynchronously. If there is no more spill data to restore, then
   /// 'spillPartition' will be set to null in the returned SpillInput.
-  std::optional<SpillInput> spillInputOrFuture(
-      ContinueFuture* FOLLY_NONNULL future);
+  std::optional<SpillInput> spillInputOrFuture(ContinueFuture* future);
 
  private:
   uint32_t numBuilders_{0};

@@ -764,63 +764,69 @@ bool HashBuild::finishHashBuild() {
     return true;
   }
 
-  std::vector<HashBuild*> otherBuilds;
-  otherBuilds.reserve(peers.size());
-  uint64_t numRows = table_->rows()->numRows();
-  for (auto& peer : peers) {
-    auto op = peer->findOperator(planNodeId());
-    HashBuild* build = dynamic_cast<HashBuild*>(op);
-    VELOX_CHECK_NOT_NULL(build);
-    if (build->joinHasNullKeys_) {
-      joinHasNullKeys_ = true;
-      if (isAntiJoin(joinType_) && nullAware_ && !joinNode_->filter()) {
-        joinBridge_->setAntiJoinHasNullKeys();
-        return true;
-      }
-    }
-    numRows += build->table_->rows()->numRows();
-    otherBuilds.push_back(build);
-  }
-
-  ensureTableFits(numRows);
-
-  std::vector<std::unique_ptr<BaseHashTable>> otherTables;
-  otherTables.reserve(peers.size());
   SpillPartitionSet spillPartitions;
-  for (auto* build : otherBuilds) {
-    VELOX_CHECK_NOT_NULL(build->table_);
-    otherTables.push_back(std::move(build->table_));
-    if (build->spiller_ != nullptr) {
-      build->spiller_->finishSpill(spillPartitions);
+  try {
+    std::vector<HashBuild*> otherBuilds;
+    otherBuilds.reserve(peers.size());
+    uint64_t numRows = table_->rows()->numRows();
+    for (auto& peer : peers) {
+      auto op = peer->findOperator(planNodeId());
+      HashBuild* build = dynamic_cast<HashBuild*>(op);
+      VELOX_CHECK_NOT_NULL(build);
+      if (build->joinHasNullKeys_) {
+        joinHasNullKeys_ = true;
+        if (isAntiJoin(joinType_) && nullAware_ && !joinNode_->filter()) {
+          joinBridge_->setAntiJoinHasNullKeys();
+          return true;
+        }
+      }
+      numRows += build->table_->rows()->numRows();
+      otherBuilds.push_back(build);
     }
-    build->recordSpillStats();
-  }
 
-  if (spiller_ != nullptr) {
-    spiller_->finishSpill(spillPartitions);
+    ensureTableFits(numRows);
 
-    // Remove the spilled partitions which are empty so as we don't need to
-    // trigger unnecessary spilling at hash probe side.
-    auto iter = spillPartitions.begin();
-    while (iter != spillPartitions.end()) {
-      if (iter->second->numFiles() > 0) {
-        ++iter;
-      } else {
-        iter = spillPartitions.erase(iter);
+    std::vector<std::unique_ptr<BaseHashTable>> otherTables;
+    otherTables.reserve(peers.size());
+    for (auto* build : otherBuilds) {
+      VELOX_CHECK_NOT_NULL(build->table_);
+      otherTables.push_back(std::move(build->table_));
+      if (build->spiller_ != nullptr) {
+        build->spiller_->finishSpill(spillPartitions);
+      }
+      build->recordSpillStats();
+    }
+
+    if (spiller_ != nullptr) {
+      spiller_->finishSpill(spillPartitions);
+
+      // Remove the spilled partitions which are empty so as we don't need to
+      // trigger unnecessary spilling at hash probe side.
+      auto iter = spillPartitions.begin();
+      while (iter != spillPartitions.end()) {
+        if (iter->second->numFiles() > 0) {
+          ++iter;
+        } else {
+          iter = spillPartitions.erase(iter);
+        }
       }
     }
-  }
-  recordSpillStats();
+    recordSpillStats();
 
-  // TODO: re-enable parallel join build with spilling triggered after
-  // https://github.com/facebookincubator/velox/issues/3567 is fixed.
-  const bool allowParallelJoinBuild =
-      !otherTables.empty() && spillPartitions.empty();
-  table_->prepareJoinTable(
-      std::move(otherTables),
-      allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
-                             : nullptr);
-  addRuntimeStats();
+    // TODO: re-enable parallel join build with spilling triggered after
+    // https://github.com/facebookincubator/velox/issues/3567 is fixed.
+    const bool allowParallelJoinBuild =
+        !otherTables.empty() && spillPartitions.empty();
+    table_->prepareJoinTable(
+        std::move(otherTables),
+        allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
+                               : nullptr);
+    addRuntimeStats();
+  } catch (const std::exception& e) {
+    joinBridge_->setError(std::current_exception());
+    std::rethrow_exception(std::current_exception());
+  }
+
   if (joinBridge_->setHashTable(
           std::move(table_), std::move(spillPartitions), joinHasNullKeys_)) {
     spillGroup_->restart();
@@ -1192,7 +1198,6 @@ void HashBuild::abort() {
   Operator::abort();
 
   // Free up major memory usage.
-  joinBridge_.reset();
   spiller_.reset();
   table_.reset();
 }

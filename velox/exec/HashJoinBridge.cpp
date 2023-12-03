@@ -44,6 +44,7 @@ bool HashJoinBridge::setHashTable(
     VELOX_CHECK(started_);
     VELOX_CHECK(!buildResult_.has_value());
     VELOX_CHECK(restoringSpillShards_.empty());
+    checkErrorLocked();
 
     if (restoringSpillPartitionId_.has_value()) {
       for (const auto& id : spillPartitionIdSet) {
@@ -80,6 +81,7 @@ void HashJoinBridge::setAntiJoinHasNullKeys() {
     VELOX_CHECK(started_);
     VELOX_CHECK(!buildResult_.has_value());
     VELOX_CHECK(restoringSpillShards_.empty());
+    checkErrorLocked();
 
     buildResult_ = HashBuildResult{};
     restoringSpillPartitionId_.reset();
@@ -98,6 +100,7 @@ std::optional<HashJoinBridge::HashBuildResult> HashJoinBridge::tableOrFuture(
       !buildResult_.has_value() ||
       (!restoringSpillPartitionId_.has_value() &&
        restoringSpillShards_.empty()));
+  checkErrorLocked();
 
   if (buildResult_.has_value()) {
     return buildResult_.value();
@@ -118,6 +121,7 @@ bool HashJoinBridge::probeFinished() {
         !restoringSpillPartitionId_.has_value() &&
         restoringSpillShards_.empty());
     VELOX_CHECK_GT(numBuilders_, 0);
+    checkErrorLocked();
 
     // NOTE: we are clearing the hash table as it has been fully processed and
     // not needed anymore. We'll wait for the HashBuild operator to build a new
@@ -147,6 +151,7 @@ std::optional<HashJoinBridge::SpillInput> HashJoinBridge::spillInputOrFuture(
   VELOX_CHECK(!cancelled_, "Getting spill input after join is aborted");
   VELOX_DCHECK(
       !restoringSpillPartitionId_.has_value() || !buildResult_.has_value());
+  checkErrorLocked();
 
   if (!restoringSpillPartitionId_.has_value()) {
     if (spillPartitionSets_.empty()) {

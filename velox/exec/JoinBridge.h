@@ -31,12 +31,19 @@ class JoinBridge {
   /// happen asynchronously before or after the result has been set.
   void cancel();
 
+  void setError(const std::exception_ptr& exception);
+
  protected:
   static void notify(std::vector<ContinuePromise> promises);
+
+  void checkErrorLocked();
 
   std::mutex mutex_;
   bool started_{false};
   std::vector<ContinuePromise> promises_;
   bool cancelled_{false};
+  // Set if hash build/probe encounters an error. This is the first error
+  // reported by any of the instances.
+  std::exception_ptr exception_{nullptr};
 };
 } // namespace facebook::velox::exec

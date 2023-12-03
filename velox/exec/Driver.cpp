@@ -48,6 +48,8 @@ class CancelGuard {
     bool onTerminateCalled = false;
     if (isThrow_) {
       // Runtime error. Driver is on thread, hence safe.
+      LOG(ERROR) << "driver task " << task_->taskId()
+                 << " set terminate, state: " << state_;
       state_->isTerminated = true;
       onTerminate_(StopReason::kNone);
       onTerminateCalled = true;
@@ -443,9 +445,8 @@ StopReason Driver::runInternal(
   auto stop = closed_ ? StopReason::kTerminate : task()->enter(state_, now);
   if (stop != StopReason::kNone) {
     if (stop == StopReason::kTerminate) {
-      // ctx_ still has a reference to the Task. 'this' is not on
-      // thread from the Task's viewpoint, hence no need to call
-      // close().
+      // ctx_ still has a reference to the Task. 'this' is not on thread from
+      // the Task's viewpoint, hence no need to call close().
       ctx_->task->setError(std::make_exception_ptr(VeloxRuntimeError(
           __FILE__,
           __LINE__,
@@ -789,6 +790,7 @@ void Driver::close() {
   if (!isOnThread() && !isTerminated()) {
     LOG(FATAL) << "Driver::close is only allowed from the Driver's thread";
   }
+  LOG(ERROR) << "close driver " << this << " " << task()->taskId();
   closeOperators();
   closed_ = true;
   Task::removeDriver(ctx_->task, this);
@@ -901,6 +903,7 @@ std::string Driver::toString() const {
   } else {
     out << "blocked " << blockingReasonToString(blockingReason_) << " ";
   }
+  out << "terminated " << state_.isTerminated << " ";
   for (auto& op : operators_) {
     out << op->toString() << " ";
   }

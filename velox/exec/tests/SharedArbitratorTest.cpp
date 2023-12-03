@@ -3794,7 +3794,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, joinBuildSpillError) {
   ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
 }
 
-TEST_F(SharedArbitrationTest, DISABLED_concurrentArbitration) {
+TEST_F(SharedArbitrationTest, concurrentArbitration) {
   // Tries to replicate an actual workload by concurrently running multiple
   // query shapes that support spilling (and hence can be forced to abort or
   // spill by the arbitrator). Also adds an element of randomness by randomly
@@ -3831,11 +3831,12 @@ TEST_F(SharedArbitrationTest, DISABLED_concurrentArbitration) {
           succinctBytes(totalCapacity),
           succinctBytes(queryCapacity));
     }
-  } testSettings[3] = {
+  } testSettings[] = {
       {16 * MB, 128 * MB}, {128 * MB, 16 * MB}, {128 * MB, 128 * MB}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
+    LOG(ERROR) << testData.debugString();
     auto totalCapacity = testData.totalCapacity;
     auto queryCapacity = testData.queryCapacity;
     setupMemory(totalCapacity);
@@ -3874,11 +3875,13 @@ TEST_F(SharedArbitrationTest, DISABLED_concurrentArbitration) {
                        .task;
           }
         } catch (const VeloxException& e) {
+#if 1
           if (e.errorCode() != error_code::kMemCapExceeded.c_str() &&
               e.errorCode() != error_code::kMemAborted.c_str() &&
               e.errorCode() != error_code::kMemAllocError.c_str()) {
             std::rethrow_exception(std::current_exception());
           }
+#endif
         }
 
         // TODO: Add RowNumber task after fixing its spiller bug.
@@ -3896,6 +3899,8 @@ TEST_F(SharedArbitrationTest, DISABLED_concurrentArbitration) {
       queryThread.join();
     }
     ASSERT_GT(arbitrator_->stats().numRequests, 0);
+    zombieTasks.clear();
+    waitForAllTasksToBeDeleted();
   }
 }
 

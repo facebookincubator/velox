@@ -818,6 +818,7 @@ void Task::initializePartitionOutput() {
 
 // static
 void Task::resume(std::shared_ptr<Task> self) {
+  LOG(ERROR) << "resume " << self->taskId_;
   std::vector<std::shared_ptr<Driver>> offThreadDrivers;
   {
     std::lock_guard<std::mutex> l(self->mutex_);
@@ -860,11 +861,14 @@ void Task::resume(std::shared_ptr<Task> self) {
         }
         if (driver->isOnThread()) {
           VELOX_CHECK(driver->isTerminated());
+          LOG(ERROR) << "driver skip resume1 " << driver.get() << " task " << self->taskId_;
           continue;
         }
         if (driver->isTerminated()) {
+          LOG(ERROR) << "driver skip resume2 " << driver.get() << " task " << self->taskId_;
           continue;
         }
+        LOG(ERROR) << "driver resume " << driver.get() << " task " << self->taskId_;
         driver->state().isTerminated = true;
         driver->state().setThread();
         self->driverClosedLocked();
@@ -1743,9 +1747,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
 
-    LOG(INFO) << "Terminating task " << taskId() << " with state "
-              << taskStateString(state_) << " after running for "
-              << timeSinceStartMsLocked() << " ms.";
+    LOG(ERROR) << "Terminating task " << taskId() << " with state "
+               << taskStateString(state_) << " after running for "
+               << timeSinceStartMsLocked() << " ms.";
 
     taskCompletionNotifier.activate(
         std::move(taskCompletionPromises_), [&]() { onTaskCompletion(); });
@@ -1763,10 +1767,14 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     numRunningDrivers_ = 0;
     for (auto& driver : drivers_) {
       if (driver) {
-        if (enterForTerminateLocked(driver->state()) ==
-            StopReason::kTerminate) {
+        const auto state = enterForTerminateLocked(driver->state());
+        if (state == StopReason::kTerminate) {
+          LOG(ERROR) << "driver " << driver.get() << " task " << taskId_;
           offThreadDrivers.push_back(std::move(driver));
           driverClosedLocked();
+        } else {
+          LOG(ERROR) << "driver skipped " << driver.get() << " task " << taskId_
+                     << " " << driver->toString() << " state " << state << " driver state " << &driver->state();
         }
       }
     }
@@ -2287,6 +2295,7 @@ StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
   }
   auto reason = shouldStopLocked();
   if (reason == StopReason::kTerminate) {
+    LOG(ERROR) << "set terminate task driver " << taskId_ << " state " << &state;
     state.isTerminated = true;
   }
   if (reason == StopReason::kNone) {
@@ -2302,6 +2311,7 @@ StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
 
 StopReason Task::enterForTerminateLocked(ThreadState& state) {
   if (state.isOnThread() || state.isTerminated) {
+    LOG(ERROR) << "set terminate task driver " << taskId_ << " state " << &state;
     state.isTerminated = true;
     return StopReason::kAlreadyOnThread;
   }
@@ -2310,6 +2320,7 @@ StopReason Task::enterForTerminateLocked(ThreadState& state) {
     // resume code path to close these off thread drivers.
     return StopReason::kPause;
   }
+  LOG(ERROR) << "set terminate task driver " << taskId_;
   state.isTerminated = true;
   state.setThread();
   return StopReason::kTerminate;
@@ -2330,6 +2341,7 @@ void Task::leave(
     if (!state.isTerminated) {
       reason = shouldStopLocked();
       if (reason == StopReason::kTerminate) {
+        LOG(ERROR) << "set terminate task driver on leave " << taskId_ << ", state " << &state;
         state.isTerminated = true;
       }
     } else {
@@ -2373,6 +2385,7 @@ StopReason Task::enterSuspended(ThreadState& state) {
   }
   const auto reason = shouldStopLocked();
   if (reason == StopReason::kTerminate) {
+    LOG(ERROR) << "set terminate task driver on suspended " << taskId_;
     state.isTerminated = true;
     return StopReason::kTerminate;
   }
@@ -2403,6 +2416,7 @@ StopReason Task::leaveSuspended(ThreadState& state) {
         return StopReason::kAlreadyTerminated;
       }
       if (terminateRequested_) {
+        LOG(ERROR) << "set terminate task driver on suspension leave " << taskId_;
         state.isTerminated = true;
         return StopReason::kTerminate;
       }

@@ -32,10 +32,10 @@ bool waitForTaskDriversToFinish(exec::Task* task, uint64_t maxWaitMicros) {
   }
 
   if (task->numFinishedDrivers() != task->numTotalDrivers()) {
-    LOG(ERROR)
-        << "Timed out waiting for all task drivers to finish. Finished drivers: "
-        << task->numFinishedDrivers()
-        << ". Total drivers: " << task->numTotalDrivers();
+    LOG(ERROR) << "Timed out waiting for all drivers from task "
+               << task->taskId()
+               << " to finish. Finished drivers: " << task->numFinishedDrivers()
+               << ". Total drivers: " << task->numTotalDrivers();
   }
 
   return task->numFinishedDrivers() == task->numTotalDrivers();

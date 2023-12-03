@@ -38,4 +38,17 @@ void JoinBridge::cancel() {
   notify(std::move(promises));
 }
 
+void JoinBridge::setError(const std::exception_ptr& exception) {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (exception_ != nullptr) {
+    return;
+  }
+  exception_ = exception;
+}
+
+void JoinBridge::checkErrorLocked() {
+  if (exception_ != nullptr) {
+    std::rethrow_exception(exception_);
+  }
+}
 } // namespace facebook::velox::exec

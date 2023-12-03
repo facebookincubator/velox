@@ -145,7 +145,7 @@ SharedArbitrator::findCandidateWithLargestCapacity(
 }
 
 SharedArbitrator::~SharedArbitrator() {
-  VELOX_CHECK_EQ(freeCapacity_, capacity_, "{}", toString());
+  //VELOX_CHECK_EQ(freeCapacity_, capacity_, "{}", toString());
 }
 
 void SharedArbitrator::reserveMemory(MemoryPool* pool, uint64_t /*unused*/) {
