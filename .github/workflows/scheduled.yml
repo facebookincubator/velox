@@ -114,6 +114,9 @@ jobs:
     timeout-minutes: 120
     steps:
 
+      - name: "Install dependencies"
+        run: source ./scripts/setup-ubuntu.sh
+
       - name: Download presto fuzzer 
         uses: actions/download-artifact@v3
         with:
@@ -153,6 +156,9 @@ jobs:
     needs: compile
     timeout-minutes: 120
     steps:
+
+      - name: "Install dependencies"
+        run: source ./scripts/setup-ubuntu.sh
 
       - name: Download spark fuzzer 
         uses: actions/download-artifact@v3
@@ -214,6 +220,9 @@ jobs:
     timeout-minutes: 120
     steps:
 
+      - name: "Install dependencies"
+        run: source ./scripts/setup-ubuntu.sh
+
       - name: Download aggregation fuzzer 
         uses: actions/download-artifact@v3
         with:
@@ -246,6 +255,9 @@ jobs:
     needs: compile
     timeout-minutes: 120
     steps:
+
+      - name: "Install dependencies"
+        run: source ./scripts/setup-ubuntu.sh
 
       - name: Download join fuzzer 
         uses: actions/download-artifact@v3
