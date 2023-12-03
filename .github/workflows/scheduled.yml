@@ -49,7 +49,7 @@ permissions:
 jobs:
   compile:
     runs-on: 8-core
-    timeout: 120
+    timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
@@ -111,6 +111,7 @@ jobs:
 
   linux-presto-fuzzer-run:
     runs-on: 8-core
+    needs: compile
     timeout-minutes: 120
     steps:
 
@@ -149,6 +150,7 @@ jobs:
 
   linux-spark-fuzzer-run:
     runs-on: 8-core
+    needs: compile
     timeout-minutes: 120
     steps:
 
@@ -206,6 +208,7 @@ jobs:
 
   linux-aggregate-fuzzer-run:
     runs-on: 8-core
+    needs: compile
     timeout-minutes: 120
     steps:
 
@@ -237,6 +240,7 @@ jobs:
 
   linux-join-fuzzer-run:
     runs-on: 8-core
+    needs: compile
     timeout-minutes: 120
     steps:
 
