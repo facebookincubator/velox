@@ -154,10 +154,12 @@ class SumDataSizeForStatsAggregate
       return ++i < numRowsToProcess;
     });
 
+    Scratch scratch;
     getVectorSerde()->estimateSerializedSize(
         vector,
         folly::Range(rowIndices_.data(), rowIndices_.size()),
-        rowSizePtrs_.data());
+        rowSizePtrs_.data(),
+        scratch);
   }
 
   void doUpdateSingleGroup(

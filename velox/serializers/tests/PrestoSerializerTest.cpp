@@ -18,6 +18,8 @@
 #include <gtest/gtest.h>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/ByteStream.h"
+#include "velox/common/time/Timer.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -38,6 +40,7 @@ class PrestoSerializerTest
   }
 
   void sanityCheckEstimateSerializedSize(const RowVectorPtr& rowVector) {
+    Scratch scratch;
     const auto numRows = rowVector->size();
 
     std::vector<IndexRange> rows(numRows);
@@ -51,7 +54,10 @@ class PrestoSerializerTest
       rawRowSizes[i] = &rowSizes[i];
     }
     serde_->estimateSerializedSize(
-        rowVector, folly::Range(rows.data(), numRows), rawRowSizes.data());
+        rowVector,
+        folly::Range(rows.data(), numRows),
+        rawRowSizes.data(),
+        scratch);
   }
 
   serializer::presto::PrestoVectorSerde::PrestoOptions getParamSerdeOptions(
@@ -68,8 +74,9 @@ class PrestoSerializerTest
   void serialize(
       const RowVectorPtr& rowVector,
       std::ostream* output,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions*
-          serdeOptions) {
+      const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions,
+      std::optional<folly::Range<const IndexRange*>> indexRanges = std::nullopt,
+      std::optional<folly::Range<const vector_size_t*>> rows = std::nullopt) {
     auto streamInitialSize = output->tellp();
     sanityCheckEstimateSerializedSize(rowVector);
 
@@ -79,9 +86,34 @@ class PrestoSerializerTest
     auto paramOptions = getParamSerdeOptions(serdeOptions);
     auto serializer =
         serde_->createSerializer(rowType, numRows, arena.get(), &paramOptions);
+    vector_size_t sizeEstimate = 0;
 
-    serializer->append(rowVector);
+    Scratch scratch;
+    if (indexRanges.has_value()) {
+      raw_vector<vector_size_t*> sizes(indexRanges.value().size());
+      std::fill(sizes.begin(), sizes.end(), &sizeEstimate);
+      serde_->estimateSerializedSize(
+          rowVector, indexRanges.value(), sizes.data(), scratch);
+      serializer->append(rowVector, indexRanges.value(), scratch);
+    } else if (rows.has_value()) {
+      raw_vector<vector_size_t*> sizes(rows.value().size());
+      std::fill(sizes.begin(), sizes.end(), &sizeEstimate);
+      serde_->estimateSerializedSize(
+          rowVector, rows.value(), sizes.data(), scratch);
+      serializer->append(rowVector, rows.value(), scratch);
+    } else {
+      vector_size_t* sizes = &sizeEstimate;
+      IndexRange range{0, rowVector->size()};
+      serde_->estimateSerializedSize(
+          rowVector,
+          folly::Range<const IndexRange*>(&range, 1),
+          &sizes,
+          scratch);
+      serializer->append(rowVector);
+    }
     auto size = serializer->maxSerializedSize();
+    LOG(INFO) << "Size=" << size << " estimate=" << sizeEstimate << " "
+              << (100 * sizeEstimate) / size << "%";
     facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
     OStreamOutputStream out(output, &listener);
     serializer->flush(&out);
@@ -164,6 +196,35 @@ class PrestoSerializerTest
     }
 
     assertEqualVectors(result, rowVector);
+
+    // Serialize the vector with even and odd rows in different partitions.
+    auto even =
+        makeIndices(rowVector->size() / 2, [&](auto row) { return row * 2; });
+    auto odd = makeIndices(
+        (rowVector->size() - 1) / 2, [&](auto row) { return (row * 2) + 1; });
+    testSerializeRows(rowVector, even, serdeOptions);
+    testSerializeRows(rowVector, odd, serdeOptions);
+  }
+
+  void testSerializeRows(
+      const RowVectorPtr& rowVector,
+      BufferPtr indices,
+      const serializer::presto::PrestoVectorSerde::PrestoOptions*
+          serdeOptions) {
+    std::ostringstream out;
+    auto rows = folly::Range<const vector_size_t*>(
+        indices->as<vector_size_t>(), indices->size() / sizeof(vector_size_t));
+    serialize(rowVector, &out, serdeOptions, std::nullopt, rows);
+
+    auto rowType = asRowType(rowVector->type());
+    auto deserialized = deserialize(rowType, out.str(), serdeOptions);
+    assertEqualVectors(
+        deserialized,
+        BaseVector::wrapInDictionary(
+            BufferPtr(nullptr),
+            indices,
+            indices->size() / sizeof(vector_size_t),
+            rowVector));
   }
 
   void serializeEncoded(
@@ -522,12 +583,19 @@ TEST_P(PrestoSerializerTest, roundTrip) {
       VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   opts.nullRatio = 0.1;
   VectorFuzzer fuzzer(opts, pool_.get());
+  VectorFuzzer::Options nonNullOpts;
+  nonNullOpts.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
+  nonNullOpts.nullRatio = 0;
+  VectorFuzzer nonNullFuzzer(nonNullOpts, pool_.get());
 
   const size_t numRounds = 20;
 
   for (size_t i = 0; i < numRounds; ++i) {
     auto rowType = fuzzer.randRowType();
-    auto inputRowVector = fuzzer.fuzzInputRow(rowType);
+
+    auto inputRowVector = (i % 2 == 0) ? fuzzer.fuzzInputRow(rowType)
+                                       : nonNullFuzzer.fuzzInputRow(rowType);
     testRoundTrip(inputRowVector);
   }
 }
@@ -536,6 +604,129 @@ TEST_P(PrestoSerializerTest, emptyArrayOfRowVector) {
   // The value of nullCount_ + nonNullCount_ of the inner RowVector is 0.
   auto arrayOfRow = makeArrayOfRowVector(ROW({UNKNOWN()}), {{}});
   testRoundTrip(arrayOfRow);
+}
+
+struct SerializeCase {
+  int32_t nullPct;
+  int32_t numSelected;
+  int32_t bits;
+  int32_t vectorSize;
+  uint64_t irTime{0};
+  uint64_t rrTime{0};
+
+  std::string toString() {
+    return fmt::format(
+        "{} of {} {} bit {}%null: {} ir / {} rr",
+        numSelected,
+        vectorSize,
+        bits,
+        nullPct,
+        irTime,
+        rrTime);
+  }
+};
+
+TEST_P(PrestoSerializerTest, timeFlat) {
+  // Serialize different fractions of a 10K vector of int32_t and int64_t with
+  // IndexRange and row range variants with and without nulls.
+  constexpr int32_t kPad = 8;
+  std::vector<int32_t> numSelectedValues = {
+    3
+#if ALL_CASES
+    ,
+    30,
+    300,
+    10000
+#endif
+  };
+  std::vector<std::vector<IndexRange>> indexRanges;
+  std::vector<std::vector<vector_size_t>> rowSets;
+  std::vector<int32_t> nullPctValues = {0, 1, 10, 90};
+  std::vector<int32_t> bitsValues = {32, 64};
+  const int32_t vectorSize = 10000;
+  for (auto numSelected : numSelectedValues) {
+    std::vector<IndexRange> ir;
+    std::vector<vector_size_t> rr;
+    int32_t step = vectorSize / numSelected;
+    for (auto r = 0; r < vectorSize; r += step) {
+      ir.push_back(IndexRange{r, 1});
+      rr.push_back(r);
+    }
+    std::cout << rr.size();
+    indexRanges.push_back(std::move(ir));
+    rr.resize(rr.size() + kPad, 999999999);
+    rowSets.push_back(std::move(rr));
+  }
+  VectorMaker vm(pool_.get());
+  std::vector<VectorPtr> v32s;
+  std::vector<VectorPtr> v64s;
+  for (auto nullPct : nullPctValues) {
+    auto v32 = vm.flatVector<int32_t>(
+        vectorSize,
+        [&](auto row) { return row; },
+        [&](auto row) { return nullPct == 0 ? false : row % 100 < nullPct; });
+    auto v64 = vm.flatVector<int64_t>(
+        vectorSize,
+        [&](auto row) { return row; },
+        [&](auto row) { return nullPct == 0 ? false : row % 100 < nullPct; });
+    v32s.push_back(std::move(v32));
+    v64s.push_back(std::move(v64));
+  }
+  std::vector<SerializeCase> cases;
+  Scratch scratch;
+
+  auto runCase = [&](int32_t nullIdx, int32_t selIdx, int32_t bits) {
+    SerializeCase item;
+    item.vectorSize = vectorSize;
+    item.nullPct = nullPctValues[nullIdx];
+    item.numSelected = numSelectedValues[selIdx];
+    item.bits = bits;
+    int32_t numRepeat = 500 * vectorSize / indexRanges[selIdx].size();
+
+    VectorPtr vector = bits == 32 ? v32s[nullIdx] : v64s[nullIdx];
+    auto rowType = ROW({vector->type()});
+    auto rowVector = vm.rowVector({vector});
+    {
+#if ALL_CASES
+      MicrosecondTimer t(&item.irTime);
+      auto group = std::make_unique<VectorStreamGroup>(pool_.get());
+      group->createStreamTree(rowType, rowSets[selIdx].size() - kPad);
+      for (auto repeat = 0; repeat < numRepeat; ++repeat) {
+        group->append(
+            rowVector,
+            folly::Range(
+                indexRanges[selIdx].data(), indexRanges[selIdx].size()),
+            scratch);
+      }
+#endif
+    }
+
+    {
+      MicrosecondTimer t(&item.rrTime);
+      auto group = std::make_unique<VectorStreamGroup>(pool_.get());
+      group->createStreamTree(rowType, rowSets[selIdx].size());
+
+      for (auto repeat = 0; repeat < numRepeat; ++repeat) {
+        group->append(
+            rowVector,
+            folly::Range(rowSets[selIdx].data(), rowSets[selIdx].size() - kPad),
+            scratch);
+      }
+    }
+    return item;
+  };
+
+  for (auto bits : bitsValues) {
+    for (auto nullIdx = 0; nullIdx < nullPctValues.size(); ++nullIdx) {
+      for (auto selIdx = 0; selIdx < numSelectedValues.size(); ++selIdx) {
+        int32_t numRepeat = 10 / numSelectedValues[selIdx];
+        cases.push_back(runCase(nullIdx, selIdx, bits));
+      }
+    }
+  }
+  for (auto& item : cases) {
+    std::cout << item.toString() << std::endl;
+  }
 }
 
 TEST_P(PrestoSerializerTest, typeMismatch) {

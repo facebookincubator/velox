@@ -91,8 +91,11 @@ class OutputBufferManagerTest : public testing::Test {
     auto range = IndexRange{0, size};
     data->createStreamTree(
         std::dynamic_pointer_cast<const RowType>(vector->type()), size);
+    Scratch scratch;
     data->append(
-        std::dynamic_pointer_cast<RowVector>(vector), folly::Range(&range, 1));
+        std::dynamic_pointer_cast<RowVector>(vector),
+        folly::Range(&range, 1),
+        scratch);
     auto listener = bufferManager_->newListener();
     IOBufOutputStream stream(*pool_, listener.get(), data->size());
     data->flush(&stream);
