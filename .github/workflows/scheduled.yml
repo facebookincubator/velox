@@ -111,7 +111,7 @@ jobs:
           path: velox/_build/debug/velox/exec/tests/velox_join_fuzzer_test      
 
   linux-presto-fuzzer-run:
-    runs-on: 8-core
+    runs-on: ubuntu-latest 
     needs: compile
     timeout-minutes: 120
     steps:
@@ -159,7 +159,7 @@ jobs:
             /tmp/fuzzer_repro
 
   linux-spark-fuzzer-run:
-    runs-on: 8-core
+    runs-on: ubuntu-latest
     needs: compile
     timeout-minutes: 120
     steps:
@@ -227,7 +227,7 @@ jobs:
 
 
   linux-aggregate-fuzzer-run:
-    runs-on: 8-core
+    runs-on: ubuntu-latest
     needs: compile
     timeout-minutes: 120
     steps:
@@ -268,7 +268,7 @@ jobs:
             /tmp/aggregate_fuzzer_repro
 
   linux-join-fuzzer-run:
-    runs-on: 8-core
+    runs-on: ubuntu-latest 
     needs: compile
     timeout-minutes: 120
     steps:
