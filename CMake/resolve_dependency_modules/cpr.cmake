@@ -20,6 +20,8 @@ set(VELOX_CPR_SOURCE_URL
     "https://github.com/libcpr/cpr/archive/refs/tags/${VELOX_CPR_VERSION}.tar.gz"
 )
 
+# Add the dependency for curl, so that we can define the source URL for curl in
+# curl.cmake. This will override the curl version declared by cpr.
 set(curl_SOURCE BUNDLED)
 resolve_dependency(curl)
 
