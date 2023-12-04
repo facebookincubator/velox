@@ -24,7 +24,7 @@ namespace facebook::velox::parquet {
 // https://github.com/apache/arrow/blob/apache-arrow-12.0.0/cpp/src/parquet/encoding.cc#LL2357C18-L2586C3
 class DeltaBpDecoder {
  public:
-  DeltaBpDecoder(const char* FOLLY_NONNULL start, const char* FOLLY_NONNULL end)
+  DeltaBpDecoder(const char* start, const char* end)
       : bufferStart_(start), bufferEnd_(end) {
     initHeader();
   }
@@ -81,10 +81,10 @@ class DeltaBpDecoder {
     }
   }
 
- protected:
+ private:
   bool getVlqInt(uint64_t& v) {
     uint64_t tmp = 0;
-    for (int i = 0; i < kMaxVlqByteLength; i++) {
+    for (int i = 0; i < folly::kMaxVarintLength64; i++) {
       uint8_t byte = *(bufferStart_++);
       tmp |= static_cast<uint64_t>(byte & 0x7F) << (7 * i);
       if ((byte & 0x80) == 0) {
@@ -99,8 +99,7 @@ class DeltaBpDecoder {
     uint64_t u;
     if (!getVlqInt(u))
       return false;
-    u = (u >> 1) ^ (~(u & 1) + 1);
-    v = ::arrow::util::SafeCopy<int64_t>(u);
+    v = (u >> 1) ^ (~(u & 1) + 1);
     return true;
   }
 
@@ -134,7 +133,7 @@ class DeltaBpDecoder {
   }
 
   void initBlock() {
-    VELOX_CHECK_GT(totalValuesRemaining_, 0, "initBlock called at EOF");
+    VELOX_DCHECK_GT(totalValuesRemaining_, 0, "initBlock called at EOF");
 
     if (!getZigZagVlqInt(minDelta_)) {
       VELOX_FAIL("initBlock EOF")
@@ -154,7 +153,7 @@ class DeltaBpDecoder {
   }
 
   void initMiniBlock(int32_t bitWidth) {
-    VELOX_CHECK_LE(
+    VELOX_DCHECK_LE(
         bitWidth,
         kMaxDeltaBitWidth,
         "delta bit width larger than integer bit width");
