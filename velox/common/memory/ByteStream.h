@@ -214,18 +214,18 @@ class ByteInputStream {
 /// in hash tables. The stream is seekable and supports overwriting of
 /// previous content, for example, writing a message body and then
 /// seeking back to start to write a length header.
-class ByteStream {
+class ByteOutputStream {
  public:
   /// For output.
-  ByteStream(
+  ByteOutputStream(
       StreamArena* arena,
       bool isBits = false,
       bool isReverseBitOrder = false)
       : arena_(arena), isBits_(isBits), isReverseBitOrder_(isReverseBitOrder) {}
 
-  ByteStream(const ByteStream& other) = delete;
+  ByteOutputStream(const ByteOutputStream& other) = delete;
 
-  void operator=(const ByteStream& other) = delete;
+  void operator=(const ByteOutputStream& other) = delete;
 
   void setRange(ByteRange range) {
     ranges_.resize(1);
@@ -392,7 +392,7 @@ class ByteStream {
 template <typename T>
 class AppendWindow {
  public:
-  AppendWindow(ByteStream& stream, Scratch& scratch)
+  AppendWindow(ByteOutputStream& stream, Scratch& scratch)
       : stream_(stream), scratchPtr_(scratch) {}
 
   ~AppendWindow() {
@@ -408,7 +408,7 @@ class AppendWindow {
   }
 
  private:
-  ByteStream& stream_;
+  ByteOutputStream& stream_;
   ScratchPtr<T> scratchPtr_;
 };
 
@@ -434,7 +434,7 @@ class IOBufOutputStream : public OutputStream {
       int32_t initialSize = memory::AllocationTraits::kPageSize)
       : OutputStream(listener),
         arena_(std::make_shared<StreamArena>(&pool)),
-        out_(std::make_unique<ByteStream>(arena_.get())) {
+        out_(std::make_unique<ByteOutputStream>(arena_.get())) {
     out_->startWrite(initialSize);
   }
 
@@ -455,7 +455,7 @@ class IOBufOutputStream : public OutputStream {
 
  private:
   std::shared_ptr<StreamArena> arena_;
-  std::unique_ptr<ByteStream> out_;
+  std::unique_ptr<ByteOutputStream> out_;
 };
 
 } // namespace facebook::velox

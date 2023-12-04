@@ -39,7 +39,7 @@ void ValueList::prepareAppend(HashStringAllocator* allocator) {
 }
 
 void ValueList::writeLastNulls(HashStringAllocator* allocator) {
-  ByteStream stream(allocator);
+  ByteOutputStream stream(allocator);
   if (nullsBegin_) {
     allocator->extendWrite(nullsCurrent_, stream);
   } else {
@@ -61,7 +61,7 @@ void ValueList::appendNonNull(
     vector_size_t index,
     HashStringAllocator* allocator) {
   prepareAppend(allocator);
-  ByteStream stream(allocator);
+  ByteOutputStream stream(allocator);
   allocator->extendWrite(dataCurrent_, stream);
   exec::ContainerRowSerde::serialize(values, index, stream);
   ++size_;
