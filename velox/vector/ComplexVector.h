@@ -444,6 +444,19 @@ class ArrayVector : public ArrayVectorBase {
     return elements_;
   }
 
+  void setType(const TypePtr& type) override {
+    VELOX_CHECK_NOT_NULL(type);
+    VELOX_CHECK(
+        type_->kindEquals(type),
+        "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
+        type_,
+        type);
+    type_ = type;
+
+    auto arrayType = std::dynamic_pointer_cast<const ArrayType>(type);
+    elements_->setType(arrayType->elementType());
+  }
+
   void setElements(VectorPtr elements) {
     elements_ = BaseVector::getOrCreateEmpty(
         std::move(elements), type()->childAt(0), pool_);
@@ -563,6 +576,20 @@ class MapVector : public ArrayVectorBase {
 
   VectorPtr& mapValues() {
     return values_;
+  }
+
+  void setType(const TypePtr& type) override {
+    VELOX_CHECK_NOT_NULL(type);
+    VELOX_CHECK(
+        type_->kindEquals(type),
+        "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
+        type_,
+        type);
+    type_ = type;
+
+    auto mapType = std::dynamic_pointer_cast<const MapType>(type);
+    keys_->setType(mapType->keyType());
+    values_->setType(mapType->valueType());
   }
 
   bool hasSortedKeys() const {

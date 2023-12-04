@@ -3541,7 +3541,10 @@ TEST_F(VectorTest, setType) {
 
   auto newType = ROW({"bb"}, {BIGINT()});
   vector->setType(newType);
-  EXPECT_EQ(vector->type()->name(), newType->name());
+
+  EXPECT_EQ(
+      std::static_pointer_cast<const RowType>(vector->type())->names()[0],
+      "bb");
 
   auto failedType = ROW({"bb"}, {VARCHAR()});
   VELOX_ASSERT_RUNTIME_THROW(
@@ -3549,7 +3552,7 @@ TEST_F(VectorTest, setType) {
       "Cannot change vector type from ROW<bb:BIGINT> to ROW<bb:VARCHAR>. The old and new types can be different logical types, but the underlying physical types must match.")
 }
 
-TEST_F(VectorTest, setNestedType) {
+TEST_F(VectorTest, setROWNestROWType) {
   auto type =
       ROW({"a", "b"}, {ROW({"c", "d"}, {BIGINT(), BIGINT()}), BIGINT()});
   auto vector = BaseVector::create(type, 1'000, pool());
@@ -3557,10 +3560,58 @@ TEST_F(VectorTest, setNestedType) {
   auto newType =
       ROW({"a", "b"}, {ROW({"cc", "dd"}, {BIGINT(), BIGINT()}), BIGINT()});
   vector->setType(newType);
-  auto rowVector = std::static_pointer_cast<const RowVector>(vector);
-  auto rowType = std::static_pointer_cast<const RowType>(newType);
-  EXPECT_EQ(
-      rowVector->children()[0]->type()->name(), rowType->childAt(0)->name());
+
+  auto rowType = std::static_pointer_cast<const RowType>(vector->type());
+  auto names =
+      std::static_pointer_cast<const RowType>(rowType->childAt(0))->names();
+  EXPECT_EQ(names[0], "cc");
+  EXPECT_EQ(names[1], "dd");
+}
+
+TEST_F(VectorTest, setARRAYNestROWType) {
+  auto type =
+      ROW({"a", "b"}, {ARRAY(ROW({"c", "d"}, {BIGINT(), BIGINT()})), BIGINT()});
+  auto vector = BaseVector::create(type, 1'000, pool());
+
+  auto newType = ROW(
+      {"a", "b"}, {ARRAY(ROW({"cc", "dd"}, {BIGINT(), BIGINT()})), BIGINT()});
+  vector->setType(newType);
+  auto rowType = std::static_pointer_cast<const RowType>(vector->type());
+  auto arrayType =
+      std::static_pointer_cast<const ArrayType>(rowType->childAt(0));
+  auto names = std::static_pointer_cast<const RowType>(arrayType->elementType())
+                   ->names();
+  EXPECT_EQ(names[0], "cc");
+  EXPECT_EQ(names[1], "dd");
+}
+
+TEST_F(VectorTest, setMAPNestROWType) {
+  auto type =
+      ROW({"a", "b"},
+          {MAP(ROW({"c", "d"}, {BIGINT(), BIGINT()}),
+               ROW({"e", "f"}, {BIGINT(), BIGINT()})),
+           BIGINT()});
+  auto vector = BaseVector::create(type, 1'000, pool());
+
+  auto newType =
+      ROW({"a", "b"},
+          {MAP(ROW({"cc", "dd"}, {BIGINT(), BIGINT()}),
+               ROW({"ee", "ff"}, {BIGINT(), BIGINT()})),
+           BIGINT()});
+  vector->setType(newType);
+  auto rowType = std::static_pointer_cast<const RowType>(vector->type());
+  auto mapType = std::static_pointer_cast<const MapType>(rowType->childAt(0));
+  auto keyType = std::static_pointer_cast<const RowType>(mapType->keyType());
+  auto valueType =
+      std::static_pointer_cast<const RowType>(mapType->valueType());
+
+  auto keyNames = keyType->names();
+  EXPECT_EQ(keyNames[0], "cc");
+  EXPECT_EQ(keyNames[1], "dd");
+
+  auto valueNames = valueType->names();
+  EXPECT_EQ(valueNames[0], "ee");
+  EXPECT_EQ(valueNames[1], "ff");
 }
 
 } // namespace
