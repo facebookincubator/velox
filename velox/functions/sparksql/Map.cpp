@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include <velox/common/base/Exceptions.h>
-#include <velox/type/Timestamp.h>
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/vector/VectorTypeUtils.h"
@@ -32,50 +31,30 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-template <TypeKind kind>
-void setKeysResultTyped(
+void setKeysAndValuesResult(
     vector_size_t mapSize,
+    vector_size_t baseOffset,
     std::vector<VectorPtr>& args,
     const VectorPtr& keysResult,
-    exec::EvalCtx& context,
-    const SelectivityVector& rows) {
-  using T = typename KindToFlatVector<kind>::WrapperType;
-  auto flatVector = keysResult->asFlatVector<T>();
-  flatVector->resize(rows.end() * mapSize);
-
-  exec::LocalDecodedVector decoded(context);
-  for (vector_size_t i = 0; i < mapSize; i++) {
-    decoded.get()->decode(*args[i * 2], rows);
-    // For efficiency traverse one arg at the time
-    rows.applyToSelected([&](vector_size_t row) {
-      VELOX_CHECK(!decoded->isNullAt(row), "Cannot use null as map key!");
-      flatVector->set(row * mapSize + i, decoded->valueAt<T>(row));
-    });
-  }
-}
-
-template <TypeKind kind>
-void setValuesResultTyped(
-    vector_size_t mapSize,
-    std::vector<VectorPtr>& args,
     const VectorPtr& valuesResult,
     exec::EvalCtx& context,
     const SelectivityVector& rows) {
-  using T = typename KindToFlatVector<kind>::WrapperType;
-  auto flatVector = valuesResult->asFlatVector<T>();
-  flatVector->resize(rows.end() * mapSize);
-
   exec::LocalDecodedVector decoded(context);
+  SelectivityVector targetRows(keysResult->size(), false);
+  std::vector<vector_size_t> toSourceRow(keysResult->size());
   for (vector_size_t i = 0; i < mapSize; i++) {
-    decoded.get()->decode(*args[i * 2 + 1], rows);
-
-    rows.applyToSelected([&](vector_size_t row) {
-      if (decoded->isNullAt(row)) {
-        flatVector->setNull(row * mapSize + i, true);
-      } else {
-        flatVector->set(row * mapSize + i, decoded->valueAt<T>(row));
-      }
+    decoded.get()->decode(*args[i * 2], rows);
+    auto offset = baseOffset;
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      VELOX_USER_CHECK(!decoded->isNullAt(row), "Cannot use null as map key!");
+      targetRows.setValid(offset + i, true);
+      toSourceRow[offset + i] = row;
+      offset += mapSize;
     });
+    targetRows.updateBounds();
+    keysResult->copy(args[i * 2].get(), targetRows, toSourceRow.data());
+    valuesResult->copy(args[i * 2 + 1].get(), targetRows, toSourceRow.data());
+    targetRows.clearAll();
   }
 }
 
@@ -91,7 +70,7 @@ class MapFunction : public exec::VectorFunction {
       const TypePtr& /*outputType*/,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         args.size() >= 2 && args.size() % 2 == 0,
         "Map function must take an even number of arguments");
     auto mapSize = args.size() / 2;
@@ -101,14 +80,12 @@ class MapFunction : public exec::VectorFunction {
 
     // Check key and value types
     for (auto i = 0; i < mapSize; i++) {
-      VELOX_CHECK_EQ(
-          args[i * 2]->type(),
-          keyType,
+      VELOX_USER_CHECK(
+          args[i * 2]->type()->equivalent(*keyType),
           "All the key arguments in Map function must be the same!");
-      VELOX_CHECK_EQ(
-          args[i * 2 + 1]->type(),
-          valueType,
-          "All the key arguments in Map function must be the same!");
+      VELOX_USER_CHECK(
+          args[i * 2 + 1]->type()->equivalent(*valueType),
+          "All the value arguments in Map function must be the same!");
     }
 
     // Initializing input
@@ -121,35 +98,24 @@ class MapFunction : public exec::VectorFunction {
     auto offsets = mapResult->mutableOffsets(rows.end());
     auto rawOffsets = offsets->asMutable<int32_t>();
 
+    // Setting keys and value elements
+    auto& keysResult = mapResult->mapKeys();
+    auto& valuesResult = mapResult->mapValues();
+    const auto baseOffset =
+        std::max<vector_size_t>(keysResult->size(), valuesResult->size());
+
     // Setting size and offsets
+    vector_size_t offset = baseOffset;
     rows.applyToSelected([&](vector_size_t row) {
       rawSizes[row] = mapSize;
-      rawOffsets[row] = row * mapSize;
+      rawOffsets[row] = offset;
+      offset += mapSize;
     });
 
-    // Setting keys and value elements
-    auto keysResult = mapResult->mapKeys();
-    auto valuesResult = mapResult->mapValues();
-    keysResult->resize(rows.end() * mapSize);
-    valuesResult->resize(rows.end() * mapSize);
-
-    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        setKeysResultTyped,
-        keyType->kind(),
-        mapSize,
-        args,
-        keysResult,
-        context,
-        rows);
-
-    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        setValuesResultTyped,
-        valueType->kind(),
-        mapSize,
-        args,
-        valuesResult,
-        context,
-        rows);
+    keysResult->resize(offset);
+    valuesResult->resize(offset);
+    setKeysAndValuesResult(
+        mapSize, baseOffset, args, keysResult, valuesResult, context, rows);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

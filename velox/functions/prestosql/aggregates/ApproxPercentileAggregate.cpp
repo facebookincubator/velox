@@ -239,9 +239,10 @@ class ApproxPercentileAggregate : public exec::Aggregate {
           BaseVector::createNullConstant(BOOLEAN(), numGroups, pool);
       rowResult->childAt(kAccuracy) =
           BaseVector::createNullConstant(DOUBLE(), numGroups, pool);
-      for (auto i = 0; i < numGroups; ++i) {
-        rowResult->setNull(i, true);
-      }
+
+      // Set nulls for all rows.
+      auto rawNulls = rowResult->mutableRawNulls();
+      bits::fillBits(rawNulls, 0, rowResult->size(), bits::kNull);
       return;
     }
     auto& values = percentiles_->values;
@@ -464,7 +465,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     checkSetPercentile(rows, *args[argIndex++]);
     if (hasAccuracy_) {
       decodedAccuracy_.decode(*args[argIndex++], rows, true);
-      checkSetAccuracy();
+      checkSetAccuracy(rows);
     }
     VELOX_CHECK_EQ(argIndex, args.size());
   }
@@ -491,31 +492,40 @@ class ApproxPercentileAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const BaseVector& vec) {
     DecodedVector decoded(vec, rows);
-    VELOX_USER_CHECK(
-        decoded.isConstantMapping(),
-        "Percentile argument must be constant for all input rows");
+
+    auto* base = decoded.base();
+    auto baseFirstRow = decoded.index(rows.begin());
+    if (!decoded.isConstantMapping()) {
+      rows.applyToSelected([&](vector_size_t row) {
+        VELOX_USER_CHECK(!decoded.isNullAt(row), "Percentile cannot be null")
+        auto baseRow = decoded.index(row);
+        VELOX_USER_CHECK(
+            base->equalValueAt(base, baseRow, baseFirstRow),
+            "Percentile argument must be constant for all input rows: {} vs. {}",
+            base->toString(baseRow),
+            base->toString(baseFirstRow));
+      });
+    }
+
     bool isArray;
     const double* data;
     vector_size_t len;
     std::vector<bool> isNull;
-    auto indexInBaseVector = decoded.index(0);
-    if (decoded.base()->typeKind() == TypeKind::DOUBLE) {
+    if (base->typeKind() == TypeKind::DOUBLE) {
       isArray = false;
-      auto baseVector = decoded.base();
-      data = baseVector->asUnchecked<ConstantVector<double>>()->rawValues() +
-          indexInBaseVector;
+      data = decoded.data<double>() + baseFirstRow;
       len = 1;
-      isNull = {baseVector->isNullAt(indexInBaseVector)};
-    } else if (decoded.base()->typeKind() == TypeKind::ARRAY) {
+      isNull = {decoded.isNullAt(rows.begin())};
+    } else if (base->typeKind() == TypeKind::ARRAY) {
       isArray = true;
-      auto arrays = decoded.base()->asUnchecked<ArrayVector>();
+      auto arrays = base->asUnchecked<ArrayVector>();
       VELOX_USER_CHECK(
           arrays->elements()->isFlatEncoding(),
           "Only flat encoding is allowed for percentile array elements");
-      extractPercentiles(arrays, indexInBaseVector, data, len, isNull);
+      extractPercentiles(arrays, baseFirstRow, data, len, isNull);
     } else {
       VELOX_USER_FAIL(
-          "Incorrect type for percentile: {}", decoded.base()->typeKind());
+          "Incorrect type for percentile: {}", base->type()->toString());
     }
     checkSetPercentile(isArray, data, len, isNull);
   }
@@ -555,14 +565,29 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     }
   }
 
-  void checkSetAccuracy() {
+  void checkSetAccuracy(const SelectivityVector& rows) {
     if (!hasAccuracy_) {
       return;
     }
-    VELOX_USER_CHECK(
-        decodedAccuracy_.isConstantMapping(),
-        "Accuracy argument must be constant for all input rows");
-    checkSetAccuracy(decodedAccuracy_.valueAt<double>(0));
+
+    if (decodedAccuracy_.isConstantMapping()) {
+      VELOX_USER_CHECK(
+          !decodedAccuracy_.isNullAt(0), "Accuracy cannot be null");
+      checkSetAccuracy(decodedAccuracy_.valueAt<double>(0));
+    } else {
+      rows.applyToSelected([&](auto row) {
+        VELOX_USER_CHECK(
+            !decodedAccuracy_.isNullAt(row), "Accuracy cannot be null");
+        const auto accuracy = decodedAccuracy_.valueAt<double>(row);
+        if (accuracy_ == kMissingNormalizedValue) {
+          checkSetAccuracy(accuracy);
+        }
+        VELOX_USER_CHECK_EQ(
+            accuracy,
+            accuracy_,
+            "Accuracy argument must be constant for all input rows");
+      });
+    }
   }
 
   void checkSetAccuracy(double accuracy) {
@@ -801,8 +826,11 @@ void addSignatures(
                            .build());
 }
 
-exec::AggregateRegistrationResult registerApproxPercentile(
-    const std::string& name) {
+} // namespace
+
+exec::AggregateRegistrationResult registerApproxPercentileAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& inputType :
        {"tinyint", "smallint", "integer", "bigint", "real", "double"}) {
@@ -813,6 +841,7 @@ exec::AggregateRegistrationResult registerApproxPercentile(
         fmt::format("array({})", inputType),
         signatures);
   }
+  auto name = prefix + kApproxPercentile;
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
@@ -901,13 +930,7 @@ exec::AggregateRegistrationResult registerApproxPercentile(
                 type->toString());
         }
       },
-      /*registerCompanionFunctions*/ true);
-}
-
-} // namespace
-
-void registerApproxPercentileAggregate(const std::string& prefix) {
-  registerApproxPercentile(prefix + kApproxPercentile);
+      withCompanionFunctions);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -31,26 +31,29 @@ class time_zone;
 namespace facebook::velox {
 
 struct TimestampToStringOptions {
-  enum Precision : int8_t {
+  enum class Precision : int8_t {
     kMilliseconds = 3,
     kNanoseconds = 9,
-  } precision = kNanoseconds;
+  };
+
+  Precision precision = Precision::kNanoseconds;
 
   bool zeroPaddingYear = false;
   char dateTimeSeparator = 'T';
-  bool dateOnly = false;
+
+  enum class Mode : int8_t {
+    /// ISO 8601 timestamp format: %Y-%m-%dT%H:%M:%S.nnnnnnnnn for nanoseconds
+    /// precision; %Y-%m-%dT%H:%M:%S.nnn for milliseconds precision.
+    kFull,
+    /// ISO 8601 date format: %Y-%m-%d.
+    kDateOnly,
+    /// ISO 8601 time format: %H:%M:%S.nnnnnnnnn for nanoseconds precision,
+    /// or %H:%M:%S.nnn for milliseconds precision.
+    kTimeOnly,
+  };
+
+  Mode mode = Mode::kFull;
 };
-
-// Our own version of gmtime_r to avoid expensive calls to __tz_convert.  This
-// might not be very significant in micro benchmark, but is causing significant
-// context switching cost in real world queries with higher concurrency (71% of
-// time is on __tz_convert for some queries).
-//
-// Return whether the epoch second can be converted to a valid std::tm.
-bool epochToUtc(int64_t seconds, std::tm& out);
-
-std::string
-tmToString(const std::tm&, int nanos, const TimestampToStringOptions&);
 
 struct Timestamp {
  public:
@@ -117,19 +120,21 @@ struct Timestamp {
   }
 
   int64_t toMillis() const {
-    // When an integer overflow occurs in the calculation,
-    // an exception will be thrown.
-    try {
-      return checkedPlus(
-          checkedMultiply(seconds_, (int64_t)1'000),
-          (int64_t)(nanos_ / 1'000'000));
-    } catch (const std::exception& e) {
+    // We use int128_t to make sure the computation does not overflows since
+    // there are cases such that seconds*1000 does not fit in int64_t,
+    // but seconds*1000 + nanos does, an example is TimeStamp::minMillis().
+
+    // If the final result does not fit in int64_tw we throw.
+    __int128_t result =
+        (__int128_t)seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
+    if (result < std::numeric_limits<int64_t>::min() ||
+        result > std::numeric_limits<int64_t>::max()) {
       VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to milliseconds, {}",
+          "Could not convert Timestamp({}, {}) to milliseconds",
           seconds_,
-          nanos_,
-          e.what());
+          nanos_);
     }
+    return result;
   }
 
   int64_t toMicros() const {
@@ -154,6 +159,21 @@ struct Timestamp {
   toTimePoint() const;
 
   static Timestamp fromMillis(int64_t millis) {
+    if (millis >= 0 || millis % 1'000 == 0) {
+      return Timestamp(millis / 1'000, (millis % 1'000) * 1'000'000);
+    }
+    auto second = millis / 1'000 - 1;
+    auto nano = ((millis - second * 1'000) % 1'000) * 1'000'000;
+    return Timestamp(second, nano);
+  }
+
+  static Timestamp fromMillisNoError(int64_t millis)
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+  {
     if (millis >= 0 || millis % 1'000 == 0) {
       return Timestamp(millis / 1'000, (millis % 1'000) * 1'000'000);
     }
@@ -205,6 +225,21 @@ struct Timestamp {
   static const Timestamp max() {
     return Timestamp(kMaxSeconds, kMaxNanos);
   }
+
+  /// Our own version of gmtime_r to avoid expensive calls to __tz_convert.
+  /// This might not be very significant in micro benchmark, but is causing
+  /// significant context switching cost in real world queries with higher
+  /// concurrency (71% of time is on __tz_convert for some queries).
+  ///
+  /// Return whether the epoch second can be converted to a valid std::tm.
+  static bool epochToUtc(int64_t seconds, std::tm& out);
+
+  /// Converts a std::tm to a time/date/timestamp string in ISO 8601 format
+  /// according to TimestampToStringOptions.
+  static std::string tmToString(
+      const std::tm&,
+      uint64_t nanos,
+      const TimestampToStringOptions& options);
 
   // Assuming the timestamp represents a time at zone, converts it to the GMT
   // time at the same moment.

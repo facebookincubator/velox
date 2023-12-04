@@ -24,8 +24,8 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
-#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/SharedArbitrator.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -161,8 +161,11 @@ class MockMemoryOperator {
       return op_->reclaimableBytes(pool, reclaimableBytes);
     }
 
-    uint64_t reclaim(MemoryPool* pool, uint64_t targetBytes, Stats& stats)
-        override {
+    uint64_t reclaim(
+        MemoryPool* pool,
+        uint64_t targetBytes,
+        uint64_t /*unused*/,
+        Stats& stats) override {
       ++numReclaims_;
       if (!reclaimable_) {
         return 0;
@@ -171,7 +174,9 @@ class MockMemoryOperator {
         reclaimInjectCb_(pool, targetBytes);
       }
       reclaimTargetBytes_.push_back(targetBytes);
-      return op_->reclaim(pool, targetBytes);
+      auto reclaimBytes = op_->reclaim(pool, targetBytes);
+      stats.reclaimedBytes += reclaimBytes;
+      return reclaimBytes;
     }
 
     void enterArbitration() override {
@@ -383,7 +388,7 @@ MockTask::~MockTask() {
 class MockSharedArbitrationTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
-    SharedArbitrator::registerFactory();
+    exec::SharedArbitrator::registerFactory();
     FLAGS_velox_memory_leak_check_enabled = true;
     TestValue::enable();
   }

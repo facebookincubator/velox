@@ -15,7 +15,7 @@
  */
 
 #include "velox/exec/PartitionedOutput.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -25,7 +25,7 @@ BlockingReason Destination::advance(
     uint64_t maxBytes,
     const std::vector<vector_size_t>& sizes,
     const RowVectorPtr& output,
-    PartitionedOutputBufferManager& bufferManager,
+    OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     bool* atEnd,
     ContinueFuture* future) {
@@ -72,14 +72,14 @@ BlockingReason Destination::advance(
   if (rangeIdx_ == ranges_.size()) {
     *atEnd = true;
   }
-  if (shouldFlush) {
+  if (shouldFlush || (eagerFlush_ && rowsInCurrent_ > 0)) {
     return flush(bufferManager, bufferReleaseFn, future);
   }
   return BlockingReason::kNotBlocked;
 }
 
 BlockingReason Destination::flush(
-    PartitionedOutputBufferManager& bufferManager,
+    OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     ContinueFuture* future) {
   if (!current_) {
@@ -112,7 +112,8 @@ BlockingReason Destination::flush(
 PartitionedOutput::PartitionedOutput(
     int32_t operatorId,
     DriverCtx* ctx,
-    const std::shared_ptr<const core::PartitionedOutputNode>& planNode)
+    const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
+    bool eagerFlush)
     : Operator(
           ctx,
           planNode->outputType(),
@@ -130,7 +131,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->inputType(),
           planNode->outputType(),
           planNode->outputType())),
-      bufferManager_(PartitionedOutputBufferManager::getInstance()),
+      bufferManager_(OutputBufferManager::getInstance()),
       // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
       // prevent it from deleting while there are output buffers being accessed
       // out of the partitioned output buffer manager such as in Prestissimo,
@@ -138,7 +139,8 @@ PartitionedOutput::PartitionedOutput(
       bufferReleaseFn_([task = operatorCtx_->task()]() {}),
       maxBufferedBytes_(ctx->task->queryCtx()
                             ->queryConfig()
-                            .maxPartitionedOutputBufferSize()) {
+                            .maxPartitionedOutputBufferSize()),
+      eagerFlush_(eagerFlush) {
   if (!planNode->isPartitioned()) {
     VELOX_USER_CHECK_EQ(numDestinations_, 1);
   }
@@ -179,8 +181,8 @@ void PartitionedOutput::initializeDestinations() {
   if (destinations_.empty()) {
     auto taskId = operatorCtx_->taskId();
     for (int i = 0; i < numDestinations_; ++i) {
-      destinations_.push_back(
-          std::make_unique<detail::Destination>(taskId, i, pool()));
+      destinations_.push_back(std::make_unique<detail::Destination>(
+          taskId, i, pool(), eagerFlush_));
     }
   }
 }
@@ -307,7 +309,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
   detail::Destination* blockedDestination = nullptr;
   auto bufferManager = bufferManager_.lock();
   VELOX_CHECK_NOT_NULL(
-      bufferManager, "PartitionedOutputBufferManager was already destructed");
+      bufferManager, "OutputBufferManager was already destructed");
 
   // Limit serialized pages to 1MB.
   static const uint64_t kMaxPageSize = 1 << 20;

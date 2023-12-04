@@ -23,10 +23,10 @@ namespace facebook::velox::dwrf {
 using namespace dwio::common;
 
 SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
-    const std::shared_ptr<const TypeWithId>& nodeType,
+    const std::shared_ptr<const TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(nodeType->type(), params, scanSpec, nodeType),
+    : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec),
       lastStrideIndex_(-1),
       provider_(params.stripeStreams().getStrideIndexProvider()),
       statistics_(params.runtimeStatistics()) {
@@ -65,8 +65,6 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
       params.streamLabels().label(),
       false);
   if (inDictStream) {
-    formatData_->as<DwrfData>().ensureRowGroupIndex();
-
     inDictionaryReader_ =
         createBooleanRleDecoder(std::move(inDictStream), encodingKey);
 

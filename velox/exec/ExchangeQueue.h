@@ -37,7 +37,7 @@ class SerializedPage {
 
   // Makes 'input' ready for deserializing 'this' with
   // VectorStreamGroup::read().
-  void prepareStreamForDeserialize(ByteStream* input);
+  ByteInputStream prepareStreamForDeserialize();
 
   std::unique_ptr<folly::IOBuf> getIOBuf() const {
     return iobuf_->clone();
@@ -73,12 +73,6 @@ class SerializedPage {
 // for input.
 class ExchangeQueue {
  public:
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  explicit ExchangeQueue(int64_t /*minBytes*/) {}
-
-  ExchangeQueue() = default;
-#endif
-
   ~ExchangeQueue() {
     clearAllPromises();
   }
@@ -100,9 +94,19 @@ class ExchangeQueue {
   // Exchanges to throw with the message.
   void setError(const std::string& error);
 
-  std::unique_ptr<SerializedPage> dequeueLocked(
-      bool* atEnd,
-      ContinueFuture* future);
+  /// Returns pages of data.
+  ///
+  /// Returns empty list if no data is available. If data is still expected,
+  /// sets 'atEnd' to false and 'future' to a Future that will complete when
+  /// data arrives. If no more data is expected, sets 'atEnd' to true. Returns
+  /// at least one page if data is available. If multiple pages are available,
+  /// returns as many pages as fit within 'maxBytes', but no fewer than onc.
+  /// Calling this method with 'maxBytes' of 1 returns at most one page.
+  ///
+  /// The data may be compressed, in which case 'maxBytes' applies to compressed
+  /// size.
+  std::vector<std::unique_ptr<SerializedPage>>
+  dequeueLocked(uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
 
   /// Returns the total bytes held by SerializedPages in 'this'.
   uint64_t totalBytes() const {

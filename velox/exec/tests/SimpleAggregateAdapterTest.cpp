@@ -17,7 +17,7 @@
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -331,9 +331,9 @@ TEST_F(SimpleArrayAggAggregationTest, trackRowSize) {
       }
     }
 
-    VELOX_CHECK_GT(groups[0][rowSizeOffset], 0);
+    VELOX_CHECK_GT(*reinterpret_cast<int32_t*>(groups[0] + rowSizeOffset), 0);
     if (!testGlobal) {
-      VELOX_CHECK_GT(groups[1][rowSizeOffset], 0);
+      VELOX_CHECK_GT(*reinterpret_cast<int32_t*>(groups[1] + rowSizeOffset), 0);
     }
   };
 
@@ -410,7 +410,8 @@ class CountNullsAggregate {
   using AccumulatorType = Accumulator;
 };
 
-bool registerSimpleCountNullsAggregate(const std::string& name) {
+exec::AggregateRegistrationResult registerSimpleCountNullsAggregate(
+    const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("bigint")
@@ -418,7 +419,7 @@ bool registerSimpleCountNullsAggregate(const std::string& name) {
           .argumentType("double")
           .build()};
 
-  exec::registerAggregateFunction(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -432,7 +433,6 @@ bool registerSimpleCountNullsAggregate(const std::string& name) {
         return std::make_unique<SimpleAggregateAdapter<CountNullsAggregate>>(
             resultType);
       });
-  return true;
 }
 
 void registerSimpleCountNullsAggregate() {

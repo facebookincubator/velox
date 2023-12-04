@@ -48,14 +48,24 @@ class CompactRowSerializerTest : public ::testing::Test,
     ASSERT_EQ(size, output->tellp());
   }
 
-  std::unique_ptr<ByteStream> toByteStream(const std::string_view& input) {
-    auto byteStream = std::make_unique<ByteStream>();
-    ByteRange byteRange{
-        reinterpret_cast<uint8_t*>(const_cast<char*>(input.data())),
-        (int32_t)input.length(),
-        0};
-    byteStream->resetInput({byteRange});
-    return byteStream;
+  ByteInputStream toByteStream(
+      const std::string_view& input,
+      size_t pageSize = 32) {
+    auto rawBytes = reinterpret_cast<uint8_t*>(const_cast<char*>(input.data()));
+    size_t offset = 0;
+    std::vector<ByteRange> ranges;
+
+    // Split the input buffer into many different pages.
+    while (offset < input.length()) {
+      ranges.push_back({
+          rawBytes + offset,
+          std::min<int32_t>(pageSize, input.length() - offset),
+          0,
+      });
+      offset += pageSize;
+    }
+
+    return ByteInputStream(std::move(ranges));
   }
 
   RowVectorPtr deserialize(
@@ -64,7 +74,7 @@ class CompactRowSerializerTest : public ::testing::Test,
     auto byteStream = toByteStream(input);
 
     RowVectorPtr result;
-    serde_->deserialize(byteStream.get(), pool_.get(), rowType, &result);
+    serde_->deserialize(&byteStream, pool_.get(), rowType, &result);
     return result;
   }
 
@@ -102,7 +112,6 @@ TEST_F(CompactRowSerializerTest, fuzz) {
   VectorFuzzer::Options opts;
   opts.vectorSize = 5;
   opts.nullRatio = 0.1;
-  opts.containerHasNulls = false;
   opts.dictionaryHasNulls = false;
   opts.stringVariableLength = true;
   opts.stringLength = 20;
@@ -119,7 +128,7 @@ TEST_F(CompactRowSerializerTest, fuzz) {
   SCOPED_TRACE(fmt::format("seed: {}", seed));
   VectorFuzzer fuzzer(opts, pool_.get(), seed);
 
-  auto data = fuzzer.fuzzRow(rowType);
+  auto data = fuzzer.fuzzInputRow(rowType);
   testRoundTrip(data);
 }
 

@@ -57,6 +57,11 @@ AssertQueryBuilder& AssertQueryBuilder::maxDrivers(int32_t maxDrivers) {
   return *this;
 }
 
+AssertQueryBuilder& AssertQueryBuilder::destination(int32_t destination) {
+  params_.destination = destination;
+  return *this;
+}
+
 AssertQueryBuilder& AssertQueryBuilder::config(
     const std::string& key,
     const std::string& value) {
@@ -188,9 +193,17 @@ std::shared_ptr<Task> AssertQueryBuilder::assertTypeAndNumRows(
 }
 
 RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
+  std::shared_ptr<Task> unused;
+  return copyResults(pool, unused);
+}
+
+RowVectorPtr AssertQueryBuilder::copyResults(
+    memory::MemoryPool* pool,
+    std::shared_ptr<Task>& task) {
   auto [cursor, results] = readCursor();
 
   if (results.empty()) {
+    task = cursor->task();
     return BaseVector::create<RowVector>(
         params_.planNode->outputType(), 0, pool);
   }
@@ -199,7 +212,6 @@ RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
   for (const auto& result : results) {
     totalCount += result->size();
   }
-
   auto copy =
       BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
   auto copyCount = 0;
@@ -208,6 +220,7 @@ RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
     copyCount += result->size();
   }
 
+  task = cursor->task();
   return copy;
 }
 

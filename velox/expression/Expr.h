@@ -239,12 +239,22 @@ class Expr {
   // sameAsParentDistinctFields_.
   void computeMetadata();
 
+  // Utility function to add fields to both distinct and multiply referenced
+  // fields.
+  static void mergeFields(
+      std::vector<FieldReference*>& distinctFields,
+      std::unordered_set<FieldReference*>& multiplyReferencedFields,
+      const std::vector<FieldReference*>& fieldsToAdd);
+
   virtual void reset() {
     sharedSubexprResults_.clear();
   }
 
   void clearMemo() {
-    baseDictionary_ = nullptr;
+    baseOfDictionaryRepeats_ = 0;
+    baseOfDictionary_.reset();
+    baseOfDictionaryWeakPtr_.reset();
+    baseOfDictionaryRawPtr_ = nullptr;
     dictionaryCache_ = nullptr;
     cachedDictionaryIndices_ = nullptr;
   }
@@ -398,7 +408,7 @@ class Expr {
 
   PeelEncodingsResult peelEncodings(
       EvalCtx& context,
-      ScopedContextSaver& saver,
+      ContextSaver& saver,
       const SelectivityVector& rows,
       LocalDecodedVector& localDecoded,
       LocalSelectivityVector& newRowsHolder,
@@ -537,6 +547,21 @@ class Expr {
                           : nullptr;
   }
 
+  // Should be called only after computeMetadata() has been called on 'inputs_'.
+  // Computes distinctFields for this expression. Also updates any multiply
+  // referenced fields.
+  virtual void computeDistinctFields();
+
+  // True if this is a spcial form where the next argument will always be
+  // evaluated on a subset of the rows for which the previous one was evaluated.
+  // This is true of AND and no other at this time.  This implies that lazies
+  // can be loaded on first use and not before starting evaluating the form.
+  // This is so because a subsequent use will never access rows that were not in
+  // scope for the previous one.
+  virtual bool evaluatesArgumentsOnNonIncreasingSelection() const {
+    return false;
+  }
+
   const TypePtr type_;
   const std::vector<std::shared_ptr<Expr>> inputs_;
   const std::string name_;
@@ -585,21 +610,28 @@ class Expr {
   // evaluateSharedSubexpr() is called to the cached shared results.
   std::map<std::vector<const BaseVector*>, SharedResults> sharedSubexprResults_;
 
-  VectorPtr baseDictionary_;
+  // Pointers to the last base vector of cachable dictionary input. Used to
+  // check if the current input's base vector is the same as the last. If it's
+  // the same, then results can be cached.
+  std::weak_ptr<BaseVector> baseOfDictionaryWeakPtr_;
+  BaseVector* baseOfDictionaryRawPtr_ = nullptr;
+
+  // This is a strong reference to the base vector and is only set if
+  // `baseOfDictionaryRepeats_` > 1. This is to ensure that the vector held is
+  // not modified and re-used in-place.
+  VectorPtr baseOfDictionary_;
+
+  // Number of times currently held cacheable vector is seen for a non-first
+  // time. Is reset everytime 'baseOfDictionaryRawPtr_' is different from the
+  // current input's base.
+  int baseOfDictionaryRepeats_ = 0;
 
   // Values computed for the base dictionary, 1:1 to the positions in
-  // 'baseDictionary_'.
+  // 'baseOfDictionaryRawPtr_'.
   VectorPtr dictionaryCache_;
 
   // The indices that are valid in 'dictionaryCache_'.
   std::unique_ptr<SelectivityVector> cachedDictionaryIndices_;
-
-  // Count of executions where this is wrapped in a dictionary so that
-  // results could be cached.
-  int32_t numCachableInput_{0};
-
-  // Count of times the cacheable vector is seen for a non-first time.
-  int32_t numCacheableRepeats_{0};
 
   /// Runtime statistics. CPU time, wall time and number of processed rows.
   ExprStats stats_;

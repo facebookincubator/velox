@@ -11,15 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_duckdb_conversion DuckConversion.cpp DuckWrapper.cpp)
+add_library(velox_duckdb_conversion DuckConversion.cpp)
 
-target_link_libraries(velox_duckdb_conversion velox_core velox_vector duckdb
-                      tpch_extension)
+target_link_libraries(velox_duckdb_conversion velox_core velox_vector
+                      duckdb_static)
 
 add_library(velox_duckdb_parser DuckParser.cpp)
 
-target_link_libraries(velox_duckdb_parser velox_duckdb_conversion duckdb
-                      velox_parse_expression)
+target_link_libraries(velox_duckdb_parser velox_duckdb_conversion
+                      velox_parse_expression duckdb_static)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

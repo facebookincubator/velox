@@ -30,7 +30,9 @@ class WindowBuild {
  public:
   WindowBuild(
       const std::shared_ptr<const core::WindowNode>& windowNode,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      const common::SpillConfig* spillConfig,
+      tsan_atomic<bool>* nonReclaimableSection);
 
   virtual ~WindowBuild() = default;
 
@@ -41,6 +43,12 @@ class WindowBuild {
 
   // Adds new input rows to the WindowBuild.
   virtual void addInput(RowVectorPtr input) = 0;
+
+  // Can be called any time before noMoreInput().
+  virtual void spill() = 0;
+
+  /// Returns the spiller stats including total bytes and rows spilled so far.
+  virtual std::optional<common::SpillStats> spilledStats() const = 0;
 
   // The Window operator invokes this function to indicate that no
   // more input rows will be passed from the Window operator to the
@@ -82,7 +90,14 @@ class WindowBuild {
   std::vector<std::pair<column_index_t, core::SortOrder>> partitionKeyInfo_;
   std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
 
-  const vector_size_t numInputColumns_;
+  // Input columns in the order of: partition keys, sorting keys, the rest.
+  const std::vector<column_index_t> inputChannels_;
+
+  // Input column types in 'inputChannels_' order.
+  const RowTypePtr inputType_;
+
+  const common::SpillConfig* const spillConfig_;
+  tsan_atomic<bool>* const nonReclaimableSection_;
 
   // The RowContainer holds all the input rows in WindowBuild.
   std::unique_ptr<RowContainer> data_;

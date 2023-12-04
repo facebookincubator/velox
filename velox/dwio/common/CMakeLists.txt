@@ -28,11 +28,14 @@ add_library(
   BufferedInput.cpp
   CachedBufferedInput.cpp
   CacheInputStream.cpp
+  DirectBufferedInput.cpp
+  DirectInputStream.cpp
   ColumnSelector.cpp
   DataBufferHolder.cpp
   DecoderUtil.cpp
   DirectDecoder.cpp
   DwioMetricsLog.cpp
+  ExecutorBarrier.cpp
   FileSink.cpp
   FlatMapHelper.cpp
   InputStream.cpp
@@ -52,6 +55,7 @@ add_library(
   SeekableInputStream.cpp
   TypeUtils.cpp
   TypeWithId.cpp
+  Writer.cpp
   WriterFactory.cpp
   SortingWriter.cpp
   SortingWriter.h)

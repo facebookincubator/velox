@@ -16,6 +16,7 @@
 
 #include "velox/common/memory/MemoryPool.h"
 
+#include <signal.h>
 #include <set>
 
 #include "velox/common/base/SuccinctPrinter.h"
@@ -202,7 +203,8 @@ MemoryPool::MemoryPool(
       trackUsage_(options.trackUsage),
       threadSafe_(options.threadSafe),
       checkUsageLeak_(options.checkUsageLeak),
-      debugEnabled_(options.debugEnabled) {
+      debugEnabled_(options.debugEnabled),
+      coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled) {
   VELOX_CHECK(!isRoot() || !isLeaf());
   VELOX_CHECK_GT(
       maxCapacity_, 0, "Memory pool {} max capacity can't be zero", name_);
@@ -429,11 +431,12 @@ void* MemoryPoolImpl::allocate(int64_t size) {
   void* buffer = allocator_->allocateBytes(alignedSize, alignment_);
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
     release(alignedSize);
-    VELOX_MEM_ALLOC_ERROR(fmt::format(
-        "{} failed with {} from {}",
+    handleAllocationFailure(fmt::format(
+        "{} failed with {} from {} {}",
         __FUNCTION__,
         succinctBytes(size),
-        toString()));
+        toString(),
+        allocator_->getAndClearFailureMessage()));
   }
   DEBUG_RECORD_ALLOC(buffer, size);
   return buffer;
@@ -447,12 +450,13 @@ void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   void* buffer = allocator_->allocateZeroFilled(alignedSize);
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
     release(alignedSize);
-    VELOX_MEM_ALLOC_ERROR(fmt::format(
-        "{} failed with {} entries and {} each from {}",
+    handleAllocationFailure(fmt::format(
+        "{} failed with {} entries and {} each from {} {}",
         __FUNCTION__,
         numEntries,
         succinctBytes(sizeEach),
-        toString()));
+        toString(),
+        allocator_->getAndClearFailureMessage()));
   }
   DEBUG_RECORD_ALLOC(buffer, size);
   return buffer;
@@ -466,12 +470,13 @@ void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
   void* newP = allocator_->allocateBytes(alignedNewSize, alignment_);
   if (FOLLY_UNLIKELY(newP == nullptr)) {
     release(alignedNewSize);
-    VELOX_MEM_ALLOC_ERROR(fmt::format(
-        "{} failed with new {} and old {} from {}",
+    handleAllocationFailure(fmt::format(
+        "{} failed with new {} and old {} from {} {}",
         __FUNCTION__,
         succinctBytes(newSize),
         succinctBytes(size),
-        toString()));
+        toString(),
+        allocator_->getAndClearFailureMessage()));
   }
   DEBUG_RECORD_ALLOC(newP, newSize);
   if (p != nullptr) {
@@ -514,8 +519,12 @@ void MemoryPoolImpl::allocateNonContiguous(
           },
           minSizeClass)) {
     VELOX_CHECK(out.empty());
-    VELOX_MEM_ALLOC_ERROR(fmt::format(
-        "{} failed with {} pages from {}", __FUNCTION__, numPages, toString()));
+    handleAllocationFailure(fmt::format(
+        "{} failed with {} pages from {} {}",
+        __FUNCTION__,
+        numPages,
+        toString(),
+        allocator_->getAndClearFailureMessage()));
   }
   DEBUG_RECORD_ALLOC(out);
   VELOX_CHECK(!out.empty());
@@ -562,8 +571,12 @@ void MemoryPoolImpl::allocateContiguous(
           },
           maxPages)) {
     VELOX_CHECK(out.empty());
-    VELOX_MEM_ALLOC_ERROR(fmt::format(
-        "{} failed with {} pages from {}", __FUNCTION__, numPages, toString()));
+    handleAllocationFailure(fmt::format(
+        "{} failed with {} pages from {} {}",
+        __FUNCTION__,
+        numPages,
+        toString(),
+        allocator_->getAndClearFailureMessage()));
   }
   DEBUG_RECORD_ALLOC(out);
   VELOX_CHECK(!out.empty());
@@ -591,11 +604,12 @@ void MemoryPoolImpl::growContiguous(
               release(allocBytes);
             }
           })) {
-    VELOX_MEM_ALLOC_ERROR(fmt::format(
-        "{} failed with {} pages from {}",
+    handleAllocationFailure(fmt::format(
+        "{} failed with {} pages from {} {}",
         __FUNCTION__,
         increment,
-        toString()));
+        toString(),
+        allocator_->getAndClearFailureMessage()));
   }
   if (FOLLY_UNLIKELY(debugEnabled_)) {
     recordGrowDbg(allocation.data(), allocation.size());
@@ -628,7 +642,8 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
           .trackUsage = trackUsage_,
           .threadSafe = threadSafe,
           .checkUsageLeak = checkUsageLeak_,
-          .debugEnabled = debugEnabled_});
+          .debugEnabled = debugEnabled_,
+          .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_});
 }
 
 bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
@@ -654,13 +669,6 @@ bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
 }
 
 void MemoryPoolImpl::reserve(uint64_t size, bool reserveOnly) {
-  if (FOLLY_UNLIKELY(underMemoryArbitration() && !isSpillMemoryPool(this))) {
-    VELOX_FAIL(
-        "Unexpected non-spilling memory reservation from memory pool: {}, arbitration request pool: {}",
-        name(),
-        memoryArbitrationContext()->requestor.name());
-  }
-
   if (FOLLY_LIKELY(trackUsage_)) {
     if (FOLLY_LIKELY(threadSafe_)) {
       reserveThreadSafe(size, reserveOnly);
@@ -773,13 +781,15 @@ bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
 
 bool MemoryPoolImpl::maybeIncrementReservationLocked(uint64_t size) {
   if (isRoot()) {
-    if (aborted()) {
-      // This memory pool has been aborted by the memory arbitrator. Abort to
-      // prevent this pool from triggering memory arbitration. The associated
-      // query should also abort soon.
-      VELOX_MEM_POOL_ABORTED("This memory pool has been aborted.");
-    }
-    if (reservationBytes_ + size > capacity_) {
+    checkIfAborted();
+
+    // NOTE: we allow memory pool to overuse its memory during the memory
+    // arbitration process. The memory arbitration process itself needs to
+    // ensure the the memory pool usage of the memory pool is within the
+    // capacity limit after the arbitration operation completes.
+    if (FOLLY_UNLIKELY(
+            (reservationBytes_ + size > capacity_) &&
+            !underMemoryArbitration())) {
       return false;
     }
   }
@@ -925,11 +935,12 @@ bool MemoryPoolImpl::reclaimableBytes(uint64_t& reclaimableBytes) const {
 
 uint64_t MemoryPoolImpl::reclaim(
     uint64_t targetBytes,
+    uint64_t maxWaitMs,
     memory::MemoryReclaimer::Stats& stats) {
   if (reclaimer() == nullptr) {
     return 0;
   }
-  return reclaimer()->reclaim(this, targetBytes, stats);
+  return reclaimer()->reclaim(this, targetBytes, maxWaitMs, stats);
 }
 
 void MemoryPoolImpl::enterArbitration() {
@@ -991,8 +1002,23 @@ void MemoryPoolImpl::abort(const std::exception_ptr& error) {
   if (reclaimer() == nullptr) {
     VELOX_FAIL("Can't abort the memory pool {} without reclaimer", name_);
   }
-  aborted_ = true;
+  setAbortError(error);
   reclaimer()->abort(this, error);
+}
+
+void MemoryPoolImpl::setAbortError(const std::exception_ptr& error) {
+  VELOX_CHECK(
+      !aborted_,
+      "Trying to set another abort error on an already aborted pool.");
+  abortError_ = error;
+  aborted_ = true;
+}
+
+void MemoryPoolImpl::checkIfAborted() const {
+  if (FOLLY_UNLIKELY(aborted())) {
+    VELOX_CHECK_NOT_NULL(abortError_);
+    std::rethrow_exception(abortError_);
+  }
 }
 
 void MemoryPoolImpl::testingSetCapacity(int64_t bytes) {
@@ -1112,5 +1138,21 @@ void MemoryPoolImpl::leakCheckDbg() {
         << allocationRecord.callStack;
   }
   VELOX_FAIL(buf.str());
+}
+
+void MemoryPoolImpl::handleAllocationFailure(
+    const std::string& failureMessage) {
+  if (coreOnAllocationFailureEnabled_) {
+    LOG(ERROR) << failureMessage;
+    // SIGBUS is one of the standard signals in Linux that triggers a core dump
+    // Normally it is raised by the operating system when a misaligned memory
+    // access occurs. On x86 and aarch64 misaligned access is allowed by default
+    // hence this signal should never occur naturally. Raising a signal other
+    // than SIGABRT makes it easier to distinguish an allocation failure from
+    // any other crash
+    raise(SIGBUS);
+  }
+
+  VELOX_MEM_ALLOC_ERROR(failureMessage);
 }
 } // namespace facebook::velox::memory

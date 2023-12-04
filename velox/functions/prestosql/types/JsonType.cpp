@@ -44,7 +44,13 @@ void generateJsonTyped(
   auto value = input.valueAt(row);
 
   if constexpr (std::is_same_v<T, StringView>) {
-    folly::json::escapeString(value, result, folly::json::serialization_opts{});
+    // TODO Presto escapes Unicode characters using uppercase hex:
+    //  SELECT cast(U&'\+01F64F' as json); -- "\uD83D\uDE4F"
+    //  Folly uses lowercase hex digits: "\ud83d\ude4f".
+    // Figure out how to produce uppercase digits.
+    folly::json::serialization_opts opts;
+    opts.encode_non_ascii = true;
+    folly::json::escapeString(value, result, opts);
   } else if constexpr (std::is_same_v<T, UnknownValue>) {
     VELOX_FAIL(
         "Casting UNKNOWN to JSON: Vectors of UNKNOWN type should not contain non-null rows");
@@ -173,23 +179,24 @@ struct AsJson {
       if (!exec::PeeledEncoding::isPeelable(input->encoding())) {
         doCast(context, input, rows, isMapKey, json_);
       } else {
-        exec::ScopedContextSaver saver;
-        exec::LocalSelectivityVector newRowsHolder(*context.execCtx());
+        exec::withContextSaver([&](exec::ContextSaver& saver) {
+          exec::LocalSelectivityVector newRowsHolder(*context.execCtx());
 
-        exec::LocalDecodedVector localDecoded(context);
-        std::vector<VectorPtr> peeledVectors;
-        auto peeledEncoding = exec::PeeledEncoding::peel(
-            {input}, rows, localDecoded, true, peeledVectors);
-        VELOX_CHECK_EQ(peeledVectors.size(), 1);
-        auto newRows =
-            peeledEncoding->translateToInnerRows(rows, newRowsHolder);
-        // Save context and set the peel.
-        context.saveAndReset(saver, rows);
-        context.setPeeledEncoding(peeledEncoding);
+          exec::LocalDecodedVector localDecoded(context);
+          std::vector<VectorPtr> peeledVectors;
+          auto peeledEncoding = exec::PeeledEncoding::peel(
+              {input}, rows, localDecoded, true, peeledVectors);
+          VELOX_CHECK_EQ(peeledVectors.size(), 1);
+          auto newRows =
+              peeledEncoding->translateToInnerRows(rows, newRowsHolder);
+          // Save context and set the peel.
+          context.saveAndReset(saver, rows);
+          context.setPeeledEncoding(peeledEncoding);
 
-        doCast(context, peeledVectors[0], *newRows, isMapKey, json_);
-        json_ = context.getPeeledEncoding()->wrap(
-            json_->type(), context.pool(), json_, rows);
+          doCast(context, peeledVectors[0], *newRows, isMapKey, json_);
+          json_ = context.getPeeledEncoding()->wrap(
+              json_->type(), context.pool(), json_, rows);
+        });
       }
     }
     decoded_.get()->decode(*json_, rows);

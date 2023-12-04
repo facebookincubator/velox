@@ -21,7 +21,8 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/exec/Exchange.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/SharedArbitrator.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -30,9 +31,10 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/PrestoSerializer.h"
 
-using namespace facebook::velox::common::testutil;
-
+DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
+
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::exec::test {
 
@@ -53,7 +55,8 @@ OperatorTestBase::~OperatorTestBase() {
 
 void OperatorTestBase::SetUpTestCase() {
   FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
-  memory::MemoryArbitrator::registerAllFactories();
+  FLAGS_velox_memory_leak_check_enabled = true;
+  exec::SharedArbitrator::registerFactory();
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   TestValue::enable();
@@ -61,7 +64,7 @@ void OperatorTestBase::SetUpTestCase() {
 
 void OperatorTestBase::TearDownTestCase() {
   waitForAllTasksToBeDeleted();
-  memory::MemoryArbitrator::unregisterAllFactories();
+  exec::SharedArbitrator::unregisterFactory();
 }
 
 void OperatorTestBase::SetUp() {

@@ -105,6 +105,7 @@ class ExprCallable : public Callable {
       const BufferPtr& wrapCapture,
       const std::vector<VectorPtr>& args,
       vector_size_t size) {
+    VELOX_CHECK_EQ(signature_->size(), args.size())
     std::vector<VectorPtr> allVectors = args;
     for (auto index = args.size(); index < capture_->childrenSize(); ++index) {
       auto values = capture_->childAt(index);
@@ -131,6 +132,15 @@ class ExprCallable : public Callable {
 };
 
 } // namespace
+
+void LambdaExpr::computeDistinctFields() {
+  SpecialForm::computeDistinctFields();
+  std::vector<FieldReference*> capturedFields;
+  for (auto& field : capture_) {
+    capturedFields.push_back(field.get());
+  }
+  mergeFields(distinctFields_, multiplyReferencedFields_, capturedFields);
+}
 
 std::string LambdaExpr::toString(bool recursive) const {
   if (!recursive) {

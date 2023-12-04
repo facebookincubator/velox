@@ -46,16 +46,6 @@ struct MemoryStats {
   uint64_t peakTotalMemoryReservation{0};
   uint64_t numMemoryAllocations{0};
 
-  void update(memory::MemoryPool* pool) {
-    const memory::MemoryPool::Stats stats = pool->stats();
-    userMemoryReservation = stats.currentBytes;
-    systemMemoryReservation = 0;
-    peakUserMemoryReservation = stats.peakBytes;
-    peakSystemMemoryReservation = 0;
-    peakTotalMemoryReservation = stats.peakBytes;
-    numMemoryAllocations = stats.numAllocs;
-  }
-
   void add(const MemoryStats& other) {
     userMemoryReservation += other.userMemoryReservation;
     revocableMemoryReservation += other.revocableMemoryReservation;
@@ -77,6 +67,18 @@ struct MemoryStats {
     peakSystemMemoryReservation = 0;
     peakTotalMemoryReservation = 0;
     numMemoryAllocations = 0;
+  }
+
+  static MemoryStats memStatsFromPool(const memory::MemoryPool* pool) {
+    const auto poolStats = pool->stats();
+    MemoryStats memStats;
+    memStats.userMemoryReservation = poolStats.currentBytes;
+    memStats.systemMemoryReservation = 0;
+    memStats.peakUserMemoryReservation = poolStats.peakBytes;
+    memStats.peakSystemMemoryReservation = 0;
+    memStats.peakTotalMemoryReservation = poolStats.peakBytes;
+    memStats.numMemoryAllocations = poolStats.numAllocs;
+    return memStats;
   }
 };
 
@@ -153,6 +155,8 @@ struct OperatorStats {
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
 
   int numDrivers = 0;
+
+  OperatorStats() {}
 
   OperatorStats(
       int32_t _operatorId,
@@ -235,7 +239,6 @@ class OperatorCtx {
       const std::string& connectorId,
       const std::string& planNodeId,
       memory::MemoryPool* connectorPool,
-      memory::SetMemoryReclaimer setMemoryReclaimer = nullptr,
       const common::SpillConfig* spillConfig = nullptr) const;
 
  private:
@@ -321,7 +324,8 @@ class Operator : public BaseRuntimeStatWriter {
   /// allocation from memory pool that can't be done under operator constructor.
   ///
   /// NOTE: the default implementation set 'initialized_' to true to ensure we
-  /// never call this more than once.
+  /// never call this more than once. The overload initialize() implementation
+  /// must call this base implementation first.
   virtual void initialize();
 
   /// Indicates if this operator has been initialized or not.
@@ -435,7 +439,7 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// Returns copy of operator stats. If 'clear' is true, the function also
   /// clears the operator stats after retrieval.
-  OperatorStats stats(bool clear);
+  virtual OperatorStats stats(bool clear);
 
   /// Add a single runtime stat to the operator stats under the write lock.
   /// This member overrides BaseRuntimeStatWriter's member.
@@ -537,6 +541,47 @@ class Operator : public BaseRuntimeStatWriter {
   /// the first one that is not std::nullopt or std::nullopt otherwise.
   static std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& planNode);
 
+  /// The scoped objects to mark an operator is under non-reclaimable execution
+  /// section or not. This prevents the memory arbitrator from reclaiming memory
+  /// from the operator if it happens to be suspended for memory arbitration
+  /// processing. The driver execution framework marks an operator under
+  /// non-reclaimable section when executes any of its method. The spillable
+  /// operator might clear this temporarily during its execution to reserve
+  /// memory from arbitrator to allow memory reclaim from itself.
+  class ReclaimableSectionGuard {
+   public:
+    /// If 'enter' is true, marks 'op' is under non-reclaimable execution,
+    /// otherwise not.
+    ReclaimableSectionGuard(Operator* op)
+        : op_(op), nonReclaimableSection_(op_->nonReclaimableSection_) {
+      op_->nonReclaimableSection_ = false;
+    }
+
+    ~ReclaimableSectionGuard() {
+      op_->nonReclaimableSection_ = nonReclaimableSection_;
+    }
+
+   private:
+    Operator* const op_;
+    const bool nonReclaimableSection_;
+  };
+
+  class NonReclaimableSectionGuard {
+   public:
+    NonReclaimableSectionGuard(Operator* op)
+        : op_(op), nonReclaimableSection_(op_->nonReclaimableSection_) {
+      op_->nonReclaimableSection_ = true;
+    }
+
+    ~NonReclaimableSectionGuard() {
+      op_->nonReclaimableSection_ = nonReclaimableSection_;
+    }
+
+   private:
+    Operator* const op_;
+    const bool nonReclaimableSection_;
+  };
+
   /// Returns the operator context of this operator. This method is only used
   /// for test.
   const OperatorCtx* testingOperatorCtx() const {
@@ -547,6 +592,12 @@ class Operator : public BaseRuntimeStatWriter {
   /// method is only used for test.
   bool testingNoMoreInput() const {
     return noMoreInput_;
+  }
+
+  /// Returns true if this operator is under non-reclaimable section, otherwise
+  /// not. This method is only used for test.
+  bool testingNonReclaimable() const {
+    return nonReclaimableSection_;
   }
 
  protected:
@@ -570,6 +621,7 @@ class Operator : public BaseRuntimeStatWriter {
     uint64_t reclaim(
         memory::MemoryPool* pool,
         uint64_t targetBytes,
+        uint64_t maxWaitMs,
         memory::MemoryReclaimer::Stats& stats) override;
 
     void abort(memory::MemoryPool* pool, const std::exception_ptr& /* error */)
@@ -581,7 +633,6 @@ class Operator : public BaseRuntimeStatWriter {
       VELOX_CHECK_NOT_NULL(op_);
     }
 
-   private:
     // Gets the shared pointer to the associated driver to ensure the liveness
     // of the operator during the memory reclaim operation.
     //
@@ -594,26 +645,6 @@ class Operator : public BaseRuntimeStatWriter {
     Operator* const op_;
   };
 
-  /// The scoped object to mark a reclaimable operator is under non-reclaimable
-  /// execution section. This prevents the memory arbitrator from reclaiming
-  /// memory from the operator if it happens to be suspended for memory
-  /// arbitration processing.
-  class NonReclaimableSection {
-   public:
-    explicit NonReclaimableSection(Operator* op) : op_(op) {
-      VELOX_CHECK(!op_->nonReclaimableSection_);
-      op_->nonReclaimableSection_ = true;
-    }
-
-    ~NonReclaimableSection() {
-      VELOX_CHECK(op_->nonReclaimableSection_);
-      op_->nonReclaimableSection_ = false;
-    }
-
-   private:
-    Operator* const op_;
-  };
-
   /// Invoked to setup memory reclaimer for this operator's memory pool if its
   /// parent node memory pool has set the reclaimer.
   void maybeSetReclaimer();
@@ -623,12 +654,19 @@ class Operator : public BaseRuntimeStatWriter {
     return spillConfig_.has_value();
   }
 
-  /// Creates output vector from 'input_' and 'results_' according to
+  /// Creates output vector from 'input_' and 'results' according to
   /// 'identityProjections_' and 'resultProjections_'. If 'mapping' is set to
   /// nullptr, the children of the output vector will be identical to their
-  /// respective sources from 'input_' or 'results_'. However, if 'mapping' is
+  /// respective sources from 'input_' or 'results'. However, if 'mapping' is
   /// provided, the children of the output vector will be generated as
   /// dictionary of the sources using the specified 'mapping'.
+  RowVectorPtr fillOutput(
+      vector_size_t size,
+      const BufferPtr& mapping,
+      const std::vector<VectorPtr>& results);
+
+  /// Creates output vector from 'input_' and 'results_' according to
+  /// 'identityProjections_' and 'resultProjections_'.
   RowVectorPtr fillOutput(vector_size_t size, const BufferPtr& mapping);
 
   /// Returns the number of rows for the output batch. This uses averageRowSize
@@ -641,7 +679,7 @@ class Operator : public BaseRuntimeStatWriter {
       std::optional<uint64_t> averageRowSize = std::nullopt) const;
 
   /// Invoked to record spill stats in operator stats.
-  void recordSpillStats(const SpillStats& spillStats);
+  void recordSpillStats(const common::SpillStats& spillStats);
 
   const std::unique_ptr<OperatorCtx> operatorCtx_;
   const RowTypePtr outputType_;
@@ -676,9 +714,6 @@ class Operator : public BaseRuntimeStatWriter {
 
   std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
       dynamicFilters_;
-
-  /// The number of times that spilling run on this operator.
-  uint32_t numSpillRuns_{0};
 };
 
 /// Given a row type returns indices for the specified subset of columns.
@@ -725,5 +760,4 @@ class SourceOperator : public Operator {
     VELOX_FAIL("SourceOperator does not support noMoreInput()");
   }
 };
-
 } // namespace facebook::velox::exec

@@ -50,25 +50,20 @@ class WriterSink {
         size_{0},
         cacheHolder_{pool, SLICE_SIZE, SLICE_SIZE},
         cacheBuffer_{pool},
-        exceedsLimit_{false} {
-    if (cacheMode_ != StripeCacheMode::NA) {
-      offsets_.push_back(0);
-      cacheBuffer_.reserve(SLICE_SIZE);
-    }
-
-    // initialize the buffer with the orc header
-    addBuffer(pool, ORC_MAGIC.data(), ORC_MAGIC_LEN);
-  }
+        exceedsLimit_{false} {}
 
   ~WriterSink() {
     if (!buffers_.empty() || size_ != 0) {
-      LOG(WARNING) << "Unflushed data in writer sink!";
+      LOG(WARNING) << "Unflushed data in writer sink: " << succinctBytes(size_)
+                   << ", " << buffers_.size() << " buffers";
     }
   }
 
   uint64_t size() const {
     return sink_->size() + size_;
   }
+
+  void init(memory::MemoryPool& pool);
 
   void addBuffer(memory::MemoryPool& pool, const char* data, size_t size) {
     dwio::common::DataBuffer<char> buf{pool, size};
@@ -176,6 +171,7 @@ class WriterSink {
   const bool shouldBuffer_;
   const uint32_t maxCacheSize_;
 
+  bool initialized_{false};
   Mode mode_;
   uint64_t size_;
 

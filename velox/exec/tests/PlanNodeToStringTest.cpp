@@ -249,6 +249,49 @@ TEST_F(PlanNodeToStringTest, aggregation) {
   ASSERT_EQ(
       "-- Aggregation[SINGLE [c0] a0 := array_agg(ROW[\"c1\"]) ORDER BY c2 DESC NULLS LAST] -> c0:BIGINT, a0:ARRAY<INTEGER>\n",
       plan->toString(true, false));
+
+  // Aggregation over GroupId with global grouping sets.
+  plan = PlanBuilder()
+             .values({data_})
+             .groupId({"c0"}, {{"c0"}, {}}, {"c1"})
+             .singleAggregation({"c0", "group_id"}, {"sum(c1) as sum_c1"}, {})
+             .planNode();
+  ASSERT_EQ("-- Aggregation\n", plan->toString());
+  ASSERT_EQ(
+      "-- Aggregation[SINGLE [c0, group_id] sum_c1 := sum(ROW[\"c1\"]) global group IDs: [ 1 ] Group Id key: group_id] -> c0:SMALLINT, group_id:BIGINT, sum_c1:BIGINT\n",
+      plan->toString(true, false));
+
+  // Aggregation over GroupId with > 1 global grouping sets.
+  plan = PlanBuilder()
+             .values({data_})
+             .groupId({"c0"}, {{"c0"}, {}, {}}, {"c1"})
+             .singleAggregation({"c0", "group_id"}, {"sum(c1) as sum_c1"}, {})
+             .planNode();
+  ASSERT_EQ("-- Aggregation\n", plan->toString());
+  ASSERT_EQ(
+      "-- Aggregation[SINGLE [c0, group_id] sum_c1 := sum(ROW[\"c1\"]) global group IDs: [ 1, 2 ] Group Id key: group_id] -> c0:SMALLINT, group_id:BIGINT, sum_c1:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .values({data_})
+             .partialStreamingAggregation({"c0"}, {"sum(c1) AS a"})
+             .planNode();
+  ASSERT_EQ(
+      "-- Aggregation[PARTIAL STREAMING [c0] a := sum(ROW[\"c1\"])] -> c0:SMALLINT, a:BIGINT\n",
+      plan->toString(true, false));
+}
+
+TEST_F(PlanNodeToStringTest, expand) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .expand(
+                      {{"c0", "null::integer as c1", "c2", "0 as gid"},
+                       {"null as c0", "c1", "c2", "1 as gid"}})
+                  .planNode();
+  ASSERT_EQ("-- Expand\n", plan->toString());
+  ASSERT_EQ(
+      "-- Expand[[c0, null, c2, 0], [null, c1, c2, 1]] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT, gid:BIGINT\n",
+      plan->toString(true, false));
 }
 
 TEST_F(PlanNodeToStringTest, groupId) {
@@ -692,7 +735,7 @@ TEST_F(PlanNodeToStringTest, window) {
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
       "-- Window[partition by [a] order by [b ASC NULLS LAST] "
-      "d := window1(ROW[\"c\"]) RANGE between 10 PRECEDING and UNBOUNDED FOLLOWING inputsSorted [0]] "
+      "d := window1(ROW[\"c\"]) RANGE between 10 PRECEDING and UNBOUNDED FOLLOWING] "
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, d:BIGINT\n",
       plan->toString(true, false));
 
@@ -703,8 +746,20 @@ TEST_F(PlanNodeToStringTest, window) {
              .planNode();
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
-      "-- Window[partition by [a] order by [] "
-      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING inputsSorted [0]] "
+      "-- Window[partition by [a] "
+      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING] "
+      "-> a:VARCHAR, b:BIGINT, c:BIGINT, w0:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+             .window({"window1(c) over (order by a "
+                      "range between current row and b following)"})
+             .planNode();
+  ASSERT_EQ("-- Window\n", plan->toString());
+  ASSERT_EQ(
+      "-- Window[order by [a ASC NULLS LAST] "
+      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING] "
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, w0:BIGINT\n",
       plan->toString(true, false));
 
@@ -716,8 +771,8 @@ TEST_F(PlanNodeToStringTest, window) {
              .planNode();
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
-      "-- Window[partition by [a] order by [b ASC NULLS LAST] "
-      "d := window1(ROW[\"c\"]) RANGE between 10 PRECEDING and UNBOUNDED FOLLOWING inputsSorted [1]] "
+      "-- Window[STREAMING partition by [a] order by [b ASC NULLS LAST] "
+      "d := window1(ROW[\"c\"]) RANGE between 10 PRECEDING and UNBOUNDED FOLLOWING] "
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, d:BIGINT\n",
       plan->toString(true, false));
 
@@ -728,8 +783,8 @@ TEST_F(PlanNodeToStringTest, window) {
              .planNode();
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
-      "-- Window[partition by [a] order by [] "
-      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING inputsSorted [1]] "
+      "-- Window[STREAMING partition by [a] "
+      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING] "
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, w0:BIGINT\n",
       plan->toString(true, false));
 }
@@ -744,7 +799,7 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
       "-- RowNumber[] -> a:VARCHAR, row_number:BIGINT\n",
       plan->toString(true, false));
 
-  // Dont' emit row number.
+  // Don't emit row number.
   plan = PlanBuilder()
              .tableScan(ROW({"a"}, {VARCHAR()}))
              .rowNumber({}, std::nullopt, false)

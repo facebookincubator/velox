@@ -31,6 +31,28 @@ commands:
             git submodule sync --recursive
             git submodule update --init --recursive
 
+  install-duckdb:
+    steps:
+      - run:
+          name: "Install DuckDB 0.8.1"
+          command: |
+            source /opt/rh/gcc-toolset-9/enable
+            set -xu
+            mkdir ~/duckdb-install && cd ~/duckdb-install
+            wget https://github.com/duckdb/duckdb/archive/refs/tags/v0.8.1.tar.gz
+            tar -xf v0.8.1.tar.gz
+            cd duckdb-0.8.1
+            mkdir build && cd build
+            CMAKE_FLAGS=(
+              "-DBUILD_UNITTESTS=OFF"
+              "-DENABLE_SANITIZER=OFF"
+              "-DENABLE_UBSAN=OFF"
+              "-DBUILD_SHELL=OFF"
+              "-DEXPORT_DLL_SYMBOLS=OFF"
+            )
+            cmake ${CMAKE_FLAGS[*]}  ..
+            make install -j 16
+
   setup-environment:
     steps:
       - run:
@@ -223,8 +245,11 @@ jobs:
 
   linux-build:
     executor: build
+    environment:
+      DuckDB_SOURCE: SYSTEM
     steps:
       - pre-steps
+      - install-duckdb
       - run:
           name: "Build"
           command: |
@@ -308,7 +333,7 @@ jobs:
             chmod -R 777 /tmp/aggregate_fuzzer_repro
             _build/debug/velox/exec/tests/velox_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
-                --duration_sec 60 \
+                --duration_sec 1800 \
                 --logtostderr=1 \
                 --minloglevel=0 \
                 --repro_persist_path=/tmp/aggregate_fuzzer_repro \
@@ -365,8 +390,10 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       ICU_SOURCE: BUNDLED
       simdjson_SOURCE: BUNDLED
+      DuckDB_SOURCE: SYSTEM
     steps:
       - pre-steps
+      - install-duckdb
       - run:
           name: "Install Adapter Dependencies"
           command: |
@@ -397,6 +424,7 @@ jobs:
               "-DVELOX_ENABLE_HDFS=ON"
               "-DVELOX_ENABLE_S3=ON"
               "-DVELOX_ENABLE_GCS=ON"
+              "-DVELOX_ENABLE_ABFS=ON"
               "-DVELOX_ENABLE_SUBSTRAIT=ON"
               "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
             )
@@ -417,6 +445,12 @@ jobs:
             export LIBHDFS3_CONF=$(pwd)/.circleci/hdfs-client.xml
             export HADOOP_HOME='/usr/local/hadoop'
             export PATH=~/adapter-deps/install/bin:/usr/local/hadoop/bin:${PATH}
+            # The following is used to install Azurite in the CI for running Abfs Hive Connector unit tests.
+            # Azurite is an emulator for local Azure Storage development, and it is a required component for running Abfs Hive Connector unit tests. 
+            # It can be installed using npm. The following is used to install Node.js and npm for Azurite installation.
+            curl -sL https://rpm.nodesource.com/setup_10.x | bash -
+            yum install -y nodejs
+            npm install -g azurite
             cd _build/release && ctest -j 16 -VV --output-on-failure
           no_output_timeout: 1h
       - post-steps
@@ -426,6 +460,7 @@ jobs:
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       simdjson_SOURCE: BUNDLED
+      DuckDB_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/fuzzer.log"

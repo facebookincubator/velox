@@ -15,7 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox::exec;
@@ -411,6 +411,103 @@ TEST_F(SetAggTest, rowCheckNull) {
       {"c1"},
       {"set_agg(c0)"},
       "ROW comparison not supported for values that contain nulls");
+}
+
+TEST_F(SetAggTest, inputOrder) {
+  // Presto preserves order of input.
+
+  auto testInputOrder = [&](const RowVectorPtr& data,
+                            const RowVectorPtr& expected) {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .singleAggregation({}, {"set_agg(c0)"})
+                    .planNode();
+    assertQuery(plan, expected);
+  };
+
+  // Integers.
+
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>(
+          {1, 2, 3, std::nullopt, 3, 4, 4, 5, 6, 7, std::nullopt}),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({"[1, 2, 3, null, 4, 5, 6, 7]"}),
+  });
+
+  testInputOrder(data, expected);
+
+  // Strings.
+  data = makeRowVector({
+      makeNullableFlatVector<StringView>(
+          {"abc",
+           "bxy",
+           "cde",
+           "abc",
+           "bxy",
+           "cdef",
+           "hijk",
+           std::nullopt,
+           "abc",
+           "some very long string to test long strings"}),
+  });
+
+  expected = makeRowVector({
+      makeNullableArrayVector<StringView>({
+          {"abc",
+           "bxy",
+           "cde",
+           "cdef",
+           "hijk",
+           std::nullopt,
+           "some very long string to test long strings"},
+      }),
+  });
+
+  testInputOrder(data, expected);
+
+  // Complex types.
+
+  data = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2]",
+          "[5, 6]",
+          "null",
+          "[3, 4]",
+          "[1, 2]",
+          "[7, 8]",
+      }),
+  });
+
+  expected = makeRowVector({
+      makeNestedArrayVectorFromJson<int32_t>(
+          {"[[1,2], [5, 6], null, [3,4], [7, 8]]"}),
+  });
+
+  testInputOrder(data, expected);
+
+  // Group by
+  data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 2, 1, 1, 1, 2, 2, 1, 2, 1}),
+      makeNullableFlatVector<int32_t>(
+          {1, 2, 3, std::nullopt, 3, 4, 4, 5, 6, 7, std::nullopt}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeArrayVectorFromJson<int32_t>({
+          "[1, null, 3, 4, 6]",
+          "[2, 3, 4, 5, 7]",
+      }),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c0"}, {"set_agg(c1)"})
+                  .planNode();
+
+  assertQuery(plan, expected);
 }
 
 } // namespace

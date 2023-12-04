@@ -20,9 +20,32 @@
 
 namespace facebook::velox {
 
-// Velox Counter Registration
+/// Velox Counter Registration
 void registerVeloxCounters();
 
 constexpr folly::StringPiece kCounterHiveFileHandleGenerateLatencyMs{
     "velox.hive_file_handle_generate_latency_ms"};
+
+constexpr folly::StringPiece kCounterCacheShrinkCount{
+    "velox.cache_shrink_count"};
+
+constexpr folly::StringPiece kCounterCacheShrinkTimeMs{"velox.cache_shrink_ms"};
+
+constexpr folly::StringPiece kCounterMemoryReclaimExecTimeMs{
+    "velox.memory_reclaim_exec_ms"};
+
+constexpr folly::StringPiece kCounterMemoryReclaimedBytes{
+    "velox.memory_reclaim_bytes"};
+
+constexpr folly::StringPiece kCounterMemoryReclaimWaitTimeMs{
+    "velox.memory_reclaim_wait_ms"};
+
+constexpr folly::StringPiece kCounterMemoryReclaimWaitTimeoutCount{
+    "velox.memory_reclaim_wait_timeout_count"};
+
+constexpr folly::StringPiece kCounterMemoryNonReclaimableCount{
+    "velox.memory_non_reclaimable_count"};
+
+constexpr folly::StringPiece kCounterMaxSpillLevelExceededCount{
+    "velox.spill_max_level_exceeded_count"};
 } // namespace facebook::velox

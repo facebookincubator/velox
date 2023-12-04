@@ -160,6 +160,10 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// If true, tracks the allocation and free call stacks to detect the source
     /// of memory leak for testing purpose.
     bool debugEnabled{FLAGS_velox_memory_pool_debug_enabled};
+
+    /// Terminates the process and generates a core file on an allocation
+    /// failure
+    bool coreOnAllocationFailureEnabled{false};
   };
 
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
@@ -406,10 +410,13 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// with specified reclaim target bytes. If 'targetBytes' is zero, then it
   /// tries to reclaim all the reclaimable memory from the memory pool. It is
   /// noop if the reclaimer is not set, otherwise invoke the reclaimer's
-  /// corresponding method. The function returns the actually freed capacity
-  /// from the root of this memory pool.
+  /// corresponding method. If not zero, 'maxWaitMs' specifies the max time in
+  /// milliseconds to wait for reclaim. The memory reclaim might fail if exceeds
+  /// the timeout. The function returns the actually freed capacity from the
+  /// root of this memory pool.
   virtual uint64_t reclaim(
       uint64_t targetBytes,
+      uint64_t maxWaitMs,
       memory::MemoryReclaimer::Stats& stats) = 0;
 
   /// Invoked by the memory arbitrator to abort a root memory pool. The function
@@ -524,6 +531,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const bool threadSafe_;
   const bool checkUsageLeak_;
   const bool debugEnabled_;
+  const bool coreOnAllocationFailureEnabled_;
 
   /// Indicates if the memory pool has been aborted by the memory arbitrator or
   /// not.
@@ -531,6 +539,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// NOTE: this flag is only set for a root memory pool if it has memory
   /// reclaimer. We process a query abort request from the root memory pool.
   std::atomic<bool> aborted_{false};
+  /// Saves the aborted error exception which is only set if 'aborted_' is true.
+  std::exception_ptr abortError_{nullptr};
 
   mutable folly::SharedMutex poolMutex_;
   // NOTE: we use raw pointer instead of weak pointer here to minimize
@@ -629,8 +639,10 @@ class MemoryPoolImpl : public MemoryPool {
 
   bool reclaimableBytes(uint64_t& reclaimableBytes) const override;
 
-  uint64_t reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
-      override;
+  uint64_t reclaim(
+      uint64_t targetBytes,
+      uint64_t maxWaitMs,
+      memory::MemoryReclaimer::Stats& stats) override;
 
   uint64_t shrink(uint64_t targetBytes = 0) override;
 
@@ -676,6 +688,10 @@ class MemoryPoolImpl : public MemoryPool {
 
   MemoryAllocator* testingAllocator() const {
     return allocator_;
+  }
+
+  uint64_t testingMinReservationBytes() const {
+    return minReservationBytes_;
   }
 
   /// Structure to store allocation details in debug mode.
@@ -874,6 +890,13 @@ class MemoryPoolImpl : public MemoryPool {
     }
   }
 
+  void setAbortError(const std::exception_ptr& error);
+
+  // Check if this memory pool has been aborted. If already aborted, we rethrow
+  // the preserved abort error to prevent this pool from triggering additional
+  // memory arbitration. The associated query should also abort soon.
+  void checkIfAborted() const;
+
   Stats statsLocked() const;
 
   FOLLY_ALWAYS_INLINE std::string toStringLocked() const {
@@ -948,6 +971,8 @@ class MemoryPoolImpl : public MemoryPool {
   // memory pool destruction. We only check this if debug mode of this memory
   // pool is enabled.
   void leakCheckDbg();
+
+  void handleAllocationFailure(const std::string& failureMessage);
 
   MemoryManager* const manager_;
   MemoryAllocator* const allocator_;

@@ -50,7 +50,8 @@ HashTable<ignoreNullKeys>::HashTable(
     bool isJoinBuild,
     bool hasProbedFlag,
     uint32_t minTableSizeForParallelJoinBuild,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    const std::shared_ptr<velox::HashStringAllocator>& stringArena)
     : BaseHashTable(std::move(hashers)),
       minTableSizeForParallelJoinBuild_(minTableSizeForParallelJoinBuild),
       isJoinBuild_(isJoinBuild) {
@@ -71,7 +72,8 @@ HashTable<ignoreNullKeys>::HashTable(
       isJoinBuild,
       hasProbedFlag,
       hashMode_ != HashMode::kHash,
-      pool);
+      pool,
+      stringArena);
   nextOffset_ = rows_->nextOffset();
 }
 
@@ -288,7 +290,7 @@ void HashTable<ignoreNullKeys>::storeKeys(
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::storeRowPointer(
-    int32_t index,
+    uint64_t index,
     uint64_t hash,
     char* row) {
   if (hashMode_ == HashMode::kArray) {
@@ -305,7 +307,7 @@ void HashTable<ignoreNullKeys>::storeRowPointer(
 template <bool ignoreNullKeys>
 char* HashTable<ignoreNullKeys>::insertEntry(
     HashLookup& lookup,
-    int32_t index,
+    uint64_t index,
     vector_size_t row) {
   char* group = rows_->newRow();
   lookup.hits[row] = group; // NOLINT
@@ -372,8 +374,8 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::fullProbe(
           return RowContainer::normalizedKey(group) ==
               lookup.normalizedKeys[row];
         },
-        [&](int32_t index, int32_t row) {
-          return isJoin ? nullptr : insertEntry(lookup, row, index);
+        [&](int32_t row, uint64_t index) {
+          return isJoin ? nullptr : insertEntry(lookup, index, row);
         },
         numTombstones_,
         !isJoin && extraCheck);
@@ -384,8 +386,8 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::fullProbe(
       *this,
       0,
       [&](char* group, int32_t row) { return compareKeys(group, lookup, row); },
-      [&](int32_t index, int32_t row) {
-        return isJoin ? nullptr : insertEntry(lookup, row, index);
+      [&](int32_t row, uint64_t index) {
+        return isJoin ? nullptr : insertEntry(lookup, index, row);
       },
       numTombstones_,
       !isJoin && extraCheck);
@@ -795,6 +797,7 @@ template <typename Source>
 void syncWorkItems(
     std::vector<std::shared_ptr<Source>>& items,
     std::exception_ptr& error,
+    CpuWallTiming time,
     bool log = false) {
   // All items must be synced also in case of error because the items
   // hold references to the table and rows which could be destructed
@@ -802,6 +805,7 @@ void syncWorkItems(
   for (auto& item : items) {
     try {
       item->move();
+      time.add(item->prepareTiming());
     } catch (const std::exception& e) {
       if (log) {
         LOG(ERROR) << "Error in async hash build: " << e.what();
@@ -867,8 +871,8 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     // This is executed on returning path, possibly in unwinding, so must not
     // throw.
     std::exception_ptr error;
-    syncWorkItems(partitionSteps, error, true);
-    syncWorkItems(buildSteps, error, true);
+    syncWorkItems(partitionSteps, error, offThreadBuildTiming_, true);
+    syncWorkItems(buildSteps, error, offThreadBuildTiming_, true);
   });
 
   const auto getTable = [this](size_t i) INLINE_LAMBDA {
@@ -896,7 +900,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     buildExecutor_->add([step = partitionSteps.back()]() { step->prepare(); });
   }
   std::exception_ptr error;
-  syncWorkItems(partitionSteps, error);
+  syncWorkItems(partitionSteps, error, offThreadBuildTiming_);
   if (error) {
     std::rethrow_exception(error);
   }
@@ -912,7 +916,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     VELOX_CHECK(!buildSteps.empty());
     buildExecutor_->add([step = buildSteps.back()]() { step->prepare(); });
   }
-  syncWorkItems(buildSteps, error);
+  syncWorkItems(buildSteps, error, offThreadBuildTiming_);
   if (error) {
     std::rethrow_exception(error);
   }

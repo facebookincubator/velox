@@ -20,6 +20,7 @@
 #include <unordered_map>
 
 #include "velox/dwio/common/CachedBufferedInput.h"
+#include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
@@ -216,6 +217,10 @@ void addSubfields(
             subscript,
             "Unsupported for array pruning: {}",
             element->toString());
+        VELOX_USER_CHECK_GT(
+            subscript->index(),
+            0,
+            "Non-positive array subscript cannot be push down");
         maxIndex = std::max(maxIndex, std::min(kMaxIndex, subscript->index()));
       }
       spec.setMaxArrayElementsCount(maxIndex);
@@ -670,6 +675,10 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
        {"totalScanTime",
         RuntimeCounter(
             ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+       {"totalRemainingFilterTime",
+        RuntimeCounter(
+            totalRemainingFilterTime_.load(std::memory_order_relaxed),
+            RuntimeCounter::Unit::kNanos)},
        {"ioWaitNanos",
         RuntimeCounter(
             ioStats_->queryThreadIoLatency().sum() * 1000,
@@ -799,20 +808,29 @@ HiveDataSource::createBufferedInput(
         executor_,
         readerOpts);
   }
-  return std::make_unique<dwio::common::BufferedInput>(
+  return std::make_unique<dwio::common::DirectBufferedInput>(
       fileHandle.file,
-      readerOpts.getMemoryPool(),
       dwio::common::MetricsLog::voidLog(),
-      ioStats_.get());
+      fileHandle.uuid.id(),
+      Connector::getTracker(scanId_, readerOpts.loadQuantum()),
+      fileHandle.groupId.id(),
+      ioStats_,
+      executor_,
+      readerOpts);
 }
 
 vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
+  auto filterStartMicros = getCurrentTimeMicro();
   filterRows_.resize(output_->size());
 
   expressionEvaluator_->evaluate(
       remainingFilterExprSet_.get(), filterRows_, *rowVector, filterResult_);
-  return exec::processFilterResults(
+  auto res = exec::processFilterResults(
       filterResult_, filterRows_, filterEvalCtx_, pool_);
+  totalRemainingFilterTime_.fetch_add(
+      (getCurrentTimeMicro() - filterStartMicros) * 1000,
+      std::memory_order_relaxed);
+  return res;
 }
 
 void HiveDataSource::resetSplit() {

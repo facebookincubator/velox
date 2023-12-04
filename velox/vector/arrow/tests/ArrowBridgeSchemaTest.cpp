@@ -22,15 +22,10 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/arrow/Bridge.h"
 
+namespace facebook::velox::test {
 namespace {
 
-using namespace facebook::velox;
 static void mockRelease(ArrowSchema*) {}
-
-void exportToArrow(const TypePtr& type, ArrowSchema& out) {
-  auto pool = &facebook::velox::memory::deprecatedSharedLeafPool();
-  exportToArrow(BaseVector::create(type, 0, pool), out);
-}
 
 class ArrowBridgeSchemaExportTest : public testing::Test {
  protected:
@@ -38,15 +33,30 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     ArrowSchema arrowSchema;
     exportToArrow(type, arrowSchema);
 
-    EXPECT_EQ(std::string{arrowFormat}, std::string{arrowSchema.format});
-    EXPECT_EQ(nullptr, arrowSchema.name);
-
-    EXPECT_EQ(0, arrowSchema.n_children);
-    EXPECT_EQ(nullptr, arrowSchema.children);
+    verifyScalarType(arrowSchema, arrowFormat);
 
     arrowSchema.release(&arrowSchema);
     EXPECT_EQ(nullptr, arrowSchema.release);
     EXPECT_EQ(nullptr, arrowSchema.private_data);
+  }
+
+  void verifyScalarType(
+      const ArrowSchema& arrowSchema,
+      const char* arrowFormat,
+      const char* name = nullptr) {
+    EXPECT_STREQ(arrowFormat, arrowSchema.format);
+    if (name == nullptr) {
+      EXPECT_EQ(nullptr, arrowSchema.name);
+    } else {
+      EXPECT_STREQ(name, arrowSchema.name);
+    }
+    EXPECT_EQ(nullptr, arrowSchema.metadata);
+    EXPECT_EQ(arrowSchema.flags | ARROW_FLAG_NULLABLE, ARROW_FLAG_NULLABLE);
+
+    EXPECT_EQ(0, arrowSchema.n_children);
+    EXPECT_EQ(nullptr, arrowSchema.children);
+    EXPECT_EQ(nullptr, arrowSchema.dictionary);
+    EXPECT_NE(nullptr, arrowSchema.release);
   }
 
   // Doesn't check the actual format string of the scalar leaf types (this is
@@ -65,13 +75,13 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
 
   void verifyNestedType(const TypePtr& type, ArrowSchema* schema) {
     if (type->kind() == TypeKind::ARRAY) {
-      EXPECT_EQ(std::string{"+l"}, std::string{schema->format});
+      EXPECT_STREQ("+l", schema->format);
     } else if (type->kind() == TypeKind::MAP) {
-      EXPECT_EQ(std::string{"+m"}, std::string{schema->format});
+      EXPECT_STREQ("+m", schema->format);
       ASSERT_EQ(schema->n_children, 1);
       schema = schema->children[0];
     } else if (type->kind() == TypeKind::ROW) {
-      EXPECT_EQ(std::string{"+s"}, std::string{schema->format});
+      EXPECT_STREQ("+s", schema->format);
     }
     // Scalar type.
     else {
@@ -91,6 +101,59 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     }
   }
 
+  void testConstant(const TypePtr& type, const char* arrowFormat) {
+    ArrowSchema arrowSchema;
+    const bool isScalar = (type->size() == 0);
+    const bool constantSize = 100;
+
+    // If scalar, create the constant vector directly; if complex type, create a
+    // complex vector first, then wrap it in a dictionary.
+    auto constantVector = isScalar
+        ? BaseVector::createConstant(
+              type, variant(type->kind()), constantSize, pool_.get())
+        : BaseVector::wrapInConstant(
+              constantSize,
+              3, // index to use for the constant
+              BaseVector::create(type, 100, pool_.get()));
+
+    velox::exportToArrow(constantVector, arrowSchema);
+
+    EXPECT_STREQ("+r", arrowSchema.format);
+    EXPECT_EQ(nullptr, arrowSchema.name);
+
+    EXPECT_EQ(2, arrowSchema.n_children);
+    EXPECT_NE(nullptr, arrowSchema.children);
+    EXPECT_EQ(nullptr, arrowSchema.dictionary);
+
+    // Validate run_ends.
+    EXPECT_NE(nullptr, arrowSchema.children[0]);
+    const auto& runEnds = *arrowSchema.children[0];
+
+    EXPECT_STREQ("i", runEnds.format);
+    EXPECT_STREQ("run_ends", runEnds.name);
+    EXPECT_EQ(0, runEnds.n_children);
+    EXPECT_EQ(nullptr, runEnds.children);
+    EXPECT_EQ(nullptr, runEnds.dictionary);
+
+    // Validate values.
+    EXPECT_NE(nullptr, arrowSchema.children[1]);
+
+    if (isScalar) {
+      verifyScalarType(*arrowSchema.children[1], arrowFormat, "values");
+    } else {
+      EXPECT_STREQ(arrowFormat, arrowSchema.children[1]->format);
+      verifyNestedType(type, arrowSchema.children[1]);
+    }
+
+    arrowSchema.release(&arrowSchema);
+    EXPECT_EQ(nullptr, arrowSchema.release);
+    EXPECT_EQ(nullptr, arrowSchema.private_data);
+  }
+
+  void exportToArrow(const TypePtr& type, ArrowSchema& out) {
+    velox::exportToArrow(BaseVector::create(type, 0, pool_.get()), out);
+  }
+
   ArrowSchema makeArrowSchema(const char* format) {
     return ArrowSchema{
         .format = format,
@@ -104,6 +167,8 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
         .private_data = nullptr,
     };
   }
+
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
 };
 
 TEST_F(ArrowBridgeSchemaExportTest, scalar) {
@@ -161,6 +226,19 @@ TEST_F(ArrowBridgeSchemaExportTest, nested) {
           }));
 }
 
+TEST_F(ArrowBridgeSchemaExportTest, constant) {
+  testConstant(TINYINT(), "c");
+  testConstant(INTEGER(), "i");
+  testConstant(BOOLEAN(), "b");
+  testConstant(DOUBLE(), "g");
+  testConstant(VARCHAR(), "u");
+  testConstant(DATE(), "tdD");
+
+  testConstant(ARRAY(INTEGER()), "+l");
+  testConstant(MAP(BOOLEAN(), REAL()), "+m");
+  testConstant(ROW({TIMESTAMP(), DOUBLE()}), "+s");
+}
+
 TEST_F(ArrowBridgeSchemaExportTest, unsupported) {
   // Try some combination of unsupported types to ensure there's no crash or
   // memory leak in failure scenarios.
@@ -184,13 +262,27 @@ class ArrowBridgeSchemaImportTest : public ArrowBridgeSchemaExportTest {
     return type;
   }
 
-  TypePtr testSchemaImportComplex(
+  TypePtr testSchemaDictionaryImport(const char* indexFmt, ArrowSchema schema) {
+    auto dictionarySchema = makeArrowSchema(indexFmt);
+    dictionarySchema.dictionary = &schema;
+
+    auto type = importFromArrow(dictionarySchema);
+    dictionarySchema.release(&dictionarySchema);
+    return type;
+  }
+
+  ArrowSchema makeComplexArrowSchema(
+      std::vector<ArrowSchema>& schemas,
+      std::vector<ArrowSchema*>& schemaPtrs,
+      std::vector<ArrowSchema>& mapSchemas,
+      std::vector<ArrowSchema*>& mapSchemaPtrs,
       const char* mainFormat,
       const std::vector<const char*>& childrenFormat,
       const std::vector<const char*>& colNames = {}) {
-    std::vector<ArrowSchema> schemas;
-    std::vector<ArrowSchema*> schemaPtrs;
-
+    schemas.clear();
+    schemaPtrs.clear();
+    mapSchemas.clear();
+    mapSchemaPtrs.clear();
     schemas.resize(childrenFormat.size());
     schemaPtrs.resize(childrenFormat.size());
 
@@ -205,18 +297,40 @@ class ArrowBridgeSchemaImportTest : public ArrowBridgeSchemaExportTest {
     auto mainSchema = makeArrowSchema(mainFormat);
     if (strcmp(mainFormat, "+m") == 0) {
       // Arrow wraps key and value in a struct.
-      auto child = makeArrowSchema("+s");
-      auto children = &child;
-      child.n_children = schemaPtrs.size();
-      child.children = schemaPtrs.data();
+      mapSchemas.resize(1);
+      mapSchemaPtrs.resize(1);
+      mapSchemas[0] = makeArrowSchema("+s");
+      auto* child = &mapSchemas[0];
+      mapSchemaPtrs[0] = &mapSchemas[0];
+      child->n_children = schemaPtrs.size();
+      child->children = schemaPtrs.data();
       mainSchema.n_children = 1;
-      mainSchema.children = &children;
-      return importFromArrow(mainSchema);
+      mainSchema.children = mapSchemaPtrs.data();
     } else {
       mainSchema.n_children = (int64_t)schemaPtrs.size();
       mainSchema.children = schemaPtrs.data();
-      return importFromArrow(mainSchema);
     }
+
+    return mainSchema;
+  }
+
+  TypePtr testSchemaImportComplex(
+      const char* mainFormat,
+      const std::vector<const char*>& childrenFormat,
+      const std::vector<const char*>& colNames = {}) {
+    std::vector<ArrowSchema> schemas;
+    std::vector<ArrowSchema> mapSchemas;
+    std::vector<ArrowSchema*> schemaPtrs;
+    std::vector<ArrowSchema*> mapSchemaPtrs;
+    auto type = importFromArrow(makeComplexArrowSchema(
+        schemas,
+        schemaPtrs,
+        mapSchemas,
+        mapSchemaPtrs,
+        mainFormat,
+        childrenFormat,
+        colNames));
+    return type;
   }
 };
 
@@ -308,6 +422,12 @@ class ArrowBridgeSchemaTest : public testing::Test {
     arrowSchema.release(&arrowSchema);
     EXPECT_EQ(*inputType, *outputType);
   }
+
+  void exportToArrow(const TypePtr& type, ArrowSchema& out) {
+    velox::exportToArrow(BaseVector::create(type, 0, pool_.get()), out);
+  }
+
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
 };
 
 TEST_F(ArrowBridgeSchemaTest, roundtrip) {
@@ -354,4 +474,99 @@ TEST_F(ArrowBridgeSchemaTest, validateInArrow) {
   }
 }
 
+TEST_F(ArrowBridgeSchemaImportTest, dictionaryTypeTest) {
+  // Primitive types
+  EXPECT_EQ(DOUBLE(), testSchemaDictionaryImport("i", makeArrowSchema("g")));
+  EXPECT_EQ(BOOLEAN(), testSchemaDictionaryImport("i", makeArrowSchema("b")));
+  EXPECT_EQ(TINYINT(), testSchemaDictionaryImport("i", makeArrowSchema("c")));
+  EXPECT_EQ(INTEGER(), testSchemaDictionaryImport("i", makeArrowSchema("i")));
+  EXPECT_EQ(SMALLINT(), testSchemaDictionaryImport("i", makeArrowSchema("s")));
+  EXPECT_EQ(BIGINT(), testSchemaDictionaryImport("i", makeArrowSchema("l")));
+  EXPECT_EQ(REAL(), testSchemaDictionaryImport("i", makeArrowSchema("f")));
+  EXPECT_EQ(VARCHAR(), testSchemaDictionaryImport("i", makeArrowSchema("u")));
+
+  std::vector<ArrowSchema> schemas;
+  std::vector<ArrowSchema> mapSchemas;
+  std::vector<ArrowSchema*> mapSchemaPtrs;
+  std::vector<ArrowSchema*> schemaPtrs;
+
+  // Arrays
+  EXPECT_EQ(
+      *ARRAY(BIGINT()),
+      *testSchemaDictionaryImport(
+          "i",
+          makeComplexArrowSchema(
+              schemas, schemaPtrs, mapSchemas, mapSchemaPtrs, "+l", {"l"})));
+  EXPECT_EQ(
+      *ARRAY(TIMESTAMP()),
+      *testSchemaDictionaryImport(
+          "i",
+          makeComplexArrowSchema(
+              schemas, schemaPtrs, mapSchemas, mapSchemaPtrs, "+l", {"ttn"})));
+  EXPECT_EQ(
+      *ARRAY(DATE()),
+      *testSchemaDictionaryImport(
+          "i",
+          makeComplexArrowSchema(
+              schemas, schemaPtrs, mapSchemas, mapSchemaPtrs, "+l", {"tdD"})));
+  EXPECT_EQ(
+      *ARRAY(VARCHAR()),
+      *testSchemaDictionaryImport(
+          "i",
+          makeComplexArrowSchema(
+              schemas, schemaPtrs, mapSchemas, mapSchemaPtrs, "+l", {"U"})));
+
+  // Maps
+  EXPECT_EQ(
+      *MAP(VARCHAR(), BOOLEAN()),
+      *testSchemaDictionaryImport(
+          "i",
+          makeComplexArrowSchema(
+              schemas,
+              schemaPtrs,
+              mapSchemas,
+              mapSchemaPtrs,
+              "+m",
+              {"U", "b"})));
+  EXPECT_EQ(
+      *MAP(SMALLINT(), REAL()),
+      *testSchemaDictionaryImport(
+          "i",
+          makeComplexArrowSchema(
+              schemas,
+              schemaPtrs,
+              mapSchemas,
+              mapSchemaPtrs,
+              "+m",
+              {"s", "f"})));
+
+  // Rows
+  EXPECT_EQ(
+      *ROW({SMALLINT(), REAL()}),
+      *testSchemaDictionaryImport(
+          "i",
+          makeComplexArrowSchema(
+              schemas,
+              schemaPtrs,
+              mapSchemas,
+              mapSchemaPtrs,
+              "+s",
+              {"s", "f"})));
+
+  // Named Row
+  EXPECT_EQ(
+      *ROW({"col1", "col2"}, {SMALLINT(), REAL()}),
+      *testSchemaDictionaryImport(
+          "i",
+          makeComplexArrowSchema(
+              schemas,
+              schemaPtrs,
+              mapSchemas,
+              mapSchemaPtrs,
+              "+s",
+              {"s", "f"},
+              {"col1", "col2"})));
+}
+
 } // namespace
+} // namespace facebook::velox::test

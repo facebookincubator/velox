@@ -1,6 +1,88 @@
 =====================================
-Date and Time Functions
+Date and Time Functions and Operators
 =====================================
+
+Date and Time Operators
+-----------------------
+
+.. list-table::
+   :widths: 15 60 25
+   :header-rows: 1
+
+   * - Operator
+     - Example
+     - Result
+   * - ``+``
+     - ``interval '1' second + interval '1' hour``
+     - ``0 01:00:01.000``
+   * - ``+``
+     - ``timestamp '1970-01-01 00:00:00.000' + interval '1' second``
+     - ``1970-01-01 00:00:01.000``
+   * - ``-``
+     - ``interval '1' hour - interval '1' second``
+     - ``0 00:59:59.000``
+   * - ``-``
+     - ``timestamp '1970-01-01 00:00:00.000' - interval '1' second``
+     - ``1969-12-31 23:59:59.000``
+   * - ``*``
+     - ``interval '1' second * 2``
+     - ``0 00:00:02.000``
+   * - ``*``
+     - ``2 * interval '1' second``
+     - ``0 00:00:02.000``
+   * - ``*``
+     - ``interval '1' second * 0.001``
+     - ``0 00:00:00.001``
+   * - ``*``
+     - ``0.001 * interval '1' second``
+     - ``0 00:00:00.001``
+   * - ``/``
+     - ``interval '15' second / 1.5``
+     - ``0 00:00:10.000``
+
+.. function:: plus(x, y) -> [same as x]
+
+    Returns the sum of ``x`` and ``y``. Both ``x`` and ``y`` are intervals day
+    to second or one of them can be timestamp. For addition of two intervals day to
+    second, returns ``-106751991167 07:12:55.808`` when the addition overflows
+    in positive and returns ``106751991167 07:12:55.807`` when the addition
+    overflows in negative. When addition of a timestamp with an interval day to
+    second, overflowed results are wrapped around.
+
+.. function:: minus(x, y) -> [same as x]
+
+    Returns the result of subtracting ``y`` from ``x``. Both ``x`` and ``y``
+    are intervals day to second or ``x`` can be timestamp. For subtraction of
+    two intervals day to second, returns ``-106751991167 07:12:55.808`` when
+    the subtraction overflows in positive and returns ``106751991167 07:12:55.807``
+    when the subtraction overflows in negative. For subtraction of an interval
+    day to second from a timestamp, overflowed results are wrapped around.
+
+.. function:: multiply(interval day to second, x) -> interval day to second
+
+    Returns the result of multiplying ``interval day to second`` by ``x``.
+    ``x`` can be a bigint or double. Returns ``0`` when ``x`` is NaN. Returns
+    ``106751991167 07:12:55.807`` when ``x`` is infinity or when the
+    multiplication overflow in positive. Returns ``-106751991167 07:12:55.808``
+    when ``x`` is -infinity or when the multiplication overflow in negiative.
+
+.. function:: multiply(x, interval day to second) -> interval day to second
+
+    Returns the result of multiplying ``x`` by ``interval day to second``.
+    Same as ``multiply(interval day to second, x)``.
+
+.. function:: divide(interval day to second, x) -> interval day to second
+
+    Returns the result of ``interval day to second`` divided by ``x``. ``x`` is
+    a double. Returns ``0`` when ``x`` is NaN or is infinity. Returns
+    ``106751991167 07:12:55.807`` when ``x`` is ``0.0`` and
+    ``interval day to second`` is not ``0``, or when the division overflows in
+    positive. Returns ``-106751991167 07:12:55.808`` when ``x`` is ``-0.0`` and
+    ``interval day to second`` is not ``0``, or when the division overflows in
+    negiative.
+
+Date and Time Functions
+-----------------------
 
 .. function:: current_date() -> date
 
@@ -241,6 +323,7 @@ arbitrary large timestamps.
 
     This is an alias for :func:`year_of_week`.
 
+.. _presto-time-zones:
 
 Time Zones
 ----------
@@ -284,3 +367,7 @@ transition: ::
 It can be interpreted as `2014-11-02 01:30:00 PDT`, or `2014-11-02 01:30:00 PST`, which are
 `2014-11-02 08:30:00 UTC` or `2014-11-02 09:30:00 UTC` respectively. The former one is
 picked to be consistent with Presto.
+
+**Timezone Name Parsing**: When parsing strings that contain timezone names, the 
+list of supported timezones follow the definition `here
+<https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>`_.

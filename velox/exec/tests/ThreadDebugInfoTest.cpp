@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/process/ThreadDebugInfo.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -42,7 +43,6 @@ using namespace facebook::velox::exec::test;
 #endif
 #endif
 
-#if IS_BUILDING_WITH_ASAN() == 0
 // Ensure the test class name has "DeathTest" as a prefix to ensure this runs in
 // a single thread since the ASSERT_DEATH forks the process.
 class ThreadDebugInfoDeathTest : public OperatorTestBase {};
@@ -59,28 +59,32 @@ struct InduceSegFaultFunction {
 };
 } // namespace
 
-TEST_F(ThreadDebugInfoDeathTest, withinSeperateDriverThread) {
+DEBUG_ONLY_TEST_F(ThreadDebugInfoDeathTest, withinSeperateDriverThread) {
   auto vector = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
   registerFunction<InduceSegFaultFunction, int64_t, int64_t>({"segFault"});
   auto op = PlanBuilder().values({vector}).project({"segFault(c0)"}).planNode();
+#if IS_BUILDING_WITH_ASAN() == 0
   ASSERT_DEATH(
       (assertQuery(op, vector)),
       ".*Fatal signal handler. Query Id= TaskCursorQuery_0 Task Id= test_cursor 1.*");
+#endif
 }
 
-TEST_F(ThreadDebugInfoDeathTest, withinQueryCompilation) {
+DEBUG_ONLY_TEST_F(ThreadDebugInfoDeathTest, withinQueryCompilation) {
   auto vector = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
   registerFunction<InduceSegFaultFunction, int64_t, int64_t>({"segFault"});
   // Call expression with a constant to trigger the constant folding during
   // compilation.
   auto op = PlanBuilder().values({vector}).project({"segFault(1)"}).planNode();
 
+#if IS_BUILDING_WITH_ASAN() == 0
   ASSERT_DEATH(
       (assertQuery(op, vector)),
       ".*Fatal signal handler. Query Id= TaskCursorQuery_0 Task Id= test_cursor 1.*");
+#endif
 }
 
-TEST_F(ThreadDebugInfoDeathTest, withinTheCallingThread) {
+DEBUG_ONLY_TEST_F(ThreadDebugInfoDeathTest, withinTheCallingThread) {
   auto vector = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
   registerFunction<InduceSegFaultFunction, int64_t, int64_t>({"segFault"});
   auto plan =
@@ -88,7 +92,7 @@ TEST_F(ThreadDebugInfoDeathTest, withinTheCallingThread) {
 
   auto queryCtx = std::make_shared<core::QueryCtx>(
       executor_.get(),
-      std::unordered_map<std::string, std::string>{},
+      core::QueryConfig({}),
       std::unordered_map<std::string, std::shared_ptr<Config>>{},
       cache::AsyncDataCache::getInstance(),
       nullptr,
@@ -97,9 +101,16 @@ TEST_F(ThreadDebugInfoDeathTest, withinTheCallingThread) {
   auto task = exec::Task::create(
       "single.execution.task.0", std::move(plan), 0, queryCtx);
 
+#if IS_BUILDING_WITH_ASAN() == 0
   ASSERT_DEATH(
       (task->next()),
       ".*Fatal signal handler. Query Id= TaskCursorQuery_0 Task Id= single.execution.task.0.*");
+#endif
 }
 
+DEBUG_ONLY_TEST_F(ThreadDebugInfoDeathTest, noThreadContextSet) {
+  int* nullpointer = nullptr;
+#if IS_BUILDING_WITH_ASAN() == 0
+  ASSERT_DEATH((*nullpointer = 6), ".*ThreadDebugInfo object not found.*");
 #endif
+}

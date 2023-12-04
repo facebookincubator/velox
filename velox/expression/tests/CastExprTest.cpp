@@ -52,6 +52,12 @@ class CastExprTest : public functions::test::CastBaseTest {
         std::make_unique<TestingDictionaryFunction>());
   }
 
+  void setLegacyCast(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kLegacyCast, std::to_string(value)},
+    });
+  }
+
   void setCastIntByTruncate(bool value) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kCastToIntByTruncate, std::to_string(value)},
@@ -533,6 +539,7 @@ TEST_F(CastExprTest, stringToTimestamp) {
 }
 
 TEST_F(CastExprTest, timestampToString) {
+  setLegacyCast(false);
   testCast<Timestamp, std::string>(
       "string",
       {
@@ -546,19 +553,43 @@ TEST_F(CastExprTest, timestampToString) {
           Timestamp(946729316, 123),
           Timestamp(946729316, 129900000),
           Timestamp(7266, 0),
+          Timestamp(-50049331200, 0),
+          Timestamp(253405036800, 0),
+          Timestamp(-62480037600, 0),
           std::nullopt,
       },
       {
-          "1940-01-02T00:00:00.000",
-          "1969-12-31T21:58:54.000",
-          "1970-01-01T00:00:00.000",
-          "2000-01-01T00:00:00.000",
-          "2269-12-29T00:00:00.000",
-          "4969-12-04T00:00:00.000",
+          "1940-01-02 00:00:00.000",
+          "1969-12-31 21:58:54.000",
+          "1970-01-01 00:00:00.000",
+          "2000-01-01 00:00:00.000",
+          "2269-12-29 00:00:00.000",
+          "4969-12-04 00:00:00.000",
+          "2000-01-01 12:21:56.000",
+          "2000-01-01 12:21:56.000",
+          "2000-01-01 12:21:56.129",
+          "1970-01-01 02:01:06.000",
+          "0384-01-01 08:00:00.000",
+          "10000-02-01 16:00:00.000",
+          "-0010-02-01 10:00:00.000",
+          std::nullopt,
+      });
+
+  setLegacyCast(true);
+  testCast<Timestamp, std::string>(
+      "string",
+      {
+          Timestamp(946729316, 123),
+          Timestamp(-50049331200, 0),
+          Timestamp(253405036800, 0),
+          Timestamp(-62480037600, 0),
+          std::nullopt,
+      },
+      {
           "2000-01-01T12:21:56.000",
-          "2000-01-01T12:21:56.000",
-          "2000-01-01T12:21:56.129",
-          "1970-01-01T02:01:06.000",
+          "384-01-01T08:00:00.000",
+          "10000-02-01T16:00:00.000",
+          "-10-02-01T10:00:00.000",
           std::nullopt,
       });
 }
@@ -1535,7 +1566,16 @@ TEST_F(CastExprTest, decimalToVarchar) {
       "c0",
       flatForInline,
       makeNullableFlatVector<StringView>(
-          {"1234567.89", "-3333333.33", "0", "0.05", "-0.09", std::nullopt}));
+          {"1234567.89",
+           "-3333333.33",
+           "0.00",
+           "0.05",
+           "-0.09",
+           std::nullopt}));
+
+  auto shortFlatForZero = makeNullableFlatVector<int64_t>({0}, DECIMAL(6, 0));
+  testComplexCast(
+      "c0", shortFlatForZero, makeNullableFlatVector<StringView>({"0"}));
 
   auto shortFlat = makeNullableFlatVector<int64_t>(
       {DecimalUtil::kShortDecimalMin,
@@ -1551,7 +1591,7 @@ TEST_F(CastExprTest, decimalToVarchar) {
       makeNullableFlatVector<StringView>(
           {"-0.999999999999999999",
            "-0.000000000000000003",
-           "0",
+           "0.000000000000000000",
            "0.000000000000000055",
            "0.999999999999999999",
            std::nullopt}));
@@ -1569,11 +1609,15 @@ TEST_F(CastExprTest, decimalToVarchar) {
       longFlat,
       makeNullableFlatVector<StringView>(
           {"-999999999999999999999999999999999.99999",
-           "0",
+           "0.00000",
            "999999999999999999999999999999999.99999",
            "-0.00001",
            "12089258196146291747.06175",
            std::nullopt}));
+
+  auto longFlatForZero = makeNullableFlatVector<int128_t>({0}, DECIMAL(25, 0));
+  testComplexCast(
+      "c0", longFlatForZero, makeNullableFlatVector<StringView>({"0"}));
 }
 
 TEST_F(CastExprTest, decimalToDecimal) {
@@ -1698,6 +1742,30 @@ TEST_F(CastExprTest, integerToDecimal) {
   testIntToDecimalCasts<int16_t>();
   testIntToDecimalCasts<int32_t>();
   testIntToDecimalCasts<int64_t>();
+}
+
+TEST_F(CastExprTest, boolToDecimal) {
+  // Bool to short decimal.
+  auto input =
+      makeFlatVector<bool>({true, false, false, true, true, true, false});
+  testComplexCast(
+      "c0",
+      input,
+      makeFlatVector<int64_t>({100, 0, 0, 100, 100, 100, 0}, DECIMAL(6, 2)));
+
+  // Bool to long decimal.
+  testComplexCast(
+      "c0",
+      input,
+      makeFlatVector<int128_t>(
+          {10'000'000'000,
+           0,
+           0,
+           10'000'000'000,
+           10'000'000'000,
+           10'000'000'000,
+           0},
+          DECIMAL(20, 10)));
 }
 
 TEST_F(CastExprTest, castInTry) {
@@ -2040,5 +2108,14 @@ TEST_F(CastExprTest, lazyInput) {
 
   evaluate("cast(switch(gt(c0, c1), c1, c0) as double)", data);
 }
+
+TEST_F(CastExprTest, identicalTypes) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(10, folly::identity),
+  });
+  auto result = evaluate("cast(c0 as bigint)", data);
+  ASSERT_EQ(result.get(), data->childAt(0).get());
+}
+
 } // namespace
 } // namespace facebook::velox::test

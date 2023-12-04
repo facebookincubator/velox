@@ -87,11 +87,14 @@ class VectorFuzzer {
     /// double between 0 and 1).
     double nullRatio{0};
 
-    /// If true, fuzzer will generate top-level nulls for containers
-    /// (arrays/maps/rows), i.e, nulls for the containers themselves, not the
-    /// elements.
+    /// If false, fuzzer will not generate nulls for elements within containers
+    /// (arrays/maps/rows). It might still generate null for the container
+    /// itself.
     ///
-    /// The amount of nulls are controlled by `nullRatio`.
+    /// The amount of nulls (if true) is controlled by `nullRatio`.
+    ///
+    /// If you want to prevent the top-level row containers from being null, see
+    /// `fuzzInputRow()` instead.
     bool containerHasNulls{true};
 
     /// If true, fuzzer will generate top-level nulls for dictionaries.
@@ -143,12 +146,12 @@ class VectorFuzzer {
   };
 
   VectorFuzzer(
-      VectorFuzzer::Options options,
+      const VectorFuzzer::Options& options,
       memory::MemoryPool* pool,
       size_t seed = 123456)
       : opts_(options), pool_(pool), rng_(seed) {}
 
-  void setOptions(VectorFuzzer::Options options) {
+  void setOptions(const VectorFuzzer::Options& options) {
     opts_ = options;
   }
 

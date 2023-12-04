@@ -90,21 +90,11 @@ TEST_F(ArrayAnyMatchTest, basic) {
 }
 
 TEST_F(ArrayAnyMatchTest, complexTypes) {
-  auto baseVector = makeArrayVector<int64_t>({
-      {1, 2, 3},
-      {2, 2},
-      {3, 3},
-      {4, 4},
-      {5, 5},
-      {},
+  auto arrayOfArrays = makeNestedArrayVectorFromJson<int32_t>({
+      "[[1, 2, 3]]",
+      "[[2, 2], [3, 3], [4, 4], [5, 5]]",
+      "[[]]",
   });
-  // Create an array of array vector using above base vector using offsets.
-  // [
-  //  [[1, 2, 3]],
-  //  [[2, 2], [3, 3], [4, 4], [5, 5]],
-  //  [[]]
-  // ]
-  auto arrayOfArrays = makeArrayVector({0, 1, 5}, baseVector);
   std::vector<std::optional<bool>> expectedResult{
       true,
       true,
@@ -112,14 +102,12 @@ TEST_F(ArrayAnyMatchTest, complexTypes) {
   };
   testAnyMatchExpr(expectedResult, "cardinality(x) > 0", arrayOfArrays);
 
-  // Create an array of array vector using above base vector using offsets.
-  // [
-  //  [[1, 2, 3]],  cardinalities is 3
-  //  [[2, 2], [3, 3], [4, 4], [5, 5]], all cardinalities is 2
-  //  [[]],
-  //  null
-  // ]
-  arrayOfArrays = makeArrayVector({0, 1, 5, 6}, baseVector, {3});
+  arrayOfArrays = makeNestedArrayVectorFromJson<int32_t>({
+      "[[1, 2, 3]]",
+      "[[2, 2], [3, 3], [4, 4], [5, 5]]",
+      "[[]]",
+      "null",
+  });
   expectedResult = {
       true,
       false,
@@ -198,7 +186,7 @@ TEST_F(ArrayAnyMatchTest, errors) {
 
 TEST_F(ArrayAnyMatchTest, conditional) {
   // No throw and return false if there are unmatched elements except nulls
-  auto c0 = makeFlatVector<uint32_t>({1, 2, 3, 4, 5});
+  auto c0 = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
   auto c1 = makeNullableArrayVector<int32_t>({
       {4, 100, std::nullopt},
       {50, 12},

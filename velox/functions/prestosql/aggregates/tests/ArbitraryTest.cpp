@@ -15,7 +15,7 @@
  */
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -43,10 +43,10 @@ TEST_F(ArbitraryTest, noNulls) {
   std::vector<std::string> aggregates = {
       "arbitrary(c1)",
       "arbitrary(c2)",
-      "arbitrary(c3)",
+      "any_value(c3)",
       "arbitrary(c4)",
       "arbitrary(c5)",
-      "arbitrary(c6)"};
+      "any_value(c6)"};
 
   // We do not test with TableScan because having two input splits makes the
   // result non-deterministic.

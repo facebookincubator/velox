@@ -290,6 +290,10 @@ class BaseHashTable {
 #endif
   }
 
+  const CpuWallTiming& offThreadBuildTiming() const {
+    return offThreadBuildTiming_;
+  }
+
  protected:
   static FOLLY_ALWAYS_INLINE size_t tableSlotSize() {
     // Each slot is 8 bytes.
@@ -300,6 +304,9 @@ class BaseHashTable {
 
   std::vector<std::unique_ptr<VectorHasher>> hashers_;
   std::unique_ptr<RowContainer> rows_;
+
+  // Time spent in build outside of the calling thread.
+  CpuWallTiming offThreadBuildTiming_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
@@ -329,12 +336,15 @@ class HashTable : public BaseHashTable {
       bool isJoinBuild,
       bool hasProbedFlag,
       uint32_t minTableSizeForParallelJoinBuild,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const std::shared_ptr<velox::HashStringAllocator>& stringArena = nullptr);
 
   static std::unique_ptr<HashTable> createForAggregation(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       const std::vector<Accumulator>& accumulators,
-      memory::MemoryPool* pool) {
+      memory::MemoryPool* pool,
+      const std::shared_ptr<velox::HashStringAllocator>& stringArena =
+          nullptr) {
     return std::make_unique<HashTable>(
         std::move(hashers),
         accumulators,
@@ -343,7 +353,8 @@ class HashTable : public BaseHashTable {
         false, // isJoinBuild
         false, // hasProbedFlag
         0, // minTableSizeForParallelJoinBuild
-        pool);
+        pool,
+        stringArena);
   }
 
   static std::unique_ptr<HashTable> createForJoin(
@@ -611,7 +622,7 @@ class HashTable : public BaseHashTable {
   void rehash(bool initNormalizedKeys);
   void storeKeys(HashLookup& lookup, vector_size_t row);
 
-  void storeRowPointer(int32_t index, uint64_t hash, char* row);
+  void storeRowPointer(uint64_t index, uint64_t hash, char* row);
 
   // Allocates new tables for tags and payload pointers. The size must
   // a power of 2.
@@ -700,7 +711,7 @@ class HashTable : public BaseHashTable {
       bool initNormalizedKeys,
       raw_vector<uint64_t>& hashes);
 
-  char* insertEntry(HashLookup& lookup, int32_t index, vector_size_t row);
+  char* insertEntry(HashLookup& lookup, uint64_t index, vector_size_t row);
 
   bool compareKeys(const char* group, HashLookup& lookup, vector_size_t row);
 

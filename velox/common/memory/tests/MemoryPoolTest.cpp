@@ -24,6 +24,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/SharedArbitrator.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_memory_pool_debug_enabled);
@@ -73,7 +74,7 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
  protected:
   static constexpr uint64_t kDefaultCapacity = 8 * GB; // 8GB
   static void SetUpTestCase() {
-    MemoryArbitrator::registerAllFactories();
+    exec::SharedArbitrator::registerFactory();
     FLAGS_velox_memory_leak_check_enabled = true;
     TestValue::enable();
   }
@@ -587,27 +588,63 @@ TEST_P(MemoryPoolTest, MemoryCapExceptions) {
         ASSERT_EQ(error_code::kMemAllocError.c_str(), ex.errorCode());
         ASSERT_TRUE(ex.isRetriable());
         if (useMmap_) {
-          ASSERT_EQ(
-              fmt::format(
-                  "allocate failed with 128.00MB from Memory Pool["
-                  "static_quota LEAF root[MemoryCapExceptions] "
-                  "parent[MemoryCapExceptions] MMAP track-usage {}]<max "
-                  "capacity 256.00MB capacity 256.00MB used 0B available 0B "
-                  "reservation [used 0B, reserved 0B, min 0B] counters [allocs "
-                  "1, frees 0, reserves 0, releases 0, collisions 0])>",
-                  isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
-              ex.message());
+          if (useCache_) {
+            ASSERT_EQ(
+                fmt::format(
+                    "allocate failed with 128.00MB from Memory Pool["
+                    "static_quota LEAF root[MemoryCapExceptions] "
+                    "parent[MemoryCapExceptions] MMAP track-usage {}]<max "
+                    "capacity 256.00MB capacity 256.00MB used 0B available 0B "
+                    "reservation [used 0B, reserved 0B, min 0B] counters [allocs "
+                    "1, frees 0, reserves 0, releases 0, collisions 0])> Failed to"
+                    " evict from cache state: AsyncDataCache:\nCache size: 0B "
+                    "tinySize: 0B large size: 0B\nCache entries: 0 read pins: "
+                    "0 write pins: 0 pinned shared: 0B pinned exclusive: 0B\n "
+                    "num write wait: 0 empty entries: 0\nCache access miss: 0 "
+                    "hit: 0 hit bytes: 0B eviction: 0 eviction checks: 0\nPrefetch"
+                    " entries: 0 bytes: 0B\nAlloc Megaclocks 0\nAllocated pages: 0"
+                    " cached pages: 0\n",
+                    isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
+                ex.message());
+          } else {
+            ASSERT_EQ(
+                fmt::format(
+                    "allocate failed with 128.00MB from Memory Pool["
+                    "static_quota LEAF root[MemoryCapExceptions] "
+                    "parent[MemoryCapExceptions] MMAP track-usage {}]<max "
+                    "capacity 256.00MB capacity 256.00MB used 0B available 0B "
+                    "reservation [used 0B, reserved 0B, min 0B] counters [allocs "
+                    "1, frees 0, reserves 0, releases 0, collisions 0])> "
+                    "Exceeded memory allocator limit when allocating 32769 "
+                    "new pages for total allocation of 32769 pages, the memory"
+                    " allocator capacity is 32768 pages",
+                    isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
+                ex.message());
+          }
         } else {
-          ASSERT_EQ(
-              fmt::format(
-                  "allocate failed with 128.00MB from Memory Pool"
-                  "[static_quota LEAF root[MemoryCapExceptions] "
-                  "parent[MemoryCapExceptions] MALLOC track-usage {}]"
-                  "<max capacity 256.00MB capacity 256.00MB used 0B available "
-                  "0B reservation [used 0B, reserved 0B, min 0B] counters "
-                  "[allocs 1, frees 0, reserves 0, releases 0, collisions 0])>",
-                  isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
-              ex.message());
+          if (useCache_) {
+            ASSERT_EQ(
+                fmt::format(
+                    "allocate failed with 128.00MB from Memory Pool"
+                    "[static_quota LEAF root[MemoryCapExceptions] "
+                    "parent[MemoryCapExceptions] MALLOC track-usage {}]"
+                    "<max capacity 256.00MB capacity 256.00MB used 0B available "
+                    "0B reservation [used 0B, reserved 0B, min 0B] counters "
+                    "[allocs 1, frees 0, reserves 0, releases 0, collisions 0])> Failed to evict from cache state: AsyncDataCache:\nCache size: 0B tinySize: 0B large size: 0B\nCache entries: 0 read pins: 0 write pins: 0 pinned shared: 0B pinned exclusive: 0B\n num write wait: 0 empty entries: 0\nCache access miss: 0 hit: 0 hit bytes: 0B eviction: 0 eviction checks: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks 0\nAllocated pages: 0 cached pages: 0\n",
+                    isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
+                ex.message());
+          } else {
+            ASSERT_EQ(
+                fmt::format(
+                    "allocate failed with 128.00MB from Memory Pool"
+                    "[static_quota LEAF root[MemoryCapExceptions] "
+                    "parent[MemoryCapExceptions] MALLOC track-usage {}]"
+                    "<max capacity 256.00MB capacity 256.00MB used 0B available "
+                    "0B reservation [used 0B, reserved 0B, min 0B] counters "
+                    "[allocs 1, frees 0, reserves 0, releases 0, collisions 0])> ",
+                    isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
+                ex.message());
+          }
         }
       }
     }
@@ -1757,9 +1794,9 @@ TEST_P(MemoryPoolTest, contiguousAllocateGrowExceedMemoryPoolLimit) {
   ASSERT_EQ(allocation.numPages(), kMaxNumPages / 2);
 }
 
-TEST_P(MemoryPoolTest, badNonContiguousAllocation) {
+TEST_P(MemoryPoolTest, nonContiguousAllocationBounds) {
   auto manager = getMemoryManager();
-  auto pool = manager->addLeafPool("badNonContiguousAllocation");
+  auto pool = manager->addLeafPool("nonContiguousAllocationBounds");
   Allocation allocation;
   // Bad zero page allocation size.
   ASSERT_THROW(pool->allocateNonContiguous(0, allocation), VeloxRuntimeError);
@@ -1767,8 +1804,9 @@ TEST_P(MemoryPoolTest, badNonContiguousAllocation) {
   // Set the num of pages to allocate exceeds one PageRun limit.
   constexpr MachinePageCount kNumPages =
       Allocation::PageRun::kMaxPagesInRun + 1;
-  ASSERT_THROW(
-      pool->allocateNonContiguous(kNumPages, allocation), VeloxRuntimeError);
+  pool->allocateNonContiguous(kNumPages, allocation);
+  ASSERT_GE(allocation.numPages(), kNumPages);
+  pool->freeNonContiguous(allocation);
   pool->allocateNonContiguous(kNumPages - 1, allocation);
   ASSERT_GE(allocation.numPages(), kNumPages - 1);
   pool->freeNonContiguous(allocation);
@@ -2779,9 +2817,9 @@ TEST_P(MemoryPoolTest, reclaimAPIsWithDefaultReclaimer) {
       uint64_t reclaimableBytes{100};
       ASSERT_FALSE(pool->reclaimableBytes(reclaimableBytes));
       ASSERT_EQ(reclaimableBytes, 0);
-      ASSERT_EQ(pool->reclaim(0, stats_), 0);
-      ASSERT_EQ(pool->reclaim(100, stats_), 0);
-      ASSERT_EQ(pool->reclaim(kMaxMemory, stats_), 0);
+      ASSERT_EQ(pool->reclaim(0, 0, stats_), 0);
+      ASSERT_EQ(pool->reclaim(100, 0, stats_), 0);
+      ASSERT_EQ(pool->reclaim(kMaxMemory, 0, stats_), 0);
     }
     for (const auto& allocation : allocations) {
       allocation.pool->free(allocation.buffer, allocation.size);
@@ -3161,7 +3199,7 @@ TEST_P(MemoryPoolTest, maybeReserveFailWithAbort) {
   ASSERT_TRUE(child->aborted());
   ASSERT_TRUE(root->aborted());
   VELOX_ASSERT_THROW(
-      child->maybeReserve(2 * kMaxSize), "This memory pool has been aborted.");
+      child->maybeReserve(2 * kMaxSize), "Manual MemoryPool Abortion");
 }
 
 // Model implementation of a GrowCallback.
@@ -3312,7 +3350,9 @@ TEST_P(MemoryPoolTest, abortAPI) {
       }
       ASSERT_TRUE(rootPool->aborted());
       {
-        abortPool(rootPool.get());
+        VELOX_ASSERT_THROW(
+            abortPool(rootPool.get()),
+            "Trying to set another abort error on an already aborted pool.");
         ASSERT_TRUE(rootPool->aborted());
       }
       ASSERT_TRUE(rootPool->aborted());
@@ -3374,7 +3414,9 @@ TEST_P(MemoryPoolTest, abortAPI) {
           "aggregateAbortAPI", MemoryReclaimer::create());
       ASSERT_TRUE(aggregatePool->aborted());
       {
-        abortPool(aggregatePool.get());
+        VELOX_ASSERT_THROW(
+            abortPool(aggregatePool.get()),
+            "Trying to set another abort error on an already aborted pool.");
         ASSERT_TRUE(aggregatePool->aborted());
         ASSERT_TRUE(leafPool->aborted());
         ASSERT_TRUE(rootPool->aborted());
@@ -3383,7 +3425,9 @@ TEST_P(MemoryPoolTest, abortAPI) {
       ASSERT_TRUE(leafPool->aborted());
       ASSERT_TRUE(rootPool->aborted());
       {
-        abortPool(rootPool.get());
+        VELOX_ASSERT_THROW(
+            abortPool(rootPool.get()),
+            "Trying to set another abort error on an already aborted pool.");
         ASSERT_TRUE(aggregatePool->aborted());
         ASSERT_TRUE(leafPool->aborted());
         ASSERT_TRUE(rootPool->aborted());
@@ -3561,6 +3605,27 @@ TEST_P(MemoryPoolTest, abort) {
       ASSERT_EQ(leafPool->capacity(), capacity);
     }
   }
+}
+
+TEST_P(MemoryPoolTest, overuseUnderArbitration) {
+  constexpr int64_t kMaxSize = 128 * MB; // 1GB
+  setupMemory({.capacity = kMaxSize, .arbitratorKind = "SHARED"});
+  MemoryManager& manager = *getMemoryManager();
+  auto root = manager.addRootPool(
+      "overuseUnderArbitration", kMaxSize, MemoryReclaimer::create());
+  auto child = root->addLeafChild("overuseUnderArbitration");
+  // maybeReserve returns false if reservation fails.
+  ASSERT_FALSE(child->maybeReserve(2 * kMaxSize));
+  ASSERT_EQ(child->currentBytes(), 0);
+  ASSERT_EQ(child->reservedBytes(), 0);
+  ScopedMemoryArbitrationContext scopedMemoryArbitration(*child);
+  ASSERT_TRUE(underMemoryArbitration());
+  ASSERT_TRUE(child->maybeReserve(2 * kMaxSize));
+  ASSERT_EQ(child->currentBytes(), 0);
+  ASSERT_EQ(child->reservedBytes(), 2 * kMaxSize);
+  child->release();
+  ASSERT_EQ(child->currentBytes(), 0);
+  ASSERT_EQ(child->reservedBytes(), 0);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

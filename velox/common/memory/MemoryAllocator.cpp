@@ -28,6 +28,28 @@ DECLARE_bool(velox_memory_use_hugepages);
 
 namespace facebook::velox::memory {
 
+namespace {
+std::string& cacheFailureMessage() {
+  thread_local std::string message;
+  return message;
+}
+
+std::string& allocatorFailureMessage() {
+  thread_local std::string errMsg;
+  return errMsg;
+}
+} // namespace
+
+void setCacheFailureMessage(std::string message) {
+  cacheFailureMessage() = std::move(message);
+}
+
+std::string getAndClearCacheFailureMessage() {
+  auto errMsg = std::move(cacheFailureMessage());
+  cacheFailureMessage().clear(); // ensure its in valid state
+  return errMsg;
+}
+
 std::shared_ptr<MemoryAllocator> MemoryAllocator::instance_;
 MemoryAllocator* MemoryAllocator::customInstance_;
 std::mutex MemoryAllocator::initMutex_;
@@ -79,14 +101,6 @@ MemoryAllocator::SizeMix MemoryAllocator::allocationSize(
       // size.
       ++numUnits;
       needed -= size;
-    }
-    if (FOLLY_UNLIKELY(numUnits * size > Allocation::PageRun::kMaxPagesInRun)) {
-      VELOX_MEM_ALLOC_ERROR(fmt::format(
-          "Too many pages {} to allocate, the number of units {} at size class of {} exceeds the PageRun limit {}",
-          numPages,
-          numUnits,
-          size,
-          Allocation::PageRun::kMaxPagesInRun));
     }
     mix.sizeCounts[mix.numSizes] = numUnits;
     pagesToAlloc += numUnits * size;
@@ -347,6 +361,23 @@ void MemoryAllocator::useHugePages(
                            << folly ::errnoStr(errno);
   }
 #endif
+}
+
+void MemoryAllocator::setAllocatorFailureMessage(std::string message) {
+  allocatorFailureMessage() = std::move(message);
+}
+
+std::string MemoryAllocator::getAndClearFailureMessage() {
+  auto allocatorErrMsg = std::move(allocatorFailureMessage());
+  allocatorFailureMessage().clear();
+  if (cache()) {
+    if (allocatorErrMsg.empty()) {
+      return getAndClearCacheFailureMessage();
+    }
+    allocatorErrMsg =
+        fmt::format("{} {}", allocatorErrMsg, getAndClearCacheFailureMessage());
+  }
+  return allocatorErrMsg;
 }
 
 } // namespace facebook::velox::memory

@@ -24,7 +24,7 @@ namespace facebook::velox::parquet {
 // https://github.com/apache/arrow/blob/apache-arrow-12.0.0/cpp/src/parquet/encoding.cc#LL2357C18-L2586C3
 class DeltaBpDecoder {
  public:
-  DeltaBpDecoder(const char* FOLLY_NONNULL start, const char* FOLLY_NONNULL end)
+  DeltaBpDecoder(const char* start, const char* end)
       : bufferStart_(start), bufferEnd_(end) {
     initHeader();
   }
@@ -34,10 +34,7 @@ class DeltaBpDecoder {
   }
 
   template <bool hasNulls>
-  inline void skip(
-      int32_t numValues,
-      int32_t current,
-      const uint64_t* FOLLY_NULLABLE nulls) {
+  inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
@@ -47,7 +44,7 @@ class DeltaBpDecoder {
   }
 
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* FOLLY_NULLABLE nulls, Visitor visitor) {
+  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
     int32_t current = visitor.start();
     skip<hasNulls>(current, 0, nulls);
     int32_t toSkip;
@@ -81,10 +78,10 @@ class DeltaBpDecoder {
     }
   }
 
- protected:
+ private:
   bool getVlqInt(uint64_t& v) {
     uint64_t tmp = 0;
-    for (int i = 0; i < kMaxVlqByteLength; i++) {
+    for (int i = 0; i < folly::kMaxVarintLength64; i++) {
       uint8_t byte = *(bufferStart_++);
       tmp |= static_cast<uint64_t>(byte & 0x7F) << (7 * i);
       if ((byte & 0x80) == 0) {
@@ -99,8 +96,7 @@ class DeltaBpDecoder {
     uint64_t u;
     if (!getVlqInt(u))
       return false;
-    u = (u >> 1) ^ (~(u & 1) + 1);
-    v = ::arrow::util::SafeCopy<int64_t>(u);
+    v = (u >> 1) ^ (~(u & 1) + 1);
     return true;
   }
 
@@ -134,7 +130,7 @@ class DeltaBpDecoder {
   }
 
   void initBlock() {
-    VELOX_CHECK_GT(totalValuesRemaining_, 0, "initBlock called at EOF");
+    VELOX_DCHECK_GT(totalValuesRemaining_, 0, "initBlock called at EOF");
 
     if (!getZigZagVlqInt(minDelta_)) {
       VELOX_FAIL("initBlock EOF")
@@ -154,7 +150,7 @@ class DeltaBpDecoder {
   }
 
   void initMiniBlock(int32_t bitWidth) {
-    VELOX_CHECK_LE(
+    VELOX_DCHECK_LE(
         bitWidth,
         kMaxDeltaBitWidth,
         "delta bit width larger than integer bit width");
@@ -212,11 +208,8 @@ class DeltaBpDecoder {
   static constexpr int kMaxDeltaBitWidth =
       static_cast<int>(sizeof(int64_t) * 8);
 
-  // Maximum byte length of a VLQ encoded int64
-  static constexpr int kMaxVlqByteLength = 10;
-
-  const char* FOLLY_NULLABLE bufferStart_;
-  const char* FOLLY_NULLABLE bufferEnd_;
+  const char* bufferStart_;
+  const char* bufferEnd_;
 
   uint64_t valuesPerBlock_;
   uint64_t miniBlocksPerBlock_;

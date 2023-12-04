@@ -41,7 +41,7 @@ add_test(velox_dwio_dwrf_column_statistics_test
 target_link_libraries(velox_dwio_dwrf_column_statistics_test velox_link_libs
                       Folly::folly ${TEST_LINK_LIBS})
 
-add_executable(velox_dwio_dwrf_compression_test TestCompression.cpp)
+add_executable(velox_dwio_dwrf_compression_test CompressionTest.cpp)
 add_test(velox_dwio_dwrf_compression_test velox_dwio_dwrf_compression_test)
 
 target_link_libraries(
@@ -150,7 +150,7 @@ add_test(velox_dwio_dwrf_checksum_test velox_dwio_dwrf_checksum_test)
 target_link_libraries(velox_dwio_dwrf_checksum_test velox_link_libs
                       Folly::folly Boost::headers ${TEST_LINK_LIBS})
 
-add_executable(velox_dwio_dwrf_writer_test WriterTests.cpp)
+add_executable(velox_dwio_dwrf_writer_test WriterTest.cpp)
 add_test(velox_dwio_dwrf_writer_test velox_dwio_dwrf_writer_test)
 
 target_link_libraries(
@@ -163,7 +163,7 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
-add_executable(velox_dwio_dwrf_writer_context_test TestWriterContext.cpp)
+add_executable(velox_dwio_dwrf_writer_context_test WriterContextTest.cpp)
 add_test(velox_dwio_dwrf_writer_context_test
          velox_dwio_dwrf_writer_context_test)
 
@@ -192,7 +192,7 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
-add_executable(velox_dwio_dwrf_writer_sink_test WriterSinkTests.cpp)
+add_executable(velox_dwio_dwrf_writer_sink_test WriterSinkTest.cpp)
 add_test(velox_dwio_dwrf_writer_sink_test velox_dwio_dwrf_writer_sink_test)
 
 target_link_libraries(velox_dwio_dwrf_writer_sink_test velox_link_libs
@@ -365,7 +365,7 @@ add_test(velox_dwrf_statistics_builder_utils_test
 target_link_libraries(velox_dwrf_statistics_builder_utils_test velox_link_libs
                       Folly::folly ${TEST_LINK_LIBS})
 
-add_executable(velox_dwrf_column_writer_test ColumnWriterTests.cpp)
+add_executable(velox_dwrf_column_writer_test ColumnWriterTest.cpp)
 add_test(velox_dwrf_column_writer_test velox_dwrf_column_writer_test)
 
 target_link_libraries(
@@ -381,7 +381,7 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
-add_executable(velox_dwrf_column_writer_index_test ColumnWriterIndexTests.cpp)
+add_executable(velox_dwrf_column_writer_index_test ColumnWriterIndexTest.cpp)
 add_test(velox_dwrf_column_writer_index_test
          velox_dwrf_column_writer_index_test)
 
@@ -412,11 +412,28 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
-add_executable(velox_dwrf_e2e_writer_test E2EWriterTests.cpp)
+add_executable(velox_dwrf_e2e_writer_test E2EWriterTest.cpp)
 add_test(velox_dwrf_e2e_writer_test velox_dwrf_e2e_writer_test)
 
 target_link_libraries(
   velox_dwrf_e2e_writer_test
+  velox_dwrf_test_utils
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  velox_link_libs
+  Folly::folly
+  fmt::fmt
+  lz4::lz4
+  lzo2::lzo2
+  zstd::zstd
+  ZLIB::ZLIB
+  ${TEST_LINK_LIBS})
+
+add_executable(velox_dwrf_e2e_reader_test E2EReaderTest.cpp)
+add_test(velox_dwrf_e2e_reader_test velox_dwrf_e2e_reader_test)
+
+target_link_libraries(
+  velox_dwrf_e2e_reader_test
   velox_dwrf_test_utils
   velox_vector_fuzzer
   velox_vector_test_lib
@@ -490,7 +507,8 @@ target_link_libraries(
   ${FOLLY_BENCHMARK}
   fmt::fmt)
 
-add_executable(velox_dwio_cache_test CacheInputTest.cpp)
+add_executable(velox_dwio_cache_test CacheInputTest.cpp
+                                     DirectBufferedInputTest.cpp)
 
 add_test(velox_dwio_cache_test velox_dwio_cache_test)
 
