@@ -211,9 +211,6 @@ class DeltaBpDecoder {
   static constexpr int kMaxDeltaBitWidth =
       static_cast<int>(sizeof(int64_t) * 8);
 
-  // Maximum byte length of a VLQ encoded int64
-  static constexpr int kMaxVlqByteLength = 10;
-
   const char* FOLLY_NULLABLE bufferStart_;
   const char* FOLLY_NULLABLE bufferEnd_;
 
