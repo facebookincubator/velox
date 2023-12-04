@@ -29,5 +29,3 @@ FetchContent_Declare(
   curl
   URL ${VELOX_CURL_SOURCE_URL}
   URL_HASH ${VELOX_CURL_BUILD_SHA256_CHECKSUM})
-
-FetchContent_MakeAvailable(curl)
