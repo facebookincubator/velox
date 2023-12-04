@@ -13,25 +13,21 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_CPR_VERSION 1.10.5)
-set(VELOX_CPR_BUILD_SHA256_CHECKSUM
-    c8590568996cea918d7cf7ec6845d954b9b95ab2c4980b365f582a665dea08d8)
-set(VELOX_CPR_SOURCE_URL
-    "https://github.com/libcpr/cpr/archive/refs/tags/${VELOX_CPR_VERSION}.tar.gz"
-)
+set(VELOX_CURL_VERSION 8.4.0)
+string(REPLACE "." "_" VELOX_CURL_VERSION_UNDERSCORES ${VELOX_CURL_VERSION})
+set(VELOX_CURL_BUILD_SHA256_CHECKSUM
+    16c62a9c4af0f703d28bda6d7bbf37ba47055ad3414d70dec63e2e6336f2a82d)
+string(
+  CONCAT
+    VELOX_CURL_SOURCE_URL "https://github.com/curl/curl/releases/download/"
+    "curl-${VELOX_CURL_VERSION_UNDERSCORES}/curl-${VELOX_CURL_VERSION}.tar.xz")
 
-set(curl_SOURCE BUNDLED)
-resolve_dependency(curl)
+resolve_dependency_url(CURL)
 
-resolve_dependency_url(CPR)
-
-message(STATUS "Building cpr from source")
+message(STATUS "Building curl from source")
 FetchContent_Declare(
-  cpr
-  URL ${VELOX_CPR_SOURCE_URL}
-  URL_HASH ${VELOX_CPR_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply
-                ${CMAKE_CURRENT_LIST_DIR}/cpr/cpr-libcurl-compatible.patch)
-set(BUILD_SHARED_LIBS OFF)
-set(CPR_USE_SYSTEM_CURL OFF)
-FetchContent_MakeAvailable(cpr)
+  curl
+  URL ${VELOX_CURL_SOURCE_URL}
+  URL_HASH ${VELOX_CURL_BUILD_SHA256_CHECKSUM})
+
+FetchContent_MakeAvailable(curl)
