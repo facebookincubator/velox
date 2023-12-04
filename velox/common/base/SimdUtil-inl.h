@@ -42,22 +42,29 @@ int genericToBitMask(xsimd::batch_bool<T, A> mask) {
 }
 
 template <typename T, typename A>
-xsimd::batch_bool<T, A> fromBitMaskImpl(int mask) {
-  static const auto kMemo = ({
-    constexpr int N = xsimd::batch_bool<T, A>::size;
+struct FromBitMask {
+  FromBitMask() {
     static_assert(N <= 8);
-    std::array<xsimd::batch_bool<T, A>, (1 << N)> memo;
     for (int i = 0; i < (1 << N); ++i) {
       bool tmp[N];
       for (int bit = 0; bit < N; ++bit) {
         tmp[bit] = (i & (1 << bit)) ? true : false;
       }
-      memo[i] = xsimd::batch_bool<T, A>::load_unaligned(tmp);
+      memo_[i] = xsimd::batch_bool<T, A>::load_unaligned(tmp);
     }
-    memo;
-  });
-  return kMemo[mask];
-}
+  }
+
+  xsimd::batch_bool<T, A> operator[](size_t i) const {
+    return memo_[i];
+  }
+
+ private:
+  static constexpr int N = xsimd::batch_bool<T, A>::size;
+  xsimd::batch_bool<T, A> memo_[1 << N];
+};
+
+extern const FromBitMask<int32_t, xsimd::default_arch> fromBitMask32;
+extern const FromBitMask<int64_t, xsimd::default_arch> fromBitMask64;
 
 template <typename T, typename A>
 struct BitMask<T, A, 1> {
@@ -132,9 +139,10 @@ struct BitMask<T, A, 4> {
     return genericToBitMask(mask);
   }
 
-  static xsimd::batch_bool<T, A> fromBitMask(int mask, const A&) {
-    return UNLIKELY(mask == kAllSet) ? xsimd::batch_bool<T, A>(true)
-                                     : fromBitMaskImpl<T, A>(mask);
+  static xsimd::batch_bool<T, A> fromBitMask(
+      int mask,
+      const xsimd::default_arch&) {
+    return fromBitMask32[mask];
   }
 };
 
@@ -158,9 +166,10 @@ struct BitMask<T, A, 8> {
     return genericToBitMask(mask);
   }
 
-  static xsimd::batch_bool<T, A> fromBitMask(int mask, const A&) {
-    return UNLIKELY(mask == kAllSet) ? xsimd::batch_bool<T, A>(true)
-                                     : fromBitMaskImpl<T, A>(mask);
+  static xsimd::batch_bool<T, A> fromBitMask(
+      int mask,
+      const xsimd::default_arch&) {
+    return fromBitMask64[mask];
   }
 };
 
@@ -1405,86 +1414,26 @@ xsimd::batch<T, A> reinterpretBatch(xsimd::batch<U, A> data, const A& arch) {
   return detail::ReinterpretBatch<T, U, A>::apply(data, arch);
 }
 
-namespace detail {
-template <typename T>
-inline bool
-oneOrTwoScalarsEqual(const uint8_t* left, const uint8_t* right, int32_t size) {
-  return *reinterpret_cast<const T*>(left) ==
-      *reinterpret_cast<const T*>(right) &&
-      (size == sizeof(T) ||
-       *reinterpret_cast<const T*>(left + size - sizeof(T)) ==
-           *reinterpret_cast<const T*>(right + size - sizeof(T)));
-}
-} // namespace detail
-
 template <typename A>
-inline bool memEqual(const void* x, const void* y, int32_t size) {
+inline bool memEqualUnsafe(const void* x, const void* y, int32_t size) {
   constexpr int32_t kBatch = xsimd::batch<uint8_t, A>::size;
+
   auto left = reinterpret_cast<const uint8_t*>(x);
   auto right = reinterpret_cast<const uint8_t*>(y);
-  if (size >= kBatch) {
-    do {
-      auto bits = toBitMask(
-          xsimd::batch<uint8_t, A>::load_unaligned(left) ==
-          xsimd::batch<uint8_t, A>::load_unaligned(right));
-      if (bits != allSetBitMask<uint8_t, A>()) {
-        return false;
-      }
+  while (size > 0) {
+    auto bits = toBitMask(
+        xsimd::batch<uint8_t, A>::load_unaligned(left) ==
+        xsimd::batch<uint8_t, A>::load_unaligned(right));
+    if (bits == allSetBitMask<uint8_t, A>()) {
       left += kBatch;
       right += kBatch;
       size -= kBatch;
-    } while (size >= kBatch);
-    if (size > 0) {
-      return toBitMask(
-                 xsimd::batch<uint8_t, A>::load_unaligned(
-                     left + size - kBatch) ==
-                 xsimd::batch<uint8_t, A>::load_unaligned(
-                     right + size - kBatch)) == allSetBitMask<uint8_t, A>();
+      continue;
     }
-    return true;
+    auto leading = __builtin_ctz(~bits);
+    return leading >= size;
   }
-#if XSIMD_WITH_AVX
-  using HalfBatch = xsimd::batch<uint8_t, xsimd::sse4_1>;
-  constexpr int32_t kHalfSize = HalfBatch::size;
-
-  if (size >= kHalfSize) {
-    if (simd::toBitMask(
-            HalfBatch::load_unaligned(left) ==
-            HalfBatch::load_unaligned(right)) !=
-        allSetBitMask<uint8_t, xsimd::sse4_1>()) {
-      return false;
-    }
-    if (size > kHalfSize) {
-      return simd::toBitMask(
-                 HalfBatch::load_unaligned(left + size - kHalfSize) ==
-                 HalfBatch::load_unaligned(right + size - kHalfSize)) ==
-          allSetBitMask<uint8_t, xsimd::sse4_1>();
-    }
-
-    return true;
-  }
-  if (size >= sizeof(uint64_t)) {
-    return detail::oneOrTwoScalarsEqual<uint64_t>(left, right, size);
-  }
-
-#else
-  while (size >= sizeof(uint64_t)) {
-    if (*reinterpret_cast<const uint64_t*>(left) !=
-        *reinterpret_cast<const uint64_t*>(right)) {
-      return false;
-    }
-    left += sizeof(uint64_t);
-    right += sizeof(uint64_t);
-    size -= sizeof(uint64_t);
-  }
-#endif
-  if (size >= sizeof(uint32_t)) {
-    return detail::oneOrTwoScalarsEqual<uint32_t>(left, right, size);
-  }
-  if (size >= sizeof(uint16_t)) {
-    return detail::oneOrTwoScalarsEqual<uint16_t>(left, right, size);
-  }
-  return size == 0 || *left == *right;
+  return true;
 }
 
 } // namespace facebook::velox::simd

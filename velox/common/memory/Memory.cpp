@@ -35,10 +35,12 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
            .capacity = std::min(options.queryMemoryCapacity, options.capacity),
            .memoryPoolInitCapacity = options.memoryPoolInitCapacity,
            .memoryPoolTransferCapacity = options.memoryPoolTransferCapacity,
+           .memoryReclaimWaitMs = options.memoryReclaimWaitMs,
            .arbitrationStateCheckCb = options.arbitrationStateCheckCb})),
       alignment_(std::max(MemoryAllocator::kMinAlignment, options.alignment)),
       checkUsageLeak_(options.checkUsageLeak),
       debugEnabled_(options.debugEnabled),
+      coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled),
       poolDestructionCb_([&](MemoryPool* pool) { dropPool(pool); }),
       defaultRoot_{std::make_shared<MemoryPoolImpl>(
           this,
@@ -54,7 +56,9 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
               .maxCapacity = kMaxMemory,
               .trackUsage = options.trackDefaultUsage,
               .checkUsageLeak = options.checkUsageLeak,
-              .debugEnabled = options.debugEnabled})} {
+              .debugEnabled = options.debugEnabled,
+              .coreOnAllocationFailureEnabled =
+                  options.coreOnAllocationFailureEnabled})} {
   VELOX_CHECK_NOT_NULL(allocator_);
   VELOX_CHECK_NOT_NULL(arbitrator_);
   VELOX_CHECK_EQ(
@@ -116,6 +120,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.trackUsage = true;
   options.checkUsageLeak = checkUsageLeak_;
   options.debugEnabled = debugEnabled_;
+  options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
 
   folly::SharedMutex::WriteHolder guard{mutex_};
   if (pools_.find(poolName) != pools_.end()) {

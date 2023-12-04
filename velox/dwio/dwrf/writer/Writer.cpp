@@ -18,6 +18,8 @@
 
 #include <folly/ScopeGuard.h>
 
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
@@ -719,12 +721,14 @@ bool Writer::MemoryReclaimer::reclaimableBytes(
 uint64_t Writer::MemoryReclaimer::reclaim(
     memory::MemoryPool* pool,
     uint64_t targetBytes,
+    uint64_t /*unused*/,
     memory::MemoryReclaimer::Stats& stats) {
   if (!writer_->canReclaim()) {
     return 0;
   }
 
   if (*writer_->nonReclaimableSection_) {
+    REPORT_ADD_STAT_VALUE(kCounterMemoryNonReclaimableCount);
     LOG(WARNING)
         << "Can't reclaim from dwrf writer which is under non-reclaimable section: "
         << pool->name();
