@@ -55,13 +55,10 @@ void StreamingAggregation::initialize() {
 
   const auto numAggregates = aggregationNode_->aggregates().size();
   aggregates_.reserve(numAggregates);
-  std::vector<Accumulator> accumulators;
-  accumulators.reserve(aggregates_.size());
-  std::vector<std::optional<column_index_t>> maskChannels;
-  maskChannels.reserve(numAggregates);
+
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode_->aggregates()[i];
-
+    AggregateInfo info;
     if (!aggregate.sortingKeys.empty()) {
       VELOX_UNSUPPORTED(
           "Streaming aggregation doesn't support aggregations over sorted inputs yet");
@@ -72,8 +69,8 @@ void StreamingAggregation::initialize() {
           "Streaming aggregation doesn't support aggregations over distinct inputs yet");
     }
 
-    std::vector<column_index_t> channels;
-    std::vector<VectorPtr> constants;
+    auto& channels = info.inputs;
+    auto& constants = info.constantInputs;
     for (auto& arg : aggregate.call->inputs()) {
       channels.push_back(exprToChannel(arg.get(), inputType));
       if (channels.back() == kConstantChannel) {
@@ -86,27 +83,25 @@ void StreamingAggregation::initialize() {
     }
 
     if (const auto& mask = aggregate.mask) {
-      maskChannels.emplace_back(inputType->asRow().getChildIdx(mask->name()));
+      info.mask = inputType->asRow().getChildIdx(mask->name());
     } else {
-      maskChannels.emplace_back(std::nullopt);
+      info.mask = std::nullopt;
     }
 
     const auto& aggResultType = outputType_->childAt(numKeys + i);
-    aggregates_.push_back(Aggregate::create(
+    info.function = Aggregate::create(
         aggregate.call->name(),
         isPartialOutput(aggregationNode_->step())
             ? core::AggregationNode::Step::kPartial
             : core::AggregationNode::Step::kSingle,
         aggregate.rawInputTypes,
         aggResultType,
-        operatorCtx_->driverCtx()->queryConfig()));
-    args_.push_back(channels);
-    constantArgs_.push_back(constants);
+        operatorCtx_->driverCtx()->queryConfig());
 
-    const auto intermediateType = Aggregate::intermediateType(
+    info.intermediateType = Aggregate::intermediateType(
         aggregate.call->name(), aggregate.rawInputTypes);
-    accumulators.push_back(
-        Accumulator{aggregates_.back().get(), std::move(intermediateType)});
+
+    aggregates_.emplace_back(std::move(info));
   }
 
   if (aggregationNode_->ignoreNullKeys()) {
@@ -114,7 +109,17 @@ void StreamingAggregation::initialize() {
         "Streaming aggregation doesn't support ignoring null keys yet");
   }
 
-  masks_ = std::make_unique<AggregationMasks>(std::move(maskChannels));
+  // Setup masks and accumulators
+  std::vector<std::optional<column_index_t>> masks;
+  masks.reserve(numAggregates);
+  std::vector<Accumulator> accumulators;
+  accumulators.reserve(numAggregates);
+  for (const auto& aggregate : aggregates_) {
+    masks.emplace_back(aggregate.mask);
+    accumulators.emplace_back(
+        aggregate.function.get(), aggregate.intermediateType);
+  }
+  masks_ = std::make_unique<AggregationMasks>(std::move(masks));
 
   rows_ = std::make_unique<RowContainer>(
       groupingKeyTypes,
@@ -128,10 +133,11 @@ void StreamingAggregation::initialize() {
       pool());
 
   for (auto i = 0; i < aggregates_.size(); ++i) {
-    aggregates_[i]->setAllocator(&rows_->stringAllocator());
+    auto& function = aggregates_[i].function;
+    function->setAllocator(&rows_->stringAllocator());
 
     const auto rowColumn = rows_->columnAt(numKeys + i);
-    aggregates_[i]->setOffsets(
+    function->setOffsets(
         rowColumn.offset(),
         rowColumn.nullByte(),
         rowColumn.nullMask(),
@@ -203,7 +209,7 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
 
   auto numKeys = groupingKeys_.size();
   for (auto i = 0; i < aggregates_.size(); ++i) {
-    auto& aggregate = aggregates_[i];
+    auto& aggregate = aggregates_.at(i).function;
     auto& result = output->childAt(numKeys + i);
     if (isPartialOutput(step_)) {
       aggregate->extractAccumulators(groups_.data(), numGroups, &result);
@@ -264,14 +270,16 @@ const SelectivityVector& StreamingAggregation::getSelectivityVector(
 
 void StreamingAggregation::evaluateAggregates() {
   for (auto i = 0; i < aggregates_.size(); ++i) {
-    auto& aggregate = aggregates_[i];
+    auto& aggregate = aggregates_.at(i).function;
+    auto& inputs = aggregates_.at(i).inputs;
+    auto& constantInputs = aggregates_.at(i).constantInputs;
 
     std::vector<VectorPtr> args;
-    for (auto j = 0; j < args_[i].size(); ++j) {
-      if (args_[i][j] == kConstantChannel) {
-        args.push_back(constantArgs_[i][j]);
+    for (auto j = 0; j < inputs.size(); ++j) {
+      if (inputs[j] == kConstantChannel) {
+        args.push_back(constantInputs[j]);
       } else {
-        args.push_back(input_->childAt(args_[i][j]));
+        args.push_back(input_->childAt(inputs[j]));
       }
     }
 
@@ -315,7 +323,7 @@ RowVectorPtr StreamingAggregation::getOutput() {
   std::iota(newGroups.begin(), newGroups.end(), numPrevGroups);
 
   for (auto i = 0; i < aggregates_.size(); ++i) {
-    auto& aggregate = aggregates_[i];
+    auto& aggregate = aggregates_.at(i).function;
 
     aggregate->initializeNewGroups(
         groups_.data(), folly::Range(newGroups.data(), newGroups.size()));

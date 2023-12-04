@@ -138,9 +138,9 @@ void HashAggregation::initialize() {
     // Setup aggregation mask: convert the Variable Reference name to the
     // channel (projection) index, if there is a mask.
     if (const auto& mask = aggregate.mask) {
-      if (mask != nullptr) {
-        info.mask = inputType->asRow().getChildIdx(mask->name());
-      }
+      info.mask = inputType->asRow().getChildIdx(mask->name());
+    } else {
+      info.mask = std::nullopt;
     }
 
     const auto& resultType = outputType_->childAt(numHashers + i);
