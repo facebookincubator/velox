@@ -50,8 +50,8 @@ class ParquetTpchTest : public testing::Test {
     parse::registerTypeResolver();
     filesystems::registerLocalFileSystem();
 
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
+    facebook::velox::parquet::registerParquetReaderFactory();
+    facebook::velox::parquet::registerParquetWriterFactory();
 
     auto hiveConnector =
         connector::getConnectorFactory(
@@ -74,8 +74,8 @@ class ParquetTpchTest : public testing::Test {
   static void TearDownTestSuite() {
     connector::unregisterConnector(kHiveConnectorId);
     connector::unregisterConnector(kTpchConnectorId);
-    parquet::unregisterParquetReaderFactory();
-    parquet::unregisterParquetWriterFactory();
+    facebook::velox::parquet::unregisterParquetReaderFactory();
+    facebook::velox::parquet::unregisterParquetWriterFactory();
   }
 
   static void saveTpchTablesAsParquet() {

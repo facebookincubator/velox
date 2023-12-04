@@ -100,7 +100,8 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
   void filterRowGroups(
       uint64_t rowGroupSize,
       const dwio::common::StatsContext&,
-      dwio::common::FormatData::FilterRowGroupsResult&) const override;
+      dwio::common::FormatData::FilterRowGroupsResult&,
+      dwio::common::BufferedInput& bufferedInput) const override;
 
  private:
   RepeatedLengths lengths_;
@@ -156,7 +157,8 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
   void filterRowGroups(
       uint64_t rowGroupSize,
       const dwio::common::StatsContext&,
-      dwio::common::FormatData::FilterRowGroupsResult&) const override;
+      dwio::common::FormatData::FilterRowGroupsResult&,
+      dwio::common::BufferedInput& bufferedInput) const override;
 
  private:
   RepeatedLengths lengths_;

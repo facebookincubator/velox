@@ -57,9 +57,27 @@ class ParquetReaderTest : public ParquetTestBase {
       const RowVectorPtr& expected) {
     const auto filePath(getExampleFilePath(fileName));
     facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+    assertReadWithFilters(
+        fileName, fileSchema, std::move(filters), expected, readerOpts);
+  }
+
+  void assertReadWithFilters(
+      const std::string& fileName,
+      const RowTypePtr& fileSchema,
+      FilterMap filters,
+      const RowVectorPtr& expected,
+      const facebook::velox::dwio::common::ReaderOptions& readerOpts,
+      std::shared_ptr<facebook::velox::dwio::common::RuntimeStatistics>
+          runtimeStats = nullptr) {
+    const auto filePath(getExampleFilePath(fileName));
     auto reader = createReader(filePath, readerOpts);
     assertReadWithReaderAndFilters(
-        std::move(reader), fileName, fileSchema, std::move(filters), expected);
+        std::move(reader),
+        fileName,
+        fileSchema,
+        std::move(filters),
+        expected,
+        runtimeStats);
   }
 };
 
@@ -631,6 +649,335 @@ TEST_F(ParquetReaderTest, intMultipleFilters) {
 
   assertReadWithFilters(
       "int.parquet", intSchema(), std::move(filters), expected);
+}
+
+TEST_F(ParquetReaderTest, bloomFilterBigint) {
+  std::string fileName = "sample_int64_string_int32_bloom_1k.snappy.parquet";
+  // Using the below row from the parquet file for testing
+  //      7824166607706395581 | c74ddef8-b260-44f9-8889-752b0aafb2c1 |	607
+  auto schema = ROW(
+      {"id", "i64", "uuid", "i32"}, {BIGINT(), BIGINT(), VARCHAR(), INTEGER()});
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>(std::vector<int64_t>{958}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{7824166607706395581}),
+      makeFlatVector<std::string>({"c74ddef8-b260-44f9-8889-752b0aafb2c1"}),
+      makeFlatVector<int32_t>(std::vector<int32_t>{607}),
+  });
+
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setParquetBloomFilterEnabled(true);
+
+  // Test equality filter
+  FilterMap bigintFilters;
+  bigintFilters.insert({"i64", exec::equal(7824166607706395581)});
+  ParquetReaderTest::assertReadWithFilters(
+      fileName, schema, std::move(bigintFilters), expected, readerOpts);
+
+  // Test IN filter with at least one value present in the column value.
+  //  607 is present in the column, 2000 and 4000 are not present.
+  bigintFilters.insert({"i64", exec::in({7824166607706395581, 2000, 4000})});
+  assertReadWithFilters(
+      fileName, schema, std::move(bigintFilters), expected, readerOpts);
+
+  readerOpts.setParquetBloomFilterEnabled(false);
+  // Test IN filter with values not present in the column but are within the
+  // stats min/max range. With bloom filter disabled, no row groups should be
+  // skipped.
+  bigintFilters.insert(
+      {"i64", exec::in({7824166607706395582, 7824166607706395590})});
+  std::shared_ptr<RuntimeStatistics> runtimeStats =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(bigintFilters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats);
+  EXPECT_EQ(runtimeStats->skippedStrides, 0);
+
+  readerOpts.setParquetBloomFilterEnabled(true);
+
+  // Test IN filter with values not present in the column but are within the
+  // stats min/max range. With bloom filter enabled, row groups should be
+  // skipped.
+  bigintFilters.insert(
+      {"i64", exec::in({7824166607706395582, 7824166607706395590})});
+  std::shared_ptr<RuntimeStatistics> runtimeStats1 =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(bigintFilters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats1);
+  EXPECT_EQ(runtimeStats1->skippedStrides, 1);
+
+  // Test BETWEEN filter, at least one value in the range is present in the
+  // column.
+  bigintFilters.insert(
+      {"i64", exec::between(7824166607706395581, 7824166607706395582)});
+  assertReadWithFilters(
+      fileName, schema, std::move(bigintFilters), expected, readerOpts);
+
+  readerOpts.setParquetBloomFilterEnabled(false);
+  // Test BETWEEN filter, None of the values in the range are present in the
+  // column but are within stats min/max range. With bloom filter disabled, no
+  // row groups should be skipped
+  bigintFilters.insert(
+      {"i64", exec::between(7824166607706395582, 7824166607706395590)});
+  std::shared_ptr<RuntimeStatistics> runtimeStats2 =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(bigintFilters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats2);
+  EXPECT_EQ(runtimeStats2->skippedStrides, 0);
+
+  readerOpts.setParquetBloomFilterEnabled(true);
+  // Test BETWEEN filter, None of the values in the range are present in the
+  // column but are within stats min/max range. With bloom filter enabled, row
+  // groups should be skipped
+  bigintFilters.insert(
+      {"i64", exec::between(7824166607706395582, 7824166607706395590)});
+  std::shared_ptr<RuntimeStatistics> runtimeStats3 =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(bigintFilters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats3);
+  EXPECT_EQ(runtimeStats3->skippedStrides, 1);
+}
+
+TEST_F(ParquetReaderTest, bloomFilterString) {
+  std::string fileName = "sample_int64_string_int32_bloom_1k.snappy.parquet";
+  // Using the below row from the parquet file for testing
+  //      7824166607706395581 | c74ddef8-b260-44f9-8889-752b0aafb2c1 |	607
+  auto schema = ROW(
+      {"id", "i64", "uuid", "i32"}, {BIGINT(), BIGINT(), VARCHAR(), INTEGER()});
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>(std::vector<int64_t>{958}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{7824166607706395581}),
+      makeFlatVector<std::string>({"c74ddef8-b260-44f9-8889-752b0aafb2c1"}),
+      makeFlatVector<int32_t>(std::vector<int32_t>{607}),
+  });
+
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setParquetBloomFilterEnabled(true);
+
+  // Test equality filter
+  FilterMap stringFilters;
+  stringFilters.insert(
+      {"uuid", exec::equal("c74ddef8-b260-44f9-8889-752b0aafb2c1")});
+  assertReadWithFilters(
+      fileName, schema, std::move(stringFilters), expected, readerOpts);
+
+  // Test IN filter with at least one value present in the column
+  stringFilters.insert(
+      {"uuid",
+       exec::in(
+           {"c74ddef8-b260-44f9-8889-752b0aafb2c1",
+            "not_exists1",
+            "not_exists2"})});
+  assertReadWithFilters(
+      fileName, schema, std::move(stringFilters), expected, readerOpts);
+
+  readerOpts.setParquetBloomFilterEnabled(false);
+  // Test IN filter with none of the values present in the column.
+  // With bloom filter disabled, no row groups should be skipped.
+  stringFilters.insert(
+      {"uuid",
+       exec::in(
+           {"c74ddef8-b260-44f9-8889-notexists",
+            "not_exists1",
+            "not_exists2"})});
+  std::shared_ptr<RuntimeStatistics> runtimeStats =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(stringFilters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats);
+  EXPECT_EQ(runtimeStats->skippedStrides, 0);
+
+  readerOpts.setParquetBloomFilterEnabled(true);
+  // Test IN filter with none of the values present in the column.
+  // With bloom filter enabled, row groups should be skipped.
+  stringFilters.insert(
+      {"uuid",
+       exec::in(
+           {"c74ddef8-b260-44f9-8889-notexists",
+            "not_exists1",
+            "not_exists2"})});
+  std::shared_ptr<RuntimeStatistics> runtimeStats1 =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(stringFilters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats1);
+  EXPECT_EQ(runtimeStats1->skippedStrides, 1);
+
+  // Test BETWEEN filter with lower and upper being same value. Bloom filter for
+  // string range is applicable only when lower = upper
+  stringFilters.insert(
+      {"uuid",
+       exec::between(
+           "c74ddef8-b260-44f9-8889-752b0aafb2c1",
+           "c74ddef8-b260-44f9-8889-752b0aafb2c1")});
+  assertReadWithFilters(
+      fileName, schema, std::move(stringFilters), expected, readerOpts);
+
+  // Test BETWEEN filter with lower = upper, value is not present in the column,
+  // but within stats min/max range.. With bloom filter disabled, no row groups
+  // should be skipped.
+  readerOpts.setParquetBloomFilterEnabled(false);
+  stringFilters.insert(
+      {"uuid",
+       exec::between(
+           "c74ddef8-b260-44f9-8889-notb0aafb2c1",
+           "c74ddef8-b260-44f9-8889-notb0aafb2c1")});
+  std::shared_ptr<RuntimeStatistics> runtimeStats2 =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(stringFilters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats2);
+  EXPECT_EQ(runtimeStats2->skippedStrides, 0);
+
+  // Test BETWEEN filter with lower = upper, value is not present in the column,
+  // but within stats min/max range.. With bloom filter enabled, row groups
+  // should be skipped.
+  readerOpts.setParquetBloomFilterEnabled(true);
+  stringFilters.insert(
+      {"uuid",
+       exec::between(
+           "c74ddef8-b260-44f9-8889-notb0aafb2c1",
+           "c74ddef8-b260-44f9-8889-notb0aafb2c1")});
+  std::shared_ptr<RuntimeStatistics> runtimeStats3 =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(stringFilters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats3);
+  EXPECT_EQ(runtimeStats3->skippedStrides, 1);
+}
+
+TEST_F(ParquetReaderTest, bloomFilterInteger) {
+  std::string fileName = "sample_int64_string_int32_bloom_1k.snappy.parquet";
+  // Using the below row from the parquet file for testing
+  //      7824166607706395581 | c74ddef8-b260-44f9-8889-752b0aafb2c1 |	607
+  auto schema = ROW(
+      {"id", "i64", "uuid", "i32"}, {BIGINT(), BIGINT(), VARCHAR(), INTEGER()});
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>(std::vector<int64_t>{958}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{7824166607706395581}),
+      makeFlatVector<std::string>({"c74ddef8-b260-44f9-8889-752b0aafb2c1"}),
+      makeFlatVector<int32_t>(std::vector<int32_t>{607}),
+  });
+
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setParquetBloomFilterEnabled(true);
+
+  FilterMap int32Filters;
+  // Test equality filter
+  int32Filters.insert({"i32", exec::equal(607)});
+  assertReadWithFilters(
+      fileName, schema, std::move(int32Filters), expected, readerOpts);
+
+  // Test IN filter with at least one value present in the column value.
+  //  607 is present in the column, 2000 and 4000 are not present.
+  int32Filters.insert({"i32", exec::in({607, 2000, 4000})});
+  assertReadWithFilters(
+      fileName, schema, std::move(int32Filters), expected, readerOpts);
+
+  readerOpts.setParquetBloomFilterEnabled(false);
+  // Test IN filter with values not present in the column but are within the
+  // stats min/max range. With bloom filter disabled, no row groups should be
+  // skipped.
+  int32Filters.insert({"i32", exec::in({610, 4000})});
+  std::shared_ptr<RuntimeStatistics> runtimeStats =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(int32Filters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats);
+  EXPECT_EQ(runtimeStats->skippedStrides, 0);
+
+  readerOpts.setParquetBloomFilterEnabled(true);
+
+  // Test IN filter with values not present in the column but are within the
+  // stats min/max range. With bloom filter enabled, row groups should be
+  // skipped.
+  int32Filters.insert({"i32", exec::in({610, 4000})});
+  std::shared_ptr<RuntimeStatistics> runtimeStats1 =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(int32Filters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats1);
+  EXPECT_EQ(runtimeStats1->skippedStrides, 1);
+
+  // Test BETWEEN filter, at least one value in the range is present in the
+  // column.
+  int32Filters.insert({"i32", exec::between(607, 610)});
+  assertReadWithFilters(
+      fileName, schema, std::move(int32Filters), expected, readerOpts);
+
+  readerOpts.setParquetBloomFilterEnabled(false);
+  // Test BETWEEN filter, None of the values in the range are present in the
+  // column but are within stats min/max range. With bloom filter disabled, no
+  // row groups should be skipped
+  int32Filters.insert({"i32", exec::between(1985, 1988)});
+  std::shared_ptr<RuntimeStatistics> runtimeStats2 =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(int32Filters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats2);
+  EXPECT_EQ(runtimeStats2->skippedStrides, 0);
+
+  readerOpts.setParquetBloomFilterEnabled(true);
+  // Test BETWEEN filter, None of the values in the range are present in the
+  // column but are within stats min/max range. With bloom filter enabled, row
+  // groups should be skipped
+  int32Filters.insert({"i32", exec::between(1985, 1988)});
+  std::shared_ptr<RuntimeStatistics> runtimeStats3 =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(int32Filters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats3);
+  EXPECT_EQ(runtimeStats3->skippedStrides, 1);
 }
 
 TEST_F(ParquetReaderTest, doubleFilters) {

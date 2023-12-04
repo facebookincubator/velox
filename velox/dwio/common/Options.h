@@ -389,6 +389,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool fileColumnNamesReadAsLowerCase{false};
   bool useColumnNamesForColumnMapping_{false};
   std::shared_ptr<folly::Executor> ioExecutor_;
+  bool enableParquetBloomFilter_{false};
 
  public:
   static constexpr uint64_t kDefaultFooterEstimatedSize = 1024 * 1024; // 1MB
@@ -416,6 +417,7 @@ class ReaderOptions : public io::ReaderOptions {
     filePreloadThreshold = other.filePreloadThreshold;
     fileColumnNamesReadAsLowerCase = other.fileColumnNamesReadAsLowerCase;
     useColumnNamesForColumnMapping_ = other.useColumnNamesForColumnMapping_;
+    enableParquetBloomFilter_ = other.enableParquetBloomFilter_;
     return *this;
   }
 
@@ -429,8 +431,8 @@ class ReaderOptions : public io::ReaderOptions {
         footerEstimatedSize(other.footerEstimatedSize),
         filePreloadThreshold(other.filePreloadThreshold),
         fileColumnNamesReadAsLowerCase(other.fileColumnNamesReadAsLowerCase),
-        useColumnNamesForColumnMapping_(other.useColumnNamesForColumnMapping_) {
-  }
+        useColumnNamesForColumnMapping_(other.useColumnNamesForColumnMapping_),
+        enableParquetBloomFilter_(other.enableParquetBloomFilter_) {}
 
   /**
    * Set the format of the file, such as "rc" or "dwrf".  The
@@ -499,6 +501,11 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setParquetBloomFilterEnabled(bool flag) {
+    enableParquetBloomFilter_ = flag;
+    return *this;
+  }
+
   /**
    * Get the desired tail location.
    * @return if not set, return the maximum long.
@@ -552,6 +559,10 @@ class ReaderOptions : public io::ReaderOptions {
 
   bool isUseColumnNamesForColumnMapping() const {
     return useColumnNamesForColumnMapping_;
+  }
+
+  bool isParquetBloomFilterEnabled() const {
+    return enableParquetBloomFilter_;
   }
 };
 

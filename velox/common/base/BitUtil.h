@@ -998,6 +998,10 @@ void storeBitsToByte(uint8_t bits, uint8_t* bytes, unsigned index) {
   }
 }
 
+constexpr bool IsMultipleOf8(int64_t n) {
+  return (n & 7) == 0;
+}
+
 } // namespace bits
 } // namespace velox
 } // namespace facebook

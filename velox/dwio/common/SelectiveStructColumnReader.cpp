@@ -23,10 +23,12 @@ namespace facebook::velox::dwio::common {
 void SelectiveStructColumnReaderBase::filterRowGroups(
     uint64_t rowGroupSize,
     const dwio::common::StatsContext& context,
-    FormatData::FilterRowGroupsResult& result) const {
-  SelectiveColumnReader::filterRowGroups(rowGroupSize, context, result);
+    FormatData::FilterRowGroupsResult& result,
+    dwio::common::BufferedInput& bufferedInput) const {
+  SelectiveColumnReader::filterRowGroups(
+      rowGroupSize, context, result, bufferedInput);
   for (const auto& child : children_) {
-    child->filterRowGroups(rowGroupSize, context, result);
+    child->filterRowGroups(rowGroupSize, context, result, bufferedInput);
   }
 }
 

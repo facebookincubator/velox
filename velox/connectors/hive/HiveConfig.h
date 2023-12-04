@@ -104,6 +104,9 @@ class HiveConfig {
   static constexpr const char* kOrcUseColumnNamesSession =
       "hive_orc_use_column_names";
 
+  static constexpr const char* kEnableParquetBloomFilter =
+      "hive.parquet.use-bloom-filter";
+
   /// Reads the source file column name as lower case.
   static constexpr const char* kFileColumnNamesReadAsLowerCase =
       "file-column-names-read-as-lower-case";
@@ -204,6 +207,8 @@ class HiveConfig {
   std::string gcsCredentials() const;
 
   bool isOrcUseColumnNames(const Config* session) const;
+
+  bool isParquetBloomFilterEnabled(const Config* config);
 
   bool isFileColumnNamesReadAsLowerCase(const Config* session) const;
 

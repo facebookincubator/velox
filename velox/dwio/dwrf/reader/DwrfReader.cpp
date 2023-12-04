@@ -239,7 +239,8 @@ void DwrfRowReader::checkSkipStrides(uint64_t strideSize) {
     StatsContext context(
         getReader().getWriterName(), getReader().getWriterVersion());
     DwrfData::FilterRowGroupsResult res;
-    selectiveColumnReader_->filterRowGroups(strideSize, context, res);
+    selectiveColumnReader_->filterRowGroups(
+        strideSize, context, res, readerBaseShared()->getBufferedInput());
     if (auto& metadataFilter = options_.getMetadataFilter()) {
       metadataFilter->eval(res.metadataFilterResults, res.filterResult);
     }
