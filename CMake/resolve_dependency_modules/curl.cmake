@@ -24,7 +24,6 @@ string(
 
 resolve_dependency_url(CURL)
 
-message(STATUS "Building curl from source")
 FetchContent_Declare(
   curl
   URL ${VELOX_CURL_SOURCE_URL}
