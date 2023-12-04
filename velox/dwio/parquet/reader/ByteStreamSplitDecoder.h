@@ -15,14 +15,14 @@
  */
 
 #pragma once
+
 #include "velox/common/base/BitUtil.h"
+
 namespace facebook::velox::parquet {
+
 class ByteStreamSplitDecoder {
  public:
-  ByteStreamSplitDecoder(
-      const char* FOLLY_NONNULL start,
-      const char* FOLLY_NONNULL end,
-      uint32_t numBytes)
+  ByteStreamSplitDecoder(const char* start, const char* end, uint32_t numBytes)
       : bufferStart_(start),
         bufferEnd_(end),
         numValues_((end - start) / numBytes) {
@@ -32,14 +32,13 @@ class ByteStreamSplitDecoder {
         "ByteStreamSplit data size " + std::to_string(end - start) +
             " not aligned with type size " + std::to_string(numBytes))
   }
+
   void skip(uint64_t numValues) {
     skip<false>(numValues, 0, nullptr);
   }
+
   template <bool hasNulls>
-  inline void skip(
-      int32_t numValues,
-      int32_t current,
-      const uint64_t* FOLLY_NULLABLE nulls) {
+  inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
@@ -47,8 +46,9 @@ class ByteStreamSplitDecoder {
       bufferStart_++;
     }
   }
+
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* FOLLY_NULLABLE nulls, Visitor visitor) {
+  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
     int32_t current = visitor.start();
     skip<hasNulls>(current, 0, nulls);
     int32_t toSkip;
@@ -81,7 +81,8 @@ class ByteStreamSplitDecoder {
       }
     }
   }
- protected:
+
+ private:
   template <class T>
   T readValue() {
     uint8_t buf[sizeof(T)];
@@ -91,8 +92,10 @@ class ByteStreamSplitDecoder {
     bufferStart_++;
     return *reinterpret_cast<T*>(buf);
   }
-  const char* FOLLY_NULLABLE bufferStart_;
-  const char* FOLLY_NULLABLE bufferEnd_;
+
+  const char* bufferStart_;
+  const char* bufferEnd_;
   const uint32_t numValues_;
 };
+
 } // namespace facebook::velox::parquet
