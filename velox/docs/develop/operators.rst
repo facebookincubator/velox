@@ -371,6 +371,16 @@ Aggregation operator that follows, groups these 9 rows by (l_orderkey, l_partkey
   3          null      1
   3          22        1
 
+Here the query plan for above ROLLUP query example is:
+
+.. code-block::
+  -- Project[expressions: (l_orderkey:BIGINT, ROW["l_orderkey"]), (l_partkey:BIGINT, ROW["l_partkey"]), (count_suppkey:BIGINT, ROW["count_suppkey"])] -> l_orderkey:BIGINT, l_partkey:BIGINT, count_suppkey:BIGINT
+    -- Aggregation[SINGLE [l_orderkey, l_partkey, gid] count_suppkey := count(ROW["l_suppkey"])] -> l_orderkey:BIGINT, l_partkey:BIGINT, gid:BIGINT, count_suppkey:BIGINT
+      -- Expand[[l_orderkey, l_partkey, l_suppkey, 0], [l_orderkey, null, l_suppkey, 1], [null, null, l_suppkey, 3]] -> l_orderkey:BIGINT, l_partkey:BIGINT, l_suppkey:BIGINT, gid:BIGINT
+        -- Values[3 rows in 1 vectors] -> l_orderkey:BIGINT, l_partkey:BIGINT, l_suppkey:BIGINT
+
+The Expand operator takes 3 rows of data and generates a result with 9 rows and 4 columns based on the projections list. Following that, the Aggregation operator groups the data based on the key (l_orderkey, l_partkey, grouping_id_0) and calculates the count(l_suppkey). Finally, the Project operator is performed to map the final output, where the grouping id column is removed.
+
 Another example would be COUNT DISTINCT query.
 
 .. code-block:: sql
@@ -423,6 +433,17 @@ Another Aggregation operator that follows, computes global count(l_suppkey) and 
 
   COUNT(DISTINCT l_suppkey) COUNT(DISTINCT l_partkey)
   3                         3
+
+Here the query plan for above COUNT DISTINCT query example is:
+
+.. code-block::
+  -- Aggregation[SINGLE count_a := count(ROW["l_suppkey"]), count_b := count(ROW["l_partkey"])] -> count_a:BIGINT, count_b:BIGINT
+    -- Aggregation[SINGLE [l_suppkey, l_partkey, gid] ] -> l_suppkey:BIGINT, l_partkey:BIGINT, gid:BIGINT
+      -- Expand[[l_suppkey, null, 1], [null, l_partkey, 2]] -> l_suppkey:BIGINT, l_partkey:BIGINT, gid:BIGINT
+        -- Values[3 rows in 1 vectors] -> l_orderkey:BIGINT, l_partkey:BIGINT, l_suppkey:BIGINT
+
+
+The Expand operator takes 3 rows of data and generates a result with 6 rows and 3 columns based on the projections list. Following that, the Aggregation operator groups the data based on the key (l_suppkey, l_partkey, gid). The last Aggregation operator calculate the global count(l_suppkey) and count(l_partkey) in each group.
 
 .. _GroupIdNode:
 
