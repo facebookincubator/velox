@@ -71,14 +71,16 @@ jobs:
       - name: "Checkout Repo"
         uses: actions/checkout@v3
         with:
+          path: velox
           submodules: 'recursive'
           ref: "${{ inputs.ref || 'main' }}"
 
       - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
+        run: cd  velox && source ./scripts/setup-ubuntu.sh
 
       - name: "Build"
         run: |
+          cd velox
           make debug NUM_THREADS="${{ inputs.numThreads || 8 }}" MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 8 }}" MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 4 }}" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }}"
           ccache -s
 
@@ -86,27 +88,27 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: presto
-          path: _build/debug/velox/expression/tests/velox_expression_fuzzer_test
+          path: velox/_build/debug/velox/expression/tests/velox_expression_fuzzer_test
             
       - name: Upload spark fuzzer 
         uses: actions/upload-artifact@v3
         with:
           name: spark
           path: |
-            _build/debug/velox/expression/tests/spark_expression_fuzzer_test
-            _build/debug/velox/expression/tests/spark_aggregation_fuzzer_test
+            velox/_build/debug/velox/expression/tests/spark_expression_fuzzer_test
+            velox/_build/debug/velox/expression/tests/spark_aggregation_fuzzer_test
 
       - name: Upload aggregation fuzzer 
         uses: actions/upload-artifact@v3
         with:
           name: aggregation
-          path: _build/debug/velox/exec/tests/velox_aggregation_fuzzer_test
+          path: velox/_build/debug/velox/exec/tests/velox_aggregation_fuzzer_test
 
       - name: Upload join fuzzer 
         uses: actions/upload-artifact@v3
         with:
           name: join
-          path: _build/debug/velox/exec/tests/velox_join_fuzzer_test      
+          path: velox/_build/debug/velox/exec/tests/velox_join_fuzzer_test      
 
   linux-presto-fuzzer-run:
     runs-on: 8-core
