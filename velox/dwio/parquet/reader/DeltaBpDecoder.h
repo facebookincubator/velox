@@ -37,7 +37,7 @@ class DeltaBpDecoder {
   inline void skip(
       int32_t numValues,
       int32_t current,
-      const uint64_t* FOLLY_NULLABLE nulls) {
+      const uint64_t* nulls) {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
@@ -47,7 +47,7 @@ class DeltaBpDecoder {
   }
 
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* FOLLY_NULLABLE nulls, Visitor visitor) {
+  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
     int32_t current = visitor.start();
     skip<hasNulls>(current, 0, nulls);
     int32_t toSkip;
@@ -211,8 +211,8 @@ class DeltaBpDecoder {
   static constexpr int kMaxDeltaBitWidth =
       static_cast<int>(sizeof(int64_t) * 8);
 
-  const char* FOLLY_NULLABLE bufferStart_;
-  const char* FOLLY_NULLABLE bufferEnd_;
+  const char* bufferStart_;
+  const char* bufferEnd_;
 
   uint64_t valuesPerBlock_;
   uint64_t miniBlocksPerBlock_;
