@@ -71,6 +71,32 @@ void populateAggregateInputs(
   }
 }
 
+void populateAggregateFunction(
+    const core::AggregationNode::Aggregate& aggregate,
+    const RowTypePtr& outputType,
+    core::AggregationNode::Step step,
+    AggregateInfo& info,
+    const std::unique_ptr<OperatorCtx>& operatorCtx,
+    uint32_t index,
+    std::shared_ptr<core::ExpressionEvaluator>& expressionEvaluator) {
+  const auto& resultType = outputType->childAt(index);
+  info.function = Aggregate::create(
+      aggregate.call->name(),
+      isPartialOutput(step) ? core::AggregationNode::Step::kPartial
+                            : core::AggregationNode::Step::kSingle,
+      aggregate.rawInputTypes,
+      resultType,
+      operatorCtx->driverCtx()->queryConfig());
+
+  auto lambdas = extractLambdaInputs(aggregate);
+  if (!lambdas.empty()) {
+    if (expressionEvaluator == nullptr) {
+      expressionEvaluator = std::make_shared<SimpleExpressionEvaluator>(
+          operatorCtx->execCtx()->queryCtx(), operatorCtx->execCtx()->pool());
+    }
+    info.function->setLambdaExpressions(lambdas, expressionEvaluator);
+  }
+}
 } // namespace
 
 HashAggregation::HashAggregation(
@@ -143,25 +169,14 @@ void HashAggregation::initialize() {
       info.mask = std::nullopt;
     }
 
-    const auto& resultType = outputType_->childAt(numHashers + i);
-    info.function = Aggregate::create(
-        aggregate.call->name(),
-        isPartialOutput(aggregationNode_->step())
-            ? core::AggregationNode::Step::kPartial
-            : core::AggregationNode::Step::kSingle,
-        aggregate.rawInputTypes,
-        resultType,
-        operatorCtx_->driverCtx()->queryConfig());
-
-    auto lambdas = extractLambdaInputs(aggregate);
-    if (!lambdas.empty()) {
-      if (expressionEvaluator == nullptr) {
-        expressionEvaluator = std::make_shared<SimpleExpressionEvaluator>(
-            operatorCtx_->execCtx()->queryCtx(),
-            operatorCtx_->execCtx()->pool());
-      }
-      info.function->setLambdaExpressions(lambdas, expressionEvaluator);
-    }
+    populateAggregateFunction(
+        aggregate,
+        outputType_,
+        aggregationNode_->step(),
+        info,
+        operatorCtx_,
+        numHashers + i,
+        expressionEvaluator);
 
     info.output = numHashers + i;
 
