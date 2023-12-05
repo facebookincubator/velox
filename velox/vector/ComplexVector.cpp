@@ -1111,7 +1111,7 @@ bool MapVector::isSorted(vector_size_t index) const {
 
 void MapVector::setType(const TypePtr& type) {
   BaseVector::setType(type);
-  auto mapType = type_->asMap();
+  const auto& mapType = type_->asMap();
   keys_->setType(mapType.keyType());
   values_->setType(mapType.valueType());
 }

@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <functional>
+#include <iostream>
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -3542,76 +3543,63 @@ TEST_F(VectorTest, setType) {
   auto newType = ROW({"bb"}, {BIGINT()});
   vector->setType(newType);
 
-  EXPECT_EQ(
-      std::static_pointer_cast<const RowType>(vector->type())->names()[0],
-      "bb");
+  EXPECT_EQ(vector->type()->toString(), newType->toString());
 
-  auto failedType = ROW({"bb"}, {VARCHAR()});
   VELOX_ASSERT_RUNTIME_THROW(
-      vector->setType(failedType),
+      vector->setType(ROW({"bb"}, {VARCHAR()})),
       "Cannot change vector type from ROW<bb:BIGINT> to ROW<bb:VARCHAR>. The old and new types can be different logical types, but the underlying physical types must match.")
 }
 
-TEST_F(VectorTest, setROWNestROWType) {
+TEST_F(VectorTest, setNestedType) {
+  auto test = [&](auto& type, auto& newType, auto& invalidNewType) {
+    auto vector = BaseVector::create(type, 1'000, pool());
+
+    vector->setType(newType);
+    EXPECT_EQ(vector->type()->toString(), newType->toString());
+
+    VELOX_ASSERT_RUNTIME_THROW(
+        vector->setType(invalidNewType),
+        fmt::format(
+            "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
+            newType->toString(),
+            invalidNewType->toString()));
+  };
+
+  // ROW(ROW)
   auto type =
       ROW({"a", "b"}, {ROW({"c", "d"}, {BIGINT(), BIGINT()}), BIGINT()});
-  auto vector = BaseVector::create(type, 1'000, pool());
-
   auto newType =
       ROW({"a", "b"}, {ROW({"cc", "dd"}, {BIGINT(), BIGINT()}), BIGINT()});
-  vector->setType(newType);
+  auto invalidNewType =
+      ROW({"a", "b"}, {ROW({"cc", "dd"}, {VARCHAR(), BIGINT()}), BIGINT()});
+  test(type, newType, invalidNewType);
 
-  auto rowType = std::static_pointer_cast<const RowType>(vector->type());
-  auto names =
-      std::static_pointer_cast<const RowType>(rowType->childAt(0))->names();
-  EXPECT_EQ(names[0], "cc");
-  EXPECT_EQ(names[1], "dd");
-}
-
-TEST_F(VectorTest, setARRAYNestROWType) {
-  auto type =
+  // ARRAY(ROW)
+  type =
       ROW({"a", "b"}, {ARRAY(ROW({"c", "d"}, {BIGINT(), BIGINT()})), BIGINT()});
-  auto vector = BaseVector::create(type, 1'000, pool());
-
-  auto newType = ROW(
+  newType = ROW(
       {"a", "b"}, {ARRAY(ROW({"cc", "dd"}, {BIGINT(), BIGINT()})), BIGINT()});
-  vector->setType(newType);
-  auto rowType = std::static_pointer_cast<const RowType>(vector->type());
-  auto arrayType =
-      std::static_pointer_cast<const ArrayType>(rowType->childAt(0));
-  auto names = std::static_pointer_cast<const RowType>(arrayType->elementType())
-                   ->names();
-  EXPECT_EQ(names[0], "cc");
-  EXPECT_EQ(names[1], "dd");
-}
+  invalidNewType = ROW(
+      {"a", "b"}, {ARRAY(ROW({"cc", "dd"}, {VARCHAR(), BIGINT()})), BIGINT()});
+  test(type, newType, invalidNewType);
 
-TEST_F(VectorTest, setMAPNestROWType) {
-  auto type =
+  // MAP(ROW)
+  type =
       ROW({"a", "b"},
           {MAP(ROW({"c", "d"}, {BIGINT(), BIGINT()}),
                ROW({"e", "f"}, {BIGINT(), BIGINT()})),
            BIGINT()});
-  auto vector = BaseVector::create(type, 1'000, pool());
-
-  auto newType =
+  newType =
       ROW({"a", "b"},
           {MAP(ROW({"cc", "dd"}, {BIGINT(), BIGINT()}),
                ROW({"ee", "ff"}, {BIGINT(), BIGINT()})),
            BIGINT()});
-  vector->setType(newType);
-  auto rowType = std::static_pointer_cast<const RowType>(vector->type());
-  auto mapType = std::static_pointer_cast<const MapType>(rowType->childAt(0));
-  auto keyType = std::static_pointer_cast<const RowType>(mapType->keyType());
-  auto valueType =
-      std::static_pointer_cast<const RowType>(mapType->valueType());
-
-  auto keyNames = keyType->names();
-  EXPECT_EQ(keyNames[0], "cc");
-  EXPECT_EQ(keyNames[1], "dd");
-
-  auto valueNames = valueType->names();
-  EXPECT_EQ(valueNames[0], "ee");
-  EXPECT_EQ(valueNames[1], "ff");
+  invalidNewType =
+      ROW({"a", "b"},
+          {MAP(ROW({"cc", "dd"}, {VARCHAR(), BIGINT()}),
+               ROW({"ee", "ff"}, {VARCHAR(), BIGINT()})),
+           BIGINT()});
+  test(type, newType, invalidNewType);
 }
 
 } // namespace
