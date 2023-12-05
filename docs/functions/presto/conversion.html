@@ -336,7 +336,7 @@ the decimal part will be truncated for casting to an integer.</p>
 </pre></div>
 </div>
 <p>Valid examples if cast_to_int_by_truncate=true</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;12345.67&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">12345</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;12345.67&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">12345</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-1.8&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
@@ -358,6 +358,7 @@ the decimal part will be truncated for casting to an integer.</p>
 </div>
 <p>Invalid examples if cast_to_int_by_truncate=false</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;12345.67&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;12345.67&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-1.8&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
@@ -400,6 +401,8 @@ numbers are converted to <cite>true</cite> while zero is converted to <cite>fals
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">nan</span><span class="p">()</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">infinity</span><span class="p">()</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.0000000000001</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.5</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">0.5</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 </pre></div>
 </div>
 </section>
@@ -453,14 +456,13 @@ floating-point number. Casting from invalid input values throws.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.0</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.0</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.7E308&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;infinity&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-infinity&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="n">Infinity</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">NaN</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;Infinity&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-Infinity&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="n">Infinity</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;NaN&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">NaN</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>Invalid examples</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.7E308&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2a&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2a&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2.3&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
 </pre></div>
 </div>
@@ -468,8 +470,20 @@ floating-point number. Casting from invalid input values throws.</p>
 Presto throws INVALID_CAST_ARGUMENT on these queries, while Velox allows these
 conversions. We keep the Velox behaivor by intention because it is more
 consistent with other supported cases of cast.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;InfiNiTy&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;infinity&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-infinity&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="n">Infinity</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;inf&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;InfiNiTy&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;INFINITY&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nAn&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">NaN</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">NaN</span>
+</pre></div>
+</div>
+<p>Below cases are supported in Presto, but throw in Velox.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2f&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.2</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2f&#39;</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.2</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2d&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.2</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2d&#39;</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.2</span>
 </pre></div>
 </div>
 </section>
@@ -559,21 +573,21 @@ Casting from invalid input values throws.</p>
 <h3>From TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#from-timestamp-with-time-zone" title="Permalink to this heading">¶</a></h3>
 <p>The results depend on whether configuration property <cite>adjust_timestamp_to_session_timezone</cite> is set or not.</p>
 <p>If set to true, input timezone is ignored and timestamp is returned as is. For example,
-“1970-01-01 00:00:00.000 America/Los_Angeles” becomes “1970-01-01 00:00:00.000”.</p>
+“1970-01-01 00:00:00.000 America/Los_Angeles” becomes “1970-01-01 08:00:00.000”.</p>
 <p>Otherwise, timestamp is shifted by the offset of the timezone. For example,
-“1970-01-01 00:00:00.000 America/Los_Angeles” becomes “1969-12-31 16:00:00.000”.</p>
+“1970-01-01 00:00:00.000 America/Los_Angeles” becomes “1970-01-01 00:00:00.000”.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>-- `adjust_timestamp_to_session_timezone` is true
-SELECT cast(timestamp &#39;1970-01-01 00:00:00 America/Los_Angeles&#39; as timestamp); -- 1970-01-01 00:00:00.000
-SELECT cast(timestamp &#39;2012-03-09 10:00:00 Asia/Chongqing&#39; as timestamp); -- 2012-03-09 10:00:00.000
-SELECT cast(from_unixtime(0, &#39;+06:00&#39;) as timestamp); -- 1970-01-01 00:00:00.000
-SELECT cast(from_unixtime(0, &#39;-02:00&#39;) as timestamp); -- 1970-01-01 00:00:00.000
+SELECT to_unixtime(cast(timestamp &#39;1970-01-01 00:00:00 America/Los_Angeles&#39; as timestamp)); -- 28800.0 (1970-01-01 08:00:00.000)
+SELECT to_unixtime(cast(timestamp &#39;2012-03-09 10:00:00 Asia/Chongqing&#39; as timestamp)); -- 1.3312584E9 (2012-03-09 02:00:00.000)
+SELECT to_unixtime(cast(from_unixtime(0, &#39;+06:00&#39;) as timestamp)); -- 0.0 (1970-01-01 00:00:00.000)
+SELECT to_unixtime(cast(from_unixtime(0, &#39;-02:00&#39;) as timestamp)); -- 0.0 (1970-01-01 00:00:00.000)
 
 -- `adjust_timestamp_to_session_timezone` is false
-SELECT cast(timestamp &#39;1970-01-01 00:00:00 America/Los_Angeles&#39; as timestamp); -- 1969-12-31 16:00:00.000
-SELECT cast(timestamp &#39;2012-03-09 10:00:00 Asia/Chongqing&#39; as timestamp); -- 2012-03-09 18:00:00.000
-SELECT cast(from_unixtime(0, &#39;+06:00&#39;) as timestamp); -- 1970-01-01 06:00:00.000
-SELECT cast(from_unixtime(0, &#39;-02:00&#39;) as timestamp); -- 1969-12-31 22:00:00.000
+SELECT to_unixtime(cast(timestamp &#39;1970-01-01 00:00:00 America/Los_Angeles&#39; as timestamp)); -- 0.0 (1970-01-01 00:00:00.000)
+SELECT to_unixtime(cast(timestamp &#39;2012-03-09 10:00:00 Asia/Chongqing&#39; as timestamp)); -- 1.3312872E9 (2012-03-09 10:00:00.000)
+SELECT to_unixtime(cast(from_unixtime(0, &#39;+06:00&#39;) as timestamp)); -- 21600.0 (1970-01-01 06:00:00.000)
+SELECT to_unixtime(cast(from_unixtime(0, &#39;-02:00&#39;) as timestamp)); -- -7200.0 (1969-12-31 22:00:00.000)
 </pre></div>
 </div>
 </section>
