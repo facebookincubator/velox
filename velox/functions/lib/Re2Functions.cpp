@@ -427,13 +427,14 @@ bool matchSubstringPattern(
 template <PatternKind P>
 class OptimizedLike final : public VectorFunction {
  public:
-  OptimizedLike(std::string pattern, vector_size_t reducedPatternLength)
-      : pattern_{pattern}, reducedPatternLength_{reducedPatternLength} {}
+  OptimizedLike(std::string pattern, size_t reducedPatternLength)
+      : pattern_{std::move(pattern)},
+        reducedPatternLength_{reducedPatternLength} {}
 
   static bool match(
       const StringView& input,
       const std::string& pattern,
-      vector_size_t reducedPatternLength) {
+      size_t reducedPatternLength) {
     switch (P) {
       case PatternKind::kExactlyN:
         return input.size() == reducedPatternLength;
@@ -483,8 +484,8 @@ class OptimizedLike final : public VectorFunction {
   }
 
  private:
-  std::string pattern_;
-  vector_size_t reducedPatternLength_;
+  const std::string pattern_;
+  const size_t reducedPatternLength_;
 };
 
 // This function is used when pattern and escape are constants. And there is not
@@ -594,8 +595,8 @@ class LikeGeneric final : public VectorFunction {
                         const std::optional<char>& escapeChar) -> bool {
       PatternMetadata patternMetadata =
           determinePatternKind(pattern, escapeChar);
-      vector_size_t reducedLength = patternMetadata.length;
-      auto fixedPattern = patternMetadata.fixedPattern;
+      const auto reducedLength = patternMetadata.length;
+      const auto& fixedPattern = patternMetadata.fixedPattern;
 
       switch (patternMetadata.patternKind) {
         case PatternKind::kExactlyN:
@@ -980,7 +981,7 @@ std::string unescape(
 
   std::ostringstream os;
   // Append the specified range to the stream.
-  auto appendNormalCharsFn = [&](const char* start, const char* end) {
+  auto appendChars = [&](const char* start, const char* end) {
     for (auto it = start; it < end; it++) {
       os << *it;
     }
@@ -996,7 +997,7 @@ std::string unescape(
     if (cursor < endCursor) {
       // There are non-escape chars, append them.
       if (previous < cursor) {
-        appendNormalCharsFn(previous, cursor);
+        appendChars(previous, cursor);
       }
 
       // Make sure there is a following normal char.
@@ -1015,7 +1016,8 @@ std::string unescape(
       os << current;
     } else {
       // Escape char not found, append all the non-escape chars.
-      appendNormalCharsFn(previous, cursor);
+      appendChars(previous, endCursor);
+      break;
     }
 
     // Advance the cursor.
@@ -1052,8 +1054,67 @@ class PatternStringIterator {
     return currentIndex_ < (int32_t)(pattern_.size() - 1);
   }
 
+  /// Advance the cursor to next char, escape char is automatically handled.
+  bool next() {
+    nextInternal();
+    userPreviousCharKind_ = previousCharKind_;
+
+    if (charKind_ == CharKind::kEscape) {
+      auto currentChar = current();
+      // The char follows escapeChar can only be one of (%, _, escapeChar).
+      if (currentChar != '%' && currentChar != '_' &&
+          currentChar != escapeChar_) {
+        return false;
+      }
+
+      if (!hasNext()) {
+        return false;
+      }
+
+      // Advance the cursor.
+      nextInternal();
+    }
+
+    return true;
+  }
+
+  /// Current index of the cursor.
+  char currentIndex() const {
+    return currentIndex_;
+  }
+
+  /// Char at current cursor.
+  char current() const {
+    return pattern_.data()[currentIndex_];
+  }
+
+  /// Kind of the current char.
+  CharKind charKind() const {
+    return charKind_;
+  }
+
+  /// Kind of previous char(escape char is skipped).
+  CharKind previousCharKind() const {
+    return userPreviousCharKind_;
+  }
+
+ private:
+  const StringView pattern_;
+  const std::optional<char> escapeChar_;
+
+  int32_t currentIndex_ = -1;
+  // Kind of current char.
+  CharKind charKind_ = CharKind::kNormal;
+  // Kind of previous char(literally).
+  CharKind previousCharKind_ = CharKind::kNormal;
+  // 'previousCharKind_' from user's perspective.
+  // The difference between previousCharKind_ and realPreviousCharKind_ can be
+  // described by an example: for pattern string 'a\_b', if the cursor is at '_'
+  // previousCharKind_ is kEscape, while userPreviousCharKind_ is kNormal.
+  CharKind userPreviousCharKind_ = CharKind::kNormal;
+
   /// Advance the cursor to next char.
-  void next() {
+  void nextInternal() {
     currentIndex_++;
     previousCharKind_ = charKind_;
 
@@ -1068,34 +1129,6 @@ class PatternStringIterator {
       charKind_ = CharKind::kNormal;
     }
   }
-
-  /// Current index of the cursor.
-  char currentIndex() const {
-    return currentIndex_;
-  }
-
-  /// Char at current cursor.
-  char current() const {
-    return pattern_.data()[currentIndex_];
-  }
-
-  CharKind state() const {
-    return charKind_;
-  }
-
-  CharKind previousState() const {
-    return previousCharKind_;
-  }
-
- private:
-  const StringView pattern_;
-  const std::optional<char> escapeChar_;
-
-  int32_t currentIndex_ = -1;
-  // State of current char.
-  CharKind charKind_ = CharKind::kNormal;
-  // State of previous char.
-  CharKind previousCharKind_ = CharKind::kNormal;
 };
 
 PatternMetadata determinePatternKind(
@@ -1120,65 +1153,41 @@ PatternMetadata determinePatternKind(
   PatternStringIterator iterator{pattern, escapeChar};
   bool fallbackToGeneric = false;
 
-  // Return false if failed to handle the new fixed pattern(need to fallback),
-  // true otherwise.
-  auto handleNewFixedPattern = [&]() -> bool {
-    // Record the first fixed pattern start.
-    if (fixedPatternStart == -1) {
-      fixedPatternStart = iterator.currentIndex();
-    } else {
-      // This is not the first fixed pattern, not supported, so fallback.
-      if (iterator.previousState() ==
-          PatternStringIterator::CharKind::kWildcard) {
-        fallbackToGeneric = true;
-        return false;
-      }
+  // Iterator through the pattern string to collect the stats for the simple
+  // patterns that we can optimize.
+  while (iterator.hasNext()) {
+    if (!iterator.next()) {
+      fallbackToGeneric = true;
+      break;
     }
 
-    return true;
-  };
-
-  // Iterator through the pattern string to collect the stats for the simple
-  // patterns that we can optimize: e.g. the
-  while (iterator.hasNext()) {
-    iterator.next();
     auto current = iterator.current();
-
-    if (iterator.previousState() == PatternStringIterator::CharKind::kEscape) {
-      // The char follows escapeChar can only be one of (%, _, escapeChar).
-      if (current != '%' && current != '_' && current != escapeChar) {
-        fallbackToGeneric = true;
-        break;
+    if (iterator.charKind() == PatternStringIterator::CharKind::kWildcard) {
+      if (wildcardStart == -1) {
+        wildcardStart = iterator.currentIndex();
       }
 
-      if (!handleNewFixedPattern()) {
-        break;
+      singleCharacterWildcardCount += (iterator.current() == '_');
+      anyCharacterWildcardCount += (iterator.current() == '%');
+      numWildcardSequences +=
+          (iterator.previousCharKind() !=
+                   PatternStringIterator::CharKind::kWildcard
+               ? 1
+               : 0);
+
+      // Mark the end of the fixed pattern.
+      if (fixedPatternStart != -1 && fixedPatternEnd == -1) {
+        fixedPatternEnd = iterator.currentIndex() - 1;
       }
     } else {
-      // Escape char, continue.
-      if (iterator.state() == PatternStringIterator::CharKind::kEscape) {
-        continue;
-      }
-
-      if (iterator.state() == PatternStringIterator::CharKind::kWildcard) {
-        if (wildcardStart == -1) {
-          wildcardStart = iterator.currentIndex();
-        }
-
-        singleCharacterWildcardCount += (iterator.current() == '_');
-        anyCharacterWildcardCount += (iterator.current() == '%');
-        numWildcardSequences +=
-            (iterator.previousState() !=
-                     PatternStringIterator::CharKind::kWildcard
-                 ? 1
-                 : 0);
-
-        // Mark the end of the fixed pattern.
-        if (fixedPatternStart != -1 && fixedPatternEnd == -1) {
-          fixedPatternEnd = iterator.currentIndex() - 1;
-        }
+      // Record the first fixed pattern start.
+      if (fixedPatternStart == -1) {
+        fixedPatternStart = iterator.currentIndex();
       } else {
-        if (!handleNewFixedPattern()) {
+        // This is not the first fixed pattern, not supported, so fallback.
+        if (iterator.previousCharKind() ==
+            PatternStringIterator::CharKind::kWildcard) {
+          fallbackToGeneric = true;
           break;
         }
       }
