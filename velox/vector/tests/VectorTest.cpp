@@ -18,7 +18,6 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <functional>
-#include <iostream>
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
