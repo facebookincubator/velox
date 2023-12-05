@@ -56,7 +56,7 @@ get_target_property(_inc folly_base INTERFACE_INCLUDE_DIRECTORIES)
 target_include_directories(folly_base SYSTEM INTERFACE ${_inc})
 
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
-  add_dependencies(folly glog gflags)
+  add_dependencies(folly glog gflags_static fmt::fmt)
 endif()
 
 set(FOLLY_BENCHMARK_STATIC_LIB
