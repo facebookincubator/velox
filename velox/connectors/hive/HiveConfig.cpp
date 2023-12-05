@@ -167,6 +167,11 @@ int32_t HiveConfig::numCacheFileHandles(const Config* config) {
 }
 
 // static.
+int32_t HiveConfig::isUseDirectBufferedInput(const Config* config) {
+  return config->get<bool>(KUseDirectBufferedInput, true);
+}
+
+// static.
 bool HiveConfig::isFileHandleCacheEnabled(const Config* config) {
   return config->get<bool>(kEnableFileHandleCache, true);
 }

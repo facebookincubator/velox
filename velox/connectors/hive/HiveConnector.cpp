@@ -97,6 +97,8 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
           connectorQueryCtx->config()));
   options.setUseColumnNamesForColumnMapping(
       HiveConfig::isOrcUseColumnNames(connectorQueryCtx->config()));
+  options.setUseDirectBufferedInput(
+      HiveConfig::isUseDirectBufferedInput(connectorQueryCtx->config()));
 
   return std::make_unique<HiveDataSource>(
       outputType,

@@ -808,15 +808,22 @@ HiveDataSource::createBufferedInput(
         executor_,
         readerOpts);
   }
-  return std::make_unique<dwio::common::DirectBufferedInput>(
+  if (readerOpts.isUseDirectBufferedInput()) {
+    return std::make_unique<dwio::common::DirectBufferedInput>(
+        fileHandle.file,
+        dwio::common::MetricsLog::voidLog(),
+        fileHandle.uuid.id(),
+        Connector::getTracker(scanId_, readerOpts.loadQuantum()),
+        fileHandle.groupId.id(),
+        ioStats_,
+        executor_,
+        readerOpts);
+  }
+  return std::make_unique<dwio::common::BufferedInput>(
       fileHandle.file,
+      readerOpts.getMemoryPool(),
       dwio::common::MetricsLog::voidLog(),
-      fileHandle.uuid.id(),
-      Connector::getTracker(scanId_, readerOpts.loadQuantum()),
-      fileHandle.groupId.id(),
-      ioStats_,
-      executor_,
-      readerOpts);
+      ioStats_.get());
 }
 
 vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {

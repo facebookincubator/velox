@@ -107,6 +107,9 @@ class HiveConfig {
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
+  /// Maximum number of entries in the file handle cache.
+  static constexpr const char* KUseDirectBufferedInput = "direct_buffered_input_used";
+
   /// Enable file handle cache.
   static constexpr const char* kEnableFileHandleCache =
       "file_handle_cache_enabled";
@@ -167,6 +170,8 @@ class HiveConfig {
   static int32_t maxCoalescedDistanceBytes(const Config* config);
 
   static int32_t numCacheFileHandles(const Config* config);
+
+  static int32_t isUseDirectBufferedInput(const Config* config);
 
   static bool isFileHandleCacheEnabled(const Config* config);
 

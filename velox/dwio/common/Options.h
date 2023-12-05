@@ -379,6 +379,7 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t filePreloadThreshold{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase{false};
   bool useColumnNamesForColumnMapping_{false};
+  bool useDirectBufferedInput_{true};
   std::shared_ptr<folly::Executor> ioExecutor_;
 
  public:
@@ -485,6 +486,11 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setUseDirectBufferedInput(bool flag) {
+    useDirectBufferedInput_ = flag;
+    return *this;
+  }
+
   ReaderOptions& setIOExecutor(std::shared_ptr<folly::Executor> executor) {
     ioExecutor_ = std::move(executor);
     return *this;
@@ -543,6 +549,10 @@ class ReaderOptions : public io::ReaderOptions {
 
   bool isUseColumnNamesForColumnMapping() const {
     return useColumnNamesForColumnMapping_;
+  }
+
+  bool isUseDirectBufferedInput() const {
+    return useDirectBufferedInput_;
   }
 };
 
