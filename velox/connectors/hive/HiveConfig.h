@@ -107,7 +107,7 @@ class HiveConfig {
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
-  /// Maximum number of entries in the file handle cache.
+  /// Use DirectBufferedInput, selective BufferedInput without cache.
   static constexpr const char* KUseDirectBufferedInput =
       "direct_buffered_input_used";
 
