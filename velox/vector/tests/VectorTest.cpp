@@ -3537,20 +3537,6 @@ TEST_F(VectorTest, hashAll) {
 }
 
 TEST_F(VectorTest, setType) {
-  auto type = ROW({"aa"}, {BIGINT()});
-  auto vector = BaseVector::create(type, 1'000, pool());
-
-  auto newType = ROW({"bb"}, {BIGINT()});
-  vector->setType(newType);
-
-  EXPECT_EQ(vector->type()->toString(), newType->toString());
-
-  VELOX_ASSERT_RUNTIME_THROW(
-      vector->setType(ROW({"bb"}, {VARCHAR()})),
-      "Cannot change vector type from ROW<bb:BIGINT> to ROW<bb:VARCHAR>. The old and new types can be different logical types, but the underlying physical types must match.")
-}
-
-TEST_F(VectorTest, setNestedType) {
   auto test = [&](auto& type, auto& newType, auto& invalidNewType) {
     auto vector = BaseVector::create(type, 1'000, pool());
 
@@ -3565,12 +3551,17 @@ TEST_F(VectorTest, setNestedType) {
             invalidNewType->toString()));
   };
 
+  // ROW
+  auto type = ROW({"aa"}, {BIGINT()});
+  auto newType = ROW({"bb"}, {BIGINT()});
+  auto invalidNewType = ROW({"bb"}, {VARCHAR()});
+  test(type, newType, invalidNewType);
+
   // ROW(ROW)
-  auto type =
-      ROW({"a", "b"}, {ROW({"c", "d"}, {BIGINT(), BIGINT()}), BIGINT()});
-  auto newType =
+  type = ROW({"a", "b"}, {ROW({"c", "d"}, {BIGINT(), BIGINT()}), BIGINT()});
+  newType =
       ROW({"a", "b"}, {ROW({"cc", "dd"}, {BIGINT(), BIGINT()}), BIGINT()});
-  auto invalidNewType =
+  invalidNewType =
       ROW({"a", "b"}, {ROW({"cc", "dd"}, {VARCHAR(), BIGINT()}), BIGINT()});
   test(type, newType, invalidNewType);
 
