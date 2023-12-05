@@ -101,21 +101,6 @@ class RowVector : public BaseVector {
     return const_cast<RowVector*>(this)->loadedVector();
   }
 
-  void setType(const TypePtr& type) override {
-    VELOX_CHECK_NOT_NULL(type);
-    VELOX_CHECK(
-        type_->kindEquals(type),
-        "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
-        type_,
-        type);
-    type_ = type;
-
-    auto rowType = std::dynamic_pointer_cast<const RowType>(type_);
-    for (auto i = 0; i < childrenSize_; i++) {
-      children_[i]->setType(rowType->childAt(i));
-    }
-  }
-
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
   /// Return the number of child vectors.
@@ -165,6 +150,8 @@ class RowVector : public BaseVector {
   const std::vector<VectorPtr>& children() const {
     return children_;
   }
+
+  void setType(const TypePtr& type) override;
 
   void copy(
       const BaseVector* source,
@@ -444,23 +431,12 @@ class ArrayVector : public ArrayVectorBase {
     return elements_;
   }
 
-  void setType(const TypePtr& type) override {
-    VELOX_CHECK_NOT_NULL(type);
-    VELOX_CHECK(
-        type_->kindEquals(type),
-        "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
-        type_,
-        type);
-    type_ = type;
-
-    auto arrayType = std::dynamic_pointer_cast<const ArrayType>(type);
-    elements_->setType(arrayType->elementType());
-  }
-
   void setElements(VectorPtr elements) {
     elements_ = BaseVector::getOrCreateEmpty(
         std::move(elements), type()->childAt(0), pool_);
   }
+
+  void setType(const TypePtr& type) override;
 
   void copyRanges(
       const BaseVector* source,
@@ -578,19 +554,7 @@ class MapVector : public ArrayVectorBase {
     return values_;
   }
 
-  void setType(const TypePtr& type) override {
-    VELOX_CHECK_NOT_NULL(type);
-    VELOX_CHECK(
-        type_->kindEquals(type),
-        "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
-        type_,
-        type);
-    type_ = type;
-
-    auto mapType = std::dynamic_pointer_cast<const MapType>(type);
-    keys_->setType(mapType->keyType());
-    values_->setType(mapType->valueType());
-  }
+  void setType(const TypePtr& type) override;
 
   bool hasSortedKeys() const {
     return sortedKeys_;

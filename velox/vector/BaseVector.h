@@ -177,10 +177,10 @@ class BaseVector {
     return type_;
   }
 
-  // Changes vector type. The new type can have a different
-  // logical representation while maintaining the same physical type.
-  // Additionally, note that the caller must ensure that this vector is not
-  // shared, i.e. singly-referenced.
+  /// Changes vector type. The new type can have a different
+  /// logical representation while maintaining the same physical type.
+  /// Additionally, note that the caller must ensure that this vector is not
+  /// shared, i.e. singly-referenced.
   virtual void setType(const TypePtr& type) {
     VELOX_CHECK_NOT_NULL(type);
     VELOX_CHECK(
