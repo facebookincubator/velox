@@ -108,7 +108,8 @@ class HiveConfig {
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
   /// Maximum number of entries in the file handle cache.
-  static constexpr const char* KUseDirectBufferedInput = "direct_buffered_input_used";
+  static constexpr const char* KUseDirectBufferedInput =
+      "direct_buffered_input_used";
 
   /// Enable file handle cache.
   static constexpr const char* kEnableFileHandleCache =
