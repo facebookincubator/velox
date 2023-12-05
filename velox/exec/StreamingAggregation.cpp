@@ -15,31 +15,8 @@
  */
 
 #include "velox/exec/StreamingAggregation.h"
-#include "velox/exec/AggregateUtil.h"
 
 namespace facebook::velox::exec {
-
-namespace {
-void populateAggregateInputs(
-    const core::AggregationNode::Aggregate& aggregate,
-    const RowTypePtr& inputType,
-    AggregateInfo& info,
-    memory::MemoryPool* pool) {
-  auto& channels = info.inputs;
-  auto& constants = info.constantInputs;
-  for (auto& arg : aggregate.call->inputs()) {
-    channels.push_back(exprToChannel(arg.get(), inputType));
-    if (channels.back() == kConstantChannel) {
-      auto constant = static_cast<const core::ConstantTypedExpr*>(arg.get());
-      constants.push_back(BaseVector::createConstant(
-          constant->type(), constant->value(), 1, pool));
-    } else {
-      constants.push_back(nullptr);
-    }
-  }
-}
-
-} // namespace
 
 StreamingAggregation::StreamingAggregation(
     int32_t operatorId,
@@ -77,10 +54,10 @@ void StreamingAggregation::initialize() {
 
   const auto numAggregates = aggregationNode_->aggregates().size();
   aggregates_.reserve(numAggregates);
+  std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
 
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode_->aggregates()[i];
-    AggregateInfo info;
     if (!aggregate.sortingKeys.empty()) {
       VELOX_UNSUPPORTED(
           "Streaming aggregation doesn't support aggregations over sorted inputs yet");
@@ -91,18 +68,16 @@ void StreamingAggregation::initialize() {
           "Streaming aggregation doesn't support aggregations over distinct inputs yet");
     }
 
-    populateAggregateInputs(aggregate, inputType, info, pool());
-    AggregateUtil::populateAggregateMask(aggregate, inputType, info);
-    AggregateUtil::populateAggregateFunction(
+    AggregateInfo info = AggregateUtil::toAggregateInfo(
         aggregate,
+        inputType,
         outputType_,
         aggregationNode_->step(),
-        info,
         operatorCtx_,
-        numKeys + i);
-
-    info.intermediateType = Aggregate::intermediateType(
-        aggregate.call->name(), aggregate.rawInputTypes);
+        pool(),
+        numKeys + i,
+        expressionEvaluator,
+        false);
 
     aggregates_.emplace_back(std::move(info));
   }

@@ -20,56 +20,6 @@
 
 namespace facebook::velox::exec {
 
-namespace {
-std::vector<core::LambdaTypedExprPtr> extractLambdaInputs(
-    const core::AggregationNode::Aggregate& aggregate) {
-  std::vector<core::LambdaTypedExprPtr> lambdas;
-  for (const auto& arg : aggregate.call->inputs()) {
-    if (auto lambda =
-            std::dynamic_pointer_cast<const core::LambdaTypedExpr>(arg)) {
-      lambdas.push_back(lambda);
-    }
-  }
-
-  return lambdas;
-}
-
-void populateAggregateInputs(
-    const core::AggregationNode::Aggregate& aggregate,
-    const RowType& inputType,
-    AggregateInfo& info,
-    memory::MemoryPool* pool) {
-  auto& channels = info.inputs;
-  auto& constants = info.constantInputs;
-
-  for (const auto& arg : aggregate.call->inputs()) {
-    if (auto field =
-            dynamic_cast<const core::FieldAccessTypedExpr*>(arg.get())) {
-      channels.push_back(inputType.getChildIdx(field->name()));
-      constants.push_back(nullptr);
-    } else if (
-        auto constant =
-            dynamic_cast<const core::ConstantTypedExpr*>(arg.get())) {
-      channels.push_back(kConstantChannel);
-      constants.push_back(constant->toConstantVector(pool));
-    } else if (
-        auto lambda = dynamic_cast<const core::LambdaTypedExpr*>(arg.get())) {
-      for (const auto& name : lambda->signature()->names()) {
-        if (auto captureIndex = inputType.getChildIdxIfExists(name)) {
-          channels.push_back(captureIndex.value());
-          constants.push_back(nullptr);
-        }
-      }
-    } else {
-      VELOX_FAIL(
-          "Expression must be field access, constant, or lambda: {}",
-          arg->toString());
-    }
-  }
-}
-
-} // namespace
-
 HashAggregation::HashAggregation(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -119,41 +69,19 @@ void HashAggregation::initialize() {
   const auto numAggregates = aggregationNode_->aggregates().size();
   std::vector<AggregateInfo> aggregateInfos;
   aggregateInfos.reserve(numAggregates);
-
   std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
 
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode_->aggregates()[i];
-
-    AggregateInfo info;
-    info.distinct = aggregate.distinct;
-    info.intermediateType = Aggregate::intermediateType(
-        aggregate.call->name(), aggregate.rawInputTypes);
-
-    populateAggregateInputs(aggregate, inputType->asRow(), info, pool());
-    AggregateUtil::populateAggregateMask(aggregate, inputType, info);
-    AggregateUtil::populateAggregateFunction(
+    AggregateInfo info = AggregateUtil::toAggregateInfo(
         aggregate,
+        inputType,
         outputType_,
         aggregationNode_->step(),
-        info,
         operatorCtx_,
-        numHashers + i);
-
-    auto lambdas = extractLambdaInputs(aggregate);
-    if (!lambdas.empty()) {
-      if (expressionEvaluator == nullptr) {
-        expressionEvaluator = std::make_shared<SimpleExpressionEvaluator>(
-            operatorCtx_->execCtx()->queryCtx(),
-            operatorCtx_->execCtx()->pool());
-      }
-      info.function->setLambdaExpressions(lambdas, expressionEvaluator);
-    }
-
-    AggregateUtil::populateAggregateKeysOrders(aggregate, inputType, info);
-
-    info.output = numHashers + i;
-
+        pool(),
+        numHashers + i,
+        expressionEvaluator);
     aggregateInfos.emplace_back(std::move(info));
   }
 

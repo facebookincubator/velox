@@ -40,26 +40,19 @@ struct AggregateRegistrationResult {
 
 class AggregateUtil {
  public:
-  /// Setup aggregation mask: convert the Variable Reference name to the
-  /// channel (projection) index, if there is a mask.
-  static void populateAggregateMask(
+  static AggregateInfo toAggregateInfo(
       const core::AggregationNode::Aggregate& aggregate,
       const RowTypePtr& inputType,
-      AggregateInfo& info);
-
-  /// Sorting keys and orders.
-  static void populateAggregateKeysOrders(
-      const core::AggregationNode::Aggregate& aggregate,
-      const RowTypePtr& inputType,
-      AggregateInfo& info);
-
-  static void populateAggregateFunction(
-      const core::AggregationNode::Aggregate& aggregate,
       const RowTypePtr& outputType,
       core::AggregationNode::Step step,
-      AggregateInfo& info,
       const std::unique_ptr<OperatorCtx>& operatorCtx,
-      uint32_t index);
+      memory::MemoryPool* pool,
+      uint32_t index,
+      std::shared_ptr<core::ExpressionEvaluator>& expressionEvaluator,
+      bool supportLambda = true);
+
+  static std::vector<core::LambdaTypedExprPtr> extractLambdaInputs(
+      const core::AggregationNode::Aggregate& aggregate);
 };
 
 } // namespace facebook::velox::exec
