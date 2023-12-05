@@ -192,6 +192,15 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param subfieldFilter A SQL expression for the range filter
+    /// to apply to an individual column. Supported filters are: column <=
+    /// value, column < value, column >= value, column > value, column = value,
+    /// column IN (v1, v2,.. vN), column < v1 OR column >= v2.
+    TableScanBuilder& subfieldFilter(std::string subfieldFilter) {
+      subfieldFilters_.emplace_back(std::move(subfieldFilter));
+      return *this;
+    }
+
     /// @param remainingFilter SQL expression for the additional conjunct. May
     /// include multiple columns and SQL functions. The remainingFilter is
     /// AND'ed with all the subfieldFilters.

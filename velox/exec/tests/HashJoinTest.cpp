@@ -4126,8 +4126,6 @@ TEST_F(HashJoinTest, dynamicFilters) {
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
                   .startTableScan()
                   .outputType(scanOutputType)
-                  .tableHandle(makeTableHandle(
-                      common::test::SubfieldFiltersBuilder().build()))
                   .assignments(assignments)
                   .endTableScan()
                   .capturePlanNodeId(probeScanId)
@@ -4880,8 +4878,6 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
           .partitionKey("k", "0")
           .build();
   auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});
-  std::shared_ptr<connector::hive::HiveTableHandle> tableHandle =
-      makeTableHandle();
   ColumnHandleMap assignments = {
       {"n1_0", regularColumn("c0", BIGINT())},
       {"n1_1", partitionKey("k", BIGINT())}};
@@ -4892,7 +4888,6 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
       PlanBuilder(planNodeIdGenerator)
           .startTableScan()
           .outputType(outputType)
-          .tableHandle(tableHandle)
           .assignments(assignments)
           .endTableScan()
           .capturePlanNodeId(probeScanId)
