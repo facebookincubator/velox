@@ -52,10 +52,10 @@ struct PatternMetadata {
   // kFixed, kPrefix, kSuffix and kSubstring. Contains the count of wildcard
   // character '_' for patterns of kind kExactlyN and kAtLeastN. Contains 0
   // otherwise.
-  vector_size_t length;
+  size_t length;
   // Contains the unescaped fixed pattern in patterns of kind kFixed, kPrefix,
   // kSuffix and kSubstring.
-  std::string unescapedPattern = "";
+  std::string fixedPattern = "";
 };
 inline const int kMaxCompiledRegexes = 20;
 
@@ -120,65 +120,6 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures();
 PatternMetadata determinePatternKind(
     StringView pattern,
     std::optional<char> escapeChar);
-
-/// Return the unescaped string for the specified string range, if escape char
-/// is not specified just return the corresponding substring.
-std::string unescape(
-    StringView pattern,
-    vector_size_t start,
-    vector_size_t end,
-    std::optional<char> escapeChar);
-std::string unescape(StringView pattern, std::optional<char> escapeChar);
-
-/// An Iterator that provides methods(hasNext, next) to iterate through a
-/// pattern string.
-class PatternStringIterator {
- public:
-  struct State {
-    // Is current char the escape char?
-    // NOTE: If escape char is set as '\',  for pattern '\\', the first '\' is
-    // an escaping char, the second is not, it is just a literal '\'
-    bool isEscaping = false;
-    // Is current char the wildcard char?
-    // NOTE: If escape char is set as '\', for pattern '\%%', the first '%' is
-    // not a wildcard, just a literal '%', the second '%' is a wildcard.
-    bool isWildcard = false;
-  };
-
-  explicit PatternStringIterator(
-      StringView pattern,
-      std::optional<char> escapeChar)
-      : pattern_(pattern), escapeChar_(escapeChar) {}
-
-  bool hasNext();
-  void next();
-
-  char currentIndex() {
-    return currentIndex_;
-  }
-
-  char current() {
-    return pattern_.data()[currentIndex_];
-  }
-
-  State state() {
-    return state_;
-  }
-
-  State previousState() {
-    return previousState_;
-  }
-
- private:
-  StringView pattern_;
-  std::optional<char> escapeChar_;
-
-  int32_t currentIndex_ = -1;
-  // State of current char.
-  State state_;
-  // State of previous char.
-  State previousState_;
-};
 
 std::shared_ptr<exec::VectorFunction> makeLike(
     const std::string& name,

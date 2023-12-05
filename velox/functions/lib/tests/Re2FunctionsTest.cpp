@@ -460,16 +460,6 @@ TEST_F(Re2FunctionsTest, likePattern) {
   testLike("abc", "MEDIUM POLISHED%", false);
 }
 
-TEST_F(Re2FunctionsTest, unescape) {
-  EXPECT_EQ("%", unescape(R"(\%)", std::make_optional('\\')));
-  EXPECT_EQ("%%%", unescape(R"(\%\%\%)", std::make_optional('\\')));
-  EXPECT_EQ("a%b%c%d", unescape(R"(a\%b\%c\%d)", std::make_optional('\\')));
-  EXPECT_EQ("a_b_c", unescape(R"(a\_b\_c)", std::make_optional('\\')));
-  EXPECT_EQ("a_b_c", unescape(R"(%%a\_b\_c)", 2, 9, std::make_optional('\\')));
-
-  EXPECT_EQ("%%%", unescape(R"(%%%%%%)", std::make_optional('%')));
-}
-
 TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
   auto testPattern =
       [&](StringView pattern, PatternKind patternKind, vector_size_t length) {
@@ -486,7 +476,7 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
         determinePatternKind(pattern, std::nullopt);
     EXPECT_EQ(patternMetadata.patternKind, patternKind);
     EXPECT_EQ(patternMetadata.length, fixedPattern.size());
-    EXPECT_EQ(patternMetadata.unescapedPattern, fixedPattern);
+    EXPECT_EQ(patternMetadata.fixedPattern, fixedPattern);
   };
 
   testPattern("_", PatternKind::kExactlyN, 1);
@@ -542,7 +532,7 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKindWithEscapeChar) {
     PatternMetadata patternMetadata = determinePatternKind(pattern, '\\');
     EXPECT_EQ(patternMetadata.patternKind, patternKind);
     EXPECT_EQ(patternMetadata.length, fixedPattern.size());
-    EXPECT_EQ(patternMetadata.unescapedPattern, fixedPattern);
+    EXPECT_EQ(patternMetadata.fixedPattern, fixedPattern);
   };
 
   testPattern(R"(\_)", PatternKind::kFixed, "_");
@@ -1238,57 +1228,6 @@ TEST_F(Re2FunctionsTest, invalidEscapeChar) {
     auto result = evaluate("try(like(c0 , 'AA', 'AA'))", rowVector);
     assertEqualVectors(makeNullConstant(TypeKind::BOOLEAN, 3), result);
   }
-}
-
-TEST_F(Re2FunctionsTest, patternStringIteratorHasNext) {
-  std::string pattern = "_";
-  PatternStringIterator iterator{StringView{pattern}, '#'};
-
-  EXPECT_EQ(true, iterator.hasNext());
-
-  iterator.next();
-  EXPECT_EQ(false, iterator.hasNext());
-}
-
-TEST_F(Re2FunctionsTest, patternStringIteratorIsEscaping) {
-  std::string pattern = "####";
-  PatternStringIterator iterator{StringView{pattern}, '#'};
-
-  iterator.next();
-  EXPECT_EQ(true, iterator.state().isEscaping);
-
-  iterator.next();
-  EXPECT_EQ(true, iterator.previousState().isEscaping);
-  EXPECT_EQ(false, iterator.state().isEscaping);
-
-  iterator.next();
-  EXPECT_EQ(false, iterator.previousState().isEscaping);
-  EXPECT_EQ(true, iterator.state().isEscaping);
-
-  iterator.next();
-  EXPECT_EQ(true, iterator.previousState().isEscaping);
-  EXPECT_EQ(false, iterator.state().isEscaping);
-}
-
-TEST_F(Re2FunctionsTest, patternStringIteratorIsWildcard) {
-  std::string pattern = "%%%%";
-  PatternStringIterator iterator{StringView{pattern}, '%'};
-
-  iterator.next();
-  EXPECT_EQ(true, iterator.state().isEscaping);
-  EXPECT_EQ(false, iterator.state().isWildcard);
-
-  iterator.next();
-  EXPECT_EQ(false, iterator.state().isEscaping);
-  EXPECT_EQ(false, iterator.state().isWildcard);
-
-  iterator.next();
-  EXPECT_EQ(true, iterator.state().isEscaping);
-  EXPECT_EQ(false, iterator.state().isWildcard);
-
-  iterator.next();
-  EXPECT_EQ(false, iterator.state().isEscaping);
-  EXPECT_EQ(false, iterator.state().isWildcard);
 }
 
 } // namespace

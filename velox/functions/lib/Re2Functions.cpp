@@ -418,9 +418,9 @@ bool matchSuffixPattern(
 
 bool matchSubstringPattern(
     const StringView& input,
-    const std::string& unescapedPattern) {
+    const std::string& fixedPattern) {
   return (
-      std::string_view(input).find(std::string_view(unescapedPattern)) !=
+      std::string_view(input).find(std::string_view(fixedPattern)) !=
       std::string::npos);
 }
 
@@ -595,7 +595,7 @@ class LikeGeneric final : public VectorFunction {
       PatternMetadata patternMetadata =
           determinePatternKind(pattern, escapeChar);
       vector_size_t reducedLength = patternMetadata.length;
-      auto unescapedPattern = patternMetadata.unescapedPattern;
+      auto fixedPattern = patternMetadata.fixedPattern;
 
       switch (patternMetadata.patternKind) {
         case PatternKind::kExactlyN:
@@ -606,16 +606,16 @@ class LikeGeneric final : public VectorFunction {
               input, pattern, reducedLength);
         case PatternKind::kFixed:
           return OptimizedLike<PatternKind::kFixed>::match(
-              input, unescapedPattern, reducedLength);
+              input, fixedPattern, reducedLength);
         case PatternKind::kPrefix:
           return OptimizedLike<PatternKind::kPrefix>::match(
-              input, unescapedPattern, reducedLength);
+              input, fixedPattern, reducedLength);
         case PatternKind::kSuffix:
           return OptimizedLike<PatternKind::kSuffix>::match(
-              input, unescapedPattern, reducedLength);
+              input, fixedPattern, reducedLength);
         case PatternKind::kSubstring:
           return OptimizedLike<PatternKind::kSubstring>::match(
-              input, unescapedPattern, reducedLength);
+              input, fixedPattern, reducedLength);
         default:
           return applyWithRegex(input, pattern, escapeChar);
       }
@@ -978,65 +978,144 @@ std::string unescape(
     return std::string(pattern.data(), start, end - start);
   }
 
-  std::ostringstream str;
-  bool isPreviousEscapeChar = false;
-  for (auto index = start; index < end; index++) {
-    auto current = pattern.data()[index];
-    if (isPreviousEscapeChar) {
+  std::ostringstream os;
+  // Append the specified range to the stream.
+  auto appendNormalCharsFn = [&](const char* start, const char* end) {
+    for (auto it = start; it < end; it++) {
+      os << *it;
+    }
+  };
+
+  auto cursor = pattern.begin() + start;
+  auto endCursor = pattern.begin() + end;
+  while (cursor < endCursor) {
+    auto previous = cursor;
+
+    // Find the next escape char.
+    cursor = std::find(cursor, endCursor, escapeChar.value());
+    if (cursor < endCursor) {
+      // There are non-escape chars, append them.
+      if (previous < cursor) {
+        appendNormalCharsFn(previous, cursor);
+      }
+
+      // Make sure there is a following normal char.
+      VELOX_USER_CHECK(
+          cursor + 1 < endCursor,
+          "Escape character must be followed by '%', '_' or the escape character itself");
+
+      // Make sure the escaped char is valid.
+      cursor++;
+      auto current = *cursor;
       VELOX_USER_CHECK(
           current == escapeChar || current == '_' || current == '%',
-          "Escape character must be followed by '%', '_' or the escape character itself")
-      str << current;
-      isPreviousEscapeChar = false;
+          "Escape character must be followed by '%', '_' or the escape character itself");
+
+      // Append the escaped char.
+      os << current;
     } else {
-      if (current == escapeChar) {
-        isPreviousEscapeChar = true;
-        continue;
-      } else {
-        str << current;
-      }
+      // Escape char not found, append all the non-escape chars.
+      appendNormalCharsFn(previous, cursor);
+    }
+
+    // Advance the cursor.
+    cursor++;
+  }
+
+  return os.str();
+}
+
+/// An iterator that provides methods(hasNext, next) to iterate through a
+/// pattern string. We call hasNext to see if there are more chars, call next
+/// to advance the cursor to next char.
+class PatternStringIterator {
+ public:
+  /// Represents the state of current cursor/char.
+  enum class CharKind {
+    // Escape char.
+    // NOTE: If escape char is set as '\',  for pattern '\\', the first '\' is
+    // an escaping char, the second is not, it is just a literal '\'
+    kEscape,
+    // Wildcard char.
+    // NOTE: If escape char is set as '\', for pattern '\%%', the first '%' is
+    // not a wildcard, just a literal '%', the second '%' is a wildcard.
+    kWildcard,
+    // Chars that are not escape char & not wildcard char.
+    kNormal
+  };
+
+  PatternStringIterator(StringView pattern, std::optional<char> escapeChar)
+      : pattern_(pattern), escapeChar_(escapeChar) {}
+
+  /// Are there more chars to iterate?
+  bool hasNext() const {
+    return currentIndex_ < (int32_t)(pattern_.size() - 1);
+  }
+
+  /// Advance the cursor to next char.
+  void next() {
+    currentIndex_++;
+    previousCharKind_ = charKind_;
+
+    auto currentChar = pattern_.data()[currentIndex_];
+    if (previousCharKind_ != CharKind::kEscape && currentChar == escapeChar_) {
+      charKind_ = CharKind::kEscape;
+    } else if (
+        previousCharKind_ != CharKind::kEscape && currentChar != escapeChar_ &&
+        (currentChar == '_' || currentChar == '%')) {
+      charKind_ = CharKind::kWildcard;
+    } else {
+      charKind_ = CharKind::kNormal;
     }
   }
 
-  return str.str();
-}
+  /// Current index of the cursor.
+  char currentIndex() const {
+    return currentIndex_;
+  }
 
-std::string unescape(StringView pattern, std::optional<char> escapeChar) {
-  return unescape(pattern, 0, pattern.size(), escapeChar);
-}
+  /// Char at current cursor.
+  char current() const {
+    return pattern_.data()[currentIndex_];
+  }
 
-bool PatternStringIterator::hasNext() {
-  return currentIndex_ < (int32_t)(pattern_.size() - 1);
-}
+  CharKind state() const {
+    return charKind_;
+  }
 
-void PatternStringIterator::next() {
-  currentIndex_++;
-  previousState_ = state_;
+  CharKind previousState() const {
+    return previousCharKind_;
+  }
 
-  auto currentChar = pattern_.data()[currentIndex_];
-  state_.isEscaping = !previousState_.isEscaping && currentChar == escapeChar_;
-  state_.isWildcard = !previousState_.isEscaping &&
-      (currentChar == '_' || currentChar == '%') && currentChar != escapeChar_;
-}
+ private:
+  const StringView pattern_;
+  const std::optional<char> escapeChar_;
+
+  int32_t currentIndex_ = -1;
+  // State of current char.
+  CharKind charKind_ = CharKind::kNormal;
+  // State of previous char.
+  CharKind previousCharKind_ = CharKind::kNormal;
+};
 
 PatternMetadata determinePatternKind(
     StringView pattern,
     std::optional<char> escapeChar) {
-  vector_size_t patternLength = pattern.size();
+  int32_t patternLength = pattern.size();
 
   // Index of the first % or _ character(not escaped).
-  vector_size_t wildcardStart = -1;
-  // Count of wildcard character sequences in pattern.
-  vector_size_t numWildcardSequences = 0;
+  int32_t wildcardStart = -1;
   // Index of the first character that is not % and not _.
-  vector_size_t fixedPatternStart = -1;
+  int32_t fixedPatternStart = -1;
   // Index of the last character in the fixed pattern, used to retrieve the
   // fixed string for patterns of type kSubstring.
-  vector_size_t fixedPatternEnd = -1;
+  int32_t fixedPatternEnd = -1;
+  // Count of wildcard character sequences in pattern.
+  size_t numWildcardSequences = 0;
   // Total number of % characters.
-  vector_size_t anyCharacterWildcardCount = 0;
+  size_t anyCharacterWildcardCount = 0;
   // Total number of _ characters.
-  vector_size_t singleCharacterWildcardCount = 0;
+  size_t singleCharacterWildcardCount = 0;
 
   PatternStringIterator iterator{pattern, escapeChar};
   bool fallbackToGeneric = false;
@@ -1049,7 +1128,8 @@ PatternMetadata determinePatternKind(
       fixedPatternStart = iterator.currentIndex();
     } else {
       // This is not the first fixed pattern, not supported, so fallback.
-      if (iterator.previousState().isWildcard) {
+      if (iterator.previousState() ==
+          PatternStringIterator::CharKind::kWildcard) {
         fallbackToGeneric = true;
         return false;
       }
@@ -1058,11 +1138,13 @@ PatternMetadata determinePatternKind(
     return true;
   };
 
+  // Iterator through the pattern string to collect the stats for the simple
+  // patterns that we can optimize: e.g. the
   while (iterator.hasNext()) {
     iterator.next();
     auto current = iterator.current();
 
-    if (iterator.previousState().isEscaping) {
+    if (iterator.previousState() == PatternStringIterator::CharKind::kEscape) {
       // The char follows escapeChar can only be one of (%, _, escapeChar).
       if (current != '%' && current != '_' && current != escapeChar) {
         fallbackToGeneric = true;
@@ -1073,19 +1155,23 @@ PatternMetadata determinePatternKind(
         break;
       }
     } else {
-      // Escaping char, continue.
-      if (iterator.state().isEscaping) {
+      // Escape char, continue.
+      if (iterator.state() == PatternStringIterator::CharKind::kEscape) {
         continue;
       }
 
-      if (iterator.state().isWildcard) {
+      if (iterator.state() == PatternStringIterator::CharKind::kWildcard) {
         if (wildcardStart == -1) {
           wildcardStart = iterator.currentIndex();
         }
 
         singleCharacterWildcardCount += (iterator.current() == '_');
         anyCharacterWildcardCount += (iterator.current() == '%');
-        numWildcardSequences += (!iterator.previousState().isWildcard ? 1 : 0);
+        numWildcardSequences +=
+            (iterator.previousState() !=
+                     PatternStringIterator::CharKind::kWildcard
+                 ? 1
+                 : 0);
 
         // Mark the end of the fixed pattern.
         if (fixedPatternStart != -1 && fixedPatternEnd == -1) {
@@ -1122,11 +1208,9 @@ PatternMetadata determinePatternKind(
   // At this point pattern contains exactly one fixed pattern.
   // Pattern contains no wildcard characters (is a fixed pattern).
   if (wildcardStart == -1) {
-    auto unescapedPattern = unescape(pattern, 0, patternLength, escapeChar);
+    auto fixedPattern = unescape(pattern, 0, patternLength, escapeChar);
     return PatternMetadata{
-        PatternKind::kFixed,
-        (vector_size_t)unescapedPattern.size(),
-        unescapedPattern};
+        PatternKind::kFixed, fixedPattern.size(), fixedPattern};
   }
 
   // Pattern is generic if it has '_' wildcard characters and a fixed pattern.
@@ -1136,28 +1220,22 @@ PatternMetadata determinePatternKind(
   // Classify pattern as prefix, fixed center, or suffix pattern based on the
   // position and count of the wildcard character sequence and fixed pattern.
   if (fixedPatternStart < wildcardStart) {
-    auto unescapedPattern = unescape(pattern, 0, wildcardStart, escapeChar);
+    auto fixedPattern = unescape(pattern, 0, wildcardStart, escapeChar);
     return PatternMetadata{
-        PatternKind::kPrefix,
-        (vector_size_t)unescapedPattern.size(),
-        unescapedPattern};
+        PatternKind::kPrefix, fixedPattern.size(), fixedPattern};
   }
   // if numWildcardSequences > 1, then fixed pattern must be in between them.
   if (numWildcardSequences == 2) {
-    auto unescapedPattern =
+    auto fixedPattern =
         unescape(pattern, fixedPatternStart, fixedPatternEnd + 1, escapeChar);
     return PatternMetadata{
-        PatternKind::kSubstring,
-        (vector_size_t)unescapedPattern.size(),
-        unescapedPattern};
+        PatternKind::kSubstring, fixedPattern.size(), fixedPattern};
   }
-  auto unescapedPattern =
+  auto fixedPattern =
       unescape(pattern, fixedPatternStart, patternLength, escapeChar);
 
   return PatternMetadata{
-      PatternKind::kSuffix,
-      (vector_size_t)unescapedPattern.size(),
-      unescapedPattern};
+      PatternKind::kSuffix, fixedPattern.size(), fixedPattern};
 }
 
 std::shared_ptr<exec::VectorFunction> makeLike(
@@ -1203,7 +1281,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
   PatternMetadata patternMetadata = determinePatternKind(pattern, escapeChar);
   PatternKind patternKind = patternMetadata.patternKind;
   vector_size_t reducedLength = patternMetadata.length;
-  auto unescapedPattern = patternMetadata.unescapedPattern;
+  auto fixedPattern = patternMetadata.fixedPattern;
 
   switch (patternKind) {
     case PatternKind::kExactlyN:
@@ -1214,16 +1292,16 @@ std::shared_ptr<exec::VectorFunction> makeLike(
           pattern, reducedLength);
     case PatternKind::kFixed:
       return std::make_shared<OptimizedLike<PatternKind::kFixed>>(
-          unescapedPattern, reducedLength);
+          fixedPattern, reducedLength);
     case PatternKind::kPrefix:
       return std::make_shared<OptimizedLike<PatternKind::kPrefix>>(
-          unescapedPattern, reducedLength);
+          fixedPattern, reducedLength);
     case PatternKind::kSuffix:
       return std::make_shared<OptimizedLike<PatternKind::kSuffix>>(
-          unescapedPattern, reducedLength);
+          fixedPattern, reducedLength);
     case PatternKind::kSubstring:
       return std::make_shared<OptimizedLike<PatternKind::kSubstring>>(
-          unescapedPattern, reducedLength);
+          fixedPattern, reducedLength);
     default:
       return std::make_shared<LikeWithRe2>(pattern, escapeChar);
   }
