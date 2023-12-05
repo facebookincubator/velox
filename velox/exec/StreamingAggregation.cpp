@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/StreamingAggregation.h"
+#include "velox/exec/AggregateUtil.h"
 
 namespace facebook::velox::exec {
 
@@ -38,22 +39,6 @@ void populateAggregateInputs(
   }
 }
 
-void populateAggregateFunction(
-    const core::AggregationNode::Aggregate& aggregate,
-    const RowTypePtr& outputType,
-    core::AggregationNode::Step step,
-    AggregateInfo& info,
-    const std::unique_ptr<OperatorCtx>& operatorCtx,
-    uint32_t index) {
-  const auto& aggResultType = outputType->childAt(index);
-  info.function = Aggregate::create(
-      aggregate.call->name(),
-      isPartialOutput(step) ? core::AggregationNode::Step::kPartial
-                            : core::AggregationNode::Step::kSingle,
-      aggregate.rawInputTypes,
-      aggResultType,
-      operatorCtx->driverCtx()->queryConfig());
-}
 } // namespace
 
 StreamingAggregation::StreamingAggregation(
@@ -107,14 +92,8 @@ void StreamingAggregation::initialize() {
     }
 
     populateAggregateInputs(aggregate, inputType, info, pool());
-
-    if (const auto& mask = aggregate.mask) {
-      info.mask = inputType->asRow().getChildIdx(mask->name());
-    } else {
-      info.mask = std::nullopt;
-    }
-
-    populateAggregateFunction(
+    AggregateUtil::populateAggregateMask(aggregate, inputType, info);
+    AggregateUtil::populateAggregateFunction(
         aggregate,
         outputType_,
         aggregationNode_->step(),

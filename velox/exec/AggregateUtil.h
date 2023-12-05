@@ -13,7 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
+
+#include "velox/exec/AggregateInfo.h"
+#include "velox/exec/Operator.h"
 
 namespace facebook::velox::exec {
 
@@ -32,6 +36,30 @@ struct AggregateRegistrationResult {
         extractFunction == other.extractFunction &&
         mergeExtractFunction == other.mergeExtractFunction;
   }
+};
+
+class AggregateUtil {
+ public:
+  /// Setup aggregation mask: convert the Variable Reference name to the
+  /// channel (projection) index, if there is a mask.
+  static void populateAggregateMask(
+      const core::AggregationNode::Aggregate& aggregate,
+      const RowTypePtr& inputType,
+      AggregateInfo& info);
+
+  /// Sorting keys and orders.
+  static void populateAggregateKeysOrders(
+      const core::AggregationNode::Aggregate& aggregate,
+      const RowTypePtr& inputType,
+      AggregateInfo& info);
+
+  static void populateAggregateFunction(
+      const core::AggregationNode::Aggregate& aggregate,
+      const RowTypePtr& outputType,
+      core::AggregationNode::Step step,
+      AggregateInfo& info,
+      const std::unique_ptr<OperatorCtx>& operatorCtx,
+      uint32_t index);
 };
 
 } // namespace facebook::velox::exec

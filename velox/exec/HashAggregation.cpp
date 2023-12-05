@@ -15,9 +15,6 @@
  */
 #include "velox/exec/HashAggregation.h"
 #include <optional>
-#include "velox/exec/Aggregate.h"
-#include "velox/exec/OperatorUtils.h"
-#include "velox/exec/SortedAggregations.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
@@ -71,32 +68,6 @@ void populateAggregateInputs(
   }
 }
 
-void populateAggregateFunction(
-    const core::AggregationNode::Aggregate& aggregate,
-    const RowTypePtr& outputType,
-    core::AggregationNode::Step step,
-    AggregateInfo& info,
-    const std::unique_ptr<OperatorCtx>& operatorCtx,
-    uint32_t index,
-    std::shared_ptr<core::ExpressionEvaluator>& expressionEvaluator) {
-  const auto& resultType = outputType->childAt(index);
-  info.function = Aggregate::create(
-      aggregate.call->name(),
-      isPartialOutput(step) ? core::AggregationNode::Step::kPartial
-                            : core::AggregationNode::Step::kSingle,
-      aggregate.rawInputTypes,
-      resultType,
-      operatorCtx->driverCtx()->queryConfig());
-
-  auto lambdas = extractLambdaInputs(aggregate);
-  if (!lambdas.empty()) {
-    if (expressionEvaluator == nullptr) {
-      expressionEvaluator = std::make_shared<SimpleExpressionEvaluator>(
-          operatorCtx->execCtx()->queryCtx(), operatorCtx->execCtx()->pool());
-    }
-    info.function->setLambdaExpressions(lambdas, expressionEvaluator);
-  }
-}
 } // namespace
 
 HashAggregation::HashAggregation(
@@ -156,39 +127,32 @@ void HashAggregation::initialize() {
 
     AggregateInfo info;
     info.distinct = aggregate.distinct;
-    populateAggregateInputs(aggregate, inputType->asRow(), info, pool());
-
     info.intermediateType = Aggregate::intermediateType(
         aggregate.call->name(), aggregate.rawInputTypes);
 
-    // Setup aggregation mask: convert the Variable Reference name to the
-    // channel (projection) index, if there is a mask.
-    if (const auto& mask = aggregate.mask) {
-      info.mask = inputType->asRow().getChildIdx(mask->name());
-    } else {
-      info.mask = std::nullopt;
-    }
-
-    populateAggregateFunction(
+    populateAggregateInputs(aggregate, inputType->asRow(), info, pool());
+    AggregateUtil::populateAggregateMask(aggregate, inputType, info);
+    AggregateUtil::populateAggregateFunction(
         aggregate,
         outputType_,
         aggregationNode_->step(),
         info,
         operatorCtx_,
-        numHashers + i,
-        expressionEvaluator);
+        numHashers + i);
+
+    auto lambdas = extractLambdaInputs(aggregate);
+    if (!lambdas.empty()) {
+      if (expressionEvaluator == nullptr) {
+        expressionEvaluator = std::make_shared<SimpleExpressionEvaluator>(
+            operatorCtx_->execCtx()->queryCtx(),
+            operatorCtx_->execCtx()->pool());
+      }
+      info.function->setLambdaExpressions(lambdas, expressionEvaluator);
+    }
+
+    AggregateUtil::populateAggregateKeysOrders(aggregate, inputType, info);
 
     info.output = numHashers + i;
-
-    // Sorting keys and orders.
-    const auto numSortingKeys = aggregate.sortingKeys.size();
-    VELOX_CHECK_EQ(numSortingKeys, aggregate.sortingOrders.size());
-    info.sortingOrders = aggregate.sortingOrders;
-
-    info.sortingKeys.reserve(numSortingKeys);
-    for (const auto& key : aggregate.sortingKeys) {
-      info.sortingKeys.push_back(exprToChannel(key.get(), inputType));
-    }
 
     aggregateInfos.emplace_back(std::move(info));
   }
