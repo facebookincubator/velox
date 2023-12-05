@@ -13,11 +13,48 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/exec/StreamingAggregation.h"
-#include "velox/exec/Aggregate.h"
-#include "velox/exec/RowContainer.h"
 
 namespace facebook::velox::exec {
+
+namespace {
+void populateAggregateInputs(
+    const core::AggregationNode::Aggregate& aggregate,
+    const RowTypePtr& inputType,
+    AggregateInfo& info,
+    memory::MemoryPool* pool) {
+  auto& channels = info.inputs;
+  auto& constants = info.constantInputs;
+  for (auto& arg : aggregate.call->inputs()) {
+    channels.push_back(exprToChannel(arg.get(), inputType));
+    if (channels.back() == kConstantChannel) {
+      auto constant = static_cast<const core::ConstantTypedExpr*>(arg.get());
+      constants.push_back(BaseVector::createConstant(
+          constant->type(), constant->value(), 1, pool));
+    } else {
+      constants.push_back(nullptr);
+    }
+  }
+}
+
+void populateAggregateFunction(
+    const core::AggregationNode::Aggregate& aggregate,
+    const RowTypePtr& outputType,
+    core::AggregationNode::Step step,
+    AggregateInfo& info,
+    const std::unique_ptr<OperatorCtx>& operatorCtx,
+    uint32_t index) {
+  const auto& aggResultType = outputType->childAt(index);
+  info.function = Aggregate::create(
+      aggregate.call->name(),
+      isPartialOutput(step) ? core::AggregationNode::Step::kPartial
+                            : core::AggregationNode::Step::kSingle,
+      aggregate.rawInputTypes,
+      aggResultType,
+      operatorCtx->driverCtx()->queryConfig());
+}
+} // namespace
 
 StreamingAggregation::StreamingAggregation(
     int32_t operatorId,
@@ -69,18 +106,7 @@ void StreamingAggregation::initialize() {
           "Streaming aggregation doesn't support aggregations over distinct inputs yet");
     }
 
-    auto& channels = info.inputs;
-    auto& constants = info.constantInputs;
-    for (auto& arg : aggregate.call->inputs()) {
-      channels.push_back(exprToChannel(arg.get(), inputType));
-      if (channels.back() == kConstantChannel) {
-        auto constant = static_cast<const core::ConstantTypedExpr*>(arg.get());
-        constants.push_back(BaseVector::createConstant(
-            constant->type(), constant->value(), 1, operatorCtx_->pool()));
-      } else {
-        constants.push_back(nullptr);
-      }
-    }
+    populateAggregateInputs(aggregate, inputType, info, pool());
 
     if (const auto& mask = aggregate.mask) {
       info.mask = inputType->asRow().getChildIdx(mask->name());
@@ -88,15 +114,13 @@ void StreamingAggregation::initialize() {
       info.mask = std::nullopt;
     }
 
-    const auto& aggResultType = outputType_->childAt(numKeys + i);
-    info.function = Aggregate::create(
-        aggregate.call->name(),
-        isPartialOutput(aggregationNode_->step())
-            ? core::AggregationNode::Step::kPartial
-            : core::AggregationNode::Step::kSingle,
-        aggregate.rawInputTypes,
-        aggResultType,
-        operatorCtx_->driverCtx()->queryConfig());
+    populateAggregateFunction(
+        aggregate,
+        outputType_,
+        aggregationNode_->step(),
+        info,
+        operatorCtx_,
+        numKeys + i);
 
     info.intermediateType = Aggregate::intermediateType(
         aggregate.call->name(), aggregate.rawInputTypes);
