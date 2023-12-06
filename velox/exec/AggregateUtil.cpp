@@ -35,7 +35,7 @@ std::vector<core::LambdaTypedExprPtr> extractLambdaInputs(
 }
 } // namespace
 
-std::vector<AggregateInfo> AggregateUtil::toAggregateInfo(
+std::vector<AggregateInfo> toAggregateInfo(
     const core::AggregationNode& aggregationNode,
     const OperatorCtx& operatorCtx,
     uint32_t numKeys,

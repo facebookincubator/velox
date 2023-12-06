@@ -66,7 +66,7 @@ void HashAggregation::initialize() {
   }
 
   std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
-  std::vector<AggregateInfo> aggregateInfos = AggregateUtil::toAggregateInfo(
+  std::vector<AggregateInfo> aggregateInfos = toAggregateInfo(
       *aggregationNode_, *operatorCtx_, numHashers, expressionEvaluator);
 
   // Check that aggregate result type match the output type.

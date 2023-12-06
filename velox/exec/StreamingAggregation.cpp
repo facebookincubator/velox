@@ -58,7 +58,7 @@ void StreamingAggregation::initialize() {
   }
 
   std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
-  aggregates_ = AggregateUtil::toAggregateInfo(
+  aggregates_ = toAggregateInfo(
       *aggregationNode_, *operatorCtx_, numKeys, expressionEvaluator, true);
 
   // Setup masks and accumulators
