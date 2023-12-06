@@ -106,34 +106,34 @@ non-contiguous allocation, it frees all the blocks in that allocation.</p>
 <p>StlAllocator, an allocator backed by HashStringAllocator that can be used with
 STL containers, is implemented using the above allocate() and free() methods.</p>
 <p>NewWrite(), extendWrite() and finishWrite() methods allow for serializing
-variable width data whose size is not known in advance using ByteStream. When
-using ByteStream, the underlying data may come from multiple non-contiguous
-blocks. ByteStream transparently manages allocation of additional blocks by
+variable width data whose size is not known in advance using ByteOutputStream. When
+using ByteOutputStream, the underlying data may come from multiple non-contiguous
+blocks. ByteOutputStream transparently manages allocation of additional blocks by
 calling HashStringAllocator::newRange() method.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets stream to write to this pool. The write can span multiple</span>
 <span class="c1">// non-contiguous runs. Each contiguous run will have at least</span>
 <span class="c1">// kMinContiguous bytes of contiguous space. finishWrite finalizes</span>
 <span class="c1">// the allocation information after the write is done.</span>
 <span class="c1">// Returns the position at the start of the allocated block.</span>
-<span class="n">Position</span><span class="w"> </span><span class="nf">newWrite</span><span class="p">(</span><span class="n">ByteStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">preferredSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMinContiguous</span><span class="p">);</span><span class="w"></span>
+<span class="n">Position</span><span class="w"> </span><span class="nf">newWrite</span><span class="p">(</span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">preferredSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMinContiguous</span><span class="p">);</span><span class="w"></span>
 
 <span class="c1">// Completes a write prepared with newWrite or</span>
 <span class="c1">// extendWrite. Up to &#39;numReserveBytes&#39; unused bytes, if available, are left</span>
 <span class="c1">// after the end of the write to accommodate another write. Returns the</span>
 <span class="c1">// position immediately after the last written byte.</span>
-<span class="n">Position</span><span class="w"> </span><span class="nf">finishWrite</span><span class="p">(</span><span class="n">ByteStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numReserveBytes</span><span class="p">);</span><span class="w"></span>
+<span class="n">Position</span><span class="w"> </span><span class="nf">finishWrite</span><span class="p">(</span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numReserveBytes</span><span class="p">);</span><span class="w"></span>
 
 <span class="c1">// Sets &#39;stream&#39; to write starting at &#39;position&#39;. If new ranges have to</span>
 <span class="c1">// be allocated when writing, headers will be updated accordingly.</span>
-<span class="kt">void</span><span class="w"> </span><span class="nf">extendWrite</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">position</span><span class="p">,</span><span class="w"> </span><span class="n">ByteStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">extendWrite</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">position</span><span class="p">,</span><span class="w"> </span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
 </pre></div>
 </div>
-<p>The prepareRead() method allows deserializing the data using ByteStream.</p>
+<p>The prepareRead() method allows deserializing the data using ByteInputStream.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets &#39;stream&#39; to range over the data in the range of &#39;header&#39; and</span>
 <span class="c1">// possible continuation ranges.</span>
 <span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">prepareRead</span><span class="p">(</span><span class="w"></span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">header</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">ByteStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="w">    </span><span class="n">ByteInputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
@@ -150,20 +150,20 @@ re-writing the value, the accumulator calls extendWrite() and provides the
 position to the start of the block. This way the data is re-written in-place.
 The accumulator calls finishWrite() after writing the value.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Write first value</span>
-<span class="n">ByteStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
 <span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">newWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
 <span class="c1">// ... write to the stream</span>
 <span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
 
 <span class="c1">// Update the value</span>
-<span class="n">ByteStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
 <span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">extendWrite</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
 <span class="c1">// ... write to the stream</span>
 <span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
 </pre></div>
 </div>
-<p>The accumulator uses prepareRead() to read the data back using ByteStream.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">ByteStream</span><span class="w"> </span><span class="n">stream</span><span class="p">;</span><span class="w"></span>
+<p>The accumulator uses prepareRead() to read the data back using ByteInputStream.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">ByteInputStream</span><span class="w"> </span><span class="n">stream</span><span class="p">;</span><span class="w"></span>
 <span class="n">exec</span><span class="o">::</span><span class="n">HashStringAllocator</span><span class="o">::</span><span class="n">prepareRead</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
 <span class="c1">// … read from the stream</span>
 </pre></div>
@@ -180,13 +180,13 @@ position after the last write returned from the finishWrite() call. To append
 data, the accumulator calls entendWrite() with the position after the last
 write.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Write first value</span>
-<span class="n">ByteStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
 <span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">newWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
 <span class="c1">// ... write to the stream</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">current</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
 
 <span class="c1">// Update the value</span>
-<span class="n">ByteStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
 <span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">extendWrite</span><span class="p">(</span><span class="n">current</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
 <span class="c1">// ... write to the stream</span>
 <span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
