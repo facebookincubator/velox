@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
+#include "velox/dwio/parquet/writer/Writer.h"
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
-#include "velox/vector/arrow/Bridge.h"
-
-#include "velox/dwio/parquet/writer/Writer.h"
+#include <iostream>
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
+#include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::parquet {
 
@@ -140,14 +140,14 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   return properties->build();
 }
 
-void validateSchemaRecursive(const RowTypePtr schema) {
+void validateSchemaRecursive(const RowTypePtr& schema) {
   // Check the schema's field names is not empty and unique.
-  VELOX_USER_CHECK_NOT_NULL(schema, "File schema must not be empty.");
+  VELOX_USER_CHECK_NOT_NULL(schema, "Field schema must not be empty.");
   const auto& fieldNames = schema->names();
 
   folly::F14FastSet<std::string> uniqueNames;
   for (const auto& name : fieldNames) {
-    VELOX_USER_CHECK(!name.empty(), "File name must not be empty.")
+    VELOX_USER_CHECK(!name.empty(), "Field name must not be empty.")
     auto result = uniqueNames.insert(name);
     VELOX_USER_CHECK(
         result.second,
@@ -158,7 +158,6 @@ void validateSchemaRecursive(const RowTypePtr schema) {
   for (auto i = 0; i < schema->size(); ++i) {
     if (auto childSchema =
             std::dynamic_pointer_cast<const RowType>(schema->childAt(i))) {
-      // Perform validation recursively for child RowTypePtr
       validateSchemaRecursive(childSchema);
     }
   }
@@ -260,17 +259,24 @@ void Writer::write(const VectorPtr& dataToWrite) {
   VELOX_USER_CHECK(
       dataToWrite->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
-  auto rowVector =
-      std::dynamic_pointer_cast<facebook::velox::RowVector>(dataToWrite);
-  VELOX_CHECK_NULL(rowVector->nulls());
-  rowVector->setType(schema_);
+  auto data = std::dynamic_pointer_cast<RowVector>(dataToWrite);
+  VELOX_CHECK_NULL(data->nulls());
 
-  auto data = std::make_shared<facebook::velox::RowVector>(
-      rowVector->pool(),
-      schema_,
-      nullptr,
-      rowVector->size(),
-      rowVector->children());
+  // VELOX_CHECK_EQ(
+  //     schema_.use_count(),
+  //     1,
+  //     "The schema_ should be singly-referenced before calling the
+  //     BaseVector::setType() method");
+  // auto children = schema_->children();
+  // for (int i = 0; i < children.size(); i++) {
+  //   VELOX_CHECK_EQ(
+  //       children[i].use_count(),
+  //       1,
+  //       "The children vectors type of schema_ should be singly-referenced
+  //       before calling the BaseVector::setType() method");
+  // }
+
+  data->setType(schema_);
 
   ArrowOptions options{.flattenDictionary = true, .flattenConstant = true};
   ArrowArray array;
