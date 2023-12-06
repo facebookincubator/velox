@@ -1876,12 +1876,12 @@ template <typename T>
 struct Constant {};
 
 template <typename T>
-struct UnwrapConstant {
+struct UnwrapConstantType {
   using type = T;
 };
 
 template <typename T>
-struct UnwrapConstant<Constant<T>> {
+struct UnwrapConstantType<Constant<T>> {
   using type = T;
 };
 

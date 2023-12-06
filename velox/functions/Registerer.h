@@ -42,7 +42,7 @@ void registerFunction(const std::vector<std::string>& aliases = {}) {
       exec::VectorExec,
       TReturn,
       ConstantChecker<TArgs...>,
-      typename UnwrapConstant<TArgs>::type...>;
+      typename UnwrapConstantType<TArgs>::type...>;
   exec::registerSimpleFunction<holderClass>(aliases);
 }
 
@@ -58,7 +58,7 @@ void registerFunction(const std::vector<std::string>& aliases = {}) {
       exec::VectorExec,
       TReturn,
       ConstantChecker<TArgs...>,
-      typename UnwrapConstant<TArgs>::type...>;
+      typename UnwrapConstantType<TArgs>::type...>;
   exec::registerSimpleFunction<holderClass>(aliases);
 }
 

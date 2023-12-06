@@ -77,13 +77,13 @@ class SimpleFunctionTest : public functions::test::FunctionBaseTest {
         exec::VectorExec,
         int32_t,
         ConstantChecker<TArgs...>,
-        typename UnwrapConstant<TArgs>::type...>;
+        typename UnwrapConstantType<TArgs>::type...>;
     using holderClassBool = core::UDFHolder<
         CallNullFreeFuncBoolOut<exec::VectorExec>,
         exec::VectorExec,
         int32_t,
         ConstantChecker<TArgs...>,
-        typename UnwrapConstant<TArgs>::type...>;
+        typename UnwrapConstantType<TArgs>::type...>;
     if (voidOutput) {
       ASSERT_EQ(
           expected,
