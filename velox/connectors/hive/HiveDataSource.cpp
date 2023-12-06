@@ -729,7 +729,7 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         partitionKeys,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
-    metadataColumns,
+        metadataColumns,
     memory::MemoryPool* pool) {
   auto spec = std::make_shared<common::ScanSpec>("root");
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
@@ -788,7 +788,8 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     // $bucket column. This filter is redundant and needs to be removed.
     // TODO Remove this check when Presto is fixed to not specify a filter
     // on $path and $bucket column.
-    if (auto name = pair.first.toString(); name == kPath || name == kBucket || metadataColumns.count(name) != 0) {
+    if (auto name = pair.first.toString();
+        name == kPath || name == kBucket || metadataColumns.count(name) != 0) {
       continue;
     }
     auto fieldSpec = spec->getOrCreateChild(pair.first);

@@ -209,7 +209,7 @@ std::vector<TypePtr> SplitReader::adaptColumns(
     if (partitionKey != hiveSplit_->partitionKeys.end()) {
       setPartitionValue(childSpec, fieldName, partitionKey->second);
     } else if (metadataColumn != hiveSplit_->metadataColumns.end()) {
-            auto metadataColumnOutputType =
+      auto metadataColumnOutputType =
           readerOutputType_->childAt(readerOutputType_->getChildIdx(fieldName));
       auto constValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           convertFromString,
