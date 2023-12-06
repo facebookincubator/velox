@@ -137,3 +137,8 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: year(x) -> integer
 
     Returns the year from ``x``.
+
+.. spark:function:: to_date(date) -> date
+
+    Returns the date part of a timestamp or string. ::
+        SELECT to_date('2009-07-30 04:17:52'); -- 2009-07-30

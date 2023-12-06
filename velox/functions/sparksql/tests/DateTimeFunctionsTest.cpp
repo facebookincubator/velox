@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/external/date/tz.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -36,6 +37,30 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
 
   int32_t parseDate(const std::string& dateStr) {
     return DATE()->toDays(dateStr);
+  }
+
+  int32_t timestampToDate(
+      const Timestamp& input,
+      const std::string& timeZoneName) {
+    auto convertToDate = [](const Timestamp& t) -> int32_t {
+      static const int32_t kSecsPerDay{86'400};
+      auto seconds = t.getSeconds();
+      if (seconds >= 0 || seconds % kSecsPerDay == 0) {
+        return seconds / kSecsPerDay;
+      }
+      // For division with negatives, minus 1 to compensate the discarded
+      // fractional part. e.g. -1/86'400 yields 0, yet it should be considered
+      // as -1 day.
+      return seconds / kSecsPerDay - 1;
+    };
+    auto* timeZone = date::locate_zone(timeZoneName);
+    if (timeZone != nullptr) {
+      Timestamp t = input;
+      t.toTimezone(*timeZone);
+      return convertToDate(t);
+    }
+
+    return convertToDate(input);
   }
 };
 
@@ -454,6 +479,111 @@ TEST_F(DateTimeFunctionsTest, quarterDate) {
   EXPECT_EQ(4, quarter("2013-11-08"));
   EXPECT_EQ(1, quarter("1987-01-08"));
   EXPECT_EQ(3, quarter("1954-08-08"));
+}
+
+TEST_F(DateTimeFunctionsTest, toDateVarchar) {
+  const auto toDateFunc = [&](std::optional<int32_t> date) {
+    return evaluateOnce<int32_t, int32_t>("to_date(c0)", {date}, {DATE()});
+  };
+
+  const auto toDate = [&](const StringView& dateStr) {
+    return toDateFunc(util::castFromDateString(dateStr, false));
+  };
+
+  auto errorMessage = fmt::format(
+      "Unable to parse date value: \"{}\"."
+      "Valid date string patterns include "
+      "(yyyy*, yyyy*-[m]m, yyyy*-[m]m-[d]d, "
+      "yyyy*-[m]m-[d]d *, yyyy*-[m]m-[d]dT*), "
+      "and any pattern prefixed with [+-]",
+      "2023/01/02");
+
+  // Check simple tests.
+  EXPECT_EQ(parseDate("2009-07-30"), toDate("2009-07-30 04:17:52"));
+  EXPECT_EQ(parseDate("2019-02-28"), toDate("2019-02-28 00:00:00"));
+
+  // Check different date formats.
+  EXPECT_EQ(parseDate("2019-01-01"), toDate("2019"));
+  EXPECT_EQ(parseDate("2019-01-01"), toDate("2019-01"));
+  EXPECT_EQ(parseDate("2019-01-02"), toDate("2019-1-02"));
+  EXPECT_EQ(parseDate("2019-01-03"), toDate("2019-01-3"));
+  EXPECT_EQ(parseDate("2019-01-04"), toDate("2019-1-4"));
+
+  // Check date formats with blank.
+  EXPECT_EQ(parseDate("2019-01-05"), toDate("2019-01-05 "));
+  EXPECT_EQ(parseDate("2019-01-06"), toDate(" 2019-01-06"));
+  EXPECT_EQ(parseDate("2019-01-07"), toDate(" 2019-01-07 "));
+
+  // Check invalid format
+  VELOX_ASSERT_THROW(toDate("2023/01/02"), errorMessage);
+}
+
+TEST_F(DateTimeFunctionsTest, toDateTimestampWithTimezone) {
+  static const int64_t kSecondsInDay = 86'400;
+
+  const auto toDateFunc = [&](std::optional<int32_t> date) {
+    return evaluateOnce<int32_t, int32_t>("to_date(c0)", {date}, {DATE()});
+  };
+
+  const auto toDate = [&](const Timestamp& timestamp,
+                          const std::string& timeZoneName) {
+    return toDateFunc(timestampToDate(timestamp, timeZoneName));
+  };
+
+  // 1970-01-01 00:00:00.000 +00:00
+  EXPECT_EQ(0, toDate(Timestamp(), "Europe/London"));
+  // 1970-01-01 00:00:00.000 -08:00
+  EXPECT_EQ(-1, toDate(Timestamp(), "America/Los_Angeles"));
+  // 1970-01-01 00:00:00.000 +08:00
+  EXPECT_EQ(0, toDate(Timestamp(), "Asia/Chongqing"));
+  // 1970-01-01 18:00:00.000 +08:00
+  EXPECT_EQ(1, toDate(Timestamp(18 * 3'600, 0), "Asia/Chongqing"));
+  // 1970-01-01 06:00:00.000 -08:00
+  EXPECT_EQ(-1, toDate(Timestamp(6 * 3'600, 0), "America/Los_Angeles"));
+  // 2020-02-05 10:00:00.000 +08:00
+  EXPECT_EQ(
+      18297,
+      toDate(
+          Timestamp(18297 * kSecondsInDay + 10 * 3'600, 0), "Asia/Chongqing"));
+  // 2020-02-05 20:00:00.000 +08:00
+  EXPECT_EQ(
+      18298,
+      toDate(
+          Timestamp(18297 * kSecondsInDay + 20 * 3'600, 0), "Asia/Chongqing"));
+  // 2020-02-05 16:00:00.000 -08:00
+  EXPECT_EQ(
+      18297,
+      toDate(
+          Timestamp(18297 * kSecondsInDay + 16 * 3'600, 0),
+          "America/Los_Angeles"));
+  // 2020-02-05 06:00:00.000 -08:00
+  EXPECT_EQ(
+      18296,
+      toDate(
+          Timestamp(18297 * kSecondsInDay + 6 * 3'600, 0),
+          "America/Los_Angeles"));
+  // 1919-11-28 10:00:00.000 +08:00
+  EXPECT_EQ(
+      -18297,
+      toDate(
+          Timestamp(-18297 * kSecondsInDay + 10 * 3'600, 0), "Asia/Chongqing"));
+  // 1919-11-28 20:00:00.000 +08:00
+  EXPECT_EQ(
+      -18296,
+      toDate(
+          Timestamp(-18297 * kSecondsInDay + 20 * 3'600, 0), "Asia/Chongqing"));
+  // 1919-11-28 16:00:00.000 -08:00
+  EXPECT_EQ(
+      -18297,
+      toDate(
+          Timestamp(-18297 * kSecondsInDay + 16 * 3'600, 0),
+          "America/Los_Angeles"));
+  // 1919-11-28 06:00:00.000 -08:00
+  EXPECT_EQ(
+      -18298,
+      toDate(
+          Timestamp(-18297 * kSecondsInDay + 6 * 3'600, 0),
+          "America/Los_Angeles"));
 }
 
 } // namespace
