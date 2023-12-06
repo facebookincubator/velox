@@ -277,6 +277,23 @@ is any character contained in <code class="docutils literal notranslate"><span c
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="str_to_map">
+<span class="sig-name descname"><span class="pre">str_to_map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">entryDelimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keyValueDelimiter</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#str_to_map" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a map by splitting <code class="docutils literal notranslate"><span class="pre">string</span></code> into entries with <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and splitting
+each entry into key/value with <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code>.
+<code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> must be constant strings with single ascii
+character. Allows <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> not found when splitting an entry. Throws exception
+when duplicate map keys are found for single row’s result, consistent with Spark’s default
+behavior.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">str_to_map</span><span class="p">(</span><span class="s1">&#39;a:1,b:2,c:3&#39;</span><span class="p">,</span> <span class="s1">&#39;,&#39;</span><span class="p">,</span> <span class="s1">&#39;:&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span><span class="s2">&quot;1&quot;</span><span class="p">,</span><span class="s2">&quot;b&quot;</span><span class="p">:</span><span class="s2">&quot;2&quot;</span><span class="p">,</span><span class="s2">&quot;c&quot;</span><span class="p">:</span><span class="s2">&quot;3&quot;</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">str_to_map</span><span class="p">(</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;,&#39;</span><span class="p">,</span> <span class="s1">&#39;:&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span><span class="n">NULL</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">str_to_map</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;,&#39;</span><span class="p">,</span> <span class="s1">&#39;:&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s2">&quot;&quot;</span><span class="p">:</span><span class="n">NULL</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">str_to_map</span><span class="p">(</span><span class="s1">&#39;a:1,b:2,c:3&#39;</span><span class="p">,</span> <span class="s1">&#39;,&#39;</span><span class="p">,</span> <span class="s1">&#39;,&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s2">&quot;a:1&quot;</span><span class="p">:</span><span class="n">NULL</span><span class="p">,</span><span class="s2">&quot;b:2&quot;</span><span class="p">:</span><span class="n">NULL</span><span class="p">,</span><span class="s2">&quot;c:3&quot;</span><span class="p">:</span><span class="n">NULL</span><span class="p">}</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="substring">
 <span class="sig-name descname"><span class="pre">substring</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#substring" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the rest of <code class="docutils literal notranslate"><span class="pre">string</span></code> from the starting position <code class="docutils literal notranslate"><span class="pre">start</span></code>.
