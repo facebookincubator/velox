@@ -1060,19 +1060,20 @@ class PatternStringIterator {
     userPreviousCharKind_ = previousCharKind_;
 
     if (charKind_ == CharKind::kEscape) {
-      auto currentChar = current();
-      // The char follows escapeChar can only be one of (%, _, escapeChar).
-      if (currentChar != '%' && currentChar != '_' &&
-          currentChar != escapeChar_) {
-        return false;
-      }
-
+      // Escape char should be followed by another char.
       if (!hasNext()) {
         return false;
       }
 
       // Advance the cursor.
       nextInternal();
+
+      auto currentChar = current();
+      // The char follows escapeChar can only be one of (%, _, escapeChar).
+      if (currentChar != '%' && currentChar != '_' &&
+          currentChar != escapeChar_) {
+        return false;
+      }
     }
 
     return true;
