@@ -85,7 +85,7 @@ TEST_F(SimpleFunctionInitTest, initializationArray) {
       NonDefaultWithArrayInitFunction,
       Array<int32_t>,
       int32_t,
-      Array<int32_t>>({"non_default_behavior_with_init"});
+      Constant<Array<int32_t>>>({"non_default_behavior_with_init"});
 
   auto testFn =
       [&](const std::optional<int32_t>& first,
@@ -166,7 +166,7 @@ TEST_F(SimpleFunctionInitTest, initializationMap) {
       NonDefaultWithMapInitFunction,
       int64_t,
       int32_t,
-      Map<int32_t, int64_t>>({"non_default_behavior_with_map_init"});
+      Constant<Map<int32_t, int64_t>>>({"non_default_behavior_with_map_init"});
 
   auto mapVectorPtr = makeMapVector<int32_t, int64_t>(
       1,

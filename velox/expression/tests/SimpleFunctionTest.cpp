@@ -76,12 +76,14 @@ class SimpleFunctionTest : public functions::test::FunctionBaseTest {
         CallNullFreeFuncVoidOut<exec::VectorExec>,
         exec::VectorExec,
         int32_t,
-        TArgs...>;
+        ConstantChecker<TArgs...>,
+        typename UnwrapConstant<TArgs>::type...>;
     using holderClassBool = core::UDFHolder<
         CallNullFreeFuncBoolOut<exec::VectorExec>,
         exec::VectorExec,
         int32_t,
-        TArgs...>;
+        ConstantChecker<TArgs...>,
+        typename UnwrapConstant<TArgs>::type...>;
     if (voidOutput) {
       ASSERT_EQ(
           expected,
@@ -1104,6 +1106,7 @@ TEST_F(SimpleFunctionTest, isAsciiArgs) {
       StringInputFunction<exec::VectorExec>,
       exec::VectorExec,
       int32_t,
+      ConstantChecker<Varchar>,
       Varchar>;
   using function_t = exec::SimpleFunctionAdapter<holder_class_t>;
 
@@ -1238,5 +1241,46 @@ TEST_F(SimpleFunctionTest, flatNoNullsPathCallNullFree) {
   testCallNullFreeSupportFlatNotNulls<int32_t>(false, false);
   testCallNullFreeSupportFlatNotNulls<int64_t, int64_t>(false, false);
   testCallNullFreeSupportFlatNotNulls<Varchar, Varchar>(false, false);
+}
+
+namespace {
+template <typename T>
+struct ConstantArgumentFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void initialize(
+      const core::QueryConfig& /*config*/,
+      const arg_type<int32_t>* /*first*/,
+      const arg_type<int32_t>* second,
+      const arg_type<Varchar>* third,
+      const arg_type<Generic<T1>>* fourth) {}
+
+  bool callNullable(
+      out_type<int64_t>& out,
+      const arg_type<int32_t>* first,
+      const arg_type<int32_t>* /*second*/,
+      const arg_type<Varchar>* /*third*/,
+      const arg_type<Generic<T1>>* /*fourth*/) {
+    out = 0;
+    return true;
+  }
+};
+
+} // namespace
+
+TEST_F(SimpleFunctionTest, constantArgument) {
+  registerFunction<
+      ConstantArgumentFunction,
+      int64_t,
+      int32_t,
+      Constant<int32_t>,
+      Constant<Varchar>,
+      Constant<Generic<T1>>>({"constant_argument_function"});
+  auto signatures = exec::simpleFunctions().getFunctionSignatures(
+      "constant_argument_function");
+  EXPECT_FALSE(signatures[0]->constantArguments().at(0));
+  EXPECT_TRUE(signatures[0]->constantArguments().at(1));
+  EXPECT_TRUE(signatures[0]->constantArguments().at(2));
+  EXPECT_TRUE(signatures[0]->constantArguments().at(3));
 }
 } // namespace
