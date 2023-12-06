@@ -39,7 +39,7 @@ class StringToMapTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(StringToMapTest, Basics) {
+TEST_F(StringToMapTest, basic) {
   testStringToMap(
       {"a:1,b:2,c:3", ",", ":"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
   testStringToMap({"a: ,b:2", ",", ":"}, {{"a", " "}, {"b", "2"}});
@@ -62,6 +62,29 @@ TEST_F(StringToMapTest, Basics) {
   testStringToMap(
       {"a:1_b:2_c:3", "_", "_"},
       {{"a:1", std::nullopt}, {"b:2", std::nullopt}, {"c:3", std::nullopt}});
+
+  // Exception for illegal delimiters.
+  // Empty string is used.
+  VELOX_ASSERT_THROW(
+      evaluateStringToMap({"a:1,b:2", "", ":"}),
+      "entryDelimiter's size should be 1.");
+  VELOX_ASSERT_THROW(
+      evaluateStringToMap({"a:1,b:2", ",", ""}),
+      "keyValueDelimiter's size should be 1.");
+  // Delimiter's length > 1.
+  VELOX_ASSERT_THROW(
+      evaluateStringToMap({"a:1,b:2", ";;", ":"}),
+      "entryDelimiter's size should be 1.");
+  VELOX_ASSERT_THROW(
+      evaluateStringToMap({"a:1,b:2", ",", "::"}),
+      "keyValueDelimiter's size should be 1.");
+  // Unicode character is used.
+  VELOX_ASSERT_THROW(
+      evaluateStringToMap({"a:1,b:2", "å", ":"}),
+      "entryDelimiter's size should be 1.");
+  VELOX_ASSERT_THROW(
+      evaluateStringToMap({"a:1,b:2", ",", "æ"}),
+      "keyValueDelimiter's size should be 1.");
 
   // Exception for duplicated keys.
   VELOX_ASSERT_THROW(
