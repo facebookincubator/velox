@@ -17,7 +17,6 @@
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
-#include <iostream>
 #include "velox/vector/arrow/Bridge.h"
 
 #include "velox/dwio/parquet/writer/Writer.h"
@@ -123,6 +122,7 @@ Compression::type getArrowParquetCompression(
 }
 
 namespace {
+
 std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     const parquet::WriterOptions& options,
     const std::unique_ptr<DefaultFlushPolicy>& flushPolicy) {
@@ -140,9 +140,9 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   return properties->build();
 }
 
-void validateSchema(const RowTypePtr schema) {
+void validateSchemaRecursive(const RowTypePtr schema) {
   // Check the schema's field names is not empty and unique.
-  VELOX_USER_CHECK_NOT_NULL(schema, "File schema must not be null.");
+  VELOX_USER_CHECK_NOT_NULL(schema, "File schema must not be empty.");
   const auto& fieldNames = schema->names();
 
   folly::F14FastSet<std::string> uniqueNames;
@@ -159,7 +159,7 @@ void validateSchema(const RowTypePtr schema) {
     if (auto childSchema =
             std::dynamic_pointer_cast<const RowType>(schema->childAt(i))) {
       // Perform validation recursively for child RowTypePtr
-      validateSchema(childSchema);
+      validateSchemaRecursive(childSchema);
     }
   }
 }
@@ -179,7 +179,7 @@ Writer::Writer(
           options.bufferGrowRatio)),
       arrowContext_(std::make_shared<ArrowContext>()),
       schema_(std::move(schema)) {
-  validateSchema(schema_);
+  validateSchemaRecursive(schema_);
 
   if (options.flushPolicyFactory) {
     flushPolicy_ = options.flushPolicyFactory();
@@ -263,24 +263,14 @@ void Writer::write(const VectorPtr& dataToWrite) {
   auto rowVector =
       std::dynamic_pointer_cast<facebook::velox::RowVector>(dataToWrite);
   VELOX_CHECK_NULL(rowVector->nulls());
+  rowVector->setType(schema_);
 
-  // Update the schema for the complex type.
-  const auto& children = rowVector->children();
-  const auto size = schema_->size();
-  std::vector<VectorPtr> newChildren = children;
-  for (auto i = 0; i < size; i++) {
-    auto columnType = schema_->childAt(i);
-    bool isComplexType = std::dynamic_pointer_cast<const RowType>(columnType) ||
-        std::dynamic_pointer_cast<const MapType>(columnType) ||
-        std::dynamic_pointer_cast<const ArrayType>(columnType);
-
-    if (isComplexType) {
-      newChildren[i]->setType(columnType);
-    }
-  }
-
-  VectorPtr data = std::make_shared<facebook::velox::RowVector>(
-      rowVector->pool(), schema_, nullptr, rowVector->size(), newChildren);
+  auto data = std::make_shared<facebook::velox::RowVector>(
+      rowVector->pool(),
+      schema_,
+      nullptr,
+      rowVector->size(),
+      rowVector->children());
 
   ArrowOptions options{.flattenDictionary = true, .flattenConstant = true};
   ArrowArray array;
