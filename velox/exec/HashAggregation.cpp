@@ -66,23 +66,15 @@ void HashAggregation::initialize() {
     preGroupedChannels.push_back(channel);
   }
 
-  const auto numAggregates = aggregationNode_->aggregates().size();
-  std::vector<AggregateInfo> aggregateInfos;
-  aggregateInfos.reserve(numAggregates);
   std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
-
-  for (auto i = 0; i < numAggregates; i++) {
-    const auto& aggregate = aggregationNode_->aggregates()[i];
-    AggregateInfo info = AggregateUtil::toAggregateInfo(
-        aggregate,
-        inputType,
-        outputType_,
-        aggregationNode_->step(),
-        *operatorCtx_,
-        numHashers + i,
-        expressionEvaluator);
-    aggregateInfos.emplace_back(std::move(info));
-  }
+  std::vector<AggregateInfo> aggregateInfos = AggregateUtil::toAggregateInfo(
+      *aggregationNode_,
+      inputType,
+      outputType_,
+      aggregationNode_->step(),
+      *operatorCtx_,
+      numHashers,
+      expressionEvaluator);
 
   // Check that aggregate result type match the output type.
   for (auto i = 0; i < aggregateInfos.size(); i++) {

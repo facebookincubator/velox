@@ -40,13 +40,25 @@ struct AggregateRegistrationResult {
 
 class AggregateUtil {
  public:
-  static AggregateInfo toAggregateInfo(
-      const core::AggregationNode::Aggregate& aggregate,
+  /// Translate an AggregationNode to a list of AggregationInfo, which could be
+  /// a hash aggregation plan node or a streaming aggregation plan node.
+  ///
+  /// @param aggregationNode Plan node of this aggregation.
+  /// @param inputType Input type of the aggregationNode.
+  /// @param outputType Output type of the aggregationNode.
+  /// @param step Aggregation step of the aggregationNode.
+  /// @param operatorCtx Operator context.
+  /// @param numKeys Number of group keys.
+  /// @param expressionEvaluator Expression evaluation.
+  /// @param isStreaming Indicate this aggregation if streaming or not.
+  /// @return List of AggregationInfo.
+  static std::vector<AggregateInfo> toAggregateInfo(
+      const core::AggregationNode& aggregationNode,
       const RowTypePtr& inputType,
       const RowTypePtr& outputType,
       core::AggregationNode::Step step,
       const OperatorCtx& operatorCtx,
-      uint32_t index,
+      uint32_t numKeys,
       std::shared_ptr<core::ExpressionEvaluator>& expressionEvaluator,
       bool isStreaming = false);
 };

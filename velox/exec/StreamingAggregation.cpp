@@ -32,7 +32,12 @@ StreamingAggregation::StreamingAggregation(
               : "Aggregation"),
       outputBatchSize_{outputBatchRows()},
       aggregationNode_{aggregationNode},
-      step_{aggregationNode->step()} {}
+      step_{aggregationNode->step()} {
+  if (aggregationNode_->ignoreNullKeys()) {
+    VELOX_UNSUPPORTED(
+        "Streaming aggregation doesn't support ignoring null keys yet");
+  }
+}
 
 void StreamingAggregation::initialize() {
   Operator::initialize();
@@ -52,30 +57,19 @@ void StreamingAggregation::initialize() {
     groupingKeyTypes.push_back(inputType->childAt(channel));
   }
 
-  const auto numAggregates = aggregationNode_->aggregates().size();
-  aggregates_.reserve(numAggregates);
   std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
-
-  for (auto i = 0; i < numAggregates; i++) {
-    const auto& aggregate = aggregationNode_->aggregates()[i];
-    AggregateInfo info = AggregateUtil::toAggregateInfo(
-        aggregate,
-        inputType,
-        outputType_,
-        aggregationNode_->step(),
-        *operatorCtx_,
-        numKeys + i,
-        expressionEvaluator,
-        true);
-    aggregates_.emplace_back(std::move(info));
-  }
-
-  if (aggregationNode_->ignoreNullKeys()) {
-    VELOX_UNSUPPORTED(
-        "Streaming aggregation doesn't support ignoring null keys yet");
-  }
+  aggregates_ = AggregateUtil::toAggregateInfo(
+      *aggregationNode_,
+      inputType,
+      outputType_,
+      aggregationNode_->step(),
+      *operatorCtx_,
+      numKeys,
+      expressionEvaluator,
+      true);
 
   // Setup masks and accumulators
+  const auto numAggregates = aggregationNode_->aggregates().size();
   std::vector<std::optional<column_index_t>> masks;
   masks.reserve(numAggregates);
   std::vector<Accumulator> accumulators;
