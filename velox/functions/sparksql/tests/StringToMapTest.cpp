@@ -15,24 +15,27 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
-#include "velox/type/Type.h"
+
+using namespace facebook::velox::test;
 
 namespace facebook::velox::functions::sparksql::test {
-using namespace facebook::velox::test;
 namespace {
 class StringToMapTest : public SparkFunctionBaseTest {
  protected:
+  VectorPtr evaluateStringToMap(const std::vector<StringView>& inputs) {
+    const std::string expr =
+        fmt::format("str_to_map(c0, '{}', '{}')", inputs[1], inputs[2]);
+    return evaluate<MapVector>(
+        expr, makeRowVector({makeFlatVector<StringView>({inputs[0]})}));
+  }
+
   void testStringToMap(
       const std::vector<StringView>& inputs,
       const std::vector<std::pair<StringView, std::optional<StringView>>>&
           expect) {
-    std::vector<VectorPtr> row;
-    row.emplace_back(makeFlatVector<StringView>({inputs[0]}));
-    std::string expr =
-        fmt::format("str_to_map(c0, '{}', '{}')", inputs[1], inputs[2]);
-    auto result = evaluate<MapVector>(expr, makeRowVector(row));
-    auto expected = makeMapVector<StringView, StringView>({expect});
-    assertEqualVectors(result, expected);
+    auto result = evaluateStringToMap(inputs);
+    auto expectVector = makeMapVector<StringView, StringView>({expect});
+    assertEqualVectors(result, expectVector);
   }
 };
 
@@ -40,6 +43,7 @@ TEST_F(StringToMapTest, Basics) {
   testStringToMap(
       {"a:1,b:2,c:3", ",", ":"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
   testStringToMap({"a: ,b:2", ",", ":"}, {{"a", " "}, {"b", "2"}});
+  testStringToMap({"a:,b:2", ",", ":"}, {{"a", ""}, {"b", "2"}});
   testStringToMap({"", ",", ":"}, {{"", std::nullopt}});
   testStringToMap({"a", ",", ":"}, {{"a", std::nullopt}});
   testStringToMap(
@@ -47,9 +51,10 @@ TEST_F(StringToMapTest, Basics) {
   testStringToMap({"", ",", "="}, {{"", std::nullopt}});
   testStringToMap(
       {"a::1,b::2,c::3", ",", "c"},
-      {{"", "::3"}, {"a::1", std::nullopt}, {"b::2", std::nullopt}});
+      {{"a::1", std::nullopt}, {"b::2", std::nullopt}, {"", "::3"}});
   testStringToMap(
       {"a:1_b:2_c:3", "_", ":"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+
   // Same delimiters.
   testStringToMap(
       {"a:1,b:2,c:3", ",", ","},
@@ -57,10 +62,14 @@ TEST_F(StringToMapTest, Basics) {
   testStringToMap(
       {"a:1_b:2_c:3", "_", "_"},
       {{"a:1", std::nullopt}, {"b:2", std::nullopt}, {"c:3", std::nullopt}});
+
   // Exception for duplicated keys.
   VELOX_ASSERT_THROW(
-      testStringToMap({"a:1,b:2,a:3", ",", ":"}, {{"a", "3"}, {"b", "2"}}),
+      evaluateStringToMap({"a:1,b:2,a:3", ",", ":"}),
       "Duplicate keys are not allowed: ('a').");
+  VELOX_ASSERT_THROW(
+      evaluateStringToMap({":1,:2", ",", ":"}),
+      "Duplicate keys are not allowed: ('').");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

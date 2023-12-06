@@ -20,9 +20,9 @@
 
 namespace facebook::velox::functions::sparksql {
 
-template <typename TExecCtx>
+template <typename T>
 struct StringToMapFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
+  VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // Results refer to strings in the first argument.
   static constexpr int32_t reuse_strings_from_arg = 0;
@@ -32,8 +32,8 @@ struct StringToMapFunction {
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& entryDelimiter,
       const arg_type<Varchar>& keyValueDelimiter) {
-    VELOX_USER_CHECK(!entryDelimiter.empty(), "entryDelimiter is empty");
-    VELOX_USER_CHECK(!keyValueDelimiter.empty(), "keyValueDelimiter is empty");
+    VELOX_USER_CHECK(!entryDelimiter.empty(), "entryDelimiter is empty.");
+    VELOX_USER_CHECK(!keyValueDelimiter.empty(), "keyValueDelimiter is empty.");
 
     callImpl(
         out,
@@ -53,7 +53,6 @@ struct StringToMapFunction {
       std::string_view entryDelimiter,
       std::string_view keyValueDelimiter) const {
     size_t pos = 0;
-
     folly::F14FastSet<std::string_view> keys;
 
     auto nextEntryPos = input.find(entryDelimiter, pos);
@@ -81,7 +80,7 @@ struct StringToMapFunction {
       std::string_view keyValueDelimiter,
       folly::F14FastSet<std::string_view>& keys) const {
     const auto delimiterPos = entry.find(keyValueDelimiter, 0);
-    // Not found key/value delimiter.
+    // Allows keyValue delimiter not found.
     if (delimiterPos == std::string::npos) {
       out.add_null().setNoCopy(StringView(entry));
       return;

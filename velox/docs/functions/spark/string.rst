@@ -187,8 +187,8 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Spark's default behavior. ::
 
         SELECT str_to_map('a:1,b:2,c:3', ',', ':'); -- {"a":"1","b":"2","c":"3"}
-        SELECT str_to_map('a', ',', ':'); -- {'a':NULL}
-        SELECT str_to_map('', ',', ':'); -- {'':NULL}
+        SELECT str_to_map('a', ',', ':'); -- {"a":NULL}
+        SELECT str_to_map('', ',', ':'); -- {"":NULL}
         SELECT str_to_map('a:1,b:2,c:3', ',', ','); -- {"a:1":NULL,"b:2":NULL,"c:3":NULL}
 
 .. spark:function:: substring(string, start) -> varchar
