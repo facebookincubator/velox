@@ -59,14 +59,7 @@ void StreamingAggregation::initialize() {
 
   std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
   aggregates_ = AggregateUtil::toAggregateInfo(
-      *aggregationNode_,
-      inputType,
-      outputType_,
-      aggregationNode_->step(),
-      *operatorCtx_,
-      numKeys,
-      expressionEvaluator,
-      true);
+      *aggregationNode_, *operatorCtx_, numKeys, expressionEvaluator, true);
 
   // Setup masks and accumulators
   const auto numAggregates = aggregationNode_->aggregates().size();

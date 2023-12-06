@@ -54,7 +54,6 @@ void HashAggregation::initialize() {
   VELOX_CHECK(pool()->trackUsage());
 
   auto inputType = aggregationNode_->sources()[0]->outputType();
-
   auto hashers =
       createVectorHashers(inputType, aggregationNode_->groupingKeys());
   auto numHashers = hashers.size();
@@ -68,13 +67,7 @@ void HashAggregation::initialize() {
 
   std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
   std::vector<AggregateInfo> aggregateInfos = AggregateUtil::toAggregateInfo(
-      *aggregationNode_,
-      inputType,
-      outputType_,
-      aggregationNode_->step(),
-      *operatorCtx_,
-      numHashers,
-      expressionEvaluator);
+      *aggregationNode_, *operatorCtx_, numHashers, expressionEvaluator);
 
   // Check that aggregate result type match the output type.
   for (auto i = 0; i < aggregateInfos.size(); i++) {

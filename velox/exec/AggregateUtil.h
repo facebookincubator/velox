@@ -44,19 +44,19 @@ class AggregateUtil {
   /// a hash aggregation plan node or a streaming aggregation plan node.
   ///
   /// @param aggregationNode Plan node of this aggregation.
-  /// @param inputType Input type of the aggregationNode.
-  /// @param outputType Output type of the aggregationNode.
-  /// @param step Aggregation step of the aggregationNode.
   /// @param operatorCtx Operator context.
-  /// @param numKeys Number of group keys.
-  /// @param expressionEvaluator Expression evaluation.
-  /// @param isStreaming Indicate this aggregation if streaming or not.
+  /// @param numKeys Number of grouping keys.
+  /// @param expressionEvaluator An Expression evaluator. It is used by an
+  /// aggregate operator to compile and eval lambda expression. It should be
+  /// initiated/assigned for at most one time.
+  /// @param isStreaming Indicate whether this aggregation is streaming or not.
+  /// Pass true if the aggregate operator is a StreamingAggregation and false if
+  /// the aggregate operator is a HashAggregation. This parameter will be
+  /// removed after sorted, distinct aggregation, and lambda functions support
+  /// are added to StreamingAggregation.
   /// @return List of AggregationInfo.
   static std::vector<AggregateInfo> toAggregateInfo(
       const core::AggregationNode& aggregationNode,
-      const RowTypePtr& inputType,
-      const RowTypePtr& outputType,
-      core::AggregationNode::Step step,
       const OperatorCtx& operatorCtx,
       uint32_t numKeys,
       std::shared_ptr<core::ExpressionEvaluator>& expressionEvaluator,

@@ -37,9 +37,6 @@ std::vector<core::LambdaTypedExprPtr> extractLambdaInputs(
 
 std::vector<AggregateInfo> AggregateUtil::toAggregateInfo(
     const core::AggregationNode& aggregationNode,
-    const RowTypePtr& inputType,
-    const RowTypePtr& outputType,
-    core::AggregationNode::Step step,
     const OperatorCtx& operatorCtx,
     uint32_t numKeys,
     std::shared_ptr<core::ExpressionEvaluator>& expressionEvaluator,
@@ -47,6 +44,10 @@ std::vector<AggregateInfo> AggregateUtil::toAggregateInfo(
   const auto numAggregates = aggregationNode.aggregates().size();
   std::vector<AggregateInfo> aggregates;
   aggregates.reserve(numAggregates);
+
+  const auto& inputType = aggregationNode.sources()[0]->outputType();
+  const auto& outputType = aggregationNode.outputType();
+  const auto step = aggregationNode.step();
 
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode.aggregates()[i];
