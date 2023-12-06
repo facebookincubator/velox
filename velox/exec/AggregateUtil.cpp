@@ -20,16 +20,40 @@
 
 namespace facebook::velox::exec {
 
+namespace {
+std::vector<core::LambdaTypedExprPtr> extractLambdaInputs(
+    const core::AggregationNode::Aggregate& aggregate) {
+  std::vector<core::LambdaTypedExprPtr> lambdas;
+  for (const auto& arg : aggregate.call->inputs()) {
+    if (auto lambda =
+            std::dynamic_pointer_cast<const core::LambdaTypedExpr>(arg)) {
+      lambdas.push_back(lambda);
+    }
+  }
+
+  return lambdas;
+}
+} // namespace
+
 AggregateInfo AggregateUtil::toAggregateInfo(
     const core::AggregationNode::Aggregate& aggregate,
     const RowTypePtr& inputType,
     const RowTypePtr& outputType,
     core::AggregationNode::Step step,
-    const std::unique_ptr<OperatorCtx>& operatorCtx,
-    memory::MemoryPool* pool,
+    const OperatorCtx& operatorCtx,
     uint32_t index,
     std::shared_ptr<core::ExpressionEvaluator>& expressionEvaluator,
-    bool supportLambda) {
+    bool isStreaming) {
+  // TODO: Add support for StreamingAggregation
+  if (isStreaming && !aggregate.sortingKeys.empty()) {
+    VELOX_UNSUPPORTED(
+        "Streaming aggregation doesn't support aggregations over sorted inputs yet");
+  }
+  if (isStreaming && aggregate.distinct) {
+    VELOX_UNSUPPORTED(
+        "Streaming aggregation doesn't support aggregations over distinct inputs yet");
+  }
+
   AggregateInfo info;
   // Populate input.
   auto& channels = info.inputs;
@@ -43,12 +67,12 @@ AggregateInfo AggregateUtil::toAggregateInfo(
         auto constant =
             dynamic_cast<const core::ConstantTypedExpr*>(arg.get())) {
       channels.push_back(kConstantChannel);
-      constants.push_back(constant->toConstantVector(pool));
+      constants.push_back(constant->toConstantVector(operatorCtx.pool()));
     } else if (
         auto lambda = dynamic_cast<const core::LambdaTypedExpr*>(arg.get())) {
       VELOX_USER_CHECK(
-          supportLambda,
-          "Streaming aggregation doesn't support lambda functions yet");
+          !isStreaming,
+          "StreamingAggregation doesn't support lambda functions yet.");
       for (const auto& name : lambda->signature()->names()) {
         if (auto captureIndex = inputType->getChildIdxIfExists(name)) {
           channels.push_back(captureIndex.value());
@@ -57,7 +81,8 @@ AggregateInfo AggregateUtil::toAggregateInfo(
       }
     } else {
       VELOX_FAIL(
-          "Expression must be field access, constant, or lambda: {}",
+          "Expression must be field access, constant, or "
+          "lambda (HashAggregation): {}",
           arg->toString());
     }
   }
@@ -81,14 +106,14 @@ AggregateInfo AggregateUtil::toAggregateInfo(
                             : core::AggregationNode::Step::kSingle,
       aggregate.rawInputTypes,
       aggResultType,
-      operatorCtx->driverCtx()->queryConfig());
+      operatorCtx.driverCtx()->queryConfig());
 
-  if (supportLambda) {
+  if (!isStreaming) {
     auto lambdas = extractLambdaInputs(aggregate);
     if (!lambdas.empty()) {
       if (expressionEvaluator == nullptr) {
         expressionEvaluator = std::make_shared<SimpleExpressionEvaluator>(
-            operatorCtx->execCtx()->queryCtx(), operatorCtx->execCtx()->pool());
+            operatorCtx.execCtx()->queryCtx(), operatorCtx.execCtx()->pool());
       }
       info.function->setLambdaExpressions(lambdas, expressionEvaluator);
     }
@@ -106,19 +131,6 @@ AggregateInfo AggregateUtil::toAggregateInfo(
   info.output = index;
 
   return info;
-}
-
-std::vector<core::LambdaTypedExprPtr> AggregateUtil::extractLambdaInputs(
-    const core::AggregationNode::Aggregate& aggregate) {
-  std::vector<core::LambdaTypedExprPtr> lambdas;
-  for (const auto& arg : aggregate.call->inputs()) {
-    if (auto lambda =
-            std::dynamic_pointer_cast<const core::LambdaTypedExpr>(arg)) {
-      lambdas.push_back(lambda);
-    }
-  }
-
-  return lambdas;
 }
 
 } // namespace facebook::velox::exec

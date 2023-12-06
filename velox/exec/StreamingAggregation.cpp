@@ -58,27 +58,15 @@ void StreamingAggregation::initialize() {
 
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode_->aggregates()[i];
-    if (!aggregate.sortingKeys.empty()) {
-      VELOX_UNSUPPORTED(
-          "Streaming aggregation doesn't support aggregations over sorted inputs yet");
-    }
-
-    if (aggregate.distinct) {
-      VELOX_UNSUPPORTED(
-          "Streaming aggregation doesn't support aggregations over distinct inputs yet");
-    }
-
     AggregateInfo info = AggregateUtil::toAggregateInfo(
         aggregate,
         inputType,
         outputType_,
         aggregationNode_->step(),
-        operatorCtx_,
-        pool(),
+        *operatorCtx_,
         numKeys + i,
         expressionEvaluator,
-        false);
-
+        true);
     aggregates_.emplace_back(std::move(info));
   }
 

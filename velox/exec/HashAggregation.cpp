@@ -78,8 +78,7 @@ void HashAggregation::initialize() {
         inputType,
         outputType_,
         aggregationNode_->step(),
-        operatorCtx_,
-        pool(),
+        *operatorCtx_,
         numHashers + i,
         expressionEvaluator);
     aggregateInfos.emplace_back(std::move(info));

@@ -45,14 +45,10 @@ class AggregateUtil {
       const RowTypePtr& inputType,
       const RowTypePtr& outputType,
       core::AggregationNode::Step step,
-      const std::unique_ptr<OperatorCtx>& operatorCtx,
-      memory::MemoryPool* pool,
+      const OperatorCtx& operatorCtx,
       uint32_t index,
       std::shared_ptr<core::ExpressionEvaluator>& expressionEvaluator,
-      bool supportLambda = true);
-
-  static std::vector<core::LambdaTypedExprPtr> extractLambdaInputs(
-      const core::AggregationNode::Aggregate& aggregate);
+      bool isStreaming = false);
 };
 
 } // namespace facebook::velox::exec
