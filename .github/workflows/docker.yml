@@ -88,3 +88,11 @@ jobs:
           file: scripts/ubuntu-22.04-cpp.dockerfile
           push: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}
           tags: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx
+
+      - name: Build and Push Presto java dev-image
+        uses: docker/build-push-action@v3
+        with:
+          file: scripts/prestojava-container.dockerfile
+          build-args: PRESTO_VERSION=0.284
+          push: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}
+          tags: ghcr.io/facebookincubator/velox-dev-presto-java:amd64-ubuntu-22.04-avx
