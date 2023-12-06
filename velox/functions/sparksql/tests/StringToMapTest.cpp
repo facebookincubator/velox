@@ -66,10 +66,10 @@ TEST_F(StringToMapTest, Basics) {
   // Exception for duplicated keys.
   VELOX_ASSERT_THROW(
       evaluateStringToMap({"a:1,b:2,a:3", ",", ":"}),
-      "Duplicate keys are not allowed: ('a').");
+      "Duplicate keys are not allowed: 'a'.");
   VELOX_ASSERT_THROW(
       evaluateStringToMap({":1,:2", ",", ":"}),
-      "Duplicate keys are not allowed: ('').");
+      "Duplicate keys are not allowed: ''.");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

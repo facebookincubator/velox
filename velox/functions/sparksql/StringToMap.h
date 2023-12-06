@@ -32,8 +32,10 @@ struct StringToMapFunction {
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& entryDelimiter,
       const arg_type<Varchar>& keyValueDelimiter) {
-    VELOX_USER_CHECK(!entryDelimiter.empty(), "entryDelimiter is empty.");
-    VELOX_USER_CHECK(!keyValueDelimiter.empty(), "keyValueDelimiter is empty.");
+    VELOX_USER_CHECK(
+        entryDelimiter.size() == 1, "entryDelimiter's size should be 1.");
+    VELOX_USER_CHECK(
+        keyValueDelimiter.size() == 1, "keyValueDelimiter's size should be 1.");
 
     callImpl(
         out,
@@ -87,9 +89,7 @@ struct StringToMapFunction {
     }
     const auto key = std::string_view(entry.data(), delimiterPos);
     VELOX_USER_CHECK(
-        keys.insert(key).second,
-        "Duplicate keys are not allowed: ('{}').",
-        key);
+        keys.insert(key).second, "Duplicate keys are not allowed: '{}'.", key);
     const auto value = StringView(
         entry.data() + delimiterPos + 1, entry.size() - delimiterPos - 1);
 

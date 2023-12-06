@@ -178,13 +178,14 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT startswith('js SQL', 'SQL'); -- false
         SELECT startswith('js SQL', null); -- NULL
 
-.. spark:function:: str_to_map(string, entryDelim, keyValueDelim) -> map(string, string)
+.. spark:function:: str_to_map(string, entryDelimiter, keyValueDelimiter) -> map(string, string)
 
-    Returns a map by splitting ``string`` into entries with ``entryDelim`` and splitting
-    each entry into key/value with ``keyValueDelim``.
-    Only supports constant single-character ``entryDelim`` and ``keyValueDelim``. Throws
-    exception when duplicate map keys are found for single row's result, consistent with
-    Spark's default behavior. ::
+    Returns a map by splitting ``string`` into entries with ``entryDelimiter`` and splitting
+    each entry into key/value with ``keyValueDelimiter``.
+    ``entryDelimiter`` and ``keyValueDelimiter`` must be constant strings with single ascii
+    character. Allows ``keyValueDelimiter`` not found when splitting an entry. Throws exception
+    when duplicate map keys are found for single row's result, consistent with Spark's default
+    behavior. ::
 
         SELECT str_to_map('a:1,b:2,c:3', ',', ':'); -- {"a":"1","b":"2","c":"3"}
         SELECT str_to_map('a', ',', ':'); -- {"a":NULL}
