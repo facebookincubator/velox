@@ -125,7 +125,7 @@ class Spiller {
   /// 'kOrderByOutput' spiller type to spill during the order by
   /// output processing. Similarly, the spilled rows still stays in the row
   /// container. The caller needs to erase them from the row container.
-  void spill(std::vector<char*> rows);
+  void spill(std::vector<char*>& rows);
 
   /// Append 'spillVector' into the spill file of given 'partition'. It is now
   /// only used by the spilling operator which doesn't need data sort, such as
@@ -292,8 +292,9 @@ class Spiller {
   // pointed by 'startRowIter'.
   void fillSpillRuns(const RowContainerIterator* startRowIter = nullptr);
 
-  /// Prepares spill runs for the spillable data from the rows.
-  void fillSinglePartition(std::vector<char*>& rows);
+  /// Prepares spill run of a single partition for the spillable data from the
+  /// rows.
+  void fillSpillRun(std::vector<char*>& rows);
 
   // Writes out all the rows collected in spillRuns_.
   void runSpill();

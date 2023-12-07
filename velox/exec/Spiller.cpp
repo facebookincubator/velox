@@ -491,7 +491,7 @@ void Spiller::spill(const RowContainerIterator* startRowIter) {
   checkEmptySpillRuns();
 }
 
-void Spiller::spill(std::vector<char*> rows) {
+void Spiller::spill(std::vector<char*>& rows) {
   CHECK_NOT_FINALIZED();
   VELOX_CHECK_EQ(type_, Type::kOrderByOutput);
   if (rows.empty()) {
@@ -500,7 +500,7 @@ void Spiller::spill(std::vector<char*> rows) {
 
   markAllPartitionsSpilled();
 
-  fillSinglePartition(rows);
+  fillSpillRun(rows);
   runSpill();
   checkEmptySpillRuns();
 }
@@ -615,7 +615,7 @@ void Spiller::fillSpillRuns(const RowContainerIterator* startRowIter) {
   updateSpillFillTime(execTimeUs);
 }
 
-void Spiller::fillSinglePartition(std::vector<char*>& rows) {
+void Spiller::fillSpillRun(std::vector<char*>& rows) {
   VELOX_CHECK_EQ(bits_.numPartitions(), 1);
   checkEmptySpillRuns();
   uint64_t execTimeUs{0};
@@ -623,7 +623,7 @@ void Spiller::fillSinglePartition(std::vector<char*>& rows) {
     MicrosecondTimer timer(&execTimeUs);
     spillRuns_[0].rows =
         SpillRows(rows.begin(), rows.end(), spillRuns_[0].rows.get_allocator());
-    for (auto row : rows) {
+    for (const auto& row : rows) {
       spillRuns_[0].numBytes += container_->rowSize(row);
     }
   }

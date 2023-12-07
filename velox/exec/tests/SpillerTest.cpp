@@ -1357,7 +1357,7 @@ TEST_P(OrderByOutputOnly, basic) {
     }
     auto spillRows =
         std::vector<char*>(rows.begin(), rows.begin() + numListedRows);
-    spiller_->spill(std::move(spillRows));
+    spiller_->spill(spillRows);
     ASSERT_EQ(rowContainer_->numRows(), numRows);
     rowContainer_->clear();
 

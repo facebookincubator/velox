@@ -217,7 +217,7 @@ void SortBuffer::spillOutput() {
 
   auto spillRows = std::vector<char*>(
       sortedRows_.begin() + numOutputRows_, sortedRows_.end());
-  spiller_->spill(std::move(spillRows));
+  spiller_->spill(spillRows);
   data_->clear();
   sortedRows_.clear();
   finishSpill();

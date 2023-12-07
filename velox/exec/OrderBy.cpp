@@ -78,10 +78,6 @@ void OrderBy::reclaim(
     memory::MemoryReclaimer::Stats& stats) {
   VELOX_CHECK(canReclaim());
   VELOX_CHECK(!nonReclaimableSection_);
-  auto* driver = operatorCtx_->driver();
-
-  // NOTE: an order by operator is reclaimable if it is not under
-  // non-reclaimable execution section.
   if (noMoreInput_) {
     sortBuffer_->spillOutput();
   } else {
