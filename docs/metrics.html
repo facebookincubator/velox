@@ -1,0 +1,258 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>Runtime Metric &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="_static/nature.css" />
+    <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="PyVelox: Python bindings and extensions for Velox" href="bindings/python/README_generated_pyvelox.html" />
+    <link rel="prev" title="Configuration properties" href="configs.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="bindings/python/README_generated_pyvelox.html" title="PyVelox: Python bindings and extensions for Velox"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="configs.html" title="Configuration properties"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Runtime Metric</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="runtime-metric">
+<h1>Runtime Metric<a class="headerlink" href="#runtime-metric" title="Permalink to this heading">¶</a></h1>
+<p>Runtime metric is used to collect the metrics of important velox runtime events
+for monitoring purpose. The collected metrics can provide insights into the
+continuous availability and performance analysis of a Velox runtime system. For
+instance, the collected data can help automatically generate alerts at an
+outage. Velox provides a framework to collect the metrics which consists of
+three steps:</p>
+<p><strong>Define</strong>: define the name and type for the metric through DEFINE_METRIC and
+DEFINE_HISTOGRAM_METRIC macros. DEFINE_HISTOGRAM_METRIC is used for histogram
+metric type and DEFINE_METRIC is used for the other types (see metric type
+definition below). BaseStatsReporter provides methods for metric definition.
+Register metrics during startup using registerVeloxMetrics() API.</p>
+<p><strong>Record</strong>: record the metric data point using RECORD_METRIC_VALUE and
+RECORD_HISTOGRAM_METRIC_VALUE macros when the corresponding event happens.
+BaseStatsReporter provides methods for metric recording.</p>
+<p><strong>Export</strong>: aggregates the collected data points based on the defined metrics,
+and periodically exports to the backend monitoring service, such as ODS used by
+Meta, Apache projects <a class="reference external" href="https://opencensus.io/">OpenCensus</a>  and <a class="reference external" href="https://prometheus.io/">Prometheus</a> provided by OSS. A derived
+implementation of BaseStatsReporter is required to integrate with a specific
+monitoring service. The metric aggregation granularity and export interval are
+also configured based on the actual used monitoring service.</p>
+<p>Velox supports five metric types:</p>
+<p><strong>Count</strong>: tracks the count of events, such as the number of query failures.</p>
+<p><strong>Sum</strong>: tracks the sum of event data point values, such as sum of query scan
+read bytes.</p>
+<p><strong>Avg</strong>: tracks the average of event data point values, such as average of query
+execution time.</p>
+<p><strong>Rate</strong>: tracks the sum of event data point values per second, such as the
+number of shuffle requests per second.</p>
+<p><strong>Histogram</strong>: tracks the distribution of event data point values, such as query
+execution time distribution. The histogram metric divides the entire data range
+into a series of adjacent equal-sized intervals or buckets, and then count how
+many data values fall into each bucket. DEFINE_HISTOGRAM_STAT specifies the data
+range by min/max values, and the number of buckets. Any collected data value
+less than min is counted in min bucket, and any one larger than max is counted
+in max bucket. It also allows to specify the value percentiles to report for
+monitoring. This allows BaseStatsReporter and the backend monitoring service to
+optimize the aggregated data storage.</p>
+<section id="memory-management">
+<h2>Memory Management<a class="headerlink" href="#memory-management" title="Permalink to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 40%" />
+<col style="width: 10%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Metric Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>cache_shrink_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of times that in-memory data cache has been shrunk under
+memory pressure.</p></td>
+</tr>
+<tr class="row-odd"><td><p>cache_shrink_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of cache shrink latency in range of [0, 100s] with 10
+buckets. It is configured to report the latency at P50, P90, P99, and
+P100 percentiles.</p></td>
+</tr>
+<tr class="row-even"><td><p>memory_reclaim_exec_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of memory reclaim execution time in range of [0, 600s]
+with 20 buckets. It is configured to report latency at P50, P90, P99, and
+P100 percentiles.</p></td>
+</tr>
+<tr class="row-odd"><td><p>memory_reclaim_bytes</p></td>
+<td><p>Sum</p></td>
+<td><p>The sum of reclaimed memory bytes.</p></td>
+</tr>
+<tr class="row-even"><td><p>memory_reclaim_wait_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of memory reclaim wait time in range of [0, 60s] with 10
+buckets. It is configured to report latency at P50, P90, P99, and P100
+percentiles.</p></td>
+</tr>
+<tr class="row-odd"><td><p>memory_reclaim_wait_timeout_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of times that the memory reclaim wait timeouts.</p></td>
+</tr>
+<tr class="row-even"><td><p>memory_non_reclaimable_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of times that the memory reclaim fails because of
+non-reclaimable section which is an indicator that the memory reservation
+is not sufficient.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="spilling">
+<h2>Spilling<a class="headerlink" href="#spilling" title="Permalink to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 40%" />
+<col style="width: 10%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Metric Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>spill_max_level_exceeded_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of times that a spillable operator hits the max spill level
+limit.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 40%" />
+<col style="width: 10%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Metric Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>hive_file_handle_generate_latency_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of hive file open latency in range of [0, 100s] with 10
+buckets. It is configured to report latency at P50, P90, P99, and P100
+percentiles.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Runtime Metric</a><ul>
+<li><a class="reference internal" href="#memory-management">Memory Management</a></li>
+<li><a class="reference internal" href="#spilling">Spilling</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="configs.html"
+                          title="previous chapter">Configuration properties</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="bindings/python/README_generated_pyvelox.html"
+                          title="next chapter">PyVelox: Python bindings and extensions for Velox</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="_sources/metrics.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="bindings/python/README_generated_pyvelox.html" title="PyVelox: Python bindings and extensions for Velox"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="configs.html" title="Configuration properties"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Runtime Metric</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>
