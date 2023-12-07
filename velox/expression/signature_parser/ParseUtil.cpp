@@ -25,17 +25,13 @@ TypeSignaturePtr inferTypeWithSpaces(
     bool canHaveFieldName) {
   VELOX_CHECK_GE(words.size(), 2);
   const auto& fieldName = words[0];
-  auto typeName = words[1];
-  for (int i = 2; i < words.size(); ++i) {
-    typeName = fmt::format("{} {}", typeName, words[i]);
-  }
-  const auto allWords = fmt::format("{} {}", fieldName, typeName);
+  const auto allWords = folly::join(" ", words);
   if (hasType(allWords) || !canHaveFieldName) {
     return std::make_shared<exec::TypeSignature>(
         exec::TypeSignature(allWords, {}));
   }
-  return std::make_shared<exec::TypeSignature>(
-      exec::TypeSignature(typeName, {}, fieldName));
+  return std::make_shared<exec::TypeSignature>(exec::TypeSignature(
+      allWords.data() + fieldName.size() + 1, {}, fieldName));
 }
 
 } // namespace facebook::velox::exec
