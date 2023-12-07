@@ -55,8 +55,6 @@ jobs:
       CCACHE_BASEDIR: "${{ github.workspace }}"
       LINUX_DISTRO: "ubuntu"
     steps:
-      - name: "Install mold as default linker"
-        uses: rui314/setup-mold@v1
 
       - name: "Restore ccache"
         uses: actions/cache@v3
