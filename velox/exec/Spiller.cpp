@@ -623,7 +623,7 @@ void Spiller::fillSpillRun(std::vector<char*>& rows) {
     MicrosecondTimer timer(&execTimeUs);
     spillRuns_[0].rows =
         SpillRows(rows.begin(), rows.end(), spillRuns_[0].rows.get_allocator());
-    for (const auto& row : rows) {
+    for (const auto* row : rows) {
       spillRuns_[0].numBytes += container_->rowSize(row);
     }
   }
