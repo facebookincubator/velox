@@ -19,6 +19,7 @@ add_library(
   AggregateCompanionSignatures.cpp
   AggregateFunctionRegistry.cpp
   AggregateInfo.cpp
+
   AggregationMasks.cpp
   AggregateWindow.cpp
   ArrowStream.cpp
