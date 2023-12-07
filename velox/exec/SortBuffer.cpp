@@ -166,28 +166,9 @@ void SortBuffer::spill() {
   updateEstimatedOutputRowSize();
 
   if (sortedRows_.empty()) {
-    // Input stage spill.
-    if (spiller_ == nullptr) {
-      spiller_ = makeSpiller(Spiller::Type::kOrderByInput);
-    }
-    spiller_->spill();
-    data_->clear();
+    spillInput();
   } else {
-    // Output stage spill.
-    if (spiller_ != nullptr) {
-      // Already spilled.
-      return;
-    }
-
-    spiller_ = makeSpiller(Spiller::Type::kOrderByOutput);
-    auto spillRows = std::vector<char*>(
-        sortedRows_.begin() + numOutputRows_, sortedRows_.end());
-    spiller_->spill(spillRows);
-    data_->clear();
-    sortedRows_.clear();
-    // Finish right after spilling as the output spiller only spills at most
-    // once.
-    finishSpill();
+    spillOutput();
   }
 }
 
@@ -279,10 +260,10 @@ void SortBuffer::updateEstimatedOutputRowSize() {
   }
 }
 
-std::unique_ptr<Spiller> SortBuffer::makeSpiller(Spiller::Type type) {
-  std::unique_ptr<Spiller> spiller;
-  if (type == Spiller::Type::kOrderByInput) {
-    spiller = std::make_unique<Spiller>(
+void SortBuffer::spillInput() {
+  if (spiller_ == nullptr) {
+    VELOX_CHECK(!noMoreInput_);
+    spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kOrderByInput,
         data_.get(),
         spillerStoreType_,
@@ -294,20 +275,35 @@ std::unique_ptr<Spiller> SortBuffer::makeSpiller(Spiller::Type type) {
         spillConfig_->compressionKind,
         memory::spillMemoryPool(),
         spillConfig_->executor);
-  } else {
-    spiller = std::make_unique<Spiller>(
-        Spiller::Type::kOrderByOutput,
-        data_.get(),
-        spillerStoreType_,
-        spillConfig_->getSpillDirPathCb,
-        spillConfig_->fileNamePrefix,
-        spillConfig_->writeBufferSize,
-        spillConfig_->compressionKind,
-        memory::spillMemoryPool(),
-        spillConfig_->executor);
   }
-  VELOX_CHECK_EQ(spiller->state().maxPartitions(), 1);
-  return spiller;
+  spiller_->spill();
+  data_->clear();
+}
+
+void SortBuffer::spillOutput() {
+  if (spiller_ != nullptr) {
+    // Already spilled.
+    return;
+  }
+
+  spiller_ = std::make_unique<Spiller>(
+      Spiller::Type::kOrderByOutput,
+      data_.get(),
+      spillerStoreType_,
+      spillConfig_->getSpillDirPathCb,
+      spillConfig_->fileNamePrefix,
+      spillConfig_->writeBufferSize,
+      spillConfig_->compressionKind,
+      memory::spillMemoryPool(),
+      spillConfig_->executor);
+  auto spillRows = std::vector<char*>(
+      sortedRows_.begin() + numOutputRows_, sortedRows_.end());
+  spiller_->spill(spillRows);
+  data_->clear();
+  sortedRows_.clear();
+  // Finish right after spilling as the output spiller only spills at most
+  // once.
+  finishSpill();
 }
 
 void SortBuffer::prepareOutput(uint32_t maxOutputRows) {

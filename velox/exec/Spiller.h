@@ -283,8 +283,8 @@ class Spiller {
 
   void checkEmptySpillRuns() const;
 
-  /// Marks all the partitions have been spilled as we don't support
-  /// fine-grained spilling as for now.
+  // Marks all the partitions have been spilled as we don't support
+  // fine-grained spilling as for now.
   void markAllPartitionsSpilled();
 
   // Prepares spill runs for the spillable data from all the hash partitions.
@@ -292,8 +292,8 @@ class Spiller {
   // pointed by 'startRowIter'.
   void fillSpillRuns(const RowContainerIterator* startRowIter = nullptr);
 
-  /// Prepares spill run of a single partition for the spillable data from the
-  /// rows.
+  // Prepares spill run of a single partition for the spillable data from the
+  // rows.
   void fillSpillRun(std::vector<char*>& rows);
 
   // Writes out all the rows collected in spillRuns_.
