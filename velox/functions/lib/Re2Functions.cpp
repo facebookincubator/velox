@@ -390,7 +390,7 @@ class Re2SearchAndExtract final : public VectorFunction {
 bool matchExactPattern(
     StringView input,
     const std::string& pattern,
-    vector_size_t length) {
+    size_t length) {
   return input.size() == pattern.size() &&
       std::memcmp(input.data(), pattern.data(), length) == 0;
 }
@@ -399,7 +399,7 @@ bool matchExactPattern(
 bool matchPrefixPattern(
     StringView input,
     const std::string& pattern,
-    vector_size_t length) {
+    size_t length) {
   return input.size() >= length &&
       std::memcmp(input.data(), pattern.data(), length) == 0;
 }
@@ -408,7 +408,7 @@ bool matchPrefixPattern(
 bool matchSuffixPattern(
     StringView input,
     const std::string& pattern,
-    vector_size_t length) {
+    size_t length) {
   return input.size() >= length &&
       std::memcmp(
           input.data() + input.size() - length,
@@ -972,8 +972,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures() {
 
 std::string unescape(
     StringView pattern,
-    vector_size_t start,
-    vector_size_t end,
+    size_t start,
+    size_t end,
     std::optional<char> escapeChar) {
   if (!escapeChar) {
     return std::string(pattern.data(), start, end - start);
@@ -1290,7 +1290,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
 
   PatternMetadata patternMetadata = determinePatternKind(pattern, escapeChar);
   PatternKind patternKind = patternMetadata.patternKind;
-  vector_size_t reducedLength = patternMetadata.length;
+  size_t reducedLength = patternMetadata.length;
   auto fixedPattern = patternMetadata.fixedPattern;
 
   switch (patternKind) {
