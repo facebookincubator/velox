@@ -58,10 +58,6 @@ class SortBuffer {
   /// Invoked to spill all the rows from 'data_'.
   void spill();
 
-  /// Invoked to spill the rest of the rows from 'data_' during output
-  /// processing, it should actually spill at most once.
-  void spillOutput();
-
   memory::MemoryPool* pool() const {
     return pool_;
   }
@@ -88,6 +84,8 @@ class SortBuffer {
   // Finish spill, and we shouldn't get any rows from non-spilled partition as
   // there is only one hash partition for SortBuffer.
   void finishSpill();
+
+  std::unique_ptr<Spiller> makeSpiller(Spiller::Type type);
 
   const RowTypePtr input_;
   const std::vector<CompareFlags> sortCompareFlags_;

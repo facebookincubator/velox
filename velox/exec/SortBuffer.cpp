@@ -16,7 +16,6 @@
 
 #include "SortBuffer.h"
 #include "velox/exec/MemoryReclaimer.h"
-#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
 
@@ -166,61 +165,30 @@ void SortBuffer::spill() {
   }
   updateEstimatedOutputRowSize();
 
-  if (spiller_ == nullptr) {
-    spiller_ = std::make_unique<Spiller>(
-        Spiller::Type::kOrderByInput,
-        data_.get(),
-        spillerStoreType_,
-        data_->keyTypes().size(),
-        sortCompareFlags_,
-        spillConfig_->getSpillDirPathCb,
-        spillConfig_->fileNamePrefix,
-        spillConfig_->writeBufferSize,
-        spillConfig_->compressionKind,
-        memory::spillMemoryPool(),
-        spillConfig_->executor);
-    VELOX_CHECK_EQ(spiller_->state().maxPartitions(), 1);
+  if (sortedRows_.empty()) {
+    // Input stage spill.
+    if (spiller_ == nullptr) {
+      spiller_ = makeSpiller(Spiller::Type::kOrderByInput);
+    }
+    spiller_->spill();
+    data_->clear();
+  } else {
+    // Output stage spill.
+    if (spiller_ != nullptr) {
+      // Already spilled.
+      return;
+    }
+
+    spiller_ = makeSpiller(Spiller::Type::kOrderByOutput);
+    auto spillRows = std::vector<char*>(
+        sortedRows_.begin() + numOutputRows_, sortedRows_.end());
+    spiller_->spill(spillRows);
+    data_->clear();
+    sortedRows_.clear();
+    // Finish right after spilling as the output spiller only spills at most
+    // once.
+    finishSpill();
   }
-
-  spiller_->spill();
-  data_->clear();
-}
-
-void SortBuffer::spillOutput() {
-  VELOX_CHECK_NOT_NULL(
-      spillConfig_, "spill config is null when SortBuffer spill is called");
-
-  VELOX_CHECK(noMoreInput_);
-
-  if (spiller_ != nullptr) {
-    // Already spilled.
-    return;
-  }
-
-  // Check if sort buffer is empty or not, and skip spill if it is empty.
-  if (data_->numRows() == 0) {
-    return;
-  }
-  updateEstimatedOutputRowSize();
-
-  spiller_ = std::make_unique<Spiller>(
-      Spiller::Type::kOrderByOutput,
-      data_.get(),
-      spillerStoreType_,
-      spillConfig_->getSpillDirPathCb,
-      spillConfig_->fileNamePrefix,
-      spillConfig_->writeBufferSize,
-      spillConfig_->compressionKind,
-      memory::spillMemoryPool(),
-      spillConfig_->executor);
-  VELOX_CHECK_EQ(spiller_->state().maxPartitions(), 1);
-
-  auto spillRows = std::vector<char*>(
-      sortedRows_.begin() + numOutputRows_, sortedRows_.end());
-  spiller_->spill(spillRows);
-  data_->clear();
-  sortedRows_.clear();
-  finishSpill();
 }
 
 std::optional<uint64_t> SortBuffer::estimateOutputRowSize() const {
@@ -309,6 +277,37 @@ void SortBuffer::updateEstimatedOutputRowSize() {
   } else if (rowSize > estimatedOutputRowSize_.value()) {
     estimatedOutputRowSize_ = rowSize;
   }
+}
+
+std::unique_ptr<Spiller> SortBuffer::makeSpiller(Spiller::Type type) {
+  std::unique_ptr<Spiller> spiller;
+  if (type == Spiller::Type::kOrderByInput) {
+    spiller = std::make_unique<Spiller>(
+        Spiller::Type::kOrderByInput,
+        data_.get(),
+        spillerStoreType_,
+        data_->keyTypes().size(),
+        sortCompareFlags_,
+        spillConfig_->getSpillDirPathCb,
+        spillConfig_->fileNamePrefix,
+        spillConfig_->writeBufferSize,
+        spillConfig_->compressionKind,
+        memory::spillMemoryPool(),
+        spillConfig_->executor);
+  } else {
+    spiller = std::make_unique<Spiller>(
+        Spiller::Type::kOrderByOutput,
+        data_.get(),
+        spillerStoreType_,
+        spillConfig_->getSpillDirPathCb,
+        spillConfig_->fileNamePrefix,
+        spillConfig_->writeBufferSize,
+        spillConfig_->compressionKind,
+        memory::spillMemoryPool(),
+        spillConfig_->executor);
+  }
+  VELOX_CHECK_EQ(spiller->state().maxPartitions(), 1);
+  return spiller;
 }
 
 void SortBuffer::prepareOutput(uint32_t maxOutputRows) {

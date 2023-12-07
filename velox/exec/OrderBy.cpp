@@ -78,13 +78,11 @@ void OrderBy::reclaim(
     memory::MemoryReclaimer::Stats& stats) {
   VELOX_CHECK(canReclaim());
   VELOX_CHECK(!nonReclaimableSection_);
-  if (noMoreInput_) {
-    sortBuffer_->spillOutput();
-  } else {
-    // TODO: support fine-grain disk spilling based on 'targetBytes' after
-    // having row container memory compaction support later.
-    sortBuffer_->spill();
-  }
+
+  // TODO: support fine-grain disk spilling based on 'targetBytes' after
+  // having row container memory compaction support later.
+  sortBuffer_->spill();
+
   // Release the minimum reserved memory.
   pool()->release();
 }
