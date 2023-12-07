@@ -930,12 +930,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
         false,
         hashes);
     insertForJoin(
-        overflows.data(),
-        hashes.data(),
-        overflows.size(),
-        0,
-        sizeMask_ + 1,
-        nullptr);
+        overflows.data(), hashes.data(), overflows.size(), 0, -1, nullptr);
     auto table = i == 0 ? this : otherTables_[i - 1].get();
     VELOX_CHECK_EQ(table->rows()->numRows(), table->numParallelBuildRows_);
   }
@@ -1113,6 +1108,9 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
     PartitionBoundIndexType partitionBegin,
     PartitionBoundIndexType partitionEnd,
     std::vector<char*>* overflows) {
+  VELOX_DCHECK(
+      partitionEnd >= 0 ? overflows == nullptr : overflows != nullptr,
+      "if partition bounds are given, overflows must also be given.");
   auto insertFn = [&](int32_t /*row*/, PartitionBoundIndexType index) {
     if (index < partitionBegin || index >= partitionEnd) {
       overflows->push_back(inserted);
