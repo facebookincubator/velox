@@ -62,6 +62,8 @@ struct CursorParameters {
   std::string spillDirectory;
 
   bool copyResult = true;
+
+  std::unordered_map<std::string, std::string> queryConfigs;
 };
 
 class TaskQueue {

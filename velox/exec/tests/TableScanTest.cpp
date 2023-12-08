@@ -93,6 +93,19 @@ class TableScanTest : public virtual HiveConnectorTestBase {
     return HiveConnectorTestBase::assertQuery(plan, filePaths, duckDbSql);
   }
 
+  std::shared_ptr<Task> assertQuery(
+      const std::shared_ptr<const core::PlanNode>& plan,
+      const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
+      const std::string& duckDbSql,
+      const int32_t numPrefetchSplit) {
+    return AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(
+            core::QueryConfig::kMaxSplitPreloadPerDriver,
+            std::to_string(numPrefetchSplit))
+        .splits(makeHiveConnectorSplits(filePaths))
+        .assertResults(duckDbSql);
+  }
+
   core::PlanNodePtr tableScanNode() {
     return tableScanNode(rowType_);
   }
@@ -888,10 +901,6 @@ TEST_F(TableScanTest, subfieldPruningArrayType) {
 // Test reading files written before schema change, e.g. missing newly added
 // columns.
 TEST_F(TableScanTest, missingColumns) {
-  // Disable preload so that we test one single data source.
-  auto oldSplitPreload = FLAGS_split_preload_per_driver;
-  FLAGS_split_preload_per_driver = 0;
-
   // Simulate schema change of adding a new column.
   // Create even files (old) with one column, odd ones (new) with two columns.
   const vector_size_t size = 1'000;
@@ -930,32 +939,36 @@ TEST_F(TableScanTest, missingColumns) {
   auto op = PlanBuilder(pool_.get())
                 .tableScan(outputType, {}, "", dataColumns)
                 .planNode();
-  assertQuery(op, filePaths, "SELECT * FROM tmp");
+  // Disable preload so that we test one single data source.
+  assertQuery(op, filePaths, "SELECT * FROM tmp", 0);
 
   // Use missing column in a tuple domain filter.
   op = PlanBuilder(pool_.get())
            .tableScan(outputType, {"c1 <= 100.1"}, "", dataColumns)
            .planNode();
-  assertQuery(op, filePaths, "SELECT * FROM tmp WHERE c1 <= 100.1");
+  assertQuery(op, filePaths, "SELECT * FROM tmp WHERE c1 <= 100.1", 0);
 
   // Use missing column in a tuple domain filter. Select *.
   op = PlanBuilder(pool_.get())
            .tableScan(outputType, {"c1 <= 2000.1"}, "", dataColumns)
            .planNode();
-  assertQuery(op, filePaths, "SELECT * FROM tmp WHERE c1 <= 2000.1");
+
+  assertQuery(op, filePaths, "SELECT * FROM tmp WHERE c1 <= 2000.1", 0);
 
   // Use missing column in a tuple domain filter. Select c0.
   op = PlanBuilder(pool_.get())
            .tableScan(outputTypeC0, {"c1 <= 3000.1"}, "", dataColumns)
            .planNode();
-  assertQuery(op, filePaths, "SELECT c0 FROM tmp WHERE c1 <= 3000.1");
+
+  assertQuery(op, filePaths, "SELECT c0 FROM tmp WHERE c1 <= 3000.1", 0);
 
   // Use missing column in a tuple domain filter. Select count(*).
   op = PlanBuilder(pool_.get())
            .tableScan(ROW({}, {}), {"c1 <= 4000.1"}, "", dataColumns)
            .singleAggregation({}, {"count(1)"})
            .planNode();
-  assertQuery(op, filePaths, "SELECT count(*) FROM tmp WHERE c1 <= 4000.1");
+
+  assertQuery(op, filePaths, "SELECT count(*) FROM tmp WHERE c1 <= 4000.1", 0);
 
   // Use missing column 'c1' in 'is null' filter, while not selecting 'c1'.
   SubfieldFilters filters;
@@ -968,14 +981,15 @@ TEST_F(TableScanTest, missingColumns) {
            .tableScan(outputTypeC0, tableHandle, assignments)
            .planNode();
   assertQuery(
-      op, filePaths, "SELECT c0 FROM tmp WHERE c1 is null or c1 <= 1050.0");
+      op, filePaths, "SELECT c0 FROM tmp WHERE c1 is null or c1 <= 1050.0", 0);
 
   // Use missing column 'c1' in 'is null' filter, while not selecting anything.
   op = PlanBuilder(pool_.get())
            .tableScan(ROW({}, {}), {"c1 is null"}, "", dataColumns)
            .singleAggregation({}, {"count(1)"})
            .planNode();
-  assertQuery(op, filePaths, "SELECT count(*) FROM tmp WHERE c1 is null");
+
+  assertQuery(op, filePaths, "SELECT count(*) FROM tmp WHERE c1 is null", 0);
 
   // Use column aliases.
   outputType = ROW({"a", "b"}, {BIGINT(), DOUBLE()});
@@ -989,9 +1003,8 @@ TEST_F(TableScanTest, missingColumns) {
   op = PlanBuilder(pool_.get())
            .tableScan(outputType, tableHandle, assignments)
            .planNode();
-  assertQuery(op, filePaths, "SELECT * FROM tmp");
 
-  FLAGS_split_preload_per_driver = oldSplitPreload;
+  assertQuery(op, filePaths, "SELECT * FROM tmp", 0);
 }
 
 // Tests queries that use Lazy vectors with multiple layers of wrapping.
@@ -1228,7 +1241,6 @@ TEST_F(TableScanTest, multipleSplits) {
   std::vector<int32_t> numPrefetchSplits = {0, 2};
   for (const auto& numPrefetchSplit : numPrefetchSplits) {
     SCOPED_TRACE(fmt::format("numPrefetchSplit {}", numPrefetchSplit));
-    FLAGS_split_preload_per_driver = numPrefetchSplit;
     auto filePaths = makeFilePaths(100);
     auto vectors = makeVectors(100, 100);
     for (int32_t i = 0; i < vectors.size(); i++) {
@@ -1236,7 +1248,8 @@ TEST_F(TableScanTest, multipleSplits) {
     }
     createDuckDbTable(vectors);
 
-    auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp");
+    auto task = assertQuery(
+        tableScanNode(), filePaths, "SELECT * FROM tmp", numPrefetchSplit);
     auto stats = getTableScanRuntimeStats(task);
     if (numPrefetchSplit != 0) {
       ASSERT_GT(stats.at("preloadedSplits").sum, 10);
@@ -2912,7 +2925,6 @@ TEST_F(TableScanTest, parallelPrepare) {
   constexpr int32_t kNumParallel = 100;
   const char* kLargeRemainingFilter =
       "c0 + 1::BIGINT > 0::BIGINT or 1111 in (1, 2, 3, 4, 5) or array_sort(array_distinct(array[1, 1, 3, 4, 5, 6,7]))[1] = -5";
-  FLAGS_split_preload_per_driver = kNumParallel;
   auto data = makeRowVector(
       {makeFlatVector<int32_t>(10, [](auto row) { return row % 5; })});
 
@@ -2928,7 +2940,12 @@ TEST_F(TableScanTest, parallelPrepare) {
   for (auto i = 0; i < kNumParallel; ++i) {
     splits.push_back(makeHiveSplit(filePath->path));
   }
-  AssertQueryBuilder(plan).splits(splits).copyResults(pool_.get());
+  AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kMaxSplitPreloadPerDriver,
+          std::to_string(kNumParallel))
+      .splits(splits)
+      .copyResults(pool_.get());
 }
 
 TEST_F(TableScanTest, dictionaryMemo) {

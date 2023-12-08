@@ -111,6 +111,10 @@ Generic Configuration
      - true
      - Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
        evalWithMemo are enabled.
+   * - max_split_preload_per_driver
+     - integer
+     - 2
+     - The maximum concurrency for split preloading per driver.
 
 .. _expression-evaluation-conf:
 
