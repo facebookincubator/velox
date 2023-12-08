@@ -49,8 +49,14 @@ class TimestampColumnReader : public IntegerColumnReader {
       if (resultVector->isNullAt(i)) {
         continue;
       }
-      const auto timestamp = rawValues[i];
-      uint64_t nanos = timestamp.getNanos();
+
+      // Convert int128_t to Timestamp by extracting days and nanos.
+      const int128_t encoded = reinterpret_cast<int128_t&>(rawValues[i]);
+      const int32_t days = static_cast<int32_t>(encoded >> 64);
+      uint64_t nanos = encoded & ((((1ULL << 63) - 1ULL) << 1) + 1);
+      const auto timestamp = Timestamp::fromDaysAndNanos(days, nanos);
+
+      nanos = timestamp.getNanos();
       switch (timestampPrecision_) {
         case TimestampPrecision::kMilliseconds:
           nanos = nanos / 1'000'000 * 1'000'000;
@@ -70,7 +76,7 @@ class TimestampColumnReader : public IntegerColumnReader {
       const RowSet& rows,
       const uint64_t* /*incomingNulls*/) override {
     auto& data = formatData_->as<ParquetData>();
-    // Use int128_t as a workaroud. Timestamp in Velox is of 16-byte length.
+    // Use int128_t as a workaround. Timestamp in Velox is of 16-byte length.
     prepareRead<int128_t>(offset, rows, nullptr);
     readCommon<IntegerColumnReader, true>(rows);
     readOffset_ += rows.back() + 1;

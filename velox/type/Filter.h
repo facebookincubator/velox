@@ -1825,7 +1825,10 @@ class TimestampRange final : public Filter {
   }
 
   bool testInt128(int128_t value) const final {
-    const auto& ts = reinterpret_cast<const Timestamp&>(value);
+    // Convert int128_t to Timestamp by extracting days and nanos.
+    const int32_t days = static_cast<int32_t>(value >> 64);
+    const uint64_t nanos = value & ((((1ULL << 63) - 1ULL) << 1) + 1);
+    const auto ts = Timestamp::fromDaysAndNanos(days, nanos);
     return ts >= lower_ && ts <= upper_;
   }
 
