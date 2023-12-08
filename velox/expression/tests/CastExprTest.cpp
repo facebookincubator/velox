@@ -1348,8 +1348,7 @@ TEST_F(CastExprTest, truncateVsRound) {
 
   setCastIntByTruncate(false);
   testCast<int32_t, int8_t>("tinyint", {2, 3}, {2, 3});
-  testCast<int32_t, int8_t>(
-      "tinyint", {1111111, 1000, -100101}, {0, 0, 0}, true);
+  testCast<int32_t, int8_t>("tinyint", {1111111, 1000, -100101}, {0, 0, 0});
 }
 
 TEST_F(CastExprTest, nullInputs) {
