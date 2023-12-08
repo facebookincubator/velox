@@ -384,11 +384,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       // We start from the end to allow in-place expansion.
       auto values = dictionary_.values->asMutable<Timestamp>();
       auto parquetValues = dictionary_.values->asMutable<char>();
-      static constexpr int64_t kJulianToUnixEpochDays = 2440588LL;
-      static constexpr int64_t kSecondsPerDay = 86400LL;
-      static constexpr int64_t kNanosPerSecond =
-          Timestamp::kNanosecondsInMillisecond *
-          Timestamp::kMillisecondsInSecond;
+
       for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
         // Convert the timestamp into seconds and nanos since the Unix epoch,
         // 00:00:00.000000 on 1 January 1970.
@@ -402,12 +398,8 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             &days,
             parquetValues + i * sizeof(Int96Timestamp) + sizeof(uint64_t),
             sizeof(int32_t));
-        int64_t seconds = (days - kJulianToUnixEpochDays) * kSecondsPerDay;
-        if (nanos > Timestamp::kMaxNanos) {
-          seconds += nanos / kNanosPerSecond;
-          nanos -= (nanos / kNanosPerSecond) * kNanosPerSecond;
-        }
-        values[i] = Timestamp(seconds, nanos);
+
+        values[i] = Timestamp::fromDaysAndNanos(days, nanos);
       }
       break;
     }
