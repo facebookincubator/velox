@@ -92,7 +92,17 @@ class DirectDecoder : public IntDecoder<isSigned> {
       } else if constexpr (std::is_same_v<
                                typename Visitor::DataType,
                                int128_t>) {
-        toSkip = visitor.process(super::template readInt<int128_t>(), atEnd);
+        if (super::numBytes == 12 /* INT96 */) {
+          int128_t encoded = super::template readInt<int128_t>();
+          int32_t days = encoded & ((1ULL << 32) - 1);
+          uint64_t nanos = static_cast<uint64_t>(encoded >> 32);
+
+          auto timestamp = Timestamp::fromDaysAndNanos(days, nanos);
+          toSkip =
+              visitor.process(*reinterpret_cast<int128_t*>(&timestamp), atEnd);
+        } else {
+          toSkip = visitor.process(super::template readInt<int128_t>(), atEnd);
+        }
       } else {
         toSkip = visitor.process(super::template readInt<int64_t>(), atEnd);
       }

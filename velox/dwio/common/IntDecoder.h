@@ -155,6 +155,9 @@ class IntDecoder {
   T readInt();
 
   template <typename T>
+  T readInt96();
+
+  template <typename T>
   T readVInt();
 
   signed char readByte();
@@ -438,10 +441,42 @@ inline T IntDecoder<isSigned>::readInt() {
     return readLittleEndianFromBigEndian<T>();
   } else {
     if constexpr (std::is_same_v<T, int128_t>) {
-      VELOX_NYI();
+      if (numBytes == 12) {
+        // TODO:: Do we need to handle useVInts case?
+        return readInt96<T>();
+      } else {
+        VELOX_NYI();
+      }
     }
     return readLongLE();
   }
+}
+
+template <bool isSigned>
+template <typename T>
+inline T IntDecoder<isSigned>::readInt96() {
+  int64_t offset = 0;
+  unsigned char ch;
+
+  // read unsigned byte 64
+  uint64_t part1 = 0;
+  for (uint32_t i = 0; i < 8; ++i) {
+    ch = readByte();
+    part1 |= (ch & BASE_256_MASK) << offset;
+    offset += 8;
+  }
+
+  // read signed byte 32
+  int32_t part2 = 0;
+  offset = 0;
+  for (uint32_t i = 0; i < 4; ++i) {
+    ch = readByte();
+    part2 |= (ch & BASE_256_MASK) << offset;
+    offset += 8;
+  }
+
+  int128_t result = part1;
+  return (result << 32) | part2;
 }
 
 template <bool isSigned>
