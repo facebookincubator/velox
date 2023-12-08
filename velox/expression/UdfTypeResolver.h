@@ -75,9 +75,9 @@ class GenericWriter;
 namespace detail {
 template <typename T>
 struct resolver {
-  using in_type = typename CppToType<T>::NativeType;
+  using in_type = typename SimpleTypeTrait<T>::NativeType;
   using null_free_in_type = in_type;
-  using out_type = typename CppToType<T>::NativeType;
+  using out_type = typename SimpleTypeTrait<T>::NativeType;
 };
 
 template <typename K, typename V>
