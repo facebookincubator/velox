@@ -1041,10 +1041,11 @@ class PatternStringIterator {
       return false;
     }
 
-    userPreviousCharKind_ = charKind_;
-    nextInternal();
+    isPreviousWildcard_ = charKind_ == CharKind::kWildcard;
 
-    if (charKind_ == CharKind::kEscape) {
+    currentIndex_++;
+    auto currentChar = current();
+    if (currentChar == escapeChar_) {
       // Escape char should be followed by another char.
       VELOX_USER_CHECK_LT(
           currentIndex_,
@@ -1053,18 +1054,22 @@ class PatternStringIterator {
           pattern_,
           escapeChar_.value())
 
-      // Advance the cursor.
-      nextInternal();
+      currentIndex_++;
+      currentChar = current();
 
-      auto currentChar = current();
-      // The char follows escapeChar can only be one of (%, _, escapeChar).
-      if (currentChar != '%' && currentChar != '_' &&
-          currentChar != escapeChar_) {
+      if (currentChar == escapeChar_ || currentChar == '_' ||
+          currentChar == '%') {
+        charKind_ = CharKind::kNormal;
+      } else {
         VELOX_USER_FAIL(
             "Escape character must be followed by '%', '_' or the escape character itself: {}, escape {}",
             pattern_,
             escapeChar_.value())
       }
+    } else if (currentChar == '_' || currentChar == '%') {
+      charKind_ = CharKind::kWildcard;
+    } else {
+      charKind_ = CharKind::kNormal;
     }
 
     return true;
@@ -1084,16 +1089,12 @@ class PatternStringIterator {
   }
 
   bool isPreviousWildcard() const {
-    return userPreviousCharKind_ == CharKind::kWildcard;
+    return isPreviousWildcard_;
   }
 
  private:
   // Represents the state of current cursor/char.
   enum class CharKind {
-    // Escape char.
-    // NOTE: If escape char is set as '\',  for pattern '\\', the first '\' is
-    // an escaping char, the second is not, it is just a literal '\'
-    kEscape,
     // Wildcard char.
     // NOTE: If escape char is set as '\', for pattern '\%%', the first '%' is
     // not a wildcard, just a literal '%', the second '%' is a wildcard.
@@ -1101,24 +1102,6 @@ class PatternStringIterator {
     // Chars that are not escape char & not wildcard char.
     kNormal
   };
-
-  // Advance the cursor to next char.
-  void nextInternal() {
-    const bool previousEscape = (charKind_ == CharKind::kEscape);
-
-    currentIndex_++;
-
-    auto currentChar = current();
-    if (!previousEscape && currentChar == escapeChar_) {
-      charKind_ = CharKind::kEscape;
-    } else if (
-        !previousEscape && currentChar != escapeChar_ &&
-        (currentChar == '_' || currentChar == '%')) {
-      charKind_ = CharKind::kWildcard;
-    } else {
-      charKind_ = CharKind::kNormal;
-    }
-  }
 
   // Char at current cursor.
   char current() const {
@@ -1131,14 +1114,9 @@ class PatternStringIterator {
 
   int32_t currentIndex_ = -1;
 
-  // Kind of current char.
   CharKind charKind_ = CharKind::kNormal;
 
-  // 'previousCharKind_' from user's perspective.
-  // The difference between previousCharKind_ and realPreviousCharKind_ can be
-  // described by an example: for pattern string 'a\_b', if the cursor is at '_'
-  // previousCharKind_ is kEscape, while userPreviousCharKind_ is kNormal.
-  CharKind userPreviousCharKind_ = CharKind::kNormal;
+  bool isPreviousWildcard_{false};
 };
 
 PatternMetadata determinePatternKind(
