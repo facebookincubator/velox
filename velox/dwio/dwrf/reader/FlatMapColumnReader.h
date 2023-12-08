@@ -87,6 +87,18 @@ class KeyNode {
       uint64_t nonNullMaps,
       const uint64_t* FOLLY_NULLABLE nulls);
 
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<BaseVector * FOLLY_NULLABLE> co_load(uint64_t numValues);
+
+  folly::coro::Task<void> co_loadAsChild(
+      VectorPtr& vec,
+      uint64_t numValues,
+      uint64_t nonNullMaps,
+      const uint64_t* FOLLY_NULLABLE nulls);
+
+#endif // FOLLY_HAS_COROUTINES
+
   const uint64_t* FOLLY_NULLABLE mergeNulls(
       uint64_t numValues,
       BufferPtr& mergedNulls,
@@ -158,6 +170,17 @@ class FlatMapColumnReader : public ColumnReader {
       VectorPtr& result,
       const uint64_t* FOLLY_NULLABLE nulls) override;
 
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
+
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
   std::vector<std::unique_ptr<KeyNode<T>>> keyNodes_;
@@ -187,6 +210,17 @@ class FlatMapStructEncodingColumnReader : public ColumnReader {
       uint64_t numValues,
       VectorPtr& result,
       const uint64_t* FOLLY_NULLABLE nulls) override;
+
+#if FOLLY_HAS_COROUTINES
+
+  folly::coro::Task<uint64_t> co_skip(uint64_t numValues) override;
+
+  folly::coro::Task<void> co_next(
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) override;
+
+#endif // FOLLY_HAS_COROUTINES
 
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;

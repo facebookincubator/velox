@@ -15,6 +15,7 @@
  */
 
 #include "folly/executors/CPUThreadPoolExecutor.h"
+#include "folly/experimental/coro/BlockingWait.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/common/exception/Exceptions.h"
@@ -164,9 +165,44 @@ class ColumnReaderTestBase {
     }
   }
 
+  uint64_t skip(ColumnReader& reader, uint64_t numValues) {
+#if FOLLY_HAS_COROUTINES
+    if (useCoroutines()) {
+      if (parallelDecoding()) {
+        return folly::coro::blockingWait(
+            reader.co_skip(numValues).scheduleOn(executor_.get()));
+      } else {
+        return folly::coro::blockingWait(reader.co_skip(numValues));
+      }
+    }
+#endif // FOLLY_HAS_COROUTINES
+    return reader.skip(numValues);
+  }
+
+  void next(
+      ColumnReader& reader,
+      uint64_t numValues,
+      VectorPtr& result,
+      const uint64_t* nulls = nullptr) {
+#if FOLLY_HAS_COROUTINES
+    if (useCoroutines()) {
+      if (parallelDecoding()) {
+        folly::coro::blockingWait(reader.co_next(numValues, result, nulls)
+                                      .scheduleOn(executor_.get()));
+      } else {
+        folly::coro::blockingWait(reader.co_next(numValues, result, nulls));
+      }
+    } else {
+      reader.next(numValues, result, nulls);
+    }
+#else // no FOLLY_HAS_COROUTINES
+    reader.next(numValues, result, nulls);
+#endif // FOLLY_HAS_COROUTINES
+  }
+
   void next(uint64_t numValues, VectorPtr& result) {
     if (columnReader_) {
-      columnReader_->next(numValues, result);
+      next(*columnReader_, numValues, result);
     } else {
       selectiveColumnReader_->next(numValues, result, nullptr);
     }
@@ -175,7 +211,7 @@ class ColumnReaderTestBase {
   void skip(int32_t skipSize = 0) {
     if (skipSize > 0) {
       if (columnReader_) {
-        columnReader_->skip(skipSize);
+        skip(*columnReader_, skipSize);
       } else {
         selectiveColumnReader_->skip(skipSize);
         selectiveColumnReader_->setReadOffset(
@@ -192,7 +228,7 @@ class ColumnReaderTestBase {
     skip(skipSize);
 
     if (columnReader_) {
-      columnReader_->next(readSize, batch);
+      next(*columnReader_, readSize, batch);
     } else {
       selectiveColumnReader_->next(readSize, batch, nullptr);
     }
@@ -218,6 +254,7 @@ class ColumnReaderTestBase {
   virtual bool useSelectiveReader() const = 0;
   virtual bool returnFlatVector() const = 0;
   virtual bool parallelDecoding() const = 0;
+  virtual bool useCoroutines() const = 0;
 
   MockStripeStreams streams_;
   memory::AllocationPool pool_;
@@ -236,13 +273,15 @@ struct StringReaderTestParams {
   const bool returnFlatVector;
   const bool expectMemoryReuse;
   const bool parallelDecoding;
+  const bool useCoroutines;
 
   std::string toString() const {
     std::ostringstream out;
     out << (useSelectiveReader ? "selective" : "") << "_"
         << (returnFlatVector ? "as_flat" : "") << "_"
         << (expectMemoryReuse ? "reuse" : "") << "_"
-        << (parallelDecoding ? "parallel" : "");
+        << (parallelDecoding ? "parallel" : "") << "_"
+        << (useCoroutines ? "coro" : "");
     return out.str();
   }
 };
@@ -251,11 +290,7 @@ class StringReaderTests
     : public ::testing::TestWithParam<StringReaderTestParams>,
       public ColumnReaderTestBase {
  protected:
-  StringReaderTests()
-      : useSelectiveReader_{GetParam().useSelectiveReader},
-        returnFlatVector_{GetParam().returnFlatVector},
-        expectMemoryReuse_{GetParam().expectMemoryReuse},
-        parallelDecoding_{GetParam().parallelDecoding} {}
+  StringReaderTests() : params_{GetParam()} {}
 
   VectorPtr newBatch(const TypePtr& rowType) const {
     return useSelectiveReader()
@@ -271,34 +306,41 @@ class StringReaderTests
     }
   }
 
-  const bool useSelectiveReader_;
-  const bool returnFlatVector_;
-  const bool expectMemoryReuse_;
-  const bool parallelDecoding_;
-
   bool useSelectiveReader() const override {
-    return useSelectiveReader_;
+    return params_.useSelectiveReader;
   }
 
   bool returnFlatVector() const override {
-    return returnFlatVector_;
+    return params_.returnFlatVector;
   }
 
   bool parallelDecoding() const override {
-    return parallelDecoding_;
+    return params_.parallelDecoding;
   }
+
+  bool useCoroutines() const override {
+    return params_.useCoroutines;
+  }
+
+  bool expectMemoryReuse() const {
+    return params_.expectMemoryReuse;
+  }
+
+  StringReaderTestParams params_;
 };
 
 struct ReaderTestParams {
   const bool useSelectiveReader;
   const bool expectMemoryReuse;
   const bool parallelDecoding;
+  const bool useCoroutines;
 
   std::string toString() const {
     std::ostringstream out;
     out << (useSelectiveReader ? "selective" : "") << "_"
         << (expectMemoryReuse ? "reuse" : "") << "_"
-        << (parallelDecoding ? "parallel" : "");
+        << (parallelDecoding ? "parallel" : "") << "_"
+        << (useCoroutines ? "coro" : "");
     return out.str();
   }
 };
@@ -306,10 +348,7 @@ struct ReaderTestParams {
 class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
                          public ColumnReaderTestBase {
  protected:
-  TestColumnReader()
-      : useSelectiveReader_{GetParam().useSelectiveReader},
-        expectMemoryReuse_{GetParam().expectMemoryReuse},
-        parallelDecoding_{GetParam().parallelDecoding} {}
+  TestColumnReader() : params_{GetParam()} {}
 
   VectorPtr newBatch(const TypePtr& rowType) const {
     return useSelectiveReader()
@@ -329,12 +368,8 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
     }
   }
 
-  const bool useSelectiveReader_;
-  const bool expectMemoryReuse_;
-  const bool parallelDecoding_;
-
   bool useSelectiveReader() const override {
-    return useSelectiveReader_;
+    return params_.useSelectiveReader;
   }
 
   bool returnFlatVector() const override {
@@ -342,18 +377,30 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
   }
 
   bool parallelDecoding() const override {
-    return parallelDecoding_;
+    return params_.parallelDecoding;
   }
+
+  bool useCoroutines() const override {
+    return params_.useCoroutines;
+  }
+
+  bool expectMemoryReuse() const {
+    return params_.expectMemoryReuse;
+  }
+
+  ReaderTestParams params_;
 };
 
 struct NonSelectiveReaderTestParams {
   const bool expectMemoryReuse;
   const bool parallelDecoding;
+  const bool useCoroutines;
 
   std::string toString() const {
     std::ostringstream out;
     out << (expectMemoryReuse ? "reuse" : "") << "_"
-        << (parallelDecoding ? "parallel" : "");
+        << (parallelDecoding ? "parallel" : "") << "_"
+        << (useCoroutines ? "coro" : "");
     return out.str();
   }
 };
@@ -363,9 +410,7 @@ class TestNonSelectiveColumnReader
     : public testing::TestWithParam<NonSelectiveReaderTestParams>,
       public ColumnReaderTestBase {
  protected:
-  TestNonSelectiveColumnReader()
-      : expectMemoryReuse_{GetParam().expectMemoryReuse},
-        parallelDecoding_{GetParam().parallelDecoding} {}
+  TestNonSelectiveColumnReader() : params_{GetParam()} {}
 
   VectorPtr newBatch(const TypePtr& rowType) const {
     return nullptr;
@@ -388,21 +433,30 @@ class TestNonSelectiveColumnReader
   }
 
   bool parallelDecoding() const override {
-    return parallelDecoding_;
+    return params_.parallelDecoding;
   }
 
-  const bool expectMemoryReuse_;
-  const bool parallelDecoding_;
+  bool useCoroutines() const override {
+    return params_.useCoroutines;
+  }
+
+  bool expectMemoryReuse() const {
+    return params_.expectMemoryReuse;
+  }
+
+  const NonSelectiveReaderTestParams params_;
 };
 
 struct SchemaMismatchTestParam {
   const bool useSelectiveReader;
   const bool parallelDecoding;
+  const bool useCoroutines;
 
   std::string toString() const {
     std::ostringstream out;
     out << (useSelectiveReader ? "selective" : "") << "_"
-        << (parallelDecoding ? "parallel" : "");
+        << (parallelDecoding ? "parallel" : "") << "_"
+        << (useCoroutines ? "coro" : "");
     return out.str();
   }
 };
@@ -410,9 +464,7 @@ struct SchemaMismatchTestParam {
 class SchemaMismatchTest : public TestWithParam<SchemaMismatchTestParam>,
                            public ColumnReaderTestBase {
  protected:
-  SchemaMismatchTest()
-      : useSelectiveReader_{GetParam().useSelectiveReader},
-        parallelDecoding_{GetParam().parallelDecoding} {}
+  SchemaMismatchTest() : params_{GetParam()} {}
 
   VectorPtr newBatch(const TypePtr& rowType) {
     return useSelectiveReader()
@@ -420,11 +472,10 @@ class SchemaMismatchTest : public TestWithParam<SchemaMismatchTestParam>,
         : nullptr;
   }
 
-  const bool useSelectiveReader_;
-  const bool parallelDecoding_;
+  SchemaMismatchTestParam params_;
 
   bool useSelectiveReader() const override {
-    return useSelectiveReader_;
+    return params_.useSelectiveReader;
   }
 
   bool returnFlatVector() const override {
@@ -432,7 +483,11 @@ class SchemaMismatchTest : public TestWithParam<SchemaMismatchTestParam>,
   }
 
   bool parallelDecoding() const override {
-    return parallelDecoding_;
+    return params_.parallelDecoding;
+  }
+
+  bool useCoroutines() const override {
+    return params_.useCoroutines;
   }
 
   template <typename From, typename To>
@@ -446,7 +501,7 @@ class SchemaMismatchTest : public TestWithParam<SchemaMismatchTestParam>,
     asIsSelectiveColumnReader_ = std::move(selectiveColumnReader_);
     VectorPtr asIsBatch = newBatch(fileType);
     if (asIsColumnReader_) {
-      asIsColumnReader_->next(size, asIsBatch, nullptr);
+      next(*asIsColumnReader_, size, asIsBatch, nullptr);
     } else {
       asIsSelectiveColumnReader_->next(size, asIsBatch, nullptr);
     }
@@ -457,7 +512,7 @@ class SchemaMismatchTest : public TestWithParam<SchemaMismatchTestParam>,
     buildReader(requestedType, fileType, {}, scanSpec2.get());
     VectorPtr mismatchBatch = newBatch(requestedType);
     if (columnReader_) {
-      columnReader_->next(size, mismatchBatch, nullptr);
+      next(*columnReader_, size, mismatchBatch, nullptr);
     } else {
       selectiveColumnReader_->next(size, mismatchBatch, nullptr);
     }
@@ -577,13 +632,13 @@ TEST_P(TestColumnReader, testBooleanWithNullsFractional) {
   }
 
   auto boolBatchPtr = boolBatch.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     boolBatch.reset();
   }
   skipAndRead(batch, /* read */ 2);
 
   boolBatch = getOnlyChild<FlatVector<bool>>(batch);
-  ASSERT_EQ(expectMemoryReuse_, boolBatch.get() == boolBatchPtr);
+  ASSERT_EQ(expectMemoryReuse(), boolBatch.get() == boolBatchPtr);
 
   ASSERT_EQ(2, boolBatch->size());
   ASSERT_EQ(1, getNullCount(boolBatch));
@@ -629,13 +684,13 @@ TEST_P(TestColumnReader, testBooleanSkipsWithNulls) {
   EXPECT_EQ(0, boolBatch->valueAt(0));
 
   auto boolBatchPtr = boolBatch.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     boolBatch.reset();
   }
   skipAndRead(batch, /* read */ 5, /* skip */ 506);
 
   boolBatch = getOnlyChild<FlatVector<bool>>(batch);
-  ASSERT_EQ(expectMemoryReuse_, boolBatch.get() == boolBatchPtr);
+  ASSERT_EQ(expectMemoryReuse(), boolBatch.get() == boolBatchPtr);
 
   ASSERT_EQ(5, boolBatch->size());
   ASSERT_EQ(4, getNullCount(boolBatch));
@@ -788,13 +843,13 @@ TEST_P(TestColumnReader, testByteSkipsWithNulls) {
   EXPECT_EQ(0, byteBatch->valueAt(0));
 
   auto byteBatchPtr = byteBatch.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     byteBatch.reset();
   }
   skipAndRead(batch, /* read */ 5, /* skip */ 506);
 
   byteBatch = getOnlyChild<FlatVector<int8_t>>(batch);
-  ASSERT_EQ(expectMemoryReuse_, byteBatch.get() == byteBatchPtr);
+  ASSERT_EQ(expectMemoryReuse(), byteBatch.get() == byteBatchPtr);
 
   ASSERT_EQ(5, byteBatch->size());
   ASSERT_EQ(4, getNullCount(byteBatch));
@@ -1026,14 +1081,14 @@ TEST_P(TestColumnReader, testIntDictSkipNoNullsAllInDict) {
   FlatVectorPtr<int32_t> intBatch;
   for (int32_t round = 0; round < 2; ++round) {
     auto intBatchPtr = intBatch.get();
-    if (expectMemoryReuse_) {
+    if (expectMemoryReuse()) {
       intBatch.reset();
     }
     skipAndRead(batch, /* read */ 40, /* skip */ 10);
 
     intBatch = getOnlyChild<FlatVector<int32_t>>(batch);
     if (round > 0) {
-      ASSERT_EQ(expectMemoryReuse_, intBatch.get() == intBatchPtr);
+      ASSERT_EQ(expectMemoryReuse(), intBatch.get() == intBatchPtr);
     }
 
     ASSERT_EQ(40, intBatch->size());
@@ -1111,7 +1166,7 @@ TEST_P(TestColumnReader, testIntDictSkipWithNulls) {
   FlatVectorPtr<int32_t> intBatch;
   for (int32_t round = 0; round < 2; ++round) {
     auto intBatchPtr = intBatch.get();
-    if (expectMemoryReuse_) {
+    if (expectMemoryReuse()) {
       intBatch.reset();
     }
     skipAndRead(batch, /* read */ 90, /* skip */ 10);
@@ -1119,7 +1174,7 @@ TEST_P(TestColumnReader, testIntDictSkipWithNulls) {
 
     intBatch = getOnlyChild<FlatVector<int32_t>>(batch);
     if (round > 0) {
-      ASSERT_EQ(expectMemoryReuse_, intBatch.get() == intBatchPtr);
+      ASSERT_EQ(expectMemoryReuse(), intBatch.get() == intBatchPtr);
     }
     ASSERT_EQ(90, intBatch->size());
     ASSERT_LT(0, getNullCount(intBatch));
@@ -1252,7 +1307,7 @@ TEST_P(StringReaderTests, testDictionaryWithNulls) {
   skipAndRead(batch, /* read */ 200);
 
   std::shared_ptr<SimpleVector<StringView>> stringBatch;
-  if (returnFlatVector_) {
+  if (returnFlatVector()) {
     stringBatch = getOnlyChild<FlatVector<StringView>>(batch);
   } else {
     stringBatch = getOnlyChild<DictionaryVector<StringView>>(batch);
@@ -1397,7 +1452,7 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
     uint64_t rowsRead = rowIndexStride - toSkip;
 
     auto stringBatchPtr = stringBatch.get();
-    if (expectMemoryReuse_) {
+    if (expectMemoryReuse()) {
       stringBatch.reset();
     }
 
@@ -1414,13 +1469,13 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
       // Selective reader can return either flat or dictionary vector based on
       // selectivity.
       stringBatch = getOnlyChild<SimpleVector<StringView>>(batch);
-    } else if (returnFlatVector_) {
+    } else if (returnFlatVector()) {
       stringBatch = getOnlyChild<FlatVector<StringView>>(batch);
     } else {
       stringBatch = getOnlyChild<DictionaryVector<StringView>>(batch);
     }
     if (toSkip > 0) {
-      ASSERT_EQ(expectMemoryReuse_, stringBatch.get() == stringBatchPtr);
+      ASSERT_EQ(expectMemoryReuse(), stringBatch.get() == stringBatchPtr);
     }
     ASSERT_EQ(rowsRead, stringBatch->size());
     ASSERT_EQ(0, getNullCount(stringBatch));
@@ -1563,20 +1618,20 @@ TEST_P(StringReaderTests, testStringDictSkipWithNulls) {
   VectorPtr rowVector;
   while (rowCount < 150) {
     auto stringBatchPtr = stringBatch.get();
-    if (expectMemoryReuse_) {
+    if (expectMemoryReuse()) {
       stringBatch.reset();
     }
     next(rowIndexStride, batch);
     ASSERT_EQ(rowIndexStride, batch->size());
     ASSERT_EQ(0, getNullCount(batch));
 
-    if (returnFlatVector_) {
+    if (returnFlatVector()) {
       stringBatch = getOnlyChild<FlatVector<StringView>>(batch);
     } else {
       stringBatch = getOnlyChild<DictionaryVector<StringView>>(batch);
     }
     if (rowCount > 0) {
-      ASSERT_EQ(expectMemoryReuse_, stringBatch.get() == stringBatchPtr);
+      ASSERT_EQ(expectMemoryReuse(), stringBatch.get() == stringBatchPtr);
     }
     ASSERT_EQ(rowIndexStride, stringBatch->size());
     ASSERT_LT(0, getNullCount(stringBatch));
@@ -1758,7 +1813,7 @@ TEST_P(TestColumnReader, testSkipWithNulls) {
 
   auto intBatchPtr = intBatch.get();
   auto stringBatchPtr = stringBatch.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     intBatch.reset();
     stringBatch.reset();
   }
@@ -1766,8 +1821,8 @@ TEST_P(TestColumnReader, testSkipWithNulls) {
 
   intBatch = getChild<SimpleVector<int32_t>>(batch, 0);
   stringBatch = getChild<DictionaryVector<StringView>>(batch, 1);
-  ASSERT_EQ(expectMemoryReuse_, intBatch.get() == intBatchPtr);
-  ASSERT_EQ(expectMemoryReuse_, stringBatch.get() == stringBatchPtr);
+  ASSERT_EQ(expectMemoryReuse(), intBatch.get() == intBatchPtr);
+  ASSERT_EQ(expectMemoryReuse(), stringBatch.get() == stringBatchPtr);
 
   ASSERT_EQ(0, getNullCount(intBatch));
   ASSERT_EQ(0, getNullCount(stringBatch));
@@ -1830,14 +1885,14 @@ TEST_P(StringReaderTests, testBinaryDirect) {
   VectorPtr rowVector;
   for (size_t i = 0; i < 2; ++i) {
     auto stringsPtr = strings.get();
-    if (expectMemoryReuse_) {
+    if (expectMemoryReuse()) {
       strings.reset();
     }
     skipAndRead(batch, /* read */ 50);
 
     strings = getOnlyChild<FlatVector<StringView>>(batch);
     if (i > 0) {
-      ASSERT_EQ(expectMemoryReuse_, strings.get() == stringsPtr);
+      ASSERT_EQ(expectMemoryReuse(), strings.get() == stringsPtr);
     }
     ASSERT_EQ(50, strings->size());
     ASSERT_EQ(0, getNullCount(strings));
@@ -1897,14 +1952,14 @@ TEST_P(StringReaderTests, testBinaryDirectWithNulls) {
   VectorPtr rowVector;
   for (size_t i = 0; i < 2; ++i) {
     auto stringsPtr = strings.get();
-    if (expectMemoryReuse_) {
+    if (expectMemoryReuse()) {
       strings.reset();
     }
     skipAndRead(batch, /* read */ 128);
 
     strings = getOnlyChild<FlatVector<StringView>>(batch);
     if (i > 0) {
-      ASSERT_EQ(expectMemoryReuse_, strings.get() == stringsPtr);
+      ASSERT_EQ(expectMemoryReuse(), strings.get() == stringsPtr);
     }
     ASSERT_EQ(128, strings->size());
     ASSERT_LT(0, getNullCount(strings));
@@ -2013,14 +2068,14 @@ TEST_P(StringReaderTests, testStringDirectShortBuffer) {
   VectorPtr rowVector;
   for (size_t i = 0; i < 4; ++i) {
     auto stringsPtr = strings.get();
-    if (expectMemoryReuse_) {
+    if (expectMemoryReuse()) {
       strings.reset();
     }
     skipAndRead(batch, /* read */ 25);
 
     strings = getOnlyChild<FlatVector<StringView>>(batch);
     if (i > 0) {
-      ASSERT_EQ(expectMemoryReuse_, strings.get() == stringsPtr);
+      ASSERT_EQ(expectMemoryReuse(), strings.get() == stringsPtr);
     }
     ASSERT_EQ(25, strings->size());
     ASSERT_EQ(0, getNullCount(strings));
@@ -2080,14 +2135,14 @@ TEST_P(StringReaderTests, testStringDirectShortBufferWithNulls) {
   VectorPtr rowVector;
   for (size_t i = 0; i < 8; ++i) {
     auto stringsPtr = strings.get();
-    if (expectMemoryReuse_) {
+    if (expectMemoryReuse()) {
       strings.reset();
     }
     skipAndRead(batch, /* read */ 64);
 
     strings = getOnlyChild<FlatVector<StringView>>(batch);
     if (i > 0) {
-      ASSERT_EQ(expectMemoryReuse_, strings.get() == stringsPtr);
+      ASSERT_EQ(expectMemoryReuse(), strings.get() == stringsPtr);
     }
 
     ASSERT_EQ(64, strings->size());
@@ -2504,15 +2559,15 @@ TEST_P(TestNonSelectiveColumnReader, testListWithNulls) {
 
   auto listsPtr = lists.get();
   auto longsPtr = longs.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     lists.reset();
     longs.reset();
   }
   skipAndRead(batch, /* read */ 512);
   lists = getOnlyChild<ArrayVector>(batch);
   longs = std::dynamic_pointer_cast<FlatVector<int64_t>>(lists->elements());
-  ASSERT_EQ(expectMemoryReuse_, lists.get() == listsPtr);
-  ASSERT_EQ(expectMemoryReuse_, longs.get() == longsPtr);
+  ASSERT_EQ(expectMemoryReuse(), lists.get() == listsPtr);
+  ASSERT_EQ(expectMemoryReuse(), longs.get() == longsPtr);
 
   ASSERT_EQ(512, lists->size());
   ASSERT_LT(0, getNullCount(lists));
@@ -2534,15 +2589,15 @@ TEST_P(TestNonSelectiveColumnReader, testListWithNulls) {
 
   listsPtr = lists.get();
   longsPtr = longs.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     lists.reset();
     longs.reset();
   }
   skipAndRead(batch, /* read */ 512);
   lists = getOnlyChild<ArrayVector>(batch);
   longs = std::dynamic_pointer_cast<FlatVector<int64_t>>(lists->elements());
-  ASSERT_EQ(expectMemoryReuse_, lists.get() == listsPtr);
-  ASSERT_EQ(expectMemoryReuse_, longs.get() == longsPtr);
+  ASSERT_EQ(expectMemoryReuse(), lists.get() == listsPtr);
+  ASSERT_EQ(expectMemoryReuse(), longs.get() == longsPtr);
 
   ASSERT_EQ(512, lists->size());
   ASSERT_LT(0, getNullCount(lists));
@@ -2564,15 +2619,15 @@ TEST_P(TestNonSelectiveColumnReader, testListWithNulls) {
 
   listsPtr = lists.get();
   longsPtr = longs.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     lists.reset();
     longs.reset();
   }
   skipAndRead(batch, /* read */ 512);
   lists = getOnlyChild<ArrayVector>(batch);
   longs = std::dynamic_pointer_cast<FlatVector<int64_t>>(lists->elements());
-  ASSERT_EQ(expectMemoryReuse_, lists.get() == listsPtr);
-  ASSERT_EQ(expectMemoryReuse_, longs.get() == longsPtr);
+  ASSERT_EQ(expectMemoryReuse(), lists.get() == listsPtr);
+  ASSERT_EQ(expectMemoryReuse(), longs.get() == longsPtr);
 
   ASSERT_EQ(512, lists->size());
   ASSERT_LT(0, getNullCount(lists));
@@ -2658,15 +2713,15 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNulls) {
 
   auto listsPtr = lists.get();
   auto longsPtr = longs.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     lists.reset();
     longs.reset();
   }
   skipAndRead(batch, /* read */ 1, /* skip */ 13);
   lists = getOnlyChild<ArrayVector>(batch);
   longs = std::dynamic_pointer_cast<FlatVector<int64_t>>(lists->elements());
-  ASSERT_EQ(expectMemoryReuse_, lists.get() == listsPtr);
-  ASSERT_EQ(expectMemoryReuse_, longs.get() == longsPtr);
+  ASSERT_EQ(expectMemoryReuse(), lists.get() == listsPtr);
+  ASSERT_EQ(expectMemoryReuse(), longs.get() == longsPtr);
 
   ASSERT_EQ(1, lists->size());
   ASSERT_EQ(0, getNullCount(lists));
@@ -2677,15 +2732,15 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNulls) {
 
   listsPtr = lists.get();
   longsPtr = longs.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     lists.reset();
     longs.reset();
   }
   skipAndRead(batch, /* read */ 2, /* skip */ 2031);
   lists = getOnlyChild<ArrayVector>(batch);
   longs = std::dynamic_pointer_cast<FlatVector<int64_t>>(lists->elements());
-  ASSERT_EQ(expectMemoryReuse_, lists.get() == listsPtr);
-  ASSERT_EQ(expectMemoryReuse_, longs.get() == longsPtr);
+  ASSERT_EQ(expectMemoryReuse(), lists.get() == listsPtr);
+  ASSERT_EQ(expectMemoryReuse(), longs.get() == longsPtr);
 
   ASSERT_EQ(2, lists->size());
   ASSERT_LT(0, getNullCount(lists));
@@ -2749,24 +2804,24 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNullsNoData) {
   EXPECT_EQ(0, lists->offsetAt(0));
 
   auto listsPtr = lists.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     lists.reset();
   }
   skipAndRead(batch, /* read */ 1, /* skip */ 13);
   lists = getOnlyChild<ArrayVector>(batch);
-  ASSERT_EQ(expectMemoryReuse_, lists.get() == listsPtr);
+  ASSERT_EQ(expectMemoryReuse(), lists.get() == listsPtr);
 
   ASSERT_EQ(1, lists->size());
   ASSERT_EQ(0, getNullCount(lists));
   EXPECT_EQ(0, lists->offsetAt(0));
 
   listsPtr = lists.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     lists.reset();
   }
   skipAndRead(batch, /* read */ 2, /* skip */ 2031);
   lists = getOnlyChild<ArrayVector>(batch);
-  ASSERT_EQ(expectMemoryReuse_, lists.get() == listsPtr);
+  ASSERT_EQ(expectMemoryReuse(), lists.get() == listsPtr);
 
   ASSERT_EQ(2, lists->size());
   ASSERT_LT(0, getNullCount(lists));
@@ -2974,7 +3029,7 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
   auto mapsPtr = maps.get();
   auto keysPtr = keys.get();
   auto elementsPtr = elements.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     maps.reset();
     keys.reset();
     elements.reset();
@@ -2983,9 +3038,9 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
   maps = getOnlyChild<MapVector>(batch);
   keys = std::dynamic_pointer_cast<FlatVector<int64_t>>(maps->mapKeys());
   elements = std::dynamic_pointer_cast<FlatVector<int64_t>>(maps->mapValues());
-  ASSERT_EQ(expectMemoryReuse_, maps.get() == mapsPtr);
-  ASSERT_EQ(expectMemoryReuse_, keys.get() == keysPtr);
-  ASSERT_EQ(expectMemoryReuse_, elements.get() == elementsPtr);
+  ASSERT_EQ(expectMemoryReuse(), maps.get() == mapsPtr);
+  ASSERT_EQ(expectMemoryReuse(), keys.get() == keysPtr);
+  ASSERT_EQ(expectMemoryReuse(), elements.get() == elementsPtr);
 
   ASSERT_EQ(512, maps->size());
   ASSERT_LT(0, getNullCount(maps));
@@ -3013,7 +3068,7 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
   mapsPtr = maps.get();
   keysPtr = keys.get();
   elementsPtr = elements.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     maps.reset();
     keys.reset();
     elements.reset();
@@ -3022,9 +3077,9 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
   maps = getOnlyChild<MapVector>(batch);
   keys = std::dynamic_pointer_cast<FlatVector<int64_t>>(maps->mapKeys());
   elements = std::dynamic_pointer_cast<FlatVector<int64_t>>(maps->mapValues());
-  ASSERT_EQ(expectMemoryReuse_, maps.get() == mapsPtr);
-  ASSERT_EQ(expectMemoryReuse_, keys.get() == keysPtr);
-  ASSERT_EQ(expectMemoryReuse_, elements.get() == elementsPtr);
+  ASSERT_EQ(expectMemoryReuse(), maps.get() == mapsPtr);
+  ASSERT_EQ(expectMemoryReuse(), keys.get() == keysPtr);
+  ASSERT_EQ(expectMemoryReuse(), elements.get() == elementsPtr);
 
   ASSERT_EQ(512, maps->size());
   ASSERT_LT(0, getNullCount(maps));
@@ -3051,7 +3106,7 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
   mapsPtr = maps.get();
   keysPtr = keys.get();
   elementsPtr = elements.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     maps.reset();
     keys.reset();
     elements.reset();
@@ -3060,9 +3115,9 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
   maps = getOnlyChild<MapVector>(batch);
   keys = std::dynamic_pointer_cast<FlatVector<int64_t>>(maps->mapKeys());
   elements = std::dynamic_pointer_cast<FlatVector<int64_t>>(maps->mapValues());
-  ASSERT_EQ(expectMemoryReuse_, maps.get() == mapsPtr);
-  ASSERT_EQ(expectMemoryReuse_, keys.get() == keysPtr);
-  ASSERT_EQ(expectMemoryReuse_, elements.get() == elementsPtr);
+  ASSERT_EQ(expectMemoryReuse(), maps.get() == mapsPtr);
+  ASSERT_EQ(expectMemoryReuse(), keys.get() == keysPtr);
+  ASSERT_EQ(expectMemoryReuse(), elements.get() == elementsPtr);
 
   ASSERT_EQ(512, maps->size());
   ASSERT_LT(0, getNullCount(maps));
@@ -3162,7 +3217,7 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNulls) {
   auto mapsPtr = maps.get();
   auto keysPtr = keys.get();
   auto elementsPtr = elements.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     maps.reset();
     keys.reset();
     elements.reset();
@@ -3171,9 +3226,9 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNulls) {
   maps = getOnlyChild<MapVector>(batch);
   keys = std::dynamic_pointer_cast<FlatVector<int64_t>>(maps->mapKeys());
   elements = std::dynamic_pointer_cast<FlatVector<int64_t>>(maps->mapValues());
-  ASSERT_EQ(expectMemoryReuse_, maps.get() == mapsPtr);
-  ASSERT_EQ(expectMemoryReuse_, keys.get() == keysPtr);
-  ASSERT_EQ(expectMemoryReuse_, elements.get() == elementsPtr);
+  ASSERT_EQ(expectMemoryReuse(), maps.get() == mapsPtr);
+  ASSERT_EQ(expectMemoryReuse(), keys.get() == keysPtr);
+  ASSERT_EQ(expectMemoryReuse(), elements.get() == elementsPtr);
 
   ASSERT_EQ(1, maps->size());
   ASSERT_EQ(0, getNullCount(maps));
@@ -3188,7 +3243,7 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNulls) {
   mapsPtr = maps.get();
   keysPtr = keys.get();
   elementsPtr = elements.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     maps.reset();
     keys.reset();
     elements.reset();
@@ -3197,9 +3252,9 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNulls) {
   maps = getOnlyChild<MapVector>(batch);
   keys = std::dynamic_pointer_cast<FlatVector<int64_t>>(maps->mapKeys());
   elements = std::dynamic_pointer_cast<FlatVector<int64_t>>(maps->mapValues());
-  ASSERT_EQ(expectMemoryReuse_, maps.get() == mapsPtr);
-  ASSERT_EQ(expectMemoryReuse_, keys.get() == keysPtr);
-  ASSERT_EQ(expectMemoryReuse_, elements.get() == elementsPtr);
+  ASSERT_EQ(expectMemoryReuse(), maps.get() == mapsPtr);
+  ASSERT_EQ(expectMemoryReuse(), keys.get() == keysPtr);
+  ASSERT_EQ(expectMemoryReuse(), elements.get() == elementsPtr);
 
   ASSERT_EQ(2, maps->size());
   ASSERT_LT(0, getNullCount(maps));
@@ -3259,24 +3314,24 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNullsNoData) {
   EXPECT_EQ(0, maps->offsetAt(0));
 
   auto mapsPtr = maps.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     maps.reset();
   }
   skipAndRead(batch, /* read */ 1, /* skip */ 13);
   maps = getOnlyChild<MapVector>(batch);
-  ASSERT_EQ(expectMemoryReuse_, maps.get() == mapsPtr);
+  ASSERT_EQ(expectMemoryReuse(), maps.get() == mapsPtr);
 
   ASSERT_EQ(1, maps->size());
   ASSERT_EQ(0, getNullCount(maps));
   EXPECT_EQ(0, maps->offsetAt(0));
 
   mapsPtr = maps.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     maps.reset();
   }
   skipAndRead(batch, /* read */ 2, /* skip */ 2031);
   maps = getOnlyChild<MapVector>(batch);
-  ASSERT_EQ(expectMemoryReuse_, maps.get() == mapsPtr);
+  ASSERT_EQ(expectMemoryReuse(), maps.get() == mapsPtr);
 
   ASSERT_EQ(2, maps->size());
   ASSERT_LT(0, getNullCount(maps));
@@ -3499,14 +3554,14 @@ TEST_P(TestColumnReader, testFloatSkipWithNulls) {
   }
 
   auto floatBatchPtr = floatBatch.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     floatBatch.reset();
   }
 
   skipAndRead(batch, /* read */ 4, /* skip */ 1);
 
   floatBatch = getOnlyChild<FlatVector<float>>(batch);
-  ASSERT_EQ(expectMemoryReuse_, floatBatch.get() == floatBatchPtr);
+  ASSERT_EQ(expectMemoryReuse(), floatBatch.get() == floatBatchPtr);
 
   ASSERT_EQ(4, floatBatch->size());
   ASSERT_LT(0, getNullCount(floatBatch));
@@ -3650,13 +3705,13 @@ TEST_P(TestColumnReader, testDoubleSkipWithNulls) {
   }
 
   auto doubleBatchPtr = doubleBatch.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     doubleBatch.reset();
   }
   skipAndRead(batch, /* read */ 3, /* skip */ 3);
 
   doubleBatch = getOnlyChild<FlatVector<double>>(batch);
-  ASSERT_EQ(expectMemoryReuse_, doubleBatch.get() == doubleBatchPtr);
+  ASSERT_EQ(expectMemoryReuse(), doubleBatch.get() == doubleBatchPtr);
 
   ASSERT_EQ(3, doubleBatch->size());
   ASSERT_LT(0, getNullCount(doubleBatch));
@@ -3759,13 +3814,13 @@ TEST_P(TestColumnReader, testTimestampSkipWithNulls) {
   }
 
   auto tsBatchPtr = tsBatch.get();
-  if (expectMemoryReuse_) {
+  if (expectMemoryReuse()) {
     tsBatch.reset();
   }
   skipAndRead(batch, /* read */ 4, /* skip */ 1);
 
   tsBatch = getOnlyChild<FlatVector<Timestamp>>(batch);
-  ASSERT_EQ(expectMemoryReuse_, tsBatch.get() == tsBatchPtr);
+  ASSERT_EQ(expectMemoryReuse(), tsBatch.get() == tsBatchPtr);
   ASSERT_EQ(4, tsBatch->size());
   ASSERT_LT(0, getNullCount(tsBatch));
   for (size_t i = 0; i < batch->size(); ++i) {
@@ -4309,12 +4364,12 @@ TEST_P(StringReaderTests, testStringDictUseBatchAfterClose) {
     provider.addRow(BATCH_SIZE);
     batches.push_back(batch);
   }
-  validateStringDictBatches(batches, returnFlatVector_, streams_);
+  validateStringDictBatches(batches, returnFlatVector(), streams_);
 
   // make sure data can still be accessed after releasing column reader. This
   // will fail in asan mode if memory is recycled.
   resetReader();
-  validateStringDictBatches(batches, returnFlatVector_, streams_);
+  validateStringDictBatches(batches, returnFlatVector(), streams_);
 }
 
 TEST_P(StringReaderTests, testStringDictStrideDictDoesntExist) {
@@ -4449,19 +4504,19 @@ TEST_P(StringReaderTests, testStringDictStrideDictDoesntExist) {
   VectorPtr rowVector;
   while (rowCount < totalRowCount) {
     auto stringBatchPtr = stringBatch.get();
-    if (expectMemoryReuse_) {
+    if (expectMemoryReuse()) {
       stringBatch.reset();
     }
     next(rowIndexStride, batch);
     ASSERT_EQ(rowIndexStride, batch->size());
     ASSERT_EQ(0, getNullCount(batch));
-    if (returnFlatVector_) {
+    if (returnFlatVector()) {
       stringBatch = getOnlyChild<FlatVector<StringView>>(batch);
     } else {
       stringBatch = getOnlyChild<DictionaryVector<StringView>>(batch);
     }
     if (rowCount > 0) {
-      ASSERT_EQ(expectMemoryReuse_, stringBatch.get() == stringBatchPtr);
+      ASSERT_EQ(expectMemoryReuse(), stringBatch.get() == stringBatchPtr);
     }
     ASSERT_EQ(rowIndexStride, stringBatch->size());
     ASSERT_EQ(0, getNullCount(stringBatch));
@@ -4610,7 +4665,7 @@ TEST_P(StringReaderTests, testStringDictZeroLengthStrideDict) {
     ASSERT_EQ(rowIndexStride, batch->size());
     ASSERT_EQ(0, getNullCount(batch));
     std::shared_ptr<SimpleVector<StringView>> stringBatch;
-    if (returnFlatVector_) {
+    if (returnFlatVector()) {
       stringBatch = getOnlyChild<FlatVector<StringView>>(batch);
     } else {
       stringBatch = getOnlyChild<DictionaryVector<StringView>>(batch);
@@ -5103,113 +5158,232 @@ TEST_P(SchemaMismatchTest, testFloat) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TestColumnReaderNoReuse,
     TestColumnReader,
-    ::testing::Values(ReaderTestParams{false, false, false}));
+    ::testing::Values(ReaderTestParams{false, false, false, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TestColumnReaderNoReuseParallel,
     TestColumnReader,
-    ::testing::Values(ReaderTestParams{false, false, true}));
+    ::testing::Values(ReaderTestParams{false, false, true, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TestColumnReaderReuse,
     TestColumnReader,
-    ::testing::Values(ReaderTestParams{false, true, false}));
+    ::testing::Values(ReaderTestParams{false, true, false, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TestColumnReaderReuseParallel,
     TestColumnReader,
-    ::testing::Values(ReaderTestParams{false, true, true}));
+    ::testing::Values(ReaderTestParams{false, true, true, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TestSelectiveColumnReader,
     TestColumnReader,
-    ::testing::Values(ReaderTestParams{true, false, false}));
+    ::testing::Values(ReaderTestParams{true, false, false, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TestNonSelectiveColumnReaderNoReuse,
     TestNonSelectiveColumnReader,
-    ::testing::Values(NonSelectiveReaderTestParams{false, false}));
+    ::testing::Values(NonSelectiveReaderTestParams{false, false, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TestNonSelectiveColumnReaderNoReuseParallel,
     TestNonSelectiveColumnReader,
-    ::testing::Values(NonSelectiveReaderTestParams{false, true}));
+    ::testing::Values(NonSelectiveReaderTestParams{false, true, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TestNonSelectiveColumnReaderReuse,
     TestNonSelectiveColumnReader,
-    ::testing::Values(NonSelectiveReaderTestParams{true, false}));
+    ::testing::Values(NonSelectiveReaderTestParams{true, false, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TestNonSelectiveColumnReaderReuseParallel,
     TestNonSelectiveColumnReader,
-    ::testing::Values(NonSelectiveReaderTestParams{true, true}));
+    ::testing::Values(NonSelectiveReaderTestParams{true, true, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     StringViewReaderNoReuse,
     StringReaderTests,
-    ::testing::Values(StringReaderTestParams{false, false, false, false}),
+    ::testing::Values(
+        StringReaderTestParams{false, false, false, false, false}),
     [](auto p) { return p.param.toString(); });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     StringViewReaderNoReuseParallel,
     StringReaderTests,
-    ::testing::Values(StringReaderTestParams{false, false, false, true}),
+    ::testing::Values(StringReaderTestParams{false, false, false, true, false}),
     [](auto p) { return p.param.toString(); });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     StringViewReaderReuse,
     StringReaderTests,
-    ::testing::Values(StringReaderTestParams{false, false, true, false}),
+    ::testing::Values(StringReaderTestParams{false, false, true, false, false}),
     [](auto p) { return p.param.toString(); });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     StringViewReaderReuseParallel,
     StringReaderTests,
-    ::testing::Values(StringReaderTestParams{false, false, true, true}),
+    ::testing::Values(StringReaderTestParams{false, false, true, true, false}),
     [](auto p) { return p.param.toString(); });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     FlatStringViewReaderNoReuse,
     StringReaderTests,
-    ::testing::Values(StringReaderTestParams{false, true, false, false}),
+    ::testing::Values(StringReaderTestParams{false, true, false, false, false}),
     [](auto p) { return p.param.toString(); });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     FlatStringViewReaderNoReuseParallel,
     StringReaderTests,
-    ::testing::Values(StringReaderTestParams{false, true, false, true}),
+    ::testing::Values(StringReaderTestParams{false, true, false, true, false}),
     [](auto p) { return p.param.toString(); });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     FlatStringViewReaderReuse,
     StringReaderTests,
-    ::testing::Values(StringReaderTestParams{false, true, true, false}),
+    ::testing::Values(StringReaderTestParams{false, true, true, false, false}),
     [](auto p) { return p.param.toString(); });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     FlatStringViewReaderReuseParallel,
     StringReaderTests,
-    ::testing::Values(StringReaderTestParams{false, true, true, true}),
+    ::testing::Values(StringReaderTestParams{false, true, true, true, false}),
     [](auto p) { return p.param.toString(); });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SelectiveStringViewReader,
     StringReaderTests,
-    ::testing::Values(StringReaderTestParams{true, false, false, false}),
+    ::testing::Values(StringReaderTestParams{true, false, false, false, false}),
     [](auto p) { return p.param.toString(); });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SchemaMismatch,
     SchemaMismatchTest,
-    Values(SchemaMismatchTestParam{false, false}));
+    Values(SchemaMismatchTestParam{false, false, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SchemaMismatchParallel,
     SchemaMismatchTest,
-    Values(SchemaMismatchTestParam{false, true}));
+    Values(SchemaMismatchTestParam{false, true, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SelectiveSchemaMismatch,
     SchemaMismatchTest,
-    Values(SchemaMismatchTestParam{true, false}));
+    Values(SchemaMismatchTestParam{true, false, false}));
+
+#if FOLLY_HAS_COROUTINES
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TestColumnReaderNoReuseCoro,
+    TestColumnReader,
+    ::testing::Values(ReaderTestParams{false, false, false, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TestColumnReaderNoReuseParallelCoro,
+    TestColumnReader,
+    ::testing::Values(ReaderTestParams{false, false, true, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TestColumnReaderReuseCoro,
+    TestColumnReader,
+    ::testing::Values(ReaderTestParams{false, true, false, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TestColumnReaderReuseParallelCoro,
+    TestColumnReader,
+    ::testing::Values(ReaderTestParams{false, true, true, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TestSelectiveColumnReaderCoro,
+    TestColumnReader,
+    ::testing::Values(ReaderTestParams{true, false, false, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TestNonSelectiveColumnReaderNoReuseCoro,
+    TestNonSelectiveColumnReader,
+    ::testing::Values(NonSelectiveReaderTestParams{false, false, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TestNonSelectiveColumnReaderNoReuseParallelCoro,
+    TestNonSelectiveColumnReader,
+    ::testing::Values(NonSelectiveReaderTestParams{false, true, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TestNonSelectiveColumnReaderReuseCoro,
+    TestNonSelectiveColumnReader,
+    ::testing::Values(NonSelectiveReaderTestParams{true, false, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TestNonSelectiveColumnReaderReuseParallelCoro,
+    TestNonSelectiveColumnReader,
+    ::testing::Values(NonSelectiveReaderTestParams{true, true, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    StringViewReaderNoReuseCoro,
+    StringReaderTests,
+    ::testing::Values(StringReaderTestParams{false, false, false, false, true}),
+    [](auto p) { return p.param.toString(); });
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    StringViewReaderNoReuseParallelCoro,
+    StringReaderTests,
+    ::testing::Values(StringReaderTestParams{false, false, false, true, true}),
+    [](auto p) { return p.param.toString(); });
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    StringViewReaderReuseCoro,
+    StringReaderTests,
+    ::testing::Values(StringReaderTestParams{false, false, true, false, true}),
+    [](auto p) { return p.param.toString(); });
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    StringViewReaderReuseParallelCoro,
+    StringReaderTests,
+    ::testing::Values(StringReaderTestParams{false, false, true, true, true}),
+    [](auto p) { return p.param.toString(); });
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    FlatStringViewReaderNoReuseCoro,
+    StringReaderTests,
+    ::testing::Values(StringReaderTestParams{false, true, false, false, true}),
+    [](auto p) { return p.param.toString(); });
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    FlatStringViewReaderNoReuseParallelCoro,
+    StringReaderTests,
+    ::testing::Values(StringReaderTestParams{false, true, false, true, true}),
+    [](auto p) { return p.param.toString(); });
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    FlatStringViewReaderReuseCoro,
+    StringReaderTests,
+    ::testing::Values(StringReaderTestParams{false, true, true, false, true}),
+    [](auto p) { return p.param.toString(); });
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    FlatStringViewReaderReuseParallelCoro,
+    StringReaderTests,
+    ::testing::Values(StringReaderTestParams{false, true, true, true, true}),
+    [](auto p) { return p.param.toString(); });
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    SelectiveStringViewReaderCoro,
+    StringReaderTests,
+    ::testing::Values(StringReaderTestParams{true, false, false, false, true}),
+    [](auto p) { return p.param.toString(); });
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    SchemaMismatchCoro,
+    SchemaMismatchTest,
+    Values(SchemaMismatchTestParam{false, false, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    SchemaMismatchParallelCoro,
+    SchemaMismatchTest,
+    Values(SchemaMismatchTestParam{false, true, true}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    SelectiveSchemaMismatchCoro,
+    SchemaMismatchTest,
+    Values(SchemaMismatchTestParam{true, false, true}));
+
+#endif // FOLLY_HAS_COROUTINES
