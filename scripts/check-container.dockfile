@@ -13,6 +13,6 @@
 # limitations under the License.
 FROM amd64/ubuntu:22.04
 ARG cpu_target
-COPY setup-check.sh /root
-COPY setup-helper-functions.sh /
+COPY scripts/setup-check.sh /root
+COPY scripts/setup-helper-functions.sh /
 RUN CPU_TARGET="$cpu_target" bash /root/setup-check.sh
