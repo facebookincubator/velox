@@ -63,6 +63,8 @@ struct CursorParameters {
 
   bool copyResult = true;
 
+  /// If both 'queryConfigs' and 'queryCtx' are specified, the configurations in
+  /// 'queryCtx' will be overridden by 'queryConfig'.
   std::unordered_map<std::string, std::string> queryConfigs;
 };
 

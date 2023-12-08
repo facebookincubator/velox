@@ -338,7 +338,7 @@ class QueryConfig {
   static constexpr const char* kEnableExpressionEvaluationCache =
       "enable_expression_evaluation_cache";
 
-  /// The maximum concurrency for split preloading per driver.
+  /// Maximum number of splits to preload. Set to 0 to disable preloading.
   static constexpr const char* kMaxSplitPreloadPerDriver =
       "max_split_preload_per_driver";
 

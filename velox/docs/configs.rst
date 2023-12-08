@@ -111,10 +111,6 @@ Generic Configuration
      - true
      - Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
        evalWithMemo are enabled.
-   * - max_split_preload_per_driver
-     - integer
-     - 2
-     - The maximum concurrency for split preloading per driver.
 
 .. _expression-evaluation-conf:
 
@@ -311,6 +307,21 @@ Spilling
      - integer
      - 0
      - Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.
+
+Table Scan
+------------
+.. list-table::
+   :widths: 20 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - max_split_preload_per_driver
+     - integer
+     - 2
+     - Maximum number of splits to preload. Set to 0 to disable preloading.
 
 Table Writer
 ------------

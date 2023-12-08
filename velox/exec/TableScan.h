@@ -89,7 +89,7 @@ class TableScan : public SourceOperator {
 
   int32_t maxPreloadedSplits_{0};
 
-  int32_t maxSplitPreloadPerDriver_{0};
+  const int32_t maxSplitPreloadPerDriver_{0};
 
   // Callback passed to getSplitOrFuture() for triggering async
   // preload. The callback's lifetime is the lifetime of 'this'. This
