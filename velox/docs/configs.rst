@@ -321,7 +321,7 @@ Table Scan
    * - max_split_preload_per_driver
      - integer
      - 2
-     - Maximum number of splits to preload. Set to 0 to disable preloading.
+     - Maximum number of splits to preload per driver. Set to 0 to disable preloading.
 
 Table Writer
 ------------
