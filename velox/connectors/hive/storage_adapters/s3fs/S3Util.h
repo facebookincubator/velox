@@ -29,7 +29,7 @@
 namespace facebook::velox {
 
 namespace {
-constexpr std::string_view kSep{"/"};
+constexpr std::string_view kS3Sep{"/"};
 // AWS S3 EMRFS, Hadoop block storage filesystem on-top of Amazon S3 buckets.
 constexpr std::string_view kS3Scheme{"s3://"};
 // This should not be mixed with s3 nor the s3a.
@@ -81,7 +81,7 @@ inline void getBucketAndKeyFromS3Path(
     const std::string& path,
     std::string& bucket,
     std::string& key) {
-  auto firstSep = path.find_first_of(kSep);
+  auto firstSep = path.find_first_of(kS3Sep);
   bucket = path.substr(0, firstSep);
   key = path.substr(firstSep + 1);
 }
@@ -98,7 +98,7 @@ inline std::string s3URI(const std::string& bucket) {
 }
 
 inline std::string s3URI(const std::string& bucket, const std::string& key) {
-  return s3URI(bucket) + "/" + key;
+  return s3URI(bucket) + std::string(kS3Sep) + key;
 }
 
 inline std::string s3Path(const std::string_view& path) {
