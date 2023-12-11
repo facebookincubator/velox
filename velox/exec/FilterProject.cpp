@@ -44,7 +44,8 @@ FilterProject::FilterProject(
     int32_t operatorId,
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::FilterNode>& filter,
-    const std::shared_ptr<const core::ProjectNode>& project)
+    const std::shared_ptr<const core::ProjectNode>& project,
+    bool eagerFlush)
     : Operator(
           driverCtx,
           project ? project->outputType() : filter->outputType(),
@@ -58,8 +59,8 @@ FilterProject::FilterProject(
           operatorCtx_->pool(),
           driverCtx->queryConfig().preferredOutputBatchBytes(),
           driverCtx->queryConfig().preferredOutputBatchRows(),
-          driverCtx->queryConfig().minOutputBatchBytes(),
-          driverCtx->queryConfig().minOutputBatchRows())) {}
+          hasFilter_ && !eagerFlush ? driverCtx->queryConfig().minMergingVectorOutputBatchRows()
+                                    : 0)) {}
 
 void FilterProject::initialize() {
   Operator::initialize();
@@ -123,22 +124,12 @@ bool FilterProject::allInputProcessed() {
   return false;
 }
 
-bool FilterProject::needsInput() const {
-  return !input_ && mergingVectorOutput_->needsInput();
-}
-
-void FilterProject::noMoreInput() {
-  Operator::noMoreInput();
-  mergingVectorOutput_->noMoreInput();
-}
-
 bool FilterProject::isFinished() {
-  return noMoreInput_ && allInputProcessed() &&
-      mergingVectorOutput_->isFinished();
+  return noMoreInput_ && allInputProcessed();
 }
 
 RowVectorPtr FilterProject::getOutput() {
-  auto output = mergingVectorOutput_->getOutput();
+  auto output = mergingVectorOutput_->getOutput(noMoreInput_);
   if (output) {
     return output;
   }
@@ -165,8 +156,7 @@ RowVectorPtr FilterProject::getOutput() {
     VELOX_CHECK(!isIdentityProjection_);
     auto results = project(*rows, evalCtx);
 
-    mergingVectorOutput_->addVector(fillOutput(size, nullptr, results));
-    return mergingVectorOutput_->getOutput();
+    return fillOutput(size, nullptr, results);
   }
 
   // evaluate filter
@@ -192,7 +182,7 @@ RowVectorPtr FilterProject::getOutput() {
       numOut,
       allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices,
       results));
-  return mergingVectorOutput_->getOutput();
+  return mergingVectorOutput_->getOutput(noMoreInput_);
 }
 
 std::vector<VectorPtr> FilterProject::project(

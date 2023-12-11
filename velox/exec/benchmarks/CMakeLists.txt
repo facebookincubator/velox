@@ -22,6 +22,13 @@ target_link_libraries(
   velox_filter_project_benchmark velox_exec velox_vector_test_lib
   velox_exec_test_lib ${FOLLY_BENCHMARK})
 
+add_executable(velox_merging_vector_output_benchmark
+               MergingVectorOutputBenchmark.cpp)
+
+target_link_libraries(
+  velox_merging_vector_output_benchmark velox_exec velox_vector_test_lib
+  velox_exec_test_lib ${FOLLY_BENCHMARK})
+
 add_executable(velox_exchange_benchmark ExchangeBenchmark.cpp)
 
 target_link_libraries(velox_exchange_benchmark velox_exec velox_exec_test_lib

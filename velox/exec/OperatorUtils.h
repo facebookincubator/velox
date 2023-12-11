@@ -158,4 +158,11 @@ void projectChildren(
     int32_t size,
     const BufferPtr& mapping);
 
+/// Merge the sourve row vector to dest row vector.
+void mergeVector(
+    RowVectorPtr& dest,
+    const RowVectorPtr& src,
+    int32_t destRows,
+    int32_t srcRows);
+
 } // namespace facebook::velox::exec

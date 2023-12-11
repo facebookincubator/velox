@@ -27,6 +27,10 @@ Generic Configuration
      - 10000
      - Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
+   * - min_merging_vector_output_batch_rows
+     - integer
+     - 2
+     - Min number of rows to be returned by operators from MergingVectorOutput::getOutput.
    * - table_scan_getoutput_time_limit_ms
      - integer
      - 5000

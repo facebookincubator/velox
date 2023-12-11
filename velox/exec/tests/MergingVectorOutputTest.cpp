@@ -26,12 +26,10 @@ class MergingVectorOutputTest : public testing::Test,
                                 public velox::test::VectorTestBase {
  protected:
   void SetUp() override {
-    pool_ = facebook::velox::memory::addDefaultLeafMemoryPool();
-    mergingVectorOutput_ = std::make_shared<MergingVectorOutput>(
-        pool(), 10UL << 20, 1024, 10UL << 16, 16);
+    mergingVectorOutput_ =
+        std::make_shared<MergingVectorOutput>(pool(), 10UL << 20, 1024, 16);
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_;
   std::shared_ptr<MergingVectorOutput> mergingVectorOutput_;
 };
 
@@ -53,23 +51,17 @@ TEST_F(MergingVectorOutputTest, bufferSmallVector) {
     vectors.push_back(makeRowVector({c0, c1, c2, c3}));
   }
 
-  EXPECT_EQ(mergingVectorOutput_->needsInput(), true);
-  EXPECT_EQ(mergingVectorOutput_->getOutput(), nullptr);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(false), nullptr);
 
   for (auto i = 0; i < vectors.size(); i++) {
     mergingVectorOutput_->addVector(vectors[i]);
   }
 
-  EXPECT_EQ(mergingVectorOutput_->needsInput(), false);
-  EXPECT_EQ(mergingVectorOutput_->getOutput()->size(), 1020);
-  EXPECT_EQ(mergingVectorOutput_->getOutput(), nullptr);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(false)->size(), 1020);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(false), nullptr);
 
-  mergingVectorOutput_->noMoreInput();
-  EXPECT_EQ(mergingVectorOutput_->isFinished(), false);
-  EXPECT_EQ(mergingVectorOutput_->needsInput(), false);
-  EXPECT_EQ(mergingVectorOutput_->getOutput()->size(), 80);
-  EXPECT_EQ(mergingVectorOutput_->getOutput(), nullptr);
-  EXPECT_EQ(mergingVectorOutput_->isFinished(), true);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(true)->size(), 80);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(true), nullptr);
 }
 
 TEST_F(MergingVectorOutputTest, bufferLargeVector) {
@@ -87,13 +79,11 @@ TEST_F(MergingVectorOutputTest, bufferLargeVector) {
     return StringView::makeInline(std::to_string(row));
   });
 
-  EXPECT_EQ(mergingVectorOutput_->needsInput(), true);
-  EXPECT_EQ(mergingVectorOutput_->getOutput(), nullptr);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(false), nullptr);
 
   mergingVectorOutput_->addVector(makeRowVector({c0, c1, c2, c3}));
 
-  EXPECT_EQ(mergingVectorOutput_->needsInput(), false);
-  EXPECT_EQ(mergingVectorOutput_->getOutput()->size(), batchSize);
-  EXPECT_EQ(mergingVectorOutput_->getOutput(), nullptr);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(true)->size(), batchSize);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(true), nullptr);
 }
 } // namespace facebook::velox::exec::test

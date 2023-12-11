@@ -156,17 +156,6 @@ class QueryConfig {
   static constexpr const char* kMaxPartitionedOutputBufferSize =
       "max_page_partitioning_buffer_size";
 
-  /// Min size of batches in bytes to be returned by operators from
-  /// MergingVectorOutput::getOutput. It is used when an estimate of average
-  /// row size is known. Otherwise kMinOutputBatchRows is used.
-  static constexpr const char* kMinOutputBatchBytes = "min_output_batch_bytes";
-
-  /// Min number of rows to be returned by operators from
-  /// MergingVectorOutput::getOutput. It is used when an estimate of average
-  /// row size is not known. When the estimate of average row size is known,
-  /// kMinOutputBatchBytes is used.
-  static constexpr const char* kMinOutputBatchRows = "min_output_batch_rows";
-
   /// Preferred size of batches in bytes to be returned by operators from
   /// Operator::getOutput. It is used when an estimate of average row size is
   /// known. Otherwise kPreferredOutputBatchRows is used.
@@ -185,6 +174,11 @@ class QueryConfig {
   /// known and kPreferredOutputBatchBytes is used to compute the number of
   /// output rows.
   static constexpr const char* kMaxOutputBatchRows = "max_output_batch_rows";
+
+  /// Min number of rows to be returned by operators from
+  /// MergingVectorOutput::getOutput.
+  static constexpr const char* kMinMergingVectorOutputBatchRows =
+      "min_merging_vector_output_batch_rows";
 
   /// TableScan operator will exit getOutput() method after this many
   /// milliseconds even if it has no data to return yet. Zero means 'no time
@@ -419,17 +413,8 @@ class QueryConfig {
     return get<uint64_t>(kMaxMergeExchangeBufferSize, kDefault);
   }
 
-  // TODO
-  //  1、Add benchmark.
-  //  2、The default values of minOutputBatchBytes and minOutputBatchRows
-  //  should base on benchmark
-  uint64_t minOutputBatchBytes() const {
-    static constexpr uint64_t kDefault = 10UL << 14;
-    return get<uint64_t>(kMinOutputBatchBytes, kDefault);
-  }
-
-  uint32_t minOutputBatchRows() const {
-    return get<uint32_t>(kMinOutputBatchRows, 16);
+  uint32_t minMergingVectorOutputBatchRows() const {
+    return get<uint32_t>(kMinMergingVectorOutputBatchRows, 2);
   }
 
   uint64_t preferredOutputBatchBytes() const {

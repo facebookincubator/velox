@@ -27,24 +27,19 @@ class MergingVectorOutput {
       velox::memory::MemoryPool* pool,
       int64_t preferredOutputBatchBytes,
       int32_t preferredOutputRows,
-      int64_t minOutputBatchBytes,
       int32_t minOutputBatchRows);
 
+  /// Adds input vector. It will be merged into a big vector if smaller than
+  /// minOutputBatchRows.
+  /// @param input input vector.
   void addVector(RowVectorPtr input);
 
-  RowVectorPtr getOutput();
-
-  bool needsInput() const {
-    return !noMoreInput_ && outputQueue_.empty();
-  }
-
-  void noMoreInput() {
-    noMoreInput_ = true;
-  }
-
-  bool isFinished() {
-    return noMoreInput_ && bufferRows_ == 0 && outputQueue_.empty();
-  }
+  /// Returns a RowVector after merging, or return nullptr if we haven't
+  /// accumulated enough just yet.
+  /// @return RowVector or nullptr.
+  /// @param noMoreInput whether more data is expected to be added via
+  /// addVector.
+  RowVectorPtr getOutput(bool noMoreInput);
 
  private:
   // Push the buffer vector to the queue, and reset bufferInputs_,
@@ -57,18 +52,14 @@ class MergingVectorOutput {
   velox::memory::MemoryPool* pool_;
 
   // The preferred output bytes of the bufferInputs_.
-  int64_t preferredOutputBatchBytes_;
+  const int64_t preferredOutputBatchBytes_;
 
   // The preferred output row count of the bufferInputs_.
-  int32_t preferredOutputBatchRows_;
-
-  // If the input vector bytes is larger than minOutputBatchBytes_, flush it to
-  // the outputQueue_ directly.
-  int64_t minOutputBatchBytes_;
+  const int32_t preferredOutputBatchRows_;
 
   // If the input vector row count is larger than minOutputBatchBytes_, flush
   // it to the outputQueue_ directly.
-  int32_t minOutputBatchRows_;
+  const int32_t minOutputBatchRows_;
 
   // The RowVectorPtr queue where bufferInputs_ flush to.
   std::queue<RowVectorPtr> outputQueue_;
@@ -81,7 +72,5 @@ class MergingVectorOutput {
 
   // The buffer bytes in bufferInputs_.
   int64_t bufferBytes_ = 0;
-
-  bool noMoreInput_ = false;
 };
 } // namespace facebook::velox::exec

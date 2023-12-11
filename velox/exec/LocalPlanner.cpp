@@ -420,18 +420,18 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         if (auto projectNode =
                 std::dynamic_pointer_cast<const core::ProjectNode>(next)) {
           operators.push_back(std::make_unique<FilterProject>(
-              id, ctx.get(), filterNode, projectNode));
+              id, ctx.get(), filterNode, projectNode, eagerFlush(*planNode)));
           i++;
           continue;
         }
       }
-      operators.push_back(
-          std::make_unique<FilterProject>(id, ctx.get(), filterNode, nullptr));
+      operators.push_back(std::make_unique<FilterProject>(
+          id, ctx.get(), filterNode, nullptr, eagerFlush(*planNode)));
     } else if (
         auto projectNode =
             std::dynamic_pointer_cast<const core::ProjectNode>(planNode)) {
-      operators.push_back(
-          std::make_unique<FilterProject>(id, ctx.get(), nullptr, projectNode));
+      operators.push_back(std::make_unique<FilterProject>(
+          id, ctx.get(), nullptr, projectNode, eagerFlush(*planNode)));
     } else if (
         auto valuesNode =
             std::dynamic_pointer_cast<const core::ValuesNode>(planNode)) {

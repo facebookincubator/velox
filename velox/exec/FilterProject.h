@@ -28,7 +28,8 @@ class FilterProject : public Operator {
       int32_t operatorId,
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::FilterNode>& filter,
-      const std::shared_ptr<const core::ProjectNode>& project);
+      const std::shared_ptr<const core::ProjectNode>& project,
+      bool eagerFlush);
 
   bool isFilter() const override {
     return true;
@@ -38,9 +39,9 @@ class FilterProject : public Operator {
     return true;
   }
 
-  bool needsInput() const override;
-
-  void noMoreInput() override;
+  bool needsInput() const override {
+    return !input_;
+  }
 
   void addInput(RowVectorPtr input) override;
 

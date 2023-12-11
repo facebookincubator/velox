@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/MergingVectorOutput.h"
+#include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::exec {
 
@@ -22,16 +23,14 @@ MergingVectorOutput::MergingVectorOutput(
     velox::memory::MemoryPool* pool,
     int64_t preferredOutputBatchBytes,
     int32_t preferredOutputBatchRows,
-    int64_t minOutputBatchBytes,
     int32_t minOutputBatchRows)
     : pool_(pool),
       preferredOutputBatchBytes_(preferredOutputBatchBytes),
       preferredOutputBatchRows_(preferredOutputBatchRows),
-      minOutputBatchBytes_(minOutputBatchBytes),
       minOutputBatchRows_(minOutputBatchRows) {}
 
-RowVectorPtr MergingVectorOutput::getOutput() {
-  if (noMoreInput_) {
+RowVectorPtr MergingVectorOutput::getOutput(bool noMoreInput) {
+  if (noMoreInput) {
     flush();
   }
   if (outputQueue_.size() > 0) {
@@ -43,54 +42,52 @@ RowVectorPtr MergingVectorOutput::getOutput() {
 }
 
 void MergingVectorOutput::addVector(RowVectorPtr vector) {
-  const auto inputRows = vector->size();
-  if (inputRows == 0) {
+  const auto numInput = vector->size();
+  if (numInput == 0) {
     return;
   }
 
   // Avoid memory copying for pages that are big enough
-  if (vector->estimateFlatSize() >= minOutputBatchBytes_ ||
-      inputRows >= minOutputBatchRows_) {
-    flush();
+  if (numInput >= minOutputBatchRows_) {
     outputQueue_.push(std::move(vector));
     return;
+  }
+
+  // Currently, we only merge flat and dictionary vector, whether merging other
+  // encodings should depend on benchmark or adaptivity.
+  for (auto children : vector->children()) {
+    if (!VectorEncoding::isFlat(children->encoding()) &&
+        !VectorEncoding::isDictionary(children->encoding())) {
+      outputQueue_.push(std::move(vector));
+      return;
+    }
   }
 
   buffer(std::move(vector));
 }
 
 void MergingVectorOutput::buffer(RowVectorPtr vector) {
-  const auto inputRows = vector->size();
-  const auto& childrens = vector->children();
+  const auto numInput = vector->size();
 
   // In order to prevent vector.resize() cause memory copy, the initial value
   // of bufferInputs_ row count is preferredOutputBatchRows_ and cannot exceed
   // preferredOutputBatchRows_.
-  if (bufferRows_ + inputRows > preferredOutputBatchRows_) {
+  if (bufferRows_ + numInput > preferredOutputBatchRows_) {
     flush();
   }
 
   if (!bufferInputs_) {
     bufferInputs_ = BaseVector::create<RowVector>(
         vector->type(), preferredOutputBatchRows_, pool_);
-    for (auto i = 0; i < childrens.size(); i++) {
-      const auto& vectorPtr = bufferInputs_->childAt(i);
-      vectorPtr->resize(bufferRows_ + inputRows);
-    }
   }
 
-  bufferInputs_->resize(bufferRows_ + inputRows);
-  for (auto i = 0; i < childrens.size(); i++) {
-    const auto& vectorPtr = bufferInputs_->childAt(i);
-    vectorPtr->resize(bufferRows_ + inputRows);
-    vectorPtr->copy(childrens[i].get(), bufferRows_, 0, inputRows);
-  }
+  mergeVector(bufferInputs_, vector, bufferRows_, numInput);
 
-  bufferRows_ += inputRows;
+  bufferRows_ += numInput;
   bufferBytes_ += vector->estimateFlatSize();
 
-  if (bufferBytes_ >= preferredOutputBatchBytes_ ||
-      bufferRows_ >= preferredOutputBatchRows_) {
+  if (bufferRows_ >= preferredOutputBatchRows_ ||
+      bufferBytes_ >= preferredOutputBatchBytes_) {
     flush();
   }
 }
