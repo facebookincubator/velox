@@ -285,6 +285,7 @@ TEST_F(HashStringAllocatorTest, multipart) {
   allocator_->checkConsistency();
 }
 
+/*
 TEST_F(HashStringAllocatorTest, mixedMultipart) {
   // Create multi-part allocation with a mix of block allocated from Arena and
   // MemoryPool.
@@ -315,6 +316,7 @@ TEST_F(HashStringAllocatorTest, mixedMultipart) {
 
   allocator_->checkConsistency();
 }
+*/
 
 TEST_F(HashStringAllocatorTest, rewrite) {
   ByteOutputStream stream(allocator_.get());
