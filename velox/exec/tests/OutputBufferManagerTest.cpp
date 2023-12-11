@@ -972,7 +972,7 @@ TEST_P(AllOutputBufferManagerTest, outputBufferUtilization) {
 
 TEST_P(AllOutputBufferManagerTest, outputBufferInfo) {
   const vector_size_t size = 100;
-  const std::string taskId =  std::to_string(rand());
+  const std::string taskId = std::to_string(rand());
   OutputBufferInfo info;
   initializeTask(taskId, rowType_, kind_, 1, 1);
 
