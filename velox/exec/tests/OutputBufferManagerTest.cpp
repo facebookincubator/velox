@@ -982,7 +982,8 @@ TEST_P(AllOutputBufferManagerTest, outputBufferInfo) {
     enqueue(taskId, 0, rowType_, size);
     totalSize += size;
     // force Arbitrary buffer to load data.
-    if (kind_ == facebook::velox::core::PartitionedOutputNode::Kind::kArbitrary) {
+    if (kind_ ==
+        facebook::velox::core::PartitionedOutputNode::Kind::kArbitrary) {
       fetchOne(taskId, 0, pageId);
     }
     info = getInfo(taskId);
