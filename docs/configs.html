@@ -534,27 +534,33 @@ value is 3, meaning we only support up to 8-way spill partitioning.ing.</p></td>
 </section>
 <section id="hive-connector">
 <h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<p>Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
+Each query can override the config by setting corresponding query session properties such as in Prestissimo.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 18%" />
-<col style="width: 9%" />
-<col style="width: 9%" />
-<col style="width: 64%" />
+<col style="width: 15%" />
+<col style="width: 15%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 54%" />
 </colgroup>
 <thead>
-<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<tr class="row-odd"><th class="head"><p>Configuration Property Name</p></th>
+<th class="head"><p>Session Property Name</p></th>
 <th class="head"><p>Type</p></th>
 <th class="head"><p>Default Value</p></th>
 <th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>max_partitions_per_writers</p></td>
+<tr class="row-even"><td><p>hive.max-partitions-per-writers</p></td>
+<td></td>
 <td><p>integer</p></td>
 <td><p>100</p></td>
 <td><p>Maximum number of (bucketed) partitions per a single table writer instance.</p></td>
 </tr>
-<tr class="row-odd"><td><p>insert_existing_partitions_behavior</p></td>
+<tr class="row-odd"><td><p>insert-existing-partitions-behavior</p></td>
+<td></td>
 <td><p>string</p></td>
 <td><p>ERROR</p></td>
 <td><p><strong>Allowed values:</strong> <code class="docutils literal notranslate"><span class="pre">OVERWRITE</span></code>, <code class="docutils literal notranslate"><span class="pre">ERROR</span></code>. The behavior on insert existing partitions. This property only derives
@@ -563,48 +569,68 @@ sets the update mode to indicate overwriting a partition if exists. <code class=
 error throwing if writing to an existing partition.</p></td>
 </tr>
 <tr class="row-even"><td><p>hive.immutable-partitions</p></td>
+<td></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>True if appending data to an existing unpartitioned table is allowed. Currently this configuration does not
 support appending to existing partitions.</p></td>
 </tr>
-<tr class="row-odd"><td><p>file_column_names_read_as_lower_case</p></td>
+<tr class="row-odd"><td><p>file-column-names-read-as-lower-case</p></td>
+<td></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>True if reading the source file column names as lower case, and planner should guarantee
 the input column name and filter is also lower case to achive case-insensitive read.</p></td>
 </tr>
 <tr class="row-even"><td><p>max-coalesced-bytes</p></td>
+<td></td>
 <td><p>integer</p></td>
 <td><p>512KB</p></td>
 <td><p>Maximum size in bytes to coalesce requests to be fetched in a single request.</p></td>
 </tr>
 <tr class="row-odd"><td><p>max-coalesced-distance-bytes</p></td>
+<td></td>
 <td><p>integer</p></td>
 <td><p>128MB</p></td>
 <td><p>Maximum distance in bytes between chunks to be fetched that may be coalesced into a single request.</p></td>
 </tr>
-<tr class="row-even"><td><p>num_cached_file_handles</p></td>
+<tr class="row-even"><td><p>num-cached-file-handles</p></td>
+<td></td>
 <td><p>integer</p></td>
 <td><p>20000</p></td>
 <td><p>Maximum number of entries in the file handle cache. The value must be non-negative. Zero value
 indicates infinite cache capacity.</p></td>
 </tr>
-<tr class="row-odd"><td><p>file_handle_cache_enabled</p></td>
+<tr class="row-odd"><td><p>file-handle-cache-enabled</p></td>
+<td></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Enables caching of file handles if true. Disables caching if false. File handle cache should be
 disabled if files are not immutable, i.e. file content may change while file path stays the same.</p></td>
 </tr>
-<tr class="row-even"><td><p>sort_writer_max_output_rows</p></td>
+<tr class="row-even"><td><p>sort-writer-max-output-rows</p></td>
+<td><p>sort_writer_max_output_rows</p></td>
 <td><p>integer</p></td>
 <td><p>1024</p></td>
 <td><p>Maximum number of rows for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
 </tr>
-<tr class="row-odd"><td><p>sort_writer_max_output_bytes</p></td>
-<td><p>integer</p></td>
+<tr class="row-odd"><td><p>sort-writer-max-output-bytes</p></td>
+<td><p>sort_writer_max_output_bytes</p></td>
+<td><p>string</p></td>
 <td><p>10MB</p></td>
 <td><p>Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.orc.writer.stripe-max-size</p></td>
+<td><p>orc_optimized_writer_max_stripe_size</p></td>
+<td><p>string</p></td>
+<td><p>64M</p></td>
+<td><p>Maximum stripe size in orc writer.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.orc.writer.dictionary-max-memory</p></td>
+<td><p>orc_optimized_writer_max_dictionary_memory</p></td>
+<td><p>string</p></td>
+<td><p>16M</p></td>
+<td><p>Maximum dictionary memory that can be used in orc writer.</p></td>
 </tr>
 </tbody>
 </table>
