@@ -1,0 +1,97 @@
+name: linux-pr-fuzzer-run
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  linux-pr-fuzzer-run:
+    runs-on: 32-core
+    container:
+      image : ghcr.io/facebookincubator/velox-dev:circleci-avx
+    env:
+      CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
+      CXX: /opt/rh/gcc-toolset-9/root/bin/g++
+      VELOX_DEPENDENCY_SOURCE: BUNDLED
+      simdjson_SOURCE: BUNDLED
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+        with:
+          submodules: recursive
+      - uses: "./.github/actions/setup-environment"
+      - name: Get merge base function signatures
+        run: |
+          conda create -y --name pyveloxenv python=3.7
+          conda activate pyveloxenv
+          cp ./scripts/signature.py /tmp/signature.py
+          pip install deepdiff
+          git remote add upstream https://github.com/facebookincubator/velox
+          git fetch upstream
+          echo "HEAD: $(git rev-parse HEAD)"
+          echo "upstream/main: $(git rev-parse upstream/main)"
+          echo "merge base: $(git merge-base  'upstream/main' `git rev-parse HEAD`)"
+          merge_base=$(git merge-base  'upstream/main' `git rev-parse HEAD`) || \
+          { echo "::error::Failed to find merge_base"; exit 1; }
+          echo "Merge Base: $merge_base"
+          git checkout $merge_base
+          git submodule update --init --recursive
+          LD_LIBRARY_PATH=/usr/local/lib make python-clean
+          LD_LIBRARY_PATH=/usr/local/lib make python-build
+          python /tmp/signature.py export --spark spark_merge_base_signatures.json
+          python /tmp/signature.py export --presto presto_merge_base_signatures.json
+      - name: Build
+        run: |
+          make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+      - name: Build and test PyVelox
+        run: |
+          conda init bash
+          conda activate pyveloxenv
+          LD_LIBRARY_PATH=/usr/local/lib make python-test
+      - name: Check and create bias function signatures
+        run: |
+          conda activate pyveloxenv
+          pip install deepdiff
+          python ./scripts/signature.py export --presto presto_pr_signatures.json
+          python ./scripts/signature.py export --spark spark_pr_signatures.json
+          python ./scripts/signature.py bias presto_merge_base_signatures.json presto_pr_signatures.json /tmp/presto_bias_functions
+          python ./scripts/signature.py bias spark_merge_base_signatures.json spark_pr_signatures.json /tmp/spark_bias_functions
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3.1.3
+        with:
+          name: linux-pr-fuzzer-artifacts
+          path: |
+            presto_merge_base_signatures.json
+            presto_pr_signatures.json
+            spark_merge_base_signatures.json
+            spark_pr_signatures.json
+      - uses: "./.github/actions/fuzzer-run"
+        with:
+          fuzzer-output: /tmp/fuzzer/log
+          fuzzer-repro: /tmp/fuzzer_repro
+          fuzzer-name: Expression Bias Run
+          fuzzer-exe: "if [ -f /tmp/presto_bias_functions ]; then _build/debug/velox/expression/tests/velox_expression_fuzzer_test"
+          fuzzer-args: " --seed ${RANDOM} --lazy_vector_generation_ratio 0.2 \
+            --assign_function_tickets  $(cat /tmp/presto_bias_functions) \
+            --duration_sec 3600 --enable_variadic_signatures \
+            --velox_fuzzer_enable_complex_types \
+            --velox_fuzzer_enable_column_reuse \
+            --velox_fuzzer_enable_expression_reuse \
+            --max_expression_trees_per_step 2 \
+            --retry_with_try \
+            --enable_dereference \
+            --logtostderr=1 --minloglevel=0 \
+            --repro_persist_path=/tmp/fuzzer_repro ; fi"
+      - uses: "./.github/actions/fuzzer-run"
+        with:
+          fuzzer-output: "/tmp/spark_fuzzer.log"
+          fuzzer-repro: "/tmp/spark_fuzzer_repro"
+          fuzzer-name: Spark Bias Run
+          fuzzer-exe: "if [ -f /tmp/spark_bias_functions ];  then _build/debug/velox/expression/tests/spark_expression_fuzzer_test"
+          fuzzer-args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \
+            --assign_function_tickets  $(cat /tmp/spark_bias_functions) \
+            --repro_persist_path=/tmp/spark_fuzzer_repro ; fi"
+
+  

@@ -1,0 +1,31 @@
+name: setup-environment
+description: Setup environment for Velox CI
+runs:
+  using: composite
+  steps:
+    # - name: Install dependencies
+    #   shell: bash
+    #   run: |
+    #     sudo ./scripts/setup-ubuntu.sh
+    - name: Setup environment
+      shell: bash
+      run: |-
+        git config --global --add safe.directory $GITHUB_WORKSPACE
+        # Calculate ccache key.
+        git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
+
+        # Set up xml gtest output.
+        mkdir -p /tmp/test_xml_output/
+        echo "export XML_OUTPUT_FILE=\"/tmp/test_xml_output/\"" >> $GITHUB_ENV
+
+        # Set up ccache configs.
+        mkdir -p .ccache
+        echo "export CCACHE_DIR=$(realpath .ccache)" >> $GITHUB_ENV
+        ccache -sz -M 5Gi
+        if [ -e /opt/rh/gcc-toolset-9/enable ]; then
+          source /opt/rh/gcc-toolset-9/enable
+        fi
+    - name: ccache
+      uses: hendrikmuhs/ccache-action@v1.2.10
+      with:
+        key: velox-ccache-debug-${{ runner.os }}-${{ hashFiles('merge-base-date') }}

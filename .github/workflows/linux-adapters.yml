@@ -1,0 +1,75 @@
+name: linux-adapters
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  linux-adapters:
+    runs-on: 32-core
+    container:
+      image : ghcr.io/facebookincubator/velox-dev:circleci-avx
+    env:
+      CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
+      CXX: /opt/rh/gcc-toolset-9/root/bin/g++
+      VELOX_DEPENDENCY_SOURCE: BUNDLED
+      ICU_SOURCE: BUNDLED
+      simdjson_SOURCE: BUNDLED
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/setup-environment
+      - name: Install Adapter Dependencies
+        run: |
+          mkdir -p ~/adapter-deps/install/bin
+          set -xu
+          DEPENDENCY_DIR=~/adapter-deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-adapters.sh
+      - name: Install Minio Server
+        run: |
+          set -xu
+          cd ~/adapter-deps/install/bin/
+          wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio-20220526054841.0.0.x86_64.rpm
+          rpm -i minio-20220526054841.0.0.x86_64.rpm
+          rm minio-20220526054841.0.0.x86_64.rpm
+      - name: Install Hadoop Dependency
+        run: |
+          set -xu
+          yum -y install java-1.8.0-openjdk
+      - name: Build including all Benchmarks
+        run: |
+          EXTRA_CMAKE_FLAGS=(
+            "-DVELOX_ENABLE_BENCHMARKS=ON"
+            "-DVELOX_ENABLE_ARROW=ON"
+            "-DVELOX_ENABLE_PARQUET=ON"
+            "-DVELOX_ENABLE_HDFS=ON"
+            "-DVELOX_ENABLE_S3=ON"
+            "-DVELOX_ENABLE_GCS=ON"
+            "-DVELOX_ENABLE_ABFS=ON"
+            "-DVELOX_ENABLE_SUBSTRAIT=ON"
+            "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
+          )
+          make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}" AWSSDK_ROOT_DIR=~/adapter-deps/install GCSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+          ccache -s
+      - name: Run Unit Tests
+        run: |
+          conda init bash
+          conda create -y --name testbench python=3.7
+          conda activate testbench
+          pip install https://github.com/googleapis/storage-testbench/archive/refs/tags/v0.36.0.tar.gz
+          export LC_ALL=C
+          export JAVA_HOME=/usr/lib/jvm/jre-1.8.0-openjdk
+          export HADOOP_ROOT_LOGGER="WARN,DRFA"
+          export LIBHDFS3_CONF=$(pwd)/.circleci/hdfs-client.xml
+          export HADOOP_HOME='/usr/local/hadoop'
+          export PATH=~/adapter-deps/install/bin:/usr/local/hadoop/bin:${PATH}
+          # The following is used to install Azurite in the CI for running Abfs Hive Connector unit tests.
+          # Azurite is an emulator for local Azure Storage development, and it is a required component for running Abfs Hive Connector unit tests. 
+          # It can be installed using npm. The following is used to install Node.js and npm for Azurite installation.
+          curl -sL https://rpm.nodesource.com/setup_10.x | bash -
+          sudo apt-get install -y nodejs
+          npm install -g azurite
+          cd _build/release && ctest -j 16 -VV --output-on-failure

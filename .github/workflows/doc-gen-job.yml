@@ -1,0 +1,40 @@
+name: doc-gen-job
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  doc-gen-job:
+    runs-on: 8-core
+    container:
+      image : ghcr.io/facebookincubator/velox-dev:circleci-avx
+    env:
+      CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
+      CXX: /opt/rh/gcc-toolset-9/root/bin/g++
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+        with:
+          submodules: recursive
+      - name: Build docs and update gh-pages
+        run: |
+          git config --global user.email "velox@users.noreply.github.com"
+          git config --global user.name "velox"
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+          git fetch origin
+          git checkout origin/main
+          conda init bash
+          source ~/.bashrc
+          conda create -y --name docgenenv python=3.7
+          conda activate docgenenv
+          pip install sphinx sphinx-tabs breathe sphinx_rtd_theme chardet
+          source /opt/rh/gcc-toolset-9/enable
+          ./scripts/gen-docs.sh docgenenv
+          git checkout gh-pages
+          cp -R velox/docs/_build/html/* docs
+          git add docs
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]
+          then
+            git commit -m "Update documentation"
+            git push
+          fi

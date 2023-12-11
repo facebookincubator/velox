@@ -1,0 +1,27 @@
+name: MacOS Build
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  macos-build:
+    strategy:
+      matrix:
+        # macos-12-large == intel
+        # macos-latest-xlarge == m1
+        # https://docs.github.com/en/actions/using-github-hosted-runners/about-larger-runners/about-larger-runners#about-macos-larger-runners
+        os: [macos-12-large, macos-latest-xlarge]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      ICU_SOURCE: BUNDLED
+      simdjson_SOURCE: BUNDLED
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+        with:
+          submodules: recursive
+      - uses: './.github/actions/macos-build'
+
