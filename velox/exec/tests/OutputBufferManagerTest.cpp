@@ -124,6 +124,10 @@ class OutputBufferManagerTest : public testing::Test {
     }
   }
 
+  OutputBufferInfo getInfo(const std::string& taskId) {
+    return bufferManager_->getInfo(taskId);
+  }
+
   void noMoreData(const std::string& taskId) {
     bufferManager_->noMoreData(taskId);
   }
@@ -964,6 +968,40 @@ TEST_P(AllOutputBufferManagerTest, outputBufferUtilization) {
   deleteResults(taskId, destination);
   bufferManager_->removeTask(taskId);
   verifyOutputBuffer(task, OutputBufferStatus::kFinished);
+}
+
+TEST_P(AllOutputBufferManagerTest, outputBufferInfo) {
+  const vector_size_t size = 100;
+  const std::string taskId =  std::to_string(rand());
+  OutputBufferInfo info;
+  initializeTask(taskId, rowType_, kind_, 1, 1);
+
+  const int pageNum = 3;
+  int totalSize = 0;
+  for (int pageId = 0; pageId < pageNum; pageId++) {
+    enqueue(taskId, 0, rowType_, size);
+    totalSize += size;
+    // force Arbitrary buffer to load data.
+    if (kind_ == facebook::velox::core::PartitionedOutputNode::Kind::kArbitrary) {
+      fetchOne(taskId, 0, pageId);
+    }
+    info = getInfo(taskId);
+    ASSERT_EQ(info.totalPagesAdded, pageId + 1);
+    ASSERT_EQ(info.totalRowsAdded, totalSize);
+
+    fetchOneAndAck(taskId, 0, pageId);
+    info = getInfo(taskId);
+
+    ASSERT_EQ(info.totalPagesSent, pageId + 1);
+    ASSERT_EQ(info.totalRowsSent, totalSize);
+  }
+
+  if (kind_ != PartitionedOutputNode::Kind::kPartitioned) {
+    bufferManager_->updateOutputBuffers(taskId, 0, true);
+  }
+  noMoreData(taskId);
+  fetchEndMarker(taskId, 0, pageNum);
+  bufferManager_->removeTask(taskId);
 }
 
 TEST_F(OutputBufferManagerTest, outOfOrderAcks) {

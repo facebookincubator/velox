@@ -74,6 +74,41 @@ class ArbitraryBuffer {
   std::deque<std::shared_ptr<SerializedPage>> pages_;
 };
 
+struct BufferInfo {
+  void recordAddPage(const SerializedPage& data) {
+    VELOX_CHECK(data.rows() >= 0, "SerializedPage's row size is not inited");
+    int64_t rows = data.rows();
+    int64_t size = data.size();
+    bufferedBytes += size;
+    bufferedRows += rows;
+    bufferedPages++;
+    bytesAdded += size;
+    rowsAdded += rows;
+    pagesAdded++;
+  }
+  void recordSendPage(const SerializedPage& data) {
+    VELOX_CHECK(data.rows() >= 0, "SerializedPage's row size is not inited");
+    int64_t rows = data.rows();
+    int64_t size = data.size();
+    bufferedBytes -= size;
+    bufferedRows -= rows;
+    bufferedPages--;
+    bytesSent += size;
+    rowsSent += rows;
+    pagesSent++;
+  }
+  bool finished{false};
+  int64_t bufferedBytes{0};
+  int64_t bufferedRows{0};
+  int64_t bufferedPages{0};
+  int64_t bytesAdded{0};
+  int64_t rowsAdded{0};
+  int64_t pagesAdded{0};
+  int64_t bytesSent{0};
+  int64_t rowsSent{0};
+  int64_t pagesSent{0};
+};
+
 class DestinationBuffer {
  public:
   void enqueue(std::shared_ptr<SerializedPage> data);
@@ -114,6 +149,8 @@ class DestinationBuffer {
   // the callback.
   DataAvailable getAndClearNotify();
 
+  BufferInfo getInfo();
+
   std::string toString();
 
  private:
@@ -124,9 +161,35 @@ class DestinationBuffer {
   // The sequence number of the first item to pass to 'notify'.
   int64_t notifySequence_{0};
   uint64_t notifyMaxBytes_{0};
+  BufferInfo info_;
 };
 
 class Task;
+
+struct OutputBufferInfo {
+  enum class BufferState {
+    OPEN,
+    NO_MORE_BUFFERS,
+    NO_MORE_PAGES,
+    FLUSHING,
+    FINISHED,
+    FAILED
+  };
+  std::string type;
+  BufferState state{BufferState::OPEN};
+  bool canAddBuffers{true};
+  bool canAddPages{true};
+  int64_t totalBufferedBytes{0};
+  int64_t totalBufferedRows{0};
+  int64_t totalBufferedPages{0};
+  int64_t totalBytesAdded{0};
+  int64_t totalRowsAdded{0};
+  int64_t totalPagesAdded{0};
+  int64_t totalBytesSent{0};
+  int64_t totalRowsSent{0};
+  int64_t totalPagesSent{0};
+  std::vector<BufferInfo> buffers;
+};
 
 class OutputBuffer {
  public:
@@ -191,6 +254,8 @@ class OutputBuffer {
   // and will start blocking producers soon. This is used to dynamically scale
   // the number of consumers, for example, increase number of TableWriter tasks.
   bool isOverutilized() const;
+
+  OutputBufferInfo getInfo();
 
  private:
   // Percentage of maxSize below which a blocked producer should
@@ -272,6 +337,8 @@ class OutputBuffer {
   int32_t nextArbitraryLoadBufferIndex_{0};
   // One buffer per destination.
   std::vector<std::unique_ptr<DestinationBuffer>> buffers_;
+  // One bufferInfo per destination.
+  std::vector<BufferInfo> bufferInfos_;
   uint32_t numFinished_{0};
   // When this reaches buffers_.size(), 'this' can be freed.
   int numFinalAcknowledges_ = 0;
