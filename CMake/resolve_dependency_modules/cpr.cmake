@@ -37,3 +37,5 @@ FetchContent_Declare(
 set(BUILD_SHARED_LIBS OFF)
 set(CPR_USE_SYSTEM_CURL OFF)
 FetchContent_MakeAvailable(cpr)
+# See issue #7964.
+unset(BUILD_TESTING)
