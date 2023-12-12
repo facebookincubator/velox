@@ -70,9 +70,12 @@ class StreamingAggregation : public Operator {
   void assignGroups();
 
   // Add input data to accumulators.
-  void evaluateAggregates();
+  void evaluateAggregates(const std::vector<vector_size_t>& newGroups);
 
-  std::vector<Accumulator> makeAccumulators();
+  std::unique_ptr<RowContainer> createRows(
+      const std::vector<TypePtr>& groupingKeyTypes);
+
+  void initializeAggregates(uint32_t numKeys);
 
   /// Maximum number of rows in the output batch.
   const uint32_t outputBatchSize_;
