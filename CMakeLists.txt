@@ -553,6 +553,7 @@ if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
   set(cpr_SOURCE BUNDLED)
   resolve_dependency(cpr)
 endif()
+unset(BUILD_TESTING)
 
 include(CTest) # include after project() but before add_subdirectory()
 
