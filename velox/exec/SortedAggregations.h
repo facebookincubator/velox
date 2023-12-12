@@ -71,6 +71,12 @@ class SortedAggregations {
   /// results in the specified 'result' vector.
   void extractValues(folly::Range<char**> groups, const RowVectorPtr& result);
 
+  static std::unique_ptr<SortedAggregations> extractSortedAggregations(
+      std::vector<AggregateInfo>& aggregates,
+      const RowTypePtr& inputType,
+      memory::MemoryPool* pool,
+      bool isPartial = false);
+
   /// Clears all data accumulated so far. Used to release memory after spilling.
   void clear();
 

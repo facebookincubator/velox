@@ -409,4 +409,31 @@ void SortedAggregations::extractValues(
   }
 }
 
+std::unique_ptr<SortedAggregations>
+SortedAggregations::extractSortedAggregations(
+    std::vector<AggregateInfo>& aggregates,
+    const RowTypePtr& inputType,
+    memory::MemoryPool* pool,
+    bool isPartial) {
+  std::vector<AggregateInfo*> sortedAggs;
+  for (auto& aggregate : aggregates) {
+    if (!aggregate.sortingKeys.empty()) {
+      VELOX_USER_CHECK(
+          !isPartial,
+          "Partial aggregations over sorted inputs are not supported");
+      VELOX_USER_CHECK(
+          !aggregate.distinct,
+          "Aggregations over sorted unique values are not supported yet");
+      sortedAggs.push_back(&aggregate);
+      continue;
+    }
+  }
+
+  if (sortedAggs.empty()) {
+    return nullptr;
+  }
+
+  return std::make_unique<SortedAggregations>(sortedAggs, inputType, pool);
+}
+
 } // namespace facebook::velox::exec

@@ -79,4 +79,7 @@ std::vector<AggregateInfo> toAggregateInfo(
     std::shared_ptr<core::ExpressionEvaluator>& expressionEvaluator,
     bool isStreaming = false);
 
+std::vector<std::optional<column_index_t>> extractMaskChannels(
+    const std::vector<AggregateInfo>& aggregates);
+
 } // namespace facebook::velox::exec

@@ -19,6 +19,7 @@
 #include "velox/exec/AggregateInfo.h"
 #include "velox/exec/AggregationMasks.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/SortedAggregations.h"
 
 namespace facebook::velox::exec {
 
@@ -71,6 +72,8 @@ class StreamingAggregation : public Operator {
   // Add input data to accumulators.
   void evaluateAggregates();
 
+  std::vector<Accumulator> makeAccumulators();
+
   /// Maximum number of rows in the output batch.
   const uint32_t outputBatchSize_;
 
@@ -81,6 +84,7 @@ class StreamingAggregation : public Operator {
 
   std::vector<column_index_t> groupingKeys_;
   std::vector<AggregateInfo> aggregates_;
+  std::unique_ptr<SortedAggregations> sortedAggregations_;
   std::unique_ptr<AggregationMasks> masks_;
   std::vector<DecodedVector> decodedKeys_;
 
