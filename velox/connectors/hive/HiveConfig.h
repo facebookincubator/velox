@@ -115,12 +115,24 @@ class HiveConfig {
   static constexpr const char* kMaxCoalescedDistanceBytes =
       "max-coalesced-distance-bytes";
 
+  /// Sets the number of prefetch rowgroups
+  static constexpr const char* kPrefetchRowGroups = "prefetch-rowgroups";
+
+  /// Sets the load quantum size for a request.
+  static constexpr const char* kLoadQuantum = "load-quantum";
+
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
   /// Enable file handle cache.
   static constexpr const char* kEnableFileHandleCache =
       "file-handle-cache-enabled";
+
+  /// set directorySizeGuess defined in dwio::common::ReaderOptions
+  static constexpr const char* kDirectorySizeGuess = "directory-size-guess";
+
+  /// set FilePreloadThreshold defined in dwio::common::ReaderOptions
+  static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
   /// Maximum stripe size in orc writer.
   static constexpr const char* kOrcWriterMaxStripeSize =
@@ -184,6 +196,11 @@ class HiveConfig {
 
   int32_t maxCoalescedDistanceBytes() const;
 
+  int32_t prefetchRowGroups() const;
+
+  int32_t loadQuantum() const;
+
+
   int32_t numCacheFileHandles() const;
 
   bool isFileHandleCacheEnabled() const;
@@ -197,6 +214,10 @@ class HiveConfig {
   uint32_t sortWriterMaxOutputRows(const Config* session) const;
 
   uint64_t sortWriterMaxOutputBytes(const Config* session) const;
+
+  uint64_t directorySizeGuess() const;
+
+  uint64_t filePreloadThreshold() const;
 
   HiveConfig(std::shared_ptr<const Config> config) {
     VELOX_CHECK_NOT_NULL(
