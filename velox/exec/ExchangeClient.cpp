@@ -43,7 +43,7 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
           taskId.substr(0, 128));
     }
 
-    if (closed_) {
+    if (closed_.load()) {
       toClose = std::move(source);
     } else {
       sources_.push_back(source);
@@ -72,10 +72,10 @@ void ExchangeClient::close() {
   std::vector<std::shared_ptr<ExchangeSource>> sources;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
-    if (closed_) {
+    if (closed_.load()) {
       return;
     }
-    closed_ = true;
+    closed_.store(true);
     sources = std::move(sources_);
   }
 
@@ -140,6 +140,9 @@ void ExchangeClient::request(const RequestSpec& requestSpec) {
           RequestSpec requestSpec;
           {
             std::lock_guard<std::mutex> l(queue_->mutex());
+            if (closed_.load()) {
+              return;
+            }
             if (!response.atEnd) {
               if (response.bytes > 0) {
                 producingSources_.push(requestSource);
@@ -205,7 +208,7 @@ void ExchangeClient::pickSourcesToRequestLocked(
 }
 
 ExchangeClient::RequestSpec ExchangeClient::pickSourcesToRequestLocked() {
-  if (closed_ || queue_->totalBytes() >= maxQueuedBytes_) {
+  if (closed_.load() || queue_->totalBytes() >= maxQueuedBytes_) {
     return {};
   }
 
@@ -242,7 +245,7 @@ std::string ExchangeClient::toString() const {
 std::string ExchangeClient::toJsonString() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["taskId"] = taskId_;
-  obj["closed"] = closed_;
+  obj["closed"] = std::to_string(closed_);
   folly::dynamic clientsObj = folly::dynamic::object;
   int index = 0;
   for (auto& source : sources_) {

@@ -116,7 +116,7 @@ class ExchangeClient {
   std::shared_ptr<ExchangeQueue> queue_;
   std::unordered_set<std::string> taskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
-  bool closed_{false};
+  std::atomic_bool closed_{false};
 
   // A queue of sources that have returned non-empty response from the latest
   // request.
