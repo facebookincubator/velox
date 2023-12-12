@@ -316,18 +316,49 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           thrift::FieldRepetitionType::REPEATED) {
         if (parentElement.converted_type == thrift::ConvertedType::LIST) {
           // child of LIST
-          auto childrenCopy = children;
-          return std::make_shared<ParquetTypeWithId>(
-              TypeFactory<TypeKind::ARRAY>::create(children[0]->type()),
-              std::move(childrenCopy),
-              curSchemaIdx,
-              maxSchemaElementIdx,
-              ParquetTypeWithId::kNonLeaf, // columnIdx,
-              std::move(name),
-              std::nullopt,
-              std::nullopt,
-              maxRepeat,
-              maxDefine);
+          if (children.size() == 1) {
+            auto childrenCopy = children;
+            return std::make_shared<ParquetTypeWithId>(
+                TypeFactory<TypeKind::ARRAY>::create(children[0]->type()),
+                std::move(childrenCopy),
+                curSchemaIdx,
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                maxRepeat,
+                maxDefine);
+          } else {
+            // According to the spec of list backward compatibility
+            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+            // "If the repeated field is a group with multiple fields, then its type
+            // is the element type and elements are required."
+            // when there are multiple fields, creating a new row type
+            // instance which has all the fields as its children.
+            // TODO: since this is newly created node, its schemaIdx actually doesn't
+            // exist from the footer schema. Reusing the curSchemaIdx but potentially
+            // could have issue.
+            auto childrenRowType = createRowType(children, isFileColumnNamesReadAsLowerCase());
+            std::shared_ptr<const dwio::common::TypeWithId> childrenType =
+                std::make_shared<facebook::velox::dwio::common::TypeWithId>(
+                    childrenRowType , std::move(children), curSchemaIdx,
+                    maxSchemaElementIdx, ParquetTypeWithId::kNonLeaf);
+            std::vector<std::shared_ptr<const facebook::velox::dwio::common::TypeWithId>> newRowChildren;
+            newRowChildren.push_back(childrenType);
+
+            return std::make_shared<ParquetTypeWithId>(
+                TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
+                std::move(newRowChildren),
+                curSchemaIdx,
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                maxRepeat,
+                maxDefine);
+          }
         } else if (
             parentElement.converted_type == thrift::ConvertedType::MAP ||
             parentElement.converted_type ==
