@@ -31,6 +31,7 @@ struct RuntimeCounter {
   explicit RuntimeCounter(int64_t _value, Unit _unit = Unit::kNone)
       : value(_value), unit(_unit) {}
 };
+auto format_as(RuntimeCounter::Unit f) { return fmt::underlying(f); }
 
 struct RuntimeMetric {
   // Sum, min, max have the same unit, count has kNone.
