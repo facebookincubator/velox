@@ -200,7 +200,6 @@ class HiveConfig {
 
   int32_t loadQuantum() const;
 
-
   int32_t numCacheFileHandles() const;
 
   bool isFileHandleCacheEnabled() const;
