@@ -255,26 +255,10 @@ dwio::common::StripeProgress getStripeProgress(
  *
  * This method assumes each input `ColumnarBatch` have same schema.
  */
-void Writer::write(const VectorPtr& dataToWrite) {
+void Writer::write(const VectorPtr& data) {
   VELOX_USER_CHECK(
-      dataToWrite->type()->equivalent(*schema_),
+      data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
-  auto data = std::dynamic_pointer_cast<RowVector>(dataToWrite);
-  VELOX_CHECK_NULL(data->nulls());
-
-  // VELOX_CHECK_EQ(
-  //     schema_.use_count(),
-  //     1,
-  //     "The schema_ should be singly-referenced before calling the
-  //     BaseVector::setType() method");
-  // auto children = schema_->children();
-  // for (int i = 0; i < children.size(); i++) {
-  //   VELOX_CHECK_EQ(
-  //       children[i].use_count(),
-  //       1,
-  //       "The children vectors type of schema_ should be singly-referenced
-  //       before calling the BaseVector::setType() method");
-  // }
 
   data->setType(schema_);
 
