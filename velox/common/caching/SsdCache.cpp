@@ -82,7 +82,7 @@ bool SsdCache::startWrite() {
 }
 
 void SsdCache::write(std::vector<CachePin> pins) {
-  VELOX_CHECK_LE(numShards_, writesInProgress_);
+  VELOX_CHECK_LE(numShards_, writesInProgress_.load());
 
   TestValue::adjust("facebook::velox::cache::SsdCache::write", this);
 
