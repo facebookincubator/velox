@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -1128,8 +1129,8 @@ TEST_P(MemoryPoolTest, persistentNonContiguousAllocateFailure) {
     std::string debugString() const {
       return fmt::format(
           "numOldPages:{}, numNewPages:{}, injectedFailure:{}",
-          numOldPages,
-          numNewPages,
+          static_cast<int>(numOldPages),
+          static_cast<int>(numNewPages),
           injectedFailure);
     }
   } testSettings[] = {// Cap failure injection.

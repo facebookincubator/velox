@@ -23,6 +23,7 @@
 #include "velox/common/memory/MmapArena.h"
 #include "velox/common/testutil/TestValue.h"
 
+#include <fmt/format.h>
 #include <folly/Random.h>
 #include <folly/Range.h>
 #include <gflags/gflags.h>
@@ -776,8 +777,8 @@ TEST_P(MemoryAllocatorTest, nonContiguousFailure) {
     std::string debugString() const {
       return fmt::format(
           "numOldPages:{}, numNewPages:{}, injectedFailure:{}",
-          numOldPages,
-          numNewPages,
+          static_cast<int>(numOldPages),
+          static_cast<int>(numNewPages),
           injectedFailure);
     }
   } testSettings[] = {// Cap failure injection.
