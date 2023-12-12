@@ -237,6 +237,12 @@ class QueryConfig {
   static constexpr const char* kOrderBySpillMemoryThreshold =
       "order_by_spill_memory_threshold";
 
+  /// TThe max row numbers to fill and spill for each spill run. If it 0, then
+  /// there is no limit.
+  /// The recommendation value is 12 * 1024 * 1024 * 1024 according to the test
+  /// results, which is 96 MB in theory and 128 MB actually.
+  static constexpr const char* kMaxSpillRunRows = "max_spill_run_rows";
+
   static constexpr const char* kTestingSpillPct = "testing.spill_pct";
 
   /// The max allowed spilling level with zero being the initial spilling level.
@@ -404,6 +410,15 @@ class QueryConfig {
   /// The producer Drivers are blocked when the buffered size exceeds
   /// this. The Drivers are resumed when the buffered size goes below
   /// OutputBufferManager::kContinuePct % of this.
+  uint64_t maxSpillRunRows() const {
+    static constexpr uint64_t kDefault = 5 * 1024 * 1024;
+    return get<uint64_t>(kMaxSpillRunRows, kDefault);
+  }
+
+  // Returns the target size for a Task's buffered output. The
+  // producer Drivers are blocked when the buffered size exceeds
+  // this. The Drivers are resumed when the buffered size goes below
+  // OutputBufferManager::kContinuePct % of this.
   uint64_t maxPartitionedOutputBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxPartitionedOutputBufferSize, kDefault);

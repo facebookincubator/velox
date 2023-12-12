@@ -44,6 +44,7 @@ Spiller::Spiller(
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor,
+    uint64_t maxSpillRunRows,
     const std::string& fileCreateConfig)
     : Spiller(
           type,
@@ -59,6 +60,7 @@ Spiller::Spiller(
           compressionKind,
           pool,
           executor,
+          maxSpillRunRows,
           fileCreateConfig) {
   VELOX_CHECK(
       type_ == Type::kOrderByInput || type_ == Type::kAggregateInput,
@@ -78,6 +80,7 @@ Spiller::Spiller(
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor,
+    uint64_t maxSpillRunRows,
     const std::string& fileCreateConfig)
     : Spiller(
           type,
@@ -93,6 +96,7 @@ Spiller::Spiller(
           compressionKind,
           pool,
           executor,
+          maxSpillRunRows,
           fileCreateConfig) {
   VELOX_CHECK(
       type_ == Type::kAggregateOutput || type_ == Type::kOrderByOutput,
@@ -113,6 +117,7 @@ Spiller::Spiller(
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor,
+    uint64_t maxSpillRunRows,
     const std::string& fileCreateConfig)
     : Spiller(
           type,
@@ -128,6 +133,7 @@ Spiller::Spiller(
           compressionKind,
           pool,
           executor,
+          maxSpillRunRows,
           fileCreateConfig) {
   VELOX_CHECK_EQ(
       type_,
@@ -148,6 +154,7 @@ Spiller::Spiller(
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor,
+    uint64_t maxSpillRunRows,
     const std::string& fileCreateConfig)
     : Spiller(
           type,
@@ -163,6 +170,7 @@ Spiller::Spiller(
           compressionKind,
           pool,
           executor,
+          maxSpillRunRows,
           fileCreateConfig) {
   VELOX_CHECK_EQ(
       type_,
@@ -185,6 +193,7 @@ Spiller::Spiller(
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor,
+    uint64_t maxSpillRunRows,
     const std::string& fileCreateConfig)
     : type_(type),
       container_(container),
@@ -192,6 +201,7 @@ Spiller::Spiller(
       pool_(pool),
       bits_(bits),
       rowType_(std::move(rowType)),
+      maxSpillRunRows_(maxSpillRunRows),
       state_(
           getSpillDirPathCb,
           fileNamePrefix,
@@ -401,7 +411,7 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
   }
 }
 
-void Spiller::runSpill() {
+void Spiller::runSpill(bool lastRun) {
   ++stats_.wlock()->spillRuns;
 
   std::vector<std::shared_ptr<AsyncSource<SpillStatus>>> writes;
@@ -449,8 +459,9 @@ void Spiller::runSpill() {
     // aggregation output / orderby output spiller, we expect only one spill
     // call to spill all the rows starting from the specified row offset.
     if (needSort() ||
-        (type_ == Spiller::Type::kAggregateOutput ||
-         type_ == Spiller::Type::kOrderByOutput)) {
+        ((type_ == Spiller::Type::kAggregateOutput ||
+          type_ == Spiller::Type::kOrderByOutput) &&
+         lastRun)) {
       state_.finishFile(partition);
     }
   }
@@ -486,8 +497,17 @@ void Spiller::spill(const RowContainerIterator* startRowIter) {
 
   markAllPartitionsSpilled();
 
-  fillSpillRuns(startRowIter);
-  runSpill();
+  RowContainerIterator rowIter;
+  if (startRowIter != nullptr) {
+    rowIter = *startRowIter;
+  }
+
+  bool lastRun{false};
+  do {
+    lastRun = fillSpillRuns(&rowIter);
+    runSpill(lastRun);
+  } while (!lastRun);
+
   checkEmptySpillRuns();
 }
 
@@ -499,7 +519,7 @@ void Spiller::spill(std::vector<char*>& rows) {
   markAllPartitionsSpilled();
 
   fillSpillRun(rows);
-  runSpill();
+  runSpill(true);
   checkEmptySpillRuns();
 }
 
@@ -567,24 +587,28 @@ void Spiller::finalizeSpill() {
   finalized_ = true;
 }
 
-void Spiller::fillSpillRuns(const RowContainerIterator* startRowIter) {
+bool Spiller::fillSpillRuns(RowContainerIterator* iterator) {
   checkEmptySpillRuns();
 
+  uint64_t numRows{0};
   uint64_t execTimeUs{0};
   {
     MicrosecondTimer timer(&execTimeUs);
-    RowContainerIterator iterator;
-    if (startRowIter != nullptr) {
-      iterator = *startRowIter;
-    }
+
     // Number of rows to hash and divide into spill partitions at a time.
     constexpr int32_t kHashBatchSize = 4096;
     std::vector<uint64_t> hashes(kHashBatchSize);
     std::vector<char*> rows(kHashBatchSize);
     const bool isSinglePartition = bits_.numPartitions() == 1;
+
+    uint64_t totalRows{0};
     for (;;) {
-      auto numRows = container_->listRows(
-          &iterator, rows.size(), RowContainer::kUnlimited, rows.data());
+      numRows = container_->listRows(
+          iterator, rows.size(), RowContainer::kUnlimited, rows.data());
+      if (numRows == 0) {
+        break;
+      }
+
       // Calculate hashes for this batch of spill candidates.
       auto rowSet = folly::Range<char**>(rows.data(), numRows);
 
@@ -605,12 +629,16 @@ void Spiller::fillSpillRuns(const RowContainerIterator* startRowIter) {
         spillRuns_[partition].rows.push_back(rows[i]);
         spillRuns_[partition].numBytes += container_->rowSize(rows[i]);
       }
-      if (numRows == 0) {
+
+      totalRows += numRows;
+      if (maxSpillRunRows_ > 0 && totalRows >= maxSpillRunRows_) {
         break;
       }
     }
   }
   updateSpillFillTime(execTimeUs);
+
+  return numRows == 0;
 }
 
 void Spiller::fillSpillRun(std::vector<char*>& rows) {

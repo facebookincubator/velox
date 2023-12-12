@@ -260,6 +260,7 @@ void HashProbe::maybeSetupSpillInput(
       spillConfig.compressionKind,
       memory::spillMemoryPool(),
       spillConfig.executor,
+      0,
       spillConfig.fileCreateConfig);
   // Set the spill partitions to the corresponding ones at the build side. The
   // hash probe operator itself won't trigger any spilling.

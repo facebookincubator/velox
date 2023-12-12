@@ -61,6 +61,7 @@ class Spiller {
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor,
+      uint64_t maxSpillRunRows = 0,
       const std::string& fileCreateConfig = {});
 
   Spiller(
@@ -73,6 +74,7 @@ class Spiller {
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor,
+      uint64_t maxSpillRunRows = 0,
       const std::string& fileCreateConfig = {});
 
   Spiller(
@@ -86,6 +88,7 @@ class Spiller {
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor,
+      uint64_t maxSpillRunRows = 0,
       const std::string& fileCreateConfig = {});
 
   Spiller(
@@ -100,6 +103,7 @@ class Spiller {
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor,
+      uint64_t maxSpillRunRows = 0,
       const std::string& fileCreateConfig = {});
 
   Type type() const {
@@ -212,6 +216,7 @@ class Spiller {
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor,
+      uint64_t maxSpillRunRows,
       const std::string& fileCreateConfig);
 
   // Invoked to spill. If 'startRowIter' is not null, then we only spill rows
@@ -286,14 +291,16 @@ class Spiller {
   // Prepares spill runs for the spillable data from all the hash partitions.
   // If 'startRowIter' is not null, we prepare runs starting from the offset
   // pointed by 'startRowIter'.
-  void fillSpillRuns(const RowContainerIterator* startRowIter = nullptr);
+  // Return true if it is the last spill run, since it may run multiple rounds
+  // as we have maxSpillRunRows limitation for each spill run.
+  bool fillSpillRuns(RowContainerIterator* startRowIter = nullptr);
 
   // Prepares spill run of a single partition for the spillable data from the
   // rows.
   void fillSpillRun(std::vector<char*>& rows);
 
   // Writes out all the rows collected in spillRuns_.
-  void runSpill();
+  void runSpill(bool lastRun);
 
   // Sorts 'run' if not already sorted.
   void ensureSorted(SpillRun& run);
@@ -321,6 +328,7 @@ class Spiller {
   memory::MemoryPool* const pool_;
   const HashBitRange bits_;
   const RowTypePtr rowType_;
+  const uint64_t maxSpillRunRows_;
 
   // True if all rows of spilling partitions are in 'spillRuns_', so
   // that one can start reading these back. This means that the rows
