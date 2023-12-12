@@ -101,6 +101,36 @@ TEST_F(ParquetReaderTest, parseSample) {
       sampleSchema(), *rowReader, expected, *leafPool_);
 }
 
+TEST_F(ParquetReaderTest, parseUnannotatedList) {
+  // unannotated_list.parquet has the following the schema
+  // the list is defined without the middle layer
+  // message ParquetSchema {
+  //   optional group self (LIST) {
+  //     repeated group self_tuple {
+  //       optional int64 a;
+  //       optional boolean b;
+  //       required binary c (STRING);
+  //     }
+  //   }
+  // }
+  const std::string sample(getExampleFilePath("unannotated_list.parquet"));
+
+  facebook::velox::dwio::common::ReaderOptions readerOpts{defaultPool.get()};
+  auto reader = createReader(sample, readerOpts);
+
+  EXPECT_EQ(reader->numberOfRows(), 22ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type()->kind(), TypeKind::ARRAY);
+
+  EXPECT_EQ(col0->size(), 3ULL);
+  EXPECT_EQ(col0->childAt(0)->type()->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(col0->childAt(1)->type()->kind(), TypeKind::BOOLEAN);
+  EXPECT_EQ(col0->childAt(2)->type()->kind(), TypeKind::VARCHAR);
+}
+
 TEST_F(ParquetReaderTest, parseSampleRange1) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 

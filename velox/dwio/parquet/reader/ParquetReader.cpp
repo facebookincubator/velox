@@ -95,6 +95,7 @@ class ReaderBase {
       uint32_t maxRepeat,
       uint32_t maxDefine,
       uint32_t& schemaIdx,
+      uint32_t parentSchemaIdx,
       uint32_t& columnIdx) const;
 
   TypePtr convertType(const thrift::SchemaElement& schemaElement) const;
@@ -213,7 +214,7 @@ void ReaderBase::initializeSchema() {
   uint32_t columnIdx = 0;
   uint32_t maxSchemaElementIdx = fileMetaData_->schema.size() - 1;
   schemaWithId_ = getParquetColumnInfo(
-      maxSchemaElementIdx, maxRepeat, maxDefine, schemaIdx, columnIdx);
+      maxSchemaElementIdx, maxRepeat, maxDefine, schemaIdx, 0, columnIdx);
   schema_ = createRowType(
       schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
 }
@@ -223,6 +224,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     uint32_t maxRepeat,
     uint32_t maxDefine,
     uint32_t& schemaIdx,
+    uint32_t parentSchemaIdx,
     uint32_t& columnIdx) const {
   VELOX_CHECK(fileMetaData_ != nullptr);
   VELOX_CHECK_LT(schemaIdx, fileMetaData_->schema.size());
@@ -230,6 +232,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   auto& schema = fileMetaData_->schema;
   uint32_t curSchemaIdx = schemaIdx;
   auto& schemaElement = schema[curSchemaIdx];
+  auto& parentElement = schema[parentSchemaIdx];
 
   if (schemaElement.__isset.repetition_type) {
     if (schemaElement.repetition_type !=
@@ -255,7 +258,12 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
       auto child = getParquetColumnInfo(
-          maxSchemaElementIdx, maxRepeat, maxDefine, ++schemaIdx, columnIdx);
+          maxSchemaElementIdx,
+          maxRepeat,
+          maxDefine,
+          ++schemaIdx,
+          curSchemaIdx,
+          columnIdx);
       children.push_back(child);
     }
     VELOX_CHECK(!children.empty());
@@ -306,9 +314,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     } else {
       if (schemaElement.repetition_type ==
           thrift::FieldRepetitionType::REPEATED) {
-        VELOX_CHECK_LE(
-            children.size(), 2, "children size should not be larger than 2");
-        if (children.size() == 1) {
+        if (parentElement.converted_type == thrift::ConvertedType::LIST) {
           // child of LIST
           auto childrenCopy = children;
           return std::make_shared<ParquetTypeWithId>(
@@ -322,7 +328,10 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               std::nullopt,
               maxRepeat,
               maxDefine);
-        } else if (children.size() == 2) {
+        } else if (
+            parentElement.converted_type == thrift::ConvertedType::MAP ||
+            parentElement.converted_type ==
+                thrift::ConvertedType::MAP_KEY_VALUE) {
           // children  of MAP
           auto childrenCopy = children;
           return std::make_shared<const ParquetTypeWithId>(
