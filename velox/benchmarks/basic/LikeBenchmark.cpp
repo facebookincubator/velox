@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
           // Strings in even rows contain/start with/end with a_b_c depends on
           // value of padAtHead && padAtTail.
           if (row % 2 == 0) {
-            auto padding = std::string("x", row / 2 + 1);
+            auto padding = std::string(row / 2 + 1, 'x');
             if (padAtHead && padAtTail) {
               return fmt::format("{}a_b_c{}", padding, padding);
             } else if (padAtHead) {
@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
               return std::string("a_b_c");
             }
           } else {
-            return std::string("x", row);
+            return std::string(row, 'x');
           }
         });
       };
