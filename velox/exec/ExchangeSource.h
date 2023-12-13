@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/ExchangeQueue.h"
 
 namespace facebook::velox::exec {
@@ -94,7 +95,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   // Returns runtime statistics. ExchangeSource is expected to report
   // background CPU time by including a runtime metric named
   // ExchangeClient::kBackgroundCpuTimeMs.
-  virtual folly::F14FastMap<std::string, int64_t> stats() const = 0;
+  virtual folly::F14FastMap<std::string, RuntimeCounter> stats() const = 0;
 
   virtual std::string toString() {
     std::stringstream out;
