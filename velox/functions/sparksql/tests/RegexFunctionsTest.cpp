@@ -52,12 +52,12 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
     auto result = [&] {
       if (!position) {
         return evaluateOnce<std::string>(
-            fmt::format("regex_replace(c0, '{}', '{}')", pattern, replace),
+            fmt::format("regexp_replace(c0, '{}', '{}')", pattern, replace),
             input);
       } else {
         return evaluateOnce<std::string>(
             fmt::format(
-                "regex_replace(c0, '{}', '{}', {})",
+                "regexp_replace(c0, '{}', '{}', {})",
                 pattern,
                 replace,
                 position.value()),
@@ -94,7 +94,7 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
     std::shared_ptr<SimpleVector<StringView>> result;
     if (position) {
       result = evaluate<SimpleVector<StringView>>(
-          "regex_replace(c0, c1, c2, c3)",
+          "regexp_replace(c0, c1, c2, c3)",
           makeRowVector(
               {inputStringVector,
                patternStringVector,
@@ -102,7 +102,7 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
                positionIntVector}));
     } else {
       result = evaluate<SimpleVector<StringView>>(
-          "regex_replace(c0, c1, c2)",
+          "regexp_replace(c0, c1, c2)",
           makeRowVector(
               {inputStringVector, patternStringVector, replaceStringVector}));
     }
@@ -123,12 +123,12 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
       auto positionIntVector = makeFlatVector<int32_t>(*position);
 
       result = evaluate<SimpleVector<StringView>>(
-          fmt::format("regex_replace(c0, '{}', c1, c2)", pattern),
+          fmt::format("regexp_replace(c0, '{}', c1, c2)", pattern),
           makeRowVector(
               {inputStringVector, replaceStringVector, positionIntVector}));
     } else {
       result = evaluate<SimpleVector<StringView>>(
-          fmt::format("regex_replace(c0, '{}', c1)", pattern),
+          fmt::format("regexp_replace(c0, '{}', c1)", pattern),
           makeRowVector({inputStringVector, replaceStringVector}));
     }
     return result;
@@ -484,7 +484,7 @@ TEST_F(RegexFunctionsTest, regexReplaceDataframeLastCharacter) {
 
 // Test to match
 // https://github.com/apache/spark/blob/master/sql/core/src/test/scala/org/apache/spark/sql/StringFunctionsSuite.scala#L180-L184
-// This test is the crux of why regex_replace needed to support non-constant
+// This test is the crux of why regexp_replace needed to support non-constant
 // parameters. Used position {0,0} out of convenience, ideally we create another
 // function that does not pass a position parameter.
 TEST_F(RegexFunctionsTest, regexReplaceMatchSparkSqlTest) {
