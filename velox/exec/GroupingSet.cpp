@@ -90,8 +90,13 @@ GroupingSet::GroupingSet(
         allAreSinglyReferenced(aggregate.inputs, channelUseCount));
   }
 
-  sortedAggregations_ = SortedAggregations::extractSortedAggregations(
-      aggregates_, inputType, &pool_, isPartial_);
+  sortedAggregations_ =
+      SortedAggregations::create(aggregates_, inputType, &pool_);
+  if (isPartial_) {
+    VELOX_USER_CHECK_NULL(
+        sortedAggregations_,
+        "Partial aggregations over sorted inputs are not supported");
+  }
 
   for (auto& aggregate : aggregates_) {
     if (aggregate.distinct) {

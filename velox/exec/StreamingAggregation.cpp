@@ -62,10 +62,10 @@ void StreamingAggregation::initialize() {
       *aggregationNode_, *operatorCtx_, numKeys, expressionEvaluator, true);
 
   // Setup SortedAggregations.
-  sortedAggregations_ = SortedAggregations::extractSortedAggregations(
-      aggregates_, inputType, pool());
+  sortedAggregations_ =
+      SortedAggregations::create(aggregates_, inputType, pool());
   masks_ = std::make_unique<AggregationMasks>(extractMaskChannels(aggregates_));
-  rows_ = createRows(groupingKeyTypes);
+  rows_ = makeRowContainer(groupingKeyTypes);
 
   initializeAggregates(numKeys);
 
@@ -202,8 +202,7 @@ const SelectivityVector& StreamingAggregation::getSelectivityVector(
   return rows ? *rows : inputRows_;
 }
 
-void StreamingAggregation::evaluateAggregates(
-    const std::vector<vector_size_t>& newGroups) {
+void StreamingAggregation::evaluateAggregates() {
   for (auto i = 0; i < aggregates_.size(); ++i) {
     const auto& aggregate = aggregates_.at(i);
     if (!aggregate.sortingKeys.empty()) {
@@ -233,10 +232,6 @@ void StreamingAggregation::evaluateAggregates(
   }
 
   if (sortedAggregations_) {
-    if (!newGroups.empty()) {
-      sortedAggregations_->initializeNewGroups(
-          groups_.data(), folly::Range(newGroups.data(), newGroups.size()));
-    }
     sortedAggregations_->addInput(inputGroups_.data(), input_);
   }
 }
@@ -264,23 +259,8 @@ RowVectorPtr StreamingAggregation::getOutput() {
   auto numPrevGroups = numGroups_;
 
   assignGroups();
-
-  // Initialize aggregates for the new groups.
-  std::vector<vector_size_t> newGroups;
-  newGroups.resize(numGroups_ - numPrevGroups);
-  std::iota(newGroups.begin(), newGroups.end(), numPrevGroups);
-
-  for (const auto& aggregate : aggregates_) {
-    if (!aggregate.sortingKeys.empty()) {
-      continue;
-    }
-    auto& function = aggregate.function;
-
-    function->initializeNewGroups(
-        groups_.data(), folly::Range(newGroups.data(), newGroups.size()));
-  }
-
-  evaluateAggregates(newGroups);
+  initializeNewGroups(numPrevGroups);
+  evaluateAggregates();
 
   RowVectorPtr output;
   if (numGroups_ > outputBatchSize_) {
@@ -304,7 +284,7 @@ RowVectorPtr StreamingAggregation::getOutput() {
   return output;
 }
 
-std::unique_ptr<RowContainer> StreamingAggregation::createRows(
+std::unique_ptr<RowContainer> StreamingAggregation::makeRowContainer(
     const std::vector<TypePtr>& groupingKeyTypes) {
   std::vector<Accumulator> accumulators;
   accumulators.reserve(aggregates_.size());
@@ -327,6 +307,30 @@ std::unique_ptr<RowContainer> StreamingAggregation::createRows(
       false,
       false,
       pool());
+}
+
+void StreamingAggregation::initializeNewGroups(size_t numPrevGroups) {
+  std::vector<vector_size_t> newGroups;
+  newGroups.resize(numGroups_ - numPrevGroups);
+  std::iota(newGroups.begin(), newGroups.end(), numPrevGroups);
+
+  for (const auto& aggregate : aggregates_) {
+    if (!aggregate.sortingKeys.empty()) {
+      continue;
+    }
+
+    if (!newGroups.empty()) {
+      aggregate.function->initializeNewGroups(
+          groups_.data(), folly::Range(newGroups.data(), newGroups.size()));
+    }
+  }
+
+  if (sortedAggregations_) {
+    if (!newGroups.empty()) {
+      sortedAggregations_->initializeNewGroups(
+          groups_.data(), folly::Range(newGroups.data(), newGroups.size()));
+    }
+  }
 }
 
 void StreamingAggregation::initializeAggregates(uint32_t numKeys) {
