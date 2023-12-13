@@ -260,6 +260,7 @@ void Driver::init(
   operators_ = std::move(operators);
   curOperatorId_ = operators_.size() - 1;
   trackOperatorCpuUsage_ = ctx_->queryConfig().operatorTrackCpuUsage();
+  updateLastProgressTime();
 }
 
 void Driver::initializeOperators() {
@@ -592,6 +593,8 @@ StopReason Driver::runInternal(
                   nextOp,
                   curOperatorId_ + 1,
                   kOpMethodAddInput);
+              // Adding input means progress.
+              updateLastProgressTime();
 
               // The next iteration will see if operators_[i + 1] has
               // output now that it got input.
@@ -627,6 +630,9 @@ StopReason Driver::runInternal(
                   curOperatorId_,
                   kOpMethodIsFinished);
               if (finished) {
+                // Assuming we can get here only once for a particular operator.
+                // If we are finished, then there is some progress.
+                updateLastProgressTime();
                 auto timer = createDeltaCpuWallTimer(
                     [op, this](const CpuWallTiming& timing) {
                       processLazyTiming(*op, timing);
@@ -688,6 +694,9 @@ StopReason Driver::runInternal(
               curOperatorId_,
               kOpMethodIsFinished);
           if (finished) {
+            // Assuming we can get here only once for a particular operator.
+            // If we are finished, then there is some progress.
+            updateLastProgressTime();
             guard.notThrown();
             close();
             return StopReason::kAtEnd;
@@ -805,6 +814,14 @@ void Driver::closeByTask() {
   VELOX_CHECK(isTerminated());
   closeOperators();
   closed_ = true;
+}
+
+void Driver::updateLastProgressTime() {
+  lastProgressTimeMs_ = getCurrentTimeMs();
+}
+
+size_t Driver::getMsSinceLastProgress() const {
+  return getCurrentTimeMs() - lastProgressTimeMs_;
 }
 
 bool Driver::mayPushdownAggregation(Operator* aggregation) const {
@@ -926,6 +943,7 @@ std::string Driver::toJsonString() const {
   obj["state"] = state_.toJsonString();
   obj["closed"] = closed_.load();
   obj["queueTimeStartMicros"] = queueTimeStartMicros_;
+  obj["lastProgressTimeMs"] = lastProgressTimeMs_.load();
   const auto ocs = opCallStatus();
   if (!ocs.empty()) {
     obj["curOpCall"] =
