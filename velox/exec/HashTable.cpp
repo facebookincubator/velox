@@ -955,7 +955,8 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
         hashes);
     insertForJoin(overflows.data(), hashes.data(), overflows.size(), nullptr);
     auto table = i == 0 ? this : otherTables_[i - 1].get();
-    VELOX_CHECK_EQ(table->rows()->numRows(), table->numParallelBuildRows_);
+    VELOX_CHECK_EQ(
+        table->rows()->numRows(), table->numParallelBuildRows_.load());
   }
 }
 

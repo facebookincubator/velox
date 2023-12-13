@@ -190,17 +190,17 @@ class FakeMemoryOperator : public Operator {
       pool()->free(allocIt->buffer, allocIt->size);
       allocIt = allocations_.erase(allocIt);
     }
-    VELOX_CHECK_GE(totalBytes_, 0);
+    VELOX_CHECK_GE(totalBytes_.load(), 0);
   }
 
  private:
   void clear() {
     for (auto& allocation : allocations_) {
       totalBytes_ -= allocation.free();
-      VELOX_CHECK_GE(totalBytes_, 0);
+      VELOX_CHECK_GE(totalBytes_.load(), 0);
     }
     allocations_.clear();
-    VELOX_CHECK_EQ(totalBytes_, 0);
+    VELOX_CHECK_EQ(totalBytes_.load(), 0);
   }
 
   const bool canReclaim_;

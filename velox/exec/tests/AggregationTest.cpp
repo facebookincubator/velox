@@ -2276,7 +2276,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
 
   std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
-    SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
+    SCOPED_TRACE(
+        fmt::format("enableSpilling {}", enableSpilling.operator bool()));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
@@ -2403,7 +2404,9 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
 
   std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
-    SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
+    SCOPED_TRACE(
+        fmt::format("enableSpilling {}", enableSpilling.operator bool()));
+
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
@@ -2700,7 +2703,9 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
 
   std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
-    SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
+    SCOPED_TRACE(
+        fmt::format("enableSpilling {}", enableSpilling.operator bool()));
+
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(

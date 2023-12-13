@@ -572,7 +572,7 @@ TEST_F(HiveDataSinkTest, memoryReclaim) {
     std::string debugString() const {
       return fmt::format(
           "format: {}, sortWriter: {}, writerSpillEnabled: {}, writerFlushThreshold: {}, expectedWriterReclaimEnabled: {}, expectedWriterReclaimed: {}",
-          format,
+          dwio::common::toString(format),
           sortWriter,
           writerSpillEnabled,
           succinctBytes(writerFlushThreshold),
@@ -713,7 +713,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
     std::string debugString() const {
       return fmt::format(
           "format: {}, sortWriter: {}, writerSpillEnabled: {}, close: {}, expectedWriterReclaimEnabled: {}",
-          format,
+          dwio::common::toString(format),
           sortWriter,
           writerSpillEnabled,
           close,
