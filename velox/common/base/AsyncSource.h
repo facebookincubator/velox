@@ -21,12 +21,15 @@
 #include <folly/futures/Future.h>
 #include <functional>
 #include <memory>
+#include <optional>
 #include "velox/common/time/CpuWallTimer.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/testutil/TestValue.h"
+
+DECLARE_bool(account_for_off_thread_times);
 
 namespace facebook::velox {
 
@@ -58,7 +61,10 @@ class AsyncSource {
     }
     std::unique_ptr<Item> item;
     try {
-      CpuWallTimer timer(timing_);
+      std::optional<CpuWallTimer> timer{
+        FLAGS_account_for_off_thread_times
+          ? std::optional<CpuWallTimer>{timing_}
+          : std::nullopt};
       item = make();
     } catch (std::exception& e) {
       std::lock_guard<std::mutex> l(mutex_);
