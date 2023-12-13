@@ -85,7 +85,7 @@ struct PlanFragment {
 template <>
 struct fmt::formatter<facebook::velox::core::ExecutionStrategy>
     : formatter<int> {
-  auto format(facebook::velox::core::ExecutionStrategy s, format_context& ctx) {
+  auto format(const facebook::velox::core::ExecutionStrategy& s, format_context& ctx) {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };

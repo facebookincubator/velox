@@ -21,6 +21,7 @@
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 
+#include <common/compression/Compression.h>
 #include <folly/Random.h>
 #include <gtest/gtest.h>
 
@@ -396,7 +397,7 @@ TEST_P(CompressionTest, getCompressionBufferOOM) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(
-        fmt::format("{} compression {}", testData.debugString(), kind_));
+        fmt::format("{} compression {}", testData.debugString(), compressionKindToString(kind_)));
 
     auto config = std::make_shared<Config>();
     config->set<CompressionKind>(Config::COMPRESSION, kind_);
