@@ -64,9 +64,10 @@ using FileHandleCache = SimpleLRUCache<std::string, FileHandle>;
 // Creates FileHandles via the Generator interface the CachedFactory requires.
 class FileHandleGenerator {
  public:
-  FileHandleGenerator() {}
-  FileHandleGenerator(std::shared_ptr<const Config> properties)
-      : properties_(std::move(properties)) {}
+  explicit FileHandleGenerator(std::shared_ptr<const Config> properties)
+      : properties_(std::move(properties)) {
+    VELOX_CHECK_NOT_NULL(properties_)
+  }
   std::shared_ptr<FileHandle> operator()(const std::string& filename);
 
  private:

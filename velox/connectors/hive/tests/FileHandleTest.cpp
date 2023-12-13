@@ -20,6 +20,7 @@
 #include "velox/common/caching/SimpleLRUCache.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/core/Config.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
 using namespace facebook::velox;
@@ -39,7 +40,8 @@ TEST(FileHandleTest, localFile) {
   FileHandleFactory factory(
       std::make_unique<
           SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(1000),
-      std::make_unique<FileHandleGenerator>());
+      std::make_unique<FileHandleGenerator>(
+          std::make_shared<const core::MemConfig>()));
   auto fileHandle = factory.generate(filename).second;
   ASSERT_EQ(fileHandle->file->size(), 3);
   char buffer[3];
