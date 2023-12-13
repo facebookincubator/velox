@@ -68,7 +68,7 @@ void AsyncDataCacheEntry::setExclusiveToShared() {
 }
 
 void AsyncDataCacheEntry::release() {
-  VELOX_CHECK_NE(0, static_cast<int>(numPins_));
+  VELOX_CHECK_NE(0, numPins_.load());
   if (numPins_ == kExclusive) {
     // Dereferencing an exclusive entry without converting to shared means that
     // the content could not be shared, e.g. error in loading.
@@ -135,7 +135,7 @@ std::string AsyncDataCacheEntry::toString() const {
       key_.fileNum.id(),
       key_.offset,
       size_,
-      static_cast<int>(numPins_));
+      numPins_.load());
 }
 
 std::unique_ptr<AsyncDataCacheEntry> CacheShard::getFreeEntry() {
@@ -639,7 +639,7 @@ bool AsyncDataCache::makeSpace(
   VELOX_CHECK(
       numThreadsInAllocate_ >= 0 && numThreadsInAllocate_ < 10000,
       "Leak in numThreadsInAllocate_: {}",
-      static_cast<int>(numThreadsInAllocate_));
+      numThreadsInAllocate_.load());
   if (numThreadsInAllocate_) {
     rank = ++numThreadsInAllocate_;
     isCounted = true;

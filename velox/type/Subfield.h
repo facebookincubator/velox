@@ -327,8 +327,9 @@ struct fmt::formatter<::facebook::velox::common::Subfield>
 template <>
 struct fmt::formatter<::facebook::velox::common::SubfieldKind>
     : formatter<int> {
-  auto format(const ::facebook::velox::common::SubfieldKind& s, format_context& ctx)
-      const {
+  auto format(
+      const ::facebook::velox::common::SubfieldKind& s,
+      format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };

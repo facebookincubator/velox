@@ -777,8 +777,8 @@ TEST_P(MemoryAllocatorTest, nonContiguousFailure) {
     std::string debugString() const {
       return fmt::format(
           "numOldPages:{}, numNewPages:{}, injectedFailure:{}",
-          static_cast<int>(numOldPages),
-          static_cast<int>(numNewPages),
+          static_cast<uint64_t>(numOldPages),
+          static_cast<uint64_t>(numNewPages),
           injectedFailure);
     }
   } testSettings[] = {// Cap failure injection.

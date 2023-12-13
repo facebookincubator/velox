@@ -97,8 +97,10 @@ void ByteInputStream::seekp(std::streampos position) {
     }
     toSkip -= range.size;
   }
+  static_assert(sizeof(std::streamsize) <= sizeof(long long));
   VELOX_FAIL(
-      "Seeking past end of ByteInputStream: {}", static_cast<int>(position));
+      "Seeking past end of ByteInputStream: {}",
+      static_cast<long long>(position));
 }
 
 void ByteInputStream::next(bool throwIfPastEnd) {
@@ -284,8 +286,10 @@ void ByteOutputStream::seekp(std::streampos position) {
     }
     toSkip -= range.size;
   }
+  static_assert(sizeof(std::streamsize) <= sizeof(long long));
   VELOX_FAIL(
-      "Seeking past end of ByteOutputStream: {}", static_cast<int>(position));
+      "Seeking past end of ByteOutputStream: {}",
+      static_cast<long long>(position));
 }
 
 void ByteOutputStream::flush(OutputStream* out) {
