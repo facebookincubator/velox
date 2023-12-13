@@ -189,7 +189,7 @@ class DestinationBuffer {
 
 class Task;
 
-/// The stats of an OutputBuffer. 
+/// The stats of an OutputBuffer.
 struct OutputBufferStats {
   /// BufferState indicates the OutputBuffer's current state.
   enum class BufferState {
