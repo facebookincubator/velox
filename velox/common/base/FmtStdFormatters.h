@@ -17,7 +17,6 @@
 #pragma once
 
 #include <fmt/format.h>
-#include <fmt/std.h>
 
 #include <cerrno>
 
