@@ -62,9 +62,9 @@ class AsyncSource {
     std::unique_ptr<Item> item;
     try {
       std::optional<CpuWallTimer> timer{
-        FLAGS_account_for_off_thread_times
-          ? std::optional<CpuWallTimer>{timing_}
-          : std::nullopt};
+          FLAGS_account_for_off_thread_times
+              ? std::optional<CpuWallTimer>{timing_}
+              : std::nullopt};
       item = make();
     } catch (std::exception& e) {
       std::lock_guard<std::mutex> l(mutex_);
