@@ -76,14 +76,6 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     return false;
   }
 
-  static FOLLY_ALWAYS_INLINE void checkBloomFilterNotNull(
-      DecodedVector& decoded,
-      vector_size_t idx) {
-    VELOX_USER_CHECK(
-        !decoded.isNullAt(idx),
-        "First argument of bloom_filter_agg cannot be null");
-  }
-
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
@@ -91,9 +83,9 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
     computeCapacity();
-
+    auto mayHaveNulls = decodedRaw_.mayHaveNulls();
     rows.applyToSelected([&](vector_size_t row) {
-      if (decodedRaw_.isNullAt(row)) {
+      if (mayHaveNulls && decodedRaw_.isNullAt(row)) {
         return;
       }
       auto group = groups[row];
@@ -139,8 +131,9 @@ class BloomFilterAggAggregate : public exec::Aggregate {
         accumulator->insert(decodedRaw_.valueAt<int64_t>(0));
       }
     } else {
+      auto mayHaveNulls = decodedRaw_.mayHaveNulls();
       rows.applyToSelected([&](vector_size_t row) {
-        if (decodedRaw_.isNullAt(row)) {
+        if (mayHaveNulls && decodedRaw_.isNullAt(row)) {
           return;
         }
         accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
