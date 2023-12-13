@@ -114,6 +114,7 @@ class ExchangeClient {
   const int64_t maxQueuedBytes_;
   memory::MemoryPool* const pool_;
   std::shared_ptr<ExchangeQueue> queue_;
+  mutable std::mutex mutex_;
   std::unordered_set<std::string> taskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
   bool closed_{false};

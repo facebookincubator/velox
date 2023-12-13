@@ -21,7 +21,7 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
   RequestSpec requestSpec;
   std::shared_ptr<ExchangeSource> toClose;
   {
-    std::lock_guard<std::mutex> l(queue_->mutex());
+    std::lock_guard<std::mutex> l(mutex_);
 
     bool duplicate = !taskIds_.insert(taskId).second;
     if (duplicate) {
@@ -71,7 +71,7 @@ void ExchangeClient::noMoreRemoteTasks() {
 void ExchangeClient::close() {
   std::vector<std::shared_ptr<ExchangeSource>> sources;
   {
-    std::lock_guard<std::mutex> l(queue_->mutex());
+    std::lock_guard<std::mutex> l(mutex_);
     if (closed_) {
       return;
     }
@@ -87,7 +87,7 @@ void ExchangeClient::close() {
 }
 
 folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
-  std::lock_guard<std::mutex> l(queue_->mutex());
+  std::lock_guard<std::mutex> l(mutex_);
 
   folly::F14FastMap<std::string, RuntimeMetric> stats;
   for (const auto& source : sources_) {
@@ -107,7 +107,6 @@ folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
 
 std::vector<std::unique_ptr<SerializedPage>>
 ExchangeClient::next(uint32_t maxBytes, bool* atEnd, ContinueFuture* future) {
-  RequestSpec requestSpec;
   std::vector<std::unique_ptr<SerializedPage>> pages;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
@@ -120,7 +119,11 @@ ExchangeClient::next(uint32_t maxBytes, bool* atEnd, ContinueFuture* future) {
     if (!pages.empty() && queue_->totalBytes() > maxQueuedBytes_) {
       return pages;
     }
+  }
 
+  RequestSpec requestSpec;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
     requestSpec = pickSourcesToRequestLocked();
   }
 
@@ -139,7 +142,7 @@ void ExchangeClient::request(const RequestSpec& requestSpec) {
         .thenValue([this, requestSource = source](auto&& response) {
           RequestSpec requestSpec;
           {
-            std::lock_guard<std::mutex> l(queue_->mutex());
+            std::lock_guard<std::mutex> l(mutex_);
             if (closed_) {
               return;
             }
