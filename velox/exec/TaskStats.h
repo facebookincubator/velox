@@ -39,6 +39,9 @@ struct PipelineStats {
   // True if contains the sync node for the task.
   bool outputPipeline;
 
+  /// The longest time since a driver in the pipeline had progress.
+  size_t longestDriverNoProgressTimeMs{0};
+
   PipelineStats(bool _inputPipeline, bool _outputPipeline)
       : inputPipeline{_inputPipeline}, outputPipeline{_outputPipeline} {}
 };

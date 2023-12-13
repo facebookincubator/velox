@@ -1923,6 +1923,12 @@ TaskStats Task::taskStats() const {
       continue;
     }
 
+    const auto pipelineId = driver->driverCtx()->pipelineId;
+    taskStats.pipelineStats[pipelineId].longestDriverNoProgressTimeMs =
+        std::max(
+            taskStats.pipelineStats[pipelineId].longestDriverNoProgressTimeMs,
+            driver->getMsSinceLastProgress());
+
     for (auto& op : driver->operators()) {
       auto statsCopy = op->stats(false);
       aggregateOperatorRuntimeStats(statsCopy.runtimeStats);

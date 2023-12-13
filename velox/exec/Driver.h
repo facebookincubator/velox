@@ -17,6 +17,7 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
 #include <folly/portability/SysSyscall.h>
+#include <cstddef>
 #include <memory>
 
 #include "velox/common/future/VeloxPromise.h"
@@ -387,6 +388,12 @@ class Driver : public std::enable_shared_from_this<Driver> {
     return blockingReason_;
   }
 
+  /// Sets the 'last progress time to 'now'.
+  void updateLastProgressTime();
+
+  /// Returns number of milliseconds since the time the last progress was made.
+  size_t getMsSinceLastProgress() const;
+
   static std::shared_ptr<Driver> testingCreate(
       std::unique_ptr<DriverCtx> ctx = nullptr) {
     auto driver = new Driver();
@@ -448,6 +455,10 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   // Set via Task and serialized by Task's mutex.
   ThreadState state_;
+
+  // Timer used to track down the last time we had a progress (got some data
+  // flowing between operators)
+  std::atomic_uint64_t lastProgressTimeMs_{0};
 
   // Timer used to track down the time we are sitting in the driver queue.
   size_t queueTimeStartMicros_{0};
