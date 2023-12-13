@@ -66,7 +66,7 @@ class FileHandleGenerator {
  public:
   explicit FileHandleGenerator(std::shared_ptr<const Config> properties)
       : properties_(std::move(properties)) {
-    VELOX_CHECK_NOT_NULL(properties_)
+    VELOX_CHECK_NOT_NULL(properties_);
   }
   std::shared_ptr<FileHandle> operator()(const std::string& filename);
 
