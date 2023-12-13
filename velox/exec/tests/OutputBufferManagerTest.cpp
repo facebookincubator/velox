@@ -124,8 +124,8 @@ class OutputBufferManagerTest : public testing::Test {
     }
   }
 
-  OutputBufferInfo getInfo(const std::string& taskId) {
-    return bufferManager_->getInfo(taskId);
+  OutputBufferStats getStats(const std::string& taskId) {
+    return bufferManager_->getStats(taskId);
   }
 
   void noMoreData(const std::string& taskId) {
@@ -970,10 +970,10 @@ TEST_P(AllOutputBufferManagerTest, outputBufferUtilization) {
   verifyOutputBuffer(task, OutputBufferStatus::kFinished);
 }
 
-TEST_P(AllOutputBufferManagerTest, outputBufferInfo) {
+TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
   const vector_size_t size = 100;
   const std::string taskId = std::to_string(rand());
-  OutputBufferInfo info;
+  OutputBufferStats stats;
   initializeTask(taskId, rowType_, kind_, 1, 1);
 
   const int pageNum = 3;
@@ -982,26 +982,52 @@ TEST_P(AllOutputBufferManagerTest, outputBufferInfo) {
     enqueue(taskId, 0, rowType_, size);
     totalSize += size;
     // force Arbitrary buffer to load data.
-    if (kind_ ==
-        facebook::velox::core::PartitionedOutputNode::Kind::kArbitrary) {
+    if (kind_ == PartitionedOutputNode::Kind::kArbitrary) {
       fetchOne(taskId, 0, pageId);
     }
-    info = getInfo(taskId);
-    ASSERT_EQ(info.totalPagesAdded, pageId + 1);
-    ASSERT_EQ(info.totalRowsAdded, totalSize);
+    stats = getStats(taskId);
+    ASSERT_EQ(stats.totalPagesAdded, pageId + 1);
+    ASSERT_EQ(stats.totalRowsAdded, totalSize);
+    ASSERT_EQ(stats.totalPagesBuffered, 1);
+    ASSERT_EQ(stats.totalRowsBuffered, size);
 
     fetchOneAndAck(taskId, 0, pageId);
-    info = getInfo(taskId);
+    stats = getStats(taskId);
 
-    ASSERT_EQ(info.totalPagesSent, pageId + 1);
-    ASSERT_EQ(info.totalRowsSent, totalSize);
+    ASSERT_EQ(stats.totalPagesSent, pageId + 1);
+    ASSERT_EQ(stats.totalRowsSent, totalSize);
+    ASSERT_EQ(stats.totalPagesBuffered, 0);
+    ASSERT_EQ(stats.totalRowsBuffered, 0);
   }
 
-  if (kind_ != PartitionedOutputNode::Kind::kPartitioned) {
-    bufferManager_->updateOutputBuffers(taskId, 0, true);
+  bufferManager_->updateOutputBuffers(taskId, 1, true);
+  stats = getStats(taskId);
+  ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kNoMoreBuffers);
+
+  enqueue(taskId, 0, rowType_, size);
+  totalSize += size;
+  // force Arbitrary buffer to load data.
+  if (kind_ == PartitionedOutputNode::Kind::kArbitrary) {
+    fetchOne(taskId, 0, pageNum);
   }
+  stats = getStats(taskId);
+  ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kNoMoreBuffers);
+
   noMoreData(taskId);
-  fetchEndMarker(taskId, 0, pageNum);
+  stats = getStats(taskId);
+  ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kFlushing);
+
+  fetchOneAndAck(taskId, 0, pageNum);
+  fetchEndMarker(taskId, 0, pageNum + 1);
+  deleteResults(taskId, 0);
+  stats = getStats(taskId);
+  ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kFinished);
+  ASSERT_EQ(stats.totalPagesAdded, pageNum + 1);
+  ASSERT_EQ(stats.totalRowsAdded, totalSize);
+  ASSERT_EQ(stats.totalPagesBuffered, 0);
+  ASSERT_EQ(stats.totalRowsBuffered, 0);
+  ASSERT_EQ(stats.totalPagesSent, pageNum + 1);
+  ASSERT_EQ(stats.totalRowsSent, totalSize);
   bufferManager_->removeTask(taskId);
 }
 

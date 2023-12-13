@@ -115,7 +115,7 @@ void DestinationBuffer::enqueue(std::shared_ptr<SerializedPage> data) {
   }
 
   if (data != nullptr) {
-    info_.recordAddPage(*data);
+    stats_.recordAddPage(*data);
   }
   data_.push_back(std::move(data));
 }
@@ -179,7 +179,7 @@ std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       break;
     }
-    info_.recordSendPage(*data_[i]);
+    stats_.recordSendPage(*data_[i]);
     freed.push_back(std::move(data_[i]));
   }
   data_.erase(data_.begin(), data_.begin() + numDeleted);
@@ -195,15 +195,15 @@ DestinationBuffer::deleteResults() {
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       break;
     }
-    info_.recordSendPage(*data_[i]);
+    stats_.recordSendPage(*data_[i]);
     freed.push_back(std::move(data_[i]));
   }
   data_.clear();
   return freed;
 }
 
-BufferInfo DestinationBuffer::getInfo() {
-  return info_;
+BufferStats DestinationBuffer::getStats() const {
+  return stats_;
 }
 
 std::string DestinationBuffer::toString() {
@@ -256,7 +256,7 @@ OutputBuffer::OutputBuffer(
   for (int i = 0; i < numDestinations; i++) {
     buffers_.push_back(std::make_unique<DestinationBuffer>());
   }
-  bufferInfos_.resize(numDestinations);
+  bufferStats_.resize(numDestinations);
 }
 
 void OutputBuffer::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
@@ -322,7 +322,7 @@ void OutputBuffer::addOutputBuffersLocked(int numBuffers) {
     }
     buffers_.emplace_back(std::move(buffer));
   }
-  bufferInfos_.resize(numBuffers);
+  bufferStats_.resize(numBuffers);
 }
 
 bool OutputBuffer::enqueue(
@@ -567,10 +567,10 @@ bool OutputBuffer::deleteResults(int destination) {
     }
     freed = buffer->deleteResults();
     dataAvailable = buffer->getAndClearNotify();
-    VELOX_CHECK_LT(destination, bufferInfos_.size());
-    bufferInfos_[destination] = buffers_[destination]->getInfo();
+    VELOX_CHECK_LT(destination, bufferStats_.size());
+    bufferStats_[destination] = buffers_[destination]->getStats();
     buffers_[destination] = nullptr;
-    bufferInfos_[destination].finished = true;
+    bufferStats_[destination].finished = true;
     ++numFinalAcknowledges_;
     isFinished = isFinishedLocked();
     updateAfterAcknowledgeLocked(freed, promises);
@@ -665,47 +665,46 @@ bool OutputBuffer::isOverutilized() const {
   return (totalSize_ > (0.5 * maxSize_)) && !atEnd_;
 }
 
-OutputBufferInfo OutputBuffer::getInfo() {
-  OutputBufferInfo info;
+OutputBufferStats OutputBuffer::getStats() {
+  OutputBufferStats stats;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    info.type = PartitionedOutputNode::kindString(kind_);
-    info.state = OutputBufferInfo::BufferState::OPEN;
+    stats.type = PartitionedOutputNode::kindString(kind_);
+    stats.state = OutputBufferStats::BufferState::kOpen;
     if (noMoreBuffers_) {
-      info.state = OutputBufferInfo::BufferState::NO_MORE_BUFFERS;
+      stats.state = OutputBufferStats::BufferState::kNoMoreBuffers;
     }
     if (atEnd_) {
-      info.state = OutputBufferInfo::BufferState::FLUSHING;
+      stats.state = OutputBufferStats::BufferState::kFlushing;
     }
-    info.canAddBuffers = !noMoreBuffers_;
-    info.canAddPages = atEnd_;
-    if (bufferInfos_.size() < buffers_.size()) {
-      bufferInfos_.resize(buffers_.size());
+    if (isFinishedLocked()) {
+      stats.state = OutputBufferStats::BufferState::kFinished;
+    }
+    stats.canAddBuffers = !noMoreBuffers_;
+    stats.canAddPages = atEnd_;
+    if (bufferStats_.size() < buffers_.size()) {
+      bufferStats_.resize(buffers_.size());
     }
     for (auto i = 0; i < buffers_.size(); ++i) {
       auto buffer = buffers_[i].get();
       if (buffer) {
-        bufferInfos_[i] = buffer->getInfo();
+        bufferStats_[i] = buffer->getStats();
       }
     }
-    info.buffers = bufferInfos_;
+    stats.buffers = bufferStats_;
   }
-  for (const auto& bufferInfo : info.buffers) {
-    info.totalBufferedBytes += bufferInfo.bufferedBytes;
-    info.totalBufferedRows += bufferInfo.bufferedRows;
-    info.totalBufferedPages += bufferInfo.bufferedPages;
-    info.totalBytesAdded += bufferInfo.bytesAdded;
-    info.totalRowsAdded += bufferInfo.rowsAdded;
-    info.totalPagesAdded += bufferInfo.pagesAdded;
-    info.totalBytesSent += bufferInfo.bytesSent;
-    info.totalRowsSent += bufferInfo.rowsSent;
-    info.totalPagesSent += bufferInfo.pagesSent;
+  for (const auto& bufferStats : stats.buffers) {
+    stats.totalBytesBuffered += bufferStats.bytesBuffered;
+    stats.totalRowsBuffered += bufferStats.rowsBuffered;
+    stats.totalPagesBuffered += bufferStats.pagesBuffered;
+    stats.totalBytesAdded += bufferStats.bytesAdded;
+    stats.totalRowsAdded += bufferStats.rowsAdded;
+    stats.totalPagesAdded += bufferStats.pagesAdded;
+    stats.totalBytesSent += bufferStats.bytesSent;
+    stats.totalRowsSent += bufferStats.rowsSent;
+    stats.totalPagesSent += bufferStats.pagesSent;
   }
-  if (info.state == OutputBufferInfo::BufferState::FLUSHING &&
-      info.totalBufferedBytes == 0) {
-    info.state = OutputBufferInfo::BufferState::FINISHED;
-  }
-  return info;
+  return stats;
 }
 
 } // namespace facebook::velox::exec

@@ -183,9 +183,9 @@ bool OutputBufferManager::isOverutilized(const std::string& taskId) {
   return false;
 }
 
-OutputBufferInfo OutputBufferManager::getInfo(const std::string& taskId) {
+OutputBufferStats OutputBufferManager::getStats(const std::string& taskId) {
   auto buffer = getBuffer(taskId);
-  return buffer->getInfo();
+  return buffer->getStats();
 }
 
 } // namespace facebook::velox::exec

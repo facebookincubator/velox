@@ -74,38 +74,60 @@ class ArbitraryBuffer {
   std::deque<std::shared_ptr<SerializedPage>> pages_;
 };
 
-struct BufferInfo {
+/// The stats of a DestinationBuffer. The data transferred by the buffer has
+/// three phases:
+/// 1. Added: the data is added to the buffer via enqueue().
+/// 2. Buffered: after added and before acked, the data is buffered in the
+///              destination buffer.
+/// 3. Sent: the data is sent and removed from the buffer after it is acked
+///          via acknowledge() or deleteResults().
+struct BufferStats {
+  /// Update stats when a data page is added.
   void recordAddPage(const SerializedPage& data) {
-    VELOX_CHECK(data.rows() >= 0, "SerializedPage's row size is not inited");
+    VELOX_CHECK_GE(data.rows(), 0, "SerializedPage's row size is not inited");
     int64_t rows = data.rows();
     int64_t size = data.size();
-    bufferedBytes += size;
-    bufferedRows += rows;
-    bufferedPages++;
+    bytesBuffered += size;
+    rowsBuffered += rows;
+    pagesBuffered++;
     bytesAdded += size;
     rowsAdded += rows;
     pagesAdded++;
   }
+
+  /// Update stats when a data page is sent (removed from buffer).
   void recordSendPage(const SerializedPage& data) {
-    VELOX_CHECK(data.rows() >= 0, "SerializedPage's row size is not inited");
+    VELOX_CHECK_GE(data.rows(), 0, "SerializedPage's row size is not inited");
     int64_t rows = data.rows();
     int64_t size = data.size();
-    bufferedBytes -= size;
-    bufferedRows -= rows;
-    bufferedPages--;
+    bytesBuffered -= size;
+    rowsBuffered -= rows;
+    pagesBuffered--;
     bytesSent += size;
     rowsSent += rows;
     pagesSent++;
   }
+
+  /// If the destination buffer is finished. A finished dest buffer would be
+  /// deleted by the OutputBuffer, so this flag is set by the OutputBuffer.
   bool finished{false};
-  int64_t bufferedBytes{0};
-  int64_t bufferedRows{0};
-  int64_t bufferedPages{0};
+  /// Byte num of data that is currently buffered.
+  int64_t bytesBuffered{0};
+  /// Row num of data that is currently buffered.
+  int64_t rowsBuffered{0};
+  /// Page num of data that is currently buffered.
+  int64_t pagesBuffered{0};
+  /// Byte num of data that has been added to the buffer.
   int64_t bytesAdded{0};
+  /// Row num of data that has been added to the buffer.
   int64_t rowsAdded{0};
+  /// Page num of data that has been added to the buffer.
   int64_t pagesAdded{0};
+  /// Byte num of data that has been sent from the buffer.
   int64_t bytesSent{0};
+  /// Row num of data that has been sent from the buffer.
   int64_t rowsSent{0};
+  /// Page num of data that has been sent from the buffer.
   int64_t pagesSent{0};
 };
 
@@ -149,7 +171,8 @@ class DestinationBuffer {
   // the callback.
   DataAvailable getAndClearNotify();
 
-  BufferInfo getInfo();
+  // Returns the stats of this buffer.
+  BufferStats getStats() const;
 
   std::string toString();
 
@@ -161,34 +184,56 @@ class DestinationBuffer {
   // The sequence number of the first item to pass to 'notify'.
   int64_t notifySequence_{0};
   uint64_t notifyMaxBytes_{0};
-  BufferInfo info_;
+  BufferStats stats_;
 };
 
 class Task;
 
-struct OutputBufferInfo {
+/// The stats of an OutputBuffer. 
+struct OutputBufferStats {
+  /// BufferState indicates the OutputBuffer's current state.
   enum class BufferState {
-    OPEN,
-    NO_MORE_BUFFERS,
-    NO_MORE_PAGES,
-    FLUSHING,
-    FINISHED,
-    FAILED
+    /// The OutputBuffer is open and ready to receive data. Initial state.
+    kOpen,
+    /// The OutputBuffer would not accept more buffers.
+    kNoMoreBuffers,
+    /// The OutputBuffer has received all input data, and some data is still
+    /// to be sent.
+    kFlushing,
+    /// The OutputBuffer has already received and sent all the input data.
+    kFinished,
+    /// The OutputBuffer has failed.
+    kFailed
   };
+
+  /// The type name of the OutputBuffer.
   std::string type;
-  BufferState state{BufferState::OPEN};
+  /// The state of the OutputBuffer.
+  BufferState state{BufferState::kOpen};
+  /// If the OutputBuffer can add more buffers.
   bool canAddBuffers{true};
+  /// If the outputBuffer can receive more input pages.
   bool canAddPages{true};
-  int64_t totalBufferedBytes{0};
-  int64_t totalBufferedRows{0};
-  int64_t totalBufferedPages{0};
+  /// The bufferStats of each destination buffer.
+  std::vector<BufferStats> buffers;
+  /// Total byte num of data buffered in all destination buffers.
+  int64_t totalBytesBuffered{0};
+  /// Total row num of data buffered in all destination buffers.
+  int64_t totalRowsBuffered{0};
+  /// Total page num of data buffered in all destination buffers.
+  int64_t totalPagesBuffered{0};
+  /// Total byte num of data that has been added to all destination buffers.
   int64_t totalBytesAdded{0};
+  /// Total row num of data that has been added to all destination buffers.
   int64_t totalRowsAdded{0};
+  /// Total page num of data that has been added to all destination buffers.
   int64_t totalPagesAdded{0};
+  /// Total byte num of data that has been sent from all destination buffers.
   int64_t totalBytesSent{0};
+  /// Total row num of data that has been sent from all destination buffers.
   int64_t totalRowsSent{0};
+  /// Total page num of data that has been sent from all destination buffers.
   int64_t totalPagesSent{0};
-  std::vector<BufferInfo> buffers;
 };
 
 class OutputBuffer {
@@ -255,7 +300,8 @@ class OutputBuffer {
   // the number of consumers, for example, increase number of TableWriter tasks.
   bool isOverutilized() const;
 
-  OutputBufferInfo getInfo();
+  // Gets the OutputBufferStats of this output buffer.
+  OutputBufferStats getStats();
 
  private:
   // Percentage of maxSize below which a blocked producer should
@@ -337,8 +383,8 @@ class OutputBuffer {
   int32_t nextArbitraryLoadBufferIndex_{0};
   // One buffer per destination.
   std::vector<std::unique_ptr<DestinationBuffer>> buffers_;
-  // One bufferInfo per destination.
-  std::vector<BufferInfo> bufferInfos_;
+  // One bufferStat per destination.
+  std::vector<BufferStats> bufferStats_;
   uint32_t numFinished_{0};
   // When this reaches buffers_.size(), 'this' can be freed.
   int numFinalAcknowledges_ = 0;
