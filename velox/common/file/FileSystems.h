@@ -49,9 +49,7 @@ struct FileOptions {
 class FileSystem {
  public:
   FileSystem(std::shared_ptr<const Config> config)
-      : config_(std::move(config)) {
-    VELOX_CHECK_NOT_NULL(config_)
-  }
+      : config_(std::move(config)) {}
   virtual ~FileSystem() = default;
 
   /// Returns the name of the File System
