@@ -104,9 +104,7 @@ class TestStripeStreams : public StripeStreamsBase {
     }
     if (!stream || stream->isSuppressed()) {
       if (throwIfNotFound) {
-        DWIO_RAISE(fmt::format(
-            "stream {} not found",
-            si.toString()));
+        DWIO_RAISE(fmt::format("stream {} not found", si.toString()));
       } else {
         return nullptr;
       }

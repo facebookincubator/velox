@@ -591,7 +591,8 @@ TEST_F(MemoryManagerTest, quotaEnforcement) {
     SCOPED_TRACE(testData.debugString());
     std::vector<bool> contiguousAllocations = {false, true};
     for (const auto& contiguousAlloc : contiguousAllocations) {
-      SCOPED_TRACE(fmt::format("contiguousAlloc {}", static_cast<bool>(contiguousAlloc)));
+      SCOPED_TRACE(fmt::format(
+          "contiguousAlloc {}", static_cast<bool>(contiguousAlloc)));
       const int alignment = 32;
       MemoryManagerOptions options;
       options.alignment = alignment;
