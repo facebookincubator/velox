@@ -46,7 +46,7 @@ void checkForBadPattern(const RE2& re) {
 // error messages.
 //
 // @throws VELOX_USER_FAIL If the pattern is found to use unsupported features.
-// @note  Default functionName is "REGEX_REPLACE" because it uses non-constant
+// @note  Default functionName is "regexp_replace" because it uses non-constant
 // patterns so it cannot be checked with "ensureRegexIsCompatible". No
 // other functions work with non-constant patterns, but they may in the future.
 //
@@ -96,8 +96,8 @@ void ensureRegexIsConstantAndCompatible(
       std::string(pattern.data(), pattern.size()), functionName);
 }
 
-// REGEX_REPLACE(string, pattern, overwrite) → string
-// REGEX_REPLACE(string, pattern, overwrite, position) → string
+// regexp_replace(string, pattern, overwrite) → string
+// regexp_replace(string, pattern, overwrite, position) → string
 //
 // If a string has a substring that matches the given pattern, replace
 // the match in the string wither overwrite and return the string. If
@@ -135,7 +135,7 @@ struct RegexReplaceFunction {
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace,
       const arg_type<int64_t>& position) {
-    VELOX_USER_CHECK_GE(position, 1, "regex_replace requires a position >= 1");
+    VELOX_USER_CHECK_GE(position, 1, "regexp_replace requires a position >= 1");
 
     re2::RE2* patternRegex = getCachedRegex(pattern.str());
     re2::StringPiece replaceStringPiece = toStringPiece(replace);
@@ -155,7 +155,7 @@ struct RegexReplaceFunction {
       int charLength =
           utf8proc_char_length(inputStringPiece.data() + utf8Position);
       VELOX_USER_CHECK_GT(
-          charLength, 0, "regex_replace encountered invalid UTF-8 character");
+          charLength, 0, "regexp_replace encountered invalid UTF-8 character");
       ++numCodePoints;
       utf8Position += charLength;
     }
@@ -196,9 +196,9 @@ struct RegexReplaceFunction {
     VELOX_USER_CHECK_LT(
         patternCache_.size(),
         kMaxCompiledRegexes,
-        "regex_replace hit the maximum number of unique regexes: {}",
+        "regexp_replace hit the maximum number of unique regexes: {}",
         kMaxCompiledRegexes);
-    checkForCompatiblePattern(pattern, "regex_replace");
+    checkForCompatiblePattern(pattern, "regexp_replace");
     auto patternRegex = std::make_unique<re2::RE2>(pattern);
     auto* rawPatternRegex = patternRegex.get();
     checkForBadPattern(*rawPatternRegex);
@@ -238,14 +238,14 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
 
 void registerRegexReplace(const std::string& prefix) {
   registerFunction<RegexReplaceFunction, Varchar, Varchar, Varchar, Varchar>(
-      {prefix + "REGEX_REPLACE"});
+      {prefix + "regexp_replace"});
   registerFunction<
       RegexReplaceFunction,
       Varchar,
       Varchar,
       Varchar,
       Varchar,
-      int64_t>({prefix + "REGEX_REPLACE"});
+      int64_t>({prefix + "regexp_replace"});
 }
 
 } // namespace facebook::velox::functions::sparksql
