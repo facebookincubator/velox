@@ -418,11 +418,6 @@ Each query can override the config by setting corresponding query session proper
      -
      - integer
      - 8MB
-     - Maximum size in bytes to start a direct coalesce data load request.
-   * - load-quantum
-     -
-     - integer
-     - 8MB
      - Define the size of each coalesce load request. E.g. in Parquet scan, if it's bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk
    * - num-cached-file-handles
      -
