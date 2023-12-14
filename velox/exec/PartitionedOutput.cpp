@@ -104,7 +104,7 @@ BlockingReason Destination::flush(
       taskId_,
       destination_,
       std::make_unique<SerializedPage>(
-          stream.getIOBuf(bufferReleaseFn),nullptr, flushedRows),
+          stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
       future);
   return blocked ? BlockingReason::kWaitForConsumer
                  : BlockingReason::kNotBlocked;
