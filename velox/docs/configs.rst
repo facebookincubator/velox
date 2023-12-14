@@ -407,13 +407,23 @@ Each query can override the config by setting corresponding query session proper
    * - max-coalesced-bytes
      -
      - integer
-     - 512KB
+     - 128MB
      - Maximum size in bytes to coalesce requests to be fetched in a single request.
    * - max-coalesced-distance-bytes
      -
      - integer
-     - 128MB
+     - 512KB
      - Maximum distance in bytes between chunks to be fetched that may be coalesced into a single request.
+   * - load-quantum
+     -
+     - integer
+     - 8MB
+     - Maximum size in bytes to start a direct coalesce data load request.
+   * - load-quantum
+     -
+     - integer
+     - 8MB
+     - Define the size of each coalesce load request. E.g. in Parquet scan, if it's bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk
    * - num-cached-file-handles
      -
      - integer
@@ -436,6 +446,16 @@ Each query can override the config by setting corresponding query session proper
      - string
      - 10MB
      - Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.
+   * - file-preload-threshold
+     -
+     - integer
+     - 1MB
+     - Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests. The parameter control the threshold when whole file is fetched. 
+   * - directory-size-guess
+     -
+     - integer
+     - 8MB
+     - Define the data size which is fetched with meta data together to void multiple IO requests. It's useful in file format where the immediately following data needs to be fetched after meta data
    * - hive.orc.writer.stripe-max-size
      - orc_optimized_writer_max_stripe_size
      - string
