@@ -1304,7 +1304,8 @@ WindowNode::WindowNode(
     std::vector<std::string> windowColumnNames,
     std::vector<Function> windowFunctions,
     bool inputsSorted,
-    PlanNodePtr source)
+    PlanNodePtr source,
+    bool binarySearch)
     : PlanNode(std::move(id)),
       partitionKeys_(std::move(partitionKeys)),
       sortingKeys_(std::move(sortingKeys)),
@@ -1315,7 +1316,8 @@ WindowNode::WindowNode(
       outputType_(getWindowOutputType(
           sources_[0]->outputType(),
           windowColumnNames,
-          windowFunctions_)) {
+          windowFunctions_)),
+      binarySearch_(binarySearch) {
   VELOX_CHECK_GT(
       windowFunctions_.size(),
       0,
@@ -1525,7 +1527,8 @@ PlanNodePtr WindowNode::create(const folly::dynamic& obj, void* context) {
       windowNames,
       functions,
       inputsSorted,
-      source);
+      source,
+      true);
 }
 
 RowTypePtr getMarkDistinctOutputType(

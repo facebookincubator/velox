@@ -43,12 +43,14 @@ SortWindowBuild::SortWindowBuild(
     const std::shared_ptr<const core::WindowNode>& node,
     velox::memory::MemoryPool* pool,
     const common::SpillConfig* spillConfig,
-    tsan_atomic<bool>* nonReclaimableSection)
+    tsan_atomic<bool>* nonReclaimableSection,
+    bool binarySearch)
     : WindowBuild(node, pool, spillConfig, nonReclaimableSection),
       numPartitionKeys_{node->partitionKeys().size()},
       spillCompareFlags_{
           makeSpillCompareFlags(numPartitionKeys_, node->sortingOrders())},
-      pool_(pool) {
+      pool_(pool),
+      binarySearch_(binarySearch) {
   VELOX_CHECK_NOT_NULL(pool_);
   allKeyInfo_.reserve(partitionKeyInfo_.size() + sortKeyInfo_.size());
   allKeyInfo_.insert(
@@ -180,24 +182,35 @@ void SortWindowBuild::computePartitionStartRows() {
 
   VELOX_CHECK_GT(sortedRows_.size(), 0);
   int32_t start = 0;
-  while (start < sortedRows_.size()) {
-    int left = start;
-    int right = left + 1;
-    int endPosition = sortedRows_.size();
-    while (right < endPosition) {
-      int distance = 1;
-      for (; distance < endPosition - left; distance *= 2) {
-        right = left + distance;
-        if (partitionCompare(sortedRows_[left], sortedRows_[right]) != 0) {
-          endPosition = right;
-          break;
+  if (binarySearch_) {
+    while (start < sortedRows_.size()) {
+      int left = start;
+      int right = left + 1;
+      int endPosition = sortedRows_.size();
+      while (right < endPosition) {
+        int distance = 1;
+        for (; distance < endPosition - left; distance *= 2) {
+          right = left + distance;
+          if (partitionCompare(sortedRows_[left], sortedRows_[right]) != 0) {
+            endPosition = right;
+            break;
+          }
         }
+        left = left + distance / 2;
+        right = left + 1;
       }
-      left = left + distance / 2;
-      right = left + 1;
+      partitionStartRows_.push_back(right);
+      start = right;
     }
-    partitionStartRows_.push_back(right);
-    start = right;
+  } else {
+    for (auto i = 1; i < sortedRows_.size(); i++) {
+      if (partitionCompare(sortedRows_[i - 1], sortedRows_[i])) {
+        partitionStartRows_.push_back(i);
+      }
+    }
+    // Setting the startRow of the (last + 1) partition to be
+    // returningRows.size() to help for last partition related calculations.
+    partitionStartRows_.push_back(sortedRows_.size());
   }
 }
 
