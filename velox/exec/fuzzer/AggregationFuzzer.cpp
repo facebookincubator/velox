@@ -34,11 +34,6 @@ DEFINE_bool(
     false,
     "When true, generates plans with aggregations over sorted inputs");
 
-DEFINE_bool(
-    enable_window_reference_verification,
-    false,
-    "When true, the results of the window aggregation are compared to reference DB results");
-
 using facebook::velox::test::CallableSignature;
 using facebook::velox::test::SignatureTemplate;
 
@@ -338,81 +333,58 @@ void AggregationFuzzer::go() {
       std::vector<TypePtr> argTypes = signature.args;
       std::vector<std::string> argNames = makeNames(argTypes.size());
 
-      // 10% of times test window operator.
+      // Exclude approx_xxx aggregations since their results differ
+      // between Velox and reference DB even when input is sorted.
+      const bool sortedInputs = FLAGS_enable_sorted_aggregations &&
+          canSortInputs(signature) &&
+          (signature.name.find("approx_") == std::string::npos) &&
+          vectorFuzzer_.coinToss(0.2);
+
+      auto call = makeFunctionCall(signature.name, argNames, sortedInputs);
+
+      // 20% of times use mask.
+      std::vector<std::string> masks;
+      if (vectorFuzzer_.coinToss(0.2)) {
+        ++stats_.numMask;
+
+        masks.push_back("m0");
+        argTypes.push_back(BOOLEAN());
+        argNames.push_back(masks.back());
+      }
+
+      // 10% of times use global aggregation (no grouping keys).
+      std::vector<std::string> groupingKeys;
       if (vectorFuzzer_.coinToss(0.1)) {
-        ++stats_.numWindow;
+        ++stats_.numGlobal;
+      } else {
+        ++stats_.numGroupBy;
+        groupingKeys = generateKeys("g", argNames, argTypes);
+      }
 
-        auto call = makeFunctionCall(signature.name, argNames, false);
+      auto input = generateInputData(argNames, argTypes, signature);
 
-        auto partitionKeys = generateKeys("p", argNames, argTypes);
-        auto sortingKeys = generateSortingKeys("s", argNames, argTypes);
-        auto input =
-            generateInputDataWithRowNumber(argNames, argTypes, signature);
-
-        bool failed = verifyWindow(
-            partitionKeys,
-            sortingKeys,
-            {call},
-            input,
-            customVerification,
-            FLAGS_enable_window_reference_verification);
+      if (sortedInputs) {
+        ++stats_.numSortedInputs;
+        bool failed =
+            verifySortedAggregation(groupingKeys, {call}, masks, input);
         if (failed) {
           signatureWithStats.second.numFailed++;
         }
       } else {
-        // Exclude approx_xxx aggregations since their results differ
-        // between Velox and reference DB even when input is sorted.
-        const bool sortedInputs = FLAGS_enable_sorted_aggregations &&
-            canSortInputs(signature) &&
-            (signature.name.find("approx_") == std::string::npos) &&
-            vectorFuzzer_.coinToss(0.2);
-
-        auto call = makeFunctionCall(signature.name, argNames, sortedInputs);
-
-        // 20% of times use mask.
-        std::vector<std::string> masks;
-        if (vectorFuzzer_.coinToss(0.2)) {
-          ++stats_.numMask;
-
-          masks.push_back("m0");
-          argTypes.push_back(BOOLEAN());
-          argNames.push_back(masks.back());
+        std::shared_ptr<ResultVerifier> customVerifier;
+        if (customVerification) {
+          customVerifier = customVerificationFunctions_.at(signature.name);
         }
 
-        // 10% of times use global aggregation (no grouping keys).
-        std::vector<std::string> groupingKeys;
-        if (vectorFuzzer_.coinToss(0.1)) {
-          ++stats_.numGlobal;
-        } else {
-          ++stats_.numGroupBy;
-          groupingKeys = generateKeys("g", argNames, argTypes);
-        }
-
-        auto input = generateInputData(argNames, argTypes, signature);
-
-        if (sortedInputs) {
-          ++stats_.numSortedInputs;
-          bool failed =
-              verifySortedAggregation(groupingKeys, {call}, masks, input);
-          if (failed) {
-            signatureWithStats.second.numFailed++;
-          }
-        } else {
-          std::shared_ptr<ResultVerifier> customVerifier;
-          if (customVerification) {
-            customVerifier = customVerificationFunctions_.at(signature.name);
-          }
-
-          bool failed = verifyAggregation(
-              groupingKeys,
-              {call},
-              masks,
-              input,
-              customVerification,
-              {customVerifier});
-          if (failed) {
-            signatureWithStats.second.numFailed++;
-          }
+        bool failed = verifyAggregation(
+            groupingKeys,
+            {call},
+            masks,
+            input,
+            customVerification,
+            {customVerifier});
+        if (failed) {
+          signatureWithStats.second.numFailed++;
         }
       }
     }
