@@ -18,6 +18,8 @@
 
 #include "folly/Executor.h"
 
+#include <vector>
+
 namespace facebook::velox::dwio::common {
 
 /*
