@@ -421,7 +421,6 @@ void RowNumber::setupInputSpiller() {
       spillConfig.compressionKind,
       memory::spillMemoryPool(),
       spillConfig.executor,
-      0,
       spillConfig.fileCreateConfig);
 
   const auto& hashers = table_->hashers();

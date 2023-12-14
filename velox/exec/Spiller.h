@@ -88,7 +88,6 @@ class Spiller {
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor,
-      uint64_t maxSpillRunRows = 0,
       const std::string& fileCreateConfig = {});
 
   Spiller(
@@ -291,8 +290,7 @@ class Spiller {
   // Prepares spill runs for the spillable data from all the hash partitions.
   // If 'startRowIter' is not null, we prepare runs starting from the offset
   // pointed by 'startRowIter'.
-  // Return true if it is the last spill run, since it may run multiple rounds
-  // as we have maxSpillRunRows limitation for each spill run.
+  // The function returns true if it is the last spill run.
   bool fillSpillRuns(RowContainerIterator* startRowIter = nullptr);
 
   // Prepares spill run of a single partition for the spillable data from the

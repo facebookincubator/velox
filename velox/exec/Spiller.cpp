@@ -117,7 +117,6 @@ Spiller::Spiller(
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Executor* executor,
-    uint64_t maxSpillRunRows,
     const std::string& fileCreateConfig)
     : Spiller(
           type,
@@ -133,7 +132,7 @@ Spiller::Spiller(
           compressionKind,
           pool,
           executor,
-          maxSpillRunRows,
+          0,
           fileCreateConfig) {
   VELOX_CHECK_EQ(
       type_,
@@ -413,6 +412,7 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
 
 void Spiller::runSpill(bool lastRun) {
   ++stats_.wlock()->spillRuns;
+  VELOX_CHECK(type_ != Spiller::Type::kOrderByOutput || lastRun);
 
   std::vector<std::shared_ptr<AsyncSource<SpillStatus>>> writes;
   for (auto partition = 0; partition < spillRuns_.size(); ++partition) {
@@ -455,13 +455,18 @@ void Spiller::runSpill(bool lastRun) {
     auto& run = spillRuns_[partition];
     VELOX_CHECK_EQ(numWritten, run.rows.size());
     run.clear();
-    // When a sorted run ends, we start with a new file next time. For
-    // aggregation output / orderby output spiller, we expect only one spill
-    // call to spill all the rows starting from the specified row offset.
-    if (needSort() ||
-        ((type_ == Spiller::Type::kAggregateOutput ||
-          type_ == Spiller::Type::kOrderByOutput) &&
-         lastRun)) {
+    // When a sorted run ends, we start with a new file next time.
+    if (needSort()) {
+      state_.finishFile(partition);
+    }
+  }
+
+  // For aggregation output / orderby output spiller, we expect only one spill
+  // call to spill all the rows starting from the specified row offset.
+  if (lastRun &&
+      (type_ == Spiller::Type::kAggregateOutput ||
+       type_ == Spiller::Type::kOrderByOutput)) {
+    for (auto partition = 0; partition < spillRuns_.size(); ++partition) {
       state_.finishFile(partition);
     }
   }
@@ -494,6 +499,7 @@ void Spiller::spill(const RowContainerIterator& startRowIter) {
 void Spiller::spill(const RowContainerIterator* startRowIter) {
   CHECK_NOT_FINALIZED();
   VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
+  VELOX_CHECK_NE(type_, Type::kOrderByOutput);
 
   markAllPartitionsSpilled();
 
@@ -590,7 +596,7 @@ void Spiller::finalizeSpill() {
 bool Spiller::fillSpillRuns(RowContainerIterator* iterator) {
   checkEmptySpillRuns();
 
-  uint64_t numRows{0};
+  bool lastRun{false};
   uint64_t execTimeUs{0};
   {
     MicrosecondTimer timer(&execTimeUs);
@@ -603,9 +609,10 @@ bool Spiller::fillSpillRuns(RowContainerIterator* iterator) {
 
     uint64_t totalRows{0};
     for (;;) {
-      numRows = container_->listRows(
+      const auto numRows = container_->listRows(
           iterator, rows.size(), RowContainer::kUnlimited, rows.data());
       if (numRows == 0) {
+        lastRun = true;
         break;
       }
 
@@ -638,7 +645,7 @@ bool Spiller::fillSpillRuns(RowContainerIterator* iterator) {
   }
   updateSpillFillTime(execTimeUs);
 
-  return numRows == 0;
+  return lastRun;
 }
 
 void Spiller::fillSpillRun(std::vector<char*>& rows) {

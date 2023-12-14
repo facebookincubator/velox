@@ -105,9 +105,9 @@ struct SpillConfig {
   /// partition bits at the end.
   int32_t maxSpillLevel;
 
-  /// The max row numbers to fill and spill for each spill run. If it is set to
-  /// 0, then there is no limit and then some extreme large query might run out
-  /// of memory at the end.
+  /// The max row numbers to fill and spill for each spill run. This is used to
+  /// cap the memory used for spilling. If it is zero, then there is no limit
+  /// and spilling might run out of memory.
   uint64_t maxSpillRunRows;
 
   /// Minimum memory footprint size required to reclaim memory from a file

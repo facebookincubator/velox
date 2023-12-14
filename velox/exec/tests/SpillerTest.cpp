@@ -1067,7 +1067,17 @@ TEST_P(AllTypes, nonSortedSpillFunctions) {
         VELOX_ASSERT_THROW(
             spiller_->spill(0, dummyVector), "Unexpected spiller type");
       }
-      spiller_->spill();
+
+      if (type_ == Spiller::Type::kOrderByOutput) {
+        RowContainerIterator rowIter;
+        std::vector<char*> rows(5'000);
+        int numListedRows{0};
+        numListedRows = rowContainer_->listRows(&rowIter, 5000, rows.data());
+        ASSERT_EQ(numListedRows, 5000);
+        spiller_->spill(rows);
+      } else {
+        spiller_->spill();
+      }
       ASSERT_FALSE(spiller_->finalized());
       SpillPartitionSet spillPartitionSet;
       spiller_->finishSpill(spillPartitionSet);
@@ -1430,7 +1440,9 @@ class MaxSpillRunTest : public SpillerTest,
   MaxSpillRunTest() : SpillerTest(GetParam()) {}
 
   static std::vector<TestParam> getTestParams() {
-    return TestParamsBuilder{.typesToExclude = {Spiller::Type::kHashJoinProbe}}
+    return TestParamsBuilder{
+        .typesToExclude =
+            {Spiller::Type::kHashJoinProbe, Spiller::Type::kOrderByOutput}}
         .getTestParams();
   }
 };
@@ -1452,8 +1464,22 @@ TEST_P(MaxSpillRunTest, basic) {
     SCOPED_TRACE(testData.debugString());
     setupSpillData(rowType_, numKeys_, numRows, 1, nullptr, {});
     sortSpillData();
-    setupSpiller(100'000, 0, 0, false, testData.maxSpillRunRows);
-    spiller_->spill();
+    setupSpiller(
+        std::numeric_limits<uint64_t>::max(),
+        0,
+        0,
+        false,
+        testData.maxSpillRunRows);
+    if (type_ == Spiller::Type::kOrderByOutput) {
+      RowContainerIterator rowIter;
+      std::vector<char*> rows(numRows);
+      int numListedRows{0};
+      numListedRows = rowContainer_->listRows(&rowIter, numRows, rows.data());
+      ASSERT_EQ(numListedRows, numRows);
+      spiller_->spill(rows);
+    } else {
+      spiller_->spill();
+    }
     ASSERT_FALSE(spiller_->finalized());
     SpillPartitionSet spillPartitionSet;
     spiller_->finishSpill(spillPartitionSet);
@@ -1480,7 +1506,8 @@ TEST_P(MaxSpillRunTest, basic) {
       ASSERT_EQ(numFiles, testData.expectedNumFiles);
       ASSERT_EQ(spillPartitionSet.size(), 1);
     } else {
-      ASSERT_GT(numFiles, 1);
+      ASSERT_EQ(numFiles, hashBits_.numPartitions());
+      ASSERT_EQ(spillPartitionSet.size(), numFiles);
     }
   }
 }
