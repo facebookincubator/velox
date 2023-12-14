@@ -76,17 +76,18 @@ TEST_F(S3ReadTest, s3ReadTest) {
            kExpectedRows, [](auto row) { return row + 100; }),
        makeFlatVector<int64_t>(
            kExpectedRows, [](auto row) { return row + 1000; })});
-  const auto sourceFile =
-      getDataFilePath("velox/connectors/hive/storage_adapters/s3fs/tests", "../../../../../dwio/parquet/tests/examples/int.parquet");
+  const auto sourceFile = getDataFilePath(
+      "velox/connectors/hive/storage_adapters/s3fs/tests",
+      "../../../../../dwio/parquet/tests/examples/int.parquet");
   const char* bucketName = "data";
   const auto destinationFile = S3Test::localPath(bucketName) + "/int.parquet";
   minioServer_->addBucket(bucketName);
-  
+
   std::ifstream src(sourceFile, std::ios::binary);
   std::ofstream dest(destinationFile, std::ios::binary);
   // Copy source file to destination bucket.
   dest << src.rdbuf();
-  VELOX_CHECK_GT(dest.tellp(), 0, "Source file not found");
+  VELOX_CHECK_GT(dest.tellp(), 0, "Source file {} not found", sourceFile);
   dest.close();
 
   const auto readDirectory{s3URI(bucketName)};

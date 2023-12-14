@@ -66,7 +66,10 @@ target_link_libraries(
   gtest_main)
 
 add_executable(velox_s3read_test S3ReadTest.cpp)
-add_test(velox_s3read_test velox_s3read_test)
+add_test(
+  NAME velox_s3read_test
+  COMMAND velox_s3read_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
   velox_s3read_test
   velox_file
