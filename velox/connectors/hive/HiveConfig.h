@@ -128,12 +128,13 @@ class HiveConfig {
   static constexpr const char* kEnableFileHandleCache =
       "file-handle-cache-enabled";
 
-  /// The size in bytes to be fetched with Meta data together, used when the data after meta data will be used later. 
-  /// Optimization to decrease small IO request
+  /// The size in bytes to be fetched with Meta data together, used when the
+  /// data after meta data will be used later. Optimization to decrease small IO
+  /// request
   static constexpr const char* kDirectorySizeGuess = "directory-size-guess";
-
-  /// The threshold of file size in bytes when the whole file is fetched with meta data together. 
-  /// Optimization to decrease the small IO requests
+ 
+  /// The threshold of file size in bytes when the whole file is fetched with
+  /// meta data together. Optimization to decrease the small IO requests
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
   /// Maximum stripe size in orc writer.
