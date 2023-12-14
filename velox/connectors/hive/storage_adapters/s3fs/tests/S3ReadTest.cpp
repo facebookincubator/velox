@@ -20,22 +20,15 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
-#include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::core;
-using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
-using namespace facebook::velox::connector;
-using namespace facebook::velox::connector::hive;
-using namespace facebook::velox::dwio::common;
-using namespace facebook::velox::test;
-using namespace facebook::velox::filesystems;
 
-class S3ReadTest : public S3Test, public VectorTestBase {
+namespace facebook::velox {
+namespace {
+class S3ReadTest : public S3Test, public test::VectorTestBase {
  public:
   static constexpr char const* kMinioConnectionString{"127.0.0.1:6000"};
   /// We use static initialization because we want a single version of the
@@ -45,44 +38,30 @@ class S3ReadTest : public S3Test, public VectorTestBase {
     minioServer_ = std::make_shared<MinioServer>(kMinioConnectionString);
     minioServer_->start();
 
-    ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
     filesystems::registerS3FileSystem();
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(
-                kHiveConnectorId,
-                minioServer_->hiveConfig(),
-                ioExecutor_.get());
+            ->newConnector(kHiveConnectorId, minioServer_->hiveConfig());
     connector::registerConnector(hiveConnector);
   }
 
   static void TearDownTestSuite() {
     filesystems::finalizeS3FileSystem();
-    unregisterConnector(kHiveConnectorId);
+    connector::unregisterConnector(kHiveConnectorId);
     minioServer_->stop();
     minioServer_ = nullptr;
   }
-
-  static std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 };
-std::unique_ptr<folly::IOThreadPoolExecutor> S3ReadTest::ioExecutor_ = nullptr;
+} // namespace
 
 TEST_F(S3ReadTest, s3ReadTest) {
-  const int64_t kExpectedRows = 10;
-  // input is the data in int.parquet file.
-  auto input = makeRowVector(
-      {makeFlatVector<int32_t>(
-           kExpectedRows, [](auto row) { return row + 100; }),
-       makeFlatVector<int64_t>(
-           kExpectedRows, [](auto row) { return row + 1000; })});
-  const auto sourceFile = getDataFilePath(
+  const auto sourceFile = test::getDataFilePath(
       "velox/connectors/hive/storage_adapters/s3fs/tests",
       "../../../../../dwio/parquet/tests/examples/int.parquet");
   const char* bucketName = "data";
   const auto destinationFile = S3Test::localPath(bucketName) + "/int.parquet";
   minioServer_->addBucket(bucketName);
-
   std::ifstream src(sourceFile, std::ios::binary);
   std::ofstream dest(destinationFile, std::ios::binary);
   // Copy source file to destination bucket.
@@ -90,6 +69,7 @@ TEST_F(S3ReadTest, s3ReadTest) {
   VELOX_CHECK_GT(dest.tellp(), 0, "Unable to copy from source {}", sourceFile);
   dest.close();
 
+  // Read the parquet file via the S3 bucket.
   const auto readDirectory{s3URI(bucketName)};
   auto rowType = ROW({"int", "bigint"}, {INTEGER(), BIGINT()});
   auto plan = PlanBuilder().tableScan(rowType).planNode();
@@ -98,7 +78,15 @@ TEST_F(S3ReadTest, s3ReadTest) {
                    .fileFormat(dwio::common::FileFormat::PARQUET)
                    .build();
   auto copy = AssertQueryBuilder(plan).split(split).copyResults(pool());
-  assertEqualResults({input}, {copy});
+
+  // expectedResults is the data in int.parquet file.
+  const int64_t kExpectedRows = 10;
+  auto expectedResults = makeRowVector(
+      {makeFlatVector<int32_t>(
+           kExpectedRows, [](auto row) { return row + 100; }),
+       makeFlatVector<int64_t>(
+           kExpectedRows, [](auto row) { return row + 1000; })});
+  assertEqualResults({expectedResults}, {copy});
 }
 
 int main(int argc, char** argv) {
@@ -106,3 +94,4 @@ int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
   return RUN_ALL_TESTS();
 }
+} // namespace facebook::velox
