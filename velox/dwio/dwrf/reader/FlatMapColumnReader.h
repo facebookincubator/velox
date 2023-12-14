@@ -149,8 +149,6 @@ class FlatMapColumnReader : public ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      folly::Executor* FOLLY_NULLABLE executor,
-      size_t decodingParallelismFactor,
       FlatMapContext flatMapContext);
   ~FlatMapColumnReader() override = default;
 
@@ -161,17 +159,11 @@ class FlatMapColumnReader : public ColumnReader {
       VectorPtr& result,
       const uint64_t* FOLLY_NULLABLE nulls) override;
 
-  bool isFlatMap() const override {
-    return true;
-  }
-
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
   std::vector<std::unique_ptr<KeyNode<T>>> keyNodes_;
   std::unique_ptr<StringKeyBuffer> stringKeyBuffer_;
   bool returnFlatVector_;
-  folly::Executor* FOLLY_NULLABLE executor_;
-  std::unique_ptr<dwio::common::ParallelFor> parallelForOnKeyNodes_;
 
   void initStringKeyBuffer() {}
 
@@ -198,7 +190,7 @@ class FlatMapStructEncodingColumnReader : public ColumnReader {
       VectorPtr& result,
       const uint64_t* FOLLY_NULLABLE nulls) override;
 
-  bool isFlatMap() const override {
+  bool isParallelized() const override {
     return true;
   }
 
