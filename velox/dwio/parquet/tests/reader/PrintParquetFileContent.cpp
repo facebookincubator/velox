@@ -40,7 +40,7 @@ DEFINE_uint64(
     rows_to_read,
     std::numeric_limits<uint64_t>::max(),
     "Number of rows to read");
-DEFINE_uint64(batch_size, 100, "Max number of rows to read at a time");
+DEFINE_uint64(batch_size, 500, "Max number of rows to read at a time");
 DEFINE_string(file_path, "", "Path to parquet file");
 DEFINE_validator(file_path, &ValidatePath);
 
