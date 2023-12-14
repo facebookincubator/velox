@@ -64,3 +64,17 @@ target_link_libraries(
   velox_exec
   gtest
   gtest_main)
+
+add_executable(velox_s3read_test S3ReadTest.cpp)
+add_test(velox_s3read_test velox_s3read_test)
+target_link_libraries(
+  velox_s3read_test
+  velox_file
+  velox_s3fs
+  velox_hive_config
+  velox_core
+  velox_exec_test_lib
+  velox_dwio_common_exception
+  velox_exec
+  gtest
+  gtest_main)
