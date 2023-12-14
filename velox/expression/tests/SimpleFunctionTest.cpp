@@ -1243,7 +1243,6 @@ TEST_F(SimpleFunctionTest, flatNoNullsPathCallNullFree) {
   testCallNullFreeSupportFlatNotNulls<Varchar, Varchar>(false, false);
 }
 
-namespace {
 template <typename T>
 struct ConstantArgumentFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -1251,22 +1250,24 @@ struct ConstantArgumentFunction {
   void initialize(
       const core::QueryConfig& /*config*/,
       const arg_type<int32_t>* /*first*/,
-      const arg_type<int32_t>* second,
-      const arg_type<Varchar>* third,
-      const arg_type<Generic<T1>>* fourth) {}
+      const arg_type<int32_t>* /*second*/,
+      const arg_type<Varchar>* /*third*/,
+      const arg_type<Generic<T1>>* /*fourth*/,
+      const arg_type<Array<int32_t>>* /*fifth*/,
+      const arg_type<Map<int32_t, int32_t>>* /*sixth*/) {}
 
   bool callNullable(
       out_type<int64_t>& out,
-      const arg_type<int32_t>* first,
+      const arg_type<int32_t>* /*first*/,
       const arg_type<int32_t>* /*second*/,
       const arg_type<Varchar>* /*third*/,
-      const arg_type<Generic<T1>>* /*fourth*/) {
-    out = 0;
+      const arg_type<Generic<T1>>* /*fourth*/,
+      const arg_type<Array<int32_t>>* /*fifth*/,
+      const arg_type<Map<int32_t, int32_t>>* /*sixth*/) {
+    out = 1;
     return true;
   }
 };
-
-} // namespace
 
 TEST_F(SimpleFunctionTest, constantArgument) {
   registerFunction<
@@ -1275,12 +1276,16 @@ TEST_F(SimpleFunctionTest, constantArgument) {
       int32_t,
       Constant<int32_t>,
       Constant<Varchar>,
-      Constant<Generic<T1>>>({"constant_argument_function"});
+      Constant<Generic<T1>>,
+      Constant<Array<int32_t>>,
+      Constant<Map<int32_t, int32_t>>>({"constant_argument_function"});
   auto signatures = exec::simpleFunctions().getFunctionSignatures(
       "constant_argument_function");
   EXPECT_FALSE(signatures[0]->constantArguments().at(0));
   EXPECT_TRUE(signatures[0]->constantArguments().at(1));
   EXPECT_TRUE(signatures[0]->constantArguments().at(2));
   EXPECT_TRUE(signatures[0]->constantArguments().at(3));
+  EXPECT_TRUE(signatures[0]->constantArguments().at(4));
+  EXPECT_TRUE(signatures[0]->constantArguments().at(5));
 }
 } // namespace
