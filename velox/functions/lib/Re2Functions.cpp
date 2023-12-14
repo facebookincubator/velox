@@ -1133,12 +1133,12 @@ PatternMetadata determinePatternKind(
   const size_t patternLength = pattern.size();
 
   // Index of the first % or _ character(not escaped).
-  size_t wildcardStart = -1;
+  int32_t wildcardStart = -1;
   // Index of the first character that is not % and not _.
-  size_t fixedPatternStart = -1;
+  int32_t fixedPatternStart = -1;
   // Index of the last character in the fixed pattern, used to retrieve the
   // fixed string for patterns of type kSubstring.
-  size_t fixedPatternEnd = -1;
+  int32_t fixedPatternEnd = -1;
   // Count of wildcard character sequences in pattern.
   size_t numWildcardSequences = 0;
   // Total number of % characters.
