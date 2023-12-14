@@ -267,6 +267,12 @@ class QueryConfig {
   static constexpr const char* kSpillWriteBufferSize =
       "spill_write_buffer_size";
 
+  /// Config used to create spill files. This config is provided to underlying
+  /// file system and the config is free form. The form should be defined by the
+  /// underlying file system.
+  static constexpr const char* kSpillFileCreateConfig =
+      "spill_file_create_config";
+
   static constexpr const char* kSpillStartPartitionBit =
       "spiller_start_partition_bit";
 
@@ -337,6 +343,10 @@ class QueryConfig {
   /// disable the caches.
   static constexpr const char* kEnableExpressionEvaluationCache =
       "enable_expression_evaluation_cache";
+
+  /// Maximum number of splits to preload. Set to 0 to disable preloading.
+  static constexpr const char* kMaxSplitPreloadPerDriver =
+      "max_split_preload_per_driver";
 
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
@@ -584,6 +594,10 @@ class QueryConfig {
     return get<uint64_t>(kSpillWriteBufferSize, 1L << 20);
   }
 
+  std::string spillFileCreateConfig() const {
+    return get<std::string>(kSpillFileCreateConfig, "");
+  }
+
   /// Returns the minimal available spillable memory reservation in percentage
   /// of the current memory usage. Suppose the current memory usage size of M,
   /// available memory reservation size of N and min reservation percentage of
@@ -668,6 +682,10 @@ class QueryConfig {
 
   bool isExpressionEvaluationCacheEnabled() const {
     return get<bool>(kEnableExpressionEvaluationCache, true);
+  }
+
+  int32_t maxSplitPreloadPerDriver() const {
+    return get<int32_t>(kMaxSplitPreloadPerDriver, 2);
   }
 
   template <typename T>

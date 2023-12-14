@@ -1082,15 +1082,10 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
 
     if (enableSpilling) {
       ASSERT_GT(reclaimableBytes, 0);
-      const auto usedMemoryBytes = op->pool()->currentBytes();
-      reclaimAndRestoreCapacity(
-          op,
-          folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
-          reclaimerStats_);
-      ASSERT_GT(reclaimerStats_.reclaimedBytes, 0);
+      reclaimerStats_.reset();
+      reclaimAndRestoreCapacity(op, reclaimableBytes, reclaimerStats_);
+      ASSERT_EQ(reclaimerStats_.reclaimedBytes, reclaimableBytes);
       ASSERT_GT(reclaimerStats_.reclaimExecTimeUs, 0);
-      // No reclaim as the operator has started output processing.
-      ASSERT_EQ(usedMemoryBytes, op->pool()->currentBytes());
     } else {
       ASSERT_EQ(reclaimableBytes, 0);
       VELOX_ASSERT_THROW(
@@ -1108,7 +1103,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
     ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 0);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
-  ASSERT_EQ(reclaimerStats_.numNonReclaimableAttempts, 1);
+  ASSERT_EQ(reclaimerStats_.numNonReclaimableAttempts, 0);
 }
 
 DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
@@ -1299,4 +1294,62 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringInputgProcessing) {
     task.reset();
     waitForAllTasksToBeDeleted();
   }
+}
+
+DEBUG_ONLY_TEST_F(OrderByTest, spillWithNoMoreOutput) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto vectors = createVectors(rowType, 1024, 4 << 20);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId orderNodeId;
+  const auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values(vectors)
+          .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+          .capturePlanNodeId(orderNodeId)
+          .planNode();
+
+  const auto expectedResult = AssertQueryBuilder(plan).copyResults(pool_.get());
+
+  std::atomic_int numOutputs{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "OrderBy") {
+          return;
+        }
+        if (!op->testingNoMoreInput()) {
+          return;
+        }
+        if (++numOutputs != 2) {
+          return;
+        }
+        ASSERT_TRUE(!op->isFinished());
+        op->reclaim(1'000'000'000, reclaimerStats_);
+        ASSERT_EQ(reclaimerStats_.reclaimedBytes, 0);
+      })));
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto task =
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->path)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+          // Set output buffer size to extreme large to read all the
+          // output rows in one vector.
+          .config(
+              QueryConfig::kPreferredOutputBatchRows,
+              std::to_string(1'000'000'000))
+          .config(
+              QueryConfig::kMaxOutputBatchRows, std::to_string(1'000'000'000))
+          .config(
+              QueryConfig::kPreferredOutputBatchBytes,
+              std::to_string(1'000'000'000))
+          .maxDrivers(1)
+          .assertResults(expectedResult);
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  auto& planStats = taskStats.at(orderNodeId);
+  ASSERT_EQ(planStats.spilledBytes, 0);
+  ASSERT_EQ(planStats.spilledRows, 0);
+  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }

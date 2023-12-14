@@ -451,7 +451,7 @@ AggregationFuzzer::AggregationFuzzer(
   auto hiveConnector =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kHiveConnectorId, nullptr);
+          ->newConnector(kHiveConnectorId, std::make_shared<core::MemConfig>());
   connector::registerConnector(hiveConnector);
 
   seed(initialSeed);
@@ -484,7 +484,7 @@ AggregationFuzzer::AggregationFuzzer(
       if (!signature->variables().empty()) {
         bool skip = false;
         std::unordered_set<std::string> typeVariables;
-        for (auto& [name, variable] : signature->variables()) {
+        for (auto& [variableName, variable] : signature->variables()) {
           if (variable.isIntegerParameter()) {
             LOG(WARNING) << "Skipping generic function signature: " << name
                          << signature->toString();
@@ -492,7 +492,7 @@ AggregationFuzzer::AggregationFuzzer(
             break;
           }
 
-          typeVariables.insert(name);
+          typeVariables.insert(variableName);
         }
         if (skip) {
           continue;
@@ -1393,6 +1393,9 @@ bool isTableScanSupported(const TypePtr& type) {
     return false;
   }
   if (type->kind() == TypeKind::UNKNOWN) {
+    return false;
+  }
+  if (type->kind() == TypeKind::HUGEINT) {
     return false;
   }
 

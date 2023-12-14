@@ -143,6 +143,11 @@ class WriteFile {
   // Appends data to the end of the file.
   virtual void append(std::string_view data) = 0;
 
+  // Appends data to the end of the file.
+  virtual void append(std::unique_ptr<folly::IOBuf> /* data */) {
+    VELOX_NYI("IOBuf appending is not implemented");
+  }
+
   // Flushes any local buffers, i.e. ensures the backing medium received
   // all data that has been appended.
   virtual void flush() = 0;
@@ -211,6 +216,7 @@ class InMemoryWriteFile final : public WriteFile {
   explicit InMemoryWriteFile(std::string* FOLLY_NONNULL file) : file_(file) {}
 
   void append(std::string_view data) final;
+  void append(std::unique_ptr<folly::IOBuf> data) final;
   void flush() final {}
   void close() final {}
   uint64_t size() const final;
@@ -277,6 +283,7 @@ class LocalWriteFile final : public WriteFile {
   ~LocalWriteFile();
 
   void append(std::string_view data) final;
+  void append(std::unique_ptr<folly::IOBuf> data) final;
   void flush() final;
   void close() final;
   uint64_t size() const final;

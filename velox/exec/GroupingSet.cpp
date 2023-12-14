@@ -247,7 +247,7 @@ void GroupingSet::addInputForActiveRows(
   TestValue::adjust(
       "facebook::velox::exec::GroupingSet::addInputForActiveRows", this);
 
-  table_->prepareForProbe(*lookup_, input, activeRows_, ignoreNullKeys_);
+  table_->prepareForGroupProbe(*lookup_, input, activeRows_, ignoreNullKeys_);
   table_->groupProbe(*lookup_);
   masks_.addInput(input, activeRows_);
 
@@ -976,7 +976,8 @@ void GroupingSet::spill() {
         spillConfig_->writeBufferSize,
         spillConfig_->compressionKind,
         memory::spillMemoryPool(),
-        spillConfig_->executor);
+        spillConfig_->executor,
+        spillConfig_->fileCreateConfig);
   }
   spiller_->spill();
   if (sortedAggregations_) {
@@ -1003,7 +1004,8 @@ void GroupingSet::spill(const RowContainerIterator& rowIterator) {
       spillConfig_->writeBufferSize,
       spillConfig_->compressionKind,
       memory::spillMemoryPool(),
-      spillConfig_->executor);
+      spillConfig_->executor,
+      spillConfig_->fileCreateConfig);
 
   spiller_->spill(rowIterator);
   table_->clear();

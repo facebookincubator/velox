@@ -20,6 +20,11 @@ set(VELOX_CPR_SOURCE_URL
     "https://github.com/libcpr/cpr/archive/refs/tags/${VELOX_CPR_VERSION}.tar.gz"
 )
 
+# Add the dependency for curl, so that we can define the source URL for curl in
+# curl.cmake. This will override the curl version declared by cpr.
+set(curl_SOURCE BUNDLED)
+resolve_dependency(curl)
+
 resolve_dependency_url(CPR)
 
 message(STATUS "Building cpr from source")
@@ -32,3 +37,6 @@ FetchContent_Declare(
 set(BUILD_SHARED_LIBS OFF)
 set(CPR_USE_SYSTEM_CURL OFF)
 FetchContent_MakeAvailable(cpr)
+# libcpr in its CMakeLists.txt file disables the BUILD_TESTING globally when
+# CPR_USE_SYSTEM_CURL=OFF. unset BUILD_TESTING here.
+unset(BUILD_TESTING)

@@ -824,9 +824,9 @@ void Task::resume(std::shared_ptr<Task> self) {
     // Setting pause requested must be atomic with the resuming so that
     // suspended sections do not go back on thread during resume.
     self->pauseRequested_ = false;
-    if (self->exception_ == nullptr) {
+    if (self->isRunningLocked()) {
       for (auto& driver : self->drivers_) {
-        if (driver) {
+        if (driver != nullptr) {
           if (driver->state().isSuspended) {
             // The Driver will come on thread in its own time as long as
             // the cancel flag is reset. This check needs to be inside 'mutex_'.
@@ -1431,12 +1431,12 @@ bool Task::isUngroupedExecution() const {
 
 bool Task::isRunning() const {
   std::lock_guard<std::mutex> l(mutex_);
-  return (state_ == TaskState::kRunning);
+  return isRunningLocked();
 }
 
 bool Task::isFinished() const {
   std::lock_guard<std::mutex> l(mutex_);
-  return (state_ == TaskState::kFinished);
+  return isFinishedLocked();
 }
 
 bool Task::isRunningLocked() const {
@@ -2276,6 +2276,7 @@ std::string Task::errorMessage() const {
 }
 
 StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
+  TestValue::adjust("facebook::velox::exec::Task::enter", &state);
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(state.isEnqueued);
   state.isEnqueued = false;
@@ -2285,7 +2286,7 @@ StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
   if (state.isOnThread()) {
     return StopReason::kAlreadyOnThread;
   }
-  auto reason = shouldStopLocked();
+  const auto reason = shouldStopLocked();
   if (reason == StopReason::kTerminate) {
     state.isTerminated = true;
   }
@@ -2422,11 +2423,11 @@ StopReason Task::leaveSuspended(ThreadState& state) {
 }
 
 StopReason Task::shouldStop() {
-  if (terminateRequested_) {
-    return StopReason::kTerminate;
-  }
   if (pauseRequested_) {
     return StopReason::kPause;
+  }
+  if (terminateRequested_) {
+    return StopReason::kTerminate;
   }
   if (toYield_) {
     std::lock_guard<std::mutex> l(mutex_);
@@ -2455,11 +2456,11 @@ std::vector<ContinuePromise> Task::allThreadsFinishedLocked() {
 }
 
 StopReason Task::shouldStopLocked() {
-  if (terminateRequested_) {
-    return StopReason::kTerminate;
-  }
   if (pauseRequested_) {
     return StopReason::kPause;
+  }
+  if (terminateRequested_) {
+    return StopReason::kTerminate;
   }
   if (toYield_ > 0) {
     --toYield_;
