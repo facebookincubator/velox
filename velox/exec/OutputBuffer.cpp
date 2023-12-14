@@ -63,6 +63,30 @@ std::string ArbitraryBuffer::toString() const {
       hasNoMoreData());
 }
 
+void BufferStats::recordAddPage(const SerializedPage& data) {
+  VELOX_CHECK_GE(data.rows(), 0, "SerializedPage's row size is not inited");
+  int64_t rows = data.rows();
+  int64_t size = data.size();
+  bytesBuffered += size;
+  rowsBuffered += rows;
+  pagesBuffered++;
+  bytesAdded += size;
+  rowsAdded += rows;
+  pagesAdded++;
+}
+
+void BufferStats::recordSendPage(const SerializedPage& data) {
+  VELOX_CHECK_GE(data.rows(), 0, "SerializedPage's row size is not inited");
+  int64_t rows = data.rows();
+  int64_t size = data.size();
+  bytesBuffered -= size;
+  rowsBuffered -= rows;
+  pagesBuffered--;
+  bytesSent += size;
+  rowsSent += rows;
+  pagesSent++;
+}
+
 std::vector<std::unique_ptr<folly::IOBuf>> DestinationBuffer::getData(
     uint64_t maxBytes,
     int64_t sequence,
@@ -239,6 +263,42 @@ uint64_t maxBufferSize(
 }
 
 } // namespace
+
+OutputBufferStats::OutputBufferStats(
+    core::PartitionedOutputNode::Kind k,
+    bool noMoreBuffers,
+    bool atEnd,
+    bool finished,
+    const std::vector<BufferStats>& bufs)
+    : kind(k),
+      canAddBuffers(!noMoreBuffers),
+      canAddPages(!atEnd),
+      buffers(bufs) {
+  if (atEnd) {
+    if (finished) {
+      state = BufferState::kFinished;
+    } else {
+      state = BufferState::kFlushing;
+    }
+  } else {
+    if (noMoreBuffers) {
+      state = BufferState::kNoMoreBuffers;
+    } else {
+      state = BufferState::kOpen;
+    }
+  }
+  for (const auto& bufferStats : buffers) {
+    totalBytesBuffered += bufferStats.bytesBuffered;
+    totalRowsBuffered += bufferStats.rowsBuffered;
+    totalPagesBuffered += bufferStats.pagesBuffered;
+    totalBytesAdded += bufferStats.bytesAdded;
+    totalRowsAdded += bufferStats.rowsAdded;
+    totalPagesAdded += bufferStats.pagesAdded;
+    totalBytesSent += bufferStats.bytesSent;
+    totalRowsSent += bufferStats.rowsSent;
+    totalPagesSent += bufferStats.pagesSent;
+  }
+}
 
 OutputBuffer::OutputBuffer(
     std::shared_ptr<Task> task,
@@ -674,7 +734,8 @@ OutputBufferStats OutputBuffer::getStats() {
       bufferStats_[i] = buffer->getStats();
     }
   }
-  OutputBufferStats stats(kind_, noMoreBuffers_, atEnd_, isFinishedLocked(), bufferStats_);
+  OutputBufferStats stats(
+      kind_, noMoreBuffers_, atEnd_, isFinishedLocked(), bufferStats_);
   return stats;
 }
 

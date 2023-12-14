@@ -83,30 +83,10 @@ class ArbitraryBuffer {
 ///          via acknowledge() or deleteResults().
 struct BufferStats {
   /// Update stats when a data page is added.
-  void recordAddPage(const SerializedPage& data) {
-    VELOX_CHECK_GE(data.rows(), 0, "SerializedPage's row size is not inited");
-    int64_t rows = data.rows();
-    int64_t size = data.size();
-    bytesBuffered += size;
-    rowsBuffered += rows;
-    pagesBuffered++;
-    bytesAdded += size;
-    rowsAdded += rows;
-    pagesAdded++;
-  }
+  void recordAddPage(const SerializedPage& data);
 
   /// Update stats when a data page is sent (removed from buffer).
-  void recordSendPage(const SerializedPage& data) {
-    VELOX_CHECK_GE(data.rows(), 0, "SerializedPage's row size is not inited");
-    int64_t rows = data.rows();
-    int64_t size = data.size();
-    bytesBuffered -= size;
-    rowsBuffered -= rows;
-    pagesBuffered--;
-    bytesSent += size;
-    rowsSent += rows;
-    pagesSent++;
-  }
+  void recordSendPage(const SerializedPage& data);
 
   /// If the destination buffer is finished. A finished dest buffer would be
   /// deleted by the OutputBuffer, so this flag is set by the OutputBuffer.
@@ -204,36 +184,12 @@ struct OutputBufferStats {
     kFinished
   };
 
-  OutputBufferStats(core::PartitionedOutputNode::Kind k, bool noMoreBuffers,
-                    bool atEnd, bool finished,
-                    const std::vector<BufferStats>& bufs)
-      : kind(k), canAddBuffers(!noMoreBuffers), canAddPages(!atEnd),
-        buffers(bufs) {
-    if (atEnd) {
-      if (finished) {
-        state = BufferState::kFinished;
-      } else {
-        state = BufferState::kFlushing;
-      }
-    } else {
-      if (noMoreBuffers) {
-        state = BufferState::kNoMoreBuffers;
-      } else {
-        state = BufferState::kOpen;
-      }
-    }
-    for (const auto& bufferStats : buffers) {
-      totalBytesBuffered += bufferStats.bytesBuffered;
-      totalRowsBuffered += bufferStats.rowsBuffered;
-      totalPagesBuffered += bufferStats.pagesBuffered;
-      totalBytesAdded += bufferStats.bytesAdded;
-      totalRowsAdded += bufferStats.rowsAdded;
-      totalPagesAdded += bufferStats.pagesAdded;
-      totalBytesSent += bufferStats.bytesSent;
-      totalRowsSent += bufferStats.rowsSent;
-      totalPagesSent += bufferStats.pagesSent;
-    }
-  }
+  OutputBufferStats(
+      core::PartitionedOutputNode::Kind k,
+      bool noMoreBuffers,
+      bool atEnd,
+      bool finished,
+      const std::vector<BufferStats>& bufs);
 
   /// The kind of the OutputBuffer.
   core::PartitionedOutputNode::Kind kind;
