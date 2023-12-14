@@ -72,7 +72,7 @@ commands:
             if [ -e /opt/rh/gcc-toolset-9/enable ]; then
               source /opt/rh/gcc-toolset-9/enable
             fi
-            if [ -z "$VELOX_DEPENDENCY_SOURCE"]; then
+            if [ -z "$VELOX_DEPENDENCY_SOURCE" ]; then
               rm -rf /usr/local/include/fmt || echo "fmt not found"
             fi
       - restore_cache:
