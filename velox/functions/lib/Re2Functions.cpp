@@ -967,7 +967,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures() {
 }
 
 std::string unescape(
-    const std::string_view& pattern,
+    const std::string_view pattern,
     size_t start,
     size_t end,
     std::optional<char> escapeChar) {
@@ -1123,7 +1123,7 @@ class PatternStringIterator {
 };
 
 PatternMetadata determinePatternKind(
-    const std::string_view& pattern,
+    const std::string_view pattern,
     std::optional<char> escapeChar) {
   int32_t patternLength = pattern.size();
 
