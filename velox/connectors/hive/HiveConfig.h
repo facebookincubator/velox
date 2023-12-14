@@ -108,17 +108,17 @@ class HiveConfig {
   static constexpr const char* kFileColumnNamesReadAsLowerCaseSession =
       "file_column_names_read_as_lower_case";
 
-  /// Sets the max coalesce bytes for a request.
+  /// The max coalesce bytes for a request.
   static constexpr const char* kMaxCoalescedBytes = "max-coalesced-bytes";
 
-  /// Sets the max coalesce distance bytes for combining requests.
+  /// The max coalesce distance bytes for combining requests.
   static constexpr const char* kMaxCoalescedDistanceBytes =
       "max-coalesced-distance-bytes";
 
-  /// Sets the number of prefetch rowgroups
+  /// The number of prefetch rowgroups
   static constexpr const char* kPrefetchRowGroups = "prefetch-rowgroups";
 
-  /// Sets the load quantum size for a request.
+  /// The total size in bytes for a direct coalesce request.
   static constexpr const char* kLoadQuantum = "load-quantum";
 
   /// Maximum number of entries in the file handle cache.
@@ -128,10 +128,12 @@ class HiveConfig {
   static constexpr const char* kEnableFileHandleCache =
       "file-handle-cache-enabled";
 
-  /// set directorySizeGuess defined in dwio::common::ReaderOptions
+  /// The size in bytes to be fetched with Meta data together, used when the data after meta data will be used later. 
+  /// Optimization to decrease small IO request
   static constexpr const char* kDirectorySizeGuess = "directory-size-guess";
 
-  /// set FilePreloadThreshold defined in dwio::common::ReaderOptions
+  /// The threshold of file size in bytes when the whole file is fetched with meta data together. 
+  /// Optimization to decrease the small IO requests
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
   /// Maximum stripe size in orc writer.
