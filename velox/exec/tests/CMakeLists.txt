@@ -156,6 +156,7 @@ target_link_libraries(
   velox_dwio_common_test_utils
   velox_exec
   velox_exec_test_lib
+  velox_fuzzer_util
   velox_functions_lib
   velox_functions_prestosql
   velox_functions_test_lib
@@ -198,31 +199,7 @@ target_link_libraries(
   velox_tpch_connector
   velox_memory)
 
-# Aggregation Fuzzer.
-add_executable(velox_aggregation_fuzzer_test AggregationFuzzerTest.cpp)
-
-target_link_libraries(
-  velox_aggregation_fuzzer_test
-  velox_aggregation_fuzzer
-  velox_aggregates
-  velox_window
-  velox_vector_test_lib
-  gtest
-  gtest_main)
-
-add_executable(spark_aggregation_fuzzer_test SparkAggregationFuzzerTest.cpp)
-
-target_link_libraries(
-  spark_aggregation_fuzzer_test
-  velox_aggregation_fuzzer
-  velox_functions_spark_aggregates
-  velox_window
-  velox_vector_test_lib
-  gtest
-  gtest_main)
-
 # Join Fuzzer.
-
 add_library(velox_join_fuzzer JoinFuzzer.cpp)
 
 target_link_libraries(velox_join_fuzzer velox_type velox_vector_fuzzer
@@ -234,8 +211,19 @@ target_link_libraries(velox_join_fuzzer_test velox_join_fuzzer gtest gtest_main)
 
 add_executable(velox_aggregation_runner_test AggregationRunnerTest.cpp)
 
-target_link_libraries(velox_aggregation_runner_test velox_aggregation_fuzzer
-                      velox_aggregates velox_vector_test_lib gtest gtest_main)
+target_link_libraries(
+  velox_aggregation_runner_test
+  velox_aggregation_fuzzer
+  velox_fuzzer_util
+  velox_aggregates
+  velox_vector_test_lib
+  gtest
+  gtest_main)
+
+add_executable(velox_window_runner_test WindowRunnerTest.cpp)
+
+target_link_libraries(velox_window_runner_test velox_window_fuzzer velox_window
+                      velox_aggregates velox_fuzzer_util gtest gtest_main)
 
 add_library(velox_simple_aggregate SimpleAverageAggregate.cpp
                                    SimpleArrayAggAggregate.cpp)
