@@ -179,6 +179,10 @@ Writer::Writer(
       arrowContext_(std::make_shared<ArrowContext>()),
       schema_(std::move(schema)) {
   validateSchemaRecursive(schema_);
+  ArrowSchema cArrowSchema;
+  exportToArrow(
+      BaseVector::create(schema_, 0, generalPool_.get()), cArrowSchema);
+  arrowContext_->schema = ::arrow::ImportSchema(&cArrowSchema).ValueOrDie();
 
   if (options.flushPolicyFactory) {
     flushPolicy_ = options.flushPolicyFactory();
@@ -260,23 +264,16 @@ void Writer::write(const VectorPtr& data) {
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
 
-  data->setType(schema_);
-
   ArrowOptions options{.flattenDictionary = true, .flattenConstant = true};
   ArrowArray array;
-  ArrowSchema schema;
   exportToArrow(data, array, generalPool_.get(), options);
-  exportToArrow(data, schema, options);
 
   PARQUET_ASSIGN_OR_THROW(
-      auto recordBatch, ::arrow::ImportRecordBatch(&array, &schema));
-  if (!arrowContext_->schema) {
-    arrowContext_->schema = recordBatch->schema();
-    for (int colIdx = 0; colIdx < arrowContext_->schema->num_fields();
-         colIdx++) {
-      arrowContext_->stagingChunks.push_back(
-          std::vector<std::shared_ptr<::arrow::Array>>());
-    }
+      auto recordBatch,
+      ::arrow::ImportRecordBatch(&array, arrowContext_->schema));
+  for (int colIdx = 0; colIdx < arrowContext_->schema->num_fields(); colIdx++) {
+    arrowContext_->stagingChunks.push_back(
+        std::vector<std::shared_ptr<::arrow::Array>>());
   }
 
   auto bytes = data->estimateFlatSize();
