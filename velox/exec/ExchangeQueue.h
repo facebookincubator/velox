@@ -36,7 +36,7 @@ class SerializedPage {
     return iobufBytes_;
   }
 
-  std::optional<int64_t> rows() const {
+  std::optional<int64_t> numRows() const {
     return numRows_;
   }
 
