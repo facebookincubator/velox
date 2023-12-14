@@ -75,11 +75,10 @@ class ArbitraryBuffer {
 };
 
 /// The stats of a DestinationBuffer. The data transferred by the buffer has
-/// three phases:
-/// 1. Added: the data is added to the buffer via enqueue().
-/// 2. Buffered: after added and before acked, the data is buffered in the
-///              destination buffer.
-/// 3. Sent: the data is sent and removed from the buffer after it is acked
+/// two phases:
+/// 1. Buffered: after added via enqueue() and before acked, the data is
+///              buffered in the destination buffer.
+/// 2. Sent: the data is sent and removed from the buffer after it is acked
 ///          via acknowledge() or deleteResults().
 struct BufferStats {
   /// Update stats when a data page is added.
@@ -97,12 +96,6 @@ struct BufferStats {
   int64_t rowsBuffered{0};
   /// Page num of data that is currently buffered.
   int64_t pagesBuffered{0};
-  /// Byte num of data that has been added to the buffer.
-  int64_t bytesAdded{0};
-  /// Row num of data that has been added to the buffer.
-  int64_t rowsAdded{0};
-  /// Page num of data that has been added to the buffer.
-  int64_t pagesAdded{0};
   /// Byte num of data that has been sent from the buffer.
   int64_t bytesSent{0};
   /// Row num of data that has been sent from the buffer.
@@ -201,24 +194,6 @@ struct OutputBufferStats {
   bool canAddPages{true};
   /// The bufferStats of each destination buffer.
   std::vector<BufferStats> buffers;
-  /// Total byte num of data buffered in all destination buffers.
-  int64_t totalBytesBuffered{0};
-  /// Total row num of data buffered in all destination buffers.
-  int64_t totalRowsBuffered{0};
-  /// Total page num of data buffered in all destination buffers.
-  int64_t totalPagesBuffered{0};
-  /// Total byte num of data that has been added to all destination buffers.
-  int64_t totalBytesAdded{0};
-  /// Total row num of data that has been added to all destination buffers.
-  int64_t totalRowsAdded{0};
-  /// Total page num of data that has been added to all destination buffers.
-  int64_t totalPagesAdded{0};
-  /// Total byte num of data that has been sent from all destination buffers.
-  int64_t totalBytesSent{0};
-  /// Total row num of data that has been sent from all destination buffers.
-  int64_t totalRowsSent{0};
-  /// Total page num of data that has been sent from all destination buffers.
-  int64_t totalPagesSent{0};
 };
 
 class OutputBuffer {

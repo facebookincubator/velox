@@ -70,9 +70,6 @@ void BufferStats::recordAddPage(const SerializedPage& data) {
   bytesBuffered += size;
   rowsBuffered += rows;
   pagesBuffered++;
-  bytesAdded += size;
-  rowsAdded += rows;
-  pagesAdded++;
 }
 
 void BufferStats::recordSendPage(const SerializedPage& data) {
@@ -286,17 +283,6 @@ OutputBufferStats::OutputBufferStats(
     } else {
       state = BufferState::kOpen;
     }
-  }
-  for (const auto& bufferStats : buffers) {
-    totalBytesBuffered += bufferStats.bytesBuffered;
-    totalRowsBuffered += bufferStats.rowsBuffered;
-    totalPagesBuffered += bufferStats.pagesBuffered;
-    totalBytesAdded += bufferStats.bytesAdded;
-    totalRowsAdded += bufferStats.rowsAdded;
-    totalPagesAdded += bufferStats.pagesAdded;
-    totalBytesSent += bufferStats.bytesSent;
-    totalRowsSent += bufferStats.rowsSent;
-    totalPagesSent += bufferStats.pagesSent;
   }
 }
 

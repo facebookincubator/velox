@@ -987,18 +987,16 @@ TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
       fetchOne(taskId, 0, pageId);
     }
     stats = getStats(taskId);
-    ASSERT_EQ(stats.totalPagesAdded, pageId + 1);
-    ASSERT_EQ(stats.totalRowsAdded, totalSize);
-    ASSERT_EQ(stats.totalPagesBuffered, 1);
-    ASSERT_EQ(stats.totalRowsBuffered, size);
+    ASSERT_EQ(stats.buffers[0].pagesBuffered, 1);
+    ASSERT_EQ(stats.buffers[0].rowsBuffered, size);
 
     fetchOneAndAck(taskId, 0, pageId);
     stats = getStats(taskId);
 
-    ASSERT_EQ(stats.totalPagesSent, pageId + 1);
-    ASSERT_EQ(stats.totalRowsSent, totalSize);
-    ASSERT_EQ(stats.totalPagesBuffered, 0);
-    ASSERT_EQ(stats.totalRowsBuffered, 0);
+    ASSERT_EQ(stats.buffers[0].pagesSent, pageId + 1);
+    ASSERT_EQ(stats.buffers[0].rowsSent, totalSize);
+    ASSERT_EQ(stats.buffers[0].pagesBuffered, 0);
+    ASSERT_EQ(stats.buffers[0].rowsBuffered, 0);
   }
 
   bufferManager_->updateOutputBuffers(taskId, 1, true);
@@ -1025,12 +1023,10 @@ TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
   deleteResults(taskId, 0);
   stats = getStats(taskId);
   ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kFinished);
-  ASSERT_EQ(stats.totalPagesAdded, pageNum + 1);
-  ASSERT_EQ(stats.totalRowsAdded, totalSize);
-  ASSERT_EQ(stats.totalPagesBuffered, 0);
-  ASSERT_EQ(stats.totalRowsBuffered, 0);
-  ASSERT_EQ(stats.totalPagesSent, pageNum + 1);
-  ASSERT_EQ(stats.totalRowsSent, totalSize);
+  ASSERT_EQ(stats.buffers[0].pagesBuffered, 0);
+  ASSERT_EQ(stats.buffers[0].rowsBuffered, 0);
+  ASSERT_EQ(stats.buffers[0].pagesSent, pageNum + 1);
+  ASSERT_EQ(stats.buffers[0].rowsSent, totalSize);
   bufferManager_->removeTask(taskId);
 }
 
