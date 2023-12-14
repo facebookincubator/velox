@@ -220,6 +220,11 @@ target_link_libraries(
   gtest
   gtest_main)
 
+add_executable(velox_window_runner_test WindowRunnerTest.cpp)
+
+target_link_libraries(velox_window_runner_test velox_window_fuzzer velox_window
+                      velox_aggregates velox_fuzzer_util gtest gtest_main)
+
 add_library(velox_simple_aggregate SimpleAverageAggregate.cpp
                                    SimpleArrayAggAggregate.cpp)
 

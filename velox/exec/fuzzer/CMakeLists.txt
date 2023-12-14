@@ -55,4 +55,6 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_exec_test_lib
   velox_expression_test_utility
-  velox_aggregation_fuzzer_base)
+  velox_aggregation_fuzzer_base
+  velox_vector
+  velox_hive_connector)

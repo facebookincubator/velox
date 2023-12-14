@@ -80,6 +80,8 @@ class WindowFuzzer : public AggregationFuzzerBase {
       bool customVerification,
       bool enableWindowVerification);
 
+  void verifyWindow(const PlanWithSplits& plan);
+
   const std::unordered_set<std::string> orderDependentFunctions_;
 
   struct Stats {

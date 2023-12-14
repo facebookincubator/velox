@@ -16,7 +16,9 @@
 
 #include "velox/exec/fuzzer/WindowFuzzer.h"
 
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/VectorSaver.h"
 
 DEFINE_bool(
     enable_window_reference_verification,
@@ -124,8 +126,78 @@ void WindowFuzzer::go() {
 }
 
 void WindowFuzzer::go(const std::string& planPath) {
-  // TODO: allow running window fuzzer with saved plans and splits.
-  VELOX_NYI();
+  Type::registerSerDe();
+  connector::hive::HiveTableHandle::registerSerDe();
+  connector::hive::LocationHandle::registerSerDe();
+  connector::hive::HiveColumnHandle::registerSerDe();
+  connector::hive::HiveInsertTableHandle::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+  core::PlanNode::registerSerDe();
+
+  LOG(INFO) << "Attempting to use serialized plan at: " << planPath;
+  auto planString = restoreStringFromFile(planPath.c_str());
+  auto parsedPlans = folly::parseJson(planString);
+  VELOX_CHECK_EQ(parsedPlans.size(), 1, "Expected exactly one plan");
+  PlanWithSplits plan = deserialize(parsedPlans.at(0));
+
+  verifyWindow(plan);
+}
+
+std::string makeFunctionCallString(const core::WindowNode::Function& call) {
+  std::ostringstream result;
+  result << call.functionCall->name() << "(";
+  int i = 0;
+  for (const auto& input : call.functionCall->inputs()) {
+    if (i > 0) {
+      result << ", ";
+    }
+    auto inputExpr =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(input);
+    VELOX_CHECK_NOT_NULL(inputExpr);
+    result << inputExpr->name();
+    ++i;
+  }
+  result << ")";
+  return result.str();
+}
+
+void WindowFuzzer::verifyWindow(const PlanWithSplits& plan) {
+  const auto node = dynamic_cast<const core::WindowNode*>(plan.plan.get());
+  VELOX_CHECK_NOT_NULL(node);
+
+  std::vector<std::string> partitionKeys;
+  for (const auto& key : node->partitionKeys()) {
+    partitionKeys.push_back(key->name());
+  }
+
+  std::vector<std::string> sortingKeys;
+  for (const auto& key : node->sortingKeys()) {
+    sortingKeys.push_back(key->name());
+  }
+
+  std::vector<std::string> functionCalls;
+  bool customVerification = false;
+  for (const auto& call : node->windowFunctions()) {
+    functionCalls.push_back(makeFunctionCallString(call));
+    customVerification =
+        customVerificationFunctions_.count(call.functionCall->name()) != 0;
+  }
+
+  std::vector<RowVectorPtr> input;
+  for (auto source : node->sources()) {
+    auto valueNode = dynamic_cast<const core::ValuesNode*>(source.get());
+    VELOX_CHECK_NOT_NULL(valueNode);
+    auto values = valueNode->values();
+    input.insert(input.end(), values.begin(), values.end());
+  }
+
+  verifyWindow(
+      partitionKeys,
+      sortingKeys,
+      functionCalls,
+      input,
+      customVerification,
+      FLAGS_enable_window_reference_verification);
 }
 
 void WindowFuzzer::updateReferenceQueryStats(
