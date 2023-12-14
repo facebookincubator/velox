@@ -19,9 +19,11 @@ namespace facebook::velox::exec {
 
 SerializedPage::SerializedPage(
     std::unique_ptr<folly::IOBuf> iobuf,
-    std::function<void(folly::IOBuf&)> onDestructionCb)
+    std::function<void(folly::IOBuf&)> onDestructionCb,
+    std::optional<int64_t> rows)
     : iobuf_(std::move(iobuf)),
       iobufBytes_(chainBytes(*iobuf_.get())),
+      iobufRows_(rows),
       onDestructionCb_(onDestructionCb) {
   VELOX_CHECK_NOT_NULL(iobuf_);
   for (auto& buf : *iobuf_) {

@@ -26,13 +26,18 @@ class SerializedPage {
   // Construct from IOBuf chain.
   explicit SerializedPage(
       std::unique_ptr<folly::IOBuf> iobuf,
-      std::function<void(folly::IOBuf&)> onDestructionCb = nullptr);
+      std::function<void(folly::IOBuf&)> onDestructionCb = nullptr,
+      std::optional<int64_t> rows = std::nullopt);
 
   ~SerializedPage();
 
   // Returns the size of the serialized data in bytes.
   uint64_t size() const {
     return iobufBytes_;
+  }
+
+  std::optional<int64_t> rows() const {
+    return iobufRows_;
   }
 
   // Makes 'input' ready for deserializing 'this' with
@@ -60,6 +65,9 @@ class SerializedPage {
 
   // Number of payload bytes in 'iobuf_'.
   const int64_t iobufBytes_;
+
+  // Number of payload rows in 'iobuf_', if provided.
+  const std::optional<int64_t> iobufRows_;
 
   // Callback that will be called on destruction of the SerializedPage,
   // primarily used to free externally allocated memory backing folly::IOBuf
