@@ -83,17 +83,25 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
     computeCapacity();
-    auto mayHaveNulls = decodedRaw_.mayHaveNulls();
-    rows.applyToSelected([&](vector_size_t row) {
-      if (mayHaveNulls && decodedRaw_.isNullAt(row)) {
-        return;
-      }
-      auto group = groups[row];
-      auto tracker = trackRowSize(group);
-      auto accumulator = value<BloomFilterAccumulator>(group);
-      accumulator->init(capacity_);
-      accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
-    });
+    const auto mayHaveNulls = decodedRaw_.mayHaveNulls();
+    if (UNLIKELY(mayHaveNulls)) {
+      rows.applyToSelected([&](vector_size_t row) {
+        if (UNLIKELY(decodedRaw_.isNullAt(row))) {
+          return;
+        }
+        insert(groups, row);
+      });
+      return;
+    }
+    rows.applyToSelected([&](vector_size_t row) { insert(groups, row); });
+  }
+
+  void insert(char** groups, vector_size_t row) {
+    auto group = groups[row];
+    auto tracker = trackRowSize(group);
+    auto accumulator = value<BloomFilterAccumulator>(group);
+    accumulator->init(capacity_);
+    accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
   }
 
   void addIntermediateResults(
@@ -131,11 +139,17 @@ class BloomFilterAggAggregate : public exec::Aggregate {
         accumulator->insert(decodedRaw_.valueAt<int64_t>(0));
       }
     } else {
-      auto mayHaveNulls = decodedRaw_.mayHaveNulls();
+      const auto mayHaveNulls = decodedRaw_.mayHaveNulls();
+      if (UNLIKELY(mayHaveNulls)) {
+        rows.applyToSelected([&](vector_size_t row) {
+          if (UNLIKELY(decodedRaw_.isNullAt(row))) {
+            return;
+          }
+          accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
+        });
+        return;
+      }
       rows.applyToSelected([&](vector_size_t row) {
-        if (mayHaveNulls && decodedRaw_.isNullAt(row)) {
-          return;
-        }
         accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
       });
     };
