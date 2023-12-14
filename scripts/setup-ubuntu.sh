@@ -45,6 +45,7 @@ sudo --preserve-env apt update && sudo --preserve-env apt install -y libunwind-d
   libboost-all-dev \
   libicu-dev \
   libdouble-conversion-dev \
+  libfmt-dev \
   libgoogle-glog-dev \
   libbz2-dev \
   libgflags-dev \
@@ -85,11 +86,6 @@ function prompt {
   ) 2> /dev/null
 }
 
-function install_fmt {
-  github_checkout fmtlib/fmt 8.0.1
-  cmake_install -DFMT_TEST=OFF
-}
-
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
   cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
@@ -118,7 +114,6 @@ function install_conda {
 }
 
 function install_velox_deps {
-  run_and_time install_fmt
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle
