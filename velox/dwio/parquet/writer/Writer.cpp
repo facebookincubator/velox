@@ -18,7 +18,6 @@
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
-#include <iostream>
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 #include "velox/vector/arrow/Bridge.h"
@@ -184,6 +183,11 @@ Writer::Writer(
       BaseVector::create(schema_, 0, generalPool_.get()), cArrowSchema);
   arrowContext_->schema = ::arrow::ImportSchema(&cArrowSchema).ValueOrDie();
 
+  for (int colIdx = 0; colIdx < arrowContext_->schema->num_fields(); colIdx++) {
+    arrowContext_->stagingChunks.push_back(
+        std::vector<std::shared_ptr<::arrow::Array>>());
+  }
+
   if (options.flushPolicyFactory) {
     flushPolicy_ = options.flushPolicyFactory();
   } else {
@@ -271,10 +275,6 @@ void Writer::write(const VectorPtr& data) {
   PARQUET_ASSIGN_OR_THROW(
       auto recordBatch,
       ::arrow::ImportRecordBatch(&array, arrowContext_->schema));
-  for (int colIdx = 0; colIdx < arrowContext_->schema->num_fields(); colIdx++) {
-    arrowContext_->stagingChunks.push_back(
-        std::vector<std::shared_ptr<::arrow::Array>>());
-  }
 
   auto bytes = data->estimateFlatSize();
   auto numRows = data->size();
