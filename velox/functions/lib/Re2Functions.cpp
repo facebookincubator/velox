@@ -1056,7 +1056,7 @@ class PatternStringIterator {
       // The char follows escapeChar can only be one of (%, _, escapeChar).
       if (currentChar == escapeChar_ || currentChar == '_' ||
           currentChar == '%') {
-        charKind_ = CharKind::kNormal;
+        charKind_ = CharKind::kEscaped;
       } else {
         VELOX_USER_FAIL(
             "Escape character must be followed by '%', '_' or the escape character itself: {}, escape {}",
@@ -1087,6 +1087,10 @@ class PatternStringIterator {
     return charKind_ == CharKind::kSingleCharWildcard;
   }
 
+  bool isEscaped() {
+    return charKind_ == CharKind::kEscaped;
+  }
+
   bool isWildcard() {
     return isAnyCharsWildcard() || isSingleCharWildcard();
   }
@@ -1106,8 +1110,10 @@ class PatternStringIterator {
     // NOTE: If escape char is set as '\', for pattern '\__', the first '_' is
     // not a wildcard, just a literal '_', the second '_' is a wildcard.
     kSingleCharWildcard,
-    // Chars that are not escape char & not wildcard char.
-    kNormal
+    // Char that is not escape char & not wildcard char.
+    kNormal,
+    // Char that was escaped by the lhs escape char.
+    kEscaped
   };
 
   // Char at current cursor.
@@ -1170,7 +1176,16 @@ PatternMetadata determinePatternKind(
     } else {
       // Record the first fixed pattern start.
       if (fixedPatternStart == -1) {
-        fixedPatternStart = iterator.currentIndex();
+        if (iterator.isEscaped()) {
+          // We should include escape chars in the fixed pattern. Otherwise,
+          // a pattern like '%\\abc%' would produce '\abc' as fixed pattern
+          // which could lead to failure when trying to unescape the fixed
+          // pattern.
+          VELOX_CHECK_GT(iterator.currentIndex(), 0)
+          fixedPatternStart = iterator.currentIndex() - 1;
+        } else {
+          fixedPatternStart = iterator.currentIndex();
+        }
       } else {
         // This is not the first fixed pattern, not supported, so fallback.
         if (iterator.isPreviousWildcard()) {
