@@ -31,6 +31,7 @@ namespace {
 class S3ReadTest : public S3Test, public test::VectorTestBase {
  public:
   static constexpr char const* kMinioConnectionString{"127.0.0.1:6000"};
+
   /// We use static initialization because we want a single version of the
   /// Minio server running.
   /// Each test must use a unique bucket to avoid concurrency issues.
@@ -66,7 +67,7 @@ TEST_F(S3ReadTest, s3ReadTest) {
   std::ofstream dest(destinationFile, std::ios::binary);
   // Copy source file to destination bucket.
   dest << src.rdbuf();
-  VELOX_CHECK_GT(dest.tellp(), 0, "Unable to copy from source {}", sourceFile);
+  ASSERT_GT(dest.tellp(), 0) << "Unable to copy from source " << sourceFile;
   dest.close();
 
   // Read the parquet file via the S3 bucket.
@@ -88,10 +89,10 @@ TEST_F(S3ReadTest, s3ReadTest) {
            kExpectedRows, [](auto row) { return row + 1000; })});
   assertEqualResults({expectedResults}, {copy});
 }
+} // namespace facebook::velox
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::init(&argc, &argv, false);
   return RUN_ALL_TESTS();
 }
-} // namespace facebook::velox
