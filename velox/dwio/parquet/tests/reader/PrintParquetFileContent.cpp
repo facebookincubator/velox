@@ -51,7 +51,7 @@ std::shared_ptr<facebook::velox::common::ScanSpec> makeScanSpec(
   return scanSpec;
 }
 
-// A temporary program that reads from parquet file and prints its meta data and
+// An executable program that reads from parquet file and prints its meta data and
 // content. Usage: velox_dwio_print_parquet {parquet_file_path}
 int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
           readerOpts.getMemoryPool()),
       readerOpts);
 
-  std::cout << "number of rows: " << reader->numberOfRows().value()
+  std::cout << "Number of rows: " << reader->numberOfRows().value()
             << std::endl;
 
   auto outputType = reader->rowType();
@@ -79,20 +79,20 @@ int main(int argc, char** argv) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   VectorPtr result = BaseVector::create(outputType, 0, pool.get());
-  uint64_t to_read = FLAGS_rows_to_read;
+  uint64_t numRowsToRead = FLAGS_rows_to_read;
 
-  while (to_read > 0) {
-    int readed = rowReader->next(std::min(FLAGS_batch_size, to_read), result);
+  while (numRowsToRead > 0) {
+    int numRowsScanned = rowReader->next(std::min(FLAGS_batch_size, numRowsToRead), result);
 
-    if (readed <= 0) {
+    if (numRowsScanned <= 0) {
       break;
     }
 
     for (vector_size_t i = 0; i < result->size(); i++) {
       std::cout << result->toString(i) << std::endl;
     }
-    VELOX_CHECK_EQ(readed, result->size(), "readed != result->size()");
-    to_read = to_read - readed;
+    VELOX_CHECK_EQ(numRowsScanned, result->size(), "readed != result->size()");
+    numRowsToRead = numRowsToRead - numRowsScanned;
   }
   return 0;
 }
