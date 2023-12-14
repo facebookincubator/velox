@@ -666,44 +666,15 @@ bool OutputBuffer::isOverutilized() const {
 }
 
 OutputBufferStats OutputBuffer::getStats() {
-  OutputBufferStats stats;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    stats.type = PartitionedOutputNode::kindString(kind_);
-    stats.state = OutputBufferStats::BufferState::kOpen;
-    if (noMoreBuffers_) {
-      stats.state = OutputBufferStats::BufferState::kNoMoreBuffers;
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_CHECK_EQ(buffers_.size(), bufferStats_.size());
+  for (auto i = 0; i < buffers_.size(); ++i) {
+    auto buffer = buffers_[i].get();
+    if (buffer) {
+      bufferStats_[i] = buffer->getStats();
     }
-    if (atEnd_) {
-      stats.state = OutputBufferStats::BufferState::kFlushing;
-    }
-    if (isFinishedLocked()) {
-      stats.state = OutputBufferStats::BufferState::kFinished;
-    }
-    stats.canAddBuffers = !noMoreBuffers_;
-    stats.canAddPages = atEnd_;
-    if (bufferStats_.size() < buffers_.size()) {
-      bufferStats_.resize(buffers_.size());
-    }
-    for (auto i = 0; i < buffers_.size(); ++i) {
-      auto buffer = buffers_[i].get();
-      if (buffer) {
-        bufferStats_[i] = buffer->getStats();
-      }
-    }
-    stats.buffers = bufferStats_;
   }
-  for (const auto& bufferStats : stats.buffers) {
-    stats.totalBytesBuffered += bufferStats.bytesBuffered;
-    stats.totalRowsBuffered += bufferStats.rowsBuffered;
-    stats.totalPagesBuffered += bufferStats.pagesBuffered;
-    stats.totalBytesAdded += bufferStats.bytesAdded;
-    stats.totalRowsAdded += bufferStats.rowsAdded;
-    stats.totalPagesAdded += bufferStats.pagesAdded;
-    stats.totalBytesSent += bufferStats.bytesSent;
-    stats.totalRowsSent += bufferStats.rowsSent;
-    stats.totalPagesSent += bufferStats.pagesSent;
-  }
+  OutputBufferStats stats(kind_, noMoreBuffers_, atEnd_, isFinishedLocked(), bufferStats_);
   return stats;
 }
 

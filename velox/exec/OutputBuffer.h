@@ -201,13 +201,42 @@ struct OutputBufferStats {
     /// to be sent.
     kFlushing,
     /// The OutputBuffer has already received and sent all the input data.
-    kFinished,
-    /// The OutputBuffer has failed.
-    kFailed
+    kFinished
   };
 
-  /// The type name of the OutputBuffer.
-  std::string type;
+  OutputBufferStats(core::PartitionedOutputNode::Kind k, bool noMoreBuffers,
+                    bool atEnd, bool finished,
+                    const std::vector<BufferStats>& bufs)
+      : kind(k), canAddBuffers(!noMoreBuffers), canAddPages(!atEnd),
+        buffers(bufs) {
+    if (atEnd) {
+      if (finished) {
+        state = BufferState::kFinished;
+      } else {
+        state = BufferState::kFlushing;
+      }
+    } else {
+      if (noMoreBuffers) {
+        state = BufferState::kNoMoreBuffers;
+      } else {
+        state = BufferState::kOpen;
+      }
+    }
+    for (const auto& bufferStats : buffers) {
+      totalBytesBuffered += bufferStats.bytesBuffered;
+      totalRowsBuffered += bufferStats.rowsBuffered;
+      totalPagesBuffered += bufferStats.pagesBuffered;
+      totalBytesAdded += bufferStats.bytesAdded;
+      totalRowsAdded += bufferStats.rowsAdded;
+      totalPagesAdded += bufferStats.pagesAdded;
+      totalBytesSent += bufferStats.bytesSent;
+      totalRowsSent += bufferStats.rowsSent;
+      totalPagesSent += bufferStats.pagesSent;
+    }
+  }
+
+  /// The kind of the OutputBuffer.
+  core::PartitionedOutputNode::Kind kind;
   /// The state of the OutputBuffer.
   BufferState state{BufferState::kOpen};
   /// If the OutputBuffer can add more buffers.

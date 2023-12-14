@@ -973,8 +973,9 @@ TEST_P(AllOutputBufferManagerTest, outputBufferUtilization) {
 TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
   const vector_size_t size = 100;
   const std::string taskId = std::to_string(rand());
-  OutputBufferStats stats;
   initializeTask(taskId, rowType_, kind_, 1, 1);
+  OutputBufferStats stats = getStats(taskId);
+  ASSERT_EQ(stats.kind, kind_);
 
   const int pageNum = 3;
   int totalSize = 0;
@@ -1003,6 +1004,7 @@ TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
   bufferManager_->updateOutputBuffers(taskId, 1, true);
   stats = getStats(taskId);
   ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kNoMoreBuffers);
+  ASSERT_FALSE(stats.canAddBuffers);
 
   enqueue(taskId, 0, rowType_, size);
   totalSize += size;
@@ -1016,6 +1018,7 @@ TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
   noMoreData(taskId);
   stats = getStats(taskId);
   ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kFlushing);
+  ASSERT_FALSE(stats.canAddPages);
 
   fetchOneAndAck(taskId, 0, pageNum);
   fetchEndMarker(taskId, 0, pageNum + 1);
