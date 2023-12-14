@@ -863,12 +863,34 @@ bool AggregationFuzzer::verifySortedAggregation(
     LOG(INFO) << "Verified results against reference DB";
   }
 
+  std::vector<PlanWithSplits> plans;
+  plans.push_back(
+      {PlanBuilder()
+           .values(input)
+           .singleAggregation(groupingKeys, aggregates, masks)
+           .planNode(),
+       {}});
+  if (!groupingKeys.empty()) {
+    plans.push_back(
+        {PlanBuilder()
+             .values(input)
+             .orderBy(groupingKeys, false)
+             .streamingAggregation(
+                 groupingKeys,
+                 aggregates,
+                 masks,
+                 core::AggregationNode::Step::kSingle,
+                 false)
+             .planNode(),
+         {}});
+  }
+
+  std::shared_ptr<exec::test::TempDirectoryPath> directory;
   const auto inputRowType = asRowType(input[0]->type());
   if (isTableScanSupported(inputRowType)) {
-    auto directory = exec::test::TempDirectoryPath::create();
+    directory = exec::test::TempDirectoryPath::create();
     auto splits = makeSplits(input, directory->path);
 
-    std::vector<PlanWithSplits> plans;
     plans.push_back(
         {PlanBuilder()
              .tableScan(inputRowType)
@@ -890,11 +912,11 @@ bool AggregationFuzzer::verifySortedAggregation(
                .planNode(),
            splits});
     }
-
-    // Set customVerification to false to trigger direct result comparison.
-    // TODO Figure out how to enable custom verify(), but not compare().
-    testPlans(plans, false, {}, resultOrError, 1);
   }
+
+  // Set customVerification to false to trigger direct result comparison.
+  // TODO Figure out how to enable custom verify(), but not compare().
+  testPlans(plans, false, {}, resultOrError, 1);
 
   return resultOrError.exceptionPtr != nullptr;
 }
