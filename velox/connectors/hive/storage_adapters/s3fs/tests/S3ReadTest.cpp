@@ -87,7 +87,7 @@ TEST_F(S3ReadTest, s3ReadTest) {
   std::ofstream dest(destinationFile, std::ios::binary);
   // Copy source file to destination bucket.
   dest << src.rdbuf();
-  VELOX_CHECK_GT(dest.tellp(), 0, "Source file {} not found", sourceFile);
+  VELOX_CHECK_GT(dest.tellp(), 0, "Unable to copy from source {}", sourceFile);
   dest.close();
 
   const auto readDirectory{s3URI(bucketName)};
