@@ -171,6 +171,7 @@ class FlatMapColumnReader : public ColumnReader {
   std::unique_ptr<StringKeyBuffer> stringKeyBuffer_;
   bool returnFlatVector_;
   folly::Executor* FOLLY_NULLABLE executor_;
+  size_t decodingParallelismFactor_;
   std::unique_ptr<dwio::common::ParallelFor> parallelForOnKeyNodes_;
 
   void initStringKeyBuffer() {}
