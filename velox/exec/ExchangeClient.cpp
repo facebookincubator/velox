@@ -18,7 +18,6 @@
 namespace facebook::velox::exec {
 
 void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
-  RequestSpec requestSpec;
   std::shared_ptr<ExchangeSource> toClose;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -47,12 +46,9 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
       toClose = std::move(source);
     } else {
       sources_.push_back(source);
-      queue_->addSourceLocked();
       // Put new source into 'producingSources_' queue to prioritise fetching
       // from these to find out whether these are productive or not.
       producingSources_.push(source);
-
-      requestSpec = pickSourcesToRequestLocked();
     }
   }
 
@@ -60,6 +56,12 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
   if (toClose) {
     toClose->close();
   } else {
+    queue_->addSourceLocked();
+    RequestSpec requestSpec;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      requestSpec = pickSourcesToRequestLocked();
+    }
     request(requestSpec);
   }
 }

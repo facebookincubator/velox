@@ -130,6 +130,7 @@ class ExchangeQueue {
   }
 
   void addSourceLocked() {
+    std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK(!noMoreSources_, "addSource called after noMoreSources");
     numSources_++;
   }
