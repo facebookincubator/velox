@@ -72,9 +72,8 @@ commands:
             if [ -e /opt/rh/gcc-toolset-9/enable ]; then
               source /opt/rh/gcc-toolset-9/enable
             fi
-            if [ -z "$VELOX_DEPENDENCY_SOURCE" ]; then
-              rm -rf /usr/local/include/fmt || echo "fmt not found"
-            fi
+            rm -rf /usr/local/include/fmt || echo "fmt not found"
+            rm  -rf /usr/local/lib64/cmake/fmt|| echo "fmt not found"
       - restore_cache:
           name: "Restore CCache Cache"
           keys:
@@ -251,6 +250,7 @@ jobs:
     environment:
       DuckDB_SOURCE: SYSTEM
       folly_SOURCE: BUNDLED
+      fmt_SOURCE: BUNDLED
     steps:
       - pre-steps
       - install-duckdb
@@ -396,6 +396,8 @@ jobs:
       ICU_SOURCE: BUNDLED
       simdjson_SOURCE: BUNDLED
       DuckDB_SOURCE: SYSTEM
+      fmt_SOURCE: BUNDLED
+      folly_SOURCE: BUNDLED
     steps:
       - pre-steps
       - install-duckdb
@@ -466,6 +468,7 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       simdjson_SOURCE: BUNDLED
       folly_SOURCE: BUNDLED
+      fmt_SOURCE: BUNDLED
       DuckDB_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
@@ -608,6 +611,7 @@ jobs:
     executor: build
     environment:
       folly_SOURCE: BUNDLED
+      fmt_SOURCE: BUNDLED
     steps:
       - pre-steps
       - run:
