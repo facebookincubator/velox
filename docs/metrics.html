@@ -192,8 +192,60 @@ memory arbitrator.</p></td>
 <tbody>
 <tr class="row-even"><td><p>spill_max_level_exceeded_count</p></td>
 <td><p>Count</p></td>
-<td><p>The number of times that a spillable operator hits the max spill level
+<td><p>The number of times that a spill-able operator hits the max spill level
 limit.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spill_input_bytes</p></td>
+<td><p>Sum</p></td>
+<td><p>The number of bytes in memory to spill.</p></td>
+</tr>
+<tr class="row-even"><td><p>spill_bytes</p></td>
+<td><p>Sum</p></td>
+<td><p>The number of bytes spilled to disk which can be the number of compressed
+bytes if compression is enabled.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spill_rows_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of spilled rows.</p></td>
+</tr>
+<tr class="row-even"><td><p>spill_files_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of spilled files.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spill_fill_time_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of the amount of time spent on filling rows for spilling
+in range of [0, 600s] with 20 buckets. It is configured to report the
+latency at P50, P90, P99, and P100 percentiles.</p></td>
+</tr>
+<tr class="row-even"><td><p>spill_sort_time_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of the amount of time spent on sorting rows for spilling
+in range of [0, 600s] with 20 buckets. It is configured to report the
+latency at P50, P90, P99, and P100 percentiles.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spill_serialization_time_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of the amount of time spent on serializing rows for
+spilling in range of [0, 600s] with 20 buckets. It is configured to report
+the latency at P50, P90, P99, and P100 percentiles.</p></td>
+</tr>
+<tr class="row-even"><td><p>spill_disk_writes_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of disk writes to spill rows.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spill_flush_time_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of the amount of time spent on copy out serialized
+rows for disk write in range of [0, 600s] with 20 buckets. It is configured
+to report the latency at P50, P90, P99, and P100 percentiles. Note:  If
+compression is enabled, this includes the compression time.</p></td>
+</tr>
+<tr class="row-even"><td><p>spill_write_time_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of the amount of time spent on writing spilled rows to
+disk in range of [0, 600s] with 20 buckets. It is configured to report the
+latency at P50, P90, P99, and P100 percentiles.</p></td>
 </tr>
 </tbody>
 </table>
