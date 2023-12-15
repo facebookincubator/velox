@@ -698,30 +698,44 @@ void FlatMapStructEncodingColumnReader<T>::next(
     // children vectors.
     childrenPtr = &rowVector->children();
     children.clear();
+    result->setNullCount(nullCount);
   } else {
     children.resize(keyNodes_.size());
-    childrenPtr = &children;
+    auto rowResult = std::make_shared<RowVector>(
+        &memoryPool_,
+        ROW(std::vector<std::string>(keyNodes_.size()),
+            std::vector<std::shared_ptr<const Type>>(
+                keyNodes_.size(), requestedType_->type()->asMap().valueType())),
+        nulls,
+        numValues,
+        std::move(children),
+        nullCount);
+    childrenPtr = &rowResult->children();
+    result = std::move(rowResult);
   }
 
   if (executor_) {
-    auto mergedNullsBuffers =
-        folly::Synchronized<std::unordered_map<std::thread::id, BufferPtr>>();
-    parallelForOnKeyNodes_.execute([numValues,
-                                    nonNullMaps,
-                                    nullsPtr,
-                                    &mergedNullsBuffers,
-                                    this,
-                                    childrenPtr](size_t i) {
-      auto mergedNullsBuffer = getBufferForCurrentThread(mergedNullsBuffers);
-      auto& node = keyNodes_[i];
-      auto& child = (*childrenPtr)[i];
-      if (node) {
-        node->loadAsChild(
-            child, numValues, mergedNullsBuffer, nonNullMaps, nullsPtr);
-      } else {
-        nullColumnReader_->next(numValues, child, nullsPtr);
-      }
-    });
+    auto mergedNullsBuffers = std::make_shared<
+        folly::Synchronized<std::unordered_map<std::thread::id, BufferPtr>>>();
+    parallelForOnKeyNodes_.execute(
+        [numValues,
+         nonNullMaps,
+         nullsPtr,
+         mergedNullsBuffers,
+         this,
+         childrenPtr](size_t i) {
+          auto mergedNullsBuffer =
+              getBufferForCurrentThread(*mergedNullsBuffers);
+          auto& node = keyNodes_[i];
+          auto& child = (*childrenPtr)[i];
+          if (node) {
+            node->loadAsChild(
+                child, numValues, mergedNullsBuffer, nonNullMaps, nullsPtr);
+          } else {
+            nullColumnReader_->next(numValues, child, nullsPtr);
+          }
+        },
+        false);
   } else {
     for (size_t i = 0; i < keyNodes_.size(); ++i) {
       auto& node = keyNodes_[i];
@@ -734,20 +748,6 @@ void FlatMapStructEncodingColumnReader<T>::next(
         nullColumnReader_->next(numValues, child, nullsPtr);
       }
     }
-  }
-
-  if (result) {
-    result->setNullCount(nullCount);
-  } else {
-    result = std::make_shared<RowVector>(
-        &memoryPool_,
-        ROW(std::vector<std::string>(keyNodes_.size()),
-            std::vector<std::shared_ptr<const Type>>(
-                keyNodes_.size(), requestedType_->type()->asMap().valueType())),
-        nulls,
-        numValues,
-        std::move(children),
-        nullCount);
   }
 }
 
