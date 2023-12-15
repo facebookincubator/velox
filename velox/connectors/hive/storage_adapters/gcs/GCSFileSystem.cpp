@@ -83,7 +83,7 @@ class GCSReadFile final : public ReadFile {
           key_);
     }
     length_ = (*metadata).size();
-    VELOX_CHECK_GE(length_, 0);
+    VELOX_CHECK_GE(length_.load(), 0);
   }
 
   std::string_view pread(uint64_t offset, uint64_t length, void* buffer)
