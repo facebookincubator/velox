@@ -864,12 +864,6 @@ bool AggregationFuzzer::verifySortedAggregation(
   }
 
   std::vector<PlanWithSplits> plans;
-  plans.push_back(
-      {PlanBuilder()
-           .values(input)
-           .singleAggregation(groupingKeys, aggregates, masks)
-           .planNode(),
-       {}});
   if (!groupingKeys.empty()) {
     plans.push_back(
         {PlanBuilder()

@@ -310,6 +310,10 @@ std::unique_ptr<RowContainer> StreamingAggregation::makeRowContainer(
 }
 
 void StreamingAggregation::initializeNewGroups(size_t numPrevGroups) {
+  if (numGroups_ == numPrevGroups) {
+    return;
+  }
+
   std::vector<vector_size_t> newGroups;
   newGroups.resize(numGroups_ - numPrevGroups);
   std::iota(newGroups.begin(), newGroups.end(), numPrevGroups);
@@ -319,17 +323,13 @@ void StreamingAggregation::initializeNewGroups(size_t numPrevGroups) {
       continue;
     }
 
-    if (!newGroups.empty()) {
-      aggregate.function->initializeNewGroups(
-          groups_.data(), folly::Range(newGroups.data(), newGroups.size()));
-    }
+    aggregate.function->initializeNewGroups(
+        groups_.data(), folly::Range(newGroups.data(), newGroups.size()));
   }
 
   if (sortedAggregations_) {
-    if (!newGroups.empty()) {
-      sortedAggregations_->initializeNewGroups(
-          groups_.data(), folly::Range(newGroups.data(), newGroups.size()));
-    }
+    sortedAggregations_->initializeNewGroups(
+        groups_.data(), folly::Range(newGroups.data(), newGroups.size()));
   }
 }
 
