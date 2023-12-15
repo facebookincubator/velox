@@ -963,7 +963,7 @@ TEST_F(MockSharedArbitrationTest, arbitrateWithMemoryReclaim) {
   const uint64_t minPoolCapacity = 8 * MB;
   const std::vector<bool> isLeafReclaimables = {true, false};
   for (const auto isLeafReclaimable : isLeafReclaimables) {
-    SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable));
+    SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable.operator bool()));
     setupMemory(memoryCapacity, minPoolCapacity);
     auto* reclaimedOp = addMemoryOp(nullptr, isLeafReclaimable);
     const int allocateSize = 8 * MB;
