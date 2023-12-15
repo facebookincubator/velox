@@ -617,26 +617,51 @@ TEST_F(E2EFilterTest, combineRowGroup) {
 }
 
 TEST_F(E2EFilterTest, configurableWriteSchema) {
-  auto rowType = ROW({"c0", "c1"}, {INTEGER(), ROW({"c2"}, {INTEGER()})});
-  std::vector<RowVectorPtr> batches;
-  for (int i = 0; i < 5; i++) {
-    batches.push_back(makeRowVector(
-        {"c0", "c1"},
-        {makeFlatVector<int32_t>(std::vector<int32_t>{100}),
-         makeRowVector(
-             {"c2"}, {makeFlatVector<int32_t>(std::vector<int32_t>{100})})}));
-  }
+  auto test = [&](auto& type, auto& newType) {
+    std::vector<RowVectorPtr> batches;
+    for (auto i = 0; i < 5; i++) {
+      auto vector = BaseVector::create(type, 100, pool());
+      auto rowVector = std::dynamic_pointer_cast<RowVector>(vector);
+      batches.push_back(rowVector);
+    }
 
+    writeToMemory(newType, batches, false);
+    std::string_view data(sinkPtr_->data(), sinkPtr_->size());
+    dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+    auto input = std::make_unique<BufferedInput>(
+        std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
+    auto reader = makeReader(readerOpts, std::move(input));
+    auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
+
+    EXPECT_EQ(parquetReader.rowType()->toString(), newType->toString());
+  };
+
+  // ROW(ROW(ROW))
+  auto type =
+      ROW({"a", "b"}, {INTEGER(), ROW({"c"}, {ROW({"d"}, {INTEGER()})})});
   auto newType =
-      ROW({"int32", "struct"}, {INTEGER(), ROW({"struct_c0"}, {INTEGER()})});
-  writeToMemory(newType, batches, false);
-  std::string_view data(sinkPtr_->data(), sinkPtr_->size());
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
-  auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
-  auto reader = makeReader(readerOpts, std::move(input));
-  auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
-  EXPECT_EQ(parquetReader.rowType()->toString(), newType->toString());
+      ROW({"aa", "bb"}, {INTEGER(), ROW({"cc"}, {ROW({"dd"}, {INTEGER()})})});
+  test(type, newType);
+
+  // ARRAY(ROW)
+  type =
+      ROW({"a", "b"}, {ARRAY(ROW({"c", "d"}, {BIGINT(), BIGINT()})), BIGINT()});
+  newType = ROW(
+      {"aa", "bb"}, {ARRAY(ROW({"cc", "dd"}, {BIGINT(), BIGINT()})), BIGINT()});
+  test(type, newType);
+
+  // // MAP(ROW)
+  type =
+      ROW({"a", "b"},
+          {MAP(ROW({"c", "d"}, {BIGINT(), BIGINT()}),
+               ROW({"e", "f"}, {BIGINT(), BIGINT()})),
+           BIGINT()});
+  newType =
+      ROW({"aa", "bb"},
+          {MAP(ROW({"cc", "dd"}, {BIGINT(), BIGINT()}),
+               ROW({"ee", "ff"}, {BIGINT(), BIGINT()})),
+           BIGINT()});
+  test(type, newType);
 }
 
 // Define main so that gflags get processed.

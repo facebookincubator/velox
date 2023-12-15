@@ -162,6 +162,91 @@ void validateSchemaRecursive(const RowTypePtr& schema) {
   }
 }
 
+std::vector<std::shared_ptr<::arrow::Field>> updateStructFieldName(
+    const std::vector<std::shared_ptr<::arrow::Field>>& fields,
+    const std::vector<std::string>& names) {
+  std::vector<std::shared_ptr<::arrow::Field>> newFields;
+  newFields.reserve(fields.size());
+  for (auto i = 0; i < fields.size(); ++i) {
+    newFields.push_back(::arrow::field(names[i], fields[i]->type()));
+  }
+
+  return newFields;
+}
+
+std::vector<std::shared_ptr<::arrow::Field>> updateComplexTypeFields(
+    const std::vector<std::shared_ptr<::arrow::Field>>& fields,
+    const RowTypePtr& rowType) {
+  std::vector<std::shared_ptr<::arrow::Field>> newFields;
+  newFields.reserve(rowType->size());
+  for (int i = 0; i < rowType->size(); ++i) {
+    auto field = fields[i];
+    if (auto childRowType =
+            std::dynamic_pointer_cast<const RowType>(rowType->childAt(i))) {
+      auto structType =
+          std::dynamic_pointer_cast<::arrow::StructType>(field->type());
+      auto newChildFields =
+          updateComplexTypeFields(structType->fields(), childRowType);
+      auto newStructFields =
+          updateStructFieldName(newChildFields, childRowType->names());
+      newFields.push_back(field->WithType(::arrow::struct_(newStructFields)));
+    } else if (
+        auto childArray =
+            std::dynamic_pointer_cast<const ArrayType>(rowType->childAt(i))) {
+      auto listType =
+          std::dynamic_pointer_cast<::arrow::BaseListType>(field->type());
+      auto valueField = field;
+      if (auto nestedRowType = std::dynamic_pointer_cast<const RowType>(
+              childArray->elementType())) {
+        auto structType = std::dynamic_pointer_cast<::arrow::StructType>(
+            listType->value_field()->type());
+        auto newChildFields =
+            updateComplexTypeFields(structType->fields(), nestedRowType);
+        auto newStructFields =
+            updateStructFieldName(newChildFields, nestedRowType->names());
+        valueField =
+            field->WithType(::arrow::list(::arrow::struct_(newStructFields)));
+      }
+
+      newFields.push_back(valueField);
+    } else if (
+        auto childMap =
+            std::dynamic_pointer_cast<const MapType>(rowType->childAt(i))) {
+      auto mapType = std::dynamic_pointer_cast<::arrow::MapType>(field->type());
+      auto keyField = mapType->key_field();
+      auto valueField = mapType->item_field();
+
+      if (auto nestedRowType =
+              std::dynamic_pointer_cast<const RowType>(childMap->keyType())) {
+        auto structType =
+            std::dynamic_pointer_cast<::arrow::StructType>(mapType->key_type());
+        auto newChildFields =
+            updateComplexTypeFields(structType->fields(), nestedRowType);
+        auto newStructFields =
+            updateStructFieldName(newChildFields, nestedRowType->names());
+        keyField = keyField->WithType(::arrow::struct_(newStructFields));
+      }
+
+      if (auto nestedRowType =
+              std::dynamic_pointer_cast<const RowType>(childMap->valueType())) {
+        auto structType = std::dynamic_pointer_cast<::arrow::StructType>(
+            mapType->item_type());
+        auto newChildFields =
+            updateComplexTypeFields(structType->fields(), nestedRowType);
+        auto newStructFields =
+            updateStructFieldName(newChildFields, nestedRowType->names());
+        valueField = valueField->WithType(::arrow::struct_(newStructFields));
+      }
+
+      newFields.push_back(
+          field->WithType(::arrow::map(keyField->type(), valueField->type())));
+    } else {
+      newFields.push_back(field);
+    }
+  }
+  return newFields;
+}
+
 } // namespace
 
 Writer::Writer(
@@ -178,15 +263,6 @@ Writer::Writer(
       arrowContext_(std::make_shared<ArrowContext>()),
       schema_(std::move(schema)) {
   validateSchemaRecursive(schema_);
-  ArrowSchema cArrowSchema;
-  exportToArrow(
-      BaseVector::create(schema_, 0, generalPool_.get()), cArrowSchema);
-  arrowContext_->schema = ::arrow::ImportSchema(&cArrowSchema).ValueOrDie();
-
-  for (int colIdx = 0; colIdx < arrowContext_->schema->num_fields(); colIdx++) {
-    arrowContext_->stagingChunks.push_back(
-        std::vector<std::shared_ptr<::arrow::Array>>());
-  }
 
   if (options.flushPolicyFactory) {
     flushPolicy_ = options.flushPolicyFactory();
@@ -270,11 +346,28 @@ void Writer::write(const VectorPtr& data) {
 
   ArrowOptions options{.flattenDictionary = true, .flattenConstant = true};
   ArrowArray array;
+  ArrowSchema schema;
   exportToArrow(data, array, generalPool_.get(), options);
+  exportToArrow(data, schema, options);
+
+  // Convert the arrow schema to Schema and then update the column names based
+  // on schema_.
+  auto arrowSchema = ::arrow::ImportSchema(&schema).ValueOrDie();
+  // The withNames method only handle primitive type not complex type.
+  auto newSchema = arrowSchema->WithNames(schema_->names()).ValueOrDie();
+  auto newFields = updateComplexTypeFields(newSchema->fields(), schema_);
 
   PARQUET_ASSIGN_OR_THROW(
       auto recordBatch,
-      ::arrow::ImportRecordBatch(&array, arrowContext_->schema));
+      ::arrow::ImportRecordBatch(&array, ::arrow::schema(newFields)));
+  if (!arrowContext_->schema) {
+    arrowContext_->schema = recordBatch->schema();
+    for (int colIdx = 0; colIdx < arrowContext_->schema->num_fields();
+         colIdx++) {
+      arrowContext_->stagingChunks.push_back(
+          std::vector<std::shared_ptr<::arrow::Array>>());
+    }
+  }
 
   auto bytes = data->estimateFlatSize();
   auto numRows = data->size();
