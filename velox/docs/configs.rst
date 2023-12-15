@@ -94,7 +94,14 @@ Generic Configuration
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB
-     - The target size for a Task's buffered output. The producer Drivers are blocked when the buffered size exceeds this.
+     - The maximum size in bytes for the task's buffered output when output is partitioned using hash of partitioning keys. See PartitionedOutputNode::Kind::kPartitioned.
+       The producer Drivers are blocked when the buffered size exceeds this.
+       The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
+   * - max_arbitrary_buffer_size
+     - integer
+     - 32MB
+     - The maximum size in bytes for the task's buffered output when output is distributed randomly among consumers. See PartitionedOutputNode::Kind::kArbitrary.
+       The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
    * - min_table_rows_for_parallel_join_build
      - integer
@@ -385,7 +392,7 @@ Each query can override the config by setting corresponding query session proper
      - 100
      - Maximum number of (bucketed) partitions per a single table writer instance.
    * - insert-existing-partitions-behavior
-     -
+     - insert_existing_partitions_behavior
      - string
      - ERROR
      - **Allowed values:** ``OVERWRITE``, ``ERROR``. The behavior on insert existing partitions. This property only derives
@@ -407,7 +414,7 @@ Each query can override the config by setting corresponding query session proper
    * - max-coalesced-bytes
      -
      - integer
-     - 128MB
+     - 8MB
      - Maximum size in bytes to coalesce requests to be fetched in a single request.
    * - max-coalesced-distance-bytes
      -

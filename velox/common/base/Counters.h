@@ -23,12 +23,6 @@ namespace facebook::velox {
 /// Velox metrics Registration.
 void registerVeloxMetrics();
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-inline void registerVeloxCounters() {
-  registerVeloxMetrics();
-}
-#endif
-
 constexpr folly::StringPiece kMetricHiveFileHandleGenerateLatencyMs{
     "velox.hive_file_handle_generate_latency_ms"};
 
@@ -72,4 +66,30 @@ constexpr folly::StringPiece kMetricArbitratorArbitrationTimeMs{
 
 constexpr folly::StringPiece kMetricArbitratorFreeCapacityBytes{
     "velox.arbitrator_free_capacity_bytes"};
+
+constexpr folly::StringPiece kMetricSpilledInputBytes{
+    "velox.spill_input_bytes"};
+
+constexpr folly::StringPiece kMetricSpilledBytes{"velox.spill_bytes"};
+
+constexpr folly::StringPiece kMetricSpilledRowsCount{"velox.spill_rows_count"};
+
+constexpr folly::StringPiece kMetricSpilledFilesCount{
+    "velox.spill_files_count"};
+
+constexpr folly::StringPiece kMetricSpillFillTimeMs{"velox.spill_fill_time_ms"};
+
+constexpr folly::StringPiece kMetricSpillSortTimeMs{"velox.spill_sort_time_ms"};
+
+constexpr folly::StringPiece kMetricSpillSerializationTimeMs{
+    "velox.spill_serialization_time_ms"};
+
+constexpr folly::StringPiece kMetricSpillDiskWritesCount{
+    "velox.spill_disk_writes_count"};
+
+constexpr folly::StringPiece kMetricSpillFlushTimeMs{
+    "velox.spill_flush_time_ms"};
+
+constexpr folly::StringPiece kMetricSpillWriteTimeMs{
+    "velox.spill_write_time_ms"};
 } // namespace facebook::velox

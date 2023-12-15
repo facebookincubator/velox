@@ -53,7 +53,12 @@ std::string HiveConfig::insertExistingPartitionsBehaviorString(
 }
 
 HiveConfig::InsertExistingPartitionsBehavior
-HiveConfig::insertExistingPartitionsBehavior() const {
+HiveConfig::insertExistingPartitionsBehavior(const Config* session) const {
+  if (session->isValueExists(kInsertExistingPartitionsBehaviorSession)) {
+    return stringToInsertExistingPartitionsBehavior(
+        session->get<std::string>(kInsertExistingPartitionsBehaviorSession)
+            .value());
+  }
   const auto behavior =
       config_->get<std::string>(kInsertExistingPartitionsBehavior);
   return behavior.has_value()
@@ -223,6 +228,13 @@ uint64_t HiveConfig::directorySizeGuess() const {
 
 uint64_t HiveConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
+}
+  
+std::string HiveConfig::fileCreateConfig(const Config* session) const {
+  if (session->isValueExists(kFileCreateConfig)) {
+    return session->get<std::string>(kFileCreateConfig).value();
+  }
+  return config_->get<std::string>(kFileCreateConfig, "");
 }
 
 } // namespace facebook::velox::connector::hive
