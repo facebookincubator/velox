@@ -61,7 +61,7 @@ class Spiller {
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor,
-      uint64_t maxSpillRunRows = 0,
+      uint64_t maxSpillRunRows,
       const std::string& fileCreateConfig = {});
 
   Spiller(
@@ -74,7 +74,7 @@ class Spiller {
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor,
-      uint64_t maxSpillRunRows = 0,
+      uint64_t maxSpillRunRows,
       const std::string& fileCreateConfig = {});
 
   Spiller(
@@ -102,7 +102,7 @@ class Spiller {
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Executor* executor,
-      uint64_t maxSpillRunRows = 0,
+      uint64_t maxSpillRunRows,
       const std::string& fileCreateConfig = {});
 
   Type type() const {

@@ -241,7 +241,7 @@ class QueryConfig {
   /// cap the memory used for spilling. If it is zero, then there is no limit
   /// and spilling might run out of memory.
   /// According to the test, the recommendation value is 12 million rows, which
-  /// may roughly use 128 MB of memory when a fill spill runs.
+  /// may roughly use 128 MB of memory when fills a spill run.
   static constexpr const char* kMaxSpillRunRows = "max_spill_run_rows";
 
   static constexpr const char* kTestingSpillPct = "testing.spill_pct";
@@ -404,6 +404,11 @@ class QueryConfig {
     return get<uint64_t>(kOrderBySpillMemoryThreshold, kDefault);
   }
 
+  uint64_t maxSpillRunRows() const {
+    static constexpr uint64_t kDefault = 12 * 1024 * 1024;
+    return get<uint64_t>(kMaxSpillRunRows, kDefault);
+  }
+
   /// Returns the maximum size in bytes for the task's buffered output when
   /// output is partitioned using hash of partitioning keys. See
   /// PartitionedOutputNode::Kind::kPartitioned.
@@ -411,15 +416,6 @@ class QueryConfig {
   /// The producer Drivers are blocked when the buffered size exceeds
   /// this. The Drivers are resumed when the buffered size goes below
   /// OutputBufferManager::kContinuePct % of this.
-  uint64_t maxSpillRunRows() const {
-    static constexpr uint64_t kDefault = 12 * 1024 * 1024;
-    return get<uint64_t>(kMaxSpillRunRows, kDefault);
-  }
-
-  // Returns the target size for a Task's buffered output. The
-  // producer Drivers are blocked when the buffered size exceeds
-  // this. The Drivers are resumed when the buffered size goes below
-  // OutputBufferManager::kContinuePct % of this.
   uint64_t maxPartitionedOutputBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxPartitionedOutputBufferSize, kDefault);

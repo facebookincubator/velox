@@ -1052,7 +1052,7 @@ TEST_P(AllTypes, nonSortedSpillFunctions) {
     std::string debugString() const {
       return fmt::format("maxSpillRunRows {}", maxSpillRunRows);
     }
-  } testSettings[] = {{101}, {0}};
+  } testSettings[] = {{0}, {101}, {100'000}};
 
   for (const auto& testData : testSettings) {
     if (type_ == Spiller::Type::kOrderByInput ||
