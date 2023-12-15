@@ -49,7 +49,7 @@ class ParallelFor {
       // number of threads
       size_t parallelismFactor);
 
-  void execute(std::function<void(size_t)> func);
+  void execute(std::function<void(size_t)> func, bool waitAll = true);
 
  private:
   std::shared_ptr<folly::Executor> owned_;
