@@ -1,0 +1,285 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>Window functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Programming Guide" href="../programming-guide.html" />
+    <link rel="prev" title="I/O Optimizations and the TpchBenchmark" href="TpchBenchmark.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../programming-guide.html" title="Programming Guide"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="TpchBenchmark.html" title="I/O Optimizations and the TpchBenchmark"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Window functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="window-functions">
+<h1>Window functions<a class="headerlink" href="#window-functions" title="Permalink to this heading">¶</a></h1>
+<p>Velox supports window function evaluation using Window operator. In this guide
+we will discuss some intricate design problems in this operator.</p>
+<p>This doc assumes familiarity with Window functions described in
+<a class="reference internal" href="../functions/presto/window.html"><span class="doc">Window functions</span></a>.</p>
+<section id="window-frames">
+<h2>Window frames<a class="headerlink" href="#window-frames" title="Permalink to this heading">¶</a></h2>
+<p>Window functions can optionally include a FRAME clause. The FRAME clause
+can be thought of as a spec for a sliding window of rows which bound
+the window function computation for the given row.</p>
+<p>Not all window functions are bound by the FRAME clause.</p>
+<ul class="simple">
+<li><p>Aggregates computed as window functions and value functions <a class="reference internal" href="../functions/presto/window.html#first_value" title="first_value"><code class="xref py py-func docutils literal notranslate"><span class="pre">first_value()</span></code></a>,
+<a class="reference internal" href="../functions/presto/window.html#last_value" title="last_value"><code class="xref py py-func docutils literal notranslate"><span class="pre">last_value()</span></code></a> and <a class="reference internal" href="../functions/presto/window.html#nth_value" title="nth_value"><code class="xref py py-func docutils literal notranslate"><span class="pre">nth_value()</span></code></a> honor window frames.</p></li>
+<li><p>Rank functions <a class="reference internal" href="../functions/presto/window.html#row_number" title="row_number"><code class="xref py py-func docutils literal notranslate"><span class="pre">row_number()</span></code></a>, <a class="reference internal" href="../functions/presto/window.html#rank" title="rank"><code class="xref py py-func docutils literal notranslate"><span class="pre">rank()</span></code></a>, <a class="reference internal" href="../functions/presto/window.html#dense_rank" title="dense_rank"><code class="xref py py-func docutils literal notranslate"><span class="pre">dense_rank()</span></code></a>,
+<a class="reference internal" href="../functions/presto/window.html#percent_rank" title="percent_rank"><code class="xref py py-func docutils literal notranslate"><span class="pre">percent_rank()</span></code></a>, <a class="reference internal" href="../functions/presto/window.html#ntile" title="ntile"><code class="xref py py-func docutils literal notranslate"><span class="pre">ntile()</span></code></a>, <a class="reference internal" href="../functions/presto/window.html#cume_dist" title="cume_dist"><code class="xref py py-func docutils literal notranslate"><span class="pre">cume_dist()</span></code></a> and value functions
+<a class="reference internal" href="../functions/presto/window.html#lead" title="lead"><code class="xref py py-func docutils literal notranslate"><span class="pre">lead()</span></code></a> and <a class="reference internal" href="../functions/presto/window.html#lag" title="lag"><code class="xref py py-func docutils literal notranslate"><span class="pre">lag()</span></code></a> are not affected by window frames.</p></li>
+</ul>
+<p>A frame can be ROWS type or RANGE type, and it runs from frame_start to
+frame_end. A FRAME clause is one of</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="n">RANGE</span><span class="o">|</span><span class="n">ROWS</span><span class="p">}</span> <span class="n">frame_start</span>
+<span class="p">{</span><span class="n">RANGE</span><span class="o">|</span><span class="n">ROWS</span><span class="p">}</span> <span class="n">BETWEEN</span> <span class="n">frame_start</span> <span class="n">AND</span> <span class="n">frame_end</span>
+</pre></div>
+</div>
+<p>frame_start and frame_end can be any of:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">UNBOUNDED</span> <span class="n">PRECEDING</span>
+<span class="n">expression</span> <span class="n">PRECEDING</span>
+<span class="n">CURRENT</span> <span class="n">ROW</span>
+<span class="n">expression</span> <span class="n">FOLLOWING</span>
+<span class="n">UNBOUNDED</span> <span class="n">FOLLOWING</span>
+</pre></div>
+</div>
+<p><strong>ROWS mode</strong></p>
+<p>ROWS mode can be interpreted as indices of the rows in the order in which they
+appear in the window partition. This ordering is determined by the ORDER BY
+clause. In ROWS mode, CURRENT ROW refers to the present row at which the
+function is being evaluated. Each consecutive row has increasing frame number.
+The frame numbers start at 0 and increase by 1 for each row.</p>
+<p><strong>RANGE mode</strong></p>
+<p>In RANGE mode, all peer rows have the same frame number.
+Rows are peers if they have the same values for the ORDER BY field.
+A frame start of CURRENT ROW refers to the first peer row of the current row,
+while a frame end of CURRENT ROW refers to the last peer row of the current row.
+If no ORDER BY is specified, all rows are considered peers of the current row.</p>
+<p><strong>Misc</strong></p>
+<p>UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING always refer to the first and
+last rows of the partition in either mode.</p>
+</section>
+<section id="window-frame-indices">
+<h2>Window frame indices<a class="headerlink" href="#window-frame-indices" title="Permalink to this heading">¶</a></h2>
+<p>As window functions are evaluated for each row, the Window operator provides
+each function a buffer of frame_start and frame_end indices at each
+WindowFunction::apply call.</p>
+<p><strong>Note</strong>: Its possible during calculations that the frame indices are values
+before or after the partition rows. In this case, the frame indices get bound
+to the first and last rows of the partition.</p>
+<p>As an example, for frame <em>ROWS BETWEEEN 2 PRECEDING AND 2 FOLLOWING</em>, the
+frame indices will be as follows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">row_index</span>    <span class="n">partition_col</span>        <span class="n">order_by_col</span>        <span class="n">frame_start</span>         <span class="n">frame_end</span>
+     <span class="mi">0</span>            <span class="mi">1</span>                     <span class="mi">1</span>                   <span class="mi">0</span>                 <span class="mi">2</span>
+     <span class="mi">1</span>            <span class="mi">1</span>                     <span class="mi">2</span>                   <span class="mi">0</span>                 <span class="mi">3</span>
+     <span class="mi">2</span>            <span class="mi">1</span>                     <span class="mi">2</span>                   <span class="mi">0</span>                 <span class="mi">4</span>
+     <span class="mi">3</span>            <span class="mi">1</span>                     <span class="mi">3</span>                   <span class="mi">1</span>                 <span class="mi">5</span>
+     <span class="mi">4</span>            <span class="mi">1</span>                     <span class="mi">4</span>                   <span class="mi">2</span>                 <span class="mi">6</span>
+     <span class="mi">5</span>            <span class="mi">1</span>                     <span class="mi">4</span>                   <span class="mi">3</span>                 <span class="mi">7</span>
+     <span class="mi">6</span>            <span class="mi">1</span>                     <span class="mi">4</span>                   <span class="mi">4</span>                 <span class="mi">7</span>
+     <span class="mi">7</span>            <span class="mi">1</span>                     <span class="mi">5</span>                   <span class="mi">5</span>                 <span class="mi">7</span>
+</pre></div>
+</div>
+<p>On the other hand, for frame <em>RANGE BETWEEEN 2 PRECEDING AND 2 FOLLOWING</em>,
+the frame indices will be as follows</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">row_index</span>    <span class="n">partition_col</span>        <span class="n">order_by_col</span>        <span class="n">frame_start</span>         <span class="n">frame_end</span>
+     <span class="mi">0</span>            <span class="mi">1</span>                     <span class="mi">1</span>                   <span class="mi">0</span>                 <span class="mi">3</span>
+     <span class="mi">1</span>            <span class="mi">1</span>                     <span class="mi">2</span>                   <span class="mi">0</span>                 <span class="mi">6</span>
+     <span class="mi">2</span>            <span class="mi">1</span>                     <span class="mi">2</span>                   <span class="mi">0</span>                 <span class="mi">6</span>
+     <span class="mi">3</span>            <span class="mi">1</span>                     <span class="mi">3</span>                   <span class="mi">0</span>                 <span class="mi">7</span>
+     <span class="mi">4</span>            <span class="mi">1</span>                     <span class="mi">4</span>                   <span class="mi">1</span>                 <span class="mi">7</span>
+     <span class="mi">5</span>            <span class="mi">1</span>                     <span class="mi">4</span>                   <span class="mi">1</span>                 <span class="mi">7</span>
+     <span class="mi">6</span>            <span class="mi">1</span>                     <span class="mi">4</span>                   <span class="mi">1</span>                 <span class="mi">7</span>
+     <span class="mi">7</span>            <span class="mi">1</span>                     <span class="mi">5</span>                   <span class="mi">3</span>                 <span class="mi">7</span>
+</pre></div>
+</div>
+</section>
+<section id="k-range-frames">
+<h2>k Range frames<a class="headerlink" href="#k-range-frames" title="Permalink to this heading">¶</a></h2>
+<p>K range window frames are a special value based window frame.</p>
+<p>An example of a k range frame is <em>RANGE BETWEEEN 5 PRECEDING AND 2 FOLLOWING</em>.
+This frame includes all rows whose order_by keys are values between
+<em>(current_row order_by key - 5)</em> to <em>(current_row order_by key + 2)</em>.</p>
+<p>Elaborating with an example table:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">row_index</span>    <span class="n">partition_col</span>    <span class="n">order_by_col</span>    <span class="n">start_frame</span>   <span class="n">end_frame</span>    <span class="n">frame_start</span>    <span class="n">frame_end</span>
+     <span class="mi">0</span>            <span class="mi">1</span>                <span class="mi">2</span>               <span class="o">-</span><span class="mi">3</span>           <span class="mi">4</span>             <span class="mi">0</span>             <span class="mi">1</span>
+     <span class="mi">1</span>            <span class="mi">1</span>                <span class="mi">3</span>               <span class="o">-</span><span class="mi">2</span>           <span class="mi">5</span>             <span class="mi">0</span>             <span class="mi">2</span>
+     <span class="mi">2</span>            <span class="mi">1</span>                <span class="mi">5</span>                <span class="mi">0</span>           <span class="mi">7</span>             <span class="mi">0</span>             <span class="mi">3</span>
+     <span class="mi">3</span>            <span class="mi">1</span>                <span class="mi">5</span>                <span class="mi">0</span>           <span class="mi">7</span>             <span class="mi">0</span>             <span class="mi">3</span>
+     <span class="mi">4</span>            <span class="mi">1</span>                <span class="mi">9</span>                <span class="mi">4</span>           <span class="mi">11</span>            <span class="mi">2</span>             <span class="mi">5</span>
+     <span class="mi">5</span>            <span class="mi">1</span>                <span class="mi">10</span>               <span class="mi">5</span>           <span class="mi">12</span>            <span class="mi">2</span>             <span class="mi">5</span>
+     <span class="mi">6</span>            <span class="mi">1</span>                <span class="mi">15</span>               <span class="mi">10</span>          <span class="mi">17</span>            <span class="mi">5</span>             <span class="mi">6</span>
+     <span class="mi">7</span>            <span class="mi">1</span>                <span class="mi">21</span>               <span class="mi">16</span>          <span class="mi">23</span>            <span class="mi">7</span>             <span class="mi">7</span>
+</pre></div>
+</div>
+<p>There are some more aspects to consider when calculating the frame indices.</p>
+<p>One of the subtle nuances is related to <em>PRECEDING</em> and <em>FOLLOWING</em> usage.</p>
+<ul class="simple">
+<li><p><em>PRECEDING</em> range means search in the rows from current row to partition start.</p></li>
+<li><p><em>FOLLOWING</em> range means search in the rows from current row to partition end.</p></li>
+</ul>
+<p>This implies:</p>
+<ul>
+<li><p>If an ORDER BY clause is <em>ASCENDING</em>,  preceding rows have values &lt; current row
+and following rows have values &gt; current row.
+So the frame <em>RANGE BETWEEN 5 PRECEDING AND 2 FOLLOWING</em> is for values
+between [order_by - 5] to [order_by + 2].
+The previous table is an example of such a frame.</p></li>
+<li><p>However, if the ORDER BY clause is <em>DESCENDING</em> then preceding rows have
+values &gt; current row and following rows have values &lt; current row</p>
+<p>So for the same frame <em>RANGE BETWEEN 5 PRECEDING AND 2 FOLLOWING</em> with
+descending the values are between [order_by + 5] to [order_by - 2].</p>
+</li>
+</ul>
+<p>Flipping the previous example for a descending order will result in the following
+table.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">row_index</span>    <span class="n">partition_col</span>    <span class="n">order_by_col</span>    <span class="n">start_frame</span>    <span class="n">end_frame</span>    <span class="n">frame_start</span>    <span class="n">frame_end</span>
+     <span class="mi">0</span>            <span class="mi">1</span>                <span class="mi">21</span>              <span class="mi">26</span>            <span class="mi">19</span>            <span class="mi">0</span>             <span class="mi">0</span>
+     <span class="mi">1</span>            <span class="mi">1</span>                <span class="mi">15</span>              <span class="mi">20</span>            <span class="mi">13</span>            <span class="mi">1</span>             <span class="mi">1</span>
+     <span class="mi">2</span>            <span class="mi">1</span>                <span class="mi">10</span>              <span class="mi">15</span>             <span class="mi">8</span>            <span class="mi">1</span>             <span class="mi">2</span>
+     <span class="mi">3</span>            <span class="mi">1</span>                <span class="mi">9</span>               <span class="mi">14</span>             <span class="mi">7</span>            <span class="mi">2</span>             <span class="mi">3</span>
+     <span class="mi">4</span>            <span class="mi">1</span>                <span class="mi">5</span>               <span class="mi">10</span>             <span class="mi">3</span>            <span class="mi">2</span>             <span class="mi">6</span>
+     <span class="mi">5</span>            <span class="mi">1</span>                <span class="mi">5</span>               <span class="mi">10</span>             <span class="mi">3</span>            <span class="mi">2</span>             <span class="mi">6</span>
+     <span class="mi">6</span>            <span class="mi">1</span>                <span class="mi">3</span>               <span class="mi">8</span>              <span class="mi">1</span>            <span class="mi">4</span>             <span class="mi">7</span>
+     <span class="mi">7</span>            <span class="mi">1</span>                <span class="mi">2</span>               <span class="mi">7</span>             <span class="o">-</span><span class="mi">1</span>            <span class="mi">4</span>             <span class="mi">7</span>
+</pre></div>
+</div>
+<p><strong>k</strong> in the range frames can be a constant, column reference or expression (like for date ranges
+the bound can be date + some interval). Velox defers computing the start_value and end_value bounds
+to a prior project node and expects the user to send these computed values in the column reference
+for k range frames. Even if k is a constant value, the user is expected to compute the start_value
+and end_value columns for the WindowNode.</p>
+<p>In WindowNode a kRange frame would look as follows :</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">struct</span> <span class="n">Frame</span> <span class="p">{</span>
+  <span class="n">WindowType</span> <span class="nb">type</span><span class="p">;</span>
+  <span class="n">BoundType</span> <span class="n">startType</span><span class="p">;</span>
+  <span class="n">TypedExprPtr</span> <span class="n">startValue</span><span class="p">;</span>
+  <span class="n">BoundType</span> <span class="n">endType</span><span class="p">;</span>
+  <span class="n">TypedExprPtr</span> <span class="n">endValue</span><span class="p">;</span>
+<span class="p">};</span>
+<span class="n">Frame</span> <span class="n">kRange</span> <span class="o">=</span> <span class="p">{</span> <span class="n">kRange</span><span class="p">,</span> <span class="n">kPreceding</span><span class="p">,</span> <span class="n">start_value_col</span><span class="p">,</span> <span class="n">kFollowing</span><span class="p">,</span> <span class="n">end_value_col</span><span class="p">};</span>
+</pre></div>
+</div>
+<p>The following validations are performed for k Range frames:</p>
+<ul class="simple">
+<li><p>There is a single ORDER BY column to compare the k Range value.</p></li>
+<li><p>start(or end)Value in WindowNode::Frame cannot be constants if the bound type is kPreceding
+or kFollowing respectively.</p></li>
+<li><p>The type of the start(end)Value TypedExprPtr must be the same type as the ORDER BY column.</p></li>
+</ul>
+<p>The Velox Window operator computes the frame indices buffer by searching start(end)Value in the
+ORDER BY column and passes the buffer in the WindowFunction::apply() call.</p>
+<p><strong>Null values in RANGE frames</strong></p>
+<p>The ORDER BY column could have NULL values. NULL values match only other NULLs for Range frames.</p>
+<p>NULL values are placed at the beginning or end of the ORDER BY column based on the
+<em>NULLS FIRST/LAST</em> mode used. So for a row with a NULL value, the frame_start index is first
+peer row with a NULL and the frame_end index is the last peer row with a NULL value.</p>
+<p>Rows with NULL values do not participate in the frames of the other rows.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Window functions</a><ul>
+<li><a class="reference internal" href="#window-frames">Window frames</a></li>
+<li><a class="reference internal" href="#window-frame-indices">Window frame indices</a></li>
+<li><a class="reference internal" href="#k-range-frames">k Range frames</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="TpchBenchmark.html"
+                          title="previous chapter">I/O Optimizations and the TpchBenchmark</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../programming-guide.html"
+                          title="next chapter">Programming Guide</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/window.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../programming-guide.html" title="Programming Guide"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="TpchBenchmark.html" title="I/O Optimizations and the TpchBenchmark"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Window functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>
