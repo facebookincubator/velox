@@ -30,7 +30,7 @@ function dnf_install {
 
 dnf_install epel-release dnf-plugins-core # For ccache, ninja
 dnf config-manager --set-enabled powertools
-dnf_install ninja-build ccache gcc-toolset-9 git wget which libevent-devel \
+dnf_install ninja-build cmake ccache gcc-toolset-9 git wget which libevent-devel \
   openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
   libdwarf-devel curl-devel libicu-devel
 
@@ -81,6 +81,7 @@ wget_and_untar https://github.com/facebook/folly/archive/${FB_OS_VERSION}.tar.gz
 wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz &
 wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle &
 wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift &
+wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst 
 
 wait  # For cmake and source downloads to complete.
 
@@ -116,6 +117,7 @@ cmake_install folly -DFOLLY_HAVE_INT128_T=ON
 
 cmake_install fizz/fizz -DBUILD_TESTS=OFF
 cmake_install wangle/wangle -DBUILD_TESTS=OFF
+cmake_install mvfst -DBUILD_TESTS=OFF
 cmake_install fbthrift -Denable_tests=OFF
 # cmake_install ranges-v3
 
