@@ -107,10 +107,6 @@ class ColumnReader {
     VELOX_NYI();
   }
 
-  virtual bool isParallelized() const {
-    return false;
-  }
-
   /**
    * Create a reader for the given stripe.
    */
