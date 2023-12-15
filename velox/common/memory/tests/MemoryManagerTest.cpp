@@ -16,6 +16,7 @@
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
+#include <vector>
 
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"

@@ -19,6 +19,7 @@
 #include <fmt/format.h>
 #include <re2/re2.h>
 #include <deque>
+#include <vector>
 #include "folly/experimental/EventCount.h"
 #include "folly/futures/Barrier.h"
 #include "velox/common/base/tests/GTestUtils.h"
