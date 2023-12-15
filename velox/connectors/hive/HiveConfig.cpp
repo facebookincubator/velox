@@ -229,7 +229,7 @@ uint64_t HiveConfig::directorySizeGuess() const {
 uint64_t HiveConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
 }
-  
+
 std::string HiveConfig::fileCreateConfig(const Config* session) const {
   if (session->isValueExists(kFileCreateConfig)) {
     return session->get<std::string>(kFileCreateConfig).value();

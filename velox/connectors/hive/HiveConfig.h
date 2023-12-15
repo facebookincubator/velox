@@ -228,7 +228,7 @@ class HiveConfig {
   uint64_t directorySizeGuess() const;
 
   uint64_t filePreloadThreshold() const;
-  
+
   std::string fileCreateConfig(const Config* session) const;
 
   HiveConfig(std::shared_ptr<const Config> config) {
