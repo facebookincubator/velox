@@ -883,10 +883,10 @@ TEST_F(MockSharedArbitrationTest, failedArbitration) {
 }
 
 TEST_F(MockSharedArbitrationTest, singlePoolGrowCapacityWithArbitration) {
-  std::vector<bool> isLeafReclaimables = {true, false};
+  const std::vector<bool> isLeafReclaimables = {true, false};
   for (const auto isLeafReclaimable : isLeafReclaimables) {
     SCOPED_TRACE(
-        fmt::format("isLeafReclaimable {}", isLeafReclaimable.operator bool()));
+        fmt::format("isLeafReclaimable {}", isLeafReclaimable));
     setupMemory();
     auto op = addMemoryOp(nullptr, isLeafReclaimable);
     const int allocateSize = MB;
@@ -925,10 +925,10 @@ TEST_F(MockSharedArbitrationTest, singlePoolGrowCapacityWithArbitration) {
 }
 
 TEST_F(MockSharedArbitrationTest, arbitrateWithCapacityShrink) {
-  std::vector<bool> isLeafReclaimables = {true, false};
+  const std::vector<bool> isLeafReclaimables = {true, false};
   for (const auto isLeafReclaimable : isLeafReclaimables) {
     SCOPED_TRACE(
-        fmt::format("isLeafReclaimable {}", isLeafReclaimable.operator bool()));
+        fmt::format("isLeafReclaimable {}", isLeafReclaimable));
     setupMemory();
     auto* reclaimedOp = addMemoryOp(nullptr, isLeafReclaimable);
     const int reclaimedOpCapacity = kMemoryCapacity * 2 / 3;
@@ -961,9 +961,9 @@ TEST_F(MockSharedArbitrationTest, arbitrateWithCapacityShrink) {
 TEST_F(MockSharedArbitrationTest, arbitrateWithMemoryReclaim) {
   const uint64_t memoryCapacity = 256 * MB;
   const uint64_t minPoolCapacity = 8 * MB;
-  const std::vector<bool> isLeafReclaimables = {true, false};
+  const std::vector<char> isLeafReclaimables = {true, false};
   for (const auto isLeafReclaimable : isLeafReclaimables) {
-    SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable.operator bool()));
+    SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable));
     setupMemory(memoryCapacity, minPoolCapacity);
     auto* reclaimedOp = addMemoryOp(nullptr, isLeafReclaimable);
     const int allocateSize = 8 * MB;

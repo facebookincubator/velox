@@ -864,10 +864,10 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringAllocation) {
     batches.push_back(fuzzer.fuzzRow(rowType));
   }
 
-  std::vector<bool> enableSpillings = {false, true};
+  const std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
     SCOPED_TRACE(
-        fmt::format("enableSpilling {}", enableSpilling.operator bool()));
+        fmt::format("enableSpilling {}", enableSpilling));
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
@@ -996,10 +996,10 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
     batches.push_back(fuzzer.fuzzRow(rowType));
   }
 
-  std::vector<bool> enableSpillings = {false, true};
+  const std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
     SCOPED_TRACE(
-        fmt::format("enableSpilling {}", enableSpilling.operator bool()));
+        fmt::format("enableSpilling {}", enableSpilling));
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(

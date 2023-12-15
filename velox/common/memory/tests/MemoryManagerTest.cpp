@@ -589,10 +589,10 @@ TEST_F(MemoryManagerTest, quotaEnforcement) {
         std::make_shared<MallocAllocator>(testData.memoryQuotaBytes);
     MemoryAllocator::setDefaultInstance(allocator.get());
     SCOPED_TRACE(testData.debugString());
-    std::vector<bool> contiguousAllocations = {false, true};
-    for (const auto& contiguousAlloc : contiguousAllocations) {
+    const std::vector<bool> contiguousAllocations = {false, true};
+    for (const auto contiguousAlloc : contiguousAllocations) {
       SCOPED_TRACE(
-          fmt::format("contiguousAlloc {}", contiguousAlloc.operator bool()));
+          fmt::format("contiguousAlloc {}", contiguousAlloc));
       const int alignment = 32;
       MemoryManagerOptions options;
       options.alignment = alignment;

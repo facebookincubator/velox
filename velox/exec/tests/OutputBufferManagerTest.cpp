@@ -1061,7 +1061,7 @@ TEST_F(OutputBufferManagerTest, updateBrodcastBufferOnFailedTask) {
 TEST_P(AllOutputBufferManagerTest, multiFetchers) {
   const std::vector<bool> earlyTerminations = {false, true};
   for (const auto earlyTermination : earlyTerminations) {
-    SCOPED_TRACE(fmt::format("earlyTermination {}", earlyTermination.operator bool()));
+    SCOPED_TRACE(fmt::format("earlyTermination {}", earlyTermination));
 
     const vector_size_t size = 10;
     const std::string taskId = "t0";
