@@ -49,7 +49,12 @@ class ParallelFor {
       // number of threads
       size_t parallelismFactor);
 
+  // Executes the given function for each element
   void execute(std::function<void(size_t)> func, bool waitAll = true);
+
+  // Executes the given function for each range.
+  // It's the function's responsibility to iterate through that range
+  void execute(std::function<void(size_t, size_t)> func, bool waitAll = true);
 
  private:
   std::shared_ptr<folly::Executor> owned_;

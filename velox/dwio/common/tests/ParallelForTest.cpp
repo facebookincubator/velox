@@ -46,11 +46,14 @@ class CountingExecutor : public folly::Executor {
   size_t count_;
 };
 
+enum class MODE { INDEX, RANGE };
+
 void testParallelFor(
     folly::Executor* executor,
     size_t from,
     size_t to,
-    size_t parallelismFactor) {
+    size_t parallelismFactor,
+    MODE mode) {
   std::optional<CountingExecutor> countedExecutor;
   std::ostringstream oss;
   oss << "ParallelFor(executor: " << executor << ", from: " << from
@@ -66,12 +69,26 @@ void testParallelFor(
     indexInvoked[i] = 0UL;
   }
 
-  ParallelFor(executor, from, to, parallelismFactor)
-      .execute([&indexInvoked](size_t i) {
-        auto it = indexInvoked.find(i);
-        ASSERT_NE(it, indexInvoked.end());
-        ++it->second;
-      });
+  switch (mode) {
+    case MODE::INDEX:
+      ParallelFor(executor, from, to, parallelismFactor)
+          .execute([&indexInvoked](size_t i) {
+            auto it = indexInvoked.find(i);
+            ASSERT_NE(it, indexInvoked.end());
+            ++it->second;
+          });
+      break;
+    case MODE::RANGE:
+      ParallelFor(executor, from, to, parallelismFactor)
+          .execute([&indexInvoked](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+              auto it = indexInvoked.find(i);
+              ASSERT_NE(it, indexInvoked.end());
+              ++it->second;
+            }
+          });
+      break;
+  }
 
   // Parallel For should have thrown otherwise
   ASSERT_LE(from, to);
@@ -97,18 +114,21 @@ void testParallelFor(
   }
 }
 
+class ParallelForTest : public ::testing::TestWithParam<MODE> {};
+
 } // namespace
 
-TEST(ParallelForTest, E2E) {
+TEST_P(ParallelForTest, E2E) {
   auto inlineExecutor = folly::InlineExecutor::instance();
   for (size_t parallelism = 0; parallelism < 25; ++parallelism) {
     for (size_t begin = 0; begin < 25; ++begin) {
       for (size_t end = 0; end < 25; ++end) {
         if (begin <= end) {
-          testParallelFor(&inlineExecutor, begin, end, parallelism);
+          testParallelFor(&inlineExecutor, begin, end, parallelism, GetParam());
         } else {
           EXPECT_THROW(
-              testParallelFor(&inlineExecutor, begin, end, parallelism),
+              testParallelFor(
+                  &inlineExecutor, begin, end, parallelism, GetParam()),
               facebook::velox::VeloxRuntimeError);
         }
       }
@@ -116,16 +136,16 @@ TEST(ParallelForTest, E2E) {
   }
 }
 
-TEST(ParallelForTest, E2EParallel) {
+TEST_P(ParallelForTest, E2EParallel) {
   for (size_t parallelism = 1; parallelism < 2; ++parallelism) {
     folly::CPUThreadPoolExecutor executor(parallelism);
     for (size_t begin = 0; begin < 25; ++begin) {
       for (size_t end = 0; end < 25; ++end) {
         if (begin <= end) {
-          testParallelFor(&executor, begin, end, parallelism);
+          testParallelFor(&executor, begin, end, parallelism, GetParam());
         } else {
           EXPECT_THROW(
-              testParallelFor(&executor, begin, end, parallelism),
+              testParallelFor(&executor, begin, end, parallelism, GetParam()),
               facebook::velox::VeloxRuntimeError);
         }
       }
@@ -133,7 +153,7 @@ TEST(ParallelForTest, E2EParallel) {
   }
 }
 
-TEST(ParallelForTest, NoWait) {
+TEST_P(ParallelForTest, NoWait) {
   bool wait = true;
   std::mutex mutex;
   std::condition_variable cv;
@@ -141,16 +161,34 @@ TEST(ParallelForTest, NoWait) {
   size_t executed = 0;
   folly::CPUThreadPoolExecutor executor(2);
   ParallelFor pf(&executor, 0, 2, 2);
-  pf.execute(
-      [&](size_t /* unused */) {
-        std::unique_lock lock(mutex);
-        ++added;
-        cv.notify_all();
-        cv.wait(lock, [&] { return !wait; });
-        ++executed;
-        cv.notify_all();
-      },
-      false);
+  switch (GetParam()) {
+    case MODE::INDEX:
+      pf.execute(
+          [&](size_t /* unused */) {
+            std::unique_lock lock(mutex);
+            ++added;
+            cv.notify_all();
+            cv.wait(lock, [&] { return !wait; });
+            ++executed;
+            cv.notify_all();
+          },
+          false);
+      break;
+    case MODE::RANGE:
+      pf.execute(
+          [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+              std::unique_lock lock(mutex);
+              ++added;
+              cv.notify_all();
+              cv.wait(lock, [&] { return !wait; });
+              ++executed;
+              cv.notify_all();
+            }
+          },
+          false);
+      break;
+  }
   {
     std::unique_lock lock(mutex);
     cv.wait(lock, [&] { return added == 2; });
@@ -170,7 +208,7 @@ TEST(ParallelForTest, NoWait) {
   EXPECT_EQ(executed, 2);
 }
 
-TEST(ParallelForTest, CanOwnExecutor) {
+TEST_P(ParallelForTest, CanOwnExecutor) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(2);
   const size_t indexInvokedSize = 100;
   std::unordered_map<size_t, std::atomic<size_t>> indexInvoked;
@@ -180,10 +218,31 @@ TEST(ParallelForTest, CanOwnExecutor) {
   }
 
   ParallelFor pf(executor, 0, indexInvokedSize, 9);
-  pf.execute([&indexInvoked](size_t i) { ++indexInvoked[i]; });
+  switch (GetParam()) {
+    case MODE::INDEX:
+      pf.execute([&indexInvoked](size_t i) { ++indexInvoked[i]; });
+      break;
+    case MODE::RANGE:
+      pf.execute([&indexInvoked](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+          ++indexInvoked[i];
+        }
+      });
+      break;
+  }
 
   EXPECT_EQ(indexInvoked.size(), indexInvokedSize);
   for (size_t i = 0; i < indexInvokedSize; ++i) {
     EXPECT_EQ(indexInvoked[i], 1);
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    ParallelForTestIndex,
+    ParallelForTest,
+    ValuesIn({MODE::INDEX}));
+
+INSTANTIATE_TEST_SUITE_P(
+    ParallelForTestRange,
+    ParallelForTest,
+    ValuesIn({MODE::RANGE}));
