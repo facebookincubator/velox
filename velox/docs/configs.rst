@@ -414,7 +414,7 @@ Each query can override the config by setting corresponding query session proper
    * - max-coalesced-bytes
      -
      - integer
-     - 8MB
+     - 128MB
      - Maximum size in bytes to coalesce requests to be fetched in a single request.
    * - max-coalesced-distance-bytes
      -
@@ -451,12 +451,12 @@ Each query can override the config by setting corresponding query session proper
    * - file-preload-threshold
      -
      - integer
-     - 1MB
+     - 8MB
      - Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests. The parameter control the threshold when whole file is fetched. 
    * - directory-size-guess
      -
      - integer
-     - 8MB
+     - 1MB
      - Define the data size which is fetched with meta data together to void multiple IO requests. It's useful in file format where the immediately following data needs to be fetched after meta data
    * - hive.orc.writer.stripe-max-size
      - orc_optimized_writer_max_stripe_size
