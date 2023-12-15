@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <fmt/format.h>
 #include <re2/re2.h>
 #include <deque>
 #include "folly/experimental/EventCount.h"
@@ -885,8 +886,7 @@ TEST_F(MockSharedArbitrationTest, failedArbitration) {
 TEST_F(MockSharedArbitrationTest, singlePoolGrowCapacityWithArbitration) {
   const std::vector<bool> isLeafReclaimables = {true, false};
   for (const auto isLeafReclaimable : isLeafReclaimables) {
-    SCOPED_TRACE(
-        fmt::format("isLeafReclaimable {}", isLeafReclaimable));
+    SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable));
     setupMemory();
     auto op = addMemoryOp(nullptr, isLeafReclaimable);
     const int allocateSize = MB;
@@ -927,8 +927,7 @@ TEST_F(MockSharedArbitrationTest, singlePoolGrowCapacityWithArbitration) {
 TEST_F(MockSharedArbitrationTest, arbitrateWithCapacityShrink) {
   const std::vector<bool> isLeafReclaimables = {true, false};
   for (const auto isLeafReclaimable : isLeafReclaimables) {
-    SCOPED_TRACE(
-        fmt::format("isLeafReclaimable {}", isLeafReclaimable));
+    SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable));
     setupMemory();
     auto* reclaimedOp = addMemoryOp(nullptr, isLeafReclaimable);
     const int reclaimedOpCapacity = kMemoryCapacity * 2 / 3;
