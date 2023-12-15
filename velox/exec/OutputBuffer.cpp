@@ -64,8 +64,9 @@ std::string ArbitraryBuffer::toString() const {
 }
 
 void BufferStats::recordAddPage(const SerializedPage& data) {
-  VELOX_CHECK_GE(data.rows(), 0, "SerializedPage's row size is not inited");
-  int64_t rows = data.rows();
+  auto numRows = data.numRows();
+  VELOX_CHECK(numRows, "SerializedPage's numRows must be valid");
+  int64_t rows = numRows.value();
   int64_t size = data.size();
   bytesBuffered += size;
   rowsBuffered += rows;
@@ -73,8 +74,9 @@ void BufferStats::recordAddPage(const SerializedPage& data) {
 }
 
 void BufferStats::recordSendPage(const SerializedPage& data) {
-  VELOX_CHECK_GE(data.rows(), 0, "SerializedPage's row size is not inited");
-  int64_t rows = data.rows();
+  auto numRows = data.numRows();
+  VELOX_CHECK(numRows, "SerializedPage's numRows must be valid");
+  int64_t rows = numRows.value();
   int64_t size = data.size();
   bytesBuffered -= size;
   rowsBuffered -= rows;
