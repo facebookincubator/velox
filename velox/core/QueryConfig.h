@@ -240,8 +240,8 @@ class QueryConfig {
   /// The max row numbers to fill and spill for each spill run. This is used to
   /// cap the memory used for spilling. If it is zero, then there is no limit
   /// and spilling might run out of memory.
-  /// According to the test, the recommendation value is 12 million rows, which
-  /// may roughly use 128 MB of memory when fills a spill run.
+  /// Based on offline test results, the default value is set to 12 million rows
+  /// which uses ~128MB memory when to fill a spill run.
   static constexpr const char* kMaxSpillRunRows = "max_spill_run_rows";
 
   static constexpr const char* kTestingSpillPct = "testing.spill_pct";
