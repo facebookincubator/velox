@@ -77,14 +77,24 @@ ParallelFor::ParallelFor(
 }
 
 void ParallelFor::execute(std::function<void(size_t)> func, bool waitAll) {
+  execute(
+      [func = std::move(func)](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+          func(i);
+        }
+      },
+      waitAll);
+}
+
+void ParallelFor::execute(
+    std::function<void(size_t, size_t)> func,
+    bool waitAll) {
   // Otherwise from == to
   if (ranges_.empty()) {
     return;
   }
   if (ranges_.size() == 1) {
-    for (size_t i = ranges_[0].first, end = ranges_[0].second; i < end; ++i) {
-      func(i);
-    }
+    func(ranges_[0].first, ranges_[0].second);
   } else {
     VELOX_CHECK(
         executor_,
@@ -96,11 +106,7 @@ void ParallelFor::execute(std::function<void(size_t)> func, bool waitAll) {
       executor = &barrier.value();
     }
     for (auto& range : ranges_) {
-      executor->add([begin = range.first, end = range.second, func]() {
-        for (size_t i = begin; i < end; ++i) {
-          func(i);
-        }
-      });
+      executor->add(std::bind(func, range.first, range.second));
     }
     if (barrier.has_value()) {
       barrier->waitAll();
