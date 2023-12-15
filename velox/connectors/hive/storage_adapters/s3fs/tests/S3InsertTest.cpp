@@ -21,16 +21,13 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 #include "velox/exec/TableWriter.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::core;
-using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
-using namespace facebook::velox::connector;
-using namespace facebook::velox::connector::hive;
-using namespace facebook::velox::dwio::common;
-using namespace facebook::velox::test;
-using namespace facebook::velox::filesystems;
+
+namespace facebook::velox {
+namespace {
 
 class S3InsertTest : public S3Test {
   void SetUp() override {
@@ -52,6 +49,7 @@ class S3InsertTest : public S3Test {
     filesystems::finalizeS3FileSystem();
   }
 };
+} // namespace
 
 TEST_F(S3InsertTest, s3InsertTest) {
   const int64_t kExpectedRows = 1'000;
@@ -81,14 +79,14 @@ TEST_F(S3InsertTest, s3InsertTest) {
 
   // First column has number of rows written in the first row and nulls in other
   // rows.
-  auto rowCount = results->childAt(TableWriteTraits::kRowCountChannel)
+  auto rowCount = results->childAt(exec::TableWriteTraits::kRowCountChannel)
                       ->as<FlatVector<int64_t>>();
   ASSERT_FALSE(rowCount->isNullAt(0));
   ASSERT_EQ(kExpectedRows, rowCount->valueAt(0));
   ASSERT_TRUE(rowCount->isNullAt(1));
 
   // Second column contains details about written files.
-  auto details = results->childAt(TableWriteTraits::kFragmentChannel)
+  auto details = results->childAt(exec::TableWriteTraits::kFragmentChannel)
                      ->as<FlatVector<StringView>>();
   ASSERT_TRUE(details->isNullAt(0));
   ASSERT_FALSE(details->isNullAt(1));
@@ -105,7 +103,6 @@ TEST_F(S3InsertTest, s3InsertTest) {
 
   auto filePath = fmt::format("{}{}", kOutputDirectory, writeFileName);
   const int64_t fileSize = fileWriteInfos[0]["fileSize"].asInt();
-  ;
   auto split = HiveConnectorSplitBuilder(filePath)
                    .fileFormat(dwio::common::FileFormat::PARQUET)
                    .length(fileSize)
@@ -113,6 +110,7 @@ TEST_F(S3InsertTest, s3InsertTest) {
   auto copy = AssertQueryBuilder(plan).split(split).copyResults(pool());
   assertEqualResults({input}, {copy});
 }
+} // namespace facebook::velox
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

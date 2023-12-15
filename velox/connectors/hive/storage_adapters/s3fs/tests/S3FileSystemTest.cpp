@@ -20,7 +20,8 @@
 
 #include <gtest/gtest.h>
 
-using namespace facebook::velox;
+namespace facebook::velox {
+namespace {
 
 class S3FileSystemTest : public S3Test {
  protected:
@@ -34,6 +35,7 @@ class S3FileSystemTest : public S3Test {
     filesystems::finalizeS3();
   }
 };
+} // namespace
 
 TEST_F(S3FileSystemTest, writeAndRead) {
   const char* bucketName = "data";
@@ -241,3 +243,4 @@ TEST_F(S3FileSystemTest, writeFileAndRead) {
   // Verify the last chunk.
   ASSERT_EQ(readFile->pread(contentSize * 250'000, contentSize), dataContent);
 }
+} // namespace facebook::velox

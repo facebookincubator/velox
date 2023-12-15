@@ -20,19 +20,16 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 #include "velox/exec/TableWriter.h"
-
-using namespace facebook::velox;
-using namespace facebook::velox::core;
-using namespace facebook::velox::exec;
-using namespace facebook::velox::exec::test;
-using namespace facebook::velox::connector;
-using namespace facebook::velox::connector::hive;
-using namespace facebook::velox::dwio::common;
-using namespace facebook::velox::test;
-using namespace facebook::velox::filesystems;
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 
 static const std::string kConnectorId1 = "test-hive1";
 static const std::string kConnectorId2 = "test-hive2";
+
+using namespace facebook::velox::exec::test;
+
+namespace facebook::velox {
+namespace {
 
 class S3MultipleEndpoints : public S3Test {
  public:
@@ -85,13 +82,13 @@ class S3MultipleEndpoints : public S3Test {
     // Execute the write plan.
     auto results = AssertQueryBuilder(plan).copyResults(pool());
     // Second column contains details about written files.
-    auto details = results->childAt(TableWriteTraits::kFragmentChannel)
+    auto details = results->childAt(exec::TableWriteTraits::kFragmentChannel)
                        ->as<FlatVector<StringView>>();
     folly::dynamic obj = folly::parseJson(details->valueAt(1));
     return obj["fileWriteInfos"];
   }
 
-  std::shared_ptr<HiveConnectorSplit> createSplit(
+  std::shared_ptr<connector::hive::HiveConnectorSplit> createSplit(
       folly::dynamic tableWriteInfo,
       std::string outputDirectory,
       std::string connectorId) {
@@ -108,6 +105,7 @@ class S3MultipleEndpoints : public S3Test {
 
   std::unique_ptr<MinioServer> minioSecondServer_;
 };
+} // namespace
 
 TEST_F(S3MultipleEndpoints, s3Join) {
   const int64_t kExpectedRows = 1'000;
@@ -135,7 +133,7 @@ TEST_F(S3MultipleEndpoints, s3Join) {
       writeData(input2, kOutputDirectory.data(), kConnectorId2);
 
   // Inner Join both the tables.
-  PlanNodeId scan1, scan2;
+  core::PlanNodeId scan1, scan2;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto table1Scan = PlanBuilder(planNodeIdGenerator, pool())
                         .startTableScan()
@@ -166,6 +164,7 @@ TEST_F(S3MultipleEndpoints, s3Join) {
                      .copyResults(pool());
   assertEqualResults({input1}, {results});
 }
+} // namespace facebook::velox
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
