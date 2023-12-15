@@ -211,13 +211,10 @@ FlatMapColumnReader<T>::FlatMapColumnReader(
     const std::shared_ptr<const TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
-    folly::Executor* executor,
-    size_t decodingParallelismFactor,
     FlatMapContext flatMapContext)
     : ColumnReader(fileType, stripe, streamLabels, std::move(flatMapContext)),
       requestedType_{requestedType},
-      returnFlatVector_{stripe.getRowReaderOptions().getReturnFlatVector()},
-      executor_{executor} {
+      returnFlatVector_{stripe.getRowReaderOptions().getReturnFlatVector()} {
   DWIO_ENSURE_EQ(fileType_->id(), fileType->id());
 
   const auto keyPredicate = prepareKeyPredicate<T>(requestedType, stripe);
@@ -230,9 +227,6 @@ FlatMapColumnReader<T>::FlatMapColumnReader(
       streamLabels,
       memoryPool_,
       flatMapContext_);
-
-  parallelForOnKeyNodes_ = std::make_unique<dwio::common::ParallelFor>(
-      executor_, 0, keyNodes_.size(), decodingParallelismFactor);
 
   // sort nodes by sequence id so order of keys is fixed
   std::sort(keyNodes_.begin(), keyNodes_.end(), [](auto& a, auto& b) {
@@ -340,11 +334,12 @@ void FlatMapColumnReader<T>::next(
     auto keyNodes_sz = keyNodes_.size();
     nodeBatches.reserve(keyNodes_sz);
     nodes.reserve(keyNodes_sz);
-    parallelForOnKeyNodes_->execute(
-        [&](size_t i) { batches[i] = keyNodes_[i]->load(nonNullMaps); });
-    for (size_t i = 0; i < keyNodes_sz; ++i) {
-      auto& batch = batches[i];
-      auto& node = keyNodes_[i];
+    for (auto& node : keyNodes_) {
+      // if the node has value filled into key-value batch
+      // future optimization - enable batch to be sortable on row index
+      // and below next can be updated to next(keys, values, numValues)
+      // which writes row index into batch and offsets can be generated
+      auto batch = node->load(nonNullMaps);
       if (batch) {
         nodes.emplace_back(node.get());
         node->addToBulkInMapBitIterator(bulkInMapIter);
@@ -786,8 +781,6 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
         fileType,
         stripe,
         streamLabels,
-        executor,
-        decodingParallelismFactor,
         std::move(flatMapContext));
   }
 }
