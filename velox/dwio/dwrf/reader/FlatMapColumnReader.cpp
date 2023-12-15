@@ -723,16 +723,18 @@ void FlatMapStructEncodingColumnReader<T>::next(
          nullsPtr,
          mergedNullsBuffers,
          this,
-         childrenPtr](size_t i) {
+         childrenPtr](size_t begin, size_t end) {
           auto mergedNullsBuffer =
               getBufferForCurrentThread(*mergedNullsBuffers);
-          auto& node = keyNodes_[i];
-          auto& child = (*childrenPtr)[i];
-          if (node) {
-            node->loadAsChild(
-                child, numValues, mergedNullsBuffer, nonNullMaps, nullsPtr);
-          } else {
-            nullColumnReader_->next(numValues, child, nullsPtr);
+          for (size_t i = begin; i < end; ++i) {
+            auto& node = keyNodes_[i];
+            auto& child = (*childrenPtr)[i];
+            if (node) {
+              node->loadAsChild(
+                  child, numValues, mergedNullsBuffer, nonNullMaps, nullsPtr);
+            } else {
+              nullColumnReader_->next(numValues, child, nullsPtr);
+            }
           }
         },
         false);
