@@ -408,4 +408,99 @@ struct DayOfYearFunction {
     result = getDayOfYear(getDateTime(date));
   }
 };
+
+template <typename T>
+struct MonthsBetweenFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp1*/,
+      const arg_type<Timestamp>* /*timestamp2*/,
+      bool /*roundOff*/) {
+    timeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  void call(
+      double& result,
+      const arg_type<Timestamp>& timestamp1,
+      const arg_type<Timestamp>& timestamp2,
+      bool roundOff) {
+    auto dateInfo1 = splitTimestamp(timestamp1);
+    auto dateInfo2 = splitTimestamp(timestamp2);
+
+    int32_t months1 = dateInfo1.year * 12 + dateInfo1.monthInYear;
+    int32_t months2 = dateInfo2.year * 12 + dateInfo2.monthInYear;
+
+    double monthDiff = months1 - months2;
+    if (dateInfo1.dayInMonth == dateInfo2.dayInMonth ||
+        (dateInfo1.daysToMonthEnd == 0 && dateInfo2.daysToMonthEnd == 0)) {
+      result = monthDiff;
+    } else {
+      int64_t secondsDiff = (dateInfo1.dayInMonth - dateInfo2.dayInMonth) *
+              kSecondsInDay +
+          getSecondsInDay(timestamp1,
+                          dateInfo1.year,
+                          dateInfo1.monthInYear,
+                          dateInfo1.dayInMonth) -
+          getSecondsInDay(timestamp2,
+                          dateInfo2.year,
+                          dateInfo2.monthInYear,
+                          dateInfo2.dayInMonth);
+      int64_t secondsInMonth = 31 * kSecondsInDay;
+      double diff = monthDiff + secondsDiff * 1.0 / secondsInMonth;
+      if (roundOff) {
+        result = round(diff * 1e8) / 1e8;
+      } else {
+        result = diff;
+      }
+    }
+  }
+
+ private:
+  struct DateInfo {
+    const int32_t year;
+    const int32_t monthInYear;
+    const int32_t dayInMonth;
+    const int32_t daysToMonthEnd;
+
+    DateInfo(
+        int32_t _year,
+        int32_t _monthInYear,
+        int32_t _dayInMonth,
+        int32_t _daysToMonthEnd)
+        : year(_year),
+          monthInYear(_monthInYear),
+          dayInMonth(_dayInMonth),
+          daysToMonthEnd(_daysToMonthEnd) {}
+  };
+
+  FOLLY_ALWAYS_INLINE DateInfo splitTimestamp(const Timestamp& timestamp) {
+    int32_t year = getYear(getDateTime(timestamp, this->timeZone_));
+    int32_t monthInYear = getMonth(getDateTime(timestamp, this->timeZone_));
+    int32_t dayInMonth = getDay(getDateTime(timestamp, this->timeZone_));
+    return DateInfo(
+        year,
+        monthInYear,
+        dayInMonth,
+        util::getMaxDayOfMonth(year, monthInYear) - dayInMonth);
+  }
+
+  FOLLY_ALWAYS_INLINE int64_t getSecondsInDay(
+      const Timestamp& timestamp,
+      const int32_t year,
+      const int32_t month,
+      const int32_t day) {
+    const date::time_zone* timeZone = this->timeZone_;
+    Timestamp ts =
+        util::fromDatetime(util::daysSinceEpochFromDate(year, month, day), 0);
+    if (timeZone != nullptr) {
+      ts.toGMT(*timeZone);
+    }
+    return (timestamp.toMicros() - ts.toMicros()) / kNanosecondsInMillisecond;
+  }
+
+  const date::time_zone* timeZone_{nullptr};
+};
+
 } // namespace facebook::velox::functions::sparksql

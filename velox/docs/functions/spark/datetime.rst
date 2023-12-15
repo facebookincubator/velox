@@ -85,6 +85,28 @@ These functions support TIMESTAMP and DATE input types.
     ``day`` need to be from 1 to 31, and matches the number of days in each month.
     days of ``year-month-day - 1970-01-01`` need to be in the range of INTEGER type.
 
+.. spark:function:: months_between(timestamp1, timestamp2, roundOff) -> double
+
+    Returns number of months between times ``timestamp1`` and ``timestamp2``.
+    If ``timestamp1`` is later than ``timestamp2``, the result is positive.
+
+    If ``timestamp1`` and ``timestamp2`` are on the same day of month, e.g.,
+    ``2022-10-15 10:00:00`` and  ``2023-10-15 09:00:00``
+    or both are the last day of month, e.g.,
+    ``2023-10-31 10:30:00`` and ``2023-11-30 09:00:00``.
+    In both instances, only the values of year and month are used to calculate the difference in months,
+    time of day will be ignored and not included in the difference calculation.
+
+    Otherwise, eg, ``2023-10-15 10:30:00`` and ``2023-11-20 09:00:00``.
+    In this instance, the values for year, month, and day all contribute to the calculation of the difference in months.
+    The time of day needs to be converted into a month-equivalent value for this calculation,
+    with the conversion based on 31 days per month.
+
+    The result is rounded to 8 digits if ``roundOff`` is set to true.
+    eg, ``1997-02-28 10:30:00`` and ``1996-10-30``
+    In this instance, if ``roundOff`` is set to true, it returns ``3.94959677``;
+    if ``roundOff`` is set to false, it returns ``3.9495967741935485``.
+
 .. spark:function:: quarter(date) -> integer
 
     Returns the quarter of ``date``. The value ranges from ``1`` to ``4``. ::
