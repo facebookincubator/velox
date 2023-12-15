@@ -372,20 +372,18 @@ velox::test::ResultOrError AggregationFuzzerBase::execute(
 
     builder.configs(queryConfigs_);
 
-    if (injectSpill) {
+    if (injectSpill || injectPartialSpill) {
       spillDirectory = exec::test::TempDirectoryPath::create();
       builder.spillDirectory(spillDirectory->path)
           .config(core::QueryConfig::kSpillEnabled, "true")
-          .config(core::QueryConfig::kAggregationSpillEnabled, "true")
           .config(core::QueryConfig::kTestingSpillPct, "100");
-    }
-
-    if (injectPartialSpill) {
-      spillDirectory = exec::test::TempDirectoryPath::create();
-      builder.spillDirectory(spillDirectory->path)
-          .config(core::QueryConfig::kSpillEnabled, "true")
-          .config(core::QueryConfig::kPartialAggregationSpillEnabled, "true")
-          .config(core::QueryConfig::kTestingSpillPct, "100");
+      if (injectSpill) {
+        builder.config(core::QueryConfig::kAggregationSpillEnabled, "true");
+      }
+      if (injectPartialSpill) {
+        builder.config(
+            core::QueryConfig::kPartialAggregationSpillEnabled, "true");
+      }
     }
 
     if (abandonPartial) {
