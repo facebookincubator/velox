@@ -240,3 +240,10 @@ int main(int argc, char* argv[]) {
 
   return 0;
 }
+
+template <>
+struct fmt::formatter<TpchBenchmarkCase> : formatter<int> {
+  auto format(const TpchBenchmarkCase& s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
