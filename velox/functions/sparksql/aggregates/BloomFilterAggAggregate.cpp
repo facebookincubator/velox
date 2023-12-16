@@ -105,14 +105,6 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     rows.applyToSelected([&](vector_size_t row) { insert(groups, row); });
   }
 
-  void insert(char** groups, vector_size_t row) {
-    auto group = groups[row];
-    auto tracker = trackRowSize(group);
-    auto accumulator = value<BloomFilterAccumulator>(group);
-    accumulator->init(capacity_);
-    accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
-  }
-
   void addIntermediateResults(
       char** groups,
       const SelectivityVector& rows,
@@ -233,6 +225,14 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       estimatedNumItems_ = defaultExpectedNumItems_;
       numBits_ = defaultNumBits_;
     }
+  }
+
+  void insert(char** groups, vector_size_t row) {
+    auto group = groups[row];
+    auto tracker = trackRowSize(group);
+    auto accumulator = value<BloomFilterAccumulator>(group);
+    accumulator->init(capacity_);
+    accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
   }
 
   void computeCapacity() {
