@@ -81,6 +81,7 @@ wget_and_untar https://github.com/facebook/folly/archive/${FB_OS_VERSION}.tar.gz
 wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz &
 wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle &
 wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift &
+FB_OS_VERSION="v2023.12.04.00" #mvfast doesn't have a v2022 tag
 wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst &
 
 wait  # For cmake and source downloads to complete.
