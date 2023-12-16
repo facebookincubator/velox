@@ -53,7 +53,7 @@ MemoryPool.</p>
 <p>Let’s start by getting access to a MemoryPool:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/common/memory/Memory.h&quot;</span><span class="cp"></span>
 
-<span class="k">auto</span><span class="w"> </span><span class="n">pool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memory</span><span class="o">::</span><span class="n">addDefaultLeafMemoryPool</span><span class="p">();</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">pool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryManager</span><span class="o">::</span><span class="n">getInstance</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">addLeafPool</span><span class="p">();</span><span class="w"></span>
 </pre></div>
 </div>
 <p><cite>pool</cite> is a std::shared_ptr&lt;velox::memory::MemoryPool&gt;. We can use it to
