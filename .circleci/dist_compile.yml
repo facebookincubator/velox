@@ -396,8 +396,6 @@ jobs:
       ICU_SOURCE: BUNDLED
       simdjson_SOURCE: BUNDLED
       DuckDB_SOURCE: SYSTEM
-      fmt_SOURCE: BUNDLED
-      folly_SOURCE: BUNDLED
     steps:
       - pre-steps
       - install-duckdb
@@ -609,9 +607,6 @@ jobs:
 
   linux-pr-fuzzer-run:
     executor: build
-    environment:
-      folly_SOURCE: BUNDLED
-      fmt_SOURCE: BUNDLED
     steps:
       - pre-steps
       - run:
