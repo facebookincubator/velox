@@ -91,3 +91,32 @@ struct fmt::formatter<substrait::Expression::RexTypeCase> : formatter<int> {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };
+
+template <>
+struct fmt::formatter<substrait::Expression::Cast::FailureBehavior>
+    : formatter<int> {
+  auto format(
+      const substrait::Expression::Cast::FailureBehavior& s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+template <>
+struct fmt::formatter<substrait::Expression_FieldReference::ReferenceTypeCase>
+    : formatter<int> {
+  auto format(
+      const substrait::Expression_FieldReference::ReferenceTypeCase& s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<substrait::Expression_Literal::LiteralTypeCase>
+    : formatter<int> {
+  auto format(
+      const substrait::Expression_Literal::LiteralTypeCase& s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

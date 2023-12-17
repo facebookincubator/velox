@@ -32,8 +32,7 @@ template <typename Char>
 struct fmt::formatter<std::errc, Char>
     : formatter<std::underlying_type<std::errc>::type, Char> {
   template <typename FormatContext>
-   auto format(std::errc v, FormatContext& ctx) const
-      -> decltype(ctx.out()) {
+  auto format(std::errc v, FormatContext& ctx) const -> decltype(ctx.out()) {
     using underlying_type = std::underlying_type<std::errc>::type;
     return formatter<underlying_type, Char>::format(
         static_cast<underlying_type>(v), ctx);
