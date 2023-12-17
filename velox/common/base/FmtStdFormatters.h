@@ -17,21 +17,52 @@
 #pragma once
 
 #include <fmt/format.h>
+#if FMT_VERSION >= 100100
+#include <fmt/std.h>
+#endif
 
+#include <atomic>
 #include <bitset>
-#include <cerrno>
+#include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <vector>
 
-template <>
-struct fmt::formatter<std::errc> : formatter<int> {
-  auto format(const std::errc& s, format_context& ctx) {
-    return formatter<int>::format(static_cast<int>(s), ctx);
+template <typename Char>
+struct fmt::formatter<std::errc, Char>
+    : formatter<std::underlying_type<std::errc>::type, Char> {
+  template <typename FormatContext>
+   auto format(std::errc v, FormatContext& ctx) const
+      -> decltype(ctx.out()) {
+    using underlying_type = std::underlying_type<std::errc>::type;
+    return formatter<underlying_type, Char>::format(
+        static_cast<underlying_type>(v), ctx);
   }
 };
 
-// -- Backport from fmt 10 see fmtlib/fmt#3570
 #if FMT_VERSION < 100100
+// This should be 100101 but FMT_VERSION was not bumped in 10.1.1
+// but under a month has passed since 10.1.0 release so we can assume 10.1.1
+//
+// Backport from fmt 10.1.1 see fmtlib/fmt#3574
+// Formats std::atomic
+template <typename T, typename Char>
+struct fmt::formatter<
+    std::atomic<T>,
+    Char,
+    std::enable_if_t<fmt::is_formattable<T, Char>::value>>
+    : formatter<T, Char> {
+  template <typename FormatContext>
+  auto format(const std::atomic<T>& v, FormatContext& ctx) const
+      -> decltype(ctx.out()) {
+    return formatter<T, Char>::format(v.load(), ctx);
+  }
+};
+#endif
+
+#if FMT_VERSION < 100100
+// Backport from fmt 10.1 see fmtlib/fmt#3570
+// Formats std::vector<bool>
 namespace fmt::detail {
 template <typename T, typename Enable = void>
 struct has_flip : std::false_type {};
@@ -74,4 +105,3 @@ struct fmt::formatter<
   }
 };
 #endif
-// -- End of backport

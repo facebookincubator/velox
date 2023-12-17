@@ -16,6 +16,7 @@
 #include "velox/common/caching/SsdCache.h"
 #include <folly/Executor.h>
 #include <folly/portability/SysUio.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
@@ -82,7 +83,7 @@ bool SsdCache::startWrite() {
 }
 
 void SsdCache::write(std::vector<CachePin> pins) {
-  VELOX_CHECK_LE(numShards_, writesInProgress_.load());
+  VELOX_CHECK_LE(numShards_, writesInProgress_);
 
   TestValue::adjust("facebook::velox::cache::SsdCache::write", this);
 

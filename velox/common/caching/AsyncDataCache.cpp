@@ -19,6 +19,7 @@
 #include "velox/common/caching/SsdCache.h"
 
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/caching/FileIds.h"
@@ -68,7 +69,7 @@ void AsyncDataCacheEntry::setExclusiveToShared() {
 }
 
 void AsyncDataCacheEntry::release() {
-  VELOX_CHECK_NE(0, numPins_.load());
+  VELOX_CHECK_NE(0, numPins_);
   if (numPins_ == kExclusive) {
     // Dereferencing an exclusive entry without converting to shared means that
     // the content could not be shared, e.g. error in loading.
@@ -135,7 +136,7 @@ std::string AsyncDataCacheEntry::toString() const {
       key_.fileNum.id(),
       key_.offset,
       size_,
-      numPins_.load());
+      numPins_);
 }
 
 std::unique_ptr<AsyncDataCacheEntry> CacheShard::getFreeEntry() {
@@ -639,7 +640,7 @@ bool AsyncDataCache::makeSpace(
   VELOX_CHECK(
       numThreadsInAllocate_ >= 0 && numThreadsInAllocate_ < 10000,
       "Leak in numThreadsInAllocate_: {}",
-      numThreadsInAllocate_.load());
+      numThreadsInAllocate_);
   if (numThreadsInAllocate_) {
     rank = ++numThreadsInAllocate_;
     isCounted = true;

@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/gcs/GCSUtil.h"
@@ -83,7 +84,7 @@ class GCSReadFile final : public ReadFile {
           key_);
     }
     length_ = (*metadata).size();
-    VELOX_CHECK_GE(length_.load(), 0);
+    VELOX_CHECK_GE(length_, 0);
   }
 
   std::string_view pread(uint64_t offset, uint64_t length, void* buffer)

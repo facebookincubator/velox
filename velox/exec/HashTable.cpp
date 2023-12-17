@@ -16,6 +16,7 @@
 
 #include "velox/exec/HashTable.h"
 #include "velox/common/base/AsyncSource.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/process/ProcessBase.h"
@@ -955,8 +956,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
         hashes);
     insertForJoin(overflows.data(), hashes.data(), overflows.size(), nullptr);
     auto table = i == 0 ? this : otherTables_[i - 1].get();
-    VELOX_CHECK_EQ(
-        table->rows()->numRows(), table->numParallelBuildRows_.load());
+    VELOX_CHECK_EQ(table->rows()->numRows(), table->numParallelBuildRows_);
   }
 }
 
