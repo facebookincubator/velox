@@ -19,6 +19,8 @@
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include <folly/executors/thread_factory/InitThreadFactory.h>
 #include <gflags/gflags.h>
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/process/TraceContext.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
@@ -44,7 +46,7 @@ class CancelGuard {
   }
 
   ~CancelGuard() {
-    bool onTerminateCalled = false;
+    bool onTerminateCalled{false};
     if (isThrow_) {
       // Runtime error. Driver is on thread, hence safe.
       state_->isTerminated = true;
@@ -55,10 +57,11 @@ class CancelGuard {
   }
 
  private:
-  Task* task_;
-  ThreadState* state_;
-  std::function<void(StopReason reason)> onTerminate_;
-  bool isThrow_ = true;
+  Task* const task_;
+  ThreadState* const state_;
+  const std::function<void(StopReason reason)> onTerminate_;
+
+  bool isThrow_{true};
 };
 
 // Checks if output channel is produced using identity projection and returns
@@ -256,6 +259,7 @@ void Driver::init(
     std::vector<std::unique_ptr<Operator>> operators) {
   VELOX_CHECK_NULL(ctx_);
   ctx_ = std::move(ctx);
+  cpuSliceMs_ = ctx_->queryConfig().driverCpuTimeSliceLimitMs();
   VELOX_CHECK(operators_.empty());
   operators_ = std::move(operators);
   curOperatorId_ = operators_.size() - 1;
@@ -433,6 +437,13 @@ CpuWallTiming Driver::processLazyTiming(
       timing.cpuNanos >= cpuDelta ? timing.cpuNanos - cpuDelta : 0};
 }
 
+bool Driver::shouldYield() const {
+  if (cpuSliceMs_ == 0) {
+    return false;
+  }
+  return execTimeMs() >= cpuSliceMs_;
+}
+
 StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>& blockingState,
@@ -440,7 +451,8 @@ StopReason Driver::runInternal(
   const auto now = getCurrentTimeMicro();
   const auto queuedTime = (now - queueTimeStartMicros_) * 1'000;
   // Update the next operator's queueTime.
-  auto stop = closed_ ? StopReason::kTerminate : task()->enter(state_, now);
+  StopReason stop =
+      closed_ ? StopReason::kTerminate : task()->enter(state_, now);
   if (stop != StopReason::kNone) {
     if (stop == StopReason::kTerminate) {
       // ctx_ still has a reference to the Task. 'this' is not on
@@ -499,8 +511,17 @@ StopReason Driver::runInternal(
           guard.notThrown();
           return stop;
         }
+        // TODO: consider to consolidate task and driver level cpu time slicing
+        // mechanisms into one.
+        if (FOLLY_UNLIKELY(shouldYield())) {
+          recordYieldStats();
+          stop = StopReason::kYield;
+          guard.notThrown();
+          return stop;
+        }
 
-        auto op = operators_[i].get();
+        auto* op = operators_[i].get();
+
         // In case we are blocked, this index will point to the operator, whose
         // queuedTime we should update.
         curOperatorId_ = i;
@@ -711,6 +732,18 @@ StopReason Driver::runInternal(
 #undef CALL_OPERATOR
 
 // static
+std::atomic_uint64_t& Driver::yieldCount() {
+  static std::atomic_uint64_t count{0};
+  return count;
+}
+
+void Driver::recordYieldStats() {
+  ++yieldCount();
+  RECORD_METRIC_VALUE(kMetricDriverYieldCount);
+  maxExecTimeOnYieldMs_ = std::max(execTimeMs(), maxExecTimeOnYieldMs_);
+}
+
+// static
 void Driver::run(std::shared_ptr<Driver> self) {
   process::TraceContext trace("Driver::run");
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(
@@ -780,8 +813,21 @@ void Driver::closeOperators() {
   }
 
   // Add operator stats to the task.
-  for (auto& op : operators_) {
+  for (int i = 0; i < operators_.size(); ++i) {
+    auto& op = operators_[i];
     auto stats = op->stats(true);
+    if ((maxExecTimeOnYieldMs_ != 0) && (i == operators_.size() - 1)) {
+      // Adds driver mex exec time on yield as a runtime stats of the source
+      // operator.
+      stats.addRuntimeStat(
+          "driverMaxExecTimeOnYield",
+          RuntimeCounter{
+              static_cast<int64_t>(
+                  maxExecTimeOnYieldMs_ * Timestamp::kNanosecondsInMillisecond),
+              RuntimeCounter::Unit::kNanos});
+      RECORD_HISTOGRAM_METRIC_VALUE(
+          kMetricDriverMaxExecTimeOnYieldMs, maxExecTimeOnYieldMs_);
+    }
     stats.numDrivers = 1;
     task()->addOperatorStats(stats);
   }
@@ -926,6 +972,9 @@ std::string Driver::toJsonString() const {
   obj["state"] = state_.toJsonString();
   obj["closed"] = closed_.load();
   obj["queueTimeStartMicros"] = queueTimeStartMicros_;
+  if (maxExecTimeOnYieldMs_ != 0) {
+    obj["maxExecTimeOnYieldMs"] = maxExecTimeOnYieldMs_;
+  }
   const auto ocs = opCallStatus();
   if (!ocs.empty()) {
     obj["curOpCall"] =

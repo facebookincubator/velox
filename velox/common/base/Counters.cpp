@@ -20,6 +20,18 @@
 namespace facebook::velox {
 
 void registerVeloxMetrics() {
+  // ================== Task Execution Counters =================
+  // The number of driver yield count when exceeds the per-driver cpu time slice
+  // limit if enforced.
+  DEFINE_METRIC(kMetricDriverYieldCount, facebook::velox::StatType::COUNT);
+
+  // Tracks max driver execution time on yield in range of [0, 10s] and reports
+  // P50, P90, P99, and P100.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricDriverMaxExecTimeOnYieldMs, 10, 0, 10'000, 50, 90, 99, 100);
+
+  // ================== Cache Counters =================
+
   // Tracks hive handle generation latency in range of [0, 100s] and reports
   // P50, P90, P99, and P100.
   DEFINE_HISTOGRAM_METRIC(
@@ -32,7 +44,7 @@ void registerVeloxMetrics() {
   DEFINE_HISTOGRAM_METRIC(
       kMetricCacheShrinkTimeMs, 10, 0, 100'000, 50, 90, 99, 100);
 
-  /// ================== Memory Arbitration Counters =================
+  // ================== Memory Arbitration Counters =================
 
   // Tracks memory reclaim exec time in range of [0, 600s] with 20 buckets and
   // reports P50, P90, P99, and P100.
@@ -96,7 +108,7 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricArbitratorFreeCapacityBytes, facebook::velox::StatType::AVG);
 
-  /// ================== Spill related Counters =================
+  // ================== Spill related Counters =================
 
   // The number of bytes in memory to spill.
   DEFINE_METRIC(kMetricSpilledInputBytes, facebook::velox::StatType::SUM);

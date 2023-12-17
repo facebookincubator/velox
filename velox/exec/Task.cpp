@@ -2429,7 +2429,7 @@ StopReason Task::shouldStop() {
   if (terminateRequested_) {
     return StopReason::kTerminate;
   }
-  if (toYield_) {
+  if (toYield_ > 0) {
     std::lock_guard<std::mutex> l(mutex_);
     return shouldStopLocked();
   }
