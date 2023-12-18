@@ -162,87 +162,49 @@ void validateSchemaRecursive(const RowTypePtr& schema) {
   }
 }
 
-std::vector<std::shared_ptr<::arrow::Field>> updateStructFieldName(
-    const std::vector<std::shared_ptr<::arrow::Field>>& fields,
-    const std::vector<std::string>& names) {
-  std::vector<std::shared_ptr<::arrow::Field>> newFields;
-  newFields.reserve(fields.size());
-  for (auto i = 0; i < fields.size(); ++i) {
-    newFields.push_back(::arrow::field(names[i], fields[i]->type()));
-  }
-
-  return newFields;
-}
-
-std::vector<std::shared_ptr<::arrow::Field>> updateComplexTypeFields(
-    const std::vector<std::shared_ptr<::arrow::Field>>& fields,
-    const RowType& rowType) {
-  std::vector<std::shared_ptr<::arrow::Field>> newFields;
-  newFields.reserve(rowType.size());
-  for (int i = 0; i < rowType.size(); ++i) {
-    auto field = fields[i];
-    if (rowType.childAt(i)->isRow()) {
-      auto childRowType = rowType.childAt(i)->asRow();
-      auto structType =
-          std::dynamic_pointer_cast<::arrow::StructType>(field->type());
-      auto newChildFields =
-          updateComplexTypeFields(structType->fields(), childRowType);
-      auto newStructFields =
-          updateStructFieldName(newChildFields, childRowType.names());
-      newFields.push_back(field->WithType(::arrow::struct_(newStructFields)));
-    } else if (rowType.childAt(i)->isArray()) {
-      auto childArray = rowType.childAt(i)->asArray();
-      auto listType =
-          std::dynamic_pointer_cast<::arrow::BaseListType>(field->type());
-      auto valueField = field;
-      if (childArray.elementType()->isRow()) {
-        auto nestedRowType = childArray.elementType()->asRow();
-        auto structType = std::dynamic_pointer_cast<::arrow::StructType>(
-            listType->value_field()->type());
-        auto newChildFields =
-            updateComplexTypeFields(structType->fields(), nestedRowType);
-        auto newStructFields =
-            updateStructFieldName(newChildFields, nestedRowType.names());
-        valueField =
-            field->WithType(::arrow::list(::arrow::struct_(newStructFields)));
-      }
-
-      newFields.push_back(valueField);
-    } else if (rowType.childAt(i)->isMap()) {
-      auto childMap = rowType.childAt(i)->asMap();
-      auto mapType = std::dynamic_pointer_cast<::arrow::MapType>(field->type());
-      auto keyField = mapType->key_field();
-      auto valueField = mapType->item_field();
-
-      if (childMap.keyType()->isRow()) {
-        auto nestedRowType = childMap.keyType()->asRow();
-        auto structType =
-            std::dynamic_pointer_cast<::arrow::StructType>(mapType->key_type());
-        auto newChildFields =
-            updateComplexTypeFields(structType->fields(), nestedRowType);
-        auto newStructFields =
-            updateStructFieldName(newChildFields, nestedRowType.names());
-        keyField = keyField->WithType(::arrow::struct_(newStructFields));
-      }
-
-      if (childMap.valueType()->isRow()) {
-        auto nestedRowType = childMap.valueType()->asRow();
-        auto structType = std::dynamic_pointer_cast<::arrow::StructType>(
-            mapType->item_type());
-        auto newChildFields =
-            updateComplexTypeFields(structType->fields(), nestedRowType);
-        auto newStructFields =
-            updateStructFieldName(newChildFields, nestedRowType.names());
-        valueField = valueField->WithType(::arrow::struct_(newStructFields));
-      }
-
-      newFields.push_back(
-          field->WithType(::arrow::map(keyField->type(), valueField->type())));
-    } else {
-      newFields.push_back(field);
+std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
+    const std::shared_ptr<::arrow::Field>& field,
+    const Type& type,
+    const std::string& name = "") {
+  if (type.isRow()) {
+    auto rowType = type.asRow();
+    // Update rowType itselef name.
+    auto newField = field->WithName(name);
+    auto structType =
+        std::dynamic_pointer_cast<::arrow::StructType>(newField->type());
+    auto childrenSize = rowType.size();
+    std::vector<std::shared_ptr<::arrow::Field>> newFields;
+    newFields.reserve(childrenSize);
+    for (auto i = 0; i < childrenSize; i++) {
+      newFields.push_back(updateFieldNameRecursive(
+          structType->fields()[i], *rowType.childAt(i), rowType.nameOf(i)));
     }
-  }
-  return newFields;
+    return newField->WithType(::arrow::struct_(newFields));
+  } else if (type.isArray()) {
+    // Update arrayType itselef name.
+    auto newField = field->WithName(name);
+    auto listType =
+        std::dynamic_pointer_cast<::arrow::BaseListType>(newField->type());
+    auto elementType = type.asArray().elementType();
+    auto elementField = listType->value_field();
+    return newField->WithType(
+        ::arrow::list(updateFieldNameRecursive(elementField, *elementType)));
+  } else if (type.isMap()) {
+    auto mapType = type.asMap();
+    // Update arrayType itselef name.
+    auto newField = field->WithName(name);
+    auto arrowMapType =
+        std::dynamic_pointer_cast<::arrow::MapType>(newField->type());
+    auto newKeyField =
+        updateFieldNameRecursive(arrowMapType->key_field(), *mapType.keyType());
+    auto newValueField = updateFieldNameRecursive(
+        arrowMapType->item_field(), *mapType.valueType());
+    return newField->WithType(
+        ::arrow::map(newKeyField->type(), newValueField->type()));
+  } else if (name != "") {
+    return field->WithName(name);
+  } else
+    return field;
 }
 
 } // namespace
@@ -351,9 +313,12 @@ void Writer::write(const VectorPtr& data) {
   // Convert the arrow schema to Schema and then update the column names based
   // on schema_.
   auto arrowSchema = ::arrow::ImportSchema(&schema).ValueOrDie();
-  // The withNames method only handle primitive type not complex type.
-  auto newSchema = arrowSchema->WithNames(schema_->names()).ValueOrDie();
-  auto newFields = updateComplexTypeFields(newSchema->fields(), *schema_);
+  std::vector<std::shared_ptr<::arrow::Field>> newFields;
+  auto childSize = schema_->size();
+  for (auto i = 0; i < childSize; i++) {
+    newFields.push_back(updateFieldNameRecursive(
+        arrowSchema->fields()[i], *schema_->childAt(i), schema_->nameOf(i)));
+  }
 
   PARQUET_ASSIGN_OR_THROW(
       auto recordBatch,
