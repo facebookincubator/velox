@@ -1171,7 +1171,7 @@ TEST_F(SharedArbitrationTest, reclaimFromDistinctAggregation) {
   createDuckDbTable(vectors);
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
   core::PlanNodeId aggrNodeId;
-  std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(maxQueryCapacity);
+  auto queryCtx = newQueryCtx(maxQueryCapacity);
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .spillDirectory(spillDirectory->path)
                   .config(core::QueryConfig::kSpillEnabled, "true")
@@ -1197,7 +1197,7 @@ TEST_F(SharedArbitrationTest, reclaimFromPartialAggregation) {
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
   core::PlanNodeId partialAggNodeId;
   core::PlanNodeId finalAggNodeId;
-  std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(maxQueryCapacity);
+  auto queryCtx = newQueryCtx(maxQueryCapacity);
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
           .spillDirectory(spillDirectory->path)
@@ -1243,7 +1243,7 @@ TEST_F(
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
   core::PlanNodeId partialAggNodeId;
   core::PlanNodeId finalAggNodeId;
-  std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(maxQueryCapacity);
+  auto queryCtx = newQueryCtx(maxQueryCapacity);
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
           .spillDirectory(spillDirectory->path)
