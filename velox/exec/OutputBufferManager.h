@@ -109,7 +109,7 @@ class OutputBufferManager {
   bool isOverutilized(const std::string& taskId);
 
   // Gets the OutputBufferStats of the taskId's outputBuffer.
-  OutputBufferStats getStats(const std::string& taskId);
+  std::optional<OutputBufferStats> getStats(const std::string& taskId);
 
   // Retrieves the set of buffers for a query if exists.
   // Returns NULL if task not found.

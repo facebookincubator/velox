@@ -63,27 +63,29 @@ std::string ArbitraryBuffer::toString() const {
       hasNoMoreData());
 }
 
-void BufferStats::recordAddPage(const SerializedPage& data) {
+void DestinationBufferStats::recordEnqueue(const SerializedPage& data) {
   auto numRows = data.numRows();
   VELOX_CHECK(numRows, "SerializedPage's numRows must be valid");
-  int64_t rows = numRows.value();
   int64_t size = data.size();
   bytesBuffered += size;
-  rowsBuffered += rows;
+  rowsBuffered += numRows.value();
   pagesBuffered++;
 }
 
-void BufferStats::recordSendPage(const SerializedPage& data) {
+void DestinationBufferStats::recordAcknowledge(const SerializedPage& data) {
   auto numRows = data.numRows();
   VELOX_CHECK(numRows, "SerializedPage's numRows must be valid");
-  int64_t rows = numRows.value();
   int64_t size = data.size();
   bytesBuffered -= size;
-  rowsBuffered -= rows;
+  rowsBuffered -= numRows.value();
   pagesBuffered--;
   bytesSent += size;
-  rowsSent += rows;
+  rowsSent += numRows.value();
   pagesSent++;
+}
+
+void DestinationBufferStats::recordDelete(const SerializedPage& data) {
+  recordAcknowledge(data);
 }
 
 std::vector<std::unique_ptr<folly::IOBuf>> DestinationBuffer::getData(
@@ -138,7 +140,7 @@ void DestinationBuffer::enqueue(std::shared_ptr<SerializedPage> data) {
   }
 
   if (data != nullptr) {
-    stats_.recordAddPage(*data);
+    stats_.recordEnqueue(*data);
   }
   data_.push_back(std::move(data));
 }
@@ -202,7 +204,7 @@ std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       break;
     }
-    stats_.recordSendPage(*data_[i]);
+    stats_.recordAcknowledge(*data_[i]);
     freed.push_back(std::move(data_[i]));
   }
   data_.erase(data_.begin(), data_.begin() + numDeleted);
@@ -218,14 +220,14 @@ DestinationBuffer::deleteResults() {
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       break;
     }
-    stats_.recordSendPage(*data_[i]);
+    stats_.recordDelete(*data_[i]);
     freed.push_back(std::move(data_[i]));
   }
   data_.clear();
   return freed;
 }
 
-BufferStats DestinationBuffer::getStats() const {
+DestinationBufferStats DestinationBuffer::stats() const {
   return stats_;
 }
 
@@ -264,28 +266,16 @@ uint64_t maxBufferSize(
 } // namespace
 
 OutputBufferStats::OutputBufferStats(
-    core::PartitionedOutputNode::Kind k,
-    bool noMoreBuffers,
-    bool atEnd,
-    bool finished,
-    const std::vector<BufferStats>& bufs)
+    PartitionedOutputNode::Kind k,
+    bool canAddBuffer,
+    bool canAddPage,
+    bool finish,
+    const std::vector<DestinationBufferStats>& buffers)
     : kind(k),
-      canAddBuffers(!noMoreBuffers),
-      canAddPages(!atEnd),
-      buffers(bufs) {
-  if (atEnd) {
-    if (finished) {
-      state = BufferState::kFinished;
-    } else {
-      state = BufferState::kFlushing;
-    }
-  } else {
-    if (noMoreBuffers) {
-      state = BufferState::kNoMoreBuffers;
-    } else {
-      state = BufferState::kOpen;
-    }
-  }
+      canAddBuffers(canAddBuffer),
+      canAddPages(canAddPage),
+      finished(finish),
+      destinationBuffers(buffers) {
 }
 
 OutputBuffer::OutputBuffer(
@@ -616,7 +606,7 @@ bool OutputBuffer::deleteResults(int destination) {
     freed = buffer->deleteResults();
     dataAvailable = buffer->getAndClearNotify();
     VELOX_CHECK_LT(destination, bufferStats_.size());
-    bufferStats_[destination] = buffers_[destination]->getStats();
+    bufferStats_[destination] = buffers_[destination]->stats();
     buffers_[destination] = nullptr;
     bufferStats_[destination].finished = true;
     ++numFinalAcknowledges_;
@@ -719,11 +709,11 @@ OutputBufferStats OutputBuffer::getStats() {
   for (auto i = 0; i < buffers_.size(); ++i) {
     auto buffer = buffers_[i].get();
     if (buffer) {
-      bufferStats_[i] = buffer->getStats();
+      bufferStats_[i] = buffer->stats();
     }
   }
   OutputBufferStats stats(
-      kind_, noMoreBuffers_, atEnd_, isFinishedLocked(), bufferStats_);
+      kind_, !noMoreBuffers_, !atEnd_, isFinishedLocked(), bufferStats_);
   return stats;
 }
 

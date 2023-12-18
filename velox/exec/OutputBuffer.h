@@ -74,33 +74,30 @@ class ArbitraryBuffer {
   std::deque<std::shared_ptr<SerializedPage>> pages_;
 };
 
-/// The stats of a DestinationBuffer. The data transferred by the buffer has
-/// two phases:
-/// 1. Buffered: after added via enqueue() and before acked, the data is
-///              buffered in the destination buffer.
-/// 2. Sent: the data is sent and removed from the buffer after it is acked
-///          via acknowledge() or deleteResults().
-struct BufferStats {
-  /// Update stats when a data page is added.
-  void recordAddPage(const SerializedPage& data);
+/// The data transferred by the destination buffer has two phases:
+/// 1. Buffered: the data resides in the buffer after enqueued and before
+///              acked / deleted.
+/// 2. Sent: the data is removed from the buffer after it is acked or
+///          deleted.
+struct DestinationBufferStats {
+  void recordEnqueue(const SerializedPage& data);
 
-  /// Update stats when a data page is sent (removed from buffer).
-  void recordSendPage(const SerializedPage& data);
+  void recordAcknowledge(const SerializedPage& data);
 
-  /// If the destination buffer is finished. A finished dest buffer would be
-  /// deleted by the OutputBuffer, so this flag is set by the OutputBuffer.
+  void recordDelete(const SerializedPage& data);
+
+  /// A destination buffer is finished after it is deleted by the
+  /// OutputBuffer, so this flag is set by the OutputBuffer.
   bool finished{false};
-  /// Byte num of data that is currently buffered.
+
+  /// Stats of data that is currently buffered.
   int64_t bytesBuffered{0};
-  /// Row num of data that is currently buffered.
   int64_t rowsBuffered{0};
-  /// Page num of data that is currently buffered.
   int64_t pagesBuffered{0};
-  /// Byte num of data that has been sent from the buffer.
+
+  /// Stats of data that has been sent from the buffer.
   int64_t bytesSent{0};
-  /// Row num of data that has been sent from the buffer.
   int64_t rowsSent{0};
-  /// Page num of data that has been sent from the buffer.
   int64_t pagesSent{0};
 };
 
@@ -145,7 +142,7 @@ class DestinationBuffer {
   DataAvailable getAndClearNotify();
 
   // Returns the stats of this buffer.
-  BufferStats getStats() const;
+  DestinationBufferStats stats() const;
 
   std::string toString();
 
@@ -157,43 +154,28 @@ class DestinationBuffer {
   // The sequence number of the first item to pass to 'notify'.
   int64_t notifySequence_{0};
   uint64_t notifyMaxBytes_{0};
-  BufferStats stats_;
+  DestinationBufferStats stats_;
 };
 
 class Task;
 
-/// The stats of an OutputBuffer.
 struct OutputBufferStats {
-  /// BufferState indicates the OutputBuffer's current state.
-  enum class BufferState {
-    /// The OutputBuffer is open and ready to receive data. Initial state.
-    kOpen,
-    /// The OutputBuffer would not accept more buffers.
-    kNoMoreBuffers,
-    /// The OutputBuffer has received all input data, and some data is still
-    /// to be sent.
-    kFlushing,
-    /// The OutputBuffer has already received and sent all the input data.
-    kFinished
-  };
-
   OutputBufferStats(
       core::PartitionedOutputNode::Kind k,
-      bool noMoreBuffers,
-      bool atEnd,
-      bool finished,
-      const std::vector<BufferStats>& bufs);
+      bool canAddBuffer,
+      bool canAddPage,
+      bool finish,
+      const std::vector<DestinationBufferStats>& buffers);
 
-  /// The kind of the OutputBuffer.
-  core::PartitionedOutputNode::Kind kind;
-  /// The state of the OutputBuffer.
-  BufferState state{BufferState::kOpen};
-  /// If the OutputBuffer can add more buffers.
-  bool canAddBuffers{true};
-  /// If the outputBuffer can receive more input pages.
-  bool canAddPages{true};
-  /// The bufferStats of each destination buffer.
-  std::vector<BufferStats> buffers;
+  const core::PartitionedOutputNode::Kind kind;
+
+  /// States of the OutputBuffer.
+  const bool canAddBuffers;
+  const bool canAddPages;
+  const bool finished;
+
+  /// Stats of the OutputBuffer's destinations.
+  const std::vector<DestinationBufferStats> destinationBuffers;
 };
 
 class OutputBuffer {
@@ -344,7 +326,7 @@ class OutputBuffer {
   // One buffer per destination.
   std::vector<std::unique_ptr<DestinationBuffer>> buffers_;
   // One bufferStat per destination.
-  std::vector<BufferStats> bufferStats_;
+  std::vector<DestinationBufferStats> bufferStats_;
   uint32_t numFinished_{0};
   // When this reaches buffers_.size(), 'this' can be freed.
   int numFinalAcknowledges_ = 0;

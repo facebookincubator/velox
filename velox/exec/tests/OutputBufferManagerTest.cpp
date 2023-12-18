@@ -125,7 +125,9 @@ class OutputBufferManagerTest : public testing::Test {
   }
 
   OutputBufferStats getStats(const std::string& taskId) {
-    return bufferManager_->getStats(taskId);
+    auto stats = bufferManager_->getStats(taskId);
+    EXPECT_TRUE(stats);
+    return stats.value();
   }
 
   void noMoreData(const std::string& taskId) {
@@ -974,8 +976,8 @@ TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
   const vector_size_t size = 100;
   const std::string taskId = std::to_string(rand());
   initializeTask(taskId, rowType_, kind_, 1, 1);
-  OutputBufferStats stats = getStats(taskId);
-  ASSERT_EQ(stats.kind, kind_);
+  OutputBufferStats stats0 = getStats(taskId);
+  ASSERT_EQ(stats0.kind, kind_);
 
   const int pageNum = 3;
   int totalSize = 0;
@@ -986,23 +988,21 @@ TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
     if (kind_ == PartitionedOutputNode::Kind::kArbitrary) {
       fetchOne(taskId, 0, pageId);
     }
-    stats = getStats(taskId);
-    ASSERT_EQ(stats.buffers[0].pagesBuffered, 1);
-    ASSERT_EQ(stats.buffers[0].rowsBuffered, size);
+    OutputBufferStats stats1 = getStats(taskId);
+    ASSERT_EQ(stats1.destinationBuffers[0].pagesBuffered, 1);
+    ASSERT_EQ(stats1.destinationBuffers[0].rowsBuffered, size);
 
     fetchOneAndAck(taskId, 0, pageId);
-    stats = getStats(taskId);
-
-    ASSERT_EQ(stats.buffers[0].pagesSent, pageId + 1);
-    ASSERT_EQ(stats.buffers[0].rowsSent, totalSize);
-    ASSERT_EQ(stats.buffers[0].pagesBuffered, 0);
-    ASSERT_EQ(stats.buffers[0].rowsBuffered, 0);
+    OutputBufferStats stats2 = getStats(taskId);
+    ASSERT_EQ(stats2.destinationBuffers[0].pagesSent, pageId + 1);
+    ASSERT_EQ(stats2.destinationBuffers[0].rowsSent, totalSize);
+    ASSERT_EQ(stats2.destinationBuffers[0].pagesBuffered, 0);
+    ASSERT_EQ(stats2.destinationBuffers[0].rowsBuffered, 0);
   }
 
   bufferManager_->updateOutputBuffers(taskId, 1, true);
-  stats = getStats(taskId);
-  ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kNoMoreBuffers);
-  ASSERT_FALSE(stats.canAddBuffers);
+  OutputBufferStats stats3 = getStats(taskId);
+  ASSERT_FALSE(stats3.canAddBuffers);
 
   enqueue(taskId, 0, rowType_, size);
   totalSize += size;
@@ -1010,23 +1010,19 @@ TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
   if (kind_ == PartitionedOutputNode::Kind::kArbitrary) {
     fetchOne(taskId, 0, pageNum);
   }
-  stats = getStats(taskId);
-  ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kNoMoreBuffers);
-
   noMoreData(taskId);
-  stats = getStats(taskId);
-  ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kFlushing);
-  ASSERT_FALSE(stats.canAddPages);
+  OutputBufferStats stats4 = getStats(taskId);
+  ASSERT_FALSE(stats4.canAddPages);
 
   fetchOneAndAck(taskId, 0, pageNum);
   fetchEndMarker(taskId, 0, pageNum + 1);
   deleteResults(taskId, 0);
-  stats = getStats(taskId);
-  ASSERT_EQ(stats.state, OutputBufferStats::BufferState::kFinished);
-  ASSERT_EQ(stats.buffers[0].pagesBuffered, 0);
-  ASSERT_EQ(stats.buffers[0].rowsBuffered, 0);
-  ASSERT_EQ(stats.buffers[0].pagesSent, pageNum + 1);
-  ASSERT_EQ(stats.buffers[0].rowsSent, totalSize);
+  OutputBufferStats stats5 = getStats(taskId);
+  ASSERT_TRUE(stats5.finished);
+  ASSERT_EQ(stats5.destinationBuffers[0].pagesBuffered, 0);
+  ASSERT_EQ(stats5.destinationBuffers[0].rowsBuffered, 0);
+  ASSERT_EQ(stats5.destinationBuffers[0].pagesSent, pageNum + 1);
+  ASSERT_EQ(stats5.destinationBuffers[0].rowsSent, totalSize);
   bufferManager_->removeTask(taskId);
 }
 
