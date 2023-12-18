@@ -165,7 +165,12 @@ struct OutputBufferStats {
       bool canAddBuffer,
       bool canAddPage,
       bool finish,
-      const std::vector<DestinationBufferStats>& buffers);
+      const std::vector<DestinationBufferStats>& buffers)
+      : kind(k),
+        canAddBuffers(canAddBuffer),
+        canAddPages(canAddPage),
+        finished(finish),
+        destinationBuffers(buffers) {}
 
   const core::PartitionedOutputNode::Kind kind;
 

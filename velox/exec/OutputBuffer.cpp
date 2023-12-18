@@ -265,18 +265,6 @@ uint64_t maxBufferSize(
 
 } // namespace
 
-OutputBufferStats::OutputBufferStats(
-    PartitionedOutputNode::Kind k,
-    bool canAddBuffer,
-    bool canAddPage,
-    bool finish,
-    const std::vector<DestinationBufferStats>& buffers)
-    : kind(k),
-      canAddBuffers(canAddBuffer),
-      canAddPages(canAddPage),
-      finished(finish),
-      destinationBuffers(buffers) {}
-
 OutputBuffer::OutputBuffer(
     std::shared_ptr<Task> task,
     PartitionedOutputNode::Kind kind,
