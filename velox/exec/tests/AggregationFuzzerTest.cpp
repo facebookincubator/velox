@@ -19,7 +19,6 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
-#include <boost/random/uniform_int_distribution.hpp>
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
 #include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
@@ -71,6 +70,7 @@ int main(int argc, char** argv) {
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
   facebook::velox::window::prestosql::registerAllWindowFunctions();
   facebook::velox::functions::prestosql::registerInternalFunctions();
+  facebook::velox::memory::MemoryManager::initialize({});
 
   ::testing::InitGoogleTest(&argc, argv);
 

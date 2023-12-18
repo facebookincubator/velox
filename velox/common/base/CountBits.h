@@ -14,22 +14,29 @@
  * limitations under the License.
  */
 
-#include <gflags/gflags.h>
-#include "velox/serializers/PrestoSerializer.h"
+#pragma once
 
-#include "velox/exec/tests/JoinSpillInputBenchmarkBase.h"
+namespace facebook::velox {
 
-using namespace facebook::velox;
-
-int main(int argc, char* argv[]) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  memory::MemoryManager::initialize({});
-  serializer::presto::PrestoVectorSerde::registerVectorSerde();
-  filesystems::registerLocalFileSystem();
-  auto test = std::make_unique<exec::test::JoinSpillInputBenchmarkBase>();
-  test->setUp();
-  test->run();
-  test->printStats();
-  test->cleanup();
-  return 0;
+// Copied from format.h of fmt.
+FOLLY_ALWAYS_INLINE int countDigits(__uint128_t n) {
+  int count = 1;
+  for (;;) {
+    if (n < 10) {
+      return count;
+    }
+    if (n < 100) {
+      return count + 1;
+    }
+    if (n < 1000) {
+      return count + 2;
+    }
+    if (n < 10000) {
+      return count + 3;
+    }
+    n /= 10000u;
+    count += 4;
+  }
 }
+
+} // namespace facebook::velox
