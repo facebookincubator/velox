@@ -716,8 +716,7 @@ OutputBufferStats OutputBuffer::stats() {
     }
   }
   OutputBufferStats stats(
-      kind_, !noMoreBuffers_, !atEnd_, isFinishedLocked(),
-      bufferStats);
+      kind_, !noMoreBuffers_, !atEnd_, isFinishedLocked(), bufferStats);
   return stats;
 }
 
