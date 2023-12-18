@@ -219,8 +219,9 @@ Spilling
      - boolean
      - false
      - When `spill_enabled` is true, determines whether the partial phase of HashAggregation operator can spill to disk under memory pressure.
-       Flushing will be disabled so max_partial_aggregation_memory and max_extended_partial_aggregation_memory will be ignored when turning this option on.
-       this option.
+       When true, flushing will be disabled so settings of max_partial_aggregation_memory and max_extended_partial_aggregation_memory will be ignored.
+       Comparing to flushing, enabling spilling would make Velox reduce data size from partial aggregation phase as much as possible however would slow
+       down partial aggregation's own processing.
    * - join_spill_enabled
      - boolean
      - true
