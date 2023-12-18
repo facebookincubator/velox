@@ -115,6 +115,8 @@ bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
   VELOX_CHECK(isPartialOutput_ && !isGlobal_);
   if (groupingSet_->hasSpilled()) {
     // Once spilling kicked in, disable the abandoning code path.
+    // This is because spilled rows did not count to
+    // numOutput yet based on current way of computation.
     return false;
   }
   return numInputRows_ > abandonPartialAggregationMinRows_ &&
