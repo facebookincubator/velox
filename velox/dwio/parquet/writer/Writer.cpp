@@ -176,65 +176,63 @@ std::vector<std::shared_ptr<::arrow::Field>> updateStructFieldName(
 
 std::vector<std::shared_ptr<::arrow::Field>> updateComplexTypeFields(
     const std::vector<std::shared_ptr<::arrow::Field>>& fields,
-    const RowTypePtr& rowType) {
+    const RowType& rowType) {
   std::vector<std::shared_ptr<::arrow::Field>> newFields;
-  newFields.reserve(rowType->size());
-  for (int i = 0; i < rowType->size(); ++i) {
+  newFields.reserve(rowType.size());
+  for (int i = 0; i < rowType.size(); ++i) {
     auto field = fields[i];
-    if (auto childRowType =
-            std::dynamic_pointer_cast<const RowType>(rowType->childAt(i))) {
+    if (rowType.childAt(i)->isRow()) {
+      auto childRowType = rowType.childAt(i)->asRow();
       auto structType =
           std::dynamic_pointer_cast<::arrow::StructType>(field->type());
       auto newChildFields =
           updateComplexTypeFields(structType->fields(), childRowType);
       auto newStructFields =
-          updateStructFieldName(newChildFields, childRowType->names());
+          updateStructFieldName(newChildFields, childRowType.names());
       newFields.push_back(field->WithType(::arrow::struct_(newStructFields)));
-    } else if (
-        auto childArray =
-            std::dynamic_pointer_cast<const ArrayType>(rowType->childAt(i))) {
+    } else if (rowType.childAt(i)->isArray()) {
+      auto childArray = rowType.childAt(i)->asArray();
       auto listType =
           std::dynamic_pointer_cast<::arrow::BaseListType>(field->type());
       auto valueField = field;
-      if (auto nestedRowType = std::dynamic_pointer_cast<const RowType>(
-              childArray->elementType())) {
+      if (childArray.elementType()->isRow()) {
+        auto nestedRowType = childArray.elementType()->asRow();
         auto structType = std::dynamic_pointer_cast<::arrow::StructType>(
             listType->value_field()->type());
         auto newChildFields =
             updateComplexTypeFields(structType->fields(), nestedRowType);
         auto newStructFields =
-            updateStructFieldName(newChildFields, nestedRowType->names());
+            updateStructFieldName(newChildFields, nestedRowType.names());
         valueField =
             field->WithType(::arrow::list(::arrow::struct_(newStructFields)));
       }
 
       newFields.push_back(valueField);
-    } else if (
-        auto childMap =
-            std::dynamic_pointer_cast<const MapType>(rowType->childAt(i))) {
+    } else if (rowType.childAt(i)->isMap()) {
+      auto childMap = rowType.childAt(i)->asMap();
       auto mapType = std::dynamic_pointer_cast<::arrow::MapType>(field->type());
       auto keyField = mapType->key_field();
       auto valueField = mapType->item_field();
 
-      if (auto nestedRowType =
-              std::dynamic_pointer_cast<const RowType>(childMap->keyType())) {
+      if (childMap.keyType()->isRow()) {
+        auto nestedRowType = childMap.keyType()->asRow();
         auto structType =
             std::dynamic_pointer_cast<::arrow::StructType>(mapType->key_type());
         auto newChildFields =
             updateComplexTypeFields(structType->fields(), nestedRowType);
         auto newStructFields =
-            updateStructFieldName(newChildFields, nestedRowType->names());
+            updateStructFieldName(newChildFields, nestedRowType.names());
         keyField = keyField->WithType(::arrow::struct_(newStructFields));
       }
 
-      if (auto nestedRowType =
-              std::dynamic_pointer_cast<const RowType>(childMap->valueType())) {
+      if (childMap.valueType()->isRow()) {
+        auto nestedRowType = childMap.valueType()->asRow();
         auto structType = std::dynamic_pointer_cast<::arrow::StructType>(
             mapType->item_type());
         auto newChildFields =
             updateComplexTypeFields(structType->fields(), nestedRowType);
         auto newStructFields =
-            updateStructFieldName(newChildFields, nestedRowType->names());
+            updateStructFieldName(newChildFields, nestedRowType.names());
         valueField = valueField->WithType(::arrow::struct_(newStructFields));
       }
 
@@ -355,7 +353,7 @@ void Writer::write(const VectorPtr& data) {
   auto arrowSchema = ::arrow::ImportSchema(&schema).ValueOrDie();
   // The withNames method only handle primitive type not complex type.
   auto newSchema = arrowSchema->WithNames(schema_->names()).ValueOrDie();
-  auto newFields = updateComplexTypeFields(newSchema->fields(), schema_);
+  auto newFields = updateComplexTypeFields(newSchema->fields(), *schema_);
 
   PARQUET_ASSIGN_OR_THROW(
       auto recordBatch,
