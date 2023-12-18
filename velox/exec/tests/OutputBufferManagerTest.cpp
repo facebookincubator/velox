@@ -125,8 +125,8 @@ class OutputBufferManagerTest : public testing::Test {
   }
 
   OutputBufferStats getStats(const std::string& taskId) {
-    auto stats = bufferManager_->getStats(taskId);
-    EXPECT_TRUE(stats);
+    const auto stats = bufferManager_->stats(taskId);
+    EXPECT_TRUE(stats.has_value());
     return stats.value();
   }
 

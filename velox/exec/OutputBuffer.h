@@ -243,7 +243,7 @@ class OutputBuffer {
   bool isOverutilized() const;
 
   // Gets the OutputBufferStats of this output buffer.
-  OutputBufferStats getStats();
+  OutputBufferStats stats();
 
  private:
   // Percentage of maxSize below which a blocked producer should
@@ -325,8 +325,10 @@ class OutputBuffer {
   int32_t nextArbitraryLoadBufferIndex_{0};
   // One buffer per destination.
   std::vector<std::unique_ptr<DestinationBuffer>> buffers_;
-  // One bufferStat per destination.
-  std::vector<DestinationBufferStats> bufferStats_;
+  // The sizes of buffers_ and finishedBufferStats_ are the same, but
+  // finishedBufferStats_[i] is set if and only if buffers_[i] is null as
+  // the buffer is finished and deleted.
+  std::vector<DestinationBufferStats> finishedBufferStats_;
   uint32_t numFinished_{0};
   // When this reaches buffers_.size(), 'this' can be freed.
   int numFinalAcknowledges_ = 0;

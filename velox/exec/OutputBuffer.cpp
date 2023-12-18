@@ -64,18 +64,18 @@ std::string ArbitraryBuffer::toString() const {
 }
 
 void DestinationBufferStats::recordEnqueue(const SerializedPage& data) {
-  auto numRows = data.numRows();
-  VELOX_CHECK(numRows, "SerializedPage's numRows must be valid");
-  int64_t size = data.size();
+  const auto numRows = data.numRows();
+  VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
+  const int64_t size = data.size();
   bytesBuffered += size;
   rowsBuffered += numRows.value();
   pagesBuffered++;
 }
 
 void DestinationBufferStats::recordAcknowledge(const SerializedPage& data) {
-  auto numRows = data.numRows();
-  VELOX_CHECK(numRows, "SerializedPage's numRows must be valid");
-  int64_t size = data.size();
+  const auto numRows = data.numRows();
+  VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
+  const int64_t size = data.size();
   bytesBuffered -= size;
   rowsBuffered -= numRows.value();
   pagesBuffered--;
@@ -293,7 +293,7 @@ OutputBuffer::OutputBuffer(
   for (int i = 0; i < numDestinations; i++) {
     buffers_.push_back(std::make_unique<DestinationBuffer>());
   }
-  bufferStats_.resize(numDestinations);
+  finishedBufferStats_.resize(numDestinations);
 }
 
 void OutputBuffer::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
@@ -359,7 +359,7 @@ void OutputBuffer::addOutputBuffersLocked(int numBuffers) {
     }
     buffers_.emplace_back(std::move(buffer));
   }
-  bufferStats_.resize(numBuffers);
+  finishedBufferStats_.resize(numBuffers);
 }
 
 bool OutputBuffer::enqueue(
@@ -604,10 +604,10 @@ bool OutputBuffer::deleteResults(int destination) {
     }
     freed = buffer->deleteResults();
     dataAvailable = buffer->getAndClearNotify();
-    VELOX_CHECK_LT(destination, bufferStats_.size());
-    bufferStats_[destination] = buffers_[destination]->stats();
+    VELOX_CHECK_LT(destination, finishedBufferStats_.size());
+    finishedBufferStats_[destination] = buffers_[destination]->stats();
     buffers_[destination] = nullptr;
-    bufferStats_[destination].finished = true;
+    finishedBufferStats_[destination].finished = true;
     ++numFinalAcknowledges_;
     isFinished = isFinishedLocked();
     updateAfterAcknowledgeLocked(freed, promises);
@@ -702,17 +702,22 @@ bool OutputBuffer::isOverutilized() const {
   return (totalSize_ > (0.5 * maxSize_)) && !atEnd_;
 }
 
-OutputBufferStats OutputBuffer::getStats() {
+OutputBufferStats OutputBuffer::stats() {
   std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK_EQ(buffers_.size(), bufferStats_.size());
+  std::vector<DestinationBufferStats> bufferStats;
+  VELOX_CHECK_EQ(buffers_.size(), finishedBufferStats_.size());
+  bufferStats.resize(buffers_.size());
   for (auto i = 0; i < buffers_.size(); ++i) {
     auto buffer = buffers_[i].get();
     if (buffer) {
-      bufferStats_[i] = buffer->stats();
+      bufferStats[i] = buffer->stats();
+    } else {
+      bufferStats[i] = finishedBufferStats_[i];
     }
   }
   OutputBufferStats stats(
-      kind_, !noMoreBuffers_, !atEnd_, isFinishedLocked(), bufferStats_);
+      kind_, !noMoreBuffers_, !atEnd_, isFinishedLocked(),
+      bufferStats);
   return stats;
 }
 
