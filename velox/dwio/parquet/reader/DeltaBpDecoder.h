@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::parquet {
 
@@ -24,8 +25,7 @@ namespace facebook::velox::parquet {
 // https://github.com/apache/arrow/blob/apache-arrow-12.0.0/cpp/src/parquet/encoding.cc#LL2357C18-L2586C3
 class DeltaBpDecoder {
  public:
-  DeltaBpDecoder(const char* start, const char* end)
-      : bufferStart_(start), bufferEnd_(end) {
+  DeltaBpDecoder(const char* start) : bufferStart_(start) {
     initHeader();
   }
 
@@ -94,8 +94,9 @@ class DeltaBpDecoder {
 
   bool getZigZagVlqInt(int64_t& v) {
     uint64_t u;
-    if (!getVlqInt(u))
+    if (!getVlqInt(u)) {
       return false;
+    }
     v = (u >> 1) ^ (~(u & 1) + 1);
     return true;
   }
@@ -194,7 +195,8 @@ class DeltaBpDecoder {
         deltaBitWidth_);
     // Addition between minDelta_, packed int and lastValue_ should be treated
     // as unsigned addition. Overflow is as expected.
-    value += minDelta_ + lastValue_;
+    value = static_cast<uint64_t>(minDelta_) + static_cast<uint64_t>(value) +
+        static_cast<uint64_t>(lastValue_);
     lastValue_ = value;
     valuesRemainingCurrentMiniBlock_--;
     totalValuesRemaining_--;
@@ -209,7 +211,6 @@ class DeltaBpDecoder {
       static_cast<int>(sizeof(int64_t) * 8);
 
   const char* bufferStart_;
-  const char* bufferEnd_;
 
   uint64_t valuesPerBlock_;
   uint64_t miniBlocksPerBlock_;
