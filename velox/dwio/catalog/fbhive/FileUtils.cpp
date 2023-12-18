@@ -182,7 +182,7 @@ std::string FileUtils::makePartName(
     if (ret.size() > 0) {
       ret += "/";
     }
-    ret += escapePathName(toLower(pair.first));
+    ret += escapePathName(pair.first);
     ret += "=";
     if (pair.second.size() == 0) {
       ret += DEFAULT_PARTITION_VALUE;
