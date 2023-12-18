@@ -163,7 +163,7 @@ inline std::string getRequestID(
           errorMsgPrefix,                                                                                                      \
           getErrorStringFromS3Error(error),                                                                                    \
           s3URI(bucket, key),                                                                                                  \
-          error.GetExceptionName(),                                                                                            \
+          static_cast<int>(error.GetErrorType()),                                                                              \
           error.GetResponseCode(),                                                                                             \
           getS3BackendService(error.GetResponseHeaders()),                                                                     \
           error.GetMessage(),                                                                                                  \
