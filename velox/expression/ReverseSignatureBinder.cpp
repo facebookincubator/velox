@@ -36,9 +36,6 @@ bool ReverseSignatureBinder::hasConstrainedIntegerVariable(
 }
 
 bool ReverseSignatureBinder::tryBind() {
-  if (hasConstrainedIntegerVariable(signature_.returnType())) {
-    return false;
-  }
   return SignatureBinderBase::tryBind(signature_.returnType(), returnType_);
 }
 

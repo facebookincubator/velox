@@ -63,6 +63,7 @@ using S1 = IntegerVariable<5>;
 using S2 = IntegerVariable<6>;
 using S3 = IntegerVariable<7>;
 using S4 = IntegerVariable<8>;
+const uint8_t kIntegerPairSize = 4;
 
 template <typename P, typename S>
 struct ShortDecimal {

@@ -445,16 +445,21 @@ bool useTypeName(
 
 bool isSupportedSignature(
     const exec::FunctionSignature& signature,
-    bool enableComplexType) {
-  // Not supporting lambda functions, or functions using decimal and
-  // timestamp with time zone types.
+    bool enableComplexType,
+    bool enableDecimalType) {
+  // When enableComplexType is disabled, not supporting complex functions.
+  const bool useComplexType =
+      (useTypeName(signature, "array") || useTypeName(signature, "map") ||
+       useTypeName(signature, "row"));
+  // When enableDecimalType is disabled, not supporting decimal functions. Not
+  // supporting lambda functions, or functions using timestamp with time zone
+  // types.
   return !(
       useTypeName(signature, "opaque") ||
-      useTypeName(signature, "long_decimal") ||
-      useTypeName(signature, "short_decimal") ||
-      useTypeName(signature, "decimal") ||
       useTypeName(signature, "timestamp with time zone") ||
       useTypeName(signature, "interval day to second") ||
+      (!enableDecimalType && useTypeName(signature, "decimal")) ||
+      (!enableComplexType && useComplexType) ||
       (enableComplexType && useTypeName(signature, "unknown")));
 }
 
@@ -563,10 +568,14 @@ ExpressionFuzzer::ExpressionFuzzer(
     for (const auto& signature : function.second) {
       ++totalFunctionSignatures;
 
-      if (!isSupportedSignature(*signature, options_.enableComplexTypes)) {
+      if (!isSupportedSignature(
+              *signature,
+              options_.enableComplexTypes,
+              options_.enableDecimalType)) {
         continue;
       }
-      if (!(signature->variables().empty() || options_.enableComplexTypes)) {
+      if (!(signature->variables().empty() || options_.enableComplexTypes ||
+            options_.enableDecimalType)) {
         LOG(WARNING) << "Skipping unsupported signature: " << function.first
                      << signature->toString();
         continue;
@@ -690,8 +699,10 @@ ExpressionFuzzer::ExpressionFuzzer(
 
   for (const auto& it : signatureTemplates_) {
     auto& returnType = it.signature->returnType().baseName();
-    auto* returnTypeKey = &returnType;
-    if (it.typeVariables.find(returnType) != it.typeVariables.end()) {
+    std::string typeName = returnType;
+    folly::toLowerAscii(typeName);
+    const auto* returnTypeKey = &typeName;
+    if (it.typeVariables.find(typeName) != it.typeVariables.end()) {
       // Return type is a template variable.
       returnTypeKey = &kTypeParameterName;
     }
@@ -710,6 +721,13 @@ ExpressionFuzzer::ExpressionFuzzer(
   // Register function override (for cases where we want to restrict the types
   // or parameters we pass to functions).
   registerFuncOverride(&ExpressionFuzzer::generateSwitchArgs, "switch");
+  registerFuncOverride(
+      &ExpressionFuzzer::generateExtremeFunctionArgs, "greatest");
+  registerFuncOverride(&ExpressionFuzzer::generateExtremeFunctionArgs, "least");
+  registerFuncOverride(
+      &ExpressionFuzzer::generateMakeTimestampArgs, "make_timestamp");
+  registerFuncOverride(
+      &ExpressionFuzzer::generateUnscaledValueArgs, "unscaled_value");
 }
 
 void ExpressionFuzzer::getTicketsForFunctions() {
@@ -762,9 +780,11 @@ int ExpressionFuzzer::getTickets(const std::string& funcName) {
 void ExpressionFuzzer::addToTypeToExpressionListByTicketTimes(
     const std::string& type,
     const std::string& funcName) {
+  std::string typeName = type;
+  folly::toLowerAscii(typeName);
   int tickets = getTickets(funcName);
   for (int i = 0; i < tickets; i++) {
-    typeToExpressionList_[type].push_back(funcName);
+    typeToExpressionList_[typeName].push_back(funcName);
   }
 }
 
@@ -940,6 +960,84 @@ core::TypedExprPtr ExpressionFuzzer::generateArg(
   }
 }
 
+std::vector<core::TypedExprPtr> ExpressionFuzzer::generateExtremeFunctionArgs(
+    const CallableSignature& input) {
+  const auto argTypes = input.args;
+  VELOX_CHECK_GE(
+      argTypes.size(),
+      1,
+      "At least one input is expected from the template signature.");
+  if (!argTypes[0]->isDecimal()) {
+    return generateArgs(input);
+  }
+
+  auto numVarArgs =
+      !input.variableArity ? 0 : rand32(0, options_.maxNumVarArgs);
+  std::vector<core::TypedExprPtr> inputExpressions;
+  inputExpressions.reserve(argTypes.size() + numVarArgs);
+  inputExpressions.emplace_back(
+      generateArg(argTypes.at(0), input.constantArgs.at(0)));
+
+  // Append varargs to the argument list.
+  for (int i = 0; i < numVarArgs; i++) {
+    core::TypedExprPtr argExpr;
+    // The varargs need to be generated following the result type of the first
+    // argument. But when nested expression is generated, that cannot be
+    // guaranteed as argument precisions and scales cannot be inferred from the
+    // result type through a decimal function signature. Given this limitation,
+    // generate constant or column only.
+    const auto argType = inputExpressions[0]->type();
+    if (rand32(0, 1) == kArgConstant) {
+      argExpr = generateArgConstant(argType);
+    } else {
+      argExpr = generateArgColumn(argType);
+    }
+    inputExpressions.emplace_back(argExpr);
+  }
+  return inputExpressions;
+}
+
+std::vector<core::TypedExprPtr> ExpressionFuzzer::generateMakeTimestampArgs(
+    const CallableSignature& input) {
+  VELOX_CHECK_GE(
+      input.args.size(),
+      6,
+      "At least six inputs are expected from the template signature.");
+  bool useTimezone = vectorFuzzer_->coinToss(0.5);
+  std::vector<core::TypedExprPtr> inputExpressions;
+  inputExpressions.reserve(6);
+  for (int index = 0; index < 5; ++index) {
+    inputExpressions.emplace_back(generateArg(input.args[index]));
+  }
+
+  // The required result type of the sixth argument is a short decimal type with
+  // scale being 6. But when nested expression is generated, that cannot be
+  // guaranteed as argument precisions and scales cannot be inferred from the
+  // result type through a decimal function signature. Given this limitation,
+  // generate constant or column only.
+  core::TypedExprPtr argExpr;
+  if (rand32(0, 1) == kArgConstant) {
+    argExpr = generateArgConstant(input.args[5]);
+  } else {
+    argExpr = generateArgColumn(input.args[5]);
+  }
+  inputExpressions.emplace_back(argExpr);
+
+  if (input.args.size() == 7) {
+    // The 7th. argument cannot be randomly generated as it should be a valid
+    // timezone string.
+    std::vector<std::string> timezoneSet = {
+        "Asia/Kolkata",
+        "America/Los_Angeles",
+        "Canada/Atlantic",
+        "+08:00",
+        "-10:00"};
+    inputExpressions.emplace_back(std::make_shared<core::ConstantTypedExpr>(
+        VARCHAR(), variant(timezoneSet[rand32(0, 4)])));
+  }
+  return inputExpressions;
+}
+
 std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSwitchArgs(
     const CallableSignature& input) {
   VELOX_CHECK_EQ(
@@ -959,6 +1057,29 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSwitchArgs(
   if (useFinalElse) {
     inputExpressions.push_back(generateArg(thenClauseType));
   }
+  return inputExpressions;
+}
+
+std::vector<core::TypedExprPtr> ExpressionFuzzer::generateUnscaledValueArgs(
+    const CallableSignature& input) {
+  VELOX_CHECK_EQ(
+      input.args.size(),
+      1,
+      "Only one input is expected from the template signature.");
+
+  // The required result type of input argument is a short decimal type. But
+  // when nested expression is generated, that cannot be guaranteed as argument
+  // precisions and scales cannot be inferred from the result type through a
+  // decimal function signature. Given this limitation, generate constant or
+  // column only.
+  std::vector<core::TypedExprPtr> inputExpressions;
+  core::TypedExprPtr argExpr;
+  if (rand32(0, 1) == kArgConstant) {
+    argExpr = generateArgConstant(input.args[0]);
+  } else {
+    argExpr = generateArgColumn(input.args[0]);
+  }
+  inputExpressions.emplace_back(argExpr);
   return inputExpressions;
 }
 
@@ -1038,7 +1159,8 @@ core::TypedExprPtr ExpressionFuzzer::generateExpression(
     } else {
       expression = generateExpressionFromConcreteSignatures(
           returnType, chosenFunctionName);
-      if (!expression && options_.enableComplexTypes) {
+      if (!expression &&
+          (options_.enableComplexTypes || options_.enableDecimalType)) {
         expression = generateExpressionFromSignatureTemplate(
             returnType, chosenFunctionName);
       }
@@ -1062,13 +1184,98 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::getArgsForCallable(
   return funcIt->second(callable);
 }
 
+TypePtr ExpressionFuzzer::getConstrainedOutputType(
+    const std::vector<core::TypedExprPtr>& args,
+    const exec::FunctionSignature* signature) {
+  if (signature == nullptr) {
+    return nullptr;
+  }
+
+  // Checks if any variable is integer constrained, and get the decimal name
+  // style.
+  bool integerConstrained = false;
+  char decimalNameStyle = 0;
+  for (const auto& [variableName, variableInfo] : signature->variables()) {
+    if (variableInfo.isIntegerParameter()) {
+      // If constraints are empty, the integer variable is also regarded to be
+      // constrained as variables are shared across argument and return types.
+      integerConstrained = true;
+      if (variableName == "precision" || variableName == "scale") {
+        decimalNameStyle = 'a';
+        break;
+      }
+      if (variableName.find("precision") != std::string::npos ||
+          variableName.find("scale") != std::string::npos) {
+        decimalNameStyle = 'b';
+        break;
+      }
+      if (variableName.find("i") != std::string::npos) {
+        decimalNameStyle = 'c';
+        break;
+      }
+    }
+  }
+
+  // To handle the constraints between input types and output types of a decimal
+  // function, extracts the input precisions and scales from decimal arguments,
+  // and bind them to integer variables.
+  std::unordered_map<std::string, int> decimalVariablesBindings;
+  column_index_t decimalColIndex = 1;
+  for (column_index_t i = 0; i < args.size(); ++i) {
+    const auto argType = args[i]->type();
+    if (argType->isDecimal()) {
+      const auto [p, s] = getDecimalPrecisionScale(*argType);
+      switch (decimalNameStyle) {
+        case 'a': {
+          decimalVariablesBindings["precision"] = p;
+          decimalVariablesBindings["scale"] = s;
+          break;
+        }
+        case 'b': {
+          const auto column = std::string(1, 'a' + i);
+          decimalVariablesBindings[column + "_precision"] = p;
+          decimalVariablesBindings[column + "_scale"] = s;
+          break;
+        }
+        case 'c': {
+          decimalVariablesBindings["i" + std::to_string(decimalColIndex)] = p;
+          decimalVariablesBindings
+              ["i" + std::to_string(decimalColIndex + kIntegerPairSize)] = s;
+          decimalColIndex++;
+          break;
+        }
+        default:
+          VELOX_UNSUPPORTED(
+              "Unsupported decimal name style {}.", decimalNameStyle);
+      }
+    }
+  }
+
+  // Calculates the matched return type through the argument types with argument
+  // type fuzzer, which evaluates the constraints internally.
+  if (integerConstrained && decimalVariablesBindings.size() > 0 && signature) {
+    ArgumentTypeFuzzer fuzzer{*signature, rng_, decimalVariablesBindings};
+    return fuzzer.fuzzReturnType();
+  }
+  return nullptr;
+}
+
 core::TypedExprPtr ExpressionFuzzer::getCallExprFromCallable(
     const CallableSignature& callable,
-    const TypePtr& type) {
+    const TypePtr& type,
+    const exec::FunctionSignature* signature) {
   auto args = getArgsForCallable(callable);
-  // Generate a CallTypedExpr with type because callable.returnType may not have
-  // the required field names.
-  return std::make_shared<core::CallTypedExpr>(type, args, callable.name);
+
+  // For a decimal function (especially a nested one), as argument precisions
+  // and scales are randomly generated, callable.returnType does not follow the
+  // required constraints, and the matched result type needs to be recalculated
+  // from the argument types. If a constrained output type can be generated, use
+  // it to avoid breaking the constraints between input types and output types.
+  // Otherwise, generate a CallTypedExpr with type because callable.returnType
+  // may not have the required field names.
+  const auto constrainedType = getConstrainedOutputType(args, signature);
+  return std::make_shared<core::CallTypedExpr>(
+      constrainedType ? constrainedType : type, args, callable.name);
 }
 
 const CallableSignature* ExpressionFuzzer::chooseRandomConcreteSignature(
@@ -1150,7 +1357,7 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromConcreteSignatures(
   }
 
   markSelected(chosen->name);
-  return getCallExprFromCallable(*chosen, returnType);
+  return getCallExprFromCallable(*chosen, returnType, nullptr);
 }
 
 const SignatureTemplate* ExpressionFuzzer::chooseRandomSignatureTemplate(
@@ -1255,7 +1462,7 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
       .constantArgs = constantArguments};
 
   markSelected(chosen->name);
-  return getCallExprFromCallable(callable, returnType);
+  return getCallExprFromCallable(callable, returnType, chosen->signature);
 }
 
 core::TypedExprPtr ExpressionFuzzer::generateCastExpression(
