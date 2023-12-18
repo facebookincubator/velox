@@ -275,8 +275,7 @@ OutputBufferStats::OutputBufferStats(
       canAddBuffers(canAddBuffer),
       canAddPages(canAddPage),
       finished(finish),
-      destinationBuffers(buffers) {
-}
+      destinationBuffers(buffers) {}
 
 OutputBuffer::OutputBuffer(
     std::shared_ptr<Task> task,

@@ -183,7 +183,8 @@ bool OutputBufferManager::isOverutilized(const std::string& taskId) {
   return false;
 }
 
-std::optional<OutputBufferStats> OutputBufferManager::getStats(const std::string& taskId) {
+std::optional<OutputBufferStats> OutputBufferManager::getStats(
+    const std::string& taskId) {
   auto buffer = getBufferIfExists(taskId);
   if (buffer != nullptr) {
     return buffer->getStats();
