@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <common/base/VeloxException.h>
 #include <folly/container/F14Map.h>
 #include "velox/functions/lib/Re2Functions.h"
 
@@ -20,7 +21,7 @@ namespace facebook::velox::functions::sparksql {
 namespace {
 
 using ::re2::RE2;
-
+static int successfulRegexCount = 0;
 template <typename T>
 re2::StringPiece toStringPiece(const T& string) {
   return re2::StringPiece(string.data(), string.size());
@@ -42,16 +43,10 @@ void checkForBadPattern(const RE2& re) {
 // operate on the remaining rows.
 //
 // @param pattern The regex pattern string to validate.
-// @param functionName (Optional) Name of the calling function to include in
+// @param functionName Name of the calling function to include in
 // error messages.
 //
 // @throws VELOX_USER_FAIL If the pattern is found to use unsupported features.
-// @note  Default functionName is "regexp_replace" because it uses non-constant
-// patterns so it cannot be checked with "ensureRegexIsCompatible". No
-// other functions work with non-constant patterns, but they may in the future.
-//
-// @note Leaving functionName as an optional parameter makes room for
-// other functions to enable non-constant patterns in the future.
 void checkForCompatiblePattern(
     const std::string& pattern,
     const char* functionName) {
@@ -110,12 +105,18 @@ template <typename T>
 struct RegexReplaceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  void call(
+  bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& stringInput,
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace) {
-    re2::RE2* patternRegex = getCachedRegex(pattern.str());
+    re2::RE2* patternRegex = nullptr;
+    try {
+      patternRegex = getCachedRegex(pattern.str());
+    } catch (const VeloxException& e) {
+      return false;
+    }
+    //re2::RE2* patternRegex = getCachedRegex(pattern.str());
     re2::StringPiece replaceStringPiece = toStringPiece(replace);
 
     std::string string(stringInput.data(), stringInput.size());
@@ -127,17 +128,28 @@ struct RegexReplaceFunction {
     } else {
       result.resize(0);
     }
+    return true;
   }
 
-  void call(
+  bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& stringInput,
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace,
       const arg_type<int64_t>& position) {
-    VELOX_USER_CHECK_GE(position, 1, "regexp_replace requires a position >= 1");
+    if (position < 1) {
+      return false;
+    }
+    //VELOX_USER_CHECK_GE(position, 1, "regex_replace requires a position >= 1");
 
-    re2::RE2* patternRegex = getCachedRegex(pattern.str());
+    re2::RE2* patternRegex = nullptr;
+    try {
+      patternRegex = getCachedRegex(pattern.str());
+    } catch (const VeloxException& e) {
+      return false;
+    }
+
+    //re2::RE2* patternRegex = getCachedRegex(pattern.str());
     re2::StringPiece replaceStringPiece = toStringPiece(replace);
     re2::StringPiece inputStringPiece = toStringPiece(stringInput);
 
@@ -145,7 +157,7 @@ struct RegexReplaceFunction {
       result.resize(inputStringPiece.size());
       std::memcpy(
           result.data(), inputStringPiece.data(), inputStringPiece.size());
-      return;
+      return true;
     }
 
     // Adjust the position for UTF-8 by counting the code points.
@@ -154,8 +166,11 @@ struct RegexReplaceFunction {
     while (numCodePoints < position - 1 && utf8Position <= stringInput.size()) {
       int charLength =
           utf8proc_char_length(inputStringPiece.data() + utf8Position);
-      VELOX_USER_CHECK_GT(
-          charLength, 0, "regexp_replace encountered invalid UTF-8 character");
+      if (charLength < 1) {
+        return false;
+      }
+      // VELOX_USER_CHECK_GT(
+      //     charLength, 0, "regex_replace encountered invalid UTF-8 character");
       ++numCodePoints;
       utf8Position += charLength;
     }
@@ -163,7 +178,7 @@ struct RegexReplaceFunction {
       result.resize(inputStringPiece.size());
       std::memcpy(
           result.data(), inputStringPiece.data(), inputStringPiece.size());
-      return;
+      return true;
     }
 
     re2::StringPiece prefix(inputStringPiece.data(), utf8Position);
@@ -185,6 +200,7 @@ struct RegexReplaceFunction {
     } else {
       result.resize(0);
     }
+    return true;
   }
 
  private:
