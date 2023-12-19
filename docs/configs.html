@@ -187,6 +187,12 @@ cause failures or crashes by helping identify which operator is generating them.
 <td><p>Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
 evalWithMemo are enabled.</p></td>
 </tr>
+<tr class="row-odd"><td><p>driver_cpu_time_slice_limit_ms</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>If it is not zero, specifies the time limit that a driver can continuously
+run on a thread before yield. If it is zero, then it no limit.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
