@@ -270,9 +270,9 @@ struct CotFunction {
   }
 };
 
+template <typename T>
 struct Atan2Function {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput y, TInput x) {
+  FOLLY_ALWAYS_INLINE void call(double& result, double y, double x) {
     result = std::atan2(y + 0.0, x + 0.0);
   }
 };
