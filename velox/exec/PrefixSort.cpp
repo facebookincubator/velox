@@ -88,57 +88,19 @@ void PrefixSort::preparePrefix() {
   }
 }
 
-int PrefixSort::compare(
-    const PrefixSortIterator& left,
-    const PrefixSortIterator& right) {
-  if (!sortLayout_.needSortData) {
-    return FastMemcmp(*left, *right, (size_t)sortLayout_.keySize);
-  } else {
-    int result = FastMemcmp(*left, *right, (size_t)sortLayout_.keySize);
-    if (result != 0) {
-      return result;
-    }
-    char* leftAddress = getAddressFromPrefix(left);
-    char* rightAddress = getAddressFromPrefix(right);
-    for (int i = sortLayout_.numPrefixKeys_; i < sortLayout_.numSortKeys_;
-         i++) {
-      result = rowContainer_->compare(
-          leftAddress, rightAddress, i, sortLayout_.keyCompareFlags_[i]);
-      if (result != 0) {
-        return result;
-      }
-    }
-  }
-  return 0;
-}
-
 void PrefixSort::sort(std::vector<char*>& rows) {
-  for (auto i = 0; i < rows.size(); i++) {
-    rows[i] = prefixes_ + i * sortLayout_.entrySize;
-  }
-
-  std::sort(rows.begin(), rows.end(), [&](char* a, char* b) {
-    return compare(a, b) < 0;
-  });
+  auto swapBuffer = AlignedBuffer::allocate<char>(
+      sortLayout_.entrySize, rowContainer_->pool());
+  PrefixSortRunner sortRunner(
+      sortLayout_.entrySize, swapBuffer->asMutable<char>());
+  auto start = prefixes_;
+  auto end = prefixes_ + numInputRows_ * sortLayout_.entrySize;
+  sortRunner.quickSort(
+      start, end, [&](char* a, char* b) { return compare(a, b); });
 
   for (int i = 0; i < rows.size(); i++) {
-    rows[i] = *reinterpret_cast<char**>((rows[i]) + sortLayout_.keySize);
-  }
-}
-
-void PrefixSort::sortWithIterator(std::vector<char*>& rows) {
-  auto start = PrefixSortIterator(prefixes_, sortLayout_.entrySize);
-  auto end = start + numInputRows_;
-  auto prefixSortContext = PrefixSortContext(sortLayout_.entrySize, *end);
-  PrefixQuickSort(
-      prefixSortContext,
-      start,
-      end,
-      [&](const PrefixSortIterator& a, const PrefixSortIterator& b) {
-        return compare(a, b);
-      });
-  for (int i = 0; i < end - start; i++) {
-    rows[i] = getAddressFromPrefix(start + i);
+    rows[i] = *reinterpret_cast<char**>(
+        prefixes_ + i * sortLayout_.entrySize + sortLayout_.keySize);
   }
 }
 

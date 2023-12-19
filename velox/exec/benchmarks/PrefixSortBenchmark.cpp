@@ -91,57 +91,39 @@ class PrefixSortBenchmark : public VectorTestBase {
     test->_1key = makeOrderByPlan({"c2"}, test->rows);
     folly::addBenchmark(
         __FILE__, name + "_1key_base", [plan = &test->_1key, this]() {
-          run(*plan, "false", "false");
+          run(*plan, "false");
           return 1;
         });
     folly::addBenchmark(
-        __FILE__, name + "_1key_prefix_std_sort", [plan = &test->_1key, this]
-        () {
-          run(*plan, "true", "false");
-          return 1;
-        });
-    folly::addBenchmark(
-        __FILE__, name + "_1key_prefix_sort_iterator", [plan = &test->_1key,
+        __FILE__, name + "_1key_prefix_sort", [plan = &test->_1key,
                                                        this]
         () {
-          run(*plan, "true", "true");
+          run(*plan, "true");
           return 1;
         });
     test->_2key = makeOrderByPlan({"c1", "c2"}, test->rows);
     folly::addBenchmark(
         __FILE__, name + "_2key_base", [plan = &test->_2key, this]() {
-          run(*plan, "false", "false");
-          return 1;
-        });
-    folly::addBenchmark(
-        __FILE__, name + "_2key_prefix_std_sort", [plan = &test->_2key, this]
-        () {
-          run(*plan, "true", "false");
+          run(*plan, "false");
           return 1;
         });
 
     folly::addBenchmark(
-        __FILE__, name + "_2key_prefix_sort_iterator", [plan = &test->_2key,
+        __FILE__, name + "_2key_prefix_sort", [plan = &test->_2key,
                                                        this]() {
-          run(*plan, "true", "true");
+          run(*plan, "true");
           return 1;
         });
     test->_3key = makeOrderByPlan({"c0", "c1", "c2"}, test->rows);
     folly::addBenchmark(
         __FILE__, name + "_3key_base", [plan = &test->_3key, this]() {
-          run(*plan, "false", "false");
+          run(*plan, "false");
           return 1;
         });
     folly::addBenchmark(
-        __FILE__, name + "_3key_prefix_std_sort", [plan = &test->_3key, this]
-        () {
-          run(*plan, "true", "false");
-          return 1;
-        });
-    folly::addBenchmark(
-        __FILE__, name + "_3key_prefix_sort_iterator", [plan = &test->_3key,
+        __FILE__, name + "_3key_prefix_sort", [plan = &test->_3key,
                                                        this]() {
-          run(*plan, "true", "true");
+          run(*plan, "true");
           return 1;
         });
 
@@ -150,18 +132,13 @@ class PrefixSortBenchmark : public VectorTestBase {
 
   int64_t run(
       std::shared_ptr<const core::PlanNode> plan,
-      const std::string& enablePrefixSort,
-      const std::string& userIterator) {
+      const std::string& enablePrefixSort) {
     auto start = getCurrentTimeMicro();
     int32_t numRows = 0;
     auto result = exec::test::AssertQueryBuilder(plan)
                       .config(
                           facebook::velox::core::QueryConfig::kEnablePrefixSort,
                           enablePrefixSort)
-                      .config(
-                          facebook::velox::core::QueryConfig::
-                              kEnablePrefixSortWithIterator,
-                          userIterator)
                       .copyResults(pool_.get());
     numRows += result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
     auto elapsedMicros = getCurrentTimeMicro() - start;
@@ -175,6 +152,8 @@ class PrefixSortBenchmark : public VectorTestBase {
 
 int main(int argc, char** argv) {
   folly::init(&argc, &argv);
+  memory::MemoryManager::initialize({});
+
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   parse::registerTypeResolver();

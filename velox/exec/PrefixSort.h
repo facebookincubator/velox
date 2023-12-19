@@ -15,19 +15,23 @@
  */
 #pragma once
 
-#include "PrefixSortAlgorithm.h"
 #include "RowContainer.h"
 #include "string.h"
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/common/memory/MemoryAllocator.h"
+#include "velox/exec/prefixsort/PrefixSortAlgorithm.h"
+#include "velox/exec/prefixsort/PrefixSortEncoder.h"
+
+using namespace facebook::velox::exec::prefixsort;
 
 namespace facebook::velox::exec {
 
 struct PrefixSortConfig {
-  PrefixSortConfig(const uint32_t maxPrefixKeyLength, const bool useIterator =
-                                                          false)
+  PrefixSortConfig(
+      const uint32_t maxPrefixKeyLength,
+      const bool useIterator = false)
       : maxPrefixKeyLength(maxPrefixKeyLength), useIterator(useIterator) {}
   uint32_t maxPrefixKeyLength;
   bool useIterator;
@@ -62,7 +66,7 @@ struct PrefixSortLayout {
 
   // prefix size is fixed.
   uint32_t keySize;
-  uint32_t entrySize;
+  uint64_t entrySize;
   int32_t numPrefixKeys_;
   const int32_t numSortKeys_;
   std::vector<CompareFlags> keyCompareFlags_;
@@ -89,17 +93,11 @@ class PrefixSort {
 
   void sort(std::vector<char*>& rows);
 
-  void sortWithIterator(std::vector<char*>& rows);
-
-  int compare(const PrefixSortIterator& left, const PrefixSortIterator& right);
-
-  int compare(
-      char* left,
-      char* right) {
+  int compare(char* left, char* right) {
     if (!sortLayout_.needSortData) {
-      return FastMemcmp(left, right, (size_t)sortLayout_.keySize);
+      return memcmp(left, right, (size_t)sortLayout_.keySize);
     } else {
-      int result = FastMemcmp(left, right, (size_t)sortLayout_.keySize);
+      int result = memcmp(left, right, (size_t)sortLayout_.keySize);
       if (result != 0) {
         return result;
       }
@@ -137,8 +135,8 @@ class PrefixSort {
     VELOX_UNSUPPORTED("prefix sort not support the type.");
   }
 
-  inline char* getAddressFromPrefix(const PrefixSortIterator& iter) {
-    return *reinterpret_cast<char**>((*iter) + sortLayout_.keySize);
+  inline char* getAddressFromPrefix(const char* prefix) {
+    return *reinterpret_cast<char**>((*prefix) + sortLayout_.keySize);
   }
 
   inline char* getAddressFromPrefix(char* prefix) {
@@ -164,20 +162,20 @@ inline void PrefixSort::rowToPrefix<TypeKind::BIGINT>(
   // store null as min/max value according compare flags.
   if (RowContainer::isNullAt(row, rowColumn.nullByte(), rowColumn.nullMask())) {
     CompareFlags compareFlags = sortLayout_.keyCompareFlags_[index];
-    EncodeData(
-        prefix + prefixOffsets[index],
+    PrefixSortEncoder::encode(
         ((compareFlags.ascending && compareFlags.nullsFirst) ||
          (!compareFlags.ascending && !compareFlags.nullsFirst))
             ? std::numeric_limits<T>::min()
-            : std::numeric_limits<T>::max());
+            : std::numeric_limits<T>::max(),
+        prefix + prefixOffsets[index]);
   } else {
-    EncodeData(
-        prefix + prefixOffsets[index],
-        *(reinterpret_cast<T*>(row + rowColumn.offset())));
+    PrefixSortEncoder::encode(
+        *(reinterpret_cast<T*>(row + rowColumn.offset())),
+        prefix + prefixOffsets[index]);
   }
   // invert bits if desc
   if (!sortLayout_.keyCompareFlags_[index].ascending) {
-    for (idx_t s = 0; s < sizeof(T); s++) {
+    for (uint64_t s = 0; s < sizeof(T); s++) {
       *(prefix + prefixOffsets[index] + s) =
           ~*(prefix + prefixOffsets[index] + s);
     }

@@ -120,12 +120,7 @@ void SortBuffer::noMoreInput() {
           numInputRows_,
           prefixSortConfig_.value());
       prefixSort.preparePrefix();
-      if (prefixSortConfig_->useIterator) {
-        prefixSort.sortWithIterator(sortedRows_);
-      }
-      else {
         prefixSort.sort(sortedRows_);
-      }
     } else {
       data_->listRows(&iter, numInputRows_, sortedRows_.data());
       std::sort(

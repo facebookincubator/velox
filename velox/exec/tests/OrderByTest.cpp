@@ -21,7 +21,6 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/PrefixSortAlgorithm.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -180,7 +179,6 @@ class OrderByTest : public OperatorTestBase {
       queryCtx->testingOverrideConfigUnsafe({
           {core::QueryConfig::kEnablePrefixSort, "true"},
           {core::QueryConfig::kPrefixSortMaxKeyLength, maxPrefixLength.value()},
-          {core::QueryConfig::kEnablePrefixSortWithIterator, "true"}
       });
       std::string straceMessage =
           "run with prefix sort with max prefix length limit " +
@@ -1388,35 +1386,4 @@ DEBUG_ONLY_TEST_F(OrderByTest, spillWithNoMoreOutput) {
   ASSERT_EQ(planStats.spilledBytes, 0);
   ASSERT_EQ(planStats.spilledRows, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
-}
-
-TEST_F(OrderByTest, prefixQuickSort) {
-  std::vector<long> data1 = {2,  3,  1,  2,  2,  -33, -3, 4,  5,  9,  11,
-                             12, 13, 14, 15, 16, 17,  18, 19, 20, 21, 22,
-                             23, 24, 25, 26, 27, 28,  29, 30, 31, 12, 23,
-                             24, 51, 26, 17, 28, 38,  40, 21};
-  std::vector<long> data2 = data1;
-
-  data_ptr_t start = (data_ptr_t)data1.data();
-  data_ptr_t end = start + sizeof(long) * data1.size();
-  uint32_t entrySize = sizeof(long);
-  auto context = PrefixSortContext(sizeof(long), end);
-  auto startPtr = PrefixSortIterator(start, entrySize);
-  auto endPtr = startPtr + data1.size();
-  PrefixQuickSort(
-      context,
-      startPtr,
-      endPtr,
-      [](const PrefixSortIterator& a, const PrefixSortIterator& b) -> int {
-        long v1 = *reinterpret_cast<long*>(*a);
-        long v2 = *reinterpret_cast<long*>(*b);
-        long result = v1 - v2;
-        if (result != 0) {
-          return result > 0 ? 1 : -1;
-        } else {
-          return 0;
-        }
-      });
-  std::sort(data2.begin(), data2.end());
-  ASSERT_EQ(data1, data2);
 }
