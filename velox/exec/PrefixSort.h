@@ -30,11 +30,9 @@ namespace facebook::velox::exec {
 
 struct PrefixSortConfig {
   PrefixSortConfig(
-      const uint32_t maxPrefixKeyLength,
-      const bool useIterator = false)
-      : maxPrefixKeyLength(maxPrefixKeyLength), useIterator(useIterator) {}
+      const uint32_t maxPrefixKeyLength)
+      : maxPrefixKeyLength(maxPrefixKeyLength) {}
   uint32_t maxPrefixKeyLength;
-  bool useIterator;
 };
 
 struct PrefixSortLayout {
@@ -133,10 +131,6 @@ class PrefixSort {
     }
     // TODO support varchar later
     VELOX_UNSUPPORTED("prefix sort not support the type.");
-  }
-
-  inline char* getAddressFromPrefix(const char* prefix) {
-    return *reinterpret_cast<char**>((*prefix) + sortLayout_.keySize);
   }
 
   inline char* getAddressFromPrefix(char* prefix) {

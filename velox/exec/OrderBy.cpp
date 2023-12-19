@@ -69,8 +69,7 @@ OrderBy::OrderBy(
       operatorCtx_->driverCtx()->queryConfig().orderBySpillMemoryThreshold(),
       driverCtx->queryConfig().isPrefixSortEnabled()
           ? std::make_optional<PrefixSortConfig>(
-                driverCtx->queryConfig().prefixSortMaxKeyLength(),
-                driverCtx->queryConfig().isPrefixSortEnabledWithIterator())
+                driverCtx->queryConfig().prefixSortMaxKeyLength())
           : std::nullopt);
 }
 

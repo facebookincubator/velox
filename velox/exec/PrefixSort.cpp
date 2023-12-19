@@ -47,54 +47,21 @@ void PrefixSort::preparePrefix() {
       bits::roundUp(numRows * sortLayout_.entrySize, kPageSize) / kPageSize;
   rowContainer_->pool()->allocateContiguous(numPages, prefixAllocation);
   prefixes_ = prefixAllocation.data<char>();
-
-  RowContainerIterator iter;
-  int32_t count = 0;
-  auto numAllocations = rowContainer_->rows_.numRanges();
-  if (iter.allocationIndex == 0 && iter.rowOffset == 0) {
-    iter.normalizedKeysLeft = rowContainer_->numRowsWithNormalizedKey_;
-    iter.normalizedKeySize = rowContainer_->originalNormalizedKeySize_;
-  }
-  int32_t rowSize = rowContainer_->fixedRowSize_ +
-      (iter.normalizedKeysLeft > 0 ? rowContainer_->originalNormalizedKeySize_
-                                   : 0);
-  char* address = nullptr;
-  for (auto i = iter.allocationIndex; i < numAllocations; ++i) {
-    auto range = rowContainer_->rows_.rangeAt(i);
-    auto* data = range.data() +
-        memory::alignmentPadding(range.data(), rowContainer_->alignment_);
-    auto limit = range.size() -
-        (reinterpret_cast<uintptr_t>(data) -
-         reinterpret_cast<uintptr_t>(range.data()));
-    auto row = iter.rowOffset;
-    while (row + rowSize <= limit) {
-      address = data + row +
-          (iter.normalizedKeysLeft > 0
-               ? rowContainer_->originalNormalizedKeySize_
-               : 0);
-      VELOX_DCHECK_EQ(
-          reinterpret_cast<uintptr_t>(address) % rowContainer_->alignment_, 0);
-      row += rowSize;
-      if (--iter.normalizedKeysLeft == 0) {
-        rowSize -= rowContainer_->originalNormalizedKeySize_;
-      }
-      if (bits::isBitSet(address, rowContainer_->freeFlagOffset_)) {
-        continue;
-      }
-      extractRowToPrefix(address, prefixes_ + sortLayout_.entrySize * count);
-      count++;
-    }
-    iter.rowOffset = 0;
-  }
 }
 
 void PrefixSort::sort(std::vector<char*>& rows) {
+  RowContainerIterator iter;
+  rowContainer_->listRows(&iter, numInputRows_, rows.data());
+  for (uint64_t i = 0; i < rows.size(); ++i) {
+    extractRowToPrefix(rows[i], prefixes_ + sortLayout_.entrySize * i);
+  }
   auto swapBuffer = AlignedBuffer::allocate<char>(
       sortLayout_.entrySize, rowContainer_->pool());
   PrefixSortRunner sortRunner(
       sortLayout_.entrySize, swapBuffer->asMutable<char>());
   auto start = prefixes_;
   auto end = prefixes_ + numInputRows_ * sortLayout_.entrySize;
+
   sortRunner.quickSort(
       start, end, [&](char* a, char* b) { return compare(a, b); });
 
