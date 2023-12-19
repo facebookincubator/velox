@@ -384,7 +384,10 @@ TEST_F(ArithmeticTest, atan2) {
     return evaluateOnce<double>("atan2(c0, c1)", y, x);
   };
 
-  EXPECT_EQ(atan2(0, 0), 0.0);
+  EXPECT_EQ(atan2(0.0, 0.0), 0.0);
+  EXPECT_EQ(atan2(-0.0, -0.0), 0.0);
+  EXPECT_EQ(atan2(0.0, -0.0), 0.0);
+  EXPECT_EQ(atan2(-0.0, 0.0), 0.0);
 }
 
 class LogNTest : public SparkFunctionBaseTest {
