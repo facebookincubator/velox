@@ -90,12 +90,12 @@ struct DestinationBufferStats {
   /// OutputBuffer, so this flag is set by the OutputBuffer.
   bool finished{false};
 
-  /// Stats of data that is currently buffered.
+  /// Number of buffered bytes / rows / pages.
   int64_t bytesBuffered{0};
   int64_t rowsBuffered{0};
   int64_t pagesBuffered{0};
 
-  /// Stats of data that has been sent from the buffer.
+  /// Number of sent bytes / rows / pages.
   int64_t bytesSent{0};
   int64_t rowsSent{0};
   int64_t pagesSent{0};
@@ -162,21 +162,21 @@ class Task;
 struct OutputBufferStats {
   OutputBufferStats(
       core::PartitionedOutputNode::Kind k,
-      bool canAddBuffer,
-      bool canAddPage,
+      bool noMoreBuffer,
+      bool noMoreDat,
       bool finish,
       const std::vector<DestinationBufferStats>& buffers)
       : kind(k),
-        canAddBuffers(canAddBuffer),
-        canAddPages(canAddPage),
+        noMoreBuffers(noMoreBuffer),
+        noMoreData(noMoreDat),
         finished(finish),
         destinationBuffers(buffers) {}
 
   const core::PartitionedOutputNode::Kind kind;
 
   /// States of the OutputBuffer.
-  const bool canAddBuffers;
-  const bool canAddPages;
+  const bool noMoreBuffers;
+  const bool noMoreData;
   const bool finished;
 
   /// Stats of the OutputBuffer's destinations.
