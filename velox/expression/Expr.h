@@ -363,7 +363,7 @@ class Expr {
       const SelectivityVector& rows,
       const uint64_t* FOLLY_NULLABLE rawNulls,
       EvalCtx& context,
-      VectorPtr& result);
+      VectorPtr& result) const;
 
   auto& vectorFunction() const {
     return vectorFunction_;
@@ -408,7 +408,7 @@ class Expr {
 
   PeelEncodingsResult peelEncodings(
       EvalCtx& context,
-      ScopedContextSaver& saver,
+      ContextSaver& saver,
       const SelectivityVector& rows,
       LocalDecodedVector& localDecoded,
       LocalSelectivityVector& newRowsHolder,

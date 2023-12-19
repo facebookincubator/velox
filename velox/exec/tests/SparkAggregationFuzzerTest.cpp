@@ -19,8 +19,9 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
-#include "velox/exec/tests/utils/AggregationFuzzerRunner.h"
-#include "velox/exec/tests/utils/DuckQueryRunner.h"
+#include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
+#include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
+#include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 DEFINE_int64(
@@ -46,6 +47,8 @@ int main(int argc, char** argv) {
   // singletons, installing proper signal handlers for better debugging
   // experience, and initialize glog and gflags.
   folly::Init init(&argc, &argv);
+
+  facebook::velox::memory::MemoryManager::initialize({});
 
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable. Constant argument of bloom_filter_agg cause
@@ -78,8 +81,9 @@ int main(int argc, char** argv) {
   });
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
+  using Options = facebook::velox::exec::test::AggregationFuzzerOptions;
 
-  Runner::Options options;
+  Options options;
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
   options.customVerificationFunctions = customVerificationFunctions;

@@ -340,7 +340,10 @@ class ArraySortLambdaFunction : public exec::VectorFunction {
         context,
         throwOnNestedNull_);
     auto sortedElements = BaseVector::wrapInDictionary(
-        nullptr, indices, newNumElements, flatArray->elements());
+        nullptr,
+        indices,
+        indices->size() / sizeof(vector_size_t),
+        flatArray->elements());
 
     // Set nulls for rows not present in 'rows'.
     BufferPtr newNulls = addNullsForUnselectedRows(flatArray, rows);
@@ -349,7 +352,7 @@ class ArraySortLambdaFunction : public exec::VectorFunction {
         flatArray->pool(),
         flatArray->type(),
         std::move(newNulls),
-        flatArray->size(),
+        rows.end(),
         flatArray->offsets(),
         flatArray->sizes(),
         sortedElements);
@@ -488,13 +491,17 @@ core::TypedExprPtr rewriteArraySortCall(
     return nullptr;
   }
 
+  static const std::string kNotSupported =
+      "array_sort with comparator lambda that cannot be rewritten "
+      "into a transform is not supported: {}";
+
   if (auto comparison =
           functions::prestosql::isSimpleComparison(prefix, *lambda)) {
     std::string name = comparison->isLessThen ? prefix + "array_sort"
                                               : prefix + "array_sort_desc";
 
     if (!comparison->expr->type()->isOrderable()) {
-      return nullptr;
+      VELOX_USER_FAIL(kNotSupported, lambda->toString())
     }
 
     auto rewritten = std::make_shared<core::CallTypedExpr>(
@@ -511,7 +518,7 @@ core::TypedExprPtr rewriteArraySortCall(
     return rewritten;
   }
 
-  return nullptr;
+  VELOX_USER_FAIL(kNotSupported, lambda->toString())
 }
 
 // Register function.

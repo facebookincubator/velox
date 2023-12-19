@@ -49,6 +49,11 @@ class PlanNodeToStringTest : public testing::Test, public test::VectorTestBase {
                 .planNode();
   }
 
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   RowVectorPtr data_;
   core::PlanNodePtr plan_;
 };
@@ -278,6 +283,19 @@ TEST_F(PlanNodeToStringTest, aggregation) {
              .planNode();
   ASSERT_EQ(
       "-- Aggregation[PARTIAL STREAMING [c0] a := sum(ROW[\"c1\"])] -> c0:SMALLINT, a:BIGINT\n",
+      plan->toString(true, false));
+}
+
+TEST_F(PlanNodeToStringTest, expand) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .expand(
+                      {{"c0", "null::integer as c1", "c2", "0 as gid"},
+                       {"null as c0", "c1", "c2", "1 as gid"}})
+                  .planNode();
+  ASSERT_EQ("-- Expand\n", plan->toString());
+  ASSERT_EQ(
+      "-- Expand[[c0, null, c2, 0], [null, c1, c2, 1]] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT, gid:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -729,12 +747,12 @@ TEST_F(PlanNodeToStringTest, window) {
   plan = PlanBuilder()
              .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
              .window({"window1(c) over (partition by a "
-                      "range between current row and b following)"})
+                      "rows between current row and b following)"})
              .planNode();
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
       "-- Window[partition by [a] "
-      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING] "
+      "w0 := window1(ROW[\"c\"]) ROWS between CURRENT ROW and b FOLLOWING] "
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, w0:BIGINT\n",
       plan->toString(true, false));
 
@@ -766,12 +784,12 @@ TEST_F(PlanNodeToStringTest, window) {
   plan = PlanBuilder()
              .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
              .streamingWindow({"window1(c) over (partition by a "
-                               "range between current row and b following)"})
+                               "rows between current row and b following)"})
              .planNode();
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
       "-- Window[STREAMING partition by [a] "
-      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING] "
+      "w0 := window1(ROW[\"c\"]) ROWS between CURRENT ROW and b FOLLOWING] "
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, w0:BIGINT\n",
       plan->toString(true, false));
 }

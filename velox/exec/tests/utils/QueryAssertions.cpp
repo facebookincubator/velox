@@ -68,6 +68,18 @@ template <>
 }
 
 template <>
+::duckdb::Value duckValueAt<TypeKind::INTEGER>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  auto type = vector->type();
+  if (type->isDate()) {
+    return ::duckdb::Value::DATE(::duckdb::Date::EpochDaysToDate(
+        vector->as<SimpleVector<int32_t>>()->valueAt(index)));
+  }
+  return ::duckdb::Value(vector->as<SimpleVector<int32_t>>()->valueAt(index));
+}
+
+template <>
 ::duckdb::Value duckValueAt<TypeKind::BIGINT>(
     const VectorPtr& vector,
     vector_size_t index) {
@@ -80,6 +92,12 @@ template <>
         decimalType.precision(),
         decimalType.scale());
   }
+
+  if (type->isIntervalDayTime()) {
+    return ::duckdb::Value::INTERVAL(
+        0, 0, vector->as<SimpleVector<int64_t>>()->valueAt(index));
+  }
+
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
 }
 
@@ -867,15 +885,12 @@ void DuckDbQueryRunner::createTable(
           appender.Append(duckValueAt<TypeKind::BIGINT>(columnVector, row));
         } else if (rowType.childAt(column)->isLongDecimal()) {
           appender.Append(duckValueAt<TypeKind::HUGEINT>(columnVector, row));
-        } else if (type->isIntervalDayTime()) {
-          auto value = ::duckdb::Value::INTERVAL(
-              0, 0, columnVector->as<SimpleVector<int64_t>>()->valueAt(row));
-          appender.Append(value);
-        } else if (type->isDate()) {
-          auto value = ::duckdb::Value::DATE(::duckdb::Date::EpochDaysToDate(
-              columnVector->as<SimpleVector<int32_t>>()->valueAt(row)));
-          appender.Append(value);
         } else {
+          VELOX_CHECK(
+              type->equivalent(*columnVector->type()),
+              "{} vs. {}",
+              type->toString(),
+              columnVector->toString())
           auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
               duckValueAt, type->kind(), columnVector, row);
           appender.Append(value);
@@ -1278,7 +1293,22 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     addSplits(task);
   }
 
-  EXPECT_TRUE(waitForTaskCompletion(task, maxWaitMicros)) << task->taskId();
+  if (!waitForTaskCompletion(task, maxWaitMicros)) {
+    // NOTE: there is async memory arbitration might fail the task after all the
+    // results have been consumed and before the task finishes. So we might run
+    // into the failed task state in some rare case such as exposed by
+    // concurrent memory arbitration test.
+    if (task->state() != TaskState::kFinished &&
+        task->state() != TaskState::kRunning) {
+      waitForTaskDriversToFinish(task, maxWaitMicros);
+      std::rethrow_exception(task->error());
+    } else {
+      VELOX_FAIL(
+          "Failed to wait for task to complete after {}, task: {}",
+          succinctMicros(maxWaitMicros),
+          task->toString());
+    }
+  }
   return {std::move(cursor), std::move(result)};
 }
 

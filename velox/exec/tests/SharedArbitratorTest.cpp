@@ -422,7 +422,6 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
       const RowVectorPtr& expectedResult = nullptr) {
     QueryTestResult result;
     const auto plan = hashJoinPlan(vectors, result.planNodeId);
-    std::shared_ptr<Task> task;
     if (enableSpilling) {
       const auto spillDirectory = exec::test::TempDirectoryPath::create();
       result.data = AssertQueryBuilder(plan)
@@ -646,13 +645,14 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
               .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
               // Set stripe size to extreme large to avoid writer internal
               // triggered flush.
-              .connectorConfig(
+              .connectorSessionProperty(
                   kHiveConnectorId,
-                  connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+                  connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
                   "1GB")
-              .connectorConfig(
+              .connectorSessionProperty(
                   kHiveConnectorId,
-                  connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+                  connector::hive::HiveConfig::
+                      kOrcWriterMaxDictionaryMemorySession,
                   "1GB")
               .queryCtx(queryCtx)
               .maxDrivers(numDrivers)
@@ -663,6 +663,29 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
                         .maxDrivers(numDrivers)
                         .copyResults(pool(), result.task);
     }
+    if (expectedResult != nullptr) {
+      assertEqualResults({result.data}, {expectedResult});
+    }
+    return result;
+  }
+
+  QueryTestResult runFakeTask(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      uint32_t numDrivers,
+      const RowVectorPtr& expectedResult = nullptr) {
+    QueryTestResult result;
+    result.data =
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(vectors)
+                .addNode([&](std::string id, core::PlanNodePtr input) {
+                  return std::make_shared<FakeMemoryNode>(id, input);
+                })
+                .planNode())
+            .queryCtx(queryCtx)
+            .maxDrivers(numDrivers)
+            .copyResults(pool(), result.task);
     if (expectedResult != nullptr) {
       assertEqualResults({result.data}, {expectedResult});
     }
@@ -1839,132 +1862,22 @@ TEST_F(SharedArbitrationTest, reclaimFromCompletedJoinBuilder) {
   }
 }
 
-DEBUG_ONLY_TEST_F(
-    SharedArbitrationTest,
-    reclaimFromJoinBuilderWithMultiDrivers) {
-  const int numVectors = 32;
-  std::vector<RowVectorPtr> vectors;
-  fuzzerOpts_.vectorSize = 128;
-  fuzzerOpts_.stringVariableLength = false;
-  fuzzerOpts_.stringLength = 512;
-  for (int i = 0; i < numVectors; ++i) {
-    vectors.push_back(newVector());
-  }
+TEST_F(SharedArbitrationTest, reclaimFromJoinBuilderWithMultiDrivers) {
+  const auto vectors = newVectors(256, 64 << 20);
   const int numDrivers = 4;
   const auto expectedResult =
       runHashJoinTask(vectors, nullptr, numDrivers, false).data;
-
-  // Whether the tasks are run under the same query context.
-  std::vector<bool> sameQueries = {false, true};
-  for (bool sameQuery : sameQueries) {
-    SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
-        newQueryCtx(kMemoryCapacity);
-    std::shared_ptr<core::QueryCtx> joinQueryCtx;
-    if (sameQuery) {
-      joinQueryCtx = fakeMemoryQueryCtx;
-    } else {
-      joinQueryCtx = newQueryCtx(kMemoryCapacity);
-    }
-    // This is an experimentally calculated size that ensures the join will
-    // spill. Can change as the join implementation evolves.
-    const auto joinMemoryUsage = 11 * MB;
-    const auto fakeAllocationSize = kMemoryCapacity - joinMemoryUsage;
-
-    // Ensure a single allocation eats up the rest of the memory.
-    std::atomic<bool> injectAllocationOnce{true};
-    std::atomic<bool> fakeAllocationWaitFlag{true};
-    folly::EventCount fakeAllocationWait;
-    fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
-      if (!injectAllocationOnce.exchange(false)) {
-        return TestAllocation{};
-      }
-      fakeAllocationWait.await(
-          [&]() { return !fakeAllocationWaitFlag.load(); });
-      auto buffer = op->pool()->allocate(fakeAllocationSize);
-      return TestAllocation{op->pool(), buffer, fakeAllocationSize};
-    });
-
-    // Ensure the build operators make enough progress to consume more than
-    // `joinMemoryUsage` then wait for the fake allocation to eat up memory and
-    // initiate a spill via the arbitrator.
-    std::atomic<int> injectCount{0};
-    folly::futures::Barrier builderBarrier(numDrivers);
-    std::atomic<bool> taskPauseWaitFlag{true};
-    folly::EventCount taskPauseWait;
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Driver::runInternal::addInput",
-        std::function<void(Operator*)>(([&](Operator* op) {
-          if (op->operatorType() != "HashBuild") {
-            return;
-          }
-          // Make sure each hash build operator has reserved memory to avoid
-          // trigger memory arbitration in test.
-          if (static_cast<MemoryPoolImpl*>(op->pool())
-                  ->testingMinReservationBytes() == 0) {
-            return;
-          }
-          // Check all the hash build operators' memory usage instead of
-          // individual operator.
-          if (op->pool()->parent()->currentBytes() < joinMemoryUsage) {
-            return;
-          }
-          if (++injectCount > numDrivers) {
-            return;
-          }
-          auto future = builderBarrier.wait();
-          if (future.wait().value()) {
-            fakeAllocationWaitFlag = false;
-            fakeAllocationWait.notifyAll();
-          }
-          // Wait for pause to be triggered.
-          taskPauseWait.await([&]() { return !taskPauseWaitFlag.load(); });
-        })));
-
-    // This indicates that a spill has been initiated by the arbitrator.
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Task::requestPauseLocked",
-        std::function<void(Task*)>([&](Task* /*unused*/) {
-          taskPauseWaitFlag = false;
-          taskPauseWait.notifyAll();
-        }));
-
-    // joinQueryCtx and fakeMemoryQueryCtx may be the same and thus share the
-    // same underlying QueryConfig.  We apply the changes here instead of using
-    // the AssertQueryBuilder to avoid a potential race condition caused by
-    // writing the config in the join thread, and reading it in the memThread.
-    std::unordered_map<std::string, std::string> config{
-        {core::QueryConfig::kSpillEnabled, "true"},
-        {core::QueryConfig::kJoinSpillEnabled, "true"},
-        {core::QueryConfig::kJoinSpillPartitionBits, "2"}};
-    joinQueryCtx->testingOverrideConfigUnsafe(std::move(config));
-
-    std::thread joinThread([&]() {
-      const auto result = runHashJoinTask(
-          vectors, joinQueryCtx, numDrivers, true, expectedResult);
-      auto taskStats = exec::toPlanStats(result.task->taskStats());
-      auto& planStats = taskStats.at(result.planNodeId);
-      ASSERT_GT(planStats.spilledBytes, 0);
-    });
-
-    std::thread memThread([&]() {
-      auto task =
-          AssertQueryBuilder(duckDbQueryRunner_)
-              .queryCtx(fakeMemoryQueryCtx)
-              .plan(PlanBuilder()
-                        .values(vectors)
-                        .addNode([&](std::string id, core::PlanNodePtr input) {
-                          return std::make_shared<FakeMemoryNode>(id, input);
-                        })
-                        .planNode())
-              .assertResults("SELECT * FROM tmp");
-    });
-    joinThread.join();
-    memThread.join();
-    waitForAllTasksToBeDeleted();
-    ASSERT_GT(arbitrator_->stats().numRequests, 0);
-  }
+  // Create a query ctx with a small capacity to trigger spilling.
+  std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(128 << 20);
+  auto result =
+      runHashJoinTask(vectors, queryCtx, numDrivers, true, expectedResult);
+  auto taskStats = exec::toPlanStats(result.task->taskStats());
+  auto& planStats = taskStats.at(result.planNodeId);
+  ASSERT_GT(planStats.spilledBytes, 0);
+  result.task.reset();
+  waitForAllTasksToBeDeleted();
+  ASSERT_GT(arbitrator_->stats().numRequests, 0);
+  ASSERT_GT(arbitrator_->stats().numReclaimedBytes, 0);
 }
 
 DEBUG_ONLY_TEST_F(
@@ -2082,68 +1995,36 @@ DEBUG_ONLY_TEST_F(
 
 DEBUG_ONLY_TEST_F(
     SharedArbitrationTest,
-    reclaimFromJoinBuildWaitForTableBuild) {
+    reclaimFromHashJoinBuildInWaitForTableBuild) {
   setupMemory(kMemoryCapacity, 0);
-  const int numVectors = 32;
-  std::vector<RowVectorPtr> vectors;
-  fuzzerOpts_.vectorSize = 128;
-  fuzzerOpts_.stringVariableLength = false;
-  fuzzerOpts_.stringLength = 512;
-  for (int i = 0; i < numVectors; ++i) {
-    vectors.push_back(newVector());
-  }
+  const auto vectors = newVectors(256, 32 << 10);
   const int numDrivers = 4;
-  createDuckDbTable(vectors);
+  const auto expectedResult =
+      runHashJoinTask(vectors, nullptr, numDrivers, false).data;
 
-  std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
-      newQueryCtx(kMemoryCapacity);
-  std::shared_ptr<core::QueryCtx> joinQueryCtx = newQueryCtx(kMemoryCapacity);
+  std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(kMemoryCapacity);
+  auto fakePool = queryCtx->pool()->addLeafChild(
+      "fakePool", true, FakeMemoryReclaimer::create());
 
-  folly::EventCount fakeAllocationWait;
-  std::atomic<bool> fakeAllocationUnblock{false};
-  std::atomic<bool> injectFakeAllocationOnce{true};
-
-  fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
-    if (!injectFakeAllocationOnce.exchange(false)) {
-      return TestAllocation{};
-    }
-    fakeAllocationWait.await([&]() { return fakeAllocationUnblock.load(); });
-    // Set the fake allocation size to trigger memory reclaim.
-    const auto fakeAllocationSize = arbitrator_->stats().freeCapacityBytes +
-        joinQueryCtx->pool()->freeBytes() + 1;
-    return TestAllocation{
-        op->pool(),
-        op->pool()->allocate(fakeAllocationSize),
-        fakeAllocationSize};
-  });
-
-  folly::futures::Barrier builderBarrier(numDrivers);
-  folly::futures::Barrier pauseBarrier(numDrivers + 1);
-  std::atomic<int> addInputInjectCount{0};
+  folly::EventCount taskPauseWait;
+  std::atomic_bool taskPauseWaitFlag{true};
+  std::atomic_int blockedBuildOperators{0};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal",
       std::function<void(Driver*)>(([&](Driver* driver) {
-        // Check if the driver is from join query.
-        if (driver->task()->queryCtx()->pool()->name() !=
-            joinQueryCtx->pool()->name()) {
-          return;
-        }
-        // Check if the driver is from the pipeline with hash build.
+        // Check if the driver is from hash join build.
         if (driver->driverCtx()->pipelineId != 1) {
           return;
         }
-        if (++addInputInjectCount > numDrivers - 1) {
+        if (++blockedBuildOperators > numDrivers - 1) {
           return;
         }
-        if (builderBarrier.wait().get()) {
-          fakeAllocationUnblock = true;
-          fakeAllocationWait.notifyAll();
-        }
-        // Wait for pause to be triggered.
-        pauseBarrier.wait().get();
+        taskPauseWait.await([&]() { return !taskPauseWaitFlag.load(); });
       })));
 
-  std::atomic<bool> injectNoMoreInputOnce{true};
+  folly::EventCount fakeAllocationWait;
+  std::atomic_bool fakeAllocationWaitFlag{true};
+  std::atomic_bool injectNoMoreInputOnce{true};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal::noMoreInput",
       std::function<void(Operator*)>(([&](Operator* op) {
@@ -2153,83 +2034,41 @@ DEBUG_ONLY_TEST_F(
         if (!injectNoMoreInputOnce.exchange(false)) {
           return;
         }
-        if (builderBarrier.wait().get()) {
-          fakeAllocationUnblock = true;
-          fakeAllocationWait.notifyAll();
-        }
-        // Wait for pause to be triggered.
-        pauseBarrier.wait().get();
+
+        fakeAllocationWaitFlag = false;
+        fakeAllocationWait.notifyAll();
+
+        taskPauseWait.await([&]() { return !taskPauseWaitFlag.load(); });
       })));
 
-  std::atomic<bool> injectPauseOnce{true};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Task::requestPauseLocked",
       std::function<void(Task*)>([&](Task* /*unused*/) {
-        if (!injectPauseOnce.exchange(false)) {
-          return;
-        }
-        pauseBarrier.wait().get();
+        taskPauseWaitFlag = false;
+        taskPauseWait.notifyAll();
       }));
 
-  // Verifies that we only trigger the hash build reclaim once.
-  std::atomic<int> numHashBuildReclaims{0};
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::HashBuild::reclaim",
-      std::function<void(Operator*)>(
-          ([&](Operator* /*unused*/) { ++numHashBuildReclaims; })));
-
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
   std::thread joinThread([&]() {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto task =
-        AssertQueryBuilder(duckDbQueryRunner_)
-            .spillDirectory(spillDirectory->path)
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kJoinSpillEnabled, "true")
-            .config(core::QueryConfig::kJoinSpillPartitionBits, "2")
-            // NOTE: set an extreme large value to avoid non-reclaimable
-            // section in test.
-            .config(core::QueryConfig::kSpillableReservationGrowthPct, "8000")
-            .maxDrivers(numDrivers)
-            .queryCtx(joinQueryCtx)
-            .plan(PlanBuilder(planNodeIdGenerator)
-                      .values(vectors, true)
-                      .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
-                      .hashJoin(
-                          {"t0"},
-                          {"u1"},
-                          PlanBuilder(planNodeIdGenerator)
-                              .values(vectors, true)
-                              .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
-                              .planNode(),
-                          "",
-                          {"t1"},
-                          core::JoinType::kInner)
-                      .planNode())
-            .assertResults(
-                "SELECT t.c1 FROM tmp as t, tmp AS u WHERE t.c0 == u.c1");
-    // We expect the spilling triggered.
-    auto stats = task->taskStats().pipelineStats;
-    ASSERT_GT(stats[1].operatorStats[2].spilledBytes, 0);
+    VELOX_ASSERT_THROW(
+        runHashJoinTask(vectors, queryCtx, numDrivers, true, expectedResult),
+        "Exceeded memory pool cap of");
   });
 
+  void* fakeBuffer{nullptr};
   std::thread memThread([&]() {
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .queryCtx(fakeMemoryQueryCtx)
-        .plan(PlanBuilder()
-                  .values(vectors)
-                  .addNode([&](std::string id, core::PlanNodePtr input) {
-                    return std::make_shared<FakeMemoryNode>(id, input);
-                  })
-                  .planNode())
-        .assertResults("SELECT * FROM tmp");
+    fakeAllocationWait.await([&]() { return !fakeAllocationWaitFlag.load(); });
+    // Let the first hash build operator reaches to wait for table build state.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    fakeBuffer = fakePool->allocate(kMemoryCapacity);
   });
 
   joinThread.join();
   memThread.join();
+  // We expect the reclaimed bytes from hash build.
+  ASSERT_GT(arbitrator_->stats().numReclaimedBytes, 0);
 
-  // We only expect to reclaim from one hash build operator once.
-  ASSERT_EQ(numHashBuildReclaims, 1);
+  ASSERT_TRUE(fakeBuffer != nullptr);
+  fakePool->free(fakeBuffer, kMemoryCapacity);
   waitForAllTasksToBeDeleted();
 }
 
@@ -2799,13 +2638,13 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, tableWriteSpillUseMoreMemory) {
           .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
           // Set stripe size to extreme large to avoid writer internal triggered
           // flush.
-          .connectorConfig(
+          .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+              connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
               "1GB")
-          .connectorConfig(
+          .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+              connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
               "1GB")
           .plan(std::move(writerPlan))
           .copyResults(pool()),
@@ -2892,13 +2731,13 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, tableWriteReclaimOnClose) {
       .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
       // Set stripe size to extreme large to avoid writer internal triggered
       // flush.
-      .connectorConfig(
+      .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
           "1GB")
-      .connectorConfig(
+      .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
@@ -2955,13 +2794,13 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, tableFileWriteError) {
           .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
           // Set stripe size to extreme large to avoid writer internal triggered
           // flush.
-          .connectorConfig(
+          .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+              connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
               "1GB")
-          .connectorConfig(
+          .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+              connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
               "1GB")
           .plan(std::move(writerPlan))
           .copyResults(pool()),
@@ -3096,13 +2935,14 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, runtimeStats) {
             .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
             // Set stripe size to extreme large to avoid writer internal
             // triggered flush.
-            .connectorConfig(
+            .connectorSessionProperty(
                 kHiveConnectorId,
-                connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+                connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
                 "1GB")
-            .connectorConfig(
+            .connectorSessionProperty(
                 kHiveConnectorId,
-                connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+                connector::hive::HiveConfig::
+                    kOrcWriterMaxDictionaryMemorySession,
                 "1GB")
             .plan(std::move(writerPlan))
             .assertResults(fmt::format("SELECT {}", numRows));
@@ -3460,13 +3300,13 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromNonReclaimableTableWriter) {
       .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
       // Set large stripe and dictionary size thresholds to avoid writer
       // internal stripe flush.
-      .connectorConfig(
+      .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
           "1GB")
-      .connectorConfig(
+      .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
@@ -3550,13 +3390,13 @@ DEBUG_ONLY_TEST_F(
       .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
       // Set large stripe and dictionary size thresholds to avoid writer
       // internal stripe flush.
-      .connectorConfig(
+      .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
           "1GB")
-      .connectorConfig(
+      .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
@@ -3639,13 +3479,13 @@ DEBUG_ONLY_TEST_F(
       .config(core::QueryConfig::kWriterFlushThresholdBytes, "0")
       // Set large stripe and dictionary size thresholds to avoid writer
       // internal stripe flush.
-      .connectorConfig(
+      .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSize,
+          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
           "1GB")
-      .connectorConfig(
+      .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemory,
+          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
@@ -3980,6 +3820,8 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
       runHashJoinTask(vectors, nullptr, numDrivers, false).data;
   const auto expectedOrderResult =
       runOrderByTask(vectors, nullptr, numDrivers, false).data;
+  const auto expectedRowNumberResult =
+      runRowNumberTask(vectors, nullptr, numDrivers, false).data;
   const auto expectedTopNResult =
       runTopNTask(vectors, nullptr, numDrivers, false).data;
 
@@ -3993,13 +3835,13 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
           succinctBytes(totalCapacity),
           succinctBytes(queryCapacity));
     }
-  } testSettings[3] = {
+  } testSettings[] = {
       {16 * MB, 128 * MB}, {128 * MB, 16 * MB}, {128 * MB, 128 * MB}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto totalCapacity = testData.totalCapacity;
-    auto queryCapacity = testData.queryCapacity;
+    const auto totalCapacity = testData.totalCapacity;
+    const auto queryCapacity = testData.queryCapacity;
     setupMemory(totalCapacity);
 
     std::mutex mutex;
@@ -4030,19 +3872,27 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
             task = runOrderByTask(
                        vectors, queryCtx, numDrivers, true, expectedOrderResult)
                        .task;
+          } else if ((i % 4) == 2) {
+            task = runRowNumberTask(
+                       vectors,
+                       queryCtx,
+                       numDrivers,
+                       true,
+                       expectedRowNumberResult)
+                       .task;
           } else {
             task = runTopNTask(
                        vectors, queryCtx, numDrivers, true, expectedTopNResult)
                        .task;
           }
         } catch (const VeloxException& e) {
-          VELOX_CHECK(
-              e.errorCode() == error_code::kMemCapExceeded.c_str() ||
-              e.errorCode() == error_code::kMemAborted.c_str() ||
-              e.errorCode() == error_code::kMemAllocError.c_str());
+          if (e.errorCode() != error_code::kMemCapExceeded.c_str() &&
+              e.errorCode() != error_code::kMemAborted.c_str() &&
+              e.errorCode() != error_code::kMemAllocError.c_str()) {
+            std::rethrow_exception(std::current_exception());
+          }
         }
 
-        // TODO: Add RowNumber task after fixing its spiller bug.
         std::lock_guard<std::mutex> l(mutex);
         if (folly::Random().oneIn(3)) {
           zombieTasks.emplace_back(std::move(task));
@@ -4056,6 +3906,8 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
     for (auto& queryThread : queryThreads) {
       queryThread.join();
     }
+    zombieTasks.clear();
+    waitForAllTasksToBeDeleted();
     ASSERT_GT(arbitrator_->stats().numRequests, 0);
   }
 }

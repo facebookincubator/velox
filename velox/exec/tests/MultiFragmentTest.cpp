@@ -69,7 +69,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     auto queryCtx = std::make_shared<core::QueryCtx>(
         executor_.get(), core::QueryConfig(std::move(configCopy)));
     queryCtx->testingOverrideMemoryPool(
-        memory::defaultMemoryManager().addRootPool(
+        memory::MemoryManager::getInstance()->addRootPool(
             queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
     core::PlanFragment planFragment{planNode};
     return Task::create(
@@ -735,6 +735,67 @@ TEST_F(MultiFragmentTest, roundRobinPartition) {
   auto finalPlan = PlanBuilder().exchange(leafPlan->outputType()).planNode();
 
   assertQuery(finalPlan, {collectTaskIds}, "SELECT * FROM tmp");
+
+  for (auto& task : tasks) {
+    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  }
+}
+
+// Test PartitionedOutput operator with constant partitioning keys.
+TEST_F(MultiFragmentTest, constantKeys) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(
+          1'000, [](auto row) { return row; }, nullEvery(7)),
+  });
+
+  std::vector<std::shared_ptr<Task>> tasks;
+  auto addTask = [&](std::shared_ptr<Task> task,
+                     const std::vector<std::string>& remoteTaskIds) {
+    tasks.emplace_back(task);
+    task->start(1);
+    if (!remoteTaskIds.empty()) {
+      addRemoteSplits(task, remoteTaskIds);
+    }
+  };
+
+  // Make leaf task: Values -> Repartitioning (3-way)
+  auto leafTaskId = makeTaskId("leaf", 0);
+  auto leafPlan = PlanBuilder()
+                      .values({data})
+                      .partitionedOutput({"c0", "123"}, 3, true, {"c0"})
+                      .planNode();
+  auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+  addTask(leafTask, {});
+
+  // Make next stage tasks to count nulls.
+  core::PlanNodePtr finalAggPlan;
+  std::vector<std::string> finalAggTaskIds;
+  for (int i = 0; i < 3; i++) {
+    finalAggPlan =
+        PlanBuilder()
+            .exchange(leafPlan->outputType())
+            .project({"c0 is null AS co_is_null"})
+            .partialAggregation({}, {"count_if(co_is_null)", "count(1)"})
+            .partitionedOutput({}, 1)
+            .planNode();
+
+    finalAggTaskIds.push_back(makeTaskId("final-agg", i));
+    auto task = makeTask(finalAggTaskIds.back(), finalAggPlan, i);
+    addTask(task, {leafTaskId});
+  }
+
+  // Collect results and verify number of nulls is 3 times larger than in the
+  // original data.
+  auto op = PlanBuilder()
+                .exchange(finalAggPlan->outputType())
+                .finalAggregation(
+                    {}, {"sum(a0)", "sum(a1)"}, {{BIGINT()}, {BIGINT()}})
+                .planNode();
+
+  assertQuery(
+      op,
+      finalAggTaskIds,
+      "SELECT 3 * ceil(1000.0 / 7) /* number of null rows */, 1000 + 2 * ceil(1000.0 / 7) /* total number of rows */");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
@@ -1714,9 +1775,11 @@ TEST_F(MultiFragmentTest, maxBytes) {
       makeConstant(StringView(s), 5'000),
   });
 
+  core::PlanNodeId outputNodeId;
   auto plan = PlanBuilder()
                   .values({data}, false, 100)
                   .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputNodeId)
                   .planNode();
 
   int32_t testIteration = 0;
@@ -1747,11 +1810,13 @@ TEST_F(MultiFragmentTest, maxBytes) {
 
     ASSERT_LT(stats.averagePacketBytes(), maxBytes * 1.5);
 
-    prevStats = stats;
-  };
+    auto taskStats = toPlanStats(task->taskStats());
+    const auto& outputStats = taskStats.at(outputNodeId);
 
-  auto verifyStats = [](auto prev, auto current) {
-    EXPECT_EQ(prev.numPages, current.numPages);
+    ASSERT_EQ(outputStats.outputBytes, stats.totalBytes);
+    ASSERT_EQ(outputStats.inputRows, 100 * data->size());
+    ASSERT_EQ(outputStats.outputRows, 100 * data->size());
+    prevStats = stats;
   };
 
   static const int64_t kMB = 1 << 20;

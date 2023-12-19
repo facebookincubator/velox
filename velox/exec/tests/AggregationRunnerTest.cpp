@@ -20,8 +20,8 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/Fs.h"
-#include "velox/exec/tests/utils/AggregationFuzzerRunner.h"
-#include "velox/exec/tests/utils/DuckQueryRunner.h"
+#include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
+#include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
@@ -67,6 +67,7 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
 
   folly::Init init(&argc, &argv);
+  facebook::velox::memory::MemoryManager::initialize({});
 
   if (!FLAGS_aggregation_fuzzer_repro_path.empty()) {
     checkDirForExpectedFiles();
@@ -74,6 +75,7 @@ int main(int argc, char** argv) {
 
   facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
+  facebook::velox::memory::MemoryManager::initialize({});
 
   auto duckQueryRunner =
       std::make_unique<facebook::velox::exec::test::DuckQueryRunner>();

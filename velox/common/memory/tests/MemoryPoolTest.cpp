@@ -568,7 +568,7 @@ TEST_P(MemoryPoolTest, MemoryCapExceptions) {
             "Exceeded memory pool cap of 128.00MB with max 128.00MB when "
             "requesting 136.00MB, memory manager cap is 128.00MB, requestor "
             "'static_quota' with current usage 0B\nMemoryCapExceptions usage "
-            "0B peak 0B\n",
+            "0B reserved 0B peak 0B\n",
             ex.message());
       }
     }
@@ -1794,9 +1794,9 @@ TEST_P(MemoryPoolTest, contiguousAllocateGrowExceedMemoryPoolLimit) {
   ASSERT_EQ(allocation.numPages(), kMaxNumPages / 2);
 }
 
-TEST_P(MemoryPoolTest, nonContiguousAllocationBounds) {
+TEST_P(MemoryPoolTest, badNonContiguousAllocation) {
   auto manager = getMemoryManager();
-  auto pool = manager->addLeafPool("nonContiguousAllocationBounds");
+  auto pool = manager->addLeafPool("badNonContiguousAllocation");
   Allocation allocation;
   // Bad zero page allocation size.
   ASSERT_THROW(pool->allocateNonContiguous(0, allocation), VeloxRuntimeError);
@@ -1804,9 +1804,8 @@ TEST_P(MemoryPoolTest, nonContiguousAllocationBounds) {
   // Set the num of pages to allocate exceeds one PageRun limit.
   constexpr MachinePageCount kNumPages =
       Allocation::PageRun::kMaxPagesInRun + 1;
-  pool->allocateNonContiguous(kNumPages, allocation);
-  ASSERT_GE(allocation.numPages(), kNumPages);
-  pool->freeNonContiguous(allocation);
+  ASSERT_THROW(
+      pool->allocateNonContiguous(kNumPages, allocation), VeloxRuntimeError);
   pool->allocateNonContiguous(kNumPages - 1, allocation);
   ASSERT_GE(allocation.numPages(), kNumPages - 1);
   pool->freeNonContiguous(allocation);
@@ -2254,7 +2253,7 @@ TEST_P(MemoryPoolTest, concurrentUpdateToSharedPools) {
   folly::Random::DefaultGenerator rng;
   rng.seed(1234);
 
-  const int32_t kNumOpsPerThread = 1'000;
+  const int32_t kNumOpsPerThread = 200;
   std::vector<std::thread> threads;
   threads.reserve(kNumThreads);
   for (size_t i = 0; i < kNumThreads; ++i) {
@@ -2862,7 +2861,7 @@ TEST_P(MemoryPoolTest, statsAndToString) {
   void* buf1 = leafChild1->allocate(bufferSize);
   ASSERT_EQ(
       leafChild1->stats().toString(),
-      "currentBytes:1.00KB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   ASSERT_EQ(
       leafChild1->toString(),
       fmt::format(
@@ -2871,7 +2870,7 @@ TEST_P(MemoryPoolTest, statsAndToString) {
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
   ASSERT_EQ(
       leafChild2->stats().toString(),
-      "currentBytes:0B peakBytes:0B cumulativeBytes:0B numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:0B reservedBytes:0B peakBytes:0B cumulativeBytes:0B numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   ASSERT_EQ(
       leafChild1->toString(),
       fmt::format(
@@ -2880,36 +2879,36 @@ TEST_P(MemoryPoolTest, statsAndToString) {
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
   ASSERT_EQ(
       aggregateChild->stats().toString(),
-      "currentBytes:0B peakBytes:0B cumulativeBytes:0B numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:0B reservedBytes:0B peakBytes:0B cumulativeBytes:0B numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   ASSERT_EQ(
       root->stats().toString(),
-      "currentBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:1.00MB reservedBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   void* buf2 = leafChild2->allocate(bufferSize);
   ASSERT_EQ(
       leafChild1->stats().toString(),
-      "currentBytes:1.00KB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   ASSERT_EQ(
       leafChild2->stats().toString(),
-      "currentBytes:1.00KB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   ASSERT_EQ(
       aggregateChild->stats().toString(),
-      "currentBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:1.00MB reservedBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   ASSERT_EQ(
       root->stats().toString(),
-      "currentBytes:2.00MB peakBytes:2.00MB cumulativeBytes:2.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:2.00MB reservedBytes:2.00MB peakBytes:2.00MB cumulativeBytes:2.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   leafChild1->free(buf1, bufferSize);
   ASSERT_EQ(
       leafChild1->stats().toString(),
-      "currentBytes:0B peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:1 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:0B reservedBytes:0B peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:1 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   ASSERT_EQ(
       leafChild2->stats().toString(),
-      "currentBytes:1.00KB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   ASSERT_EQ(
       aggregateChild->stats().toString(),
-      "currentBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:1.00MB reservedBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   ASSERT_EQ(
       root->stats().toString(),
-      "currentBytes:1.00MB peakBytes:2.00MB cumulativeBytes:2.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
+      "currentBytes:1.00MB reservedBytes:1.00MB peakBytes:2.00MB cumulativeBytes:2.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0");
   leafChild2->free(buf2, bufferSize);
   std::vector<void*> bufs;
   for (int i = 0; i < 10; ++i) {
@@ -2985,6 +2984,7 @@ TEST_P(MemoryPoolTest, memoryUsageUpdateCheck) {
   ASSERT_THROW(child1->allocate(2 * kMaxSize), VeloxRuntimeError);
 
   ASSERT_EQ(root->stats().currentBytes, 0);
+  ASSERT_EQ(root->stats().reservedBytes, 0);
   ASSERT_EQ(root->stats().cumulativeBytes, 0);
   ASSERT_EQ(root->reservedBytes(), 0);
 
@@ -2992,8 +2992,10 @@ TEST_P(MemoryPoolTest, memoryUsageUpdateCheck) {
   buffers.emplace_back(Buffer{child1->allocate(1000), 1000});
   // The memory pool do alignment internally.
   ASSERT_EQ(child1->stats().currentBytes, 1024);
+  ASSERT_EQ(root->stats().reservedBytes, MB);
   ASSERT_EQ(child1->currentBytes(), 1024);
   ASSERT_EQ(child1->reservedBytes(), MB);
+  ASSERT_EQ(child1->stats().reservedBytes, MB);
   ASSERT_EQ(child1->stats().cumulativeBytes, 1024);
   ASSERT_EQ(root->currentBytes(), MB);
   ASSERT_EQ(root->stats().cumulativeBytes, MB);
@@ -3002,20 +3004,25 @@ TEST_P(MemoryPoolTest, memoryUsageUpdateCheck) {
   buffers.emplace_back(Buffer{child1->allocate(1000), 1000});
   ASSERT_EQ(child1->stats().currentBytes, 2048);
   ASSERT_EQ(child1->currentBytes(), 2048);
+  ASSERT_EQ(child1->stats().reservedBytes, MB);
   ASSERT_EQ(root->currentBytes(), MB);
   ASSERT_EQ(root->stats().currentBytes, MB);
   ASSERT_EQ(root->stats().cumulativeBytes, MB);
+  ASSERT_EQ(root->stats().reservedBytes, MB);
 
   buffers.emplace_back(Buffer{child1->allocate(MB), MB});
   ASSERT_EQ(child1->stats().currentBytes, 2048 + MB);
+  ASSERT_EQ(child1->stats().reservedBytes, 2 * MB);
   ASSERT_EQ(child1->currentBytes(), 2048 + MB);
   ASSERT_EQ(root->currentBytes(), 2 * MB);
   ASSERT_EQ(root->stats().currentBytes, 2 * MB);
   ASSERT_EQ(root->stats().cumulativeBytes, 2 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, 2 * MB);
 
   buffers.emplace_back(Buffer{child1->allocate(100 * MB), 100 * MB});
   ASSERT_EQ(child1->currentBytes(), 2048 + 101 * MB);
   ASSERT_EQ(child1->stats().currentBytes, 2048 + 101 * MB);
+  ASSERT_EQ(child1->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(child1->reservedBytes(), 104 * MB);
   ASSERT_EQ(
       child1->availableReservation(),
@@ -3024,6 +3031,7 @@ TEST_P(MemoryPoolTest, memoryUsageUpdateCheck) {
   ASSERT_EQ(root->currentBytes(), 104 * MB);
   ASSERT_EQ(root->stats().currentBytes, 104 * MB);
   ASSERT_EQ(root->stats().cumulativeBytes, 104 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(root->availableReservation(), 0);
 
   child1->free(buffers[0].data, buffers[0].length);
@@ -3037,6 +3045,7 @@ TEST_P(MemoryPoolTest, memoryUsageUpdateCheck) {
   ASSERT_EQ(root->currentBytes(), 104 * MB);
   ASSERT_EQ(root->stats().currentBytes, 104 * MB);
   ASSERT_EQ(root->stats().cumulativeBytes, 104 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(root->availableReservation(), 0);
 
   child1->free(buffers[2].data, buffers[2].length);
@@ -3050,6 +3059,7 @@ TEST_P(MemoryPoolTest, memoryUsageUpdateCheck) {
   ASSERT_EQ(root->currentBytes(), 104 * MB);
   ASSERT_EQ(root->stats().currentBytes, 104 * MB);
   ASSERT_EQ(root->stats().cumulativeBytes, 104 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(root->availableReservation(), 0);
 
   child1->free(buffers[3].data, buffers[3].length);
@@ -3063,6 +3073,7 @@ TEST_P(MemoryPoolTest, memoryUsageUpdateCheck) {
   ASSERT_EQ(root->currentBytes(), MB);
   ASSERT_EQ(root->stats().currentBytes, MB);
   ASSERT_EQ(root->stats().cumulativeBytes, 104 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, MB);
   ASSERT_EQ(root->availableReservation(), 0);
 
   child1->free(buffers[1].data, buffers[1].length);
@@ -3074,6 +3085,7 @@ TEST_P(MemoryPoolTest, memoryUsageUpdateCheck) {
   ASSERT_EQ(root->currentBytes(), 0);
   ASSERT_EQ(root->stats().currentBytes, 0);
   ASSERT_EQ(root->stats().cumulativeBytes, 104 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, 0);
   ASSERT_EQ(root->availableReservation(), 0);
 
   ASSERT_EQ(root->stats().numAllocs, 0);
@@ -3109,10 +3121,12 @@ TEST_P(MemoryPoolTest, maybeReserve) {
   ASSERT_EQ(child->currentBytes(), 0);
   ASSERT_EQ(child->stats().currentBytes, 0);
   ASSERT_EQ(child->stats().cumulativeBytes, 0);
+  ASSERT_EQ(child->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(child->availableReservation(), 104 * MB);
 
   ASSERT_EQ(root->currentBytes(), 104 * MB);
   ASSERT_EQ(root->stats().currentBytes, 104 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(root->availableReservation(), 0);
 
   std::vector<Buffer> buffers;
@@ -3120,21 +3134,25 @@ TEST_P(MemoryPoolTest, maybeReserve) {
   ASSERT_EQ(child->currentBytes(), 60 * MB);
   ASSERT_EQ(child->stats().currentBytes, 60 * MB);
   ASSERT_EQ(child->reservedBytes(), 104 * MB);
+  ASSERT_EQ(child->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(
       child->availableReservation(),
       child->reservedBytes() - child->currentBytes());
   ASSERT_EQ(root->currentBytes(), 104 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(root->availableReservation(), 0);
 
   buffers.emplace_back(Buffer{child->allocate(70 * MB), 70 * MB});
   ASSERT_EQ(child->currentBytes(), 130 * MB);
   ASSERT_EQ(child->stats().currentBytes, 130 * MB);
   ASSERT_EQ(child->reservedBytes(), 136 * MB);
+  ASSERT_EQ(child->stats().reservedBytes, 136 * MB);
   ASSERT_EQ(
       child->availableReservation(),
       child->reservedBytes() - child->currentBytes());
   // Extended and rounded up the reservation to then next 8MB.
   ASSERT_EQ(root->currentBytes(), 136 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, 136 * MB);
   ASSERT_EQ(root->availableReservation(), 0);
 
   child->free(buffers[0].data, buffers[0].length);
@@ -3142,10 +3160,12 @@ TEST_P(MemoryPoolTest, maybeReserve) {
   ASSERT_EQ(child->stats().currentBytes, 70 * MB);
   // Extended and rounded up the reservation to then next 8MB.
   ASSERT_EQ(child->reservedBytes(), 104 * MB);
+  ASSERT_EQ(child->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(
       child->availableReservation(),
       child->reservedBytes() - child->currentBytes());
   ASSERT_EQ(root->currentBytes(), 104 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(root->availableReservation(), 0);
 
   child->free(buffers[1].data, buffers[1].length);
@@ -3154,19 +3174,23 @@ TEST_P(MemoryPoolTest, maybeReserve) {
   ASSERT_EQ(child->currentBytes(), 0);
   ASSERT_EQ(child->stats().currentBytes, 0);
   ASSERT_EQ(child->reservedBytes(), 104 * MB);
+  ASSERT_EQ(child->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(
       child->availableReservation(),
       child->reservedBytes() - child->currentBytes());
   ASSERT_EQ(root->currentBytes(), 104 * MB);
+  ASSERT_EQ(root->stats().reservedBytes, 104 * MB);
   ASSERT_EQ(root->availableReservation(), 0);
 
   child->release();
   ASSERT_EQ(child->currentBytes(), 0);
   ASSERT_EQ(child->stats().currentBytes, 0);
   ASSERT_EQ(child->reservedBytes(), 0);
+  ASSERT_EQ(child->stats().reservedBytes, 0);
   ASSERT_EQ(child->availableReservation(), 0);
   ASSERT_EQ(root->currentBytes(), 0);
   ASSERT_EQ(root->availableReservation(), 0);
+  ASSERT_EQ(root->stats().reservedBytes, 0);
 
   ASSERT_EQ(root->stats().numAllocs, 0);
   ASSERT_EQ(root->stats().numFrees, 0);

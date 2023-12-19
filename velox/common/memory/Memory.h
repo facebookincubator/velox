@@ -116,8 +116,8 @@ struct MemoryManagerOptions {
 
   /// Specifies the max time to wait for memory reclaim by arbitration. The
   /// memory reclaim might fail if the max wait time has exceeded. If it is
-  /// zero, then there is no timeout.
-  uint64_t memoryReclaimWaitMs{0};
+  /// zero, then there is no timeout. The default is 5 mins.
+  uint64_t memoryReclaimWaitMs{300'000};
 
   /// Provided by the query system to validate the state after a memory pool
   /// enters arbitration if not null. For instance, Prestissimo provides
@@ -138,10 +138,28 @@ class MemoryManager {
 
   ~MemoryManager();
 
-  /// Tries to get the singleton memory manager. If not previously initialized,
-  /// the process singleton manager will be initialized.
+  /// Creates process-wide memory manager using specified options. Throws if
+  /// memory manager has already been created by an easier call.
+  static void initialize(const MemoryManagerOptions& options);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   FOLLY_EXPORT static MemoryManager& getInstance(
+      const MemoryManagerOptions& options) {
+    return deprecatedGetInstance(options);
+  }
+#endif
+  /// Returns process-wide memory manager. Throws if 'initialize' hasn't been
+  /// called yet.
+  static MemoryManager* getInstance();
+
+  /// Deprecated. Do not use. Remove once existing call sites are updated.
+  /// Returns the process-wide default memory manager instance if exists,
+  /// otherwise creates one based on the specified 'options'.
+  FOLLY_EXPORT static MemoryManager& deprecatedGetInstance(
       const MemoryManagerOptions& options = MemoryManagerOptions{});
+
+  /// Used by test to override the process-wide memory manager.
+  static MemoryManager& testingSetInstance(const MemoryManagerOptions& options);
 
   /// Returns the memory capacity of this memory manager which puts a hard cap
   /// on memory usage, and any allocation that exceeds this capacity throws.
@@ -198,8 +216,10 @@ class MemoryManager {
 
   MemoryArbitrator* arbitrator();
 
-  /// Returns debug string of this memory manager.
-  std::string toString() const;
+  /// Returns debug string of this memory manager. If 'detail' is true, it
+  /// returns the detailed tree memory usage from all the top level root memory
+  /// pools.
+  std::string toString(bool detail = false) const;
 
   /// Returns the memory manger's internal default root memory pool for testing
   /// purpose.
@@ -242,14 +262,28 @@ class MemoryManager {
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> pools_;
 };
 
-MemoryManager& defaultMemoryManager();
+/// Deprecated. Do not use.
+MemoryManager& deprecatedDefaultMemoryManager();
 
+/// Deprecated. Do not use.
 /// Creates a leaf memory pool from the default memory manager for memory
 /// allocation use. If 'threadSafe' is true, then creates a leaf memory pool
 /// with thread-safe memory usage tracking.
-std::shared_ptr<MemoryPool> addDefaultLeafMemoryPool(
+std::shared_ptr<MemoryPool> deprecatedAddDefaultLeafMemoryPool(
     const std::string& name = "",
     bool threadSafe = true);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+inline MemoryManager& defaultMemoryManager() {
+  return deprecatedDefaultMemoryManager();
+}
+
+inline std::shared_ptr<MemoryPool> addDefaultLeafMemoryPool(
+    const std::string& name = "",
+    bool threadSafe = true) {
+  return deprecatedAddDefaultLeafMemoryPool(name, threadSafe);
+}
+#endif
 
 /// Default unmanaged leaf pool with no threadsafe stats support. Libraries
 /// using this method can get a pool that is shared with other threads. The goal

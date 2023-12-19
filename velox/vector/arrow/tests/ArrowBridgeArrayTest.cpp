@@ -44,6 +44,10 @@ struct VeloxToArrowType<Timestamp> {
 
 class ArrowBridgeArrayExportTest : public testing::Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   template <typename T>
   void testFlatVector(
       const std::vector<std::optional<T>>& inputData,
@@ -354,7 +358,8 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
   // Boiler plate structures required by vectorMaker.
   std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::MemoryManager::getInstance()->addLeafPool()};
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   facebook::velox::test::VectorMaker vectorMaker_{execCtx_.pool()};
 };
@@ -906,6 +911,33 @@ TEST_F(ArrowBridgeArrayExportTest, constantComplex) {
       vector, std::vector<std::optional<int64_t>>{1, 2, 3});
 }
 
+TEST_F(ArrowBridgeArrayExportTest, constantCrossValidate) {
+  auto vector =
+      BaseVector::createConstant(VARCHAR(), "hello", 100, pool_.get());
+  auto array = toArrow(vector, pool_.get());
+
+  ASSERT_OK(array->ValidateFull());
+  EXPECT_EQ(array->null_count(), 0);
+  ASSERT_EQ(
+      *array->type(), *arrow::run_end_encoded(arrow::int32(), arrow::utf8()));
+  const auto& reeArray = static_cast<const arrow::RunEndEncodedArray&>(*array);
+
+  const auto& runEnds = reeArray.run_ends();
+  const auto& values = reeArray.values();
+
+  ASSERT_EQ(*runEnds->type(), *arrow::int32());
+  ASSERT_EQ(*values->type(), *arrow::utf8());
+
+  const auto& valuesArray = static_cast<const arrow::StringArray&>(*values);
+  const auto& runEndsArray = static_cast<const arrow::Int32Array&>(*runEnds);
+
+  ASSERT_EQ(valuesArray.length(), 1);
+  ASSERT_EQ(runEndsArray.length(), 1);
+
+  EXPECT_EQ(valuesArray.GetString(0), std::string("hello"));
+  EXPECT_EQ(runEndsArray.Value(0), 100);
+}
+
 class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
  protected:
   // Used by this base test class to import Arrow data and create Velox Vector.
@@ -1399,7 +1431,8 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     EXPECT_NO_THROW(importFromArrow(arrowSchema, arrowArray, pool_.get()));
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::MemoryManager::getInstance()->addLeafPool()};
 };
 
 class ArrowBridgeArrayImportAsViewerTest : public ArrowBridgeArrayImportTest {

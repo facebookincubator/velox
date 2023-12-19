@@ -128,7 +128,11 @@ void SortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
     }
   }
 
-  spill();
+  LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
+               << " for memory pool " << data_->pool()->name()
+               << ", usage: " << succinctBytes(data_->pool()->currentBytes())
+               << ", reservation: "
+               << succinctBytes(data_->pool()->reservedBytes());
 }
 
 void SortWindowBuild::setupSpiller() {
@@ -136,7 +140,7 @@ void SortWindowBuild::setupSpiller() {
 
   spiller_ = std::make_unique<Spiller>(
       // TODO Replace Spiller::Type::kOrderBy.
-      Spiller::Type::kOrderBy,
+      Spiller::Type::kOrderByInput,
       data_.get(),
       inputType_,
       spillCompareFlags_.size(),
@@ -146,7 +150,9 @@ void SortWindowBuild::setupSpiller() {
       spillConfig_->writeBufferSize,
       spillConfig_->compressionKind,
       memory::spillMemoryPool(),
-      spillConfig_->executor);
+      spillConfig_->executor,
+      spillConfig_->maxSpillRunRows,
+      spillConfig_->fileCreateConfig);
 }
 
 void SortWindowBuild::spill() {

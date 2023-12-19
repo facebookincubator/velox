@@ -51,10 +51,9 @@ class MapFunction : public exec::VectorFunction {
 
             VELOX_USER_CHECK(
                 !keysElements->containsNullAt(offset + i),
-                fmt::format(
-                    "{}: {}",
-                    kIndeterminateKeyErrorMessage,
-                    keysElements->toString(offset + i)));
+                "{}: {}",
+                kIndeterminateKeyErrorMessage,
+                keysElements->toString(offset + i));
           }
         };
     // When context.throwOnError is false, some rows will be marked as
@@ -88,7 +87,7 @@ class MapFunction : public exec::VectorFunction {
       auto mapVector = std::make_shared<MapVector>(
           context.pool(),
           outputType,
-          nullptr,
+          keysArray->nulls(),
           rows.end(),
           keysArray->offsets(),
           keysArray->sizes(),
@@ -307,6 +306,14 @@ class MapFunction : public exec::VectorFunction {
       return false;
     }
     for (auto row = 0; row < keys->size(); ++row) {
+      if (keys->isNullAt(row)) {
+        continue;
+      }
+
+      if (values->isNullAt(row)) {
+        return false;
+      }
+
       if (keys->offsetAt(row) != values->offsetAt(row) ||
           keys->sizeAt(row) != values->sizeAt(row)) {
         return false;

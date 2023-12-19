@@ -98,7 +98,7 @@ class DecimalUtil {
   }
 
   /// Helper function to convert a decimal value to string.
-  static std::string toString(const int128_t value, const TypePtr& type);
+  static std::string toString(int128_t value, const TypePtr& type);
 
   template <typename T>
   inline static void fillDecimals(
@@ -147,11 +147,11 @@ class DecimalUtil {
 
   template <typename TInput, typename TOutput>
   inline static std::optional<TOutput> rescaleWithRoundUp(
-      const TInput inputValue,
-      const int fromPrecision,
-      const int fromScale,
-      const int toPrecision,
-      const int toScale) {
+      TInput inputValue,
+      int fromPrecision,
+      int fromScale,
+      int toPrecision,
+      int toScale) {
     int128_t rescaledValue = inputValue;
     auto scaleDifference = toScale - fromScale;
     bool isOverflow = false;
@@ -183,10 +183,8 @@ class DecimalUtil {
   }
 
   template <typename TInput, typename TOutput>
-  inline static std::optional<TOutput> rescaleInt(
-      const TInput inputValue,
-      const int toPrecision,
-      const int toScale) {
+  inline static std::optional<TOutput>
+  rescaleInt(TInput inputValue, int toPrecision, int toScale) {
     int128_t rescaledValue = static_cast<int128_t>(inputValue);
     bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
@@ -205,8 +203,8 @@ class DecimalUtil {
   template <typename R, typename A, typename B>
   inline static R divideWithRoundUp(
       R& r,
-      const A& a,
-      const B& b,
+      A a,
+      B b,
       bool noRoundUp,
       uint8_t aRescale,
       uint8_t /*bRescale*/) {
@@ -232,7 +230,7 @@ class DecimalUtil {
       ++quotient;
     }
     r = quotient * resultSign;
-    return remainder;
+    return remainder * resultSign;
   }
 
   /*
@@ -311,38 +309,9 @@ class DecimalUtil {
     return sum;
   }
 
-  /*
-   * Computes average. If there is an overflow value uses the following
-   * expression to compute the average.
-   *                       ---                                         ---
-   *                      |    overflow_multiplier          sum          |
-   * average = overflow * |     -----------------  +  ---------------    |
-   *                      |         count              count * overflow  |
-   *                       ---                                         ---
-   */
-  inline static void computeAverage(
-      int128_t& avg,
-      const int128_t& sum,
-      const int64_t count,
-      const int64_t overflow) {
-    if (overflow == 0) {
-      divideWithRoundUp<int128_t, int128_t, int64_t>(
-          avg, sum, count, false, 0, 0);
-    } else {
-      __uint128_t sumA{0};
-      auto remainderA =
-          DecimalUtil::divideWithRoundUp<__uint128_t, __uint128_t, int64_t>(
-              sumA, kOverflowMultiplier, count, true, 0, 0);
-      double totalRemainder = (double)remainderA / count;
-      __uint128_t sumB{0};
-      auto remainderB =
-          DecimalUtil::divideWithRoundUp<__uint128_t, __int128_t, int64_t>(
-              sumB, sum, count * overflow, true, 0, 0);
-      totalRemainder += (double)remainderB / (count * overflow);
-      DecimalUtil::addWithOverflow(avg, sumA, sumB);
-      avg = avg * overflow + (int)(totalRemainder * overflow);
-    }
-  }
+  /// avg = (sum + overflow * kOverflowMultiplier) / count
+  static void
+  computeAverage(int128_t& avg, int128_t sum, int64_t count, int64_t overflow);
 
   /// Origins from java side BigInteger#bitLength.
   ///

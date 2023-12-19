@@ -238,7 +238,8 @@ if(VELOX_ENABLE_ABFS)
   if(AZURESDK_ROOT_DIR)
     list(APPEND CMAKE_PREFIX_PATH ${AZURESDK_ROOT_DIR})
   endif()
-  find_package(azure-storage-blobs-cpp CONFIG REQUIRED)
+  # files-datalake is built on blobs
+  find_package(azure-storage-files-datalake-cpp CONFIG REQUIRED)
   add_definitions(-DVELOX_ENABLE_ABFS)
 endif()
 
@@ -553,7 +554,10 @@ if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
   resolve_dependency(cpr)
 endif()
 
-include(CTest) # include after project() but before add_subdirectory()
+if(VELOX_BUILD_TESTING)
+  set(BUILD_TESTING ON)
+  include(CTest) # include after project() but before add_subdirectory()
+endif()
 
 include_directories(.)
 

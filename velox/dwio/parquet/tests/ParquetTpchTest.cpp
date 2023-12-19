@@ -37,6 +37,10 @@ using namespace facebook::velox::exec::test;
 
 class ParquetTpchTest : public testing::Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
     duckDb_ = std::make_shared<DuckDbQueryRunner>();
     tempDirectory_ = TempDirectoryPath::create();
@@ -53,13 +57,15 @@ class ParquetTpchTest : public testing::Test {
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(kHiveConnectorId, nullptr);
+            ->newConnector(
+                kHiveConnectorId, std::make_shared<core::MemConfig>());
     connector::registerConnector(hiveConnector);
 
     auto tpchConnector =
         connector::getConnectorFactory(
             connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-            ->newConnector(kTpchConnectorId, nullptr);
+            ->newConnector(
+                kTpchConnectorId, std::make_shared<core::MemConfig>());
     connector::registerConnector(tpchConnector);
 
     saveTpchTablesAsParquet();
@@ -75,7 +81,7 @@ class ParquetTpchTest : public testing::Test {
 
   void saveTpchTablesAsParquet() {
     std::shared_ptr<memory::MemoryPool> rootPool{
-        memory::defaultMemoryManager().addRootPool()};
+        memory::MemoryManager::getInstance()->addRootPool()};
     std::shared_ptr<memory::MemoryPool> pool{rootPool->addLeafChild("leaf")};
 
     for (const auto& table : tpch::tables) {

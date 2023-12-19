@@ -18,6 +18,8 @@
 #include <gtest/gtest.h>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/ByteStream.h"
+#include "velox/common/time/Timer.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -31,6 +33,7 @@ class PrestoSerializerTest
  protected:
   static void SetUpTestCase() {
     serializer::presto::PrestoVectorSerde::registerVectorSerde();
+    memory::MemoryManager::testingSetInstance({});
   }
 
   void SetUp() override {
@@ -38,6 +41,7 @@ class PrestoSerializerTest
   }
 
   void sanityCheckEstimateSerializedSize(const RowVectorPtr& rowVector) {
+    Scratch scratch;
     const auto numRows = rowVector->size();
 
     std::vector<IndexRange> rows(numRows);
@@ -51,7 +55,10 @@ class PrestoSerializerTest
       rawRowSizes[i] = &rowSizes[i];
     }
     serde_->estimateSerializedSize(
-        rowVector, folly::Range(rows.data(), numRows), rawRowSizes.data());
+        rowVector,
+        folly::Range(rows.data(), numRows),
+        rawRowSizes.data(),
+        scratch);
   }
 
   serializer::presto::PrestoVectorSerde::PrestoOptions getParamSerdeOptions(
@@ -60,16 +67,20 @@ class PrestoSerializerTest
     const bool useLosslessTimestamp =
         serdeOptions == nullptr ? false : serdeOptions->useLosslessTimestamp;
     common::CompressionKind kind = GetParam();
+    const bool nullsFirst =
+        serdeOptions == nullptr ? false : serdeOptions->nullsFirst;
     serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions{
-        useLosslessTimestamp, kind};
+        useLosslessTimestamp, kind, nullsFirst};
+
     return paramOptions;
   }
 
   void serialize(
       const RowVectorPtr& rowVector,
       std::ostream* output,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions*
-          serdeOptions) {
+      const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions,
+      std::optional<folly::Range<const IndexRange*>> indexRanges = std::nullopt,
+      std::optional<folly::Range<const vector_size_t*>> rows = std::nullopt) {
     auto streamInitialSize = output->tellp();
     sanityCheckEstimateSerializedSize(rowVector);
 
@@ -79,9 +90,34 @@ class PrestoSerializerTest
     auto paramOptions = getParamSerdeOptions(serdeOptions);
     auto serializer =
         serde_->createSerializer(rowType, numRows, arena.get(), &paramOptions);
+    vector_size_t sizeEstimate = 0;
 
-    serializer->append(rowVector);
+    Scratch scratch;
+    if (indexRanges.has_value()) {
+      raw_vector<vector_size_t*> sizes(indexRanges.value().size());
+      std::fill(sizes.begin(), sizes.end(), &sizeEstimate);
+      serde_->estimateSerializedSize(
+          rowVector, indexRanges.value(), sizes.data(), scratch);
+      serializer->append(rowVector, indexRanges.value(), scratch);
+    } else if (rows.has_value()) {
+      raw_vector<vector_size_t*> sizes(rows.value().size());
+      std::fill(sizes.begin(), sizes.end(), &sizeEstimate);
+      serde_->estimateSerializedSize(
+          rowVector, rows.value(), sizes.data(), scratch);
+      serializer->append(rowVector, rows.value(), scratch);
+    } else {
+      vector_size_t* sizes = &sizeEstimate;
+      IndexRange range{0, rowVector->size()};
+      serde_->estimateSerializedSize(
+          rowVector,
+          folly::Range<const IndexRange*>(&range, 1),
+          &sizes,
+          scratch);
+      serializer->append(rowVector);
+    }
     auto size = serializer->maxSerializedSize();
+    LOG(INFO) << "Size=" << size << " estimate=" << sizeEstimate << " "
+              << (100L * sizeEstimate) / (1 + size) << "%";
     facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
     OStreamOutputStream out(output, &listener);
     serializer->flush(&out);
@@ -164,6 +200,35 @@ class PrestoSerializerTest
     }
 
     assertEqualVectors(result, rowVector);
+
+    // Serialize the vector with even and odd rows in different partitions.
+    auto even =
+        makeIndices(rowVector->size() / 2, [&](auto row) { return row * 2; });
+    auto odd = makeIndices(
+        (rowVector->size() - 1) / 2, [&](auto row) { return (row * 2) + 1; });
+    testSerializeRows(rowVector, even, serdeOptions);
+    testSerializeRows(rowVector, odd, serdeOptions);
+  }
+
+  void testSerializeRows(
+      const RowVectorPtr& rowVector,
+      BufferPtr indices,
+      const serializer::presto::PrestoVectorSerde::PrestoOptions*
+          serdeOptions) {
+    std::ostringstream out;
+    auto rows = folly::Range<const vector_size_t*>(
+        indices->as<vector_size_t>(), indices->size() / sizeof(vector_size_t));
+    serialize(rowVector, &out, serdeOptions, std::nullopt, rows);
+
+    auto rowType = asRowType(rowVector->type());
+    auto deserialized = deserialize(rowType, out.str(), serdeOptions);
+    assertEqualVectors(
+        deserialized,
+        BaseVector::wrapInDictionary(
+            BufferPtr(nullptr),
+            indices,
+            indices->size() / sizeof(vector_size_t),
+            rowVector));
   }
 
   void serializeEncoded(
@@ -436,56 +501,6 @@ TEST_P(PrestoSerializerTest, encodings) {
   testEncodedRoundTrip(data);
 }
 
-TEST_P(PrestoSerializerTest, scatterEncoded) {
-  // Makes a struct with nulls and constant/dictionary encoded children. The
-  // children need to get gaps where the parent struct has a null.
-  VectorFuzzer::Options opts;
-  opts.timestampPrecision =
-      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
-  opts.nullRatio = 0.1;
-  VectorFuzzer fuzzer(opts, pool_.get());
-
-  auto rowType = ROW(
-      {{"inner",
-        ROW(
-            {{"i1", BIGINT()},
-             {"i2", VARCHAR()},
-             {"i3", ARRAY(INTEGER())},
-             {"i4", ROW({{"ii1", BIGINT()}})}})}});
-  auto row = fuzzer.fuzzInputRow(rowType);
-  auto inner =
-      const_cast<RowVector*>(row->childAt(0)->wrappedVector()->as<RowVector>());
-  if (!inner->mayHaveNulls()) {
-    return;
-  }
-  auto numNulls = BaseVector::countNulls(inner->nulls(), 0, inner->size());
-  auto numNonNull = inner->size() - numNulls;
-  auto indices = makeIndices(numNonNull, [](auto row) { return row; });
-
-  inner->children()[0] = BaseVector::createConstant(
-      BIGINT(),
-      variant::create<TypeKind::BIGINT>(11L),
-      numNonNull,
-      pool_.get());
-  inner->children()[1] = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), indices, numNonNull, inner->childAt(1));
-  inner->children()[2] =
-      BaseVector::wrapInConstant(numNonNull, 3, inner->childAt(2));
-
-  // i4 is a struct that we wrap in constant. We make ths struct like it was
-  // read from seriailization, needing scatter for struct nulls.
-  auto i4 = const_cast<RowVector*>(
-      inner->childAt(3)->wrappedVector()->as<RowVector>());
-  auto i4NonNull = i4->mayHaveNulls()
-      ? i4->size() - BaseVector::countNulls(i4->nulls(), 0, i4->size())
-      : i4->size();
-  i4->childAt(0)->resize(i4NonNull);
-  inner->children()[3] =
-      BaseVector::wrapInConstant(numNonNull, 3, inner->childAt(3));
-  serializer::presto::testingScatterStructNulls(
-      row->size(), row->size(), nullptr, nullptr, *row, 0);
-}
-
 TEST_P(PrestoSerializerTest, lazy) {
   constexpr int kSize = 1000;
   auto rowVector = makeTestVector(kSize);
@@ -504,7 +519,7 @@ TEST_P(PrestoSerializerTest, ioBufRoundTrip) {
   opts.nullRatio = 0.1;
   VectorFuzzer fuzzer(opts, pool_.get());
 
-  const size_t numRounds = 20;
+  const size_t numRounds = 100;
 
   for (size_t i = 0; i < numRounds; ++i) {
     auto rowType = fuzzer.randRowType();
@@ -522,13 +537,39 @@ TEST_P(PrestoSerializerTest, roundTrip) {
       VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   opts.nullRatio = 0.1;
   VectorFuzzer fuzzer(opts, pool_.get());
+  VectorFuzzer::Options nonNullOpts;
+  nonNullOpts.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
+  nonNullOpts.nullRatio = 0;
+  VectorFuzzer nonNullFuzzer(nonNullOpts, pool_.get());
 
-  const size_t numRounds = 20;
+  const size_t numRounds = 100;
+
+  for (size_t i = 0; i < numRounds; ++i) {
+    auto rowType = fuzzer.randRowType();
+    auto inputRowVector = (i % 2 == 0) ? fuzzer.fuzzInputRow(rowType)
+                                       : nonNullFuzzer.fuzzInputRow(rowType);
+    serializer::presto::PrestoVectorSerde::PrestoOptions prestoOpts;
+    // Test every 2/4 with struct nulls first.
+    prestoOpts.nullsFirst = i % 4 < 2;
+    testRoundTrip(inputRowVector, &prestoOpts);
+  }
+}
+
+TEST_P(PrestoSerializerTest, encodedRoundtrip) {
+  VectorFuzzer::Options opts;
+  opts.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
+  opts.nullRatio = 0.1;
+  opts.dictionaryHasNulls = false;
+  VectorFuzzer fuzzer(opts, pool_.get());
+
+  const size_t numRounds = 200;
 
   for (size_t i = 0; i < numRounds; ++i) {
     auto rowType = fuzzer.randRowType();
     auto inputRowVector = fuzzer.fuzzInputRow(rowType);
-    testRoundTrip(inputRowVector);
+    testEncodedRoundTrip(inputRowVector);
   }
 }
 

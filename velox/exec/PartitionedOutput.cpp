@@ -93,8 +93,13 @@ BlockingReason Destination::flush(
       *current_->pool(),
       listener.get(),
       std::max<int64_t>(kMinMessageSize, current_->size()));
+  const int64_t flushedRows = rowsInCurrent_;
+
   current_->flush(&stream);
   current_.reset();
+
+  const int64_t flushedBytes = stream.tellp();
+
   bytesInCurrent_ = 0;
   rowsInCurrent_ = 0;
   setTargetSizePct();
@@ -102,8 +107,12 @@ BlockingReason Destination::flush(
   bool blocked = bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(stream.getIOBuf(bufferReleaseFn)),
+      std::make_unique<SerializedPage>(
+          stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
       future);
+
+  recordEnqueued_(flushedBytes, flushedRows);
+
   return blocked ? BlockingReason::kWaitForConsumer
                  : BlockingReason::kNotBlocked;
 }
@@ -182,7 +191,10 @@ void PartitionedOutput::initializeDestinations() {
     auto taskId = operatorCtx_->taskId();
     for (int i = 0; i < numDestinations_; ++i) {
       destinations_.push_back(std::make_unique<detail::Destination>(
-          taskId, i, pool(), eagerFlush_));
+          taskId, i, pool(), eagerFlush_, [&](uint64_t bytes, uint64_t rows) {
+            auto lockedStats = stats_.wlock();
+            lockedStats->addOutputVector(bytes, rows);
+          }));
     }
   }
 }
@@ -216,12 +228,6 @@ void PartitionedOutput::estimateRowSizes() {
 }
 
 void PartitionedOutput::addInput(RowVectorPtr input) {
-  // TODO Report outputBytes as bytes after serialization
-  {
-    auto lockedStats = stats_.wlock();
-    lockedStats->addOutputVector(input->estimateFlatSize(), input->size());
-  }
-
   initializeInput(std::move(input));
 
   initializeDestinations();
@@ -288,6 +294,9 @@ void PartitionedOutput::collectNullRows() {
   decodedVectors_.resize(keyChannels_.size());
 
   for (auto i : keyChannels_) {
+    if (i == kConstantChannel) {
+      continue;
+    }
     auto& keyVector = input_->childAt(i);
     if (keyVector->mayHaveNulls()) {
       decodedVectors_[i].decode(*keyVector, rows_);

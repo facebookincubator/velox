@@ -108,19 +108,6 @@ PlanBuilder& PlanBuilder::tableScan(
       .endTableScan();
 }
 
-PlanBuilder& PlanBuilder::tableScan(
-    const RowTypePtr& outputType,
-    const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& assignments) {
-  return TableScanBuilder(*this)
-      .outputType(outputType)
-      .tableHandle(tableHandle)
-      .assignments(assignments)
-      .endTableScan();
-}
-
 PlanBuilder& PlanBuilder::tpchTableScan(
     tpch::Table table,
     std::vector<std::string>&& columnNames,
@@ -929,6 +916,59 @@ PlanBuilder& PlanBuilder::localMerge(const std::vector<std::string>& keys) {
   return *this;
 }
 
+PlanBuilder& PlanBuilder::expand(
+    const std::vector<std::vector<std::string>>& projections) {
+  VELOX_CHECK(!projections.empty(), "projections must not be empty.");
+  const auto numColumns = projections[0].size();
+  const auto numRows = projections.size();
+  std::vector<std::string> aliases;
+  aliases.reserve(numColumns);
+
+  std::vector<std::vector<core::TypedExprPtr>> projectExprs;
+  projectExprs.reserve(projections.size());
+
+  for (auto i = 0; i < numRows; i++) {
+    std::vector<core::TypedExprPtr> projectExpr;
+    VELOX_CHECK_EQ(numColumns, projections[i].size())
+    for (auto j = 0; j < numColumns; j++) {
+      auto untypedExpression = parse::parseExpr(projections[i][j], options_);
+      auto typedExpression = inferTypes(untypedExpression);
+
+      if (i == 0) {
+        if (untypedExpression->alias().has_value()) {
+          aliases.push_back(untypedExpression->alias().value());
+        } else {
+          auto fieldExpr = dynamic_cast<const core::FieldAccessExpr*>(
+              untypedExpression.get());
+          VELOX_CHECK_NOT_NULL(fieldExpr);
+          aliases.push_back(fieldExpr->getFieldName());
+        }
+        projectExpr.push_back(typedExpression);
+      } else {
+        // The types of values in 2nd and subsequent rows must much types in the
+        //  1st row.
+        const auto& expectedType = projectExprs[0][j]->type();
+        if (typedExpression->type()->equivalent(*expectedType)) {
+          projectExpr.push_back(typedExpression);
+        } else {
+          auto constantExpr =
+              dynamic_cast<const core::ConstantExpr*>(untypedExpression.get());
+          VELOX_CHECK_NOT_NULL(constantExpr);
+          VELOX_CHECK(constantExpr->value().isNull());
+          projectExpr.push_back(std::make_shared<core::ConstantTypedExpr>(
+              expectedType, variant::null(expectedType->kind())));
+        }
+      }
+    }
+    projectExprs.push_back(projectExpr);
+  }
+
+  planNode_ = std::make_shared<core::ExpandNode>(
+      nextPlanNodeId(), projectExprs, std::move(aliases), planNode_);
+
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::localMerge(
     const std::vector<std::string>& keys,
     std::vector<core::PlanNodePtr> sources) {
@@ -971,7 +1011,7 @@ PlanBuilder& PlanBuilder::topN(
   return *this;
 }
 
-PlanBuilder& PlanBuilder::limit(int32_t offset, int32_t count, bool isPartial) {
+PlanBuilder& PlanBuilder::limit(int64_t offset, int64_t count, bool isPartial) {
   planNode_ = std::make_shared<core::LimitNode>(
       nextPlanNodeId(), offset, count, isPartial, planNode_);
   return *this;
@@ -994,17 +1034,33 @@ PlanBuilder& PlanBuilder::assignUniqueId(
 namespace {
 core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const RowTypePtr& inputType,
-    const std::vector<std::string>& keys) {
+    const std::vector<core::TypedExprPtr>& keys,
+    memory::MemoryPool* pool) {
   if (keys.empty()) {
     return std::make_shared<core::GatherPartitionFunctionSpec>();
   } else {
     std::vector<column_index_t> keyIndices;
     keyIndices.reserve(keys.size());
+
+    std::vector<VectorPtr> constValues;
+    constValues.reserve(keys.size());
+
     for (const auto& key : keys) {
-      keyIndices.push_back(inputType->getChildIdx(key));
+      if (auto field =
+              std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+                  key)) {
+        keyIndices.push_back(inputType->getChildIdx(field->name()));
+      } else if (
+          auto constant =
+              std::dynamic_pointer_cast<const core::ConstantTypedExpr>(key)) {
+        keyIndices.push_back(kConstantChannel);
+        constValues.push_back(constant->toConstantVector(pool));
+      } else {
+        VELOX_UNREACHABLE();
+      }
     }
     return std::make_shared<HashPartitionFunctionSpec>(
-        inputType, std::move(keyIndices));
+        inputType, std::move(keyIndices), std::move(constValues));
   }
 }
 
@@ -1044,10 +1100,11 @@ RowTypePtr rename(
 
 core::PlanNodePtr createLocalPartitionNode(
     const core::PlanNodeId& planNodeId,
-    const std::vector<std::string>& keys,
-    const std::vector<core::PlanNodePtr>& sources) {
+    const std::vector<core::TypedExprPtr>& keys,
+    const std::vector<core::PlanNodePtr>& sources,
+    memory::MemoryPool* pool) {
   auto partitionFunctionFactory =
-      createPartitionFunctionSpec(sources[0]->outputType(), keys);
+      createPartitionFunctionSpec(sources[0]->outputType(), keys, pool);
   return std::make_shared<core::LocalPartitionNode>(
       planNodeId,
       keys.empty() ? core::LocalPartitionNode::Type::kGather
@@ -1071,11 +1128,13 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     const std::vector<std::string>& outputLayout) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
+
+  auto keyExprs = exprs(keys, planNode_->outputType());
   return partitionedOutput(
       keys,
       numPartitions,
       replicateNullsAndAny,
-      createPartitionFunctionSpec(planNode_->outputType(), keys),
+      createPartitionFunctionSpec(planNode_->outputType(), keyExprs, pool_),
       outputLayout);
 }
 
@@ -1093,7 +1152,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
   planNode_ = std::make_shared<core::PartitionedOutputNode>(
       nextPlanNodeId(),
       core::PartitionedOutputNode::Kind::kPartitioned,
-      exprs(keys),
+      exprs(keys, planNode_->outputType()),
       numPartitions,
       replicateNullsAndAny,
       std::move(partitionFunctionSpec),
@@ -1130,12 +1189,17 @@ PlanBuilder& PlanBuilder::localPartition(
     const std::vector<std::string>& keys,
     const std::vector<core::PlanNodePtr>& sources) {
   VELOX_CHECK_NULL(planNode_, "localPartition() must be the first call");
-  planNode_ = createLocalPartitionNode(nextPlanNodeId(), keys, sources);
+  planNode_ = createLocalPartitionNode(
+      nextPlanNodeId(), exprs(keys, sources[0]->outputType()), sources, pool_);
   return *this;
 }
 
 PlanBuilder& PlanBuilder::localPartition(const std::vector<std::string>& keys) {
-  planNode_ = createLocalPartitionNode(nextPlanNodeId(), keys, {planNode_});
+  planNode_ = createLocalPartitionNode(
+      nextPlanNodeId(),
+      exprs(keys, planNode_->outputType()),
+      {planNode_},
+      pool_);
   return *this;
 }
 
@@ -1813,16 +1877,26 @@ PlanBuilder::fields(const std::vector<column_index_t>& indices) {
 }
 
 std::vector<core::TypedExprPtr> PlanBuilder::exprs(
-    const std::vector<std::string>& names) {
-  VELOX_CHECK_NOT_NULL(planNode_);
-  auto flds = fields(planNode_->outputType(), names);
-  std::vector<core::TypedExprPtr> expressions;
-  expressions.reserve(flds.size());
-  for (const auto& fld : flds) {
-    expressions.emplace_back(
-        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(fld));
+    const std::vector<std::string>& expressions,
+    const RowTypePtr& inputType) {
+  std::vector<core::TypedExprPtr> typedExpressions;
+  for (auto& expr : expressions) {
+    auto typedExpression = core::Expressions::inferTypes(
+        parse::parseExpr(expr, options_), inputType, pool_);
+
+    if (auto field = dynamic_cast<const core::FieldAccessTypedExpr*>(
+            typedExpression.get())) {
+      typedExpressions.push_back(typedExpression);
+    } else if (
+        auto constant = dynamic_cast<const core::ConstantTypedExpr*>(
+            typedExpression.get())) {
+      typedExpressions.push_back(typedExpression);
+    } else {
+      VELOX_FAIL("Expected field name or constant: {}", expr);
+    }
   }
-  return expressions;
+
+  return typedExpressions;
 }
 
 core::TypedExprPtr PlanBuilder::inferTypes(

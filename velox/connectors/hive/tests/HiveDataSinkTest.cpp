@@ -61,6 +61,14 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
         std::thread::hardware_concurrency());
   }
 
+  void TearDown() override {
+    connectorQueryCtx_.reset();
+    connectorPool_.reset();
+    opPool_.reset();
+    root_.reset();
+    HiveConnectorTestBase::TearDown();
+  }
+
   std::vector<RowVectorPtr> createVectors(int vectorSize, int numVectors) {
     VectorFuzzer::Options options;
     options.vectorSize = vectorSize;
@@ -87,6 +95,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
         0,
         0,
         0,
+        0,
         writerFlushThreshold,
         0,
         "none");
@@ -98,7 +107,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     opPool_.reset();
     root_.reset();
 
-    root_ = memory::defaultMemoryManager().addRootPool(
+    root_ = memory::MemoryManager::getInstance()->addRootPool(
         "HiveDataSinkTest", 1L << 30, exec::MemoryReclaimer::create());
     opPool_ = root_->addLeafChild("operator");
     connectorPool_ =
@@ -107,7 +116,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     connectorQueryCtx_ = std::make_unique<connector::ConnectorQueryCtx>(
         opPool_.get(),
         connectorPool_.get(),
-        connectorConfig_.get(),
+        connectorSessionProperties_.get(),
         nullptr,
         nullptr,
         nullptr,
@@ -177,26 +186,23 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
         fmt::format("SELECT * FROM tmp"));
   }
 
-  void setConnectorConfig(
-      std::unordered_map<std::string, std::string> connectorConfig) {
-    connectorConfig_ =
-        std::make_shared<core::MemConfig>(std::move(connectorConfig));
-  }
-
   void setConnectorQueryContext(
       std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx) {
     connectorQueryCtx_ = std::move(connectorQueryCtx);
   }
 
   const std::shared_ptr<memory::MemoryPool> pool_ =
-      memory::addDefaultLeafMemoryPool();
+      memory::MemoryManager::getInstance()->addLeafPool();
 
   std::shared_ptr<memory::MemoryPool> root_;
   std::shared_ptr<memory::MemoryPool> opPool_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
   RowTypePtr rowType_;
+  std::shared_ptr<core::MemConfig> connectorSessionProperties_ =
+      std::make_shared<core::MemConfig>();
   std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
-  std::shared_ptr<Config> connectorConfig_{std::make_unique<core::MemConfig>()};
+  std::shared_ptr<HiveConfig> connectorConfig_ =
+      std::make_shared<HiveConfig>(std::make_shared<core::MemConfig>());
   std::unique_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
 };
 
@@ -630,7 +636,7 @@ TEST_F(HiveDataSinkTest, memoryReclaim) {
       auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
           opPool_.get(),
           connectorPool_.get(),
-          connectorConfig_.get(),
+          connectorSessionProperties_.get(),
           spillConfig.get(),
           nullptr,
           nullptr,
@@ -643,7 +649,7 @@ TEST_F(HiveDataSinkTest, memoryReclaim) {
       auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
           opPool_.get(),
           connectorPool_.get(),
-          connectorConfig_.get(),
+          connectorSessionProperties_.get(),
           nullptr,
           nullptr,
           nullptr,
@@ -742,12 +748,11 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
     connectorConfig.emplace(
         "file_writer_flush_threshold_bytes", folly::to<std::string>(0));
     // Avoid internal the stripe flush while data write.
-    connectorConfig.emplace("orc_optimized_writer_max_stripe_size", "1GB");
-    connectorConfig.emplace(
-        "orc_optimized_writer_max_dictionary_memory", "1GB");
+    connectorConfig.emplace("hive.orc.writer.stripe-max-size", "1GB");
+    connectorConfig.emplace("hive.orc.writer.dictionary-max-memory", "1GB");
 
-    setConnectorConfig(connectorConfig);
-
+    connectorConfig_ = std::make_shared<HiveConfig>(
+        std::make_shared<core::MemConfig>(std::move(connectorConfig)));
     const auto outputDirectory = TempDirectoryPath::create();
     std::shared_ptr<HiveBucketProperty> bucketProperty;
     std::vector<std::string> partitionBy;
@@ -770,7 +775,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
       auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
           opPool_.get(),
           connectorPool_.get(),
-          connectorConfig_.get(),
+          connectorSessionProperties_.get(),
           spillConfig.get(),
           nullptr,
           nullptr,
@@ -783,7 +788,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
       auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
           opPool_.get(),
           connectorPool_.get(),
-          connectorConfig_.get(),
+          connectorSessionProperties_.get(),
           nullptr,
           nullptr,
           nullptr,
@@ -867,7 +872,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
   auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
       opPool_.get(),
       connectorPool_.get(),
-      connectorConfig_.get(),
+      connectorSessionProperties_.get(),
       spillConfig.get(),
       nullptr,
       nullptr,

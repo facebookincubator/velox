@@ -146,20 +146,6 @@ class PlanBuilder {
       const std::string& remainingFilter = "",
       const RowTypePtr& dataColumns = nullptr);
 
-  /// Add a TableScanNode using a connector-specific table handle and
-  /// assignments. Supports any connector, not just Hive connector.
-  ///
-  /// @param outputType List of column names and types to project out. Column
-  /// names should match the keys in the 'assignments' map. The 'assignments'
-  /// map may contain more columns then 'outputType' if some columns are only
-  /// used by pushed-down filters.
-  PlanBuilder& tableScan(
-      const RowTypePtr& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& assignments);
-
   /// Add a TableScanNode to scan a TPC-H table.
   ///
   /// @param tpchTableHandle The handle that specifies the target TPC-H table
@@ -203,6 +189,15 @@ class PlanBuilder {
     TableScanBuilder& subfieldFilters(
         std::vector<std::string> subfieldFilters) {
       subfieldFilters_ = std::move(subfieldFilters);
+      return *this;
+    }
+
+    /// @param subfieldFilter A SQL expression for the range filter
+    /// to apply to an individual column. Supported filters are: column <=
+    /// value, column < value, column >= value, column > value, column = value,
+    /// column IN (v1, v2,.. vN), column < v1 OR column >= v2.
+    TableScanBuilder& subfieldFilter(std::string subfieldFilter) {
+      subfieldFilters_.emplace_back(std::move(subfieldFilter));
       return *this;
     }
 
@@ -634,6 +629,25 @@ class PlanBuilder {
       const std::vector<std::string>& aggregationInputs,
       std::string groupIdName = "group_id");
 
+  /// Add an ExpandNode using specified projections. See comments for
+  /// ExpandNode class for description of this plan node.
+  ///
+  /// @param projections A list of projection expressions. Each expression is
+  /// either a column name, null or non-null constant.
+  ///
+  /// For example,
+  ///
+  ///     .expand(
+  ///            {{"k1", "null:: bigint k2", "a", "b", "0 as gid"}, //
+  ///            Column name will be extracted from the first projection. If the
+  ///            column is null, it is also necessary to specify the column
+  ///            type.
+  ///             {"k1", "null", "a", "b", "1"},
+  ///             {"null", "null", "a", "b", "2"}})
+  ///
+  ///
+  PlanBuilder& expand(const std::vector<std::vector<std::string>>& projections);
+
   /// Add a LocalMergeNode using specified ORDER BY clauses.
   ///
   /// For example,
@@ -679,7 +693,7 @@ class PlanBuilder {
   /// @param isPartial Boolean indicating whether the limit node is partial or
   /// final. Partial limit can run multi-threaded. Final limit must run
   /// single-threaded.
-  PlanBuilder& limit(int32_t offset, int32_t count, bool isPartial);
+  PlanBuilder& limit(int64_t offset, int64_t count, bool isPartial);
 
   /// Add an EnforceSingleRowNode to ensure input has at most one row at
   /// runtime.
@@ -987,7 +1001,9 @@ class PlanBuilder {
   std::shared_ptr<const core::FieldAccessTypedExpr> field(
       const std::string& name);
 
-  std::vector<core::TypedExprPtr> exprs(const std::vector<std::string>& names);
+  std::vector<core::TypedExprPtr> exprs(
+      const std::vector<std::string>& expressions,
+      const RowTypePtr& inputType);
 
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> fields(
       const std::vector<std::string>& names);

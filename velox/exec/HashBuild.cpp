@@ -15,6 +15,8 @@
  */
 
 #include "velox/exec/HashBuild.h"
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
@@ -220,6 +222,7 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
     // Disable spilling if exceeding the max spill level and the query might run
     // out of memory if the restored partition still can't fit in memory.
     if (spillConfig.exceedJoinSpillLevelLimit(startBit)) {
+      RECORD_METRIC_VALUE(kMetricMaxSpillLevelExceededCount);
       LOG(WARNING) << "Exceeded spill level limit: "
                    << spillConfig.maxSpillLevel
                    << ", and disable spilling for memory pool: "
@@ -241,7 +244,9 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       spillConfig.writeBufferSize,
       spillConfig.compressionKind,
       memory::spillMemoryPool(),
-      spillConfig.executor);
+      spillConfig.executor,
+      spillConfig.maxSpillRunRows,
+      spillConfig.fileCreateConfig);
 
   const int32_t numPartitions = spiller_->hashBits().numPartitions();
   spillInputIndicesBuffers_.resize(numPartitions);
@@ -515,17 +520,11 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
     }
   }
 
-  if (numRows == 0) {
-    // Nothing we can spill from this hash build operator.
-    return true;
-  }
-
-  // TODO: deprecate the spilling after memory reservation fails as we rely on
-  // memory arbitration to trigger spilling automatically.
-  numSpillRows_ = std::max<int64_t>(
-      1, targetIncrementBytes / (rows->fixedRowSize() + outOfLineBytesPerRow));
-  numSpillBytes_ = numSpillRows_ * outOfLineBytesPerRow;
-  return false;
+  LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
+               << " for memory pool " << pool()->name()
+               << ", usage: " << succinctBytes(pool()->currentBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes());
+  return true;
 }
 
 void HashBuild::spillInput(const RowVectorPtr& input) {
@@ -861,19 +860,10 @@ void HashBuild::ensureTableFits(uint64_t numRows) {
     }
   }
 
-  // TODO: add spilling support here in case of threshold triggered spilling.
-#if 0
-  // NOTE: the memory arbitrator must have spilled everything from this hash
-  // build operator and all its peers.
-  VELOX_CHECK(spiller_->isAllSpilled());
-#endif
-
-  // Throw a memory cap exceeded error to fail this query.
-  VELOX_MEM_POOL_CAP_EXCEEDED(fmt::format(
-      "Failed to reserve {} to build table with {} rows from {}",
-      succinctBytes(bytesToReserve),
-      numRows,
-      pool()->name()));
+  LOG(WARNING) << "Failed to reserve " << succinctBytes(bytesToReserve)
+               << " for memory pool " << pool()->name()
+               << ", usage: " << succinctBytes(pool()->currentBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes());
 }
 
 void HashBuild::postHashBuildProcess() {
@@ -1080,10 +1070,6 @@ bool HashBuild::testingTriggerSpill() {
       spillConfig()->testSpillPct;
 }
 
-bool HashBuild::canReclaim() const {
-  return Operator::canReclaim() && (spiller_ != nullptr);
-}
-
 void HashBuild::reclaim(
     uint64_t /*unused*/,
     memory::MemoryReclaimer::Stats& stats) {
@@ -1094,10 +1080,16 @@ void HashBuild::reclaim(
 
   TestValue::adjust("facebook::velox::exec::HashBuild::reclaim", this);
 
+  if (spiller_ == nullptr) {
+    // NOTE: we might have reached to the max spill limit.
+    return;
+  }
+
   // NOTE: a hash build operator is reclaimable if it is in the middle of table
   // build processing and is not under non-reclaimable execution section.
   if (nonReclaimableState()) {
     // TODO: reduce the log frequency if it is too verbose.
+    RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
     ++stats.numNonReclaimableAttempts;
     LOG(WARNING) << "Can't reclaim from hash build operator, state_["
                  << stateName(state_) << "], nonReclaimableSection_["
@@ -1118,6 +1110,7 @@ void HashBuild::reclaim(
     VELOX_CHECK(buildOp->canReclaim());
     if (buildOp->nonReclaimableState()) {
       // TODO: reduce the log frequency if it is too verbose.
+      RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
       ++stats.numNonReclaimableAttempts;
       LOG(WARNING) << "Can't reclaim from hash build operator, state_["
                    << stateName(buildOp->state_) << "], nonReclaimableSection_["

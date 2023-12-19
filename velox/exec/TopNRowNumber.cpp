@@ -191,7 +191,7 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
     ensureInputFits(input);
 
     SelectivityVector rows(numInput);
-    table_->prepareForProbe(*lookup_, input, rows, false);
+    table_->prepareForGroupProbe(*lookup_, input, rows, false);
     table_->groupProbe(*lookup_);
 
     // Initialize new partitions.
@@ -713,7 +713,10 @@ void TopNRowNumber::ensureInputFits(const RowVectorPtr& input) {
     }
   }
 
-  spill();
+  LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
+               << " for memory pool " << pool()->name()
+               << ", usage: " << succinctBytes(pool()->currentBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes());
 }
 
 void TopNRowNumber::spill() {
@@ -734,7 +737,7 @@ void TopNRowNumber::setupSpiller() {
 
   spiller_ = std::make_unique<Spiller>(
       // TODO Replace Spiller::Type::kOrderBy.
-      Spiller::Type::kOrderBy,
+      Spiller::Type::kOrderByInput,
       data_.get(),
       inputType_,
       spillCompareFlags_.size(),
@@ -744,6 +747,8 @@ void TopNRowNumber::setupSpiller() {
       spillConfig_->writeBufferSize,
       spillConfig_->compressionKind,
       memory::spillMemoryPool(),
-      spillConfig_->executor);
+      spillConfig_->executor,
+      spillConfig_->maxSpillRunRows,
+      spillConfig_->fileCreateConfig);
 }
 } // namespace facebook::velox::exec

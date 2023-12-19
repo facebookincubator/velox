@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/Operator.h"
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Driver.h"
@@ -54,7 +56,7 @@ OperatorCtx::createConnectorQueryCtx(
   return std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
       connectorPool,
-      driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
+      driverCtx_->task->queryCtx()->connectorSessionProperties(connectorId),
       spillConfig,
       std::make_unique<SimpleExpressionEvaluator>(
           execCtx()->queryCtx(), execCtx()->pool()),
@@ -605,6 +607,7 @@ uint64_t Operator::MemoryReclaimer::reclaim(
   if (op_->nonReclaimableSection_) {
     // TODO: reduce the log frequency if it is too verbose.
     ++stats.numNonReclaimableAttempts;
+    RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
     LOG(WARNING) << "Can't reclaim from memory pool " << pool->name()
                  << " which is under non-reclaimable section, memory usage: "
                  << succinctBytes(pool->currentBytes())

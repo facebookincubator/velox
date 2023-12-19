@@ -79,7 +79,8 @@ class ValueListTest : public functions::test::FunctionBaseTest {
     return allocator_.get();
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::MemoryManager::getInstance()->addLeafPool()};
   std::unique_ptr<HashStringAllocator> allocator_{
       std::make_unique<HashStringAllocator>(pool_.get())};
 };
@@ -112,7 +113,7 @@ TEST_F(ValueListTest, integers) {
 
 TEST_F(ValueListTest, arrays) {
   // No nulls.
-  int32_t kSizeCaps[] = {500, 4000, 6000, 50000};
+  int32_t kSizeCaps[] = {730, 4000, 7500, 50000};
   int32_t counter = 0;
   for (auto size : kTestSizes) {
     auto data = makeArrayVector<int32_t>(

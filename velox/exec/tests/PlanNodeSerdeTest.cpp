@@ -28,6 +28,10 @@ namespace facebook::velox::exec::test {
 class PlanNodeSerdeTest : public testing::Test,
                           public velox::test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   PlanNodeSerdeTest() {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
@@ -192,6 +196,17 @@ TEST_F(PlanNodeSerdeTest, groupId) {
              .values({data_})
              .groupId({"c0", "c0 as c1"}, {{"c0"}, {"c0", "c1"}}, {"c2"})
              .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, expand) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .expand(
+                      {{"c0", "c1", "c2", "0 as gid"},
+                       {"c0", "c1", "null as c2", "1  as gid"},
+                       {"c0", "null as c1", "null as c2", "2  as gid"}})
+                  .planNode();
   testSerde(plan);
 }
 

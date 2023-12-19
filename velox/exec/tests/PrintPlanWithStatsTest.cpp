@@ -22,8 +22,6 @@
 #include <gtest/gtest.h>
 #include <re2/re2.h>
 
-DECLARE_int32(split_preload_per_driver);
-
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
@@ -192,6 +190,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"          flattenStringDictionaryValues [ ]* sum: 0, count: 1, min: 0, max: 0"},
        {"          ioWaitNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
        {"          localReadBytes      [ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
+       {"          maxSingleIoWaitNanos[ ]*sum: .+, count: 1, min: .+, max: .+"},
        {"          numLocalRead        [ ]* sum: 0, count: 1, min: 0, max: 0"},
        {"          numPrefetch         [ ]* sum: .+, count: 1, min: .+, max: .+"},
        {"          numRamRead          [ ]* sum: 40, count: 1, min: 40, max: 40"},
@@ -236,7 +235,6 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
   for (const auto& numPrefetchSplit : numPrefetchSplits) {
     SCOPED_TRACE(fmt::format("numPrefetchSplit {}", numPrefetchSplit));
     asyncDataCache_->clear();
-    FLAGS_split_preload_per_driver = numPrefetchSplit;
     auto filePath = TempFilePath::create();
     writeToFile(filePath->path, vectors);
 
@@ -247,11 +245,14 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
                 {"c5"}, {"max(c0)", "sum(c1)", "sum(c2)", "sum(c3)", "sum(c4)"})
             .planNode();
 
-    auto task = assertQuery(
-        op,
-        {filePath},
-        "SELECT c5, max(c0), sum(c1), sum(c2), sum(c3), sum(c4) FROM tmp group by c5");
-
+    auto task =
+        AssertQueryBuilder(op, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kMaxSplitPreloadPerDriver,
+                std::to_string(numPrefetchSplit))
+            .splits(makeHiveConnectorSplits({filePath}))
+            .assertResults(
+                "SELECT c5, max(c0), sum(c1), sum(c2), sum(c3), sum(c4) FROM tmp group by c5");
     ensureTaskCompletion(task.get());
     compareOutputs(
         ::testing::UnitTest::GetInstance()->current_test_info()->name(),
@@ -283,6 +284,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
          {"        flattenStringDictionaryValues [ ]* sum: 0, count: 1, min: 0, max: 0"},
          {"        ioWaitNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
          {"        localReadBytes   [ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
+         {"        maxSingleIoWaitNanos[ ]*sum: .+, count: 1, min: .+, max: .+"},
          {"        numLocalRead     [ ]* sum: 0, count: 1, min: 0, max: 0"},
          {"        numPrefetch      [ ]* sum: .+, count: .+, min: .+, max: .+"},
          {"        numRamRead       [ ]* sum: 6, count: 1, min: 6, max: 6"},

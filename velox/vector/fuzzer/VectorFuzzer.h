@@ -125,6 +125,9 @@ class VectorFuzzer {
     /// generating nested vectors (arrays, maps, and rows).
     size_t complexElementsMaxSize{10000};
 
+    /// maximum size of array/map wrapped inside constant.
+    std::optional<int32_t> maxConstantContainerSize{std::nullopt};
+
     /// If true, generated map keys are normalized (unique and not-null).
     bool normalizeMapKeys{true};
 
@@ -146,12 +149,12 @@ class VectorFuzzer {
   };
 
   VectorFuzzer(
-      VectorFuzzer::Options options,
+      const VectorFuzzer::Options& options,
       memory::MemoryPool* pool,
       size_t seed = 123456)
       : opts_(options), pool_(pool), rng_(seed) {}
 
-  void setOptions(VectorFuzzer::Options options) {
+  void setOptions(const VectorFuzzer::Options& options) {
     opts_ = options;
   }
 

@@ -24,8 +24,12 @@ using namespace facebook::velox;
 class UnsafeRowSerializerTest : public ::testing::Test,
                                 public test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
-    pool_ = memory::addDefaultLeafMemoryPool();
+    pool_ = memory::MemoryManager::getInstance()->addLeafPool();
     serde_ = std::make_unique<serializer::spark::UnsafeRowVectorSerde>();
   }
 
@@ -41,7 +45,8 @@ class UnsafeRowSerializerTest : public ::testing::Test,
     auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
     auto serializer = serde_->createSerializer(rowType, numRows, arena.get());
 
-    serializer->append(rowVector, folly::Range(rows.data(), numRows));
+    Scratch scratch;
+    serializer->append(rowVector, folly::Range(rows.data(), numRows), scratch);
     auto size = serializer->maxSerializedSize();
     OStreamOutputStream out(output);
     serializer->flush(&out);
@@ -277,7 +282,8 @@ TEST_F(UnsafeRowSerializerTest, incompleteRow) {
   // Cut in the middle of the `size` integer.
   buffers = {{rawData, 2}};
   VELOX_ASSERT_RUNTIME_THROW(
-      testDeserialize(buffers, expected), "Reading past end of ByteStream");
+      testDeserialize(buffers, expected),
+      "Reading past end of ByteInputStream");
 }
 
 TEST_F(UnsafeRowSerializerTest, types) {

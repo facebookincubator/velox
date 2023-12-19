@@ -151,6 +151,8 @@ class RowVector : public BaseVector {
     return children_;
   }
 
+  void setType(const TypePtr& type) override;
+
   void copy(
       const BaseVector* source,
       vector_size_t targetIndex,
@@ -299,21 +301,19 @@ struct ArrayVectorBase : BaseVector {
   }
 
   BufferPtr mutableOffsets(size_t size) {
-    BaseVector::resizeIndices(size, pool_, &offsets_, &rawOffsets_);
+    BaseVector::resizeIndices(length_, size, pool_, offsets_, &rawOffsets_);
     return offsets_;
   }
 
   BufferPtr mutableSizes(size_t size) {
-    BaseVector::resizeIndices(size, pool_, &sizes_, &rawSizes_);
+    BaseVector::resizeIndices(length_, size, pool_, sizes_, &rawSizes_);
     return sizes_;
   }
 
   void resize(vector_size_t size, bool setNotNull = true) override {
     if (BaseVector::length_ < size) {
-      BaseVector::resizeIndices(size, pool_, &offsets_, &rawOffsets_);
-      BaseVector::resizeIndices(size, pool_, &sizes_, &rawSizes_);
-      clearIndices(sizes_, length_, size);
-      // No need to clear offset indices since we set sizes to 0.
+      BaseVector::resizeIndices(length_, size, pool_, offsets_, &rawOffsets_);
+      BaseVector::resizeIndices(length_, size, pool_, sizes_, &rawSizes_);
     }
     BaseVector::resize(size, setNotNull);
   }
@@ -436,6 +436,8 @@ class ArrayVector : public ArrayVectorBase {
         std::move(elements), type()->childAt(0), pool_);
   }
 
+  void setType(const TypePtr& type) override;
+
   void copyRanges(
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges) override;
@@ -551,6 +553,8 @@ class MapVector : public ArrayVectorBase {
   VectorPtr& mapValues() {
     return values_;
   }
+
+  void setType(const TypePtr& type) override;
 
   bool hasSortedKeys() const {
     return sortedKeys_;
