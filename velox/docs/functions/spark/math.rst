@@ -18,9 +18,9 @@ Mathematical Functions
 
     Returns inverse hyperbolic sine of ``x``.
 
-.. spark:function:: atan2(x, y) -> double
+.. spark:function:: atan2(y, x) -> double
 
-    Returns the angle in radians between the positive x-axis of a plane and the point given by the coordinates(x, y).
+    Returns the arc tangent of ``y / x``.
 
 .. spark:function:: atanh(x) -> double
 
