@@ -737,10 +737,11 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
       : targetFileName;
   if (insertTableHandle_->tableStorageFormat() ==
       dwio::common::FileFormat::PARQUET) {
-    return {targetFileName, fmt::format("{}{}", writeFileName, ".parquet")};
-  } else {
-    return {targetFileName, writeFileName};
+    return {
+        fmt::format("{}{}", targetFileName, ".parquet"),
+        fmt::format("{}{}", writeFileName, ".parquet")};
   }
+  return {targetFileName, writeFileName};
 }
 
 HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
