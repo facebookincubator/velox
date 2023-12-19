@@ -101,14 +101,16 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   // Returns runtime statistics. ExchangeSource is expected to report
   // background CPU time by including a runtime metric named
   // ExchangeClient::kBackgroundCpuTimeMs.
-  virtual folly::F14FastMap<std::string, int64_t> stats() const = 0;
+  virtual folly::F14FastMap<std::string, int64_t> stats() const {
+    VELOX_UNREACHABLE();
+  }
 
   /// Returns runtime statistics. ExchangeSource is expected to report
   /// Specify units of individual counters in ExchangeSource.
   /// for an example: 'totalBytes ：count: 9, sum: 11.17GB, max: 1.39GB,
   /// min:  1.16GB'
   virtual folly::F14FastMap<std::string, RuntimeMetric> metrics() const {
-    return {};
+    VELOX_NYI();
   }
 
   virtual std::string toString() {

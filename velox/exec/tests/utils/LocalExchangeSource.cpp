@@ -162,14 +162,6 @@ class LocalExchangeSource : public exec::ExchangeSource {
     buffers->deleteResults(taskId_, destination_);
   }
 
-  folly::F14FastMap<std::string, int64_t> stats() const override {
-    return {
-        {"localExchangeSource.numPages", numPages_},
-        {"localExchangeSource.totalBytes", totalBytes_},
-        {ExchangeClient::kBackgroundCpuTimeMs, 123},
-    };
-  }
-
   folly::F14FastMap<std::string, RuntimeMetric> metrics() const override {
     return {
         {"localExchangeSource.numPages", RuntimeMetric(numPages_)},
