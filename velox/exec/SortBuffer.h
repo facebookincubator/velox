@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "PrefixSort.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorUtils.h"
@@ -37,7 +38,8 @@ class SortBuffer {
       velox::memory::MemoryPool* pool,
       tsan_atomic<bool>* nonReclaimableSection,
       const common::SpillConfig* spillConfig = nullptr,
-      uint64_t spillMemoryThreshold = 0);
+      uint64_t spillMemoryThreshold = 0,
+      const std::optional<PrefixSortConfig>& prefixSortConfig = std::nullopt);
 
   void addInput(const VectorPtr& input);
 
@@ -134,6 +136,8 @@ class SortBuffer {
   std::optional<uint64_t> estimatedOutputRowSize_{};
   // The number of rows that has been returned.
   size_t numOutputRows_{0};
+
+  const std::optional<PrefixSortConfig> prefixSortConfig_;
 };
 
 } // namespace facebook::velox::exec

@@ -169,6 +169,32 @@ class OrderByTest : public OperatorTestBase {
     }
   }
 
+  void runWithPrefixSort(
+      core::PlanNodePtr planNode,
+      const std::string& duckDbSql,
+      const std::vector<uint32_t>& sortingKeys,
+      const std::optional<std::string>& maxPrefixLength) {
+    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    if (maxPrefixLength.has_value()) {
+      queryCtx->testingOverrideConfigUnsafe({
+          {core::QueryConfig::kEnablePrefixSort, "true"},
+          {core::QueryConfig::kPrefixSortMaxKeyLength, maxPrefixLength.value()},
+      });
+      std::string straceMessage =
+          "run with prefix sort with max prefix length limit " +
+          maxPrefixLength.value();
+      SCOPED_TRACE(straceMessage);
+    } else {
+      queryCtx->testingOverrideConfigUnsafe(
+          {{core::QueryConfig::kEnablePrefixSort, "true"}});
+      SCOPED_TRACE("run with prefix sort without max prefix length limit ");
+    }
+    CursorParameters params;
+    params.planNode = planNode;
+    params.queryCtx = queryCtx;
+    assertQueryOrdered(params, duckDbSql, sortingKeys);
+  }
+
   void runTest(
       core::PlanNodePtr planNode,
       const core::PlanNodeId& orderById,
@@ -177,6 +203,14 @@ class OrderByTest : public OperatorTestBase {
     {
       SCOPED_TRACE("run without spilling");
       assertQueryOrdered(planNode, duckDbSql, sortingKeys);
+    }
+    {
+      SCOPED_TRACE("run with prefix sort");
+      runWithPrefixSort(
+          planNode, duckDbSql, sortingKeys, std::optional<std::string>("0"));
+      runWithPrefixSort(
+          planNode, duckDbSql, sortingKeys, std::optional<std::string>("1"));
+      runWithPrefixSort(planNode, duckDbSql, sortingKeys, std::nullopt);
     }
     {
       SCOPED_TRACE("run with spilling");

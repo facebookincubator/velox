@@ -66,7 +66,11 @@ OrderBy::OrderBy(
       pool(),
       &nonReclaimableSection_,
       spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
-      operatorCtx_->driverCtx()->queryConfig().orderBySpillMemoryThreshold());
+      operatorCtx_->driverCtx()->queryConfig().orderBySpillMemoryThreshold(),
+      driverCtx->queryConfig().isPrefixSortEnabled()
+          ? std::make_optional<PrefixSortConfig>(
+                driverCtx->queryConfig().prefixSortMaxKeyLength())
+          : std::nullopt);
 }
 
 void OrderBy::addInput(RowVectorPtr input) {

@@ -357,6 +357,15 @@ class QueryConfig {
   /// Maximum number of splits to preload. Set to 0 to disable preloading.
   static constexpr const char* kMaxSplitPreloadPerDriver =
       "max_split_preload_per_driver";
+  static constexpr const char* kEnablePrefixSort = "enable_prefix_sort";
+
+  static constexpr const char* kPrefixSortMaxKeyLength =
+      "prefix_sort_max_key_length";
+
+  // TODO: for testing , remove as follow-up
+  static constexpr const char* kEnablePrefixSortWithIterator =
+      "enable_prefix_sort_with_iterater";
+
 
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
@@ -712,6 +721,19 @@ class QueryConfig {
 
   int32_t maxSplitPreloadPerDriver() const {
     return get<int32_t>(kMaxSplitPreloadPerDriver, 2);
+  }
+
+  bool isPrefixSortEnabled() const {
+    return get<bool>(kEnablePrefixSort, false);
+  }
+
+  bool isPrefixSortEnabledWithIterator() const {
+    return get<bool>(kEnablePrefixSortWithIterator, false);
+  }
+
+  uint32_t prefixSortMaxKeyLength() const {
+    return get<uint32_t>(
+        kPrefixSortMaxKeyLength, std::numeric_limits<uint32_t>::max());
   }
 
   template <typename T>
