@@ -93,6 +93,9 @@ folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
   for (const auto& source : sources_) {
     if (source->supportsMetrics()) {
       for (const auto& [name, value] : source->metrics()) {
+        if (UNLIKELY(stats.count(name) == 0)) {
+          stats.insert(std::pair(name, RuntimeMetric(value.unit)));
+        }
         stats[name].merge(value);
       }
     } else {
