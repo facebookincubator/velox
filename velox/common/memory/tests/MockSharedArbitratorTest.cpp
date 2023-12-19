@@ -423,7 +423,6 @@ class MockSharedArbitrationTest : public testing::Test {
     options.memoryPoolInitCapacity = memoryPoolInitCapacity;
     options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
     options.arbitrationStateCheckCb = std::move(arbitrationStateCheckCb);
-    options.checkUsageLeak = true;
     manager_ = std::make_unique<MemoryManager>(options);
     ASSERT_EQ(manager_->arbitrator()->kind(), arbitratorKind);
     arbitrator_ = static_cast<SharedArbitrator*>(manager_->arbitrator());

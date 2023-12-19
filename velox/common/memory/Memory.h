@@ -82,12 +82,6 @@ struct MemoryManagerOptions {
   bool trackDefaultUsage{
       FLAGS_velox_enable_memory_usage_track_in_default_memory_pool};
 
-  /// If true, check the memory pool and usage leaks on destruction.
-  ///
-  /// TODO: deprecate this flag after all the existing memory leak use cases
-  /// have been fixed.
-  bool checkUsageLeak{FLAGS_velox_memory_leak_check_enabled};
-
   /// If true, the memory pool will be running in debug mode to track the
   /// allocation and free call stacks to detect the source of memory leak for
   /// testing purpose.
@@ -247,7 +241,6 @@ class MemoryManager {
   // If not null, used to arbitrate the memory capacity among 'pools_'.
   const std::unique_ptr<MemoryArbitrator> arbitrator_;
   const uint16_t alignment_;
-  const bool checkUsageLeak_;
   const bool debugEnabled_;
   const bool coreOnAllocationFailureEnabled_;
   // The destruction callback set for the allocated root memory pools which are

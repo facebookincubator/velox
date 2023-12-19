@@ -338,7 +338,6 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     options.memoryPoolInitCapacity = memoryPoolInitCapacity;
     options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
     options.memoryReclaimWaitMs = maxReclaimWaitMs;
-    options.checkUsageLeak = true;
     options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
     memoryManager_ = std::make_unique<MemoryManager>(options);
     ASSERT_EQ(memoryManager_->arbitrator()->kind(), "SHARED");

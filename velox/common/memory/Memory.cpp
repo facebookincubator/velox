@@ -51,7 +51,6 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
            .memoryReclaimWaitMs = options.memoryReclaimWaitMs,
            .arbitrationStateCheckCb = options.arbitrationStateCheckCb})),
       alignment_(std::max(MemoryAllocator::kMinAlignment, options.alignment)),
-      checkUsageLeak_(options.checkUsageLeak),
       debugEnabled_(options.debugEnabled),
       coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled),
       poolDestructionCb_([&](MemoryPool* pool) { dropPool(pool); }),
@@ -68,7 +67,6 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
               .alignment = alignment_,
               .maxCapacity = kMaxMemory,
               .trackUsage = options.trackDefaultUsage,
-              .checkUsageLeak = options.checkUsageLeak,
               .debugEnabled = options.debugEnabled,
               .coreOnAllocationFailureEnabled =
                   options.coreOnAllocationFailureEnabled})} {
@@ -162,7 +160,6 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.alignment = alignment_;
   options.maxCapacity = capacity;
   options.trackUsage = true;
-  options.checkUsageLeak = checkUsageLeak_;
   options.debugEnabled = debugEnabled_;
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
 

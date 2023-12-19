@@ -214,7 +214,6 @@ MemoryPool::MemoryPool(
       maxCapacity_(parent_ == nullptr ? options.maxCapacity : kMaxMemory),
       trackUsage_(options.trackUsage),
       threadSafe_(options.threadSafe),
-      checkUsageLeak_(options.checkUsageLeak),
       debugEnabled_(options.debugEnabled),
       coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled) {
   VELOX_CHECK(!isRoot() || !isLeaf());
@@ -657,7 +656,6 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
           .alignment = alignment_,
           .trackUsage = trackUsage_,
           .threadSafe = threadSafe,
-          .checkUsageLeak = checkUsageLeak_,
           .debugEnabled = debugEnabled_,
           .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_});
 }
