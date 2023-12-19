@@ -25,7 +25,7 @@ namespace facebook::velox::parquet {
 // https://github.com/apache/arrow/blob/apache-arrow-12.0.0/cpp/src/parquet/encoding.cc#LL2357C18-L2586C3
 class DeltaBpDecoder {
  public:
-  DeltaBpDecoder(const char* start) : bufferStart_(start) {
+  explicit DeltaBpDecoder(const char* start) : bufferStart_(start) {
     initHeader();
   }
 
