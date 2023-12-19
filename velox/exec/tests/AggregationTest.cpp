@@ -1129,6 +1129,67 @@ TEST_F(AggregationTest, spillWithMemoryLimit) {
   }
 }
 
+TEST_F(AggregationTest, partialSpillWithMemoryLimit) {
+  constexpr int32_t kNumDistinct = 2000;
+  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
+  rng_.seed(1);
+  rowType_ = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
+  auto batches = makeVectors(rowType_, 100, 5);
+
+  core::PlanNodeId partialAggrNodeId;
+  const auto plan = PlanBuilder()
+                        .values(batches)
+                        .partialAggregation({"c0"}, {}, {})
+                        .capturePlanNodeId(partialAggrNodeId)
+                        .finalAggregation({"c0"}, {}, {})
+                        .planNode();
+  const auto expectedResults =
+      AssertQueryBuilder(plan).copyResults(pool_.get());
+
+  struct {
+    uint64_t aggregationMemLimit;
+    bool expectSpill;
+
+    std::string debugString() const {
+      return fmt::format(
+          "aggregationMemLimit:{}, expectSpill:{}",
+          aggregationMemLimit,
+          expectSpill);
+    }
+  } testSettings[] = {// Memory limit is disabled so spilling is not triggered.
+                      {0, false},
+                      // Memory limit is too small so always trigger spilling.
+                      {1, true},
+                      // Memory limit is too large so spilling is not triggered.
+                      {1'000'000'000, false}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(spillDirectory->path)
+            .config(QueryConfig::kSpillEnabled, "true")
+            .config(QueryConfig::kPartialAggregationSpillEnabled, "true")
+            .config(QueryConfig::kAggregationSpillEnabled, "true")
+            .config(
+                QueryConfig::kAggregationSpillMemoryThreshold,
+                std::to_string(testData.aggregationMemLimit))
+            .config(
+                QueryConfig::kAbandonPartialAggregationMinPct,
+                "200") // avoid abandoning
+            .config(
+                QueryConfig::kAbandonPartialAggregationMinRows,
+                std::to_string(1LL << 30)) // avoid abandoning
+            .assertResults(expectedResults);
+
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    auto& stats = taskStats.at(partialAggrNodeId);
+    checkSpillStats(stats, testData.expectSpill);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
 TEST_F(AggregationTest, spillAll) {
   auto inputs = makeVectors(rowType_, 100, 10);
 
