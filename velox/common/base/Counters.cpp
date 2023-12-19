@@ -96,11 +96,13 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricArbitratorFreeCapacityBytes, facebook::velox::StatType::AVG);
 
-  // Tracks the unexpected leaked used reservation memory bytes.
-  DEFINE_METRIC(kMetricMemoryPoolLeakUsedBytes, facebook::velox::StatType::SUM);
+  // Tracks the memory pool usage leak in bytes.
+  DEFINE_METRIC(
+      kMetricMemoryPoolUsageLeakBytes, facebook::velox::StatType::SUM);
 
-  // Tracks the unexpected leaked min reservation memory bytes.
-  DEFINE_METRIC(kMetricMemoryPoolLeakMinBytes, facebook::velox::StatType::SUM);
+  // Tracks the memory pool reservation leak in bytes.
+  DEFINE_METRIC(
+      kMetricMemoryPoolReservationLeakBytes, facebook::velox::StatType::SUM);
 
   /// ================== Spill related Counters =================
 

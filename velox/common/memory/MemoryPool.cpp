@@ -409,11 +409,12 @@ MemoryPoolImpl::~MemoryPoolImpl() {
   if (isLeaf()) {
     if (usedReservationBytes_ > 0) {
       RECORD_METRIC_VALUE(
-          kMetricMemoryPoolLeakUsedBytes, usedReservationBytes_);
+          kMetricMemoryPoolUsageLeakBytes, usedReservationBytes_);
     }
 
     if (minReservationBytes_ > 0) {
-      RECORD_METRIC_VALUE(kMetricMemoryPoolLeakMinBytes, minReservationBytes_);
+      RECORD_METRIC_VALUE(
+          kMetricMemoryPoolReservationLeakBytes, minReservationBytes_);
     }
   }
 
