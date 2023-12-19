@@ -19,6 +19,8 @@
 #include <signal.h>
 #include <set>
 
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TestValue.h"
@@ -404,13 +406,16 @@ MemoryPoolImpl::~MemoryPoolImpl() {
   if (parent_ != nullptr) {
     toImpl(parent_)->dropChild(this);
   }
-  if (checkUsageLeak_) {
-    VELOX_CHECK(
-        (usedReservationBytes_ == 0) && (reservationBytes_ == 0) &&
-            (minReservationBytes_ == 0),
-        "Bad memory usage track state: {}",
-        toString());
-  }
+
+  RECORD_METRIC_VALUE(kMetricMemoryLeakReservationBytes, reservationBytes_);
+  RECORD_METRIC_VALUE(kMetricMemoryLeakReservationBytes, usedReservationBytes_);
+  RECORD_METRIC_VALUE(kMetricMemoryLeakReservationBytes, minReservationBytes_);
+  VELOX_DCHECK(
+      (usedReservationBytes_ == 0) && (reservationBytes_ == 0) &&
+          (minReservationBytes_ == 0),
+      "Bad memory usage track state: {}",
+      toString());
+
   if (destructionCb_ != nullptr) {
     destructionCb_(this);
   }

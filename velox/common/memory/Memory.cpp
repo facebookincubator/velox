@@ -15,6 +15,8 @@
  */
 
 #include "velox/common/memory/Memory.h"
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 
 DECLARE_int32(velox_memory_num_shared_leaf_pools);
 
@@ -91,13 +93,12 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
 }
 
 MemoryManager::~MemoryManager() {
-  if (checkUsageLeak_) {
-    VELOX_CHECK_EQ(
-        pools_.size(),
-        0,
-        "There are unexpected alive memory pools allocated by user on memory manager destruction:\n{}",
-        toString(true));
-  }
+  RECORD_METRIC_VALUE(kMetricMemoryLeakPoolCount, pools_.size());
+  VELOX_DCHECK_EQ(
+      pools_.size(),
+      0,
+      "There are unexpected alive memory pools allocated by user on memory manager destruction:\n{}",
+      toString(true));
 }
 
 // static
