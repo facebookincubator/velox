@@ -168,7 +168,6 @@ std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
     const std::string& name = "") {
   if (type.isRow()) {
     auto rowType = type.asRow();
-    // Update rowType itselef name.
     auto newField = field->WithName(name);
     auto structType =
         std::dynamic_pointer_cast<::arrow::StructType>(newField->type());
@@ -181,7 +180,6 @@ std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
     }
     return newField->WithType(::arrow::struct_(newFields));
   } else if (type.isArray()) {
-    // Update arrayType itselef name.
     auto newField = field->WithName(name);
     auto listType =
         std::dynamic_pointer_cast<::arrow::BaseListType>(newField->type());
@@ -191,7 +189,6 @@ std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
         ::arrow::list(updateFieldNameRecursive(elementField, *elementType)));
   } else if (type.isMap()) {
     auto mapType = type.asMap();
-    // Update arrayType itselef name.
     auto newField = field->WithName(name);
     auto arrowMapType =
         std::dynamic_pointer_cast<::arrow::MapType>(newField->type());
@@ -203,8 +200,9 @@ std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
         ::arrow::map(newKeyField->type(), newValueField->type()));
   } else if (name != "") {
     return field->WithName(name);
-  } else
+  } else {
     return field;
+  }
 }
 
 } // namespace
