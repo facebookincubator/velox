@@ -200,17 +200,29 @@ target_link_libraries(
   velox_tpch_connector
   velox_memory)
 
-# Aggregation Fuzzer.
-add_executable(velox_aggregation_fuzzer_test AggregationFuzzerTest.cpp)
+add_library(velox_aggregation_fuzzer_common AggregationFuzzerCommon.cpp)
 
 target_link_libraries(
-  velox_aggregation_fuzzer_test
+  velox_aggregation_fuzzer_common
   velox_aggregation_fuzzer
   velox_aggregation_fuzzer_base
   velox_aggregates
   velox_window
   gtest
   gtest_main)
+
+# Aggregation Fuzzer.
+add_executable(velox_aggregation_fuzzer_test AggregationFuzzerTest.cpp)
+
+target_link_libraries(velox_aggregation_fuzzer_test
+                      velox_aggregation_fuzzer_common)
+
+# Aggregation Fuzzer.
+add_executable(velox_presto_java_aggregation_fuzzer_test
+               PrestoJavaAggregationFuzzerTest.cpp)
+
+target_link_libraries(velox_presto_java_aggregation_fuzzer_test
+                      velox_aggregation_fuzzer_common)
 
 add_executable(spark_aggregation_fuzzer_test SparkAggregationFuzzerTest.cpp)
 

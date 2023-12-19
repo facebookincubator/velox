@@ -14,21 +14,26 @@
  * limitations under the License.
  */
 
-#include "velox/exec/fuzzer/DuckQueryRunner.h"
+#include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/tests/AggregationFuzzerCommon.h"
+
+DEFINE_string(
+    presto_url,
+    "",
+    "Presto coordinator URI along with port. This is required to use Presto "
+    "as source of truth. Example: "
+    "--presto_url=http://127.0.0.1:8080");
 
 int main(int argc, char** argv) {
   using namespace facebook::velox::exec::test;
-  auto duckQueryRunner = std::make_unique<DuckQueryRunner>();
-  duckQueryRunner->disableAggregateFunctions({
-      "skewness",
-      // DuckDB results on constant inputs are incorrect. Should be NaN,
-      // but DuckDB returns some random value.
-      "kurtosis",
-      "entropy",
-  });
 
-  // List of functions that have known bugs that cause crashes or failures.
+  VELOX_CHECK(
+      !FLAGS_presto_url.empty(),
+      "Presto Aggregation fuzzer requires Presto"
+      " coordinator URL!");
+
+  // List of presto specific functions that have known bugs that cause crashes
+  // or failures.
   static const std::unordered_set<std::string> skipFunctions = {
       // https://github.com/facebookincubator/velox/issues/3493
       "stddev_pop",
@@ -36,6 +41,9 @@ int main(int argc, char** argv) {
       "reduce_agg",
   };
 
+  auto prestoQueryRunner = std::make_unique<PrestoQueryRunner>(
+      FLAGS_presto_url, "aggregation_fuzzer");
+
   return runAggregationFuzzer(
-      argc, argv, skipFunctions, std::move(duckQueryRunner));
+      argc, argv, skipFunctions, std::move(prestoQueryRunner));
 }
