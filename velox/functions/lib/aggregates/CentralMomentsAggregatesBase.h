@@ -66,7 +66,7 @@ struct CentralMomentsAccumulator {
     m1_ += deltaN;
     m2_ += dm2;
     m3_ += dm2 * deltaN * (count() - 2) - 3 * deltaN * oldM2;
-    m4_ += dm2 * deltaN2 * (count() * (double)count() - 3 * count() + 3) +
+    m4_ += dm2 * deltaN2 * (1.0 * count() * count() - 3.0 * count() + 3) +
         6 * deltaN2 * oldM2 - 4 * deltaN * oldM3;
   }
 
@@ -107,16 +107,16 @@ struct CentralMomentsAccumulator {
     m2_ += otherM2 + delta2 * oldCount * otherCount / count();
     m3_ += otherM3 +
         delta3 * oldCount * otherCount * (oldCount - otherCount) /
-            (count() * count()) +
+            (1.0 * count() * count()) +
         3 * delta * (oldCount * otherM2 - otherCount * oldM2) / count();
     m4_ += otherM4 +
         delta4 * oldCount * otherCount *
             (oldCount * oldCount - oldCount * otherCount +
              otherCount * otherCount) /
-            (count() * count() * count()) +
+            (1.0 * count() * count() * count()) +
         6 * delta2 *
             (oldCount * oldCount * otherM2 + otherCount * otherCount * oldM2) /
-            (count() * count()) +
+            (1.0 * count() * count()) +
         4 * delta * (oldCount * otherM3 - otherCount * oldM3) / count();
   }
 
