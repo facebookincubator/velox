@@ -732,15 +732,15 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
         connectorQueryCtx_->planNodeId(),
         makeUuid());
   }
-  std::string writeFileName = isCommitRequired()
+  const std::string writeFileName = isCommitRequired()
       ? fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid())
       : targetFileName;
   if (insertTableHandle_->tableStorageFormat() ==
       dwio::common::FileFormat::PARQUET) {
-    targetFileName += ".parquet";
-    writeFileName += ".parquet";
+    return {targetFileName, fmt::format("{}{}", writeFileName, ".parquet")};
+  } else {
+    return {targetFileName, writeFileName};
   }
-  return {targetFileName, writeFileName};
 }
 
 HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
