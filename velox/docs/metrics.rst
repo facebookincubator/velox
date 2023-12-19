@@ -124,18 +124,12 @@ Memory Management
      - Average
      - The average of total free memory capacity which is managed by the
        memory arbitrator.
-   * - memory_leak_pool_count
-     - Count
-     - The unexpected alive memory pools allocated by user on memory manager destruction.
-   * - memory_leak_reservation_bytes
+   * - memory_pool_leak_used_bytes
      - Sum
-     - The unexpected memory usage in terms of reservation bytes.
-   * - memory_leak_used_reservation_bytes
+     - The unexpected leaked used reservation memory bytes.
+   * - memory_pool_leak_min_bytes
      - Sum
-     - The unexpected memory usage in terms of used reservation bytes.
-   * - memory_leak_min_reservation_bytes
-     - Sum
-     - The unexpected memory usage in terms of min reservation bytes.
+     - The unexpected leaked min reservation memory bytes.
 
 Spilling
 --------

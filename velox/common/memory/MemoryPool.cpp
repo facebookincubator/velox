@@ -406,9 +406,17 @@ MemoryPoolImpl::~MemoryPoolImpl() {
     toImpl(parent_)->dropChild(this);
   }
 
-  RECORD_METRIC_VALUE(kMetricMemoryLeakReservationBytes, reservationBytes_);
-  RECORD_METRIC_VALUE(kMetricMemoryLeakReservationBytes, usedReservationBytes_);
-  RECORD_METRIC_VALUE(kMetricMemoryLeakReservationBytes, minReservationBytes_);
+  if (isLeaf()) {
+    if (usedReservationBytes_ > 0) {
+      RECORD_METRIC_VALUE(
+          kMetricMemoryPoolLeakUsedBytes, usedReservationBytes_);
+    }
+
+    if (minReservationBytes_ > 0) {
+      RECORD_METRIC_VALUE(kMetricMemoryPoolLeakMinBytes, minReservationBytes_);
+    }
+  }
+
   VELOX_DCHECK(
       (usedReservationBytes_ == 0) && (reservationBytes_ == 0) &&
           (minReservationBytes_ == 0),
