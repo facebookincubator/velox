@@ -47,6 +47,15 @@ void checkForBadPattern(const RE2& re) {
 // error messages.
 //
 // @throws VELOX_USER_FAIL If the pattern is found to use unsupported features.
+<<<<<<< HEAD
+=======
+// @note  Default functionName is "regexp_replace" because it uses non-constant
+// patterns so it cannot be checked with "ensureRegexIsCompatible". No
+// other functions work with non-constant patterns, but they may in the future.
+//
+// @note Leaving functionName as an optional parameter makes room for
+// other functions to enable non-constant patterns in the future.
+>>>>>>> 0910bee6fabbd162ca70d7588191733cbb59af4a
 void checkForCompatiblePattern(
     const std::string& pattern,
     const char* functionName) {
@@ -137,10 +146,14 @@ struct RegexReplaceFunction {
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace,
       const arg_type<int64_t>& position) {
+<<<<<<< HEAD
     if (position < 1) {
       return false;
     }
     //VELOX_USER_CHECK_GE(position, 1, "regex_replace requires a position >= 1");
+=======
+    VELOX_USER_CHECK_GE(position, 1, "regexp_replace requires a position >= 1");
+>>>>>>> 0910bee6fabbd162ca70d7588191733cbb59af4a
 
     re2::RE2* patternRegex = nullptr;
     try {
@@ -166,11 +179,16 @@ struct RegexReplaceFunction {
     while (numCodePoints < position - 1 && utf8Position <= stringInput.size()) {
       int charLength =
           utf8proc_char_length(inputStringPiece.data() + utf8Position);
+<<<<<<< HEAD
       if (charLength < 1) {
         return false;
       }
       // VELOX_USER_CHECK_GT(
       //     charLength, 0, "regex_replace encountered invalid UTF-8 character");
+=======
+      VELOX_USER_CHECK_GT(
+          charLength, 0, "regexp_replace encountered invalid UTF-8 character");
+>>>>>>> 0910bee6fabbd162ca70d7588191733cbb59af4a
       ++numCodePoints;
       utf8Position += charLength;
     }
