@@ -67,7 +67,17 @@ void FunctionBaseTest::testEncodings(
   VELOX_CHECK(!inputs.empty());
 
   const auto size = inputs[0]->size();
-  VELOX_CHECK_GE(size, 3);
+  VELOX_CHECK_GE(size, 0);
+
+  SCOPED_TRACE(expr->toString());
+
+  // No extra encoding.
+  velox::test::assertEqualVectors(
+      expected, evaluate(expr, makeRowVector(inputs)));
+  // Skip test for encodings if size is too small.
+  if (size < 3) {
+    return;
+  }
 
   auto testDictionary = [&](vector_size_t dictionarySize,
                             std::function<vector_size_t(vector_size_t)> indexAt,
@@ -108,12 +118,6 @@ void FunctionBaseTest::testEncodings(
     velox::test::assertEqualVectors(
         expectedResult, evaluate(expr, constantRow));
   };
-
-  SCOPED_TRACE(expr->toString());
-
-  // No extra encoding.
-  velox::test::assertEqualVectors(
-      expected, evaluate(expr, makeRowVector(inputs)));
 
   // Repeat each row twice: 0, 0, 1, 1,... No extra nulls.
   testDictionary(size * 2, [](auto row) { return row / 2; });

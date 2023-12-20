@@ -26,23 +26,7 @@ namespace facebook::velox::functions::sparksql::test {
 namespace {
 
 class DecimalArithmeticTest : public SparkFunctionBaseTest {
- public:
-  DecimalArithmeticTest() {
-    options_.parseDecimalAsDouble = false;
-  }
-
  protected:
-  template <TypeKind KIND>
-  void testDecimalExpr(
-      const VectorPtr& expected,
-      const std::string& expression,
-      const std::vector<VectorPtr>& input) {
-    using EvalType = typename velox::TypeTraits<KIND>::NativeType;
-    auto result =
-        evaluate<SimpleVector<EvalType>>(expression, makeRowVector(input));
-    assertEqualVectors(expected, result);
-  }
-
   void testArithmeticFunction(
       const std::string& functionName,
       const std::vector<VectorPtr>& inputs,
@@ -295,232 +279,216 @@ TEST_F(DecimalArithmeticTest, subtract) {
 }
 
 TEST_F(DecimalArithmeticTest, multiply) {
-  // The result can be obtained by Spark unit test
-  //       test("multiply") {
-  //     val l1 = Literal.create(
-  //       Decimal(BigDecimal(1), 17, 3),
-  //       DecimalType(17, 3))
-  //     val l2 = Literal.create(
-  //       Decimal(BigDecimal(1), 17, 3),
-  //       DecimalType(17, 3))
-  //     checkEvaluation(Divide(l1, l2), null)
-  //   }
-  auto shortFlat = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3));
-  // Multiply short and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({1000000, 4000000}, DECIMAL(35, 6)),
-      "multiply(c0, c1)",
-      {shortFlat, shortFlat});
-  // Multiply short and long, returning long.
-  auto longFlat = makeFlatVector<int128_t>({1000, 2000}, DECIMAL(20, 3));
-  auto expectedLongFlat =
-      makeFlatVector<int128_t>({1000000, 4000000}, DECIMAL(38, 6));
-  testDecimalExpr<TypeKind::HUGEINT>(
-      expectedLongFlat, "multiply(c0, c1)", {shortFlat, longFlat});
-  // Multiply long and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      expectedLongFlat, "multiply(c0, c1)", {longFlat, shortFlat});
+  // Multiply short and short decimals, and return long decimals.
+  testArithmeticFunction(
+      "multiply",
+      {makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3)),
+       makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3))},
+      makeFlatVector<int128_t>({1000000, 4000000}, DECIMAL(35, 6)));
 
-  // Multiply long and long, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({1000000, 4000000}, DECIMAL(38, 6)),
-      "multiply(c0, c1)",
-      {longFlat, longFlat});
+  // Multiply short and long decimals, and return long decimals.
+  testArithmeticFunction(
+      "multiply",
+      {makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3)),
+       makeFlatVector<int128_t>({1000, 2000}, DECIMAL(20, 3))},
+      makeFlatVector<int128_t>({1000000, 4000000}, DECIMAL(38, 6)));
 
-  auto leftFlat0 = makeFlatVector<int128_t>({0, 1, 0}, DECIMAL(20, 3));
-  auto rightFlat0 = makeFlatVector<int128_t>({1, 0, 0}, DECIMAL(20, 2));
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({0, 0, 0}, DECIMAL(38, 5)),
-      "multiply(c0, c1)",
-      {leftFlat0, rightFlat0});
+  // Multiply long and short decimals, and return long decimals.
+  testArithmeticFunction(
+      "multiply",
+      {makeFlatVector<int128_t>({1000, 2000}, DECIMAL(20, 3)),
+       makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3))},
+      makeFlatVector<int128_t>({1000000, 4000000}, DECIMAL(38, 6)));
 
-  // Multiply short and short, returning short.
-  shortFlat = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(6, 3));
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({1000000, 4000000}, DECIMAL(13, 6)),
-      "c0 * c1",
-      {shortFlat, shortFlat});
+  // Multiply long and long decimals, and return long decimals.
+  testArithmeticFunction(
+      "multiply",
+      {makeFlatVector<int128_t>({1000, 2000}, DECIMAL(20, 3)),
+       makeFlatVector<int128_t>({1000, 2000}, DECIMAL(20, 3))},
+      makeFlatVector<int128_t>({1000000, 4000000}, DECIMAL(38, 6)));
 
-  auto expectedConstantFlat =
-      makeFlatVector<int64_t>({100000, 200000}, DECIMAL(10, 5));
-  // Constant and Flat arguments.
-  testDecimalExpr<TypeKind::BIGINT>(
-      expectedConstantFlat, "1.00 * c0", {shortFlat});
+  testArithmeticFunction(
+      "multiply",
+      {makeFlatVector<int128_t>({0, 1, 0}, DECIMAL(20, 3)),
+       makeFlatVector<int128_t>({1, 0, 0}, DECIMAL(20, 2))},
+      makeFlatVector<int128_t>({0, 0, 0}, DECIMAL(38, 5)));
 
-  // Flat and Constant arguments.
-  testDecimalExpr<TypeKind::BIGINT>(
-      expectedConstantFlat, "c0 * 1.00", {shortFlat});
+  // Multiply short and short decimals, and return short decimals.
+  testArithmeticFunction(
+      "multiply",
+      {makeFlatVector<int64_t>({1000, 2000}, DECIMAL(6, 3)),
+       makeFlatVector<int64_t>({1000, 2000}, DECIMAL(6, 3))},
+      makeFlatVector<int64_t>({1000000, 4000000}, DECIMAL(13, 6)));
 
-  // out_precision == 38, small input values, trimming of scale.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeConstant<int128_t>(61, 1, DECIMAL(38, 7)),
-      "c0 * c1",
+  // Multiply constant and flat arguments.
+  testArithmeticFunction(
+      "multiply",
+      {makeConstant<int64_t>(100, 2, DECIMAL(3, 2)),
+       makeFlatVector<int64_t>({1000, 2000}, DECIMAL(6, 3))},
+      makeFlatVector<int64_t>({100000, 200000}, DECIMAL(10, 5)));
+
+  // Multiply flat and constant arguments.
+  testArithmeticFunction(
+      "multiply",
+      {makeFlatVector<int64_t>({1000, 2000}, DECIMAL(6, 3)),
+       makeConstant<int64_t>(100, 2, DECIMAL(3, 2))},
+      makeFlatVector<int64_t>({100000, 200000}, DECIMAL(10, 5)));
+
+  // Output precision is 38 with small input values and trimmed scale.
+  testArithmeticFunction(
+      "multiply",
       {makeConstant<int128_t>(201, 1, DECIMAL(20, 5)),
-       makeConstant<int128_t>(301, 1, DECIMAL(20, 5))});
+       makeConstant<int128_t>(301, 1, DECIMAL(20, 5))},
+      makeConstant<int128_t>(61, 1, DECIMAL(38, 7)));
 
-  // out_precision == 38, large values, trimming of scale.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeConstant<int128_t>(
-          HugeInt::parse("201" + std::string(31, '0')), 1, DECIMAL(38, 6)),
-      "c0 * c1",
+  // Output precision is 38 with large input values and trimmed scale.
+  testArithmeticFunction(
+      "multiply",
       {makeConstant<int128_t>(201, 1, DECIMAL(20, 5)),
        makeConstant<int128_t>(
-           HugeInt::parse(std::string(35, '9')), 1, DECIMAL(35, 5))});
-
-  // out_precision == 38, very large values, trimming of scale (requires convert
-  // to 256).
-  testDecimalExpr<TypeKind::HUGEINT>(
+           HugeInt::parse(std::string(35, '9')), 1, DECIMAL(35, 5))},
       makeConstant<int128_t>(
-          HugeInt::parse("9999999999999999999999999999999999890"),
-          1,
-          DECIMAL(38, 6)),
-      "c0 * c1",
+          HugeInt::parse("201" + std::string(31, '0')), 1, DECIMAL(38, 6)));
+
+  // Output precision is 38 with very large input values and trimmed scale.
+  // Requires for int256.
+  testArithmeticFunction(
+      "multiply",
       {makeConstant<int128_t>(
            HugeInt::parse(std::string(35, '9')), 1, DECIMAL(38, 20)),
        makeConstant<int128_t>(
-           HugeInt::parse(std::string(36, '9')), 1, DECIMAL(38, 20))});
+           HugeInt::parse(std::string(36, '9')), 1, DECIMAL(38, 20))},
+      makeConstant<int128_t>(
+          HugeInt::parse("9999999999999999999999999999999999890"),
+          1,
+          DECIMAL(38, 6)));
 
-  // out_precision == 38, very large values, trimming of scale (requires convert
-  // to 256). should cause overflow.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeConstant<int128_t>(std::nullopt, 1, DECIMAL(38, 6)),
-      "c0 * c1",
+  // Output precision is 38 with very large input values and trimmed scale.
+  // Requires for int256 and overflow occurs.
+  testArithmeticFunction(
+      "multiply",
       {makeConstant<int128_t>(
            HugeInt::parse(std::string(35, '9')), 1, DECIMAL(38, 4)),
        makeConstant<int128_t>(
-           HugeInt::parse(std::string(36, '9')), 1, DECIMAL(38, 4))});
+           HugeInt::parse(std::string(36, '9')), 1, DECIMAL(38, 4))},
+      makeConstant<int128_t>(std::nullopt, 1, DECIMAL(38, 6)));
 
-  // Big scale * big scale.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeConstant<int128_t>(0, 1, DECIMAL(38, 37)),
-      "c0 * c1",
+  // Multiply two inputs of big scale.
+  testArithmeticFunction(
+      "multiply",
       {makeConstant<int128_t>(201, 1, DECIMAL(38, 38)),
-       makeConstant<int128_t>(301, 1, DECIMAL(38, 38))});
+       makeConstant<int128_t>(301, 1, DECIMAL(38, 38))},
+      makeConstant<int128_t>(0, 1, DECIMAL(38, 37)));
 
-  // Long decimal limits.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeConstant<int128_t>(std::nullopt, 1, DECIMAL(38, 0)),
-      "c0 * cast(10.00 as decimal(2,0))",
+  // Exceeds long decimal limit.
+  testArithmeticFunction(
+      "multiply",
       {makeConstant<int128_t>(
-          HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF),
-          1,
-          DECIMAL(38, 0))});
+           HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF),
+           1,
+           DECIMAL(38, 0)),
+       makeConstant<int64_t>(10, 1, DECIMAL(2, 0))},
+      makeConstant<int128_t>(std::nullopt, 1, DECIMAL(38, 0)));
 
   // Rescaling the final result overflows.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeConstant<int128_t>(std::nullopt, 1, DECIMAL(38, 1)),
-      "c0 * cast(1.00 as decimal(2,1))",
+  testArithmeticFunction(
+      "multiply",
       {makeConstant<int128_t>(
-          HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF),
-          1,
-          DECIMAL(38, 0))});
+           HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF),
+           1,
+           DECIMAL(38, 0)),
+       makeConstant<int64_t>(10, 1, DECIMAL(2, 1))},
+      makeConstant<int128_t>(std::nullopt, 1, DECIMAL(38, 1)));
 }
 
-TEST_F(DecimalArithmeticTest, decimalDivTest) {
-  auto shortFlat = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3));
-  // Divide short and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
+TEST_F(DecimalArithmeticTest, divide) {
+  // Divide short and short decimals, and return long decimals.
+  testArithmeticFunction(
+      "divide",
+      {makeFlatVector<int64_t>({500, 4000}, DECIMAL(17, 3)),
+       makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3))},
       makeNullableLongDecimalVector(
-          {"500000000000000000000", "2000000000000000000000"}, DECIMAL(38, 21)),
-      "divide(c0, c1)",
-      {makeFlatVector<int64_t>({500, 4000}, DECIMAL(17, 3)), shortFlat});
+          {"500000000000000000000", "2000000000000000000000"},
+          DECIMAL(38, 21)));
 
-  // Divide short and long, returning long.
-  auto longFlat = makeFlatVector<int128_t>({500, 4000}, DECIMAL(20, 2));
-  testDecimalExpr<TypeKind::HUGEINT>(
+  // Divide long and short decimals, and return long decimals.
+  testArithmeticFunction(
+      "divide",
+      {makeFlatVector<int128_t>({500, 4000}, DECIMAL(20, 2)),
+       makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3))},
       makeFlatVector<int128_t>(
-          {500000000000000000, 2000000000000000000}, DECIMAL(38, 17)),
-      "divide(c0, c1)",
-      {longFlat, shortFlat});
+          {500000000000000000, 2000000000000000000}, DECIMAL(38, 17)));
 
-  // Divide long and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
+  // Divide short and long decimals, and return long decimals.
+  testArithmeticFunction(
+      "divide",
+      {makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3)),
+       makeFlatVector<int128_t>({500, 4000}, DECIMAL(20, 2))},
       makeNullableLongDecimalVector(
           {"20" + std::string(20, '0'), "5" + std::string(20, '0')},
-          DECIMAL(38, 22)),
-      "divide(c0, c1)",
-      {shortFlat, longFlat});
+          DECIMAL(38, 22)));
 
-  // Divide long and long, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
+  // Divide long and long decimals, and return long decimals.
+  testArithmeticFunction(
+      "divide",
+      {makeFlatVector<int128_t>({2500, 12000}, DECIMAL(20, 2)),
+       makeFlatVector<int128_t>({500, 4000}, DECIMAL(20, 2))},
       makeNullableLongDecimalVector(
           {"5" + std::string(18, '0'), "3" + std::string(18, '0')},
-          DECIMAL(38, 18)),
-      "divide(c0, c1)",
-      {makeFlatVector<int128_t>({2500, 12000}, DECIMAL(20, 2)), longFlat});
+          DECIMAL(38, 18)));
 
-  // Divide short and short, returning short.
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({500000000, 300000000}, DECIMAL(13, 11)),
-      "divide(c0, c1)",
+  // Divide short and short decimals, and return short decimals.
+  testArithmeticFunction(
+      "divide",
       {makeFlatVector<int64_t>({2500, 12000}, DECIMAL(5, 5)),
-       makeFlatVector<int64_t>({500, 4000}, DECIMAL(5, 2))});
-  // This result can be obtained by Spark unit test
-  //   test("divide decimal big") {
-  //     val s = Seq(35, 6, 20, 3)
-  //     var builder = new StringBuffer()
-  //     (0 until 29).foreach(_ => builder = builder.append("9"))
-  //     builder.append(".")
-  //     (0 until 6).foreach(_ => builder = builder.append("9"))
-  //     val str1 = builder.toString
+       makeFlatVector<int64_t>({500, 4000}, DECIMAL(5, 2))},
+      makeFlatVector<int64_t>({500000000, 300000000}, DECIMAL(13, 11)));
 
-  //     val l1 = Literal.create(
-  //       Decimal(BigDecimal(str1), s.head, s(1)),
-  //       DecimalType(s.head, s(1)))
-  //     val l2 = Literal.create(
-  //       Decimal(BigDecimal(0.201), s(2), s(3)),
-  //       DecimalType(s(2), s(3)))
-  //     checkEvaluation(Divide(l1, l2), null)
-  //   }
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeNullableLongDecimalVector(
-          {"497512437810945273631840796019900493"}, DECIMAL(38, 6)),
-      "c0 / c1",
+  testArithmeticFunction(
+      "divide",
       {makeNullableLongDecimalVector({std::string(35, '9')}, DECIMAL(35, 6)),
-       makeConstant<int128_t>(201, 1, DECIMAL(20, 3))});
+       makeConstant<int128_t>(201, 1, DECIMAL(20, 3))},
+      makeNullableLongDecimalVector(
+          {"497512437810945273631840796019900493"}, DECIMAL(38, 6)));
 
-  testDecimalExpr<TypeKind::HUGEINT>(
+  testArithmeticFunction(
+      "divide",
+      {makeConstant<int64_t>(100, 2, DECIMAL(3, 2)),
+       makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3))},
       makeNullableLongDecimalVector(
           {"1000" + std::string(17, '0'), "500" + std::string(17, '0')},
-          DECIMAL(24, 20)),
-      "1.00 / c0",
-      {shortFlat});
+          DECIMAL(24, 20)));
 
-  // Flat and Constant arguments.
-  testDecimalExpr<TypeKind::HUGEINT>(
+  // Divide flat and constant arguments.
+  testArithmeticFunction(
+      "divide",
+      {makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3)),
+       makeConstant<int64_t>(200, 2, DECIMAL(3, 2))},
       makeNullableLongDecimalVector(
           {"500" + std::string(4, '0'), "1000" + std::string(4, '0')},
-          DECIMAL(23, 7)),
-      "c0 / 2.00",
-      {shortFlat});
+          DECIMAL(23, 7)));
 
   // Divide and round-up.
-  // The result can be obtained by Spark unit test
-  //     test("divide test") {
-  //     spark.sql("create table decimals_test(a decimal(2,1)) using parquet;")
-  //     spark.sql("insert into decimals_test values(6)")
-  //     val df = spark.sql("select a / -6.0 from decimals_test")
-  //     df.printSchema()
-  //     df.show(truncate = false)
-  //     spark.sql("drop table decimals_test;")
-  //   }
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>(
-          {566667, -83333, -1083333, -1500000, -33333, 816667}, DECIMAL(8, 6))},
-      "c0 / -6.0",
-      {makeFlatVector<int64_t>({-34, 5, 65, 90, 2, -49}, DECIMAL(2, 1))});
-  // Divide by zero.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeConstant<int128_t>(std::nullopt, 2, DECIMAL(21, 6)),
-      "c0 / 0.0",
-      {shortFlat});
+  testArithmeticFunction(
+      "divide",
+      {makeFlatVector<int64_t>({-34, 5, 65, 90, 2, -49}, DECIMAL(2, 1)),
+       makeConstant<int64_t>(-60, 6, DECIMAL(2, 1))},
+      makeFlatVector<int64_t>(
+          {566667, -83333, -1083333, -1500000, -33333, 816667}, DECIMAL(8, 6)));
 
-  // Long decimal limits.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeConstant<int128_t>(std::nullopt, 1, DECIMAL(38, 6)),
-      "c0 / 0.01",
-      {makeConstant<int128_t>(
-          DecimalUtil::kLongDecimalMax, 1, DECIMAL(38, 0))});
+  // Divide by zero.
+  testArithmeticFunction(
+      "divide",
+      {makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3)),
+       makeConstant<int64_t>(0, 2, DECIMAL(2, 1))},
+      makeConstant<int128_t>(std::nullopt, 2, DECIMAL(21, 6)));
+
+  // Exceeds long decimal limit.
+  testArithmeticFunction(
+      "divide",
+      {makeConstant<int128_t>(DecimalUtil::kLongDecimalMax, 1, DECIMAL(38, 0)),
+       makeConstant<int64_t>(1, 1, DECIMAL(3, 2))},
+      makeConstant<int128_t>(std::nullopt, 1, DECIMAL(38, 6)));
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
