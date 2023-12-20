@@ -19,6 +19,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/type/Variant.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::exec::test;
@@ -491,6 +492,25 @@ TEST_F(QueryAssertionsTest, intervalDayTime) {
   createDuckDbTable({data});
   plan = PlanBuilder().values({data}).planNode();
   assertQuery(plan, "SELECT * FROM tmp");
+}
+
+TEST_F(QueryAssertionsTest, equalPlans) {
+  VectorFuzzer::Options opts;
+  opts.containerVariableLength = false;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto input = fuzzer.fuzzFlat(INTEGER(), 100);
+  auto unnestPlan = PlanBuilder()
+                        .values({makeRowVector({fuzzer.fuzzArray(input, 20)})})
+                        .unnest({}, {"c0"})
+                        .orderBy({"c0_e"}, false)
+                        .planNode();
+
+  auto noUnnestPlan = PlanBuilder()
+                          .values({makeRowVector({input})})
+                          .orderBy({"c0"}, false)
+                          .planNode();
+  assertEqualResults(unnestPlan, noUnnestPlan);
 }
 
 } // namespace facebook::velox::test

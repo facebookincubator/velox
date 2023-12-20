@@ -1426,8 +1426,10 @@ PlanBuilder& PlanBuilder::nestedLoopJoin(
 PlanBuilder& PlanBuilder::unnest(
     const std::vector<std::string>& replicateColumns,
     const std::vector<std::string>& unnestColumns,
-    const std::optional<std::string>& ordinalColumn) {
+    const std::optional<std::string>& ordinalColumn,
+    const bool unnestArrayOfRows) {
   VELOX_CHECK_NOT_NULL(planNode_, "Unnest cannot be the source node");
+
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
       replicateFields;
   replicateFields.reserve(replicateColumns.size());
@@ -1445,7 +1447,17 @@ PlanBuilder& PlanBuilder::unnest(
   for (const auto& name : unnestColumns) {
     auto input = planNode_->outputType()->findChild(name);
     if (input->isArray()) {
-      unnestNames.push_back(name + "_e");
+      if (input->childAt(0)->isRow() && unnestArrayOfRows) {
+        // The array of rows is unnested into multiple columns, one for each
+        // child type of the row.
+        auto row = asRowType(input->childAt(0));
+        auto size = row->size();
+        for (auto i = 0; i < size; i++) {
+          unnestNames.push_back(name + "_" + row->nameOf(i) + "_e");
+        }
+      } else {
+        unnestNames.push_back(name + "_e");
+      }
     } else if (input->isMap()) {
       unnestNames.push_back(name + "_k");
       unnestNames.push_back(name + "_v");
@@ -1462,6 +1474,7 @@ PlanBuilder& PlanBuilder::unnest(
       unnestFields,
       unnestNames,
       ordinalColumn,
+      unnestArrayOfRows,
       planNode_);
   return *this;
 }

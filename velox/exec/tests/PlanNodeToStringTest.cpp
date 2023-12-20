@@ -560,6 +560,17 @@ TEST_F(PlanNodeToStringTest, unnest) {
   ASSERT_EQ(
       "-- Unnest[a0] -> c1:INTEGER, a0_e:SMALLINT\n",
       plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .values({data_})
+             .project({"array_constructor(c0) AS a0", "c1"})
+             .unnest({"c1"}, {"a0"}, std::nullopt, true)
+             .planNode();
+
+  ASSERT_EQ("-- Unnest\n", plan->toString());
+  ASSERT_EQ(
+      "-- Unnest[a0, unnest arrays of rows] -> c1:INTEGER, a0_e:SMALLINT\n",
+      plan->toString(true, false));
 }
 
 TEST_F(PlanNodeToStringTest, localPartition) {

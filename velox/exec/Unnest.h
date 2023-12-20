@@ -50,6 +50,7 @@ class Unnest : public Operator {
       vector_size_t outputSize);
 
   const bool withOrdinality_;
+  const bool unnestArrayOfRows_;
   std::vector<column_index_t> unnestChannels_;
 
   SelectivityVector inputRows_;

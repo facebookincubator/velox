@@ -17,6 +17,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
@@ -39,6 +40,19 @@ TEST_F(UnnestTest, basicArray) {
 
   auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
   assertQuery(op, "SELECT c0, UNNEST(c1) FROM tmp WHERE c0 % 7 > 0");
+
+  // Tests with an array with dictionary encoded elements.
+  VectorFuzzer::Options opts;
+  opts.containerVariableLength = false;
+  VectorFuzzer fuzzer(opts, pool());
+  vector = makeRowVector(
+      {fuzzer.fuzzFlat(INTEGER(), 30),
+       fuzzer.fuzzArray(
+           fuzzer.fuzzDictionary(fuzzer.fuzzFlat(INTEGER(), 100), 100), 30)});
+
+  createDuckDbTable({vector});
+  op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
+  assertQuery(op, "SELECT c0, UNNEST(c1) FROM tmp");
 }
 
 TEST_F(UnnestTest, arrayWithOrdinality) {
@@ -101,6 +115,146 @@ TEST_F(UnnestTest, arrayWithOrdinality) {
            {7, 8, 9, std::nullopt, 5, 6, 1, 2, std::nullopt, 4}),
        makeNullableFlatVector<int64_t>({1, 2, 3, 1, 1, 2, 1, 2, 3, 4})});
   assertQuery(op, expectedInDict);
+}
+
+TEST_F(UnnestTest, arrayOfRows) {
+  // Array of rows with legacy unnest set to false.
+  auto rowType1 = ROW({INTEGER(), VARCHAR()});
+  auto rowType2 = ROW({BIGINT(), DOUBLE(), VARCHAR()});
+  std::vector<std::vector<std::optional<std::tuple<int32_t, std::string>>>>
+      array1{
+          {
+              {{1, "red"}},
+              {{2, "blue"}},
+          },
+          {
+              {{3, "green"}},
+              {{4, "orange"}},
+              {{5, "black"}},
+              {{6, "white"}},
+          },
+      };
+  std::vector<
+      std::vector<std::optional<std::tuple<int64_t, double, std::string>>>>
+      array2{
+          {
+              {{-1, 1.0, "cat"}},
+              {{-2, 2.0, "tiger"}},
+              {{-3, 3.0, "lion"}},
+          },
+          {
+              {{-4, 4.0, "elephant"}},
+              {{-5, 5.0, "wolf"}},
+          },
+      };
+
+  auto vector = makeRowVector(
+      {makeArrayOfRowVector(array1, rowType1),
+       makeArrayOfRowVector(array2, rowType2)});
+
+  auto op = PlanBuilder()
+                .values({vector})
+                .unnest({}, {"c0", "c1"}, std::nullopt, true)
+                .planNode();
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 3, 4, 5, 6}),
+       makeNullableFlatVector<StringView>(
+           {"red", "blue", std::nullopt, "green", "orange", "black", "white"}),
+       makeNullableFlatVector<int64_t>(
+           {-1, -2, -3, -4, -5, std::nullopt, std::nullopt}),
+       makeNullableFlatVector<double>(
+           {1.0, 2.0, 3.0, 4.0, 5.0, std::nullopt, std::nullopt}),
+       makeNullableFlatVector<StringView>(
+           {"cat",
+            "tiger",
+            "lion",
+            "elephant",
+            "wolf",
+            std::nullopt,
+            std::nullopt})});
+  assertQuery(op, expected);
+
+  // Test with array of rows (one of which is a constant). Each array is
+  // encoded.
+  vector_size_t size = array1.size();
+  auto offsets = makeIndicesInReverse(size);
+  vector = makeRowVector(
+      {wrapInDictionary(offsets, size, makeArrayOfRowVector(array1, rowType1)),
+       BaseVector::wrapInConstant(
+           size, 0, makeArrayOfRowVector(array2, rowType2))});
+
+  op = PlanBuilder()
+           .values({vector})
+           .unnest({}, {"c0", "c1"}, std::nullopt, true)
+           .planNode();
+  expected = makeRowVector(
+      {makeNullableFlatVector<int32_t>({3, 4, 5, 6, 1, 2, std::nullopt}),
+       makeNullableFlatVector<StringView>({
+           "green",
+           "orange",
+           "black",
+           "white",
+           "red",
+           "blue",
+           std::nullopt,
+       }),
+       makeNullableFlatVector<int64_t>({-1, -2, -3, std::nullopt, -1, -2, -3}),
+       makeNullableFlatVector<double>(
+           {1.0, 2.0, 3.0, std::nullopt, 1.0, 2.0, 3.0}),
+       makeNullableFlatVector<StringView>(
+           {"cat", "tiger", "lion", std::nullopt, "cat", "tiger", "lion"})});
+  assertQuery(op, expected);
+}
+
+TEST_F(UnnestTest, encodedArrayOfRows) {
+  VectorFuzzer::Options opts;
+  opts.containerVariableLength = false;
+  opts.dictionaryHasNulls = false;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto unnestPlan = [&](const VectorPtr& input) -> const core::PlanNodePtr {
+    return PlanBuilder()
+        .values({makeRowVector({fuzzer.fuzzArray(input, 20)})})
+        .unnest({}, {"c0"}, std::nullopt, true)
+        .orderBy({"c0_c0_e", "c0_c1_e", "c0_c2_e"}, false)
+        .planNode();
+  };
+
+  auto noUnnestPlan = [&](const VectorPtr& child1,
+                          const VectorPtr& child2,
+                          const VectorPtr& child3) -> const core::PlanNodePtr {
+    return PlanBuilder()
+        .values({makeRowVector({child1, child2, child3})})
+        .orderBy({"c0", "c1", "c2"}, false)
+        .planNode();
+  };
+
+  // The first test is to unnest an array of rows where the row vector is
+  // encoded before building the array.
+  auto arrayInput = fuzzer.fuzzDictionary(makeRowVector(
+      {fuzzer.fuzzFlat(INTEGER(), 100),
+       fuzzer.fuzzFlat(BIGINT(), 100),
+       fuzzer.fuzzFlat(INTEGER(), 100)}));
+  // Flatten the array vector to generate an equivalent plan without unnest.
+  DecodedVector decoded;
+  decoded.decode(*arrayInput);
+  auto flatChildAt = [&](auto idx) -> const VectorPtr {
+    auto decodedRowVector = decoded.base()->as<RowVector>();
+    return decoded.wrap(
+        decodedRowVector->childAt(idx), *arrayInput, decodedRowVector->size());
+  };
+  assertEqualResults(
+      unnestPlan(arrayInput),
+      noUnnestPlan(flatChildAt(0), flatChildAt(1), flatChildAt(2)));
+
+  // The second unnest test is with an array of rows where each child row vector
+  // is encoded before building the array row elements.
+  auto child1 = fuzzer.fuzzDictionary(fuzzer.fuzzFlat(INTEGER(), 100));
+  auto child2 = fuzzer.fuzzDictionary(fuzzer.fuzzFlat(BIGINT(), 100));
+  auto child3 = fuzzer.fuzzDictionary(fuzzer.fuzzFlat(INTEGER(), 100));
+  arrayInput = makeRowVector({child1, child2, child3});
+  assertEqualResults(
+      unnestPlan(arrayInput), noUnnestPlan(child1, child2, child3));
 }
 
 TEST_F(UnnestTest, basicMap) {

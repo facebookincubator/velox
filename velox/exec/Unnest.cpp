@@ -30,7 +30,8 @@ Unnest::Unnest(
           operatorId,
           unnestNode->id(),
           "Unnest"),
-      withOrdinality_(unnestNode->withOrdinality()) {
+      withOrdinality_(unnestNode->withOrdinality()),
+      unnestArrayOfRows_(unnestNode->unnestArrayOfRows()) {
   const auto& inputType = unnestNode->sources()[0]->outputType();
   const auto& unnestVariables = unnestNode->unnestVariables();
   for (const auto& variable : unnestVariables) {
@@ -182,8 +183,7 @@ RowVectorPtr Unnest::generateOutput(
     BufferPtr elementIndices = allocateIndices(numElements, pool());
     auto* rawElementIndices = elementIndices->asMutable<vector_size_t>();
 
-    auto nulls =
-        AlignedBuffer::allocate<bool>(numElements, pool(), bits::kNotNull);
+    auto nulls = allocateNulls(numElements, pool());
     auto rawNulls = nulls->asMutable<uint64_t>();
 
     // Make dictionary index for elements column since they may be out of order.
@@ -220,13 +220,35 @@ RowVectorPtr Unnest::generateOutput(
       // Construct unnest column using Array elements wrapped using above
       // created dictionary.
       auto unnestBaseArray = currentDecoded.base()->as<ArrayVector>();
-      outputs[outputsIndex++] = identityMapping
-          ? unnestBaseArray->elements()
-          : wrapChild(
-                numElements,
-                elementIndices,
-                unnestBaseArray->elements(),
-                nulls);
+      auto elements = unnestBaseArray->elements();
+
+      if (elements->typeKind() == TypeKind::ROW && unnestArrayOfRows_) {
+        // In this case the array is un-nested into multiple columns, one for
+        // each child type of the row.
+        // The array row elements could be encoded, however. In that case, each
+        // child array accessed needs to be encoded with the array row elements
+        // encoding and then wrapped with the un-nest encoding for final output.
+        DecodedVector rowDecoded(*elements);
+        auto rowVector = rowDecoded.base()->as<RowVector>();
+
+        auto rowIsIdentity = rowDecoded.isIdentityMapping();
+        auto numRowElements = rowDecoded.size();
+
+        for (auto j = 0; j < rowVector->childrenSize(); j++) {
+          auto childVector = rowIsIdentity
+              ? rowVector->childAt(j)
+              : rowDecoded.wrap(
+                    rowVector->childAt(j), *elements, numRowElements);
+
+          outputs[outputsIndex++] = identityMapping
+              ? childVector
+              : wrapChild(numElements, elementIndices, childVector, nulls);
+        }
+      } else {
+        outputs[outputsIndex++] = identityMapping
+            ? elements
+            : wrapChild(numElements, elementIndices, elements, nulls);
+      }
     } else {
       // Construct two unnest columns for Map keys and values vectors wrapped
       // using above created dictionary.
