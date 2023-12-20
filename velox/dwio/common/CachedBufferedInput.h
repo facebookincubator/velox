@@ -69,12 +69,12 @@ class CachedBufferedInput : public BufferedInput {
       : BufferedInput(
             std::move(readFile),
             readerOptions.getMemoryPool(),
-            metricsLog),
+            metricsLog,
+            std::move(ioStats)),
         cache_(cache),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
         groupId_(groupId),
-        ioStats_(std::move(ioStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
@@ -88,12 +88,14 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<IoStatistics> ioStats,
       folly::Executor* FOLLY_NULLABLE executor,
       const io::ReaderOptions& readerOptions)
-      : BufferedInput(std::move(input), readerOptions.getMemoryPool()),
+      : BufferedInput(
+            std::move(input),
+            readerOptions.getMemoryPool(),
+            std::move(ioStats)),
         cache_(cache),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
         groupId_(groupId),
-        ioStats_(std::move(ioStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
@@ -179,7 +181,6 @@ class CachedBufferedInput : public BufferedInput {
   const uint64_t fileNum_;
   std::shared_ptr<cache::ScanTracker> tracker_;
   const uint64_t groupId_;
-  std::shared_ptr<IoStatistics> ioStats_;
   folly::Executor* const FOLLY_NULLABLE executor_;
 
   // Regions that are candidates for loading.

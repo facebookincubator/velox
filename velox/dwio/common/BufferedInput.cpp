@@ -41,11 +41,15 @@ void BufferedInput::load(const LogType logType) {
   // After sorting and merging we have the accurate sizes
   offsets_.reserve(regions_.size());
   buffers_.reserve(regions_.size());
+  uint64_t scanTime = 0;
 
   if (useVRead()) {
     // Now we have all buffers and regions, load it in parallel
     std::vector<folly::IOBuf> iobufs(regions_.size());
-    input_->vread(regions_, {iobufs.data(), iobufs.size()}, logType);
+    {
+      MicrosecondTimer timer(&scanTime);
+      input_->vread(regions_, {iobufs.data(), iobufs.size()}, logType);
+    }
     for (size_t i = 0; i < regions_.size(); ++i) {
       const auto& region = regions_[i];
       auto iobuf = std::move(iobufs[i]);
@@ -60,17 +64,22 @@ void BufferedInput::load(const LogType logType) {
   } else {
     for (const auto& region : regions_) {
       auto allocated = allocate(region);
-      uint64_t usec = 0;
       {
-        MicrosecondTimer timer(&usec);
+        MicrosecondTimer timer(&scanTime);
         input_->read(
             allocated.data(), allocated.size(), region.offset, logType);
       }
-      if (auto* stats = input_->getStats()) {
-        stats->read().increment(region.length);
-        stats->queryThreadIoLatency().increment(usec);
-      }
     }
+  }
+  if (ioStats_) {
+    uint64_t totalLength = 0;
+    for (const auto& region : regions_) {
+      totalLength += region.length;
+    }
+    ioStats_->read().increment(totalLength);
+    ioStats_->incRawBytesRead(totalLength);
+    ioStats_->queryThreadIoLatency().increment(scanTime);
+    ioStats_->incTotalScanTime(scanTime);
   }
 
   // clear the loaded regions

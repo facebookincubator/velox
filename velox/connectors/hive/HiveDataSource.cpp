@@ -682,7 +682,7 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
         RuntimeCounter(ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)},
        {"totalScanTime",
         RuntimeCounter(
-            ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+            ioStats_->totalScanTime() * 1000, RuntimeCounter::Unit::kNanos)},
        {"totalRemainingFilterTime",
         RuntimeCounter(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),

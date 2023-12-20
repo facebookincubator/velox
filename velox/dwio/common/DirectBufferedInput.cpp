@@ -251,6 +251,7 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool isPrefetch) {
           reinterpret_cast<char*>(
               static_cast<uint64_t>(region.offset - lastEnd))));
       overread += buffers.back().size();
+      size += overread;
     }
     if (region.length > DirectBufferedInput::kTinySize) {
       if (&request != &requests_.back()) {
@@ -270,10 +271,11 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool isPrefetch) {
       buffers.push_back(folly::Range(request.tinyData.data(), region.length));
     }
     lastEnd = region.offset + request.loadSize;
-    size += std::min<int32_t>(loadQuantum_, region.length);
+    size += request.loadSize;
   }
   input_->read(buffers, requests_[0].region.offset, LogType::FILE);
   ioStats_->read().increment(size);
+  ioStats_->incRawBytesRead(size);
   ioStats_->incRawOverreadBytes(overread);
   if (isPrefetch) {
     ioStats_->prefetch().increment(size);

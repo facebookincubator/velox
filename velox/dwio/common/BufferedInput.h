@@ -33,14 +33,14 @@ class BufferedInput {
       std::shared_ptr<ReadFile> readFile,
       memory::MemoryPool& pool,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      IoStatistics* FOLLY_NULLABLE stats = nullptr,
+      std::shared_ptr<IoStatistics> ioStats = nullptr,
       uint64_t maxMergeDistance = kMaxMergeDistance,
       std::optional<bool> wsVRLoad = std::nullopt)
       : input_{std::make_shared<ReadFileInputStream>(
             std::move(readFile),
-            metricsLog,
-            stats)},
+            metricsLog)},
         pool_{pool},
+        ioStats_(std::move(ioStats)),
         maxMergeDistance_{maxMergeDistance},
         wsVRLoad_{wsVRLoad},
         allocPool_{std::make_unique<memory::AllocationPool>(&pool)} {}
@@ -48,10 +48,12 @@ class BufferedInput {
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
       memory::MemoryPool& pool,
+      std::shared_ptr<IoStatistics> ioStats = nullptr,
       uint64_t maxMergeDistance = kMaxMergeDistance,
       std::optional<bool> wsVRLoad = std::nullopt)
       : input_(std::move(input)),
         pool_(pool),
+        ioStats_(std::move(ioStats)),
         maxMergeDistance_{maxMergeDistance},
         wsVRLoad_{wsVRLoad},
         allocPool_{std::make_unique<memory::AllocationPool>(&pool)} {}
@@ -92,6 +94,12 @@ class BufferedInput {
       // We cannot do enqueue/load here because load() clears previously
       // loaded data. TODO: figure out how we can use the data cache for
       // this access.
+      // We cannot count scan time here because SeekableInputStream does not do
+      // actual read immediately.
+      if (ioStats_) {
+        ioStats_->read().increment(length);
+        ioStats_->incRawBytesRead(length);
+      }
       ret = std::make_unique<SeekableFileInputStream>(
           input_, offset, length, pool_, logType, input_->getNaturalReadSize());
     }
@@ -119,7 +127,7 @@ class BufferedInput {
   // Create a new (clean) instance of BufferedInput sharing the same
   // underlying file and memory pool.  The enqueued regions are NOT copied.
   virtual std::unique_ptr<BufferedInput> clone() const {
-    return std::make_unique<BufferedInput>(input_, pool_);
+    return std::make_unique<BufferedInput>(input_, pool_, ioStats_);
   }
 
   std::unique_ptr<SeekableInputStream> loadCompleteFile() {
@@ -148,6 +156,10 @@ class BufferedInput {
  protected:
   std::shared_ptr<ReadFileInputStream> input_;
   memory::MemoryPool& pool_;
+
+  // `ioStats_` should be counted at BufferedInput level,
+  // do not pass it to InputStream.
+  std::shared_ptr<IoStatistics> ioStats_;
 
  private:
   uint64_t maxMergeDistance_;
