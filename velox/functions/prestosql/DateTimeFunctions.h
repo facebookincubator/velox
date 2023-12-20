@@ -849,6 +849,13 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
+  FOLLY_ALWAYS_INLINE Timestamp
+  adjustByArithmetic(Timestamp timestamp, long intervalSeconds) {
+    long seconds = timestamp.getSeconds();
+    long truncedSeconds = (seconds / intervalSeconds) * intervalSeconds;
+    return Timestamp(truncedSeconds, 0);
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Varchar>& unitString,
@@ -863,6 +870,22 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     if (unit == DateTimeUnit::kSecond) {
       result = Timestamp(timestamp.getSeconds(), 0);
       return;
+    }
+
+    if (timeZone_ == nullptr) {
+      switch (unit) {
+        case DateTimeUnit::kMinute:
+          result = adjustByArithmetic(timestamp, 60);
+          return;
+        case DateTimeUnit::kHour:
+          result = adjustByArithmetic(timestamp, 60 * 60);
+          return;
+        case DateTimeUnit::kDay:
+          result = adjustByArithmetic(timestamp, 24 * 60 * 60);
+          return;
+        default:
+          break;
+      }
     }
 
     auto dateTime = getDateTime(timestamp, timeZone_);
