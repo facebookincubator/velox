@@ -366,9 +366,9 @@ int64_t parseTimezoneOffset(const char* cur, const char* end, Date& date) {
         if (std::strncmp(cur + 1, "00:00", 5) == 0) {
           date.timezoneId = 0;
         } else {
-          try {
-            date.timezoneId = util::getTimeZoneID(std::string_view(cur, 6));
-          } catch (VeloxRuntimeError& e) {
+          date.timezoneId =
+              util::getTimeZoneID(std::string_view(cur, 6), false);
+          if (date.timezoneId == -1) {
             return -1;
           }
         }
@@ -385,9 +385,8 @@ int64_t parseTimezoneOffset(const char* cur, const char* end, Date& date) {
           // thread_local buffer to prevent extra allocations.
           std::memcpy(&timezoneBuffer[0], cur, 3);
           std::memcpy(&timezoneBuffer[4], cur + 3, 2);
-          try {
-            date.timezoneId = util::getTimeZoneID(timezoneBuffer);
-          } catch (VeloxRuntimeError& e) {
+          date.timezoneId = util::getTimeZoneID(timezoneBuffer, false);
+          if (date.timezoneId == -1) {
             return -1;
           }
         }
@@ -404,9 +403,8 @@ int64_t parseTimezoneOffset(const char* cur, const char* end, Date& date) {
           // buffer to prevent extra allocations.
           std::memcpy(&timezoneBuffer[0], cur, 3);
           std::memcpy(&timezoneBuffer[4], defaultTrailingOffset, 2);
-          try {
-            date.timezoneId = util::getTimeZoneID(timezoneBuffer);
-          } catch (VeloxRuntimeError& e) {
+          date.timezoneId = util::getTimeZoneID(timezoneBuffer, false);
+          if (date.timezoneId == -1) {
             return -1;
           }
         }
