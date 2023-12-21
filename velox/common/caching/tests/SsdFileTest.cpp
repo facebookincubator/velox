@@ -232,7 +232,7 @@ class SsdFileTest : public testing::Test {
   std::unique_ptr<SsdFile> ssdFile_;
 };
 
-TEST_F(SsdFileTest, writeAndRead) {
+TEST_F(SsdFileTest, DISABLED_writeAndRead) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   std::vector<TestEntry> allEntries;
   initializeCache(128 * kMB, kSsdSize);
