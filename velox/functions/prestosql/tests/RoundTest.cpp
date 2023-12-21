@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 
-class RoundTest : public functions::test::FunctionBaseTest {
+class RoundTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   template <typename T>
   void runRoundTest(const std::vector<std::tuple<T, T>>& data) {

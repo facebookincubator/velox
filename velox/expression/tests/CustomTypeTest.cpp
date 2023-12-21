@@ -19,12 +19,12 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/OpaqueCustomTypes.h"
 
 namespace facebook::velox::test {
 
-class CustomTypeTest : public functions::test::FunctionBaseTest {};
+class CustomTypeTest : public functions::test::PrestoFunctionBaseTest {};
 
 namespace {
 struct FancyInt {

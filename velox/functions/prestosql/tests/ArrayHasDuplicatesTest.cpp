@@ -15,7 +15,7 @@
  */
 
 #include <optional>
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -23,7 +23,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class ArrayHasDuplicatesTest : public FunctionBaseTest {
+class ArrayHasDuplicatesTest : public PrestoFunctionBaseTest {
  protected:
   // Evaluate an expression.
   void testExpr(

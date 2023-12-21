@@ -19,7 +19,7 @@
 
 #include "velox/expression/Expr.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -29,7 +29,8 @@ namespace facebook::velox {
 
 using namespace facebook::velox::test;
 
-class SimpleFunctionInitTest : public functions::test::FunctionBaseTest {};
+class SimpleFunctionInitTest : public functions::test::PrestoFunctionBaseTest {
+};
 
 namespace {
 template <typename T>

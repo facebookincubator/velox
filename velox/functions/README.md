@@ -181,10 +181,13 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(udf_in, InPredicate::create);
 
 ## UnitTest Functions
 
-When writing tests for functions, it is convenient to use FunctionBaseTest base class. These class has methods for
-making new vectors via VectorMaker utility class. PlanBuilder is useful for building query plans. FunctionBaseTest
-provides an "evaluate" method that takes a SQL expression string and an input vector, evaluates the expression and
-returns the results. Here is how one can write a simple test for multiply function:
+When writing tests for functions, it is convenient to use PrestoFunctionBaseTest or 
+SparkFunctionBaseTest as base class. These classes are based on FunctionBaseTest that 
+provides methods for making new vectors via VectorMaker utility class, and an "evaluate" 
+method that takes a SQL expression string and an input vector, evaluates the expression 
+and returns the results.
+PlanBuilder is useful for building query plans. Here is how one can write a simple test  
+for multiply function:
 
 ```c++
 vector_size_t size = 1'000;
@@ -202,4 +205,4 @@ vector_size_t size = 1'000;
   }
 ```
 
-You can find more examples in the code base by searching for FunctionBaseTest
+You can find more examples in the code base by searching for FunctionBaseTest.

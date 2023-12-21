@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class ReduceTest : public functions::test::FunctionBaseTest {};
+class ReduceTest : public functions::test::PrestoFunctionBaseTest {};
 
 TEST_F(ReduceTest, basic) {
   vector_size_t size = 1'000;

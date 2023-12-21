@@ -32,7 +32,6 @@ namespace {
 class RegexFunctionsTest : public test::SparkFunctionBaseTest {
  public:
   void SetUp() override {
-    SparkFunctionBaseTest::SetUp();
     registerRegexReplace("");
   }
 

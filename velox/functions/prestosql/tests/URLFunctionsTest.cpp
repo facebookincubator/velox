@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 #include <gmock/gmock.h>
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 namespace facebook::velox {
 
 namespace {
-class URLFunctionsTest : public functions::test::FunctionBaseTest {
+class URLFunctionsTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   void validate(
       const std::string& url,

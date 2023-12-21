@@ -18,11 +18,11 @@
 #include <glog/logging.h>
 #include "folly/Range.h"
 #include "gtest/gtest.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 namespace facebook::velox::expressions::test {
 
-class StringWriterTest : public functions::test::FunctionBaseTest {};
+class StringWriterTest : public functions::test::PrestoFunctionBaseTest {};
 
 TEST_F(StringWriterTest, append) {
   auto vector = makeFlatVector<StringView>(2);

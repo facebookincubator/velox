@@ -19,7 +19,7 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
@@ -27,7 +27,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class ExprStatsTest : public functions::test::FunctionBaseTest {
+class ExprStatsTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();

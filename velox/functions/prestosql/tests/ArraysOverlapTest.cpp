@@ -15,7 +15,7 @@
  */
 
 #include <optional>
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/vector/tests/TestingDictionaryArrayElementsFunction.h"
 
 using namespace facebook::velox;
@@ -23,7 +23,7 @@ using namespace facebook::velox::test;
 using namespace facebook::velox::functions::test;
 
 namespace {
-class ArraysOverlapTest : public FunctionBaseTest {
+class ArraysOverlapTest : public PrestoFunctionBaseTest {
  protected:
   void testExpr(
       const VectorPtr& expected,

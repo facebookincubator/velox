@@ -20,14 +20,14 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/ITypedExpr.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/vector/tests/TestingDictionaryFunction.h"
 
 namespace facebook::velox::functions::test {
 
 using namespace facebook::velox::test;
 
-class CastBaseTest : public FunctionBaseTest {
+class CastBaseTest : public PrestoFunctionBaseTest {
  protected:
   CastBaseTest() {
     exec::registerVectorFunction(

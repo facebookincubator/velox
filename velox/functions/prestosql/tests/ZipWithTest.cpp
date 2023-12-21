@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -23,7 +23,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class ZipWithTest : public FunctionBaseTest {};
+class ZipWithTest : public PrestoFunctionBaseTest {};
 
 TEST_F(ZipWithTest, basic) {
   auto data = makeRowVector({

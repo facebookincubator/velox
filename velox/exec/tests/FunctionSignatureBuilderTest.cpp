@@ -17,13 +17,13 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 
-class FunctionSignatureBuilderTest : public functions::test::FunctionBaseTest {
-};
+class FunctionSignatureBuilderTest
+    : public functions::test::PrestoFunctionBaseTest {};
 
 TEST_F(FunctionSignatureBuilderTest, basicTypeTests) {
   // All type variables should be used in the inputs arguments.

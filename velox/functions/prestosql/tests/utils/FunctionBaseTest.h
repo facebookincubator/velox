@@ -20,7 +20,6 @@
 #include "velox/expression/Expr.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
-#include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::functions::test {
@@ -42,8 +41,6 @@ class FunctionBaseTest : public testing::Test,
       RealType>;
 
  protected:
-  static void SetUpTestCase();
-
   static std::function<vector_size_t(vector_size_t row)> modN(int n) {
     return [n](vector_size_t row) { return row % n; };
   }

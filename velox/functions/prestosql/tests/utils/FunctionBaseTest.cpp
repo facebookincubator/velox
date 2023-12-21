@@ -15,16 +15,8 @@
  */
 #include "FunctionBaseTest.h"
 #include "velox/functions/FunctionRegistry.h"
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/parse/TypeResolver.h"
 
 namespace facebook::velox::functions::test {
-
-void FunctionBaseTest::SetUpTestCase() {
-  parse::registerTypeResolver();
-  functions::prestosql::registerAllScalarFunctions();
-  memory::MemoryManager::testingSetInstance({});
-}
 
 // static
 std::unordered_set<std::string> FunctionBaseTest::getSignatureStrings(

@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 namespace facebook::velox::functions {
 namespace {
 
-class FindFirstTest : public functions::test::FunctionBaseTest {
+class FindFirstTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   void verify(
       const std::string& expression,

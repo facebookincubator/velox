@@ -18,7 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/expression/VectorReaders.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using facebook::velox::exec::LocalDecodedVector;
 namespace facebook::velox {
@@ -29,7 +29,7 @@ DecodedVector* decode(DecodedVector& decoder, const BaseVector& vector) {
   return &decoder;
 }
 
-class VectorReaderTest : public functions::test::FunctionBaseTest {};
+class VectorReaderTest : public functions::test::PrestoFunctionBaseTest {};
 
 TEST_F(VectorReaderTest, scalarContainsNull) {
   // Vector is:

@@ -16,13 +16,13 @@
 
 #include "gtest/gtest.h"
 
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
-using functions::test::FunctionBaseTest;
+using functions::test::PrestoFunctionBaseTest;
 
 // This test suite tests the simplified eval engine by:
 //
@@ -31,7 +31,7 @@ using functions::test::FunctionBaseTest;
 //  and common eval engines
 //  3. Asserting that result vectors are the same.
 //
-class EvalSimplifiedTest : public FunctionBaseTest {
+class EvalSimplifiedTest : public PrestoFunctionBaseTest {
  protected:
   void assertExceptions(
       std::exception_ptr commonPtr,

@@ -26,7 +26,7 @@
 #include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/StringFunctions.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/functions/remote/client/Remote.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionService.h"
 #include "velox/functions/remote/server/RemoteFunctionService.h"
@@ -40,7 +40,7 @@ namespace {
 // Parametrize in the serialization format so we can test both presto page and
 // unsafe row.
 class RemoteFunctionTest
-    : public functions::test::FunctionBaseTest,
+    : public functions::test::PrestoFunctionBaseTest,
       public ::testing::WithParamInterface<remote::PageFormat> {
  public:
   void SetUp() override {

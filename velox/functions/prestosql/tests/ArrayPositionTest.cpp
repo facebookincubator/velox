@@ -16,7 +16,7 @@
 
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -28,7 +28,7 @@ namespace {
 template <typename T>
 using TwoDimVector = std::vector<std::vector<std::optional<T>>>;
 
-class ArrayPositionTest : public FunctionBaseTest {
+class ArrayPositionTest : public PrestoFunctionBaseTest {
  protected:
   void evalExpr(
       const std::vector<VectorPtr>& input,

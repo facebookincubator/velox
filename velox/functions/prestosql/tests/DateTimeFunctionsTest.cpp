@@ -18,14 +18,14 @@
 #include <string>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/date/tz.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
+class DateTimeFunctionsTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   std::string daysShort[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
 

@@ -20,7 +20,7 @@
 
 #include "velox/expression/Expr.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -39,7 +39,8 @@ using namespace facebook::velox::test;
 
 namespace {
 
-class SimpleFunctionPresetNullsTest : public functions::test::FunctionBaseTest {
+class SimpleFunctionPresetNullsTest
+    : public functions::test::PrestoFunctionBaseTest {
   // Helper class to create the test function for type T.
   template <typename T>
   struct TestFunction {

@@ -16,12 +16,12 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class MapFilterTest : public functions::test::FunctionBaseTest {
+class MapFilterTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   template <typename K, typename V>
   void checkMapFilter(

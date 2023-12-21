@@ -19,7 +19,7 @@
 #include <limits>
 #include "velox/common/base/VeloxException.h"
 #include "velox/expression/Expr.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -39,7 +39,7 @@ std::string hexToDec(const std::string& str) {
   return out;
 }
 
-class BinaryFunctionsTest : public FunctionBaseTest {};
+class BinaryFunctionsTest : public PrestoFunctionBaseTest {};
 
 TEST_F(BinaryFunctionsTest, md5) {
   const auto md5 = [&](std::optional<std::string> arg) {

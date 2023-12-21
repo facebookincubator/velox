@@ -17,7 +17,7 @@
 #include <gmock/gmock.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 namespace facebook::velox {
 namespace {
@@ -39,7 +39,7 @@ MATCHER(IsInf, "is Infinity") {
   return arg && std::isinf(*arg);
 }
 
-class ProbabilityTest : public functions::test::FunctionBaseTest {
+class ProbabilityTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   template <typename ValueType>
   auto poissonCDF(

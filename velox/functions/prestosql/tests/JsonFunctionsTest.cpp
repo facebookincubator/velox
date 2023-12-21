@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions::prestosql {
@@ -62,7 +62,7 @@ const std::string kJson = R"(
     }
     )";
 
-class JsonFunctionsTest : public functions::test::FunctionBaseTest {
+class JsonFunctionsTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   VectorPtr makeJsonVector(std::optional<std::string> json) {
     std::optional<StringView> s = json.has_value()

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -23,7 +23,7 @@ namespace facebook::velox::functions {
 
 namespace {
 
-class RandTest : public functions::test::FunctionBaseTest {
+class RandTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   template <typename T>
   std::optional<T> random(T n) {

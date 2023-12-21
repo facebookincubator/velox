@@ -15,7 +15,7 @@
  */
 
 #include <optional>
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/vector/tests/TestingDictionaryArrayElementsFunction.h"
 
 using namespace facebook::velox;
@@ -24,7 +24,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class ArrayIntersectTest : public FunctionBaseTest {
+class ArrayIntersectTest : public PrestoFunctionBaseTest {
  protected:
   void testExpr(
       const VectorPtr& expected,

@@ -23,7 +23,7 @@
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
@@ -48,7 +48,7 @@ struct FuncPrimitivesTest {
   }
 };
 
-class RowWriterTest : public functions::test::FunctionBaseTest {
+class RowWriterTest : public functions::test::PrestoFunctionBaseTest {
  public:
   VectorPtr prepareResult(const TypePtr& rowType, vector_size_t size = 1) {
     VectorPtr result;

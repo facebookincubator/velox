@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/TimestampConversion.h"
 
 using namespace facebook::velox;
@@ -24,7 +24,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class SequenceTest : public FunctionBaseTest {
+class SequenceTest : public PrestoFunctionBaseTest {
  protected:
   void testExpression(
       const std::string& expression,

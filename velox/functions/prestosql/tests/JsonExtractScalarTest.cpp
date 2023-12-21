@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions::prestosql {
 
 namespace {
 
-class JsonExtractScalarTest : public functions::test::FunctionBaseTest {
+class JsonExtractScalarTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   VectorPtr makeVector(std::optional<std::string> json, const TypePtr& type) {
     std::optional<StringView> s = json.has_value()

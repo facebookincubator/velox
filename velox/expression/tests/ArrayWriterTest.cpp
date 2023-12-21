@@ -22,7 +22,7 @@
 
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/OpaqueCustomTypes.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Type.h"
@@ -61,7 +61,7 @@ struct Func {
   }
 };
 
-class ArrayWriterTest : public functions::test::FunctionBaseTest {
+class ArrayWriterTest : public functions::test::PrestoFunctionBaseTest {
  public:
   VectorPtr prepareResult(const TypePtr& arrayType, vector_size_t size = 1) {
     VectorPtr result;

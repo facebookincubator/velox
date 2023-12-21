@@ -22,7 +22,7 @@
 #include <velox/common/base/VeloxException.h>
 #include <velox/vector/SimpleVector.h>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 namespace facebook::velox {
 namespace {
@@ -42,7 +42,7 @@ MATCHER(IsInf, "is Infinity") {
   return arg && std::isinf(*arg);
 }
 
-class ArithmeticTest : public functions::test::FunctionBaseTest {
+class ArithmeticTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   template <typename T, typename TExpected = T>
   void assertExpression(

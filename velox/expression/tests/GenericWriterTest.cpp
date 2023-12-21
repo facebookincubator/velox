@@ -18,7 +18,7 @@
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
@@ -32,7 +32,7 @@ using namespace facebook::velox::exec;
 namespace facebook::velox {
 namespace {
 
-class GenericWriterTest : public functions::test::FunctionBaseTest {};
+class GenericWriterTest : public functions::test::PrestoFunctionBaseTest {};
 
 TEST_F(GenericWriterTest, boolean) {
   VectorPtr result;

@@ -15,7 +15,7 @@
  */
 
 #include <optional>
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -23,7 +23,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class ArrayMaxTest : public FunctionBaseTest {
+class ArrayMaxTest : public PrestoFunctionBaseTest {
  protected:
   void testArrayMax(const VectorPtr& input, const VectorPtr& expected) {
     auto result = evaluate<BaseVector>("array_max(C0)", makeRowVector({input}));
@@ -166,7 +166,7 @@ TEST_F(ArrayMaxTest, docs) {
 }
 
 template <typename Type>
-class ArrayMaxIntegralTest : public FunctionBaseTest {
+class ArrayMaxIntegralTest : public PrestoFunctionBaseTest {
  public:
   using T = typename Type::NativeType::NativeType;
 
@@ -231,7 +231,7 @@ class ArrayMaxIntegralTest : public FunctionBaseTest {
 };
 
 template <typename Type>
-class ArrayMaxFloatingPointTest : public FunctionBaseTest {
+class ArrayMaxFloatingPointTest : public PrestoFunctionBaseTest {
  public:
   using T = typename Type::NativeType::NativeType;
 

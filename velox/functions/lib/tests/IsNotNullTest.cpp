@@ -16,7 +16,7 @@
 
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/IsNull.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
 
 namespace facebook::velox::functions {
@@ -31,7 +31,7 @@ void registerIsNotNull() {
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class IsNotNullTest : public functions::test::FunctionBaseTest {
+class IsNotNullTest : public functions::test::PrestoFunctionBaseTest {
  public:
   static void SetUpTestCase() {
     functions::registerIsNotNull();

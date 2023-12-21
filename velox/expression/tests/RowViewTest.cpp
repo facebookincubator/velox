@@ -19,7 +19,7 @@
 
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 namespace {
 
@@ -32,7 +32,7 @@ DecodedVector* decode(DecodedVector& decoder, const BaseVector& vector) {
 }
 
 template <bool returnsOptionalValues>
-class RowViewTest : public functions::test::FunctionBaseTest {
+class RowViewTest : public functions::test::PrestoFunctionBaseTest {
   using ViewType = exec::RowView<returnsOptionalValues, int32_t, float>;
   using ReadFunction =
       std::function<ViewType(exec::VectorReader<Row<int32_t, float>>&, size_t)>;
@@ -206,7 +206,7 @@ TEST_F(NullableRowViewTest, materialize) {
   ASSERT_EQ(reader[0].materialize(), expected);
 }
 
-class DynamicRowViewTest : public functions::test::FunctionBaseTest {};
+class DynamicRowViewTest : public functions::test::PrestoFunctionBaseTest {};
 
 TEST_F(DynamicRowViewTest, emptyRow) {
   auto rowVector = vectorMaker_.rowVector({});

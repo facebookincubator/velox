@@ -15,7 +15,7 @@
  */
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -24,7 +24,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class WidthBucketArrayTest : public FunctionBaseTest {
+class WidthBucketArrayTest : public PrestoFunctionBaseTest {
  protected:
   static constexpr double kInf = std::numeric_limits<double>::infinity();
   static constexpr double kNan = std::numeric_limits<double>::quiet_NaN();

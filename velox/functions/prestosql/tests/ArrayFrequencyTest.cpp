@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using facebook::velox::test::assertEqualVectors;
 
@@ -22,7 +22,7 @@ namespace facebook::velox::functions::test {
 
 namespace {
 
-class ArrayFrequencyTest : public functions::test::FunctionBaseTest {
+class ArrayFrequencyTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   void testArrayFrequency(const VectorPtr& expected, const VectorPtr& input) {
     auto result =

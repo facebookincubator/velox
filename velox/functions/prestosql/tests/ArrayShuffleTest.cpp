@@ -22,7 +22,7 @@
 #include <sstream>
 
 #include "velox/expression/VectorReaders.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -74,7 +74,7 @@ std::string printArray(const std::vector<T>& input) {
 } // namespace
 
 namespace {
-class ArrayShuffleTest : public FunctionBaseTest {
+class ArrayShuffleTest : public PrestoFunctionBaseTest {
  protected:
   template <typename T>
   void testShuffle(const VectorPtr& input) {

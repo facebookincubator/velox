@@ -929,9 +929,9 @@ types.
 Testing
 -------
 
-Add a test using FunctionBaseTest from
-velox/functions/prestosql/tests/utils/FunctionBaseTest.h as a base class. Name your test
-and the .cpp file <function-name>Test, e.g. CardinalityTest in
+Add a test using PrestoFunctionBaseTest or SparkFunctionBaseTest as a base class.
+They are based on FunctionBaseTest from velox/functions/prestosql/tests/utils/FunctionBaseTest.h.
+Name your test and the .cpp file <function-name>Test, e.g. CardinalityTest in
 CardinalityTest.cpp or IsNullTest in IsNullTest.cpp.
 
 FunctionBaseTest has many helper methods for generating test vectors. It also

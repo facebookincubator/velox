@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox::test;
 using namespace facebook::velox::functions::test;
@@ -22,7 +22,7 @@ using namespace facebook::velox::functions::test;
 namespace facebook::velox::functions {
 namespace {
 
-class InPredicateTest : public FunctionBaseTest {
+class InPredicateTest : public PrestoFunctionBaseTest {
  protected:
   template <typename T>
   std::string getInList(

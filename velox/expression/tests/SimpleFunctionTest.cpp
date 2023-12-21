@@ -25,7 +25,7 @@
 #include "velox/expression/SimpleFunctionAdapter.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -36,7 +36,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::test;
 namespace {
 
-class SimpleFunctionTest : public functions::test::FunctionBaseTest {
+class SimpleFunctionTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   VectorPtr arraySum(const std::vector<std::vector<int64_t>>& data) {
     return makeFlatVector<int64_t>(data.size(), [&](auto row) {

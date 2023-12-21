@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::functions::test;
 
 namespace {
-class ReverseTest : public FunctionBaseTest {
+class ReverseTest : public PrestoFunctionBaseTest {
  protected:
   void testExpr(const VectorPtr& expected, const VectorPtr& input) {
     auto result = evaluate("reverse(C0)", makeRowVector({input}));

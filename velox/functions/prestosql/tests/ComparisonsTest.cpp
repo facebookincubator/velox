@@ -16,11 +16,11 @@
 #include <string>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 
-class ComparisonsTest : public functions::test::FunctionBaseTest {
+class ComparisonsTest : public functions::test::PrestoFunctionBaseTest {
  public:
   void SetUp() override {
     this->options_.parseDecimalAsDouble = false;
@@ -639,7 +639,7 @@ typedef ::testing::Types<
 } // namespace
 
 template <typename ComparisonTypeOp>
-class SimdComparisonsTest : public functions::test::FunctionBaseTest {
+class SimdComparisonsTest : public functions::test::PrestoFunctionBaseTest {
  public:
   using T = typename ComparisonTypeOp::type::NativeType::NativeType;
   using ComparisonOp = typename ComparisonTypeOp::fn;

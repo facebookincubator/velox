@@ -17,7 +17,7 @@
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/lib/CheckDuplicateKeys.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/vector/tests/TestingDictionaryArrayElementsFunction.h"
 
 using namespace facebook::velox;
@@ -32,7 +32,7 @@ std::optional<std::vector<std::pair<int32_t, std::optional<int32_t>>>> O(
 } // namespace
 
 namespace {
-class MapFromEntriesTest : public FunctionBaseTest {
+class MapFromEntriesTest : public PrestoFunctionBaseTest {
  protected:
   /// Create an MAP vector of size 1 using specified 'keys' and 'values' vector.
   VectorPtr makeSingleRowMapVector(

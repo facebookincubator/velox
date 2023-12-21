@@ -15,7 +15,7 @@
  */
 
 #include <optional>
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -24,7 +24,7 @@ using namespace facebook::velox::functions::test;
 namespace {
 
 // Class to test the array_distinct operator.
-class ArrayDistinctTest : public FunctionBaseTest {
+class ArrayDistinctTest : public PrestoFunctionBaseTest {
  protected:
   // Evaluate an expression.
   void testExpr(

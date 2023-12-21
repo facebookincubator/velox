@@ -19,7 +19,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/lib/SubscriptUtil.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SelectivityVector.h"
 
@@ -29,7 +29,7 @@ using facebook::velox::functions::SubscriptImpl;
 
 namespace {
 
-class ElementAtTest : public FunctionBaseTest {
+class ElementAtTest : public PrestoFunctionBaseTest {
  protected:
   static const vector_size_t kVectorSize{1'000};
 

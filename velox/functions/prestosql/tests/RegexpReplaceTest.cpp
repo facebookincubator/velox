@@ -16,12 +16,12 @@
 #include <exception>
 #include <optional>
 
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 namespace facebook::velox {
 namespace {
 
-class RegexFunctionsTest : public functions::test::FunctionBaseTest {
+class RegexFunctionsTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   std::optional<std::string> regexp_replace(
       const std::optional<std::string>& string,

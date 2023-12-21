@@ -22,7 +22,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/functions/lib/StringEncodingUtils.h"
 #include "velox/functions/lib/string/StringImpl.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -66,7 +66,7 @@ int expectedLength(int i) {
 }
 } // namespace
 
-class StringFunctionsTest : public FunctionBaseTest {
+class StringFunctionsTest : public PrestoFunctionBaseTest {
  protected:
   VectorPtr makeStrings(
       vector_size_t size,

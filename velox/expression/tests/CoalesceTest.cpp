@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class CoalesceTest : public functions::test::FunctionBaseTest {};
+class CoalesceTest : public functions::test::PrestoFunctionBaseTest {};
 
 TEST_F(CoalesceTest, basic) {
   vector_size_t size = 20;

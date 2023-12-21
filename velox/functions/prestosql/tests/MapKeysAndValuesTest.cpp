@@ -15,7 +15,7 @@
  */
 
 #include <cstdint>
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -23,7 +23,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class MapKeysAndValuesTest : public FunctionBaseTest {
+class MapKeysAndValuesTest : public PrestoFunctionBaseTest {
  protected:
   void checkResult(
       MapVectorPtr mapVector,

@@ -19,12 +19,13 @@
 #include <cstdint>
 
 #include "velox/expression/VectorReaders.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
 
-class ConstantFlatVectorReaderTest : public functions::test::FunctionBaseTest {
+class ConstantFlatVectorReaderTest
+    : public functions::test::PrestoFunctionBaseTest {
  public:
   ConstantFlatVectorReader<int32_t> makeConstantFlatVectorReader(
       const VectorPtr& vector) {

@@ -15,15 +15,15 @@
  */
 #include "velox/functions/prestosql/aggregates/ValueList.h"
 #include <gtest/gtest.h>
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class ValueListTest : public functions::test::FunctionBaseTest {
+class ValueListTest : public functions::test::PrestoFunctionBaseTest {
  protected:
-  ValueListTest() : functions::test::FunctionBaseTest() {}
+  ValueListTest() : functions::test::PrestoFunctionBaseTest() {}
 
   // Make sure to test sizes that are multiples of 64.
   static constexpr vector_size_t kTestSizes[6] =

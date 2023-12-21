@@ -16,7 +16,7 @@
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 namespace facebook::velox {
 
@@ -30,7 +30,7 @@ static constexpr auto kMin64 = std::numeric_limits<int64_t>::min();
 static constexpr auto kMax64 = std::numeric_limits<int64_t>::max();
 static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
 
-class BitwiseTest : public functions::test::FunctionBaseTest {
+class BitwiseTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   template <typename T>
   std::optional<int64_t> bitwiseFunction(

@@ -16,7 +16,7 @@
 
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -24,7 +24,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class ArraySumTest : public FunctionBaseTest {
+class ArraySumTest : public PrestoFunctionBaseTest {
  protected:
   // Evaluate an expression.
   template <typename T>

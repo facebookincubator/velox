@@ -20,7 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/tests/TestingAlwaysThrowsFunction.h"
 
@@ -29,10 +29,9 @@ namespace facebook::velox {
 using namespace common::testutil;
 using namespace facebook::velox::test;
 
-class TryExprTest : public functions::test::FunctionBaseTest {
+class TryExprTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   static void SetUpTestCase() {
-    FunctionBaseTest::SetUpTestCase();
     TestValue::enable();
   }
 };

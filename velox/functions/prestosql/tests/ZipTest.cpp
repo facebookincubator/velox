@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -23,7 +23,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class ZipTest : public FunctionBaseTest {};
+class ZipTest : public PrestoFunctionBaseTest {};
 
 /// Test if we can zip two integer arrays.
 TEST_F(ZipTest, simpleInt) {

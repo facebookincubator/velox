@@ -15,12 +15,12 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class ArrayNoneMatchTest : public functions::test::FunctionBaseTest {
+class ArrayNoneMatchTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   void testNoneMatchExpr(
       const std::vector<std::optional<bool>>& expected,

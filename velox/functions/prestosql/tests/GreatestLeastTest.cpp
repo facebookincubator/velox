@@ -16,11 +16,11 @@
 
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 
-class GreatestLeastTest : public functions::test::FunctionBaseTest {
+class GreatestLeastTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   template <typename T>
   void runTest(

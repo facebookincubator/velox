@@ -18,7 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -28,7 +28,7 @@ namespace facebook::velox {
 using namespace facebook::velox::test;
 
 class SimpleFunctionCallNullFreeTest
-    : public functions::test::FunctionBaseTest {};
+    : public functions::test::PrestoFunctionBaseTest {};
 
 // Test that function with default contains nulls behavior won't get called when
 // inputs are all null.

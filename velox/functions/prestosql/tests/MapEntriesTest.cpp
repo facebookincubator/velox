@@ -15,12 +15,12 @@
  */
 
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::functions::test;
 
-class MapEntriesTest : public FunctionBaseTest {
+class MapEntriesTest : public PrestoFunctionBaseTest {
  protected:
   /// Create an ARRAY vector of size 1 using specified 'elements' vector.
   VectorPtr makeSingleRowArrayVector(const VectorPtr& elements) {

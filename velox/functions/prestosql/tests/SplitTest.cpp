@@ -17,7 +17,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/parse/Expressions.h"
 
 using namespace facebook::velox;
@@ -26,7 +26,7 @@ using namespace facebook::velox::functions::test;
 using namespace facebook::velox::test;
 
 /// Class to test 'split' vector function.
-class SplitTest : public FunctionBaseTest {
+class SplitTest : public PrestoFunctionBaseTest {
  protected:
   /// Method runs the given split function, f.e. split(C0, C1), where C0 is the
   /// input column and the C1 is delimiter column.

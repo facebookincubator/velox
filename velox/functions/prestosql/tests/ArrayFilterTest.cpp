@@ -15,12 +15,12 @@
  */
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class ArrayFilterTest : public functions::test::FunctionBaseTest {
+class ArrayFilterTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   template <typename T>
   void checkArrayFilter(

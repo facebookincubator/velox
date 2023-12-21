@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 
-class CeilFloorTest : public functions::test::FunctionBaseTest {
+class CeilFloorTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   template <typename T>
   void runCeilFloorTest(

@@ -24,7 +24,7 @@
 
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/StringView.h"
 #include "velox/vector/BaseVector.h"
@@ -44,10 +44,9 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
   return makeRe2Extract(name, inputArgs, config, /*emptyNoMatch=*/false);
 }
 
-class Re2FunctionsTest : public test::FunctionBaseTest {
+class Re2FunctionsTest : public test::PrestoFunctionBaseTest {
  public:
   static void SetUpTestCase() {
-    test::FunctionBaseTest::SetUpTestCase();
     exec::registerStatefulVectorFunction(
         "re2_match", re2MatchSignatures(), makeRe2Match);
     exec::registerStatefulVectorFunction(
@@ -174,7 +173,7 @@ void addRow(Table& dataset, const Row& row, std::index_sequence<I...>) {
 //   2) One batch of 1024 identical rows per test case using FlatVectors.
 //   3) One batch of 1024 identical rows per test case using ConstantVectors.
 template <typename ReturnType, typename... T>
-class VectorFunctionTester : public test::FunctionBaseTest {
+class VectorFunctionTester : public test::PrestoFunctionBaseTest {
  public:
   explicit VectorFunctionTester(std::string expr) : expr(expr) {}
 
@@ -238,9 +237,10 @@ class VectorFunctionTester : public test::FunctionBaseTest {
     }
   }
 
-  // We inherit from FunctionBaseTest so that we can get access to the helpers
-  // it defines, but since it is supposed to be a test fixture TestBody() is
-  // declared pure virtual.  We must provide an implementation here.
+  // We inherit from PrestoFunctionBaseTest so that we can get access to the
+  // helpers it defines, but since it is supposed to be a test fixture
+  // TestBody() is declared pure virtual.  We must provide an implementation
+  // here.
   void TestBody() override {}
 };
 

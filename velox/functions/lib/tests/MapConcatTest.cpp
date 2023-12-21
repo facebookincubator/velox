@@ -14,16 +14,15 @@
  * limitations under the License.
  */
 #include "velox/functions/lib/MapConcat.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::functions::test;
 
-class MapConcatTest : public FunctionBaseTest {
+class MapConcatTest : public PrestoFunctionBaseTest {
  protected:
   static void SetUpTestCase() {
-    FunctionBaseTest::SetUpTestCase();
     facebook::velox::functions::registerMapConcatEmptyNullsFunction(
         "map_concat_empty_nulls");
   }

@@ -16,7 +16,7 @@
 #include <gtest/gtest.h>
 #include "velox/expression/Expr.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/parse/Expressions.h"
 
 namespace facebook::velox::functions::test {
@@ -24,7 +24,7 @@ namespace facebook::velox::functions::test {
 namespace {
 
 // Class to test 'split_part' function.
-class SplitPartTest : public FunctionBaseTest {
+class SplitPartTest : public PrestoFunctionBaseTest {
  protected:
   auto split_part(
       std::optional<std::string> input,

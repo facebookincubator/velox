@@ -22,7 +22,7 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/OpaqueCustomTypes.h"
 
 namespace {
@@ -37,7 +37,7 @@ DecodedVector* decode(DecodedVector& decoder, const BaseVector& vector) {
 }
 
 template <bool returnsOptionalValues>
-class ArrayViewTest : public functions::test::FunctionBaseTest {
+class ArrayViewTest : public functions::test::PrestoFunctionBaseTest {
   template <typename T>
   exec::ArrayView<returnsOptionalValues, T> read(
       exec::VectorReader<Array<T>>& reader,

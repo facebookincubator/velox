@@ -21,7 +21,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 namespace {
 using namespace facebook::velox;
@@ -33,7 +33,7 @@ DecodedVector* decode(DecodedVector& decoder, const BaseVector& vector) {
 }
 
 template <bool returnsOptionalValues>
-class MapViewTest : public functions::test::FunctionBaseTest {
+class MapViewTest : public functions::test::PrestoFunctionBaseTest {
   using ViewType = exec::MapView<returnsOptionalValues, int64_t, int64_t>;
   using ReadFunction = std::function<
       ViewType(exec::VectorReader<Map<int64_t, int64_t>>&, size_t)>;

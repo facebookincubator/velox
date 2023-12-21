@@ -20,7 +20,7 @@
 #include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -113,7 +113,7 @@ void registerVectorFunctions() {
 namespace facebook::velox::exec {
 namespace {
 
-class FunctionResolutionTest : public functions::test::FunctionBaseTest {
+class FunctionResolutionTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   void checkResults(const std::string& func, int32_t expected) {
     auto results = evaluateOnce<int32_t, int32_t, int32_t>(

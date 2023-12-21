@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 #include <fmt/format.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
-using facebook::velox::functions::test::FunctionBaseTest;
+using facebook::velox::functions::test::PrestoFunctionBaseTest;
 
 namespace {
 
@@ -39,7 +39,7 @@ const std::unordered_set<TypeKind> kSupportedTypes = {
 using TestArrayType = std::vector<std::optional<StringView>>;
 using TestRowType = variant;
 
-class ArraySortTest : public FunctionBaseTest,
+class ArraySortTest : public PrestoFunctionBaseTest,
                       public testing::WithParamInterface<TypeKind> {
  protected:
   ArraySortTest() : numValues_(10), numVectors_(5) {}

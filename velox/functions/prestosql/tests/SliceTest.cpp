@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -22,7 +22,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class SliceTest : public FunctionBaseTest {
+class SliceTest : public PrestoFunctionBaseTest {
  protected:
   static const vector_size_t kVectorSize{1000};
 

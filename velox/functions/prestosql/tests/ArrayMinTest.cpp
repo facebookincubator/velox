@@ -15,7 +15,7 @@
  */
 
 #include <optional>
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -23,7 +23,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class ArrayMinTest : public FunctionBaseTest {
+class ArrayMinTest : public PrestoFunctionBaseTest {
  protected:
   template <typename T, typename TExpected = T>
   void testExpr(

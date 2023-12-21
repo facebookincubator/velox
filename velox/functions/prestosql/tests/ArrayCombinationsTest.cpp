@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -23,7 +23,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class ArrayCombinationsTest : public FunctionBaseTest {
+class ArrayCombinationsTest : public PrestoFunctionBaseTest {
  protected:
   void testExpr(
       const VectorPtr& expected,

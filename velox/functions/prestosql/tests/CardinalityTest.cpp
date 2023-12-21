@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -22,7 +22,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class CardinalityTest : public FunctionBaseTest {
+class CardinalityTest : public PrestoFunctionBaseTest {
  protected:
   void testArrayCardinality(
       std::function<vector_size_t(vector_size_t /* row */)> sizeAt,

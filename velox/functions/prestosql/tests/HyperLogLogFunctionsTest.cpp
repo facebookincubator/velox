@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/hyperloglog/SparseHll.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #define XXH_INLINE_ALL
 #include <xxhash.h>
@@ -30,7 +30,8 @@ uint64_t hashOne(T value) {
   return XXH64(&value, sizeof(value), 0);
 }
 
-class HyperLogLogFunctionsTest : public functions::test::FunctionBaseTest {
+class HyperLogLogFunctionsTest
+    : public functions::test::PrestoFunctionBaseTest {
  protected:
   static std::string serialize(
       int8_t indexBitLength,

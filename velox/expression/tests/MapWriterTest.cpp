@@ -27,7 +27,7 @@
 #include "folly/container/F14Map.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Type.h"
 namespace facebook::velox {
@@ -71,7 +71,7 @@ struct Func {
   }
 };
 
-class MapWriterTest : public functions::test::FunctionBaseTest {
+class MapWriterTest : public functions::test::PrestoFunctionBaseTest {
  public:
   template <typename K, typename V>
   using map_pairs_t = std::vector<std::pair<K, std::optional<V>>>;

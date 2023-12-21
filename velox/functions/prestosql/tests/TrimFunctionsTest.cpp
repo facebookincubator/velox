@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 #include <boost/random/uniform_int_distribution.hpp>
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 using namespace std::string_literals;
 
 namespace facebook::velox::functions {
 namespace {
 
-class TrimFunctionsTest : public test::FunctionBaseTest {
+class TrimFunctionsTest : public test::PrestoFunctionBaseTest {
  protected:
   static std::string generateInvalidUtf8() {
     std::string str;

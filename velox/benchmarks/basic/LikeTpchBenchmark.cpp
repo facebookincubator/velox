@@ -19,7 +19,7 @@
 
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/tpch/gen/TpchGen.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -45,7 +45,7 @@ enum class TpchBenchmarkCase {
   TpchQuery20,
 };
 
-class LikeFunctionsBenchmark : public FunctionBaseTest,
+class LikeFunctionsBenchmark : public PrestoFunctionBaseTest,
                                public FunctionBenchmarkBase {
  public:
   explicit LikeFunctionsBenchmark() {
@@ -165,9 +165,10 @@ class LikeFunctionsBenchmark : public FunctionBaseTest,
     return cnt;
   }
 
-  // We inherit from FunctionBaseTest so that we can get access to the helpers
-  // it defines, but since it is supposed to be a test fixture TestBody() is
-  // declared pure virtual.  We must provide an implementation here.
+  // We inherit from PrestoFunctionBaseTest so that we can get access to the
+  // helpers it defines, but since it is supposed to be a test fixture
+  // TestBody() is declared pure virtual.  We must provide an implementation
+  // here.
   void TestBody() override {}
 
  private:

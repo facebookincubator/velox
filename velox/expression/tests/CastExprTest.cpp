@@ -21,7 +21,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/TypeAliases.h"

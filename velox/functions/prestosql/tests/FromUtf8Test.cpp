@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 
 namespace facebook::velox::functions {
 
 namespace {
 
-class FromUtf8Test : public test::FunctionBaseTest {
+class FromUtf8Test : public test::PrestoFunctionBaseTest {
  protected:
   std::optional<std::string> fromUtf8(std::optional<std::string> value) {
     return evaluateOnce<std::string, std::string>(

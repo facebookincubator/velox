@@ -21,7 +21,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/PrestoFunctionBaseTest.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -32,7 +32,7 @@ DecodedVector* decode(DecodedVector& decoder, const BaseVector& vector) {
   return &decoder;
 }
 
-class GenericViewTest : public functions::test::FunctionBaseTest {
+class GenericViewTest : public functions::test::PrestoFunctionBaseTest {
  protected:
   using array_data_t =
       std::vector<std::optional<std::vector<std::optional<int64_t>>>>;
