@@ -88,8 +88,6 @@ class DestinationBuffer {
 
     void recordDelete(const SerializedPage& data);
 
-    /// A destination buffer is finished after it is deleted by the
-    /// OutputBuffer, so this flag is set by the OutputBuffer.
     bool finished{false};
 
     /// Number of buffered bytes / rows / pages.
