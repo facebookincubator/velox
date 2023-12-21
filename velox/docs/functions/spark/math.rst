@@ -20,7 +20,11 @@ Mathematical Functions
 
 .. spark:function:: atan2(y, x) -> double
 
-    Returns the arc tangent of ``y / x``.
+    Returns the arc tangent of ``y / x``. For compatibility with Spark, returns 0 for the following corner cases:
+    * if y and x are both 0.
+    * if y is -0 and x is 0.
+    * if y is 0 and x is -0.
+    * if y is -0 and x is -0.
 
 .. spark:function:: atanh(x) -> double
 

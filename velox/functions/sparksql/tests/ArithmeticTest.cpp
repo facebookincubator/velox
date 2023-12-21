@@ -388,6 +388,13 @@ TEST_F(ArithmeticTest, atan2) {
   EXPECT_EQ(atan2(-0.0, -0.0), 0.0);
   EXPECT_EQ(atan2(0.0, -0.0), 0.0);
   EXPECT_EQ(atan2(-0.0, 0.0), 0.0);
+  EXPECT_EQ(atan2(-1.0, 1.0), std::atan2(-1.0, 1.0));
+  EXPECT_EQ(atan2(1.0, 1.0), std::atan2(1.0, 1.0));
+  EXPECT_EQ(atan2(1.0, -1.0), std::atan2(1.0, -1.0));
+  EXPECT_EQ(atan2(-1.0, -1.0), std::atan2(-1.0, -1.0));
+  EXPECT_EQ(atan2(std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(atan2(1.0E0, std::nullopt), std::nullopt);
+  EXPECT_EQ(atan2(std::nullopt, 1.0E0), std::nullopt);
 }
 
 class LogNTest : public SparkFunctionBaseTest {

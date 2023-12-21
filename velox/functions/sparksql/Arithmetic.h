@@ -272,8 +272,9 @@ struct CotFunction {
 
 template <typename T>
 struct Atan2Function {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput y, TInput x) {
+  FOLLY_ALWAYS_INLINE void call(double& result, double y, double x) {
+    // Spark (as of Spark 3.5)'s atan2 SQL function is internally calculated by
+    // Math.atan2(y + 0.0, x + 0.0). We do the same here for compatibility.
     result = std::atan2(y + 0.0, x + 0.0);
   }
 };
