@@ -2463,7 +2463,15 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
       if (commitStrategy_ == CommitStrategy::kNoCommit) {
         ASSERT_EQ(writeFileName, targetFileName);
       } else {
-        ASSERT_TRUE(writeFileName.find(targetFileName) != std::string::npos);
+        std::string suffix = ".parquet";
+        if (folly::StringPiece(targetFileName).endsWith(suffix)) {
+          // Remove the .parquet suffix.
+          auto trimmedFilename =
+              targetFileName.substr(0, targetFileName.size() - suffix.size());
+          ASSERT_TRUE(writeFileName.find(trimmedFilename) != std::string::npos);
+        } else {
+          ASSERT_TRUE(writeFileName.find(targetFileName) != std::string::npos);
+        }
       }
     }
     if (!commitContextVector->isNullAt(i)) {
