@@ -66,7 +66,6 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
               .alignment = alignment_,
               .maxCapacity = kMaxMemory,
               .trackUsage = options.trackDefaultUsage,
-              .checkUsageLeak = options.checkUsageLeak,
               .debugEnabled = options.debugEnabled,
               .coreOnAllocationFailureEnabled =
                   options.coreOnAllocationFailureEnabled})} {
@@ -161,7 +160,6 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.alignment = alignment_;
   options.maxCapacity = capacity;
   options.trackUsage = true;
-  options.checkUsageLeak = checkUsageLeak_;
   options.debugEnabled = debugEnabled_;
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
 
@@ -281,6 +279,14 @@ std::vector<std::shared_ptr<MemoryPool>> MemoryManager::getAlivePools() const {
     }
   }
   return pools;
+}
+
+void initializeMemoryManager(const MemoryManagerOptions& options) {
+  MemoryManager::initialize(options);
+}
+
+MemoryManager* memoryManager() {
+  return MemoryManager::getInstance();
 }
 
 MemoryManager& deprecatedDefaultMemoryManager() {

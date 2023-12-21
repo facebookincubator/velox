@@ -401,9 +401,16 @@ TEST_F(MemoryManagerTest, memoryPoolManagement) {
 // effects for other tests using process singleton memory manager. Might need to
 // use folly::Singleton for isolation by tag.
 TEST_F(MemoryManagerTest, globalMemoryManager) {
-  MemoryManager::initialize({});
-  auto* manager = MemoryManager::getInstance();
-  auto* managerII = MemoryManager::getInstance();
+  initializeMemoryManager({});
+  auto* globalManager = memoryManager();
+  ASSERT_TRUE(globalManager != nullptr);
+  VELOX_ASSERT_THROW(initializeMemoryManager({}), "");
+  ASSERT_EQ(memoryManager(), globalManager);
+  MemoryManager::testingSetInstance({});
+  auto* manager = memoryManager();
+  ASSERT_NE(manager, globalManager);
+  ASSERT_EQ(manager, memoryManager());
+  auto* managerII = memoryManager();
   const auto kSharedPoolCount = FLAGS_velox_memory_num_shared_leaf_pools;
   {
     auto& rootI = manager->testingDefaultRoot();
@@ -614,17 +621,6 @@ TEST_F(MemoryManagerTest, quotaEnforcement) {
       pool->free(smallBuffer, testData.smallAllocationBytes);
     }
   }
-}
-
-TEST_F(MemoryManagerTest, testCheckUsageLeak) {
-  FLAGS_velox_memory_leak_check_enabled = true;
-  auto& manager = MemoryManager::testingSetInstance(
-      memory::MemoryManagerOptions{.checkUsageLeak = false});
-
-  auto rootPool = manager.addRootPool("duplicateRootPool", kMaxMemory);
-  auto leafPool = manager.addLeafPool("duplicateLeafPool", true);
-  ASSERT_FALSE(rootPool->testingCheckUsageLeak());
-  ASSERT_FALSE(leafPool->testingCheckUsageLeak());
 }
 
 } // namespace memory
