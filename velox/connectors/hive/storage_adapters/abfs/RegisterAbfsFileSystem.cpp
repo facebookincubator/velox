@@ -25,25 +25,21 @@ namespace facebook::velox::filesystems::abfs {
 #ifdef VELOX_ENABLE_ABFS
 folly::once_flag abfsInitiationFlag;
 
-std::function<std::shared_ptr<
-    FileSystem>(std::shared_ptr<const Config>, std::string_view)>
-abfsFileSystemGenerator() {
-  static auto filesystemGenerator = [](std::shared_ptr<const Config> properties,
-                                       std::string_view filePath) {
-    static std::shared_ptr<FileSystem> filesystem;
-    folly::call_once(abfsInitiationFlag, [&properties]() {
-      filesystem = std::make_shared<AbfsFileSystem>(properties);
-    });
-    return filesystem;
-  };
-  return filesystemGenerator;
+std::shared_ptr<FileSystem> abfsFileSystemGenerator(
+    std::shared_ptr<const Config> properties,
+    std::string_view filePath) {
+  static std::shared_ptr<FileSystem> filesystem;
+  folly::call_once(abfsInitiationFlag, [&properties]() {
+    filesystem = std::make_shared<AbfsFileSystem>(properties);
+  });
+  return filesystem;
 }
 #endif
 
 void registerAbfsFileSystem() {
 #ifdef VELOX_ENABLE_ABFS
   LOG(INFO) << "Register ABFS";
-  registerFileSystem(isAbfsFile, abfsFileSystemGenerator());
+  registerFileSystem(isAbfsFile, std::function(abfsFileSystemGenerator));
 #endif
 }
 
