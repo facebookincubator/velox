@@ -63,28 +63,30 @@ std::string ArbitraryBuffer::toString() const {
       hasNoMoreData());
 }
 
-void DestinationBufferStats::recordEnqueue(const SerializedPage& data) {
+void DestinationBuffer::Stats::recordEnqueue(const SerializedPage& data) {
   const auto numRows = data.numRows();
   VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
-  const int64_t size = data.size();
-  bytesBuffered += size;
+  bytesBuffered += data.size();
   rowsBuffered += numRows.value();
-  pagesBuffered++;
+  ++pagesBuffered;
 }
 
-void DestinationBufferStats::recordAcknowledge(const SerializedPage& data) {
+void DestinationBuffer::Stats::recordAcknowledge(const SerializedPage& data) {
   const auto numRows = data.numRows();
   VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
   const int64_t size = data.size();
   bytesBuffered -= size;
+  VELOX_DCHECK_GE(bytesBuffered, 0, "bytesBuffered must be non-negative");
   rowsBuffered -= numRows.value();
-  pagesBuffered--;
+  VELOX_DCHECK_GE(rowsBuffered, 0, "rowsBuffered must be non-negative");
+  --pagesBuffered;
+  VELOX_DCHECK_GE(pagesBuffered, 0, "pagesBuffered must be non-negative");
   bytesSent += size;
   rowsSent += numRows.value();
-  pagesSent++;
+  ++pagesSent;
 }
 
-void DestinationBufferStats::recordDelete(const SerializedPage& data) {
+void DestinationBuffer::Stats::recordDelete(const SerializedPage& data) {
   recordAcknowledge(data);
 }
 
@@ -159,6 +161,12 @@ DataAvailable DestinationBuffer::getAndClearNotify() {
   return result;
 }
 
+void DestinationBuffer::finish() {
+  VELOX_CHECK_NULL(notify_, "notify must be cleared before finish");
+  VELOX_CHECK(data_.empty(), "data must be fetched before finish");
+  stats_.finished = true;
+}
+
 void DestinationBuffer::maybeLoadData(ArbitraryBuffer* buffer) {
   VELOX_CHECK(!buffer->empty() || buffer->hasNoMoreData());
   if (notify_ == nullptr) {
@@ -227,7 +235,7 @@ DestinationBuffer::deleteResults() {
   return freed;
 }
 
-DestinationBufferStats DestinationBuffer::stats() const {
+DestinationBuffer::Stats DestinationBuffer::stats() const {
   return stats_;
 }
 
@@ -592,10 +600,10 @@ bool OutputBuffer::deleteResults(int destination) {
     }
     freed = buffer->deleteResults();
     dataAvailable = buffer->getAndClearNotify();
+    buffer->finish();
     VELOX_CHECK_LT(destination, finishedBufferStats_.size());
     finishedBufferStats_[destination] = buffers_[destination]->stats();
     buffers_[destination] = nullptr;
-    finishedBufferStats_[destination].finished = true;
     ++numFinalAcknowledges_;
     isFinished = isFinishedLocked();
     updateAfterAcknowledgeLocked(freed, promises);
@@ -690,9 +698,9 @@ bool OutputBuffer::isOverutilized() const {
   return (totalSize_ > (0.5 * maxSize_)) && !atEnd_;
 }
 
-OutputBufferStats OutputBuffer::stats() {
+OutputBuffer::Stats OutputBuffer::stats() {
   std::lock_guard<std::mutex> l(mutex_);
-  std::vector<DestinationBufferStats> bufferStats;
+  std::vector<DestinationBuffer::Stats> bufferStats;
   VELOX_CHECK_EQ(buffers_.size(), finishedBufferStats_.size());
   bufferStats.resize(buffers_.size());
   for (auto i = 0; i < buffers_.size(); ++i) {
@@ -703,9 +711,8 @@ OutputBufferStats OutputBuffer::stats() {
       bufferStats[i] = finishedBufferStats_[i];
     }
   }
-  OutputBufferStats stats(
+  return OutputBuffer::Stats(
       kind_, noMoreBuffers_, atEnd_, isFinishedLocked(), bufferStats);
-  return stats;
 }
 
 } // namespace facebook::velox::exec
