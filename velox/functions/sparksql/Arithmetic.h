@@ -279,7 +279,7 @@ struct Atan2Function {
     // The sign (+/-) for 0.0 matters because it could make atan2 output
     // different results. For example:
 
-    // * std::atan2(0.0, -0.0) = 0
+    // * std::atan2(0.0, 0.0) = 0
     // * std::atan2(0.0, -0.0) = 3.1415926535897931
     // * std::atan2(-0.0, -0.0) = -3.1415926535897931
     // * std::atan2(0.0, -0.0) = 0
