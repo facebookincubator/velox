@@ -76,7 +76,6 @@ class ArbitraryBuffer {
 
 class DestinationBuffer {
  public:
-
   /// The data transferred by the destination buffer has two phases:
   /// 1. Buffered: the data resides in the buffer after enqueued and before
   ///              acked / deleted.
@@ -165,7 +164,6 @@ class Task;
 
 class OutputBuffer {
  public:
-
   struct Stats {
     Stats(
         core::PartitionedOutputNode::Kind _kind,
