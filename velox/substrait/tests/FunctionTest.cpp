@@ -19,16 +19,10 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 
+#include "velox/core/QueryCtx.h"
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/substrait/TypeUtils.h"
 #include "velox/substrait/VariantToVectorConverter.h"
-
-#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-#include "velox/core/QueryCtx.h"
-#else
-#include "velox/common/base/Fs.h"
-#include "velox/substrait/VeloxToSubstraitType.h"
-#endif
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -37,11 +31,15 @@ namespace vestrait = facebook::velox::substrait;
 
 class FunctionTest : public ::testing::Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   std::shared_ptr<core::QueryCtx> queryCtx_ =
       std::make_shared<core::QueryCtx>();
 
   std::shared_ptr<memory::MemoryPool> pool_ =
-      memory::addDefaultLeafMemoryPool();
+      memory::memoryManager()->addLeafPool();
 
   std::shared_ptr<vestrait::SubstraitParser> substraitParser_ =
       std::make_shared<vestrait::SubstraitParser>();

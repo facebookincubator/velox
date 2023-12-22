@@ -85,8 +85,7 @@ RowTypePtr getAggregationOutputType(
   std::vector<TypePtr> types;
 
   for (auto& key : groupingKeys) {
-    auto field =
-        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(key);
+    auto field = TypedExprs::asFieldAccess(key);
     VELOX_CHECK(field, "Grouping key must be a field reference");
     names.push_back(field->name());
     types.push_back(field->type());
@@ -203,12 +202,9 @@ void addKeys(std::stringstream& stream, const std::vector<TypedExprPtr>& keys) {
   for (auto i = 0; i < keys.size(); ++i) {
     const auto& expr = keys[i];
     appendComma(i, stream);
-    if (auto field =
-            std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr)) {
+    if (auto field = TypedExprs::asFieldAccess(expr)) {
       stream << field->name();
-    } else if (
-        auto constant =
-            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr)) {
+    } else if (auto constant = TypedExprs::asConstant(expr)) {
       stream << constant->toString();
     } else {
       stream << expr->toString();
@@ -493,12 +489,9 @@ ExpandNode::ExpandNode(
 
   for (const auto& rowProjection : projections_) {
     for (const auto& columnProjection : rowProjection) {
-      auto field = std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
-          columnProjection);
-      auto constant = std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
-          columnProjection);
       VELOX_USER_CHECK(
-          field || constant,
+          TypedExprs::isFieldAccess(columnProjection) ||
+              TypedExprs::isConstant(columnProjection),
           "Unsupported projection expression in Expand plan node. Expected field reference or constant. Got: {} ",
           columnProjection->toString());
     }
@@ -1345,6 +1338,21 @@ WindowNode::WindowNode(
         keyNames.insert(key->name()).second,
         "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: {}",
         key->name());
+  }
+
+  for (const auto& windowFunction : windowFunctions_) {
+    if (windowFunction.frame.type == WindowType::kRange) {
+      if (windowFunction.frame.startValue || windowFunction.frame.endValue) {
+        // This is RANGE frame with a k limit bound like
+        // RANGE BETWEEN 5 PRECEDING AND CURRENT ROW.
+        // Such frames require that the ORDER BY have a single sorting key
+        // for comparison.
+        VELOX_USER_CHECK_EQ(
+            sortingKeys_.size(),
+            1,
+            "Window frame of type RANGE PRECEDING or FOLLOWING requires single sorting key in ORDER BY.");
+      }
+    }
   }
 }
 

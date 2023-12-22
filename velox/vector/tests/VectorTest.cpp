@@ -104,6 +104,10 @@ int NonPOD::alive = 0;
 
 class VectorTest : public testing::Test, public test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
@@ -1470,6 +1474,20 @@ TEST_F(VectorTest, wrapInConstant) {
   for (auto i = 0; i < size; i++) {
     ASSERT_TRUE(constArrayVector->isNullAt(i));
   }
+
+  // Wrap a loaded lazy complex vector that will be retained as a valueVector.
+  // Ensure the lazy layer is stripped away and the valueVector points to the
+  // loaded Vector underneath it.
+  auto lazyOverArray = std::make_shared<LazyVector>(
+      pool(),
+      arrayVector->type(),
+      size,
+      std::make_unique<TestingLoader>(arrayVector));
+  lazyOverArray->loadedVector();
+  EXPECT_TRUE(lazyOverArray->isLoaded());
+  constArrayVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
+      BaseVector::wrapInConstant(size, 22, lazyOverArray));
+  EXPECT_FALSE(constArrayVector->valueVector()->isLazy());
 }
 
 TEST_F(VectorTest, wrapInConstantWithCopy) {
@@ -2242,6 +2260,23 @@ TEST_F(VectorTest, nestedLazy) {
   EXPECT_TRUE(lazy->isLoaded());
 }
 
+TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
+  // Ensure the lazy layer is stripped away and the dictionaryValues vector
+  // points to the loaded Vector underneath it.
+  vector_size_t size = 10;
+  auto lazy = std::make_shared<LazyVector>(
+      pool(),
+      INTEGER(),
+      size,
+      std::make_unique<TestingLoader>(
+          makeFlatVector<int64_t>(size, [](auto row) { return row; })));
+  lazy->loadedVector();
+  EXPECT_TRUE(lazy->isLoaded());
+  auto dict = wrapInDictionary(makeIndices(size, folly::identity), size, lazy);
+  auto valuesVector = dict->valueVector();
+  EXPECT_FALSE(valuesVector->isLazy());
+}
+
 TEST_F(VectorTest, dictionaryResize) {
   vector_size_t size = 10;
   std::vector<int64_t> elements{0, 1, 2, 3, 4};
@@ -2576,7 +2611,7 @@ TEST_F(VectorTest, mapSliceMutability) {
 TEST_F(VectorTest, lifetime) {
   ASSERT_DEATH(
       {
-        auto childPool = memory::addDefaultLeafMemoryPool();
+        auto childPool = memory::memoryManager()->addLeafPool();
         auto v = BaseVector::create(INTEGER(), 10, childPool.get());
 
         // BUG: Memory pool needs to stay alive until all memory allocated from
@@ -3515,6 +3550,81 @@ TEST_F(VectorTest, flatAllNulls) {
       }
     }
   }
+}
+
+TEST_F(VectorTest, hashAll) {
+  auto data = makeFlatVector<int32_t>({1, 2, 3});
+  ASSERT_TRUE(data->getNullCount().has_value());
+
+  auto hashes = data->hashAll();
+
+  // Make a similar vector, but without stats, e.g. nullCount unset.
+  auto copy = std::make_shared<FlatVector<int32_t>>(
+      pool(), INTEGER(), nullptr, 3, data->values(), std::vector<BufferPtr>{});
+  ASSERT_FALSE(copy->getNullCount().has_value());
+
+  auto hashesCopy = copy->hashAll();
+
+  for (auto i = 0; i < 3; ++i) {
+    ASSERT_EQ(hashes->valueAt(i), hashesCopy->valueAt(i));
+  }
+}
+
+TEST_F(VectorTest, setType) {
+  auto test = [&](auto& type, auto& newType, auto& invalidNewType) {
+    auto vector = BaseVector::create(type, 1'000, pool());
+
+    vector->setType(newType);
+    EXPECT_EQ(vector->type()->toString(), newType->toString());
+
+    VELOX_ASSERT_RUNTIME_THROW(
+        vector->setType(invalidNewType),
+        fmt::format(
+            "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
+            newType->toString(),
+            invalidNewType->toString()));
+  };
+
+  // ROW
+  auto type = ROW({"aa"}, {BIGINT()});
+  auto newType = ROW({"bb"}, {BIGINT()});
+  auto invalidNewType = ROW({"bb"}, {VARCHAR()});
+  test(type, newType, invalidNewType);
+
+  // ROW(ROW)
+  type = ROW({"a", "b"}, {ROW({"c", "d"}, {BIGINT(), BIGINT()}), BIGINT()});
+  newType =
+      ROW({"a", "b"}, {ROW({"cc", "dd"}, {BIGINT(), BIGINT()}), BIGINT()});
+  invalidNewType =
+      ROW({"a", "b"}, {ROW({"cc", "dd"}, {VARCHAR(), BIGINT()}), BIGINT()});
+  test(type, newType, invalidNewType);
+
+  // ARRAY(ROW)
+  type =
+      ROW({"a", "b"}, {ARRAY(ROW({"c", "d"}, {BIGINT(), BIGINT()})), BIGINT()});
+  newType = ROW(
+      {"a", "b"}, {ARRAY(ROW({"cc", "dd"}, {BIGINT(), BIGINT()})), BIGINT()});
+  invalidNewType = ROW(
+      {"a", "b"}, {ARRAY(ROW({"cc", "dd"}, {VARCHAR(), BIGINT()})), BIGINT()});
+  test(type, newType, invalidNewType);
+
+  // MAP(ROW)
+  type =
+      ROW({"a", "b"},
+          {MAP(ROW({"c", "d"}, {BIGINT(), BIGINT()}),
+               ROW({"e", "f"}, {BIGINT(), BIGINT()})),
+           BIGINT()});
+  newType =
+      ROW({"a", "b"},
+          {MAP(ROW({"cc", "dd"}, {BIGINT(), BIGINT()}),
+               ROW({"ee", "ff"}, {BIGINT(), BIGINT()})),
+           BIGINT()});
+  invalidNewType =
+      ROW({"a", "b"},
+          {MAP(ROW({"cc", "dd"}, {VARCHAR(), BIGINT()}),
+               ROW({"ee", "ff"}, {VARCHAR(), BIGINT()})),
+           BIGINT()});
+  test(type, newType, invalidNewType);
 }
 
 } // namespace

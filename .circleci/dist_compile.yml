@@ -259,7 +259,7 @@ jobs:
       - run:
           name: "Run Unit Tests"
           command: |
-            cd _build/debug && ctest -j 16 -VV --output-on-failure
+            cd _build/debug && ctest -j 16 -VV --output-on-failure --no-tests=error
           no_output_timeout: 1h
       - store_test_results:
           path: /tmp/test_xml_output/
@@ -302,6 +302,7 @@ jobs:
                 --velox_fuzzer_enable_expression_reuse \
                 --max_expression_trees_per_step 2 \
                 --retry_with_try \
+                --enable_dereference \
                 --logtostderr=1 \
                 --minloglevel=0 \
                 --repro_persist_path=/tmp/spark_fuzzer_repro \
@@ -314,7 +315,7 @@ jobs:
           command: |
             mkdir -p /tmp/spark_aggregate_fuzzer_repro/
             chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
-            _build/debug/velox/exec/tests/spark_aggregation_fuzzer_test \
+            _build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec 60 \
                 --logtostderr=1 \
@@ -331,7 +332,7 @@ jobs:
             mkdir -p /tmp/aggregate_fuzzer_repro/
             rm -rfv /tmp/aggregate_fuzzer_repro/*
             chmod -R 777 /tmp/aggregate_fuzzer_repro
-            _build/debug/velox/exec/tests/velox_aggregation_fuzzer_test \
+            _build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec 1800 \
                 --logtostderr=1 \
@@ -360,7 +361,7 @@ jobs:
       - run:
           name: "Run Unit Tests"
           command: |
-            cd _build/release && ctest -j 16 -VV --output-on-failure
+            cd _build/release && ctest -j 16 -VV --output-on-failure --no-tests=error
           no_output_timeout: 1h
       - post-steps
 
@@ -446,12 +447,12 @@ jobs:
             export HADOOP_HOME='/usr/local/hadoop'
             export PATH=~/adapter-deps/install/bin:/usr/local/hadoop/bin:${PATH}
             # The following is used to install Azurite in the CI for running Abfs Hive Connector unit tests.
-            # Azurite is an emulator for local Azure Storage development, and it is a required component for running Abfs Hive Connector unit tests. 
+            # Azurite is an emulator for local Azure Storage development, and it is a required component for running Abfs Hive Connector unit tests.
             # It can be installed using npm. The following is used to install Node.js and npm for Azurite installation.
             curl -sL https://rpm.nodesource.com/setup_10.x | bash -
             yum install -y nodejs
             npm install -g azurite
-            cd _build/release && ctest -j 16 -VV --output-on-failure
+            cd _build/release && ctest -j 16 -VV --output-on-failure --no-tests=error
           no_output_timeout: 1h
       - post-steps
 
@@ -502,7 +503,7 @@ jobs:
           fuzzer_output: "/tmp/spark_aggregate_fuzzer.log"
           fuzzer_repro: "/tmp/spark_aggregate_fuzzer_repro"
           fuzzer_name: "SparkAggregate"
-          fuzzer_exe: "_build/debug/velox/exec/tests/spark_aggregation_fuzzer_test"
+          fuzzer_exe: "_build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test"
           fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \
           --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro"
 
@@ -517,7 +518,7 @@ jobs:
           fuzzer_output: "/tmp/aggregate_fuzzer.log"
           fuzzer_repro: "/tmp/aggregate_fuzzer_repro"
           fuzzer_name: "Aggregate"
-          fuzzer_exe: "_build/debug/velox/exec/tests/velox_aggregation_fuzzer_test"
+          fuzzer_exe: "_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test"
           fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \
           --repro_persist_path=/tmp/aggregate_fuzzer_repro"
 
@@ -643,8 +644,11 @@ jobs:
             pip install deepdiff
             python ./scripts/signature.py export --presto presto_pr_signatures.json
             python ./scripts/signature.py export --spark spark_pr_signatures.json
-            python ./scripts/signature.py bias presto_merge_base_signatures.json presto_pr_signatures.json /tmp/presto_bias_functions
-            python ./scripts/signature.py bias spark_merge_base_signatures.json spark_pr_signatures.json /tmp/spark_bias_functions
+            if python ./scripts/signature.py bias presto_merge_base_signatures.json presto_pr_signatures.json /tmp/presto_bias_functions ; \
+            then echo "Presto signature check success" ; else echo "Presto signature check failed" > /tmp/presto-signature-error-code ; fi
+            if python ./scripts/signature.py bias spark_merge_base_signatures.json spark_pr_signatures.json /tmp/spark_bias_functions ; \
+            then echo "Spark signature check success"; else echo "Spark signature check failed" > /tmp/spark-signature-error-code ; fi
+
       - store_artifacts:
           path: 'presto_merge_base_signatures.json'
       - store_artifacts:
@@ -676,8 +680,13 @@ jobs:
           fuzzer_name: "Spark Bias Run"
           fuzzer_exe: "if [ -f /tmp/spark_bias_functions ];  then _build/debug/velox/expression/tests/spark_expression_fuzzer_test"
           fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \
-          --assign_function_tickets  $(cat /tmp/spark_bias_functions) \
-          --repro_persist_path=/tmp/spark_fuzzer_repro ; fi"
+                --assign_function_tickets  $(cat /tmp/spark_bias_functions) \
+                --repro_persist_path=/tmp/spark_fuzzer_repro ; fi"
+
+      - run:
+          name: "Surface only Presto function signature errors if any"
+          command: |
+              if [ -f /tmp/presto-signature-error-code ]; then return 1 ; fi
 
 
 workflows:

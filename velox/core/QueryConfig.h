@@ -156,6 +156,9 @@ class QueryConfig {
   static constexpr const char* kMaxPartitionedOutputBufferSize =
       "max_page_partitioning_buffer_size";
 
+  static constexpr const char* kMaxArbitraryBufferSize =
+      "max_arbitrary_buffer_size";
+
   /// Preferred size of batches in bytes to be returned by operators from
   /// Operator::getOutput. It is used when an estimate of average row size is
   /// known. Otherwise kPreferredOutputBatchRows is used.
@@ -234,6 +237,13 @@ class QueryConfig {
   static constexpr const char* kOrderBySpillMemoryThreshold =
       "order_by_spill_memory_threshold";
 
+  /// The max row numbers to fill and spill for each spill run. This is used to
+  /// cap the memory used for spilling. If it is zero, then there is no limit
+  /// and spilling might run out of memory.
+  /// Based on offline test results, the default value is set to 12 million rows
+  /// which uses ~128MB memory when to fill a spill run.
+  static constexpr const char* kMaxSpillRunRows = "max_spill_run_rows";
+
   static constexpr const char* kTestingSpillPct = "testing.spill_pct";
 
   /// The max allowed spilling level with zero being the initial spilling level.
@@ -267,6 +277,12 @@ class QueryConfig {
   static constexpr const char* kSpillWriteBufferSize =
       "spill_write_buffer_size";
 
+  /// Config used to create spill files. This config is provided to underlying
+  /// file system and the config is free form. The form should be defined by the
+  /// underlying file system.
+  static constexpr const char* kSpillFileCreateConfig =
+      "spill_file_create_config";
+
   static constexpr const char* kSpillStartPartitionBit =
       "spiller_start_partition_bit";
 
@@ -296,11 +312,11 @@ class QueryConfig {
   static constexpr const char* kSparkBloomFilterExpectedNumItems =
       "spark.bloom_filter.expected_num_items";
 
-  // The default number of bits to use for the bloom filter.
+  /// The default number of bits to use for the bloom filter.
   static constexpr const char* kSparkBloomFilterNumBits =
       "spark.bloom_filter.num_bits";
 
-  // The max number of bits to use for the bloom filter.
+  /// The max number of bits to use for the bloom filter.
   static constexpr const char* kSparkBloomFilterMaxNumBits =
       "spark.bloom_filter.max_num_bits";
 
@@ -337,6 +353,16 @@ class QueryConfig {
   /// disable the caches.
   static constexpr const char* kEnableExpressionEvaluationCache =
       "enable_expression_evaluation_cache";
+
+  /// Maximum number of splits to preload. Set to 0 to disable preloading.
+  static constexpr const char* kMaxSplitPreloadPerDriver =
+      "max_split_preload_per_driver";
+
+  /// If not zero, specifies the cpu time slice limit in ms that a driver thread
+  /// can continuously run without yielding. If it is zero, then there is no
+  /// limit.
+  static constexpr const char* kDriverCpuTimeSliceLimitMs =
+      "driver_cpu_time_slice_limit_ms";
 
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
@@ -384,13 +410,29 @@ class QueryConfig {
     return get<uint64_t>(kOrderBySpillMemoryThreshold, kDefault);
   }
 
-  // Returns the target size for a Task's buffered output. The
-  // producer Drivers are blocked when the buffered size exceeds
-  // this. The Drivers are resumed when the buffered size goes below
-  // OutputBufferManager::kContinuePct % of this.
+  uint64_t maxSpillRunRows() const {
+    static constexpr uint64_t kDefault = 12 * 1024 * 1024;
+    return get<uint64_t>(kMaxSpillRunRows, kDefault);
+  }
+
+  /// Returns the maximum size in bytes for the task's buffered output when
+  /// output is partitioned using hash of partitioning keys. See
+  /// PartitionedOutputNode::Kind::kPartitioned.
+  ///
+  /// The producer Drivers are blocked when the buffered size exceeds
+  /// this. The Drivers are resumed when the buffered size goes below
+  /// OutputBufferManager::kContinuePct % of this.
   uint64_t maxPartitionedOutputBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxPartitionedOutputBufferSize, kDefault);
+  }
+
+  /// Returns the maximum size in bytes for the task's buffered output when
+  /// output is distributed randomly among consumers. See
+  /// PartitionedOutputNode::Kind::kArbitrary.
+  uint64_t maxArbitraryBufferSize() const {
+    static constexpr uint64_t kDefault = 32UL << 20;
+    return get<uint64_t>(kMaxArbitraryBufferSize, kDefault);
   }
 
   uint64_t maxLocalExchangeBufferSize() const {
@@ -584,6 +626,10 @@ class QueryConfig {
     return get<uint64_t>(kSpillWriteBufferSize, 1L << 20);
   }
 
+  std::string spillFileCreateConfig() const {
+    return get<std::string>(kSpillFileCreateConfig, "");
+  }
+
   /// Returns the minimal available spillable memory reservation in percentage
   /// of the current memory usage. Suppose the current memory usage size of M,
   /// available memory reservation size of N and min reservation percentage of
@@ -668,6 +714,14 @@ class QueryConfig {
 
   bool isExpressionEvaluationCacheEnabled() const {
     return get<bool>(kEnableExpressionEvaluationCache, true);
+  }
+
+  int32_t maxSplitPreloadPerDriver() const {
+    return get<int32_t>(kMaxSplitPreloadPerDriver, 2);
+  }
+
+  uint32_t driverCpuTimeSliceLimitMs() const {
+    return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 0);
   }
 
   template <typename T>

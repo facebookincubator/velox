@@ -350,6 +350,9 @@ TEST_F(BinTest, bin) {
       bin(std::numeric_limits<int64_t>::max()),
       "111111111111111111111111111111111111111111111111111111111111111");
   EXPECT_EQ(bin(0), "0");
+  auto result = evaluateOnce<std::string, int64_t>(
+      "bin(row_constructor(c0).c1)", {13}, {BIGINT()});
+  EXPECT_EQ(result, "1101");
 }
 
 TEST_F(ArithmeticTest, hypot) {
@@ -374,6 +377,21 @@ TEST_F(ArithmeticTest, cot) {
   EXPECT_EQ(cot(1), 1 / std::tan(1));
   EXPECT_EQ(cot(-1), 1 / std::tan(-1));
   EXPECT_EQ(cot(0), 1 / std::tan(0));
+}
+
+TEST_F(ArithmeticTest, atan2) {
+  const auto atan2 = [&](std::optional<double> y, std::optional<double> x) {
+    return evaluateOnce<double>("atan2(c0, c1)", y, x);
+  };
+
+  EXPECT_EQ(atan2(0.0, 0.0), 0.0);
+  EXPECT_EQ(atan2(-0.0, -0.0), 0.0);
+  EXPECT_EQ(atan2(0.0, -0.0), 0.0);
+  EXPECT_EQ(atan2(-0.0, 0.0), 0.0);
+  EXPECT_EQ(atan2(-1.0, 1.0), std::atan2(-1.0, 1.0));
+  EXPECT_EQ(atan2(1.0, 1.0), std::atan2(1.0, 1.0));
+  EXPECT_EQ(atan2(1.0, -1.0), std::atan2(1.0, -1.0));
+  EXPECT_EQ(atan2(-1.0, -1.0), std::atan2(-1.0, -1.0));
 }
 
 class LogNTest : public SparkFunctionBaseTest {

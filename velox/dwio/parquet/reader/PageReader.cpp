@@ -669,8 +669,7 @@ void PageReader::makeDecoder() {
       switch (parquetType) {
         case thrift::Type::INT32:
         case thrift::Type::INT64:
-          deltaBpDecoder_ = std::make_unique<DeltaBpDecoder>(
-              pageData_, pageData_ + encodedDataSize_);
+          deltaBpDecoder_ = std::make_unique<DeltaBpDecoder>(pageData_);
           break;
         default:
           VELOX_UNSUPPORTED(

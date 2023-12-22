@@ -28,36 +28,27 @@ BlockingReason Destination::advance(
     OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     bool* atEnd,
-    ContinueFuture* future) {
-  if (rangeIdx_ >= ranges_.size()) {
+    ContinueFuture* future,
+    Scratch& scratch) {
+  if (rowIdx_ >= rows_.size()) {
     *atEnd = true;
     return BlockingReason::kNotBlocked;
   }
 
+  const auto firstRow = rowIdx_;
   const uint32_t adjustedMaxBytes = (maxBytes * targetSizePct_) / 100;
   if (bytesInCurrent_ >= adjustedMaxBytes) {
     return flush(bufferManager, bufferReleaseFn, future);
   }
 
-  // Collect ranges to serialize.
-  rangesToSerialize_.clear();
+  // Collect rows to serialize.
   bool shouldFlush = false;
-  while (rangeIdx_ < ranges_.size() && !shouldFlush) {
-    auto& currRange = ranges_[rangeIdx_];
-    auto startRow = rowsInCurrentRange_;
-    for (; rowsInCurrentRange_ < currRange.size && !shouldFlush;
-         rowsInCurrentRange_++) {
-      ++rowsInCurrent_;
-      bytesInCurrent_ += sizes[currRange.begin + rowsInCurrentRange_];
-      shouldFlush = bytesInCurrent_ >= adjustedMaxBytes ||
-          rowsInCurrent_ >= targetNumRows_;
-    }
-    rangesToSerialize_.push_back(
-        {currRange.begin + startRow, rowsInCurrentRange_ - startRow});
-    if (rowsInCurrentRange_ == currRange.size) {
-      rowsInCurrentRange_ = 0;
-      rangeIdx_++;
-    }
+  while (rowIdx_ < rows_.size() && !shouldFlush) {
+    bytesInCurrent_ += sizes[rowIdx_];
+    ++rowIdx_;
+    ++rowsInCurrent_;
+    shouldFlush =
+        bytesInCurrent_ >= adjustedMaxBytes || rowsInCurrent_ >= targetNumRows_;
   }
 
   // Serialize
@@ -67,9 +58,9 @@ BlockingReason Destination::advance(
     current_->createStreamTree(rowType, rowsInCurrent_);
   }
   current_->append(
-      output, folly::Range(&rangesToSerialize_[0], rangesToSerialize_.size()));
+      output, folly::Range(&rows_[firstRow], rowIdx_ - firstRow), scratch);
   // Update output state variable.
-  if (rangeIdx_ == ranges_.size()) {
+  if (rowIdx_ == rows_.size()) {
     *atEnd = true;
   }
   if (shouldFlush || (eagerFlush_ && rowsInCurrent_ > 0)) {
@@ -93,8 +84,13 @@ BlockingReason Destination::flush(
       *current_->pool(),
       listener.get(),
       std::max<int64_t>(kMinMessageSize, current_->size()));
+  const int64_t flushedRows = rowsInCurrent_;
+
   current_->flush(&stream);
   current_.reset();
+
+  const int64_t flushedBytes = stream.tellp();
+
   bytesInCurrent_ = 0;
   rowsInCurrent_ = 0;
   setTargetSizePct();
@@ -102,8 +98,12 @@ BlockingReason Destination::flush(
   bool blocked = bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(stream.getIOBuf(bufferReleaseFn)),
+      std::make_unique<SerializedPage>(
+          stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
       future);
+
+  recordEnqueued_(flushedBytes, flushedRows);
+
   return blocked ? BlockingReason::kWaitForConsumer
                  : BlockingReason::kNotBlocked;
 }
@@ -182,19 +182,17 @@ void PartitionedOutput::initializeDestinations() {
     auto taskId = operatorCtx_->taskId();
     for (int i = 0; i < numDestinations_; ++i) {
       destinations_.push_back(std::make_unique<detail::Destination>(
-          taskId, i, pool(), eagerFlush_));
+          taskId, i, pool(), eagerFlush_, [&](uint64_t bytes, uint64_t rows) {
+            auto lockedStats = stats_.wlock();
+            lockedStats->addOutputVector(bytes, rows);
+          }));
     }
   }
 }
 
 void PartitionedOutput::initializeSizeBuffers() {
   auto numInput = input_->size();
-  if (numInput > topLevelRanges_.size()) {
-    vector_size_t numOld = topLevelRanges_.size();
-    topLevelRanges_.resize(numInput);
-    for (auto i = numOld; i < numInput; ++i) {
-      topLevelRanges_[i] = IndexRange{i, 1};
-    }
+  if (numInput > rowSize_.size()) {
     rowSize_.resize(numInput);
     sizePointers_.resize(numInput);
     // Set all the size pointers since 'rowSize_' may have been reallocated.
@@ -207,21 +205,18 @@ void PartitionedOutput::initializeSizeBuffers() {
 void PartitionedOutput::estimateRowSizes() {
   auto numInput = input_->size();
   std::fill(rowSize_.begin(), rowSize_.end(), 0);
+  raw_vector<vector_size_t> storage;
+  auto numbers = iota(numInput, storage);
   for (int i = 0; i < output_->childrenSize(); ++i) {
     VectorStreamGroup::estimateSerializedSize(
         output_->childAt(i),
-        folly::Range(topLevelRanges_.data(), numInput),
-        sizePointers_.data());
+        folly::Range(numbers, numInput),
+        sizePointers_.data(),
+        scratch_);
   }
 }
 
 void PartitionedOutput::addInput(RowVectorPtr input) {
-  // TODO Report outputBytes as bytes after serialization
-  {
-    auto lockedStats = stats_.wlock();
-    lockedStats->addOutputVector(input->estimateFlatSize(), input->size());
-  }
-
   initializeInput(std::move(input));
 
   initializeDestinations();
@@ -288,6 +283,9 @@ void PartitionedOutput::collectNullRows() {
   decodedVectors_.resize(keyChannels_.size());
 
   for (auto i : keyChannels_) {
+    if (i == kConstantChannel) {
+      continue;
+    }
     auto& keyVector = input_->childAt(i);
     if (keyVector->mayHaveNulls()) {
       decodedVectors_[i].decode(*keyVector, rows_);
@@ -329,7 +327,8 @@ RowVectorPtr PartitionedOutput::getOutput() {
           *bufferManager,
           bufferReleaseFn_,
           &atEnd,
-          &future_);
+          &future_,
+          scratch_);
       if (blockingReason_ != BlockingReason::kNotBlocked) {
         blockedDestination = destination.get();
         workLeft = false;

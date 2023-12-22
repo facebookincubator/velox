@@ -148,15 +148,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// memory pools from the same root memory pool independently.
     bool threadSafe{true};
 
-    /// TODO: deprecate this flag after all the existing memory leak use cases
-    /// have been fixed.
-    ///
-    /// If true, checks the memory usage leak on destruction.
-    ///
-    /// NOTE: user can turn on/off the memory leak check of each individual
-    /// memory pools from the same root memory pool independently.
-    bool checkUsageLeak{FLAGS_velox_memory_leak_check_enabled};
-
     /// If true, tracks the allocation and free call stacks to detect the source
     /// of memory leak for testing purpose.
     bool debugEnabled{FLAGS_velox_memory_pool_debug_enabled};
@@ -210,12 +201,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// leaf memory pool with memory usage tracking enabled.
   virtual bool threadSafe() const {
     return threadSafe_;
-  }
-
-  /// Returns true if this memory pool checks memory leak on destruction.
-  /// Used only for test purposes.
-  virtual bool testingCheckUsageLeak() const {
-    return checkUsageLeak_;
   }
 
   /// Invoked to traverse the memory pool subtree rooted at this, and calls
@@ -435,6 +420,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   struct Stats {
     /// The current memory usage.
     uint64_t currentBytes{0};
+    /// The current reserved memory.
+    uint64_t reservedBytes{0};
     /// The peak memory usage.
     uint64_t peakBytes{0};
     /// The accumulative memory usage.
@@ -466,11 +453,11 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
     std::string toString() const;
 
-    /// Returns true if the current bytes is zero.
+    /// Returns true if the current and reserved bytes are zero.
     /// Note that peak or cumulative bytes might be non-zero and we are still
     /// empty at this moment.
     bool empty() const {
-      return currentBytes == 0;
+      return currentBytes == 0 && reservedBytes == 0;
     }
   };
 
@@ -529,7 +516,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const int64_t maxCapacity_;
   const bool trackUsage_;
   const bool threadSafe_;
-  const bool checkUsageLeak_;
   const bool debugEnabled_;
   const bool coreOnAllocationFailureEnabled_;
 

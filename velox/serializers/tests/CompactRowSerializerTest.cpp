@@ -24,8 +24,12 @@ namespace {
 class CompactRowSerializerTest : public ::testing::Test,
                                  public test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
-    pool_ = memory::addDefaultLeafMemoryPool();
+    pool_ = memory::memoryManager()->addLeafPool();
     serde_ = std::make_unique<serializer::CompactRowVectorSerde>();
   }
 
@@ -41,7 +45,8 @@ class CompactRowSerializerTest : public ::testing::Test,
     auto rowType = asRowType(rowVector->type());
     auto serializer = serde_->createSerializer(rowType, numRows, arena.get());
 
-    serializer->append(rowVector, folly::Range(rows.data(), numRows));
+    Scratch scratch;
+    serializer->append(rowVector, folly::Range(rows.data(), numRows), scratch);
     auto size = serializer->maxSerializedSize();
     OStreamOutputStream out(output);
     serializer->flush(&out);

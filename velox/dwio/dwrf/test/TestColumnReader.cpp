@@ -159,7 +159,8 @@ class ColumnReaderTestBase {
           fileTypeWithId,
           streams_,
           labels_,
-          executor_.get());
+          executor_.get(),
+          parallelDecoding() ? 2 : 0);
       selectiveColumnReader_ = nullptr;
     }
   }
@@ -251,6 +252,10 @@ class StringReaderTests
     : public ::testing::TestWithParam<StringReaderTestParams>,
       public ColumnReaderTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   StringReaderTests()
       : useSelectiveReader_{GetParam().useSelectiveReader},
         returnFlatVector_{GetParam().returnFlatVector},
@@ -306,6 +311,10 @@ struct ReaderTestParams {
 class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
                          public ColumnReaderTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   TestColumnReader()
       : useSelectiveReader_{GetParam().useSelectiveReader},
         expectMemoryReuse_{GetParam().expectMemoryReuse},
@@ -363,6 +372,10 @@ class TestNonSelectiveColumnReader
     : public testing::TestWithParam<NonSelectiveReaderTestParams>,
       public ColumnReaderTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   TestNonSelectiveColumnReader()
       : expectMemoryReuse_{GetParam().expectMemoryReuse},
         parallelDecoding_{GetParam().parallelDecoding} {}
@@ -410,6 +423,10 @@ struct SchemaMismatchTestParam {
 class SchemaMismatchTest : public TestWithParam<SchemaMismatchTestParam>,
                            public ColumnReaderTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   SchemaMismatchTest()
       : useSelectiveReader_{GetParam().useSelectiveReader},
         parallelDecoding_{GetParam().parallelDecoding} {}

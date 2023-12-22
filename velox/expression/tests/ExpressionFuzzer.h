@@ -73,10 +73,27 @@ class ExpressionFuzzer {
     // Chance of adding a null constant to the plan, or null value in a vector
     // (expressed as double from 0 to 1).
     double nullRatio = 0.1;
+
+    // If specified, Fuzzer will only choose functions from this comma separated
+    // list of function names (e.g: --only \"split\" or --only
+    // \"substr,ltrim\")."
+    std::string useOnlyFunctions = "";
+
+    // Comma-separated list of special forms to use in generated expression.
+    // Supported special forms: and, or, coalesce, if, switch, cast.")
+    std::string specialForms = "and,or,cast,coalesce,if,switch";
+
+    // This list can include a mix of function names and function signatures.
+    // Use function name to exclude all signatures of a given function from
+    // testing. Use function signature to exclude only a specific signature.
+    // ex skipFunctions{
+    //   "width_bucket",
+    //   "array_sort(array(T),constant function(T,T,bigint)) -> array(T)"}
+    std::unordered_set<std::string> skipFunctions;
   };
 
   ExpressionFuzzer(
-      const FunctionSignatureMap& signatureMap,
+      FunctionSignatureMap signatureMap,
       size_t initialSeed,
       const std::shared_ptr<VectorFuzzer>& vectorFuzzer,
       const std::optional<ExpressionFuzzer::Options>& options = std::nullopt);
@@ -191,6 +208,16 @@ class ExpressionFuzzer {
 
   core::TypedExprPtr generateArg(const TypePtr& arg);
 
+  // Given lambda argument type, generate matching LambdaTypedExpr.
+  //
+  // The 'arg' specifies inputs types and result type for the lambda. This
+  // method finds all matching signatures and signature templates, picks one
+  // randomly and generates LambdaTypedExpr. If no matching signatures or
+  // signature templates found, this method returns LambdaTypedExpr that
+  // represents a constant lambda, i.e lambda that returns the same value for
+  // all input. The constant value is generated using 'generateArgConstant'.
+  core::TypedExprPtr generateArgFunction(const TypePtr& arg);
+
   std::vector<core::TypedExprPtr> generateArgs(const CallableSignature& input);
 
   std::vector<core::TypedExprPtr> generateArgs(
@@ -239,6 +266,13 @@ class ExpressionFuzzer {
       const TypePtr& returnType,
       const std::string& functionName);
 
+  /// Returns a signature with matching input types and return type. Returns
+  /// nullptr if matching signature doesn't exist.
+  const CallableSignature* findConcreteSignature(
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& returnType,
+      const std::string& functionName);
+
   /// Generate an expression by randomly selecting a concrete function
   /// signature that returns 'returnType' among all signatures that the
   /// function named 'functionName' supports.
@@ -250,6 +284,14 @@ class ExpressionFuzzer {
   /// in expressionToTemplatedSignature_ whose return type can match
   /// returnType. Return nullptr if no such signature template exists.
   const SignatureTemplate* chooseRandomSignatureTemplate(
+      const TypePtr& returnType,
+      const std::string& typeName,
+      const std::string& functionName);
+
+  /// Returns a signature template with matching input types and return type.
+  /// Returns nullptr if matching signature template doesn't exist.
+  const SignatureTemplate* findSignatureTemplate(
+      const std::vector<TypePtr>& argTypes,
       const TypePtr& returnType,
       const std::string& typeName,
       const std::string& functionName);
@@ -287,9 +329,12 @@ class ExpressionFuzzer {
     state.expressionStats_[funcName]++;
   }
 
-  const std::string kTypeParameterName = "T";
+  // Returns random integer between min and max inclusive.
+  int32_t rand32(int32_t min, int32_t max);
 
-  Options options_;
+  static const inline std::string kTypeParameterName = "T";
+
+  const Options options_;
 
   std::vector<CallableSignature> signatures_;
   std::vector<SignatureTemplate> signatureTemplates_;

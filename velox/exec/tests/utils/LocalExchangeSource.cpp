@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include <folly/executors/IOThreadPoolExecutor.h>
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OutputBufferManager.h"
 
@@ -29,6 +30,10 @@ class LocalExchangeSource : public exec::ExchangeSource {
       memory::MemoryPool* pool)
       : ExchangeSource(taskId, destination, queue, pool) {}
 
+  bool supportsMetrics() const override {
+    return true;
+  }
+
   bool shouldRequestLocked() override {
     if (atEnd_) {
       return false;
@@ -38,21 +43,11 @@ class LocalExchangeSource : public exec::ExchangeSource {
 
   folly::SemiFuture<Response> request(
       uint32_t maxBytes,
-      uint32_t /*maxWaitSeconds*/) override {
+      uint32_t maxWaitSeconds) override {
     ++numRequests_;
 
     auto promise = VeloxPromise<Response>("LocalExchangeSource::request");
     auto future = promise.getSemiFuture();
-
-    if (numRequests_ % 2 == 0) {
-      {
-        std::lock_guard<std::mutex> l(queue_->mutex());
-        requestPending_ = false;
-      }
-      // Simulate no-data.
-      promise.setValue(Response{0, false});
-      return future;
-    }
 
     promise_ = std::move(promise);
 
@@ -61,84 +56,101 @@ class LocalExchangeSource : public exec::ExchangeSource {
     VELOX_CHECK(requestPending_);
     auto requestedSequence = sequence_;
     auto self = shared_from_this();
-    buffers->getData(
-        taskId_,
-        destination_,
-        maxBytes,
-        sequence_,
-        // Since this lambda may outlive 'this', we need to capture a
-        // shared_ptr to the current object (self).
-        [self, requestedSequence, buffers, this](
-            std::vector<std::unique_ptr<folly::IOBuf>> data, int64_t sequence) {
-          if (requestedSequence > sequence) {
-            VLOG(2) << "Receives earlier sequence than requested: task "
-                    << taskId_ << ", destination " << destination_
-                    << ", requested " << sequence << ", received "
-                    << requestedSequence;
-            int64_t nExtra = requestedSequence - sequence;
-            VELOX_CHECK(nExtra < data.size());
-            data.erase(data.begin(), data.begin() + nExtra);
-            sequence = requestedSequence;
-          }
-          std::vector<std::unique_ptr<SerializedPage>> pages;
-          bool atEnd = false;
-          int64_t totalBytes = 0;
-          for (auto& inputPage : data) {
-            if (!inputPage) {
-              atEnd = true;
-              // Keep looping, there could be extra end markers.
-              continue;
-            }
-            totalBytes += inputPage->length();
-            inputPage->unshare();
-            pages.push_back(
-                std::make_unique<SerializedPage>(std::move(inputPage)));
-            inputPage = nullptr;
-          }
-          numPages_ += pages.size();
-          totalBytes_ += totalBytes;
+    // Since this lambda may outlive 'this', we need to capture a
+    // shared_ptr to the current object (self).
+    auto resultCallback = [self, requestedSequence, buffers, this](
+                              std::vector<std::unique_ptr<folly::IOBuf>> data,
+                              int64_t sequence) {
+      if (requestedSequence > sequence) {
+        VLOG(2) << "Receives earlier sequence than requested: task " << taskId_
+                << ", destination " << destination_ << ", requested "
+                << sequence << ", received " << requestedSequence;
+        int64_t nExtra = requestedSequence - sequence;
+        VELOX_CHECK(nExtra < data.size());
+        data.erase(data.begin(), data.begin() + nExtra);
+        sequence = requestedSequence;
+      }
+      std::vector<std::unique_ptr<SerializedPage>> pages;
+      bool atEnd = false;
+      int64_t totalBytes = 0;
+      for (auto& inputPage : data) {
+        if (!inputPage) {
+          atEnd = true;
+          // Keep looping, there could be extra end markers.
+          continue;
+        }
+        totalBytes += inputPage->length();
+        inputPage->unshare();
+        pages.push_back(std::make_unique<SerializedPage>(std::move(inputPage)));
+        inputPage = nullptr;
+      }
+      numPages_ += pages.size();
+      totalBytes_ += totalBytes;
 
-          try {
-            common::testutil::TestValue::adjust(
-                "facebook::velox::exec::test::LocalExchangeSource", &numPages_);
-          } catch (const std::exception& e) {
-            queue_->setError(e.what());
-            checkSetRequestPromise();
-            return;
-          }
+      try {
+        common::testutil::TestValue::adjust(
+            "facebook::velox::exec::test::LocalExchangeSource", &numPages_);
+      } catch (const std::exception& e) {
+        queue_->setError(e.what());
+        checkSetRequestPromise();
+        return;
+      }
 
-          int64_t ackSequence;
+      int64_t ackSequence;
+      VeloxPromise<Response> requestPromise;
+      {
+        std::vector<ContinuePromise> queuePromises;
+        {
+          std::lock_guard<std::mutex> l(queue_->mutex());
+          requestPending_ = false;
+          requestPromise = std::move(promise_);
+          for (auto& page : pages) {
+            queue_->enqueueLocked(std::move(page), queuePromises);
+          }
+          if (atEnd) {
+            queue_->enqueueLocked(nullptr, queuePromises);
+            atEnd_ = true;
+          }
+          ackSequence = sequence_ = sequence + pages.size();
+        }
+        for (auto& promise : queuePromises) {
+          promise.setValue();
+        }
+      }
+      // Outside of queue mutex.
+      if (atEnd_) {
+        buffers->deleteResults(taskId_, destination_);
+      } else {
+        buffers->acknowledge(taskId_, destination_, ackSequence);
+      }
+
+      if (!requestPromise.isFulfilled()) {
+        requestPromise.setValue(Response{totalBytes, atEnd_});
+      }
+    };
+
+    // Call the callback in any case after timeout.
+    auto& exec = folly::QueuedImmediateExecutor::instance();
+    future = std::move(future).via(&exec).onTimeout(
+        std::chrono::seconds(maxWaitSeconds), [self, this] {
+          common::testutil::TestValue::adjust(
+              "facebook::velox::exec::test::LocalExchangeSource::timeout",
+              this);
           VeloxPromise<Response> requestPromise;
           {
-            std::vector<ContinuePromise> queuePromises;
-            {
-              std::lock_guard<std::mutex> l(queue_->mutex());
-              requestPending_ = false;
-              requestPromise = std::move(promise_);
-              for (auto& page : pages) {
-                queue_->enqueueLocked(std::move(page), queuePromises);
-              }
-              if (atEnd) {
-                queue_->enqueueLocked(nullptr, queuePromises);
-                atEnd_ = true;
-              }
-              ackSequence = sequence_ = sequence + pages.size();
-            }
-            for (auto& promise : queuePromises) {
-              promise.setValue();
-            }
+            std::lock_guard<std::mutex> l(queue_->mutex());
+            requestPending_ = false;
+            requestPromise = std::move(promise_);
           }
-          // Outside of queue mutex.
-          if (atEnd_) {
-            buffers->deleteResults(taskId_, destination_);
-          } else {
-            buffers->acknowledge(taskId_, destination_, ackSequence);
-          }
-
+          Response response = {0, false};
           if (!requestPromise.isFulfilled()) {
-            requestPromise.setValue(Response{totalBytes, atEnd_});
+            requestPromise.setValue(response);
           }
+          return response;
         });
+
+    buffers->getData(
+        taskId_, destination_, maxBytes, sequence_, resultCallback);
 
     return future;
   }
@@ -150,11 +162,13 @@ class LocalExchangeSource : public exec::ExchangeSource {
     buffers->deleteResults(taskId_, destination_);
   }
 
-  folly::F14FastMap<std::string, int64_t> stats() const override {
+  folly::F14FastMap<std::string, RuntimeMetric> metrics() const override {
     return {
-        {"localExchangeSource.numPages", numPages_},
-        {"localExchangeSource.totalBytes", totalBytes_},
-        {ExchangeClient::kBackgroundCpuTimeMs, 123},
+        {"localExchangeSource.numPages", RuntimeMetric(numPages_)},
+        {"localExchangeSource.totalBytes",
+         RuntimeMetric(totalBytes_, RuntimeCounter::Unit::kBytes)},
+        {ExchangeClient::kBackgroundCpuTimeMs,
+         RuntimeMetric(123 * 1000000, RuntimeCounter::Unit::kNanos)},
     };
   }
 

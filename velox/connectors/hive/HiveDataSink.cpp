@@ -291,14 +291,14 @@ HiveDataSink::HiveDataSink(
     std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
-    const std::shared_ptr<const Config>& connectorProperties)
+    const std::shared_ptr<const HiveConfig>& hiveConfig)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
       commitStrategy_(commitStrategy),
-      connectorProperties_(connectorProperties),
-      maxOpenWriters_(
-          HiveConfig::maxPartitionsPerWriters(connectorQueryCtx_->config())),
+      hiveConfig_(hiveConfig),
+      maxOpenWriters_(hiveConfig_->maxPartitionsPerWriters(
+          connectorQueryCtx->sessionProperties())),
       partitionChannels_(getPartitionChannels(insertTableHandle_)),
       partitionIdGenerator_(
           !partitionChannels_.empty() ? std::make_unique<PartitionIdGenerator>(
@@ -595,6 +595,8 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   setMemoryReclaimers(writerInfo_.back().get());
 
   dwio::common::WriterOptions options;
+  const auto* connectorSessionProperties =
+      connectorQueryCtx_->sessionProperties();
   options.schema = inputType_;
   options.memoryPool = writerInfo_.back()->writerPool.get();
   options.compressionKind = insertTableHandle_->compressionKind();
@@ -603,11 +605,10 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   }
   options.nonReclaimableSection =
       writerInfo_.back()->nonReclaimableSectionHolder.get();
-  options.maxStripeSize = std::optional(HiveConfig::getOrcWriterMaxStripeSize(
-      connectorQueryCtx_->config(), connectorProperties_.get()));
-  options.maxDictionaryMemory =
-      std::optional(HiveConfig::getOrcWriterMaxDictionaryMemory(
-          connectorQueryCtx_->config(), connectorProperties_.get()));
+  options.maxStripeSize = std::optional(
+      hiveConfig_->getOrcWriterMaxStripeSize(connectorSessionProperties));
+  options.maxDictionaryMemory = std::optional(
+      hiveConfig_->getOrcWriterMaxDictionaryMemory(connectorSessionProperties));
   ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
 
   // Prevents the memory allocation during the writer creation.
@@ -616,7 +617,9 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
       dwio::common::FileSink::create(
           writePath,
           {.bufferWrite = false,
-           .connectorProperties = connectorProperties_,
+           .connectorProperties = hiveConfig_->config(),
+           .fileCreateConfig =
+               hiveConfig_->fileCreateConfig(connectorSessionProperties),
            .pool = writerInfo_.back()->sinkPool.get(),
            .metricLogger = dwio::common::MetricsLog::voidLog(),
            .stats = ioStats_.back().get()}),
@@ -650,8 +653,10 @@ HiveDataSink::maybeCreateBucketSortWriter(
   return std::make_unique<dwio::common::SortingWriter>(
       std::move(writer),
       std::move(sortBuffer),
-      HiveConfig::sortWriterMaxOutputRows(connectorQueryCtx_->config()),
-      HiveConfig::sortWriterMaxOutputBytes(connectorQueryCtx_->config()),
+      hiveConfig_->sortWriterMaxOutputRows(
+          connectorQueryCtx_->sessionProperties()),
+      hiveConfig_->sortWriterMaxOutputBytes(
+          connectorQueryCtx_->sessionProperties()),
       writerInfo_.back()->spillStats.get());
 }
 
@@ -736,8 +741,8 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
 HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
   if (insertTableHandle_->isInsertTable()) {
     if (insertTableHandle_->isPartitioned()) {
-      const auto insertBehavior = HiveConfig::insertExistingPartitionsBehavior(
-          connectorQueryCtx_->config());
+      const auto insertBehavior = hiveConfig_->insertExistingPartitionsBehavior(
+          connectorQueryCtx_->sessionProperties());
       switch (insertBehavior) {
         case HiveConfig::InsertExistingPartitionsBehavior::kOverwrite:
           return HiveWriterParameters::UpdateMode::kOverwrite;
@@ -753,7 +758,7 @@ HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
       if (insertTableHandle_->isBucketed()) {
         VELOX_USER_FAIL("Cannot insert into bucketed unpartitioned Hive table");
       }
-      if (HiveConfig::immutablePartitions(connectorProperties_.get())) {
+      if (hiveConfig_->immutablePartitions()) {
         VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");
       }
       return HiveWriterParameters::UpdateMode::kAppend;
@@ -877,7 +882,7 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
   }
 
   if (*writerInfo_->nonReclaimableSectionHolder.get()) {
-    REPORT_ADD_STAT_VALUE(kCounterMemoryNonReclaimableCount);
+    RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
     LOG(WARNING) << "Can't reclaim from hive writer pool " << pool->name()
                  << " which is under non-reclaimable section, "
                  << " used memory: " << succinctBytes(pool->currentBytes())

@@ -1107,7 +1107,7 @@ void Expr::addNulls(
     const SelectivityVector& rows,
     const uint64_t* FOLLY_NULLABLE rawNulls,
     EvalCtx& context,
-    VectorPtr& result) {
+    VectorPtr& result) const {
   EvalCtx::addNulls(rows, rawNulls, context, type(), result);
 }
 
@@ -1282,7 +1282,7 @@ void computeIsAsciiForInputs(
       auto* vector =
           inputValues[index]->template as<SimpleVector<StringView>>();
 
-      VELOX_CHECK(vector);
+      VELOX_CHECK(vector, inputValues[index]->toString());
       vector->computeAndSetIsAscii(rows);
     }
   }

@@ -40,11 +40,11 @@ struct SpillConfig {
       uint8_t _startPartitionBit,
       uint8_t _joinPartitionBits,
       int32_t _maxSpillLevel,
+      uint64_t _maxSpillRunRows,
       uint64_t _writerFlushThresholdSize,
       int32_t _testSpillPct,
       const std::string& _compressionKind,
-      const std::unordered_map<std::string, std::string>& _writeFileOptions =
-          {});
+      const std::string& _fileCreateConfig = {});
 
   /// Returns the hash join spilling level with given 'startBitOffset'.
   ///
@@ -105,6 +105,11 @@ struct SpillConfig {
   /// partition bits at the end.
   int32_t maxSpillLevel;
 
+  /// The max row numbers to fill and spill for each spill run. This is used to
+  /// cap the memory used for spilling. If it is zero, then there is no limit
+  /// and spilling might run out of memory.
+  uint64_t maxSpillRunRows;
+
   /// Minimum memory footprint size required to reclaim memory from a file
   /// writer by flushing its buffered data to disk.
   uint64_t writerFlushThresholdSize;
@@ -117,6 +122,6 @@ struct SpillConfig {
   common::CompressionKind compressionKind;
 
   /// Custom options passed to velox::FileSystem to create spill WriteFile.
-  std::unordered_map<std::string, std::string> writeFileOptions;
+  std::string fileCreateConfig;
 };
 } // namespace facebook::velox::common

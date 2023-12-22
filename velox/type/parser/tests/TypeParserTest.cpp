@@ -133,11 +133,24 @@ TEST_F(TestTypeSignature, mapType) {
   ASSERT_EQ(
       *parseType("maP(DECIMAL(10,5), DECIMAL(20, 4))"),
       *MAP(DECIMAL(10, 5), DECIMAL(20, 4)));
+
+  // Complex types as map keys.
+  ASSERT_EQ(
+      *parseType("map(row(bigint),bigint)"), *MAP(ROW({BIGINT()}), BIGINT()));
+
+  ASSERT_EQ(
+      *parseType("map(array(double),bigint)"), *MAP(ARRAY(DOUBLE()), BIGINT()));
+
+  ASSERT_EQ(
+      *parseType("map(map(tinyint, varchar),bigint)"),
+      *MAP(MAP(TINYINT(), VARCHAR()), BIGINT()));
 }
 
 TEST_F(TestTypeSignature, invalidType) {
   VELOX_ASSERT_THROW(
-      parseType("blah()"), "Failed to parse type [blah]. Type not registered.");
+      parseType("blah()"),
+      "Failed to parse type [blah()]. "
+      "syntax error, unexpected LPAREN, expecting WORD");
 
   VELOX_ASSERT_THROW(parseType("array()"), "Failed to parse type [array()]");
 
@@ -148,10 +161,16 @@ TEST_F(TestTypeSignature, invalidType) {
   // Ensure this is not treated as a row type.
   VELOX_ASSERT_THROW(
       parseType("rowxxx(a)"),
-      "Failed to parse type [rowxxx]. Type not registered.");
+      "Failed to parse type [rowxxx(a)]. "
+      "syntax error, unexpected LPAREN, expecting WORD");
 }
 
 TEST_F(TestTypeSignature, rowType) {
+  // Unnamed fields.
+  ASSERT_EQ(
+      *parseType("row(bigint,varchar, real, timestamp with time zone)"),
+      *ROW({BIGINT(), VARCHAR(), REAL(), TIMESTAMP_WITH_TIME_ZONE()}));
+
   ASSERT_EQ(
       *parseType("row(a bigint,b varchar,c real)"),
       *ROW({"a", "b", "c"}, {BIGINT(), VARCHAR(), REAL()}));
@@ -170,6 +189,13 @@ TEST_F(TestTypeSignature, rowType) {
   ASSERT_EQ(
       *parseType("row(\"12 tb\" bigint,b bigint,c bigint)"),
       *ROW({"12 tb", "b", "c"}, {BIGINT(), BIGINT(), BIGINT()}));
+
+  ASSERT_EQ(
+      *parseType("row(\"a\" bigint, \"b\" array(varchar), "
+                 "\"c\" timestamp with time zone)"),
+      *ROW(
+          {"a", "b", "c"},
+          {BIGINT(), ARRAY(VARCHAR()), TIMESTAMP_WITH_TIME_ZONE()}));
 
   ASSERT_EQ(
       *parseType("row(a varchar(10),b row(a bigint))"),
@@ -218,13 +244,20 @@ TEST_F(TestTypeSignature, rowType) {
 
   // Field type canonicalization.
   ASSERT_EQ(*parseType("row(col iNt)"), *ROW({"col"}, {INTEGER()}));
+
+  // Can only have names within rows.
+  VELOX_ASSERT_THROW(
+      parseType("asd bigint"),
+      "Failed to parse type [asd bigint]. Type not registered.");
 }
 
 TEST_F(TestTypeSignature, typesWithSpaces) {
-  // Type is not registered.
   VELOX_ASSERT_THROW(
       parseType("row(time time with time zone)"),
       "Failed to parse type [time with time zone]. Type not registered.");
+
+  ASSERT_EQ(
+      *parseType("timestamp with time zone"), *TIMESTAMP_WITH_TIME_ZONE());
 
   // Type is registered.
   ASSERT_EQ(
@@ -290,6 +323,33 @@ TEST_F(TestTypeSignature, decimalType) {
       parseType("decimal(20)"), "Failed to parse type [decimal(20)]");
   VELOX_ASSERT_THROW(
       parseType("decimal(, 20)"), "Failed to parse type [decimal(, 20)]");
+}
+
+// Checks that type names can also be field names.
+TEST_F(TestTypeSignature, fieldNames) {
+  ASSERT_EQ(
+      *parseType("row(bigint bigint, map bigint, row bigint, array bigint, "
+                 "decimal bigint, function bigint, struct bigint, "
+                 "varchar map(bigint, tinyint), varbinary array(bigint))"),
+      *ROW(
+          {"bigint",
+           "map",
+           "row",
+           "array",
+           "decimal",
+           "function",
+           "struct",
+           "varchar",
+           "varbinary"},
+          {BIGINT(),
+           BIGINT(),
+           BIGINT(),
+           BIGINT(),
+           BIGINT(),
+           BIGINT(),
+           BIGINT(),
+           MAP(BIGINT(), TINYINT()),
+           ARRAY(BIGINT())}));
 }
 
 } // namespace

@@ -31,6 +31,9 @@
 #ifdef VELOX_ENABLE_S3
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h" // @manual
 #endif
+#ifdef VELOX_ENABLE_ABFS
+#include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h" // @manual
+#endif
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 // Meta's buck build system needs this check.
@@ -48,32 +51,24 @@ using namespace facebook::velox::dwrf;
 
 namespace facebook::velox::connector::hive {
 
-bool isFileHandleCacheEnabled(const Config* properties) {
-  return properties ? HiveConfig::isFileHandleCacheEnabled(properties) : true;
-}
-
-int32_t numCachedFileHandles(const Config* properties) {
-  return properties ? HiveConfig::numCacheFileHandles(properties) : 20'000;
-}
-
 HiveConnector::HiveConnector(
     const std::string& id,
-    std::shared_ptr<const Config> properties,
+    std::shared_ptr<const Config> config,
     folly::Executor* FOLLY_NULLABLE executor)
-    : Connector(id, properties),
+    : Connector(id),
+      hiveConfig_(std::make_shared<HiveConfig>(config)),
       fileHandleFactory_(
-          isFileHandleCacheEnabled(properties.get())
+          hiveConfig_->isFileHandleCacheEnabled()
               ? std::make_unique<
                     SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(
-                    numCachedFileHandles(properties.get()))
+                    hiveConfig_->numCacheFileHandles())
               : nullptr,
-          std::make_unique<FileHandleGenerator>(properties)),
+          std::make_unique<FileHandleGenerator>(config)),
       executor_(executor) {
-  if (isFileHandleCacheEnabled(properties.get())) {
+  if (hiveConfig_->isFileHandleCacheEnabled()) {
     LOG(INFO) << "Hive connector " << connectorId()
               << " created with maximum of "
-              << numCachedFileHandles(properties.get())
-              << " cached file handles.";
+              << hiveConfig_->numCacheFileHandles() << " cached file handles.";
   } else {
     LOG(INFO) << "Hive connector " << connectorId()
               << " created with file handle cache disabled";
@@ -88,15 +83,13 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
   dwio::common::ReaderOptions options(connectorQueryCtx->memoryPool());
-  options.setMaxCoalesceBytes(
-      HiveConfig::maxCoalescedBytes(connectorQueryCtx->config()));
-  options.setMaxCoalesceDistance(
-      HiveConfig::maxCoalescedDistanceBytes(connectorQueryCtx->config()));
+  options.setMaxCoalesceBytes(hiveConfig_->maxCoalescedBytes());
+  options.setMaxCoalesceDistance(hiveConfig_->maxCoalescedDistanceBytes());
   options.setFileColumnNamesReadAsLowerCase(
-      HiveConfig::isFileColumnNamesReadAsLowerCase(
-          connectorQueryCtx->config()));
+      hiveConfig_->isFileColumnNamesReadAsLowerCase(
+          connectorQueryCtx->sessionProperties()));
   options.setUseColumnNamesForColumnMapping(
-      HiveConfig::isOrcUseColumnNames(connectorQueryCtx->config()));
+      hiveConfig_->isOrcUseColumnNames(connectorQueryCtx->sessionProperties()));
 
   return std::make_unique<HiveDataSource>(
       outputType,
@@ -124,7 +117,7 @@ std::unique_ptr<DataSink> HiveConnector::createDataSink(
       hiveInsertHandle,
       connectorQueryCtx,
       commitStrategy,
-      connectorProperties());
+      hiveConfig_);
 }
 
 std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
@@ -166,6 +159,9 @@ void HiveConnectorFactory::initialize() {
 #endif
 #ifdef VELOX_ENABLE_GCS
     filesystems::registerGCSFileSystem();
+#endif
+#ifdef VELOX_ENABLE_ABFS
+    filesystems::abfs::registerAbfsFileSystem();
 #endif
     return true;
   }();

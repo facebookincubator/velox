@@ -697,10 +697,10 @@ TEST_F(AggregationTest, hashmodes) {
   makeModeTestKeys(rowType, 20000, 2, 2, 2, 4, 4, 4, batches);
   // 20K rows with all at slightly higher cardinality, still in array range.
   makeModeTestKeys(rowType, 20000, 2, 2, 2, 4, 16, 4, batches);
-  // 100K rows with cardinality outside of array range. We transit to
+  // 25K rows with cardinality outside of array range. We transit to
   // generic hash table from normalized keys when running out of quota
   // for distinct string storage for the sixth key.
-  makeModeTestKeys(rowType, 100000, 1000000, 2, 2, 4, 4, 1000000, batches);
+  makeModeTestKeys(rowType, 25000, 1000000, 2, 2, 4, 4, 1000000, batches);
   createDuckDbTable(batches);
   auto op =
       PlanBuilder()
@@ -708,10 +708,19 @@ TEST_F(AggregationTest, hashmodes) {
           .singleAggregation({"c0", "c1", "c2", "c3", "c4", "c5"}, {"sum(1)"})
           .planNode();
 
+  std::atomic<BaseHashTable::HashMode> mode{BaseHashTable::HashMode::kArray};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashTable::setHashMode",
+      std::function<void(void*)>([&](void* newMode) {
+        mode = *reinterpret_cast<BaseHashTable::HashMode*>(newMode);
+      }));
   assertQuery(
       op,
       "SELECT c0, c1, C2, C3, C4, C5, sum(1) FROM tmp "
       " GROUP BY c0, c1, c2, c3, c4, c5");
+#ifndef NDEBUG
+  EXPECT_EQ(mode, BaseHashTable::HashMode::kHash);
+#endif
 }
 
 TEST_F(AggregationTest, rangeToDistinct) {
@@ -2018,9 +2027,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::defaultMemoryManager().addRootPool(
-            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2161,9 +2169,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  queryCtx->testingOverrideMemoryPool(
-      memory::defaultMemoryManager().addRootPool(
-          queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
   auto expectedResult =
       AssertQueryBuilder(PlanBuilder()
                              .values(batches)
@@ -2272,8 +2279,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
-        memory::defaultMemoryManager().addRootPool(
-            queryCtx->queryId(), kMaxBytes));
+        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2397,9 +2403,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::defaultMemoryManager().addRootPool(
-            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2542,8 +2547,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
-        memory::defaultMemoryManager().addRootPool(
-            queryCtx->queryId(), kMaxBytes));
+        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2695,8 +2699,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
-        memory::defaultMemoryManager().addRootPool(
-            queryCtx->queryId(), kMaxBytes));
+        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2829,9 +2832,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::defaultMemoryManager().addRootPool(
-            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2918,9 +2920,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::defaultMemoryManager().addRootPool(
-            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -3007,6 +3008,52 @@ TEST_F(AggregationTest, noAggregationsNoGroupingKeys) {
   ASSERT_EQ(result->type()->size(), 0);
 }
 
+// Reproduces hang in partial distinct aggregation described in
+// https://github.com/facebookincubator/velox/issues/7967 .
+TEST_F(AggregationTest, distinctHang) {
+  static const int64_t kMin = std::numeric_limits<int32_t>::min();
+  static const int64_t kMax = std::numeric_limits<int32_t>::max();
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(
+          5'000,
+          [](auto row) {
+            if (row % 2 == 0) {
+              return kMin + row;
+            } else {
+              return kMax - row;
+            }
+          }),
+      makeFlatVector<int64_t>(
+          5'000,
+          [](auto row) {
+            if (row % 2 == 0) {
+              return kMin - row;
+            } else {
+              return kMax + row;
+            }
+          }),
+  });
+
+  auto newData = makeRowVector({
+      makeFlatVector<int64_t>(
+          5'000, [](auto row) { return kMin + row + 5'000; }),
+      makeFlatVector<int64_t>(5'000, [](auto row) { return kMin - row; }),
+  });
+
+  createDuckDbTable({data, newData});
+
+  core::PlanNodeId aggNodeId;
+  auto plan = PlanBuilder()
+                  .values({data, newData, data})
+                  .partialAggregation({"c0", "c1"}, {})
+                  .capturePlanNodeId(aggNodeId)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(QueryConfig::kMaxPartialAggregationMemory, "400000")
+      .assertResults("SELECT distinct c0, c1 FROM tmp");
+}
+
 // Trigger memory pool allocation at HashAggregation::populateAggregateInputs by
 // aggregating null constant. Ensure the allocation happens outside of
 // HashAggregation's constructor.
@@ -3043,13 +3090,15 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyInput) {
         }
         auto* driver = values->testingOperatorCtx()->driver();
         auto task = values->testingOperatorCtx()->task();
+        // Shrink all the capacity before reclaim.
+        task->pool()->shrink();
         {
           MemoryReclaimer::Stats stats;
           SuspendedSection suspendedSection(driver);
           task->pool()->reclaim(kMaxBytes, 0, stats);
           ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
           ASSERT_GT(stats.reclaimExecTimeUs, 0);
-          ASSERT_GT(stats.reclaimedBytes, 0);
+          ASSERT_EQ(stats.reclaimedBytes, 0);
           ASSERT_GT(stats.reclaimWaitTimeUs, 0);
         }
         static_cast<memory::MemoryPoolImpl*>(task->pool())
@@ -3058,9 +3107,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyInput) {
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  queryCtx->testingOverrideMemoryPool(
-      memory::defaultMemoryManager().addRootPool(
-          queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
   core::PlanNodeId aggNodeId;
   auto task =
       AssertQueryBuilder(
@@ -3113,13 +3161,15 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
         }
         auto* driver = op->testingOperatorCtx()->driver();
         auto task = op->testingOperatorCtx()->task();
+        // Shrink all the capacity before reclaim.
+        task->pool()->shrink();
         {
           MemoryReclaimer::Stats stats;
           SuspendedSection suspendedSection(driver);
           task->pool()->reclaim(kMaxBytes, 0, stats);
           ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
           ASSERT_GT(stats.reclaimExecTimeUs, 0);
-          ASSERT_GT(stats.reclaimedBytes, 0);
+          ASSERT_EQ(stats.reclaimedBytes, 0);
           ASSERT_GT(stats.reclaimWaitTimeUs, 0);
         }
         // Sets back the memory capacity to proceed the test.
@@ -3129,9 +3179,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  queryCtx->testingOverrideMemoryPool(
-      memory::defaultMemoryManager().addRootPool(
-          queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
   core::PlanNodeId aggNodeId;
   auto task =
       AssertQueryBuilder(PlanBuilder()

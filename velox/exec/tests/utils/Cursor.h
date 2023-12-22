@@ -62,6 +62,10 @@ struct CursorParameters {
   std::string spillDirectory;
 
   bool copyResult = true;
+
+  /// If both 'queryConfigs' and 'queryCtx' are specified, the configurations in
+  /// 'queryCtx' will be overridden by 'queryConfig'.
+  std::unordered_map<std::string, std::string> queryConfigs;
 };
 
 class TaskQueue {
@@ -72,7 +76,7 @@ class TaskQueue {
   };
 
   explicit TaskQueue(uint64_t maxBytes)
-      : pool_(memory::addDefaultLeafMemoryPool()), maxBytes_(maxBytes) {}
+      : pool_(memory::memoryManager()->addLeafPool()), maxBytes_(maxBytes) {}
 
   void setNumProducers(int32_t n) {
     numProducers_ = n;

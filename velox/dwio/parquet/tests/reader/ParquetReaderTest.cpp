@@ -16,15 +16,12 @@
 
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::parquet;
-
-namespace {
-auto defaultPool = memory::addDefaultLeafMemoryPool();
-}
 
 class ParquetReaderTest : public ParquetTestBase {
  public:
@@ -33,8 +30,7 @@ class ParquetReaderTest : public ParquetTestBase {
       const RowTypePtr& rowType) {
     const std::string sample(getExampleFilePath(fileName));
 
-    facebook::velox::dwio::common::ReaderOptions readerOptions{
-        defaultPool.get()};
+    facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
     auto reader = createReader(sample, readerOptions);
 
     RowReaderOptions rowReaderOpts;
@@ -60,7 +56,7 @@ class ParquetReaderTest : public ParquetTestBase {
       FilterMap filters,
       const RowVectorPtr& expected) {
     const auto filePath(getExampleFilePath(fileName));
-    facebook::velox::dwio::common::ReaderOptions readerOpts{defaultPool.get()};
+    facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
     auto reader = createReader(filePath, readerOpts);
     assertReadWithReaderAndFilters(
         std::move(reader), fileName, fileSchema, std::move(filters), expected);
@@ -75,7 +71,7 @@ TEST_F(ParquetReaderTest, parseSample) {
   //   b: [1.0..20.0]
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 20ULL);
 
@@ -104,7 +100,7 @@ TEST_F(ParquetReaderTest, parseSample) {
 TEST_F(ParquetReaderTest, parseSampleRange1) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOpts{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   auto reader = createReader(sample, readerOpts);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
@@ -123,7 +119,7 @@ TEST_F(ParquetReaderTest, parseSampleRange1) {
 TEST_F(ParquetReaderTest, parseSampleRange2) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOpts{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   auto reader = createReader(sample, readerOpts);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
@@ -142,7 +138,7 @@ TEST_F(ParquetReaderTest, parseSampleRange2) {
 TEST_F(ParquetReaderTest, parseSampleEmptyRange) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOpts{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   auto reader = createReader(sample, readerOpts);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
@@ -160,7 +156,7 @@ TEST_F(ParquetReaderTest, parseReadAsLowerCase) {
   // 2 rows.
   const std::string upper(getExampleFilePath("upper.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   readerOptions.setFileColumnNamesReadAsLowerCase(true);
   auto reader = createReader(upper, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 2ULL);
@@ -194,7 +190,7 @@ TEST_F(ParquetReaderTest, parseRowMapArrayReadAsLowerCase) {
   // +-----------------------+
   const std::string upper(getExampleFilePath("upper_complex.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   readerOptions.setFileColumnNamesReadAsLowerCase(true);
   auto reader = createReader(upper, readerOptions);
 
@@ -237,7 +233,7 @@ TEST_F(ParquetReaderTest, parseEmpty) {
   // 0 rows.
   const std::string empty(getExampleFilePath("empty.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(empty, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 0ULL);
 
@@ -259,7 +255,7 @@ TEST_F(ParquetReaderTest, parseInt) {
   //   bigint: [1000 .. 1009]
   const std::string sample(getExampleFilePath("int.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOpts{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   auto reader = createReader(sample, readerOpts);
 
   EXPECT_EQ(reader->numberOfRows(), 10ULL);
@@ -294,7 +290,7 @@ TEST_F(ParquetReaderTest, parseUnsignedInt1) {
   //   uint64: [18446744073709551615, 2000000000000000000, 3000000000000000000]
   const std::string sample(getExampleFilePath("uint.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader->numberOfRows(), 3ULL);
@@ -398,7 +394,7 @@ TEST_F(ParquetReaderTest, parseDate) {
   //   date: [1969-12-27 .. 1970-01-20]
   const std::string sample(getExampleFilePath("date.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader->numberOfRows(), 25ULL);
@@ -425,7 +421,7 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
   // ARRAY(INTEGER)) c1) c)
   const std::string sample(getExampleFilePath("row_map_array.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader->numberOfRows(), 1ULL);
@@ -458,7 +454,7 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
 TEST_F(ParquetReaderTest, projectNoColumns) {
   // This is the case for count(*).
   auto rowType = ROW({}, {});
-  facebook::velox::dwio::common::ReaderOptions readerOpts{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   auto reader = createReader(getExampleFilePath("sample.parquet"), readerOpts);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
@@ -482,7 +478,7 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
   //   a: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
   //   b: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
   auto rowType = ROW({"a", "b"}, {DECIMAL(7, 2), DECIMAL(14, 2)});
-  facebook::velox::dwio::common::ReaderOptions readerOpts{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   const std::string decimal_dict(getExampleFilePath("decimal_dict.parquet"));
 
   auto reader = createReader(decimal_dict, readerOpts);
@@ -513,6 +509,58 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
     EXPECT_EQ(b[index], expectValues[i]);
     EXPECT_EQ(b[index + 1], expectValues[i]);
   }
+}
+
+TEST_F(ParquetReaderTest, parseMapKeyValueAsMap) {
+  // map_key_value.parquet holds a single map column (key: VARCHAR, b: BIGINT)
+  // and 1 row that contains 8 map entries. It is with older version of Parquet
+  // and uses MAP_KEY_VALUE instead of MAP as the map SchemaElement
+  // converted_type. It has 5 SchemaElements in the schema, in the format of
+  // schemaIdx: <repetition> <type> name (<converted type>):
+  //
+  // 0: REQUIRED BOOLEAN hive_schema (UTF8)
+  // 1:   OPTIONAL BOOLEAN test (MAP_KEY_VALUE)
+  // 2:     REPEATED BOOLEAN map (UTF8)
+  // 3:       REQUIRED BYTE_ARRAY key (UTF8)
+  // 4:       OPTIONAL INT64 value (UTF8)
+
+  const std::string sample(getExampleFilePath("map_key_value.parquet"));
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 1ULL);
+
+  auto rowType = reader->typeWithId();
+  EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(rowType->size(), 1ULL);
+
+  auto mapColumnType = rowType->childAt(0);
+  EXPECT_EQ(mapColumnType->type()->kind(), TypeKind::MAP);
+
+  auto mapKeyType = mapColumnType->childAt(0);
+  EXPECT_EQ(mapKeyType->type()->kind(), TypeKind::VARCHAR);
+
+  auto mapValueType = mapColumnType->childAt(1);
+  EXPECT_EQ(mapValueType->type()->kind(), TypeKind::BIGINT);
+
+  auto fileSchema =
+      ROW({"test"}, {createType<TypeKind::MAP>({VARCHAR(), BIGINT()})});
+  auto rowReaderOpts = getReaderOpts(fileSchema);
+  auto scanSpec = makeScanSpec(fileSchema);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto expected = makeRowVector({vectorMaker_.mapVector<std::string, int64_t>(
+      {{{"0", 0},
+        {"1", 1},
+        {"2", 2},
+        {"3", 3},
+        {"4", 4},
+        {"5", 5},
+        {"6", 6},
+        {"7", 7}}})});
+
+  assertReadWithReaderAndExpected(fileSchema, *rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, readSampleBigintRangeFilter) {
@@ -723,7 +771,7 @@ TEST_F(ParquetReaderTest, filterRowGroups) {
   // decimal_no_ColumnMetadata.parquet has one columns a: DECIMAL(9,1). It
   // doesn't have ColumnMetaData, and rowGroups_[0].columns[0].file_offset is 0.
   auto rowType = ROW({"_c0"}, {DECIMAL(9, 1)});
-  facebook::velox::dwio::common::ReaderOptions readerOpts{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   const std::string decimal_dict(
       getExampleFilePath("decimal_no_ColumnMetadata.parquet"));
 
@@ -739,7 +787,7 @@ TEST_F(ParquetReaderTest, parseLongTagged) {
   // This is a case for long with annonation read
   const std::string sample(getExampleFilePath("tagged_long.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader->numberOfRows(), 4ULL);
@@ -755,9 +803,9 @@ TEST_F(ParquetReaderTest, preloadSmallFile) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   auto file = std::make_shared<LocalReadFile>(sample);
-  auto input = std::make_unique<BufferedInput>(file, *defaultPool);
+  auto input = std::make_unique<BufferedInput>(file, *leafPool_);
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader =
       std::make_unique<ParquetReader>(std::move(input), readerOptions);
 
@@ -793,7 +841,7 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
   const std::string sample(getExampleFilePath("multiple_row_groups.parquet"));
   const int numRowGroups = 4;
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   // Disable preload of file.
   readerOptions.setFilePreloadThreshold(0);
 

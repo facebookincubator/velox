@@ -28,8 +28,8 @@
 namespace facebook::velox {
 
 // Implements an arena backed by MappedMemory::Allocation. This is for backing
-// ByteStream or for allocating single blocks. Blocks can be individually freed.
-// Adjacent frees are coalesced and free blocks are kept in a free list.
+// ByteOutputStream or for allocating single blocks. Blocks can be individually
+// freed. Adjacent frees are coalesced and free blocks are kept in a free list.
 // Allocated blocks are prefixed with a Header. This has a size and flags.
 // kContinue means that last 8 bytes are a pointer to another Header after which
 // the contents of this allocation continue. kFree means the block is free. A
@@ -263,11 +263,13 @@ class HashStringAllocator : public StreamArena {
   // kMinContiguous bytes of contiguous space. finishWrite finalizes
   // the allocation information after the write is done.
   // Returns the position at the start of the allocated block.
-  Position newWrite(ByteStream& stream, int32_t preferredSize = kMinContiguous);
+  Position newWrite(
+      ByteOutputStream& stream,
+      int32_t preferredSize = kMinContiguous);
 
   // Sets 'stream' to write starting at 'position'. If new ranges have to
   // be allocated when writing, headers will be updated accordingly.
-  void extendWrite(Position position, ByteStream& stream);
+  void extendWrite(Position position, ByteOutputStream& stream);
 
   // Completes a write prepared with newWrite or
   // extendWrite. Up to 'numReserveBytes' unused bytes, if available, are left
@@ -275,21 +277,28 @@ class HashStringAllocator : public StreamArena {
   // positions: (1) position at the start of this 'write', (2) position
   // immediately after the last written byte.
   std::pair<Position, Position> finishWrite(
-      ByteStream& stream,
+      ByteOutputStream& stream,
       int32_t numReserveBytes);
 
   /// Allocates a new range for a stream writing to 'this'. Sets the last word
   /// of the previous range to point to the new range and copies the overwritten
-  /// word as the first word of the new range.
+  /// word as the first word of the new range. If 'lastRange' is non-null, we
+  /// are continuing an existing entry and setting the last word  of the
+  /// previous entry point to the new one. In this case, we decrement the size
+  /// in 'lastEntry' by the size of the continue pointer, so that the sum of the
+  /// sizes reflects the payload size without any overheads. Furthermore,
+  /// rewriting a multirange entry is safe because a write spanning multiple
+  /// ranges will not overwrite the next pointer.
   ///
   /// May allocate less than 'bytes'.
-  void newRange(int32_t bytes, ByteRange* FOLLY_NONNULL range) override;
+  void newRange(int32_t bytes, ByteRange* lastRange, ByteRange* range) override;
 
   /// Allocates a new range of at least 'bytes' size.
   void newContiguousRange(int32_t bytes, ByteRange* range);
 
-  void newTinyRange(int32_t bytes, ByteRange* FOLLY_NONNULL range) override {
-    newRange(bytes, range);
+  void newTinyRange(int32_t bytes, ByteRange* lastRange, ByteRange* range)
+      override {
+    newRange(bytes, lastRange, range);
   }
 
   // Returns the total memory footprint of 'this'.
@@ -345,7 +354,11 @@ class HashStringAllocator : public StreamArena {
   static constexpr int32_t kMinContiguous = 48;
   static constexpr int32_t kNumFreeLists = kMaxAlloc - kMinAlloc + 2;
 
-  void newRange(int32_t bytes, ByteRange* range, bool contiguous);
+  void newRange(
+      int32_t bytes,
+      ByteRange* lastRange,
+      ByteRange* range,
+      bool contiguous);
 
   // Adds a new standard size slab to the free list. This
   // grows the footprint in MemoryAllocator but does not allocate

@@ -4123,16 +4123,15 @@ TEST_F(HashJoinTest, dynamicFilters) {
     assignments["b"] = regularColumn("c1", BIGINT());
 
     core::PlanNodeId probeScanId;
-    auto op =
-        PlanBuilder(planNodeIdGenerator, pool_.get())
-            .tableScan(
-                scanOutputType,
-                makeTableHandle(common::test::SubfieldFiltersBuilder().build()),
-                assignments)
-            .capturePlanNodeId(probeScanId)
-            .hashJoin({"a"}, {"u_c0"}, buildSide, "", {"a", "b", "u_c1"})
-            .project({"a", "b + 1", "b + u_c1"})
-            .planNode();
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .startTableScan()
+                  .outputType(scanOutputType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin({"a"}, {"u_c0"}, buildSide, "", {"a", "b", "u_c1"})
+                  .project({"a", "b + 1", "b + u_c1"})
+                  .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
@@ -4879,8 +4878,6 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
           .partitionKey("k", "0")
           .build();
   auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});
-  std::shared_ptr<connector::hive::HiveTableHandle> tableHandle =
-      makeTableHandle();
   ColumnHandleMap assignments = {
       {"n1_0", regularColumn("c0", BIGINT())},
       {"n1_1", partitionKey("k", BIGINT())}};
@@ -4889,7 +4886,10 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto op =
       PlanBuilder(planNodeIdGenerator)
-          .tableScan(outputType, tableHandle, assignments)
+          .startTableScan()
+          .outputType(outputType)
+          .assignments(assignments)
+          .endTableScan()
           .capturePlanNodeId(probeScanId)
           .hashJoin(
               {"n1_1"},
@@ -4947,7 +4947,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringInputProcessing) {
     SCOPED_TRACE(testData.debugString());
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryPool = memory::defaultMemoryManager().addRootPool(
+    auto queryPool = memory::memoryManager()->addRootPool(
         "", kMaxBytes, memory::MemoryReclaimer::create());
 
     core::PlanNodeId probeScanId;
@@ -5094,7 +5094,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringReserve) {
   createDuckDbTable("u", buildVectors);
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  auto queryPool = memory::defaultMemoryManager().addRootPool(
+  auto queryPool = memory::memoryManager()->addRootPool(
       "", kMaxBytes, memory::MemoryReclaimer::create());
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -5224,7 +5224,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringAllocation) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryPool = memory::defaultMemoryManager().addRootPool("", kMaxBytes);
+    auto queryPool = memory::memoryManager()->addRootPool("", kMaxBytes);
 
     core::PlanNodeId probeScanId;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -5355,7 +5355,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringOutputProcessing) {
   for (const auto enableSpilling : enableSpillings) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryPool = memory::defaultMemoryManager().addRootPool(
+    auto queryPool = memory::memoryManager()->addRootPool(
         "", kMaxBytes, memory::MemoryReclaimer::create());
 
     core::PlanNodeId probeScanId;
@@ -5481,7 +5481,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
   createDuckDbTable("u", buildVectors);
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  auto queryPool = memory::defaultMemoryManager().addRootPool(
+  auto queryPool = memory::memoryManager()->addRootPool(
       "", kMaxBytes, memory::MemoryReclaimer::create());
 
   core::PlanNodeId probeScanId;
@@ -5630,7 +5630,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto queryPool = memory::defaultMemoryManager().addRootPool(
+    auto queryPool = memory::memoryManager()->addRootPool(
         "", kMaxBytes, memory::MemoryReclaimer::create());
 
     core::PlanNodeId probeScanId;
@@ -5735,7 +5735,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputgProcessing) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto queryPool = memory::defaultMemoryManager().addRootPool(
+    auto queryPool = memory::memoryManager()->addRootPool(
         "", kMaxBytes, memory::MemoryReclaimer::create());
 
     core::PlanNodeId probeScanId;
@@ -5841,7 +5841,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto queryPool = memory::defaultMemoryManager().addRootPool(
+    auto queryPool = memory::memoryManager()->addRootPool(
         "", kMaxBytes, memory::MemoryReclaimer::create());
 
     core::PlanNodeId probeScanId;

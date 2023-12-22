@@ -39,10 +39,11 @@ const double kFilterErrorMargin = 0.2;
 
 class ParquetReaderBenchmark {
  public:
-  explicit ParquetReaderBenchmark(bool disableDictionary)
+  explicit ParquetReaderBenchmark(
+      bool disableDictionary,
+      const RowTypePtr& rowType)
       : disableDictionary_(disableDictionary) {
-    rootPool_ =
-        memory::defaultMemoryManager().addRootPool("ParquetReaderBenchmark");
+    rootPool_ = memory::memoryManager()->addRootPool("ParquetReaderBenchmark");
     leafPool_ = rootPool_->addLeafChild("ParquetReaderBenchmark");
     dataSetBuilder_ = std::make_unique<DataSetBuilder>(*leafPool_, 0);
     auto path = fileFolder_->path + "/" + fileName_;
@@ -56,7 +57,7 @@ class ParquetReaderBenchmark {
     }
     options.memoryPool = rootPool_.get();
     writer_ = std::make_unique<facebook::velox::parquet::Writer>(
-        std::move(sink), options);
+        std::move(sink), options, rowType);
   }
 
   ~ParquetReaderBenchmark() {}
@@ -272,7 +273,7 @@ void run(
     uint8_t nullsRateX100,
     uint32_t nextSize,
     bool disableDictionary) {
-  ParquetReaderBenchmark benchmark(disableDictionary);
+  ParquetReaderBenchmark benchmark(disableDictionary, asRowType(type));
   BIGINT()->toString();
   benchmark.readSingleColumn(
       columnName, type, 0, filterRateX100, nullsRateX100, nextSize);
@@ -403,6 +404,7 @@ PARQUET_BENCHMARKS_NO_FILTER(ARRAY(BIGINT()), List);
 
 int main(int argc, char** argv) {
   folly::init(&argc, &argv);
+  memory::MemoryManager::initialize({});
   folly::runBenchmarks();
   return 0;
 }

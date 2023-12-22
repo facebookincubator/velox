@@ -63,6 +63,7 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<SinhFunction, double, double>({prefix + "sinh"});
   registerFunction<CoshFunction, double, double>({prefix + "cosh"});
   registerFunction<CotFunction, double, double>({prefix + "cot"});
+  registerFunction<Atan2Function, double, double, double>({prefix + "atan2"});
   registerFunction<Log1pFunction, double, double>({prefix + "log1p"});
   registerFunction<ToBinaryStringFunction, Varchar, int64_t>({prefix + "bin"});
   registerFunction<ExpFunction, double, double>({prefix + "exp"});
@@ -91,6 +92,8 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});
   registerRandFunctions(prefix);
 
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_add, prefix + "add");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_sub, prefix + "subtract");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_mul, prefix + "multiply");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "divide");
 }

@@ -24,7 +24,36 @@
 namespace facebook::velox::exec {
 
 using PartitionBoundIndexType = int64_t;
+/// Provides the partition info for parallel join table build use.
+struct TableInsertPartitionInfo {
+  /// ['start', 'end') specifies the insert range of this table partition.
+  PartitionBoundIndexType start;
+  PartitionBoundIndexType end;
+  /// Used to contains the overflowed rows which can't be inserted into the
+  /// given table partition range.
+  std::vector<char*>& overflows;
 
+  TableInsertPartitionInfo(
+      PartitionBoundIndexType _start,
+      PartitionBoundIndexType _end,
+      std::vector<char*>& _overflows)
+      : start(_start), end(_end), overflows(_overflows) {
+    VELOX_CHECK_GE(start, 0);
+    VELOX_CHECK_LT(start, end);
+  }
+
+  /// Indicates if 'index' is within this partition range.
+  bool inRange(PartitionBoundIndexType index) const {
+    return index >= start && index < end;
+  }
+
+  /// Adds 'row' falls outside of this partititon range into 'overflows'.
+  void addOverflow(char* row) {
+    overflows.push_back(row);
+  }
+};
+
+/// Contains input and output parameters for groupProbe and joinProbe APIs.
 struct HashLookup {
   explicit HashLookup(const std::vector<std::unique_ptr<VectorHasher>>& h)
       : hashers(h) {}
@@ -36,17 +65,36 @@ struct HashLookup {
     newGroups.clear();
   }
 
-  // One entry per aggregation or join key
+  /// One entry per group-by or join key.
   const std::vector<std::unique_ptr<VectorHasher>>& hashers;
+
+  /// Scratch memory used to call VectorHasher::lookupValueIds.
+  VectorHasher::ScratchMemory scratchMemory;
+
+  /// Input to groupProbe and joinProbe APIs.
+
+  /// Set of row numbers of row to probe.
   raw_vector<vector_size_t> rows;
-  // Hash number for all input rows.
+
+  /// Hashes or value IDs for rows in 'rows'. Not aligned with 'rows'. Index is
+  /// the row number.
   raw_vector<uint64_t> hashes;
-  // If using valueIds, list of concatenated valueIds. 1:1 with 'hashes'.
-  raw_vector<uint64_t> normalizedKeys;
-  // Hit for each row of input corresponding group row or join row.
+
+  /// Results of groupProbe and joinProbe APIs.
+
+  /// Contains one entry for each row in 'rows'. Index is the row number.
+  /// For groupProbe, a pointer to an existing or new row with matching grouping
+  /// keys. For joinProbe, a pointer to the first row with matching keys or null
+  /// if no match.
   raw_vector<char*> hits;
-  // Indices of newly inserted rows (not found during probe).
+
+  /// For groupProbe, row numbers for which a new entry was inserted (didn't
+  /// exist before the groupProbe). Empty for joinProbe.
   std::vector<vector_size_t> newGroups;
+
+  /// If using valueIds, list of concatenated valueIds. 1:1 with 'hashes'.
+  /// Populated by groupProbe and joinProbe.
+  raw_vector<uint64_t> normalizedKeys;
 };
 
 struct HashTableStats {
@@ -124,7 +172,12 @@ class BaseHashTable {
 
   virtual HashStringAllocator* stringAllocator() = 0;
 
-  void prepareForProbe(
+  /// Populates 'hashes' and 'rows' fields in 'lookup' in preparation for
+  /// 'groupProbe' call. Rehashes the table if necessary. Uses lookup.hashes to
+  /// decode grouping keys from 'input'. If 'ignoreNullKeys' is true, updates
+  /// 'rows' to remove entries with null grouping keys. After this call, 'rows'
+  /// may have no entries selected.
+  void prepareForGroupProbe(
       HashLookup& lookup,
       const RowVectorPtr& input,
       SelectivityVector& rows,
@@ -138,6 +191,20 @@ class BaseHashTable {
   /// 'lookup.hits' with a nullptr representing a miss. This is for use in hash
   /// join probe. Use listJoinResults to iterate over the results.
   virtual void joinProbe(HashLookup& lookup) = 0;
+
+  /// Populates 'hashes' and 'rows' fields in 'lookup' in preparation for
+  /// 'joinProbe' call. If hash mode is not kHash, populates 'hashes' with
+  /// values IDs. Rows which do not have value IDs are removed from 'rows'
+  /// (these rows cannot possibly match). if 'decodeAndRemoveNulls' is true,
+  /// uses lookup.hashes to decode grouping keys from 'input' and updates 'rows'
+  /// to remove entries with null grouping keys. Otherwise, assumes the caller
+  /// has done that already. After this call, 'rows' may have no entries
+  /// selected.
+  void prepareForJoinProbe(
+      HashLookup& lookup,
+      const RowVectorPtr& input,
+      SelectivityVector& rows,
+      bool decodeAndRemoveNulls);
 
   /// Fills 'hits' with consecutive hash join results. The corresponding element
   /// of 'inputRows' is set to the corresponding row number in probe keys.
@@ -256,10 +323,6 @@ class BaseHashTable {
     return rows_.get();
   }
 
-  std::unique_ptr<RowContainer> moveRows() {
-    return std::move(rows_);
-  }
-
   // Static functions for processing internals. Public because used in
   // structs that define probe and insert algorithms.
 
@@ -317,6 +380,10 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 }
 
 class ProbeState;
+namespace test {
+template <bool ignoreNullKeys>
+class HashTableTestHelper;
+}
 
 template <bool ignoreNullKeys>
 class HashTable : public BaseHashTable {
@@ -487,6 +554,11 @@ class HashTable : public BaseHashTable {
 
   std::string toString() override;
 
+  /// Returns the details of the range of buckets. The range starts from
+  /// zero-based 'startBucket' and contains 'numBuckets' or however many there
+  /// are left till the end of the table.
+  std::string toString(int64_t startBucket, int64_t numBuckets = 1) const;
+
   /// Invoked to check the consistency of the internal state. The function scans
   /// all the table slots to check if the relevant slot counting are correct
   /// such as the number of used slots ('numDistinct_') and the number of
@@ -495,10 +567,6 @@ class HashTable : public BaseHashTable {
   /// NOTE: the check cost is non-trivial and is mostly intended for testing
   /// purpose.
   void checkConsistency() const;
-
-  void testingSetHashMode(HashMode mode, int32_t numNew) {
-    setHashMode(mode, numNew);
-  }
 
   auto& testingOtherTables() const {
     return otherTables_;
@@ -643,22 +711,19 @@ class HashTable : public BaseHashTable {
       raw_vector<uint64_t>& hashes,
       bool initNormalizedKeys);
 
-  // Inserts 'numGroups' entries into 'this'. 'groups' point to
-  // contents in a RowContainer owned by 'this'. 'hashes' are the hash
-  // numbers or array indices (if kArray mode) for each
-  // group. Duplicate key rows are chained via their next link. if
-  // parallel build, partitionEnd is the index of the first entry
-  // after the partition being inserted. If a row would be inserted to
-  // the right of the end, it is not inserted but rather added to the
-  // end of 'overflows'.
+  /// Inserts 'numGroups' entries into 'this'. 'groups' point to contents in a
+  /// RowContainer owned by 'this'. 'hashes' are the hash numbers or array
+  /// indices (if kArray mode) for each group. Duplicate key rows are chained
+  /// via their next link. If not null, 'partitionInfo' provides the table
+  /// partition info for parallel join table build. It specifies the first and
+  /// (exclusive) last indexes of the insert entries in the table. If a row
+  /// can't be inserted within this range, it is not inserted but rather added
+  /// to the end of 'overflows' in 'partitionInfo'.
   void insertForJoin(
       char** groups,
       uint64_t* hashes,
       int32_t numGroups,
-      PartitionBoundIndexType partitionBegin = 0,
-      PartitionBoundIndexType partitionEnd =
-          std::numeric_limits<PartitionBoundIndexType>::max(),
-      std::vector<char*>* overflows = nullptr);
+      TableInsertPartitionInfo* = nullptr);
 
   // Inserts 'numGroups' entries into 'this'. 'groups' point to
   // contents in a RowContainer owned by 'this'. 'hashes' are the hash
@@ -738,17 +803,15 @@ class HashTable : public BaseHashTable {
   // with the same key.
   void pushNext(char* row, char* next);
 
-  // Finishes inserting an entry into a join hash table. If the insert
-  // would fall outside of 'partitionBegin' ... 'partitionEnd', the
-  // insert is not made but the row is instead added to 'overflow'.
+  // Finishes inserting an entry into a join hash table. If 'partitionInfo' is
+  // not null and the insert falls out-side of the partition range, then insert
+  // is not made but row is instead added to 'overflow' in 'partitionInfo'
   void buildFullProbe(
       ProbeState& state,
       uint64_t hash,
       char* row,
       bool extraCheck,
-      PartitionBoundIndexType partitionBegin,
-      PartitionBoundIndexType partitionEnd,
-      std::vector<char*>* overflows);
+      TableInsertPartitionInfo* partitionInfo);
 
   // Updates 'hashers_' to correspond to the keys in the
   // content. Returns true if all hashers offer a mapping to value ids
@@ -772,9 +835,14 @@ class HashTable : public BaseHashTable {
 
   // Returns the byte offset of the next bucket from 'offset'. Wraps around at
   // the end of the table.
-  int64_t nextBucketOffset(int32_t offset) const {
-    VELOX_DCHECK_EQ(0, offset & (kBucketSize - 1));
-    return sizeMask_ & (offset + kBucketSize);
+  int64_t nextBucketOffset(int64_t bucketOffset) const {
+    VELOX_DCHECK_EQ(0, bucketOffset & (kBucketSize - 1));
+    VELOX_DCHECK_LT(bucketOffset, sizeMask_);
+    return sizeMask_ & (bucketOffset + kBucketSize);
+  }
+
+  int64_t numBuckets() const {
+    return numBuckets_;
   }
 
   // Return the row pointer at 'slotIndex' of bucket at 'bucketOffset'.
@@ -824,8 +892,7 @@ class HashTable : public BaseHashTable {
   // many threads can set this.
   std::atomic<bool> hasDuplicates_{false};
 
-  // Offset of next row link for join build side, 0 if none. Copied
-  // from 'rows_'.
+  // Offset of next row link for join build side set from 'rows_'.
   int32_t nextOffset_;
   char** table_ = nullptr;
   memory::ContiguousAllocation tableAllocation_;
@@ -840,6 +907,7 @@ class HashTable : public BaseHashTable {
   // Mask used to get the byte offset of a bucket from 'table_' given a hash
   // number.
   int64_t bucketOffsetMask_{0};
+  int64_t numBuckets_{0};
   int64_t numDistinct_{0};
   // Counts the number of tombstone table slots.
   int64_t numTombstones_{0};
@@ -863,8 +931,6 @@ class HashTable : public BaseHashTable {
   // Number of times a match is found.
   mutable tsan_atomic<int64_t> numHits_{0};
 
-  friend class ProbeState;
-
   // Bounds of independently buildable index ranges in the table. The
   // range of partition i starts at [i] and ends at [i +1]. Bounds are multiple
   // of cache line  size.
@@ -881,6 +947,9 @@ class HashTable : public BaseHashTable {
 
   // If true, avoids using VectorHasher value ranges with kArray hash mode.
   bool disableRangeArrayHash_{false};
+
+  friend class ProbeState;
+  friend test::HashTableTestHelper<ignoreNullKeys>;
 };
 
 } // namespace facebook::velox::exec

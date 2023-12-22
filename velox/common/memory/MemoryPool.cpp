@@ -19,6 +19,8 @@
 #include <signal.h>
 #include <set>
 
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TestValue.h"
@@ -61,18 +63,24 @@ namespace {
 struct MemoryUsage {
   std::string name;
   uint64_t currentUsage;
+  uint64_t reservedUsage;
   uint64_t peakUsage;
 
   bool operator>(const MemoryUsage& other) const {
-    return std::tie(currentUsage, peakUsage, name) >
-        std::tie(other.currentUsage, other.peakUsage, other.name);
+    return std::tie(currentUsage, reservedUsage, peakUsage, name) >
+        std::tie(
+               other.currentUsage,
+               other.reservedUsage,
+               other.peakUsage,
+               other.name);
   }
 
   std::string toString() const {
     return fmt::format(
-        "{} usage {} peak {}",
+        "{} usage {} reserved {} peak {}",
         name,
         succinctBytes(currentUsage),
+        succinctBytes(reservedUsage),
         succinctBytes(peakUsage));
   }
 };
@@ -113,6 +121,7 @@ void treeMemoryUsageVisitor(
   const MemoryUsage usage{
       .name = pool->name(),
       .currentUsage = stats.currentBytes,
+      .reservedUsage = stats.reservedBytes,
       .peakUsage = stats.peakBytes,
   };
   out << std::string(indent, ' ') << usage.toString() << "\n";
@@ -152,8 +161,9 @@ std::string capacityToString(int64_t capacity) {
 
 std::string MemoryPool::Stats::toString() const {
   return fmt::format(
-      "currentBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{}",
+      "currentBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{}",
       succinctBytes(currentBytes),
+      succinctBytes(reservedBytes),
       succinctBytes(peakBytes),
       succinctBytes(cumulativeBytes),
       numAllocs,
@@ -168,6 +178,7 @@ std::string MemoryPool::Stats::toString() const {
 bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
   return std::tie(
              currentBytes,
+             reservedBytes,
              peakBytes,
              cumulativeBytes,
              numAllocs,
@@ -177,6 +188,7 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              numCollisions) ==
       std::tie(
              other.currentBytes,
+             other.reservedBytes,
              other.peakBytes,
              other.cumulativeBytes,
              other.numAllocs,
@@ -202,7 +214,6 @@ MemoryPool::MemoryPool(
       maxCapacity_(parent_ == nullptr ? options.maxCapacity : kMaxMemory),
       trackUsage_(options.trackUsage),
       threadSafe_(options.threadSafe),
-      checkUsageLeak_(options.checkUsageLeak),
       debugEnabled_(options.debugEnabled),
       coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled) {
   VELOX_CHECK(!isRoot() || !isLeaf());
@@ -394,13 +405,27 @@ MemoryPoolImpl::~MemoryPoolImpl() {
   if (parent_ != nullptr) {
     toImpl(parent_)->dropChild(this);
   }
-  if (checkUsageLeak_) {
-    VELOX_CHECK(
-        (usedReservationBytes_ == 0) && (reservationBytes_ == 0) &&
-            (minReservationBytes_ == 0),
-        "Bad memory usage track state: {}",
-        toString());
+
+  if (isLeaf()) {
+    if (usedReservationBytes_ > 0) {
+      LOG(ERROR) << "Memory leak (Used memory): " << toString();
+      RECORD_METRIC_VALUE(
+          kMetricMemoryPoolUsageLeakBytes, usedReservationBytes_);
+    }
+
+    if (minReservationBytes_ > 0) {
+      LOG(ERROR) << "Memory leak (Reserved Memory): " << toString();
+      RECORD_METRIC_VALUE(
+          kMetricMemoryPoolReservationLeakBytes, minReservationBytes_);
+    }
   }
+
+  VELOX_DCHECK(
+      (usedReservationBytes_ == 0) && (reservationBytes_ == 0) &&
+          (minReservationBytes_ == 0),
+      "Bad memory usage track state: {}",
+      toString());
+
   if (destructionCb_ != nullptr) {
     destructionCb_(this);
   }
@@ -414,6 +439,7 @@ MemoryPool::Stats MemoryPoolImpl::stats() const {
 MemoryPool::Stats MemoryPoolImpl::statsLocked() const {
   Stats stats;
   stats.currentBytes = currentBytesLocked();
+  stats.reservedBytes = reservationBytes_;
   stats.peakBytes = peakBytes_;
   stats.cumulativeBytes = cumulativeBytes_;
   stats.numAllocs = numAllocs_;
@@ -641,7 +667,6 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
           .alignment = alignment_,
           .trackUsage = trackUsage_,
           .threadSafe = threadSafe,
-          .checkUsageLeak = checkUsageLeak_,
           .debugEnabled = debugEnabled_,
           .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_});
 }
@@ -873,6 +898,7 @@ std::string MemoryPoolImpl::treeMemoryUsage() const {
     const MemoryUsage usage{
         .name = name(),
         .currentUsage = stats.currentBytes,
+        .reservedUsage = stats.reservedBytes,
         .peakUsage = stats.peakBytes};
     out << usage.toString() << "\n";
   }

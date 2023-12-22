@@ -80,11 +80,20 @@ class TestReaderP
     : public testing::TestWithParam</* parallel decoding = */ bool>,
       public VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   folly::Executor* executor() {
     if (GetParam() && !executor_) {
-      std::make_shared<folly::CPUThreadPoolExecutor>(2);
+      std::make_shared<folly::CPUThreadPoolExecutor>(
+          getDecodingParallelismFactor());
     }
     return executor_.get();
+  }
+
+  size_t getDecodingParallelismFactor() {
+    return GetParam() ? 2 : 0;
   }
 
  private:
@@ -93,6 +102,10 @@ class TestReaderP
 
 class TestReader : public testing::Test, public VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   std::vector<VectorPtr> createBatches(
       const std::vector<std::vector<int32_t>>& values) {
     std::vector<VectorPtr> batches;
@@ -105,9 +118,19 @@ class TestReader : public testing::Test, public VectorTestBase {
   }
 };
 
-class TestRowReaderPrefetch : public testing::Test, public VectorTestBase {};
+class TestRowReaderPrefetch : public testing::Test, public VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
 
-class TestRowReaderPfetch : public testing::Test, public VectorTestBase {};
+class TestRowReaderPfetch : public testing::Test, public VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
 
 } // namespace
 
@@ -125,6 +148,42 @@ std::unique_ptr<BufferedInput> createFileBufferedInput(
     memory::MemoryPool& pool) {
   return std::make_unique<BufferedInput>(
       std::make_shared<LocalReadFile>(path), pool);
+}
+
+// Prefetches the entire range of the reader and verifies correctness in
+// PrefetchUnits() API. Does not do any actual reading of the file.
+void verifyPrefetch(
+    DwrfRowReader* rowReader,
+    const std::vector<uint32_t>& expectedPrefetchRowSizes = {},
+    const std::vector<bool>& shouldTryPrefetch = {}) {
+  auto prefetchUnitsOpt = rowReader->prefetchUnits();
+  ASSERT_TRUE(prefetchUnitsOpt.has_value());
+  auto prefetchUnits = std::move(prefetchUnitsOpt.value());
+  auto numFetches = prefetchUnits.size();
+  auto expectedResultsSize = shouldTryPrefetch.size();
+  auto expectedRowsSize = expectedPrefetchRowSizes.size();
+  bool shouldCheckResults = expectedResultsSize != 0;
+  bool shouldCheckRowCount = expectedRowsSize != 0;
+
+  // Empty vector will skip the check, but they should never been different than
+  // actual expected prefetchUnits vector
+  DWIO_ENSURE(expectedResultsSize == numFetches || !shouldCheckResults);
+  DWIO_ENSURE(expectedRowsSize == numFetches || !shouldCheckRowCount);
+
+  for (int i = 0; i < numFetches; i++) {
+    if (shouldCheckRowCount) {
+      EXPECT_EQ(prefetchUnits[i].rowCount, expectedPrefetchRowSizes[i]);
+    }
+    if (shouldCheckResults && shouldTryPrefetch[i]) {
+      RowReader::FetchResult result = prefetchUnits[i].prefetch();
+      EXPECT_EQ(
+          result,
+          // A prefetch request for the first stripe should be already fetched,
+          // because createDwrfRowReader calls startNextStripe() synchronously.
+          i == 0 ? RowReader::FetchResult::kAlreadyFetched
+                 : RowReader::FetchResult::kFetched);
+    }
+  }
 }
 
 // This relies on schema and data inside of our fm_small and fm_large orc files,
@@ -220,40 +279,6 @@ void verifyFlatMapReading(
 
   // number of batches should match
   EXPECT_EQ(batchId, numBatches);
-}
-
-void verifyPrefetch(
-    DwrfRowReader* rowReader,
-    const std::vector<uint32_t>& expectedPrefetchRowSizes = {},
-    const std::vector<bool>& shouldTryPrefetch = {}) {
-  auto prefetchUnitsOpt = rowReader->prefetchUnits();
-  ASSERT_TRUE(prefetchUnitsOpt.has_value());
-  auto prefetchUnits = std::move(prefetchUnitsOpt.value());
-  auto numFetches = prefetchUnits.size();
-  auto expectedResultsSize = shouldTryPrefetch.size();
-  auto expectedRowsSize = expectedPrefetchRowSizes.size();
-  bool shouldCheckResults = expectedResultsSize != 0;
-  bool shouldCheckRowCount = expectedRowsSize != 0;
-
-  // Empty vector will skip the check, but they should never been different than
-  // actual expected prefetchUnits vector
-  DWIO_ENSURE(expectedResultsSize == numFetches || !shouldCheckResults);
-  DWIO_ENSURE(expectedRowsSize == numFetches || !shouldCheckRowCount);
-
-  for (int i = 0; i < numFetches; i++) {
-    if (shouldCheckRowCount) {
-      EXPECT_EQ(prefetchUnits[i].rowCount, expectedPrefetchRowSizes[i]);
-    }
-    if (shouldCheckResults && shouldTryPrefetch[i]) {
-      RowReader::FetchResult result = prefetchUnits[i].prefetch();
-      EXPECT_EQ(
-          result,
-          // A prefetch request for the first stripe should be already fetched,
-          // because createDwrfRowReader calls startNextStripe() synchronously.
-          i == 0 ? RowReader::FetchResult::kAlreadyFetched
-                 : RowReader::FetchResult::kFetched);
-    }
-  }
 }
 
 // schema of flat map sample file
@@ -385,7 +410,12 @@ void verifyCachedIndexStreamReads(
   }
 }
 
-class TestFlatMapReader : public TestWithParam<bool>, public VectorTestBase {};
+class TestFlatMapReader : public TestWithParam<bool>, public VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
 
 TEST_P(TestFlatMapReader, testReadFlatMapEmptyMap) {
   const std::string emptyFile(getExampleFilePath("empty_flatmap.orc"));
@@ -773,7 +803,12 @@ struct ByStripeInfo {
 };
 
 class TestRowReaderPrefetchByStripe : public TestWithParam<ByStripeInfo>,
-                                      public VectorTestBase {};
+                                      public VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
 
 // This test ensures that we only return the prefetch units for the stripes that
 // we'll actually use, according to the range passed to the row reader. We
@@ -903,7 +938,12 @@ TEST_F(TestRowReaderPrefetch, testEmptyRowRange) {
 
 class TestFlatMapReaderFlatLayout
     : public TestWithParam<std::tuple<bool, size_t>>,
-      public VectorTestBase {};
+      public VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
 
 TEST_P(TestFlatMapReaderFlatLayout, testCompare) {
   dwio::common::ReaderOptions readerOptions{pool()};
@@ -1816,7 +1856,8 @@ TEST_P(TestReaderP, testUpcastBoolean) {
       TypeWithId::create(rowType),
       streams,
       labels,
-      executor());
+      executor(),
+      getDecodingParallelismFactor());
 
   VectorPtr batch;
   reader->next(104, batch);
@@ -1866,7 +1907,8 @@ TEST_P(TestReaderP, testUpcastIntDirect) {
       TypeWithId::create(rowType),
       streams,
       labels,
-      executor());
+      executor(),
+      getDecodingParallelismFactor());
 
   VectorPtr batch;
   reader->next(100, batch);
@@ -1933,7 +1975,8 @@ TEST_P(TestReaderP, testUpcastIntDict) {
       TypeWithId::create(rowType),
       streams,
       labels,
-      executor());
+      executor(),
+      getDecodingParallelismFactor());
 
   VectorPtr batch;
   reader->next(100, batch);
@@ -1988,7 +2031,8 @@ TEST_P(TestReaderP, testUpcastFloat) {
       TypeWithId::create(rowType),
       streams,
       labels,
-      executor());
+      executor(),
+      getDecodingParallelismFactor());
 
   VectorPtr batch;
   reader->next(100, batch);

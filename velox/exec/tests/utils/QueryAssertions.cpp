@@ -92,6 +92,12 @@ template <>
         decimalType.precision(),
         decimalType.scale());
   }
+
+  if (type->isIntervalDayTime()) {
+    return ::duckdb::Value::INTERVAL(
+        0, 0, vector->as<SimpleVector<int64_t>>()->valueAt(index));
+  }
+
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
 }
 
@@ -879,10 +885,6 @@ void DuckDbQueryRunner::createTable(
           appender.Append(duckValueAt<TypeKind::BIGINT>(columnVector, row));
         } else if (rowType.childAt(column)->isLongDecimal()) {
           appender.Append(duckValueAt<TypeKind::HUGEINT>(columnVector, row));
-        } else if (type->isIntervalDayTime()) {
-          auto value = ::duckdb::Value::INTERVAL(
-              0, 0, columnVector->as<SimpleVector<int64_t>>()->valueAt(row));
-          appender.Append(value);
         } else {
           VELOX_CHECK(
               type->equivalent(*columnVector->type()),
@@ -993,6 +995,19 @@ bool assertEqualResults(
   const auto& expectedType =
       (expected.size() == 0) ? nullptr : expected.at(0)->type();
   return assertEqualResults(expectedRows, expectedType, actual);
+}
+
+bool assertEqualResults(
+    const core::PlanNodePtr& plan1,
+    const core::PlanNodePtr& plan2) {
+  CursorParameters params1;
+  params1.planNode = plan1;
+  auto [cursor1, results1] = readCursor(params1, [](Task*) {});
+
+  CursorParameters params2;
+  params2.planNode = plan2;
+  auto [cursor2, results2] = readCursor(params2, [](Task*) {});
+  return assertEqualResults(results1, results2);
 }
 
 void assertEqualTypeAndNumRows(
@@ -1291,7 +1306,22 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     addSplits(task);
   }
 
-  EXPECT_TRUE(waitForTaskCompletion(task, maxWaitMicros)) << task->taskId();
+  if (!waitForTaskCompletion(task, maxWaitMicros)) {
+    // NOTE: there is async memory arbitration might fail the task after all the
+    // results have been consumed and before the task finishes. So we might run
+    // into the failed task state in some rare case such as exposed by
+    // concurrent memory arbitration test.
+    if (task->state() != TaskState::kFinished &&
+        task->state() != TaskState::kRunning) {
+      waitForTaskDriversToFinish(task, maxWaitMicros);
+      std::rethrow_exception(task->error());
+    } else {
+      VELOX_FAIL(
+          "Failed to wait for task to complete after {}, task: {}",
+          succinctMicros(maxWaitMicros),
+          task->toString());
+    }
+  }
   return {std::move(cursor), std::move(result)};
 }
 

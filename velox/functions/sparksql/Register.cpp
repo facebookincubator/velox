@@ -16,6 +16,7 @@
 #include "velox/functions/sparksql/Register.h"
 
 #include "velox/expression/RegisterSpecialForm.h"
+#include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
@@ -36,6 +37,7 @@
 #include "velox/functions/sparksql/RegisterCompare.h"
 #include "velox/functions/sparksql/Size.h"
 #include "velox/functions/sparksql/String.h"
+#include "velox/functions/sparksql/StringToMap.h"
 #include "velox/functions/sparksql/UnscaledValueFunction.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
@@ -65,6 +67,8 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_allow_duplicates, prefix + "map_from_arrays");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_concat_row, exec::RowConstructorCallToSpecialForm::kRowConstructor);
   // String functions.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, prefix + "concat");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_lower, prefix + "lower");
@@ -153,6 +157,13 @@ void registerFunctions(const std::string& prefix) {
       int32_t,
       int32_t>({prefix + "overlay"});
 
+  registerFunction<
+      sparksql::StringToMapFunction,
+      Map<Varchar, Varchar>,
+      Varchar,
+      Varchar,
+      Varchar>({prefix + "str_to_map"});
+
   registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
       {prefix + "left"});
 
@@ -173,7 +184,6 @@ void registerFunctions(const std::string& prefix) {
       prefix + "regexp_extract", re2ExtractSignatures(), makeRegexExtract);
   exec::registerStatefulVectorFunction(
       prefix + "rlike", re2SearchSignatures(), makeRLike);
-  registerRegexReplace(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_regexp_split, prefix + "split");
 
   exec::registerStatefulVectorFunction(
@@ -274,6 +284,8 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<QuarterFunction, int32_t, Date>({prefix + "quarter"});
 
   registerFunction<MonthFunction, int32_t, Date>({prefix + "month"});
+
+  registerFunction<NextDayFunction, Date, Date, Varchar>({prefix + "next_day"});
 
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
