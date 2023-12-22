@@ -129,7 +129,7 @@ class PageReader {
   }
 
   bool isByteStreamSplit() const {
-      return encoding_ == thrift::Encoding::BYTE_STREAM_SPLIT;
+    return encoding_ == thrift::Encoding::BYTE_STREAM_SPLIT;
   }
 
   /// Returns the range of repdefs for the top level rows covered by the last
