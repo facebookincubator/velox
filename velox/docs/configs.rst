@@ -452,12 +452,14 @@ Each query can override the config by setting corresponding query session proper
      -
      - integer
      - 8MB
-     - Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests. The parameter control the threshold when whole file is fetched. 
-   * - directory-size-guess
+     - Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests. 
+       The parameter controls the threshold when whole file is fetched. 
+   * - footer-size-estinated
      -
      - integer
      - 1MB
-     - Define the data size which is fetched with meta data together to void multiple IO requests. It's useful in file format where the immediately following data needs to be fetched after meta data
+     - Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later. 
+       The parameter controls the size when footer is fetched each time. Bigger value can decrease the IO requests but may fetch more used meta data.
    * - hive.orc.writer.stripe-max-size
      - orc_optimized_writer_max_stripe_size
      - string
