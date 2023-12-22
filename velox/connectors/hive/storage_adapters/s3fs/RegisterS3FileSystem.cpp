@@ -87,25 +87,28 @@ std::unique_ptr<velox::dwio::common::FileSink> s3WriteFileSinkGenerator(
 
 void registerS3FileSystem() {
 #ifdef VELOX_ENABLE_S3
-  if (fileSystems()->empty()) {
-    registerFileSystem(isS3File, std::function(fileSystemGenerator));
-    dwio::common::FileSink::registerFactory(
-        std::function(s3WriteFileSinkGenerator));
-  }
+  fileSystems().withWLock([&](auto& instanceMap) {
+    if (instanceMap.empty()) {
+      registerFileSystem(isS3File, std::function(fileSystemGenerator));
+      dwio::common::FileSink::registerFactory(
+          std::function(s3WriteFileSinkGenerator));
+    }
+  });
 #endif
 }
 
 void finalizeS3FileSystem() {
 #ifdef VELOX_ENABLE_S3
   bool singleUseCount = true;
-  fileSystems().withRLock([&](auto& instanceMap) {
+  fileSystems().withWLock([&](auto& instanceMap) {
     for (const auto& [id, fs] : instanceMap) {
       singleUseCount &= (fs.use_count() == 1);
     }
   });
 
   VELOX_CHECK(singleUseCount, "Cannot finalize S3FileSystem while in use");
-  fileSystems()->clear();
+  fileSystems().withWLock([&](auto& instanceMap) { instanceMap.clear(); });
+
   finalizeS3();
 #endif
 }

@@ -22,11 +22,12 @@ namespace {
 
 class S3FileSystemRegistrationTest : public S3Test {
  protected:
-  static void SetUpTestSuite() {
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
     filesystems::registerS3FileSystem();
   }
 
-  static void TearDownTestSuite() {
+  static void TearDownTestCase() {
     filesystems::finalizeS3FileSystem();
   }
 };
