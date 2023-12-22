@@ -34,6 +34,7 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
             velox_exec
             velox_functions_prestosql
             velox_parse_parser
+            velox_parse_utils
             velox_functions_prestosql
             velox_functions_spark)
 

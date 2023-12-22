@@ -39,6 +39,7 @@ add_test(velox_base_test velox_base_test)
 target_link_libraries(
   velox_base_test
   PRIVATE velox_common_base
+          velox_test_util
           velox_time
           velox_status
           velox_exception

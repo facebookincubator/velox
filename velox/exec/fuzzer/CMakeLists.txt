@@ -29,7 +29,6 @@ target_link_libraries(
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_writer
   velox_type
-  velox_vector_fuzzer
   velox_exec_test_lib
   velox_expression_test_utility
   velox_vector
@@ -38,10 +37,5 @@ target_link_libraries(
 add_library(velox_aggregation_fuzzer AggregationFuzzer.cpp)
 
 target_link_libraries(
-  velox_aggregation_fuzzer
-  velox_type
-  velox_vector_fuzzer
-  velox_exec_test_lib
-  velox_expression_test_utility
-  velox_aggregation_fuzzer_base
-  velox_fuzzer_util)
+  velox_aggregation_fuzzer velox_type velox_exec_test_lib
+  velox_expression_test_utility velox_aggregation_fuzzer_base velox_fuzzer_util)

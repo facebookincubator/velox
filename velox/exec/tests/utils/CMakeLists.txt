@@ -39,6 +39,7 @@ target_link_libraries(
   velox_exception
   velox_expression
   velox_parse_parser
+  velox_parse_utils
   velox_duckdb_conversion
   velox_dwio_common
   velox_dwio_dwrf_reader
@@ -49,4 +50,5 @@ target_link_libraries(
   velox_tpch_connector
   velox_presto_serializer
   velox_functions_prestosql
-  velox_aggregates)
+  velox_aggregates
+  velox_vector_fuzzer)
