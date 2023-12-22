@@ -25,6 +25,10 @@ namespace {
 
 class S3FileSystemTest : public S3Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
     S3Test::SetUp();
     auto hiveConfig = minioServer_->hiveConfig({{"hive.s3.log-level", "Info"}});

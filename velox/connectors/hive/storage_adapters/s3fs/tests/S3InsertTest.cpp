@@ -30,6 +30,11 @@ namespace facebook::velox {
 namespace {
 
 class S3InsertTest : public S3Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
     S3Test::SetUp();
     filesystems::registerS3FileSystem();

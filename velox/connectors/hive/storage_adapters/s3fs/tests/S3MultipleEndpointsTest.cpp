@@ -23,8 +23,8 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-static const std::string kConnectorId1 = "test-hive1";
-static const std::string kConnectorId2 = "test-hive2";
+static const std::string_view kConnectorId1 = "test-hive1";
+static const std::string_view kConnectorId2 = "test-hive2";
 
 using namespace facebook::velox::exec::test;
 
@@ -33,6 +33,10 @@ namespace {
 
 class S3MultipleEndpoints : public S3Test {
  public:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
     S3Test::SetUp();
     filesystems::registerS3FileSystem();
@@ -40,7 +44,9 @@ class S3MultipleEndpoints : public S3Test {
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
-                kConnectorId1, minioServer_->hiveConfig(), ioExecutor_.get());
+                std::string(kConnectorId1),
+                minioServer_->hiveConfig(),
+                ioExecutor_.get());
     connector::registerConnector(hiveConnector1);
     auto port = facebook::velox::exec::test::getFreePort();
     minioSecondServer_ =
@@ -50,15 +56,15 @@ class S3MultipleEndpoints : public S3Test {
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
-                kConnectorId2,
+                std::string(kConnectorId2),
                 minioSecondServer_->hiveConfig(),
                 ioExecutor_.get());
     connector::registerConnector(hiveConnector2);
   }
 
   void TearDown() override {
-    connector::unregisterConnector(kConnectorId1);
-    connector::unregisterConnector(kConnectorId2);
+    connector::unregisterConnector(std::string(kConnectorId1));
+    connector::unregisterConnector(std::string(kConnectorId2));
     S3Test::TearDown();
     filesystems::finalizeS3FileSystem();
   }
@@ -128,9 +134,9 @@ TEST_F(S3MultipleEndpoints, s3Join) {
 
   // Insert input data into both tables.
   auto table1WriteInfo =
-      writeData(input1, kOutputDirectory.data(), kConnectorId1);
+      writeData(input1, kOutputDirectory.data(), std::string(kConnectorId1));
   auto table2WriteInfo =
-      writeData(input2, kOutputDirectory.data(), kConnectorId2);
+      writeData(input2, kOutputDirectory.data(), std::string(kConnectorId2));
 
   // Inner Join both the tables.
   core::PlanNodeId scan1, scan2;
@@ -139,7 +145,7 @@ TEST_F(S3MultipleEndpoints, s3Join) {
                         .startTableScan()
                         .tableName("hive_table1")
                         .outputType(rowType1)
-                        .connectorId(kConnectorId1)
+                        .connectorId(std::string(kConnectorId1))
                         .endTableScan()
                         .capturePlanNodeId(scan1)
                         .planNode();
@@ -148,16 +154,16 @@ TEST_F(S3MultipleEndpoints, s3Join) {
           .startTableScan()
           .tableName("hive_table1")
           .outputType(rowType2)
-          .connectorId(kConnectorId2)
+          .connectorId(std::string(kConnectorId2))
           .endTableScan()
           .capturePlanNodeId(scan2)
           .hashJoin({"b0"}, {"a0"}, table1Scan, "", {"a0", "a1", "a2", "a3"})
           .planNode();
 
-  auto split1 =
-      createSplit(table1WriteInfo, kOutputDirectory.data(), kConnectorId1);
-  auto split2 =
-      createSplit(table2WriteInfo, kOutputDirectory.data(), kConnectorId2);
+  auto split1 = createSplit(
+      table1WriteInfo, kOutputDirectory.data(), std::string(kConnectorId1));
+  auto split2 = createSplit(
+      table2WriteInfo, kOutputDirectory.data(), std::string(kConnectorId2));
   auto results = AssertQueryBuilder(join)
                      .split(scan1, split1)
                      .split(scan2, split2)
