@@ -20,6 +20,8 @@
 
 namespace facebook::velox::parquet {
 
+// ByteStreamSplitDecoder is adapted from Apache Arrow:
+// https://github.com/apache/arrow/blob/9736dde84bb2e6996d1d12f6a044c33398e3c3a3/cpp/src/parquet/encoding.cc#L3202-L3327
 class ByteStreamSplitDecoder {
  public:
   ByteStreamSplitDecoder(const char* start, const char* end, uint32_t numBytes)
