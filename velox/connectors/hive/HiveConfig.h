@@ -133,7 +133,7 @@ class HiveConfig {
   /// The size in bytes to be fetched with Meta data together, used when the
   /// data after meta data will be used later. Optimization to decrease small IO
   /// request
-  static constexpr const char* kDirectorySizeGuess = "directory-size-guess";
+  static constexpr const char* kDirectorySizeGuess = "footer-size-estinated";
 
   /// The threshold of file size in bytes when the whole file is fetched with
   /// meta data together. Optimization to decrease the small IO requests
