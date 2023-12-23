@@ -37,7 +37,7 @@ FileSystemMap& fileSystems() {
   return instances;
 }
 
-std::string getS3Identity(std::shared_ptr<core::MemConfig>& config) {
+std::string getS3Identity(const std::shared_ptr<core::MemConfig>& config) {
   HiveConfig hiveConfig = HiveConfig(config);
   auto endpoint = hiveConfig.s3Endpoint();
   if (!endpoint.empty()) {
@@ -60,12 +60,13 @@ std::shared_ptr<FileSystem> fileSystemGenerator(
   return fileSystems().withWLock(
       [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
         initializeS3(config.get());
-        if (instanceMap.count(s3Identity) == 0) {
+        auto iterator = instanceMap.find(s3Identity);
+        if (iterator == instanceMap.end()) {
           auto fs = std::make_shared<S3FileSystem>(properties);
           instanceMap.insert({s3Identity, fs});
           return fs;
         }
-        return instanceMap[s3Identity];
+        return iterator->second;
       });
 }
 
@@ -104,10 +105,9 @@ void finalizeS3FileSystem() {
     for (const auto& [id, fs] : instanceMap) {
       singleUseCount &= (fs.use_count() == 1);
     }
+    VELOX_CHECK(singleUseCount, "Cannot finalize S3FileSystem while in use");
+    instanceMap.clear();
   });
-
-  VELOX_CHECK(singleUseCount, "Cannot finalize S3FileSystem while in use");
-  fileSystems().withWLock([&](auto& instanceMap) { instanceMap.clear(); });
 
   finalizeS3();
 #endif
