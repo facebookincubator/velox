@@ -93,7 +93,9 @@ SpillWriter::SpillWriter(
     uint64_t writeBufferSize,
     const std::string& fileCreateConfig,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* stats)
+    folly::Synchronized<common::SpillStats>* stats,
+    common::UpdateSpilledBytesAndCheckLimitCB&
+        updateSpilledBytesAndCheckLimitCb)
     : type_(type),
       numSortKeys_(numSortKeys),
       sortCompareFlags_(sortCompareFlags),
@@ -103,7 +105,8 @@ SpillWriter::SpillWriter(
       writeBufferSize_(writeBufferSize),
       fileCreateConfig_(fileCreateConfig),
       pool_(pool),
-      stats_(stats) {
+      stats_(stats),
+      updateSpilledBytesAndCheckLimitCb_(updateSpilledBytesAndCheckLimitCb) {
   // NOTE: if the associated spilling operator has specified the sort
   // comparison flags, then it must match the number of sorting keys.
   VELOX_CHECK(
@@ -165,6 +168,7 @@ uint64_t SpillWriter::flush() {
     writtenBytes = file->write(std::move(iobuf));
   }
   updateWriteStats(writtenBytes, flushTimeUs, writeTimeUs);
+  updateSpilledBytesAndCheckLimitCb_(writtenBytes);
   return writtenBytes;
 }
 

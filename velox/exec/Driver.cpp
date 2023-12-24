@@ -139,8 +139,13 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
   };
   const auto& spillFilePrefix =
       fmt::format("{}_{}_{}", pipelineId, driverId, operatorId);
+  common::UpdateSpilledBytesAndCheckLimitCB updateSpilledBytesAndCheckLimitCb =
+      [this](uint64_t bytes) {
+        this->task->queryCtx()->updateSpilledBytesAndCheckLimit(bytes);
+      };
   return common::SpillConfig(
       getSpillDirPathCb,
+      updateSpilledBytesAndCheckLimitCb,
       spillFilePrefix,
       queryConfig.maxSpillFileSize(),
       queryConfig.spillWriteBufferSize(),

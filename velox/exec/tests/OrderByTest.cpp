@@ -497,6 +497,7 @@ TEST_F(OrderByTest, spill) {
                   .config(
                       QueryConfig::kOrderBySpillMemoryThreshold,
                       std::to_string(32 << 20))
+                  .config(QueryConfig::kMaxSpillBytes, std::to_string(1))
                   .assertResults(expectedResult);
   auto taskStats = exec::toPlanStats(task->taskStats());
   auto& planStats = taskStats.at(orderNodeId);
@@ -1338,6 +1339,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, spillWithNoMoreOutput) {
           .config(
               QueryConfig::kPreferredOutputBatchBytes,
               std::to_string(1'000'000'000))
+          .config(QueryConfig::kMaxSpillBytes, std::to_string(1))
           .maxDrivers(1)
           .assertResults(expectedResult);
   auto taskStats = exec::toPlanStats(task->taskStats());
@@ -1345,4 +1347,64 @@ DEBUG_ONLY_TEST_F(OrderByTest, spillWithNoMoreOutput) {
   ASSERT_EQ(planStats.spilledBytes, 0);
   ASSERT_EQ(planStats.spilledRows, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+}
+
+TEST_F(OrderByTest, maxSpillBytes) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto vectors = createVectors(rowType, 1024, 15 << 20);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId orderNodeId;
+  const auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values(vectors)
+          .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+          .capturePlanNodeId(orderNodeId)
+          .planNode();
+  const auto expectedResult = AssertQueryBuilder(plan).copyResults(pool_.get());
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+
+  // Default maxSpillBytes is greater than the input size.
+  AssertQueryBuilder(plan)
+      .spillDirectory(spillDirectory->path)
+      .queryCtx(queryCtx)
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+      // Set a small capacity to trigger threshold based spilling
+      .config(
+          QueryConfig::kOrderBySpillMemoryThreshold, std::to_string(5 << 20))
+      .copyResults(pool_.get());
+
+  auto testSpill = [&](int32_t maxSpilledBytes) {
+    AssertQueryBuilder(plan)
+        .spillDirectory(spillDirectory->path)
+        .queryCtx(queryCtx)
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+        // Set a small capacity to trigger threshold based spilling
+        .config(
+            QueryConfig::kOrderBySpillMemoryThreshold, std::to_string(5 << 20))
+        .config(QueryConfig::kMaxSpillBytes, std::to_string(maxSpilledBytes))
+        .copyResults(pool_.get());
+  };
+
+  struct {
+    int32_t maxSpilledBytes;
+    std::string debugString() const {
+      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+    }
+  } testSettings[] = {{16 << 20}, {0}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    if (testData.maxSpilledBytes != 0) {
+      VELOX_ASSERT_THROW(
+          testSpill(testData.maxSpilledBytes),
+          "Query exceeded per-query local spill limit of 16.00MB");
+    } else {
+      testSpill(testData.maxSpilledBytes);
+    }
+  }
 }

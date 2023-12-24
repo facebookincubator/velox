@@ -26,10 +26,15 @@ namespace facebook::velox::common {
 /// Implementations can use it to ensure the path exists before returning.
 using GetSpillDirectoryPathCB = std::function<const std::string&()>;
 
+/// Defining type for a callback function that updates the spilled bytes in
+/// query level, which would throw if exceeds the maxSpillBytes limitation.
+using UpdateSpilledBytesAndCheckLimitCB = std::function<void(uint64_t)>;
+
 /// Specifies the config for spilling.
 struct SpillConfig {
   SpillConfig(
       GetSpillDirectoryPathCB _getSpillDirPathCb,
+      UpdateSpilledBytesAndCheckLimitCB _updateSpilledBytesAndCheckLimitCb,
       std::string _filePath,
       uint64_t _maxFileSize,
       uint64_t _writeBufferSize,
@@ -59,6 +64,10 @@ struct SpillConfig {
   /// A callback function that returns the spill directory path. Implementations
   /// can use it to ensure the path exists before returning.
   GetSpillDirectoryPathCB getSpillDirPathCb;
+
+  /// A callback function that updates the spilled bytes query level, which
+  /// would throw if exceeds the maxSpillBytes limitation.
+  UpdateSpilledBytesAndCheckLimitCB updateSpilledBytesAndCheckLimitCb;
 
   /// Prefix for spill files.
   std::string fileNamePrefix;

@@ -79,4 +79,15 @@ QueryCtx::QueryCtx(
   return fmt::format("query.{}.{}", queryId.c_str(), seqNum++);
 }
 
+void QueryCtx::updateSpilledBytesAndCheckLimit(uint64_t bytes) {
+  const auto numSpilledBytes = numSpilledBytes_.fetch_add(bytes) + bytes;
+  if (queryConfig_.maxSpillBytes() > 0) {
+    VELOX_USER_CHECK_LE(
+        numSpilledBytes,
+        queryConfig_.maxSpillBytes(),
+        "Query exceeded per-query local spill limit of {}.",
+        succinctBytes(queryConfig_.maxSpillBytes()));
+  }
+}
+
 } // namespace facebook::velox::core

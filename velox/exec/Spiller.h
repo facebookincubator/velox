@@ -56,6 +56,8 @@ class Spiller {
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
       common::GetSpillDirectoryPathCB getSpillDirPathCb,
+      const common::UpdateSpilledBytesAndCheckLimitCB&
+          updateSpilledBytesAndCheckLimitCb,
       const std::string& fileNamePrefix,
       uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
@@ -69,6 +71,8 @@ class Spiller {
       RowContainer* container,
       RowTypePtr rowType,
       common::GetSpillDirectoryPathCB getSpillDirPathCb,
+      const common::UpdateSpilledBytesAndCheckLimitCB&
+          updateSpilledBytesAndCheckLimitCb,
       const std::string& fileNamePrefix,
       uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
@@ -82,6 +86,8 @@ class Spiller {
       RowTypePtr rowType,
       HashBitRange bits,
       common::GetSpillDirectoryPathCB getSpillDirPathCb,
+      const common::UpdateSpilledBytesAndCheckLimitCB&
+          updateSpilledBytesAndCheckLimitCb,
       const std::string& fileNamePrefix,
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
@@ -96,6 +102,8 @@ class Spiller {
       RowTypePtr rowType,
       HashBitRange bits,
       common::GetSpillDirectoryPathCB getSpillDirPathCb,
+      const common::UpdateSpilledBytesAndCheckLimitCB&
+          updateSpilledBytesAndCheckLimitCb,
       const std::string& fileNamePrefix,
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
@@ -209,6 +217,8 @@ class Spiller {
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
       common::GetSpillDirectoryPathCB getSpillDirPathCb,
+      const common::UpdateSpilledBytesAndCheckLimitCB&
+          updateSpilledBytesAndCheckLimitCb,
       const std::string& fileNamePrefix,
       uint64_t targetFileSize,
       uint64_t writeBufferSize,

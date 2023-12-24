@@ -125,6 +125,8 @@ class QueryCtx {
     pool_ = std::move(pool);
   }
 
+  void updateSpilledBytesAndCheckLimit(uint64_t bytes);
+
  private:
   static Config* getEmptyConfig() {
     static const std::unique_ptr<Config> kEmptyConfig =
@@ -149,6 +151,7 @@ class QueryCtx {
   std::shared_ptr<memory::MemoryPool> pool_;
   folly::Executor::KeepAlive<> executorKeepalive_;
   QueryConfig queryConfig_;
+  std::atomic<uint64_t> numSpilledBytes_{0};
 };
 
 // Represents the state of one thread of query execution.

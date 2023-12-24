@@ -321,6 +321,8 @@ class SpillState {
   /// results.
   SpillState(
       common::GetSpillDirectoryPathCB getSpillDirectoryPath,
+      const common::UpdateSpilledBytesAndCheckLimitCB&
+          updateSpilledBytesAndCheckLimitCb,
       const std::string& fileNamePrefix,
       int32_t maxPartitions,
       int32_t numSortKeys,
@@ -405,6 +407,10 @@ class SpillState {
   // A callback function that returns the spill directory path. Implementations
   // can use it to ensure the path exists before returning.
   common::GetSpillDirectoryPathCB getSpillDirPathCb_;
+
+  // A callback function that updates the spilled bytes query level, which
+  // would throw if exceeds the maxSpillBytes limitation.
+  common::UpdateSpilledBytesAndCheckLimitCB updateSpilledBytesAndCheckLimitCb_;
 
   /// Prefix for spill files.
   const std::string fileNamePrefix_;
