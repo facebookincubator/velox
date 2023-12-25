@@ -27,18 +27,7 @@ DEFINE_int64(
     "Initial seed for random number generator used to reproduce previous "
     "results (0 means start with random seed).");
 
-DEFINE_string(
-    only,
-    "",
-    "If specified, Fuzzer will only choose functions from "
-    "this comma separated list of function names "
-    "(e.g: --only \"split\" or --only \"substr,ltrim\").");
-
-DEFINE_string(
-    special_forms,
-    "and,or,cast,coalesce,if,switch",
-    "Comma-separated list of special forms to use in generated expression. "
-    "Supported special forms: and, or, coalesce, if, switch, cast.");
+using facebook::velox::test::FuzzerRunner;
 
 int main(int argc, char** argv) {
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
@@ -48,10 +37,13 @@ int main(int argc, char** argv) {
   // Calls common init functions in the necessary order, initializing
   // singletons, installing proper signal handlers for better debugging
   // experience, and initialize glog and gflags.
-  folly::init(&argc, &argv);
+  folly::Init init(&argc, &argv);
 
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable.
+  // This list can include a mix of function names and function signatures.
+  // Use function name to exclude all signatures of a given function from
+  // testing. Use function signature to exclude only a specific signature.
   std::unordered_set<std::string> skipFunctions = {
       // Fuzzer and the underlying engine are confused about cardinality(HLL)
       // (since HLL is a user defined type), and end up trying to use
@@ -60,8 +52,9 @@ int main(int argc, char** argv) {
       "cardinality",
       "element_at",
       "width_bucket",
+      // Fuzzer cannot generate valid 'comparator' lambda.
+      "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return FuzzerRunner::run(
-      FLAGS_only, initialSeed, skipFunctions, FLAGS_special_forms);
+  return FuzzerRunner::run(initialSeed, skipFunctions);
 }

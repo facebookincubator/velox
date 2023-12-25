@@ -41,7 +41,8 @@ int main(int argc, char** argv) {
   // filesystem. We also need to register the dwrf reader factory:
   filesystems::registerLocalFileSystem();
   dwrf::registerDwrfReaderFactory();
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
+  facebook::velox::memory::MemoryManager::initialize({});
+  auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
 
   std::string filePath{argv[1]};
   dwio::common::ReaderOptions readerOpts{pool.get()};

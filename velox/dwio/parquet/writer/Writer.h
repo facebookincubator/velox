@@ -23,9 +23,13 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/writer/arrow/Types.h"
+#include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::parquet {
+
+using facebook::velox::parquet::arrow::util::CodecOptions;
 
 class ArrowDataBufferSink;
 
@@ -90,10 +94,12 @@ struct WriterOptions {
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
   double bufferGrowRatio = 1.5;
   common::CompressionKind compression = common::CompressionKind_NONE;
+  arrow::Encoding::type encoding = arrow::Encoding::PLAIN;
   velox::memory::MemoryPool* memoryPool;
   // The default factory allows the writer to construct the default flush
   // policy with the configs in its ctor.
   std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicyFactory;
+  std::shared_ptr<CodecOptions> codecOptions;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.
@@ -102,15 +108,18 @@ class Writer : public dwio::common::Writer {
   // Constructs a writer with output to 'sink'. A new row group is
   // started every 'rowsInRowGroup' top level rows. 'pool' is used for
   // temporary memory. 'properties' specifies Parquet-specific
-  // options.
+  // options. 'schema' specifies the file's overall schema, and it is always
+  // non-null.
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
       const WriterOptions& options,
-      std::shared_ptr<memory::MemoryPool> pool);
+      std::shared_ptr<memory::MemoryPool> pool,
+      RowTypePtr schema);
 
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const WriterOptions& options);
+      const WriterOptions& options,
+      RowTypePtr schema);
 
   ~Writer() override = default;
 
@@ -142,6 +151,8 @@ class Writer : public dwio::common::Writer {
   std::shared_ptr<ArrowContext> arrowContext_;
 
   std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
+
+  const RowTypePtr schema_;
 };
 
 class ParquetWriterFactory : public dwio::common::WriterFactory {

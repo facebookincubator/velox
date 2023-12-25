@@ -19,7 +19,9 @@
 #include <string>
 #include <unordered_map>
 
+#include "velox/common/caching/CacheTTLController.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
+#include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
@@ -216,6 +218,10 @@ void addSubfields(
             subscript,
             "Unsupported for array pruning: {}",
             element->toString());
+        VELOX_USER_CHECK_GT(
+            subscript->index(),
+            0,
+            "Non-positive array subscript cannot be push down");
         maxIndex = std::max(maxIndex, std::min(kMaxIndex, subscript->index()));
       }
       spec.setMaxArrayElementsCount(maxIndex);
@@ -548,6 +554,13 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 
   auto fileHandle = fileHandleFactory_->generate(split_->filePath).second;
+  // Here we keep adding new entries to CacheTTLController when new fileHandles
+  // are generated, if CacheTTLController was created. Creator of
+  // CacheTTLController needs to make sure a size control strategy was available
+  // such as removing aged out entries.
+  if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
+    cacheTTLController->addOpenFileInfo(fileHandle->uuid.id());
+  }
   auto input = createBufferedInput(*fileHandle, readerOpts_);
 
   if (splitReader_) {
@@ -670,9 +683,17 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
        {"totalScanTime",
         RuntimeCounter(
             ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+       {"totalRemainingFilterTime",
+        RuntimeCounter(
+            totalRemainingFilterTime_.load(std::memory_order_relaxed),
+            RuntimeCounter::Unit::kNanos)},
        {"ioWaitNanos",
         RuntimeCounter(
             ioStats_->queryThreadIoLatency().sum() * 1000,
+            RuntimeCounter::Unit::kNanos)},
+       {"maxSingleIoWaitNanos",
+        RuntimeCounter(
+            ioStats_->queryThreadIoLatency().max() * 1000,
             RuntimeCounter::Unit::kNanos)},
        {"overreadBytes",
         RuntimeCounter(
@@ -799,20 +820,29 @@ HiveDataSource::createBufferedInput(
         executor_,
         readerOpts);
   }
-  return std::make_unique<dwio::common::BufferedInput>(
+  return std::make_unique<dwio::common::DirectBufferedInput>(
       fileHandle.file,
-      readerOpts.getMemoryPool(),
       dwio::common::MetricsLog::voidLog(),
-      ioStats_.get());
+      fileHandle.uuid.id(),
+      Connector::getTracker(scanId_, readerOpts.loadQuantum()),
+      fileHandle.groupId.id(),
+      ioStats_,
+      executor_,
+      readerOpts);
 }
 
 vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
+  auto filterStartMicros = getCurrentTimeMicro();
   filterRows_.resize(output_->size());
 
   expressionEvaluator_->evaluate(
       remainingFilterExprSet_.get(), filterRows_, *rowVector, filterResult_);
-  return exec::processFilterResults(
+  auto res = exec::processFilterResults(
       filterResult_, filterRows_, filterEvalCtx_, pool_);
+  totalRemainingFilterTime_.fetch_add(
+      (getCurrentTimeMicro() - filterStartMicros) * 1000,
+      std::memory_order_relaxed);
+  return res;
 }
 
 void HiveDataSource::resetSplit() {

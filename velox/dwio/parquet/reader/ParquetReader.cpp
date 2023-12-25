@@ -15,11 +15,12 @@
  */
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
-#include <thrift/protocol/TCompactProtocol.h> //@manual
-#include "velox/dwio/common/MetricsLog.h"
-#include "velox/dwio/common/TypeUtils.h"
+
+#include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
+
+#include <thrift/protocol/TCompactProtocol.h> //@manual
 
 namespace facebook::velox::parquet {
 
@@ -93,6 +94,7 @@ class ReaderBase {
       uint32_t maxSchemaElementIdx,
       uint32_t maxRepeat,
       uint32_t maxDefine,
+      uint32_t parentSchemaIdx,
       uint32_t& schemaIdx,
       uint32_t& columnIdx) const;
 
@@ -211,8 +213,11 @@ void ReaderBase::initializeSchema() {
   uint32_t schemaIdx = 0;
   uint32_t columnIdx = 0;
   uint32_t maxSchemaElementIdx = fileMetaData_->schema.size() - 1;
+  // Setting the parent schema index of the root("hive_schema") to be 0, which
+  // is the root itself. This is ok because it's never required to check the
+  // parent of the root in getParquetColumnInfo().
   schemaWithId_ = getParquetColumnInfo(
-      maxSchemaElementIdx, maxRepeat, maxDefine, schemaIdx, columnIdx);
+      maxSchemaElementIdx, maxRepeat, maxDefine, 0, schemaIdx, columnIdx);
   schema_ = createRowType(
       schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
 }
@@ -221,6 +226,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     uint32_t maxSchemaElementIdx,
     uint32_t maxRepeat,
     uint32_t maxDefine,
+    uint32_t parentSchemaIdx,
     uint32_t& schemaIdx,
     uint32_t& columnIdx) const {
   VELOX_CHECK(fileMetaData_ != nullptr);
@@ -252,22 +258,60 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
     std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>> children;
 
+    auto curSchemaIdx = schemaIdx;
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
       auto child = getParquetColumnInfo(
-          maxSchemaElementIdx, maxRepeat, maxDefine, ++schemaIdx, columnIdx);
+          maxSchemaElementIdx,
+          maxRepeat,
+          maxDefine,
+          curSchemaIdx,
+          ++schemaIdx,
+          columnIdx);
       children.push_back(child);
     }
     VELOX_CHECK(!children.empty());
 
     if (schemaElement.__isset.converted_type) {
       switch (schemaElement.converted_type) {
+        case thrift::ConvertedType::MAP_KEY_VALUE:
+          // If the MAP_KEY_VALUE annotated group's parent is a MAP, it should
+          // be the repeated key_value group that directly contains the key and
+          // value children.
+          if (schema[parentSchemaIdx].converted_type ==
+              thrift::ConvertedType::MAP) {
+            VELOX_CHECK_EQ(
+                schemaElement.repetition_type,
+                thrift::FieldRepetitionType::REPEATED);
+            VELOX_CHECK_EQ(children.size(), 2);
+
+            auto childrenCopy = children;
+            return std::make_shared<const ParquetTypeWithId>(
+                TypeFactory<TypeKind::MAP>::create(
+                    children[0]->type(), children[1]->type()),
+                std::move(childrenCopy),
+                curSchemaIdx, // TODO: there are holes in the ids
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                maxRepeat,
+                maxDefine);
+          }
+
+          // For backward-compatibility, a group annotated with MAP_KEY_VALUE
+          // that is not contained by a MAP-annotated group should be handled as
+          // a MAP-annotated group.
+          FOLLY_FALLTHROUGH;
+
         case thrift::ConvertedType::LIST:
         case thrift::ConvertedType::MAP: {
-          auto element = children.at(0)->getChildren();
           VELOX_CHECK_EQ(children.size(), 1);
+          const auto& child = children[0];
+          auto grandChildren = child->getChildren();
           return std::make_shared<const ParquetTypeWithId>(
-              children[0]->type(),
-              std::move(element),
+              child->type(),
+              std::move(grandChildren),
               curSchemaIdx, // TODO: there are holes in the ids
               maxSchemaElementIdx,
               ParquetTypeWithId::kNonLeaf, // columnIdx,
@@ -277,30 +321,12 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               maxRepeat + 1,
               maxDefine);
         }
-        case thrift::ConvertedType::MAP_KEY_VALUE: {
-          // child of MAP
-          VELOX_CHECK_EQ(
-              schemaElement.repetition_type,
-              thrift::FieldRepetitionType::REPEATED);
-          assert(children.size() == 2);
-          auto childrenCopy = children;
-          return std::make_shared<const ParquetTypeWithId>(
-              TypeFactory<TypeKind::MAP>::create(
-                  children[0]->type(), children[1]->type()),
-              std::move(childrenCopy),
-              curSchemaIdx, // TODO: there are holes in the ids
-              maxSchemaElementIdx,
-              ParquetTypeWithId::kNonLeaf, // columnIdx,
-              std::move(name),
-              std::nullopt,
-              std::nullopt,
-              maxRepeat,
-              maxDefine);
-        }
+
         default:
-          VELOX_UNSUPPORTED(
-              "Unsupported SchemaElement type: {}",
-              schemaElement.converted_type);
+          VELOX_UNREACHABLE(
+              "Invalid SchemaElement converted_type: {}, name: {}",
+              schemaElement.converted_type,
+              schemaElement.name);
       }
     } else {
       if (schemaElement.repetition_type ==
@@ -567,24 +593,16 @@ void ReaderBase::scheduleRowGroups(
     const std::vector<uint32_t>& rowGroupIds,
     int32_t currentGroup,
     StructColumnReader& reader) {
-  auto thisGroup = rowGroupIds[currentGroup];
-  auto nextGroup =
-      currentGroup + 1 < rowGroupIds.size() ? rowGroupIds[currentGroup + 1] : 0;
-  auto input = inputs_[thisGroup].get();
-  if (!input) {
-    inputs_[thisGroup] = reader.loadRowGroup(thisGroup, input_);
-  }
-  for (auto counter = 0; counter < options_.prefetchRowGroups(); ++counter) {
-    if (nextGroup) {
-      if (inputs_.count(nextGroup) == 0) {
-        inputs_[nextGroup] = reader.loadRowGroup(nextGroup, input_);
-      }
-    } else {
-      break;
+  auto numRowGroupsToLoad = std::min(
+      options_.prefetchRowGroups() + 1,
+      static_cast<int64_t>(rowGroupIds.size() - currentGroup));
+  for (auto i = 0; i < numRowGroupsToLoad; i++) {
+    auto thisGroup = rowGroupIds[currentGroup + i];
+    if (!inputs_[thisGroup]) {
+      inputs_[thisGroup] = reader.loadRowGroup(thisGroup, input_);
     }
-    nextGroup =
-        nextGroup + 1 < rowGroupIds.size() ? rowGroupIds[nextGroup + 1] : 0;
   }
+
   if (currentGroup >= 1) {
     inputs_.erase(rowGroupIds[currentGroup - 1]);
   }

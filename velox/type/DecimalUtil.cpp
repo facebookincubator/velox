@@ -23,7 +23,11 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   VELOX_DCHECK_GE(scale, 0);
   VELOX_DCHECK_LT(
       static_cast<size_t>(scale), sizeof(DecimalUtil::kPowersOfTen));
+  const bool isFraction = (scale > 0);
   if (unscaledValue == 0) {
+    if (isFraction) {
+      return fmt::format("{:.{}f}", 0.0, scale);
+    }
     return "0";
   }
 
@@ -33,7 +37,6 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   }
   int128_t integralPart = unscaledValue / DecimalUtil::kPowersOfTen[scale];
 
-  bool isFraction = (scale > 0);
   std::string fractionString;
   if (isFraction) {
     auto fraction =
@@ -51,7 +54,7 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
 }
 } // namespace
 
-std::string DecimalUtil::toString(const int128_t value, const TypePtr& type) {
+std::string DecimalUtil::toString(int128_t value, const TypePtr& type) {
   auto [precision, scale] = getDecimalPrecisionScale(*type);
   return formatDecimal(scale, value);
 }
@@ -84,6 +87,31 @@ int32_t DecimalUtil::toByteArray(int128_t value, char* out) {
     memcpy(out + length - sizeof(int64_t), lowAddr, sizeof(int64_t));
   }
   return length;
+}
+
+void DecimalUtil::computeAverage(
+    int128_t& avg,
+    int128_t sum,
+    int64_t count,
+    int64_t overflow) {
+  if (overflow == 0) {
+    divideWithRoundUp<int128_t, int128_t, int64_t>(
+        avg, sum, count, false, 0, 0);
+  } else {
+    VELOX_DCHECK_LE(overflow, count);
+    __uint128_t quotMul, remMul;
+    __int128_t quotSum, remSum;
+    __int128_t remTotal;
+    remMul = DecimalUtil::divideWithRoundUp<__uint128_t, __uint128_t, int64_t>(
+        quotMul, kOverflowMultiplier, count, true, 0, 0);
+    remMul *= overflow;
+    quotMul *= overflow;
+    remSum = DecimalUtil::divideWithRoundUp<__int128_t, __int128_t, int64_t>(
+        quotSum, sum, count, true, 0, 0);
+    DecimalUtil::divideWithRoundUp<__int128_t, __int128_t, int64_t>(
+        remTotal, remMul + remSum, count, true, 0, 0);
+    avg = quotMul + quotSum + remTotal;
+  }
 }
 
 } // namespace facebook::velox

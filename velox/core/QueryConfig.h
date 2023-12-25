@@ -94,6 +94,8 @@ class QueryConfig {
 
   /// Flags used to configure the CAST operator:
 
+  static constexpr const char* kLegacyCast = "legacy_cast";
+
   /// This flag makes the Row conversion to by applied in a way that the casting
   /// row field are matched by name instead of position.
   static constexpr const char* kCastMatchStructByName =
@@ -128,6 +130,11 @@ class QueryConfig {
   static constexpr const char* kMaxExchangeBufferSize =
       "exchange.max_buffer_size";
 
+  /// Maximum size in bytes to accumulate among all sources of the merge
+  /// exchange. Enforced approximately, not strictly.
+  static constexpr const char* kMaxMergeExchangeBufferSize =
+      "merge_exchange.max_buffer_size";
+
   static constexpr const char* kMaxPartialAggregationMemory =
       "max_partial_aggregation_memory";
 
@@ -148,6 +155,9 @@ class QueryConfig {
 
   static constexpr const char* kMaxPartitionedOutputBufferSize =
       "max_page_partitioning_buffer_size";
+
+  static constexpr const char* kMaxArbitraryBufferSize =
+      "max_arbitrary_buffer_size";
 
   /// Preferred size of batches in bytes to be returned by operators from
   /// Operator::getOutput. It is used when an estimate of average row size is
@@ -197,6 +207,9 @@ class QueryConfig {
   /// OrderBy spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kOrderBySpillEnabled = "order_by_spill_enabled";
 
+  /// Window spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kWindowSpillEnabled = "window_spill_enabled";
+
   /// If true, the memory arbitrator will reclaim memory from table writer by
   /// flushing its buffered data to disk.
   static constexpr const char* kWriterSpillEnabled = "writer_spill_enabled";
@@ -223,6 +236,13 @@ class QueryConfig {
   /// there is no limit.
   static constexpr const char* kOrderBySpillMemoryThreshold =
       "order_by_spill_memory_threshold";
+
+  /// The max row numbers to fill and spill for each spill run. This is used to
+  /// cap the memory used for spilling. If it is zero, then there is no limit
+  /// and spilling might run out of memory.
+  /// Based on offline test results, the default value is set to 12 million rows
+  /// which uses ~128MB memory when to fill a spill run.
+  static constexpr const char* kMaxSpillRunRows = "max_spill_run_rows";
 
   static constexpr const char* kTestingSpillPct = "testing.spill_pct";
 
@@ -257,26 +277,28 @@ class QueryConfig {
   static constexpr const char* kSpillWriteBufferSize =
       "spill_write_buffer_size";
 
+  /// Config used to create spill files. This config is provided to underlying
+  /// file system and the config is free form. The form should be defined by the
+  /// underlying file system.
+  static constexpr const char* kSpillFileCreateConfig =
+      "spill_file_create_config";
+
   static constexpr const char* kSpillStartPartitionBit =
       "spiller_start_partition_bit";
 
   static constexpr const char* kJoinSpillPartitionBits =
       "join_spiller_partition_bits";
 
-  static constexpr const char* kAggregationSpillPartitionBits =
-      "aggregation_spiller_partition_bits";
-
-  /// If true and spilling has been triggered during the input processing, the
-  /// spiller will spill all the remaining in-memory state to disk before output
-  /// processing. This is to simplify the aggregation query OOM prevention in
-  /// output processing stage.
-  static constexpr const char* kAggregationSpillAll = "aggregation_spill_all";
-
   static constexpr const char* kMinSpillableReservationPct =
       "min_spillable_reservation_pct";
 
   static constexpr const char* kSpillableReservationGrowthPct =
       "spillable_reservation_growth_pct";
+
+  /// Minimum memory footprint size required to reclaim memory from a file
+  /// writer by flushing its buffered data to disk.
+  static constexpr const char* kWriterFlushThresholdBytes =
+      "writer_flush_threshold_bytes";
 
   /// If true, array_agg() aggregation function will ignore nulls in the input.
   static constexpr const char* kPrestoArrayAggIgnoreNulls =
@@ -290,11 +312,11 @@ class QueryConfig {
   static constexpr const char* kSparkBloomFilterExpectedNumItems =
       "spark.bloom_filter.expected_num_items";
 
-  // The default number of bits to use for the bloom filter.
+  /// The default number of bits to use for the bloom filter.
   static constexpr const char* kSparkBloomFilterNumBits =
       "spark.bloom_filter.num_bits";
 
-  // The max number of bits to use for the bloom filter.
+  /// The max number of bits to use for the bloom filter.
   static constexpr const char* kSparkBloomFilterMaxNumBits =
       "spark.bloom_filter.max_num_bits";
 
@@ -331,6 +353,16 @@ class QueryConfig {
   /// disable the caches.
   static constexpr const char* kEnableExpressionEvaluationCache =
       "enable_expression_evaluation_cache";
+
+  /// Maximum number of splits to preload. Set to 0 to disable preloading.
+  static constexpr const char* kMaxSplitPreloadPerDriver =
+      "max_split_preload_per_driver";
+
+  /// If not zero, specifies the cpu time slice limit in ms that a driver thread
+  /// can continuously run without yielding. If it is zero, then there is no
+  /// limit.
+  static constexpr const char* kDriverCpuTimeSliceLimitMs =
+      "driver_cpu_time_slice_limit_ms";
 
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
@@ -378,13 +410,29 @@ class QueryConfig {
     return get<uint64_t>(kOrderBySpillMemoryThreshold, kDefault);
   }
 
-  // Returns the target size for a Task's buffered output. The
-  // producer Drivers are blocked when the buffered size exceeds
-  // this. The Drivers are resumed when the buffered size goes below
-  // OutputBufferManager::kContinuePct % of this.
+  uint64_t maxSpillRunRows() const {
+    static constexpr uint64_t kDefault = 12 * 1024 * 1024;
+    return get<uint64_t>(kMaxSpillRunRows, kDefault);
+  }
+
+  /// Returns the maximum size in bytes for the task's buffered output when
+  /// output is partitioned using hash of partitioning keys. See
+  /// PartitionedOutputNode::Kind::kPartitioned.
+  ///
+  /// The producer Drivers are blocked when the buffered size exceeds
+  /// this. The Drivers are resumed when the buffered size goes below
+  /// OutputBufferManager::kContinuePct % of this.
   uint64_t maxPartitionedOutputBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxPartitionedOutputBufferSize, kDefault);
+  }
+
+  /// Returns the maximum size in bytes for the task's buffered output when
+  /// output is distributed randomly among consumers. See
+  /// PartitionedOutputNode::Kind::kArbitrary.
+  uint64_t maxArbitraryBufferSize() const {
+    static constexpr uint64_t kDefault = 32UL << 20;
+    return get<uint64_t>(kMaxArbitraryBufferSize, kDefault);
   }
 
   uint64_t maxLocalExchangeBufferSize() const {
@@ -395,6 +443,11 @@ class QueryConfig {
   uint64_t maxExchangeBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxExchangeBufferSize, kDefault);
+  }
+
+  uint64_t maxMergeExchangeBufferSize() const {
+    static constexpr uint64_t kDefault = 128UL << 20;
+    return get<uint64_t>(kMaxMergeExchangeBufferSize, kDefault);
   }
 
   uint64_t preferredOutputBatchBytes() const {
@@ -430,6 +483,10 @@ class QueryConfig {
 
   bool adaptiveFilterReorderingEnabled() const {
     return get<bool>(kAdaptiveFilterReorderingEnabled, true);
+  }
+
+  bool isLegacyCast() const {
+    return get<bool>(kLegacyCast, false);
   }
 
   bool isMatchStructByName() const {
@@ -491,6 +548,12 @@ class QueryConfig {
     return get<bool>(kOrderBySpillEnabled, true);
   }
 
+  /// Returns true if spilling is enabled for Window operator. Must also
+  /// check the spillEnabled()!
+  bool windowSpillEnabled() const {
+    return get<bool>(kWindowSpillEnabled, true);
+  }
+
   /// Returns 'is writer spilling enabled' flag. Must also check the
   /// spillEnabled()!
   bool writerSpillEnabled() const {
@@ -540,20 +603,8 @@ class QueryConfig {
         kMaxBits, get<uint8_t>(kJoinSpillPartitionBits, kDefaultBits));
   }
 
-  /// Returns the number of bits used to calculate the spilling partition
-  /// number for hash join. The number of spilling partitions will be power of
-  /// two.
-  ///
-  /// NOTE: as for now, we only support up to 8-way spill partitioning.
-  uint8_t aggregationSpillPartitionBits() const {
-    constexpr uint8_t kDefaultBits = 0;
-    constexpr uint8_t kMaxBits = 3;
-    return std::min(
-        kMaxBits, get<uint8_t>(kAggregationSpillPartitionBits, kDefaultBits));
-  }
-
-  bool aggregationSpillAll() const {
-    return get<bool>(kAggregationSpillAll, true);
+  uint64_t writerFlushThresholdBytes() const {
+    return get<uint64_t>(kWriterFlushThresholdBytes, 96L << 20);
   }
 
   uint64_t maxSpillFileSize() const {
@@ -573,6 +624,10 @@ class QueryConfig {
   uint64_t spillWriteBufferSize() const {
     // The default write buffer size set to 1MB.
     return get<uint64_t>(kSpillWriteBufferSize, 1L << 20);
+  }
+
+  std::string spillFileCreateConfig() const {
+    return get<std::string>(kSpillFileCreateConfig, "");
   }
 
   /// Returns the minimal available spillable memory reservation in percentage
@@ -659,6 +714,14 @@ class QueryConfig {
 
   bool isExpressionEvaluationCacheEnabled() const {
     return get<bool>(kEnableExpressionEvaluationCache, true);
+  }
+
+  int32_t maxSplitPreloadPerDriver() const {
+    return get<int32_t>(kMaxSplitPreloadPerDriver, 2);
+  }
+
+  uint32_t driverCpuTimeSliceLimitMs() const {
+    return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 0);
   }
 
   template <typename T>

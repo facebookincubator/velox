@@ -39,8 +39,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
   void SetUp() override;
   void TearDown() override;
 
-  void resetHiveConnector(
-      const std::shared_ptr<const Config>& connectorProperties);
+  void resetHiveConnector(const std::shared_ptr<const Config>& config);
 
   void writeToFile(const std::string& filePath, RowVectorPtr vector);
 
@@ -219,9 +218,14 @@ class HiveConnectorSplitBuilder {
     return *this;
   }
 
+  HiveConnectorSplitBuilder& connectorId(const std::string& connectorId) {
+    connectorId_ = connectorId;
+    return *this;
+  }
+
   std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
     return std::make_shared<connector::hive::HiveConnectorSplit>(
-        kHiveConnectorId,
+        connectorId_,
         filePath_.find("/") == 0 ? "file:" + filePath_ : filePath_,
         fileFormat_,
         start_,
@@ -237,6 +241,7 @@ class HiveConnectorSplitBuilder {
   uint64_t length_{std::numeric_limits<uint64_t>::max()};
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
   std::optional<int32_t> tableBucketNumber_;
+  std::string connectorId_ = kHiveConnectorId;
 };
 
 } // namespace facebook::velox::exec::test

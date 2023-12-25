@@ -182,8 +182,9 @@ class SumDataSizeForStatsAggregate
   std::vector<IndexRange> rowIndices_;
 };
 
-exec::AggregateRegistrationResult registerSumDataSizeForStats(
-    const std::string& name) {
+} // namespace
+
+void registerSumDataSizeForStatsAggregate(const std::string& prefix) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   signatures.push_back(exec::AggregateFunctionSignatureBuilder()
@@ -193,7 +194,8 @@ exec::AggregateRegistrationResult registerSumDataSizeForStats(
                            .argumentType("T")
                            .build());
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kSumDataSizeForStats;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -207,12 +209,6 @@ exec::AggregateRegistrationResult registerSumDataSizeForStats(
 
         return std::make_unique<SumDataSizeForStatsAggregate>(resultType);
       });
-}
-
-} // namespace
-
-void registerSumDataSizeForStatsAggregate(const std::string& prefix) {
-  registerSumDataSizeForStats(prefix + kSumDataSizeForStats);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

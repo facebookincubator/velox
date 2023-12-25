@@ -57,6 +57,11 @@ AssertQueryBuilder& AssertQueryBuilder::maxDrivers(int32_t maxDrivers) {
   return *this;
 }
 
+AssertQueryBuilder& AssertQueryBuilder::destination(int32_t destination) {
+  params_.destination = destination;
+  return *this;
+}
+
 AssertQueryBuilder& AssertQueryBuilder::config(
     const std::string& key,
     const std::string& value) {
@@ -72,11 +77,11 @@ AssertQueryBuilder& AssertQueryBuilder::configs(
   return *this;
 }
 
-AssertQueryBuilder& AssertQueryBuilder::connectorConfig(
+AssertQueryBuilder& AssertQueryBuilder::connectorSessionProperty(
     const std::string& connectorId,
     const std::string& key,
     const std::string& value) {
-  connectorConfigs_[connectorId][key] = value;
+  connectorSessionProperties_[connectorId][key] = value;
   return *this;
 }
 
@@ -188,9 +193,17 @@ std::shared_ptr<Task> AssertQueryBuilder::assertTypeAndNumRows(
 }
 
 RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
+  std::shared_ptr<Task> unused;
+  return copyResults(pool, unused);
+}
+
+RowVectorPtr AssertQueryBuilder::copyResults(
+    memory::MemoryPool* pool,
+    std::shared_ptr<Task>& task) {
   auto [cursor, results] = readCursor();
 
   if (results.empty()) {
+    task = cursor->task();
     return BaseVector::create<RowVector>(
         params_.planNode->outputType(), 0, pool);
   }
@@ -199,7 +212,6 @@ RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
   for (const auto& result : results) {
     totalCount += result->size();
   }
-
   auto copy =
       BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
   auto copyCount = 0;
@@ -208,6 +220,7 @@ RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
     copyCount += result->size();
   }
 
+  task = cursor->task();
   return copy;
 }
 
@@ -215,7 +228,7 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 AssertQueryBuilder::readCursor() {
   VELOX_CHECK_NOT_NULL(params_.planNode);
 
-  if (!configs_.empty() || !connectorConfigs_.empty()) {
+  if (!configs_.empty() || !connectorSessionProperties_.empty()) {
     if (params_.queryCtx == nullptr) {
       // NOTE: the destructor of 'executor_' will wait for all the async task
       // activities to finish on AssertQueryBuilder dtor.
@@ -233,10 +246,10 @@ AssertQueryBuilder::readCursor() {
   if (!configs_.empty()) {
     params_.queryCtx->testingOverrideConfigUnsafe(std::move(configs_));
   }
-  if (!connectorConfigs_.empty()) {
-    for (auto& [connectorId, configs] : connectorConfigs_) {
-      params_.queryCtx->setConnectorConfigOverridesUnsafe(
-          connectorId, std::move(configs));
+  if (!connectorSessionProperties_.empty()) {
+    for (auto& [connectorId, sessionProperties] : connectorSessionProperties_) {
+      params_.queryCtx->setConnectorSessionOverridesUnsafe(
+          connectorId, std::move(sessionProperties));
     }
   }
 

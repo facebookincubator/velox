@@ -39,7 +39,7 @@ inline std::string getExampleFilePath(const std::string& fileName) {
 
 class MockStripeStreams : public StripeStreams {
  public:
-  MockStripeStreams() : pool_{memory::addDefaultLeafMemoryPool()} {};
+  MockStripeStreams() : pool_{memory::memoryManager()->addLeafPool()} {};
   ~MockStripeStreams() = default;
 
   std::unique_ptr<dwio::common::SeekableInputStream> getStream(

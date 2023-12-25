@@ -166,5 +166,111 @@ TEST_F(FindFirstTest, predicateFailures) {
   verify("find_first_index(c0, -3, x -> (10 / x > 2))", data, expected);
 }
 
+TEST_F(FindFirstTest, invalidIndex) {
+  auto data = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3]",
+          "[-1, 2]",
+          "[-2, -3, -4]",
+          "[-5, -6]",
+      }),
+      makeFlatVector<int32_t>({2, 0, 0, 1}),
+  });
+
+  // Index 0 is not valid. Expect an error.
+  VELOX_ASSERT_THROW(
+      evaluate("find_first(c0, c1, x -> (x > 0))", data),
+      "SQL array indices start at 1. Got 0.");
+
+  // There are 2 rows with invalid index. Mark array argument in one of these
+  // rows as NULL. Still expect the other row to trigger an error.
+  data->childAt(0)->setNull(1, true);
+  VELOX_ASSERT_THROW(
+      evaluate("find_first(c0, c1, x -> (x > 0))", data),
+      "SQL array indices start at 1. Got 0.");
+
+  // Mark array argument in the other row as NULL. Expect no errors.
+  data->childAt(0)->setNull(2, true);
+  auto expected = makeNullableFlatVector<int32_t>(
+      {2, std::nullopt, std::nullopt, std::nullopt});
+  verify("find_first(c0, c1, x -> (x > 0))", data, expected);
+
+  // All null or empty arrays.
+  data = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[]",
+          "null",
+          "[]",
+          "null",
+      }),
+      makeFlatVector<int32_t>({2, 0, 0, 1}),
+  });
+
+  // Index 0 is not valid. Expect an error in the 3rd row.
+  VELOX_ASSERT_THROW(
+      evaluate("find_first(c0, c1, x -> (x > 0))", data),
+      "SQL array indices start at 1. Got 0.");
+
+  // Mark 3rd row null. Expect no error.
+  data->setNull(2, true);
+  expected = makeAllNullFlatVector<int32_t>(4);
+  verify("find_first(c0, c1, x -> (x > 0))", data, expected);
+}
+
+// Verify that null arrays with non-zero offsets/sizes are processed correctly.
+TEST_F(FindFirstTest, nulls) {
+  auto data = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3]",
+          "[-1, 2]",
+          "[-2, -3, -4]",
+          "[-5, -6]",
+      }),
+  });
+
+  // find_first: x > 0.
+  VectorPtr expected =
+      makeNullableFlatVector<int32_t>({1, 2, std::nullopt, std::nullopt});
+  verify("find_first(c0, x -> (x > 0))", data, expected);
+
+  // Mark [-1, 2] array as null. Expect null result.
+  data->childAt(0)->setNull(1, true);
+  expected = makeNullableFlatVector<int32_t>(
+      {1, std::nullopt, std::nullopt, std::nullopt});
+  verify("find_first(c0, x -> (x > 0))", data, expected);
+
+  // Mark all arrays null. Expect all-null results.
+  for (auto i = 0; i < data->size(); ++i) {
+    data->childAt(0)->setNull(i, true);
+  }
+
+  expected = makeAllNullFlatVector<int32_t>(data->size());
+  verify("find_first(c0, x -> (x > 0))", data, expected);
+}
+
+// Verify evaluation on a subset of rows in ArrayVector with only null and empty
+// arrays..
+TEST_F(FindFirstTest, emptyArrays) {
+  auto data = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[]",
+          "[]",
+          "null",
+          "[]",
+          "[]",
+          "null",
+      }),
+  });
+
+  // Evaluate on all rows, but the first one.
+  SelectivityVector rows(data->size());
+  rows.setValid(0, false);
+  rows.updateBounds();
+
+  auto result = evaluate("find_first(c0, x -> (x > 0))", data, rows);
+  auto expected = makeNullConstant(TypeKind::INTEGER, data->size());
+  velox::test::assertEqualVectors(expected, result);
+}
+
 } // namespace
 } // namespace facebook::velox::functions

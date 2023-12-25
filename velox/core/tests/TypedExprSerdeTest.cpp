@@ -23,6 +23,10 @@ namespace facebook::velox::core::test {
 class TypedExprSerDeTest : public testing::Test,
                            public velox::test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   TypedExprSerDeTest() {
     Type::registerSerDe();
 
@@ -113,19 +117,11 @@ TEST_F(TypedExprSerDeTest, call) {
 
 TEST_F(TypedExprSerDeTest, cast) {
   auto expression = std::make_shared<CastTypedExpr>(
-      BIGINT(),
-      std::vector<TypedExprPtr>{
-          std::make_shared<FieldAccessTypedExpr>(VARCHAR(), "a"),
-      },
-      false);
+      BIGINT(), std::make_shared<FieldAccessTypedExpr>(VARCHAR(), "a"), false);
   testSerde(expression);
 
   expression = std::make_shared<CastTypedExpr>(
-      VARCHAR(),
-      std::vector<TypedExprPtr>{
-          std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a"),
-      },
-      true);
+      VARCHAR(), std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a"), true);
   testSerde(expression);
 }
 

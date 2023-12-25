@@ -39,6 +39,7 @@ class HashJoinBridgeTest : public testing::Test,
 
  protected:
   static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
     filesystems::registerLocalFileSystem();
   }
 
@@ -87,26 +88,21 @@ class HashJoinBridgeTest : public testing::Test,
     return futures;
   }
 
-  void createFile(const std::string& filePath) {
-    auto fs = filesystems::getFileSystem(filePath, nullptr);
-    // File object dtor will close the file.
-    auto file = fs->openFileForWrite(filePath);
-  }
-
   SpillFiles makeFakeSpillFiles(int32_t numFiles) {
+    static uint32_t fakeFileId{0};
     SpillFiles files;
     files.reserve(numFiles);
+    const std::string filePathPrefix = tempDir_->path + "/Spill";
     for (int32_t i = 0; i < numFiles; ++i) {
-      files.push_back(std::make_unique<SpillFile>(
-          rowType_,
-          1,
-          std::vector<CompareFlags>({}),
-          tempDir_->path + "/Spill",
-          common::CompressionKind_NONE,
-          pool_.get()));
-      // Create a fake file to avoid too many exception logs in test when spill
-      // file deletion fails.
-      createFile(files.back()->testingFilePath());
+      const auto fileId = fakeFileId;
+      files.push_back(
+          {fileId,
+           rowType_,
+           tempDir_->path + "/Spill_" + std::to_string(fileId),
+           1024,
+           1,
+           std::vector<CompareFlags>({}),
+           common::CompressionKind_NONE});
     }
     return files;
   }
@@ -137,7 +133,8 @@ class HashJoinBridgeTest : public testing::Test,
   const uint32_t maxNumPartitions_{8};
   const uint32_t numSpillFilesPerPartition_{20};
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
   memory::MemoryAllocator* allocator_{memory::MemoryAllocator::getInstance()};
   std::shared_ptr<TempDirectoryPath> tempDir_;
 
@@ -483,6 +480,32 @@ TEST_P(HashJoinBridgeTest, multiThreading) {
     for (auto& th : proberThreads) {
       th.join();
     }
+  }
+}
+
+TEST_P(HashJoinBridgeTest, isHashBuildMemoryPool) {
+  auto root = memory::memoryManager()->addRootPool("isHashBuildMemoryPool");
+  struct {
+    std::string poolName;
+    bool expectedHashBuildPool;
+
+    std::string debugString() const {
+      return fmt::format(
+          "poolName: {}, expectedHashBuildPool: {}",
+          poolName,
+          expectedHashBuildPool);
+    }
+  } testSettings[] = {
+      {"HashBuild", true},
+      {"HashBuildd", false},
+      {"hHashBuild", true},
+      {"hHashProbe", false},
+      {"HashProbe", false},
+      {"HashProbeh", false}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto pool = root->addLeafChild(testData.poolName);
+    ASSERT_EQ(isHashBuildMemoryPool(*pool), testData.expectedHashBuildPool);
   }
 }
 

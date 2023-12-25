@@ -187,6 +187,9 @@ void RowVector::copy(
 
   // Copy non-null values.
   SelectivityVector nonNullRows = rows;
+  if (!toSourceRow) {
+    VELOX_CHECK_GE(source->size(), rows.end());
+  }
 
   DecodedVector decodedSource(*source);
   if (decodedSource.isIdentityMapping()) {
@@ -194,6 +197,7 @@ void RowVector::copy(
       auto rawNulls = source->rawNulls();
       rows.applyToSelected([&](auto row) {
         auto idx = toSourceRow ? toSourceRow[row] : row;
+        VELOX_DCHECK_GT(source->size(), idx);
         if (bits::isBitNull(rawNulls, idx)) {
           nonNullRows.setValid(row, false);
         }
@@ -218,6 +222,7 @@ void RowVector::copy(
     if (nulls) {
       rows.applyToSelected([&](auto row) {
         auto idx = toSourceRow ? toSourceRow[row] : row;
+        VELOX_DCHECK_GT(source->size(), idx);
         if (bits::isBitNull(nulls, idx)) {
           nonNullRows.setValid(row, false);
         }
@@ -263,6 +268,13 @@ void RowVector::copy(
       ensureNulls();
       nullRows.setNulls(nulls_);
     }
+  }
+}
+
+void RowVector::setType(const TypePtr& type) {
+  BaseVector::setType(type);
+  for (auto i = 0; i < childrenSize_; i++) {
+    children_[i]->setType(type_->asRow().childAt(i));
   }
 }
 
@@ -634,6 +646,32 @@ void RowVector::validate(const VectorValidateOptions& options) const {
   }
 }
 
+void RowVector::unsafeResize(vector_size_t newSize, bool setNotNull) {
+  BaseVector::resize(newSize, setNotNull);
+}
+
+void RowVector::resize(vector_size_t newSize, bool setNotNull) {
+  auto oldSize = size();
+  BaseVector::resize(newSize, setNotNull);
+
+  // Resize all the children.
+  for (auto& child : children_) {
+    if (child) {
+      if (child->isLazy()) {
+        VELOX_FAIL("Resize on a lazy vector is not allowed");
+      }
+
+      // If we are just reducing the size of the vector, its safe
+      // to skip uniqueness check since effectively we are just changing
+      // the length.
+      if (newSize > oldSize) {
+        VELOX_CHECK(child.unique(), "Resizing shared child vector");
+        child->resize(newSize, setNotNull);
+      }
+    }
+  }
+}
+
 void ArrayVectorBase::checkRanges() const {
   std::unordered_map<vector_size_t, vector_size_t> seenElements;
   seenElements.reserve(size());
@@ -811,6 +849,11 @@ std::optional<int32_t> ArrayVector::compare(
           otherArray->rawOffsets_[wrappedOtherIndex],
           otherArray->rawSizes_[wrappedOtherIndex]},
       flags);
+}
+
+void ArrayVector::setType(const TypePtr& type) {
+  BaseVector::setType(type);
+  elements_->setType(type_->asArray().elementType());
 }
 
 namespace {
@@ -1066,6 +1109,13 @@ bool MapVector::isSorted(vector_size_t index) const {
   return true;
 }
 
+void MapVector::setType(const TypePtr& type) {
+  BaseVector::setType(type);
+  const auto& mapType = type_->asMap();
+  keys_->setType(mapType.keyType());
+  values_->setType(mapType.valueType());
+}
+
 // static
 void MapVector::canonicalize(
     const std::shared_ptr<MapVector>& map,
@@ -1260,8 +1310,8 @@ void RowVector::appendNulls(vector_size_t numberOfRows) {
   if (numberOfRows == 0) {
     return;
   }
-  auto newSize = numberOfRows + BaseVector::length_;
-  auto oldSize = BaseVector::length_;
+  const vector_size_t newSize = numberOfRows + BaseVector::length_;
+  const vector_size_t oldSize = BaseVector::length_;
   BaseVector::resize(newSize, false);
   bits::fillBits(mutableRawNulls(), oldSize, newSize, bits::kNull);
 }

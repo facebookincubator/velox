@@ -27,6 +27,10 @@ using facebook::velox::exec::test::PlanBuilder;
 namespace {
 class PlanFragmentTest : public testing::Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
     rowType_ = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), BIGINT()});
     rowTypeWithProjection_ = ROW(
@@ -74,7 +78,8 @@ class PlanFragmentTest : public testing::Test {
   RowTypePtr probeTypeWithProjection_;
   std::vector<RowVectorPtr> emptyProbeVectors_;
   std::shared_ptr<PlanNode> probeValueNode_;
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
 };
 }; // namespace
 
@@ -154,7 +159,7 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
   } testSettings[] = {
       {AggregationNode::Step::kSingle, false, true, false, false, false},
       {AggregationNode::Step::kSingle, true, false, false, false, false},
-      {AggregationNode::Step::kSingle, true, true, true, false, false},
+      {AggregationNode::Step::kSingle, true, true, true, false, true},
       {AggregationNode::Step::kSingle, true, true, false, true, false},
       {AggregationNode::Step::kSingle, true, true, false, false, true},
       {AggregationNode::Step::kIntermediate, false, true, false, false, false},
@@ -167,11 +172,11 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
       {AggregationNode::Step::kPartial, true, true, true, false, false},
       {AggregationNode::Step::kPartial, true, true, false, true, false},
       {AggregationNode::Step::kPartial, true, true, false, false, false},
-      {AggregationNode::Step::kSingle, false, true, false, false, false},
-      {AggregationNode::Step::kSingle, true, false, false, false, false},
-      {AggregationNode::Step::kSingle, true, true, true, false, false},
-      {AggregationNode::Step::kSingle, true, true, false, true, false},
-      {AggregationNode::Step::kSingle, true, true, false, false, true}};
+      {AggregationNode::Step::kFinal, false, true, false, false, false},
+      {AggregationNode::Step::kFinal, true, false, false, false, false},
+      {AggregationNode::Step::kFinal, true, true, true, false, true},
+      {AggregationNode::Step::kFinal, true, true, false, true, false},
+      {AggregationNode::Step::kFinal, true, true, false, false, true}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());

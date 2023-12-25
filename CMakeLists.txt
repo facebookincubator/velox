@@ -13,7 +13,7 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.14)
 
-# the policy allows us to change options without caching
+# The policy allows us to change options without caching.
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
@@ -25,8 +25,24 @@ if(POLICY CMP0135)
   set(CMAKE_POLICY_DEFAULT_CMP0135 NEW)
 endif()
 
-# set the project name
+# Set the project name.
 project(velox)
+
+# If we are in an active conda env disable search in system paths and add env to
+# prefix path
+if(DEFINED ENV{CONDA_PREFIX})
+  if(NOT DEFINED ENV{VELOX_DEPENDENCY_SOURCE} OR "$ENV{VELOX_DEPENDENCY_SOURCE}"
+                                                 STREQUAL "CONDA")
+    message(STATUS "Using Conda environment: $ENV{CONDA_PREFIX}")
+    set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH FALSE)
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{CONDA_PREFIX}")
+    # Override in case it was set to CONDA
+    set(ENV{VELOX_DEPENDENCY_SOURCE} AUTO)
+  elseif(DEFINED ENV{VELOX_DEPENDENCY_SOURCE}
+         AND NOT "$ENV{VELOX_DEPENDENCY_SOURCE}" STREQUAL "CONDA")
+    message(STATUS "Overriding Conda environment: $ENV{CONDA_PREFIX}")
+  endif()
+endif()
 
 list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
      "${PROJECT_SOURCE_DIR}/CMake/third-party")
@@ -46,6 +62,7 @@ option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
   OFF)
+
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
 #
@@ -58,7 +75,6 @@ set(VELOX_DEPENDENCY_SOURCE
       STRING
       "Default source for all dependencies with source builds enabled: AUTO SYSTEM BUNDLED."
 )
-option(VELOX_ENABLE_DUCKDB "Build duckDB to enable differential testing." ON)
 option(VELOX_ENABLE_EXEC "Build exec." ON)
 option(VELOX_ENABLE_AGGREGATES "Build aggregates." ON)
 option(VELOX_ENABLE_HIVE_CONNECTOR "Build Hive connector." ON)
@@ -66,7 +82,6 @@ option(VELOX_ENABLE_TPCH_CONNECTOR "Build TPC-H connector." ON)
 option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
 option(VELOX_ENABLE_SPARK_FUNCTIONS "Build Spark SQL functions." ON)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
-option(VELOX_ENABLE_PARSE "Build parser used for unit tests." ON)
 option(VELOX_ENABLE_EXAMPLES
        "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
        OFF)
@@ -84,19 +99,22 @@ option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
-option(VELOX_BUILD_BENCHMARKS "Builds Velox benchmarks" OFF)
 option(
   VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND
   "make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer overflow when the hashtable has billions of records"
   OFF)
 
+# Explicitly force compilers to generate colored output. Compilers usually do
+# this by default if they detect the output is a terminal, but this assumption
+# is broken if you use ninja.
+option(VELOX_FORCE_COLORED_OUTPUT
+       "Always produce ANSI-colored output (GNU/Clang only)." OFF)
+
 if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build
   set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
-  set(VELOX_ENABLE_DUCKDB OFF)
   set(VELOX_ENABLE_EXPRESSION ON)
-  set(VELOX_ENABLE_PARSE OFF)
   set(VELOX_ENABLE_EXEC OFF)
   set(VELOX_ENABLE_AGGREGATES OFF)
   set(VELOX_ENABLE_HIVE_CONNECTOR OFF)
@@ -113,7 +131,6 @@ endif()
 if(${VELOX_BUILD_TESTING})
   # Enable all components to build testing binaries
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
-  set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_EXPRESSION ON)
   set(VELOX_ENABLE_PARSE ON)
   set(VELOX_ENABLE_EXEC ON)
@@ -122,25 +139,20 @@ if(${VELOX_BUILD_TESTING})
   set(VELOX_ENABLE_TPCH_CONNECTOR ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
   set(VELOX_ENABLE_EXAMPLES ON)
+else()
+  set(VELOX_ENABLE_PARSE OFF)
+endif()
+
+if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
+  set(cpr_SOURCE BUNDLED)
+  resolve_dependency(cpr)
+  set(VELOX_ENABLE_DUCKDB ON)
+else()
+  set(VELOX_ENABLE_DUCKDB OFF)
 endif()
 
 if(${VELOX_ENABLE_EXAMPLES})
   set(VELOX_ENABLE_EXPRESSION ON)
-endif()
-
-if(${VELOX_BUILD_BENCHMARKS})
-  set(VELOX_ENABLE_BENCHMARKS ON)
-  set(VELOX_ENABLE_BENCHMARKS_BASIC ON)
-  set(VELOX_ENABLE_DUCKDB ON)
-  set(VELOX_ENABLE_PARSE ON)
-  set(VELOX_ENABLE_PARQUET ON)
-  set(VELOX_BUILD_TEST_UTILS ON)
-  set(VELOX_BUILD_TESTING OFF)
-  set(VELOX_ENABLE_EXAMPLES OFF)
-  set(VELOX_ENABLE_GCS OFF)
-  set(VELOX_ENABLE_ABFS OFF)
-  set(VELOX_ENABLE_SUBSTRAIT OFF)
-  set(VELOX_CODEGEN_SUPPORT OFF)
 endif()
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
@@ -178,6 +190,15 @@ if(VELOX_ENABLE_CCACHE
   endif()
 endif()
 
+if(${VELOX_FORCE_COLORED_OUTPUT})
+  if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+    add_compile_options(-fdiagnostics-color=always)
+  elseif("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
+         OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
+    add_compile_options(-fcolor-diagnostics)
+  endif()
+endif()
+
 # At the moment we prefer static linking but by default cmake looks for shared
 # libs first. This will still fallback to shared libs when static ones are not
 # found
@@ -206,6 +227,7 @@ if(VELOX_ENABLE_ABFS)
   if(AZURESDK_ROOT_DIR)
     list(APPEND CMAKE_PREFIX_PATH ${AZURESDK_ROOT_DIR})
   endif()
+  # files-datalake is built on blobs
   find_package(azure-storage-files-datalake-cpp CONFIG REQUIRED)
   add_definitions(-DVELOX_ENABLE_ABFS)
 endif()
@@ -231,17 +253,6 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)
-endif()
-
-# Turn on Codegen only for Clang and non Mac systems.
-if((NOT DEFINED VELOX_CODEGEN_SUPPORT)
-   AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-   AND NOT (${CMAKE_SYSTEM_NAME} MATCHES "Darwin"))
-  message(STATUS "Enabling Codegen")
-  set(VELOX_CODEGEN_SUPPORT True)
-else()
-  message(STATUS "Disabling Codegen")
-  set(VELOX_CODEGEN_SUPPORT False)
 endif()
 
 # define processor variable for conditional compilation
@@ -400,6 +411,11 @@ else()
 endif()
 resolve_dependency(glog)
 
+if(${VELOX_ENABLE_DUCKDB})
+  set_source(DuckDB)
+  resolve_dependency(DuckDB)
+endif()
+
 set_source(fmt)
 resolve_dependency(fmt)
 
@@ -458,6 +474,9 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     message(
       FATAL_ERROR "VELOX requires gcc > 8. Found ${CMAKE_CXX_COMPILER_VERSION}")
   endif()
+
+  # Find Threads library
+  find_package(Threads REQUIRED)
 else()
   set(FILESYSTEM "")
 endif()
@@ -506,12 +525,10 @@ find_package(FLEX 2.5.13 REQUIRED)
 
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
-include_directories(SYSTEM velox/external/duckdb)
-include_directories(SYSTEM velox/external/duckdb/tpch/dbgen/include)
 
 # these were previously vendored in third-party/
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  set(gtest_SOURCE BUNDLED)
+  set(gtest_SOURCE AUTO)
   resolve_dependency(gtest)
   set(VELOX_GTEST_INCUDE_DIR
       "${gtest_SOURCE_DIR}/googletest/include"
@@ -521,7 +538,10 @@ endif()
 set(xsimd_SOURCE BUNDLED)
 resolve_dependency(xsimd)
 
-include(CTest) # include after project() but before add_subdirectory()
+if(VELOX_BUILD_TESTING)
+  set(BUILD_TESTING ON)
+  include(CTest) # include after project() but before add_subdirectory()
+endif()
 
 include_directories(.)
 

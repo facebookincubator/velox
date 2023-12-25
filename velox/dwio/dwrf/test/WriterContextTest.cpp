@@ -24,11 +24,17 @@
 using namespace ::testing;
 
 namespace facebook::velox::dwrf {
-TEST(TestWriterContext, GetIntDictionaryEncoder) {
+class WriterContextTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
+
+TEST_F(WriterContextTest, GetIntDictionaryEncoder) {
   auto config = std::make_shared<Config>();
   WriterContext context{
-      config,
-      memory::defaultMemoryManager().addRootPool("GetIntDictionaryEncoder")};
+      config, memory::memoryManager()->addRootPool("GetIntDictionaryEncoder")};
 
   EXPECT_EQ(0, context.dictEncoders_.size());
   auto& intEncoder_1_0 = context.getIntDictionaryEncoder<int32_t>(
@@ -58,12 +64,12 @@ TEST(TestWriterContext, GetIntDictionaryEncoder) {
   EXPECT_EQ(2, context.dictEncoders_.size());
 }
 
-TEST(TestWriterContext, RemoveIntDictionaryEncoderForNode) {
+TEST_F(WriterContextTest, RemoveIntDictionaryEncoderForNode) {
   auto config = std::make_shared<Config>();
   config->set(Config::MAP_FLAT_DICT_SHARE, false);
   WriterContext context{
       config,
-      memory::defaultMemoryManager().addRootPool(
+      memory::memoryManager()->addRootPool(
           "RemoveIntDictionaryEncoderForNode")};
 
   context.getIntDictionaryEncoder<int32_t>(
@@ -111,12 +117,11 @@ TEST(TestWriterContext, RemoveIntDictionaryEncoderForNode) {
   EXPECT_EQ(0, context.dictEncoders_.size());
 }
 
-TEST(TestWriterContext, BuildPhysicalSizeAggregators) {
+TEST_F(WriterContextTest, BuildPhysicalSizeAggregators) {
   auto config = std::make_shared<Config>();
   WriterContext context{
       config,
-      memory::defaultMemoryManager().addRootPool(
-          "BuildPhysicalSizeAggregators")};
+      memory::memoryManager()->addRootPool("BuildPhysicalSizeAggregators")};
   auto type = ROW({
       {"array", ARRAY(REAL())},
       {"map", MAP(INTEGER(), DOUBLE())},
@@ -143,8 +148,8 @@ TEST(TestWriterContext, BuildPhysicalSizeAggregators) {
   }
 }
 
-TEST(TestWriterContext, memory) {
-  auto writerRoot = memory::defaultMemoryManager().addRootPool(
+TEST_F(WriterContextTest, memory) {
+  auto writerRoot = memory::memoryManager()->addRootPool(
       "memory", 1L << 30, exec::MemoryReclaimer::create());
   WriterContext context{std::make_shared<Config>(), writerRoot};
   ASSERT_EQ(context.getTotalMemoryUsage(), 0);
@@ -213,8 +218,8 @@ TEST(TestWriterContext, memory) {
   ASSERT_EQ(context.availableMemoryReservation(), 786368);
 }
 
-TEST(TestWriterContext, abort) {
-  auto writerRoot = memory::defaultMemoryManager().addRootPool(
+TEST_F(WriterContextTest, abort) {
+  auto writerRoot = memory::memoryManager()->addRootPool(
       "abort", 1L << 30, exec::MemoryReclaimer::create());
   WriterContext context{std::make_shared<Config>(), writerRoot};
   ASSERT_EQ(context.getTotalMemoryUsage(), 0);

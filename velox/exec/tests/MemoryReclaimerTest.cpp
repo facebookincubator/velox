@@ -26,7 +26,7 @@ using namespace facebook::velox::memory;
 
 class MemoryReclaimerTest : public OperatorTestBase {
  protected:
-  MemoryReclaimerTest() : pool_(memory::addDefaultLeafMemoryPool()) {
+  MemoryReclaimerTest() : pool_(memory::memoryManager()->addLeafPool()) {
     const auto seed =
         std::chrono::system_clock::now().time_since_epoch().count();
     rng_.seed(seed);
@@ -86,7 +86,7 @@ TEST_F(MemoryReclaimerTest, abortTest) {
   for (const auto& leafPool : {false, true}) {
     const std::string testName = fmt::format("leafPool: {}", leafPool);
     SCOPED_TRACE(testName);
-    auto rootPool = defaultMemoryManager().addRootPool(
+    auto rootPool = memory::memoryManager()->addRootPool(
         testName, kMaxMemory, exec::MemoryReclaimer::create());
     ASSERT_FALSE(rootPool->aborted());
     if (leafPool) {

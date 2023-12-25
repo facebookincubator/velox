@@ -233,7 +233,7 @@ void HashProbe::maybeSetupSpillInput(
     VELOX_CHECK(iter != spillPartitionSet_.end());
     auto partition = std::move(iter->second);
     VELOX_CHECK_EQ(partition->id(), restoredPartitionId.value());
-    spillInputReader_ = partition->createReader();
+    spillInputReader_ = partition->createUnorderedReader(pool());
     spillPartitionSet_.erase(iter);
   }
 
@@ -246,7 +246,6 @@ void HashProbe::maybeSetupSpillInput(
   // If 'spillInputPartitionIds_' is not empty, then we set up a spiller to
   // spill the incoming probe inputs.
   const auto& spillConfig = spillConfig_.value();
-  ++numSpillRuns_;
   spiller_ = std::make_unique<Spiller>(
       Spiller::Type::kHashJoinProbe,
       probeType_,
@@ -254,13 +253,14 @@ void HashProbe::maybeSetupSpillInput(
           spillInputPartitionIds_.begin()->partitionBitOffset(),
           spillInputPartitionIds_.begin()->partitionBitOffset() +
               spillConfig.joinPartitionBits),
-      spillConfig.filePath,
+      spillConfig.getSpillDirPathCb,
+      spillConfig.fileNamePrefix,
       spillConfig.maxFileSize,
       spillConfig.writeBufferSize,
-      spillConfig.minSpillRunSize,
       spillConfig.compressionKind,
       memory::spillMemoryPool(),
-      spillConfig.executor);
+      spillConfig.executor,
+      spillConfig.fileCreateConfig);
   // Set the spill partitions to the corresponding ones at the build side. The
   // hash probe operator itself won't trigger any spilling.
   spiller_->setPartitionsSpilled(toPartitionNumSet(spillInputPartitionIds_));
@@ -529,7 +529,9 @@ void HashProbe::addInput(RowVectorPtr input) {
   }
   input_ = std::move(input);
 
-  if (input_->size() > 0) {
+  const auto numInput = input_->size();
+
+  if (numInput > 0) {
     noInput_ = false;
   }
 
@@ -578,28 +580,9 @@ void HashProbe::addInput(RowVectorPtr input) {
   if (!hasDecoded) {
     decodeAndDetectNonNullKeys();
   }
-
   activeRows_ = nonNullInputRows_;
-  lookup_->hashes.resize(input_->size());
-  auto mode = table_->hashMode();
-  auto& buildHashers = table_->hashers();
-  for (auto i = 0; i < keyChannels_.size(); ++i) {
-    if (mode != BaseHashTable::HashMode::kHash) {
-      auto key = input_->childAt(keyChannels_[i]);
-      buildHashers[i]->lookupValueIds(
-          *key, activeRows_, scratchMemory_, lookup_->hashes);
-    } else {
-      hashers_[i]->hash(activeRows_, i > 0, lookup_->hashes);
-    }
-  }
-  lookup_->rows.clear();
-  if (activeRows_.isAllSelected()) {
-    lookup_->rows.resize(activeRows_.size());
-    std::iota(lookup_->rows.begin(), lookup_->rows.end(), 0);
-  } else {
-    activeRows_.applyToSelected(
-        [&](auto row) { lookup_->rows.push_back(row); });
-  }
+
+  table_->prepareForJoinProbe(*lookup_.get(), input_, activeRows_, false);
 
   passingInputRowsInitialized_ = false;
   if (isLeftJoin(joinType_) || isFullJoin(joinType_) || isAntiJoin(joinType_) ||
@@ -608,7 +591,6 @@ void HashProbe::addInput(RowVectorPtr input) {
     // including rows without a match in the output. Also, make sure to
     // initialize all 'hits' to nullptr as HashTable::joinProbe will only
     // process activeRows_.
-    auto numInput = input_->size();
     auto& hits = lookup_->hits;
     hits.resize(numInput);
     std::fill(hits.data(), hits.data() + numInput, nullptr);
@@ -1448,6 +1430,7 @@ void HashProbe::abort() {
   output_.reset();
   nonSpillInputIndicesBuffer_.reset();
   spillInputIndicesBuffers_.clear();
+  spillInputReader_.reset();
 }
 
 } // namespace facebook::velox::exec

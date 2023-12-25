@@ -292,6 +292,10 @@ class ConstantVector final : public SimpleVector<T> {
     }
   }
 
+  void addNulls(const SelectivityVector& /*rows*/) override {
+    VELOX_FAIL("addNulls not supported");
+  }
+
   std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -368,10 +372,14 @@ class ConstantVector final : public SimpleVector<T> {
       // Do not load Lazy vector
       return;
     }
+    // Ensure any internal state in valueVector_ is initialized, and it points
+    // to the loaded vector underneath any lazy layers.
+    valueVector_ = BaseVector::loadedVectorShared(valueVector_);
 
     isNull_ = valueVector_->isNullAt(index_);
     BaseVector::distinctValueCount_ = isNull_ ? 0 : 1;
-    BaseVector::nullCount_ = isNull_ ? BaseVector::length_ : 0;
+    const vector_size_t vectorSize = BaseVector::length_;
+    BaseVector::nullCount_ = isNull_ ? vectorSize : 0;
     if (valueVector_->isScalar()) {
       auto simple = valueVector_->loadedVector()->as<SimpleVector<T>>();
       isNull_ = simple->isNullAt(index_);

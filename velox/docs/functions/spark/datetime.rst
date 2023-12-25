@@ -46,17 +46,17 @@ These functions support TIMESTAMP and DATE input types.
 
     num_days can be positive or negative.
 
-.. spark:function:: dayofyear(date) -> integer
-
-    Returns Returns the day of year of the date/timestamp. ::
-
-        SELECT dayofyear('2016-04-09'); -- 100
-
 .. spark:function:: dayofmonth(date) -> integer
 
-    Returns the day of month of the date/timestamp. ::
+    Returns the day of month of the date. ::
 
         SELECT dayofmonth('2009-07-30'); -- 30
+
+.. spark:function:: dayofyear(date) -> integer
+
+    Returns the day of year of the date. ::
+
+        SELECT dayofyear('2016-04-09'); -- 100
 
 .. spark:function:: dayofweek(date/timestamp) -> integer
 
@@ -84,6 +84,33 @@ These functions support TIMESTAMP and DATE input types.
     ``month`` need to be from 1 (January) to 12 (December).
     ``day`` need to be from 1 to 31, and matches the number of days in each month.
     days of ``year-month-day - 1970-01-01`` need to be in the range of INTEGER type.
+
+.. spark:function:: quarter(date) -> integer
+
+    Returns the quarter of ``date``. The value ranges from ``1`` to ``4``. ::
+
+        SELECT quarter('2009-07-30'); -- 3
+
+.. spark:function:: month(date) -> integer
+
+    Returns the month of ``date``. ::
+
+        SELECT month('2009-07-30'); -- 7
+
+.. spark:function:: next_day(startDate, dayOfWeek) -> date
+
+    Returns the first date which is later than ``startDate`` and named as ``dayOfWeek``.
+    Returns null if ``dayOfWeek`` is invalid.
+    ``dayOfWeek`` is case insensitive and must be one of the following:
+    ``SU``, ``SUN``, ``SUNDAY``, ``MO``, ``MON``, ``MONDAY``, ``TU``, ``TUE``, ``TUESDAY``,
+    ``WE``, ``WED``, ``WEDNESDAY``, ``TH``, ``THU``, ``THURSDAY``, ``FR``, ``FRI``, ``FRIDAY``,
+    ``SA``, ``SAT``, ``SATURDAY``. ::
+
+        SELECT next_day('2015-07-23', "Mon"); -- '2015-07-27'
+        SELECT next_day('2015-07-23', "mo"); -- '2015-07-27'
+        SELECT next_day('2015-07-23', "Tue"); -- '2015-07-28'
+        SELECT next_day('2015-07-23', "tu"); -- '2015-07-28'
+        SELECT next_day('2015-07-23', "we"); -- '2015-07-29'
 
 .. spark:function:: to_unix_timestamp(string) -> integer
 

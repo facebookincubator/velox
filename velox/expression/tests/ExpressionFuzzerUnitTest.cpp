@@ -22,6 +22,10 @@
 namespace facebook::velox::test {
 class ExpressionFuzzerUnitTest : public testing::Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   uint32_t countLevelOfNesting(core::TypedExprPtr expression) {
     if (expression->inputs().empty()) {
       return 0;
@@ -50,18 +54,34 @@ class ExpressionFuzzerUnitTest : public testing::Test {
     auto index = folly::Random::rand32(kSupportedTypes.size(), seed);
     return kSupportedTypes[index];
   }
+  std::shared_ptr<memory::MemoryPool> pool{
+      memory::memoryManager()->addLeafPool()};
+
+  std::shared_ptr<VectorFuzzer> vectorfuzzer{
+      std::make_shared<VectorFuzzer>(VectorFuzzer::Options{}, pool.get())};
 };
 
+namespace {
+auto makeOptionsWithMaxLevelNesting(int32_t value) {
+  ExpressionFuzzer::Options options;
+  options.maxLevelOfNesting = value;
+  return options;
+}
+} // namespace
 TEST_F(ExpressionFuzzerUnitTest, restrictedLevelOfNesting) {
   velox::functions::prestosql::registerAllScalarFunctions();
   std::mt19937 seed{0};
 
   auto testLevelOfNesting = [&](int32_t maxLevelOfNesting) {
     ExpressionFuzzer fuzzer{
-        velox::getFunctionSignatures(), 0, maxLevelOfNesting};
+        velox::getFunctionSignatures(),
+        0,
+        vectorfuzzer,
+        makeOptionsWithMaxLevelNesting(maxLevelOfNesting),
+    };
 
     for (int i = 0; i < 5000; ++i) {
-      auto expression = fuzzer.generateExpression(randomType(seed));
+      auto expression = fuzzer.fuzzExpression().expressions[0];
       EXPECT_LE(countLevelOfNesting(expression), std::max(1, maxLevelOfNesting))
           << fmt::format(
                  "Expression {} exceeds max level of nesting {} (original {})",
@@ -92,10 +112,14 @@ TEST_F(ExpressionFuzzerUnitTest, reproduceExpressionWithSeed) {
   auto generateExpressions = [&]() {
     std::vector<std::string> firstGeneration;
     std::mt19937 seed{7654321};
-    ExpressionFuzzer fuzzer{velox::getFunctionSignatures(), 1234567, 5};
+    ExpressionFuzzer fuzzer{
+        velox::getFunctionSignatures(),
+        1234567,
+        vectorfuzzer,
+        makeOptionsWithMaxLevelNesting(5)};
     for (auto i = 0; i < 10; ++i) {
       firstGeneration.push_back(
-          fuzzer.generateExpression(randomType(seed))->toString());
+          fuzzer.fuzzExpression().expressions[0]->toString());
     }
     return firstGeneration;
   };
@@ -115,10 +139,13 @@ TEST_F(ExpressionFuzzerUnitTest, exprBank) {
   int32_t maxLevelOfNesting = 10;
   {
     ExpressionFuzzer fuzzer{
-        velox::getFunctionSignatures(), 0, maxLevelOfNesting};
+        velox::getFunctionSignatures(),
+        0,
+        vectorfuzzer,
+        makeOptionsWithMaxLevelNesting(maxLevelOfNesting)};
     ExpressionFuzzer::ExprBank exprBank(seed, maxLevelOfNesting);
     for (int i = 0; i < 5000; ++i) {
-      auto expression = fuzzer.generateExpression(randomType(seed));
+      auto expression = fuzzer.fuzzExpression().expressions[0];
       // Verify that if there is a single expression then it is returned
       // successfully.
       exprBank.insert(expression);
@@ -140,10 +167,13 @@ TEST_F(ExpressionFuzzerUnitTest, exprBank) {
     // Verify that randomly selected expressions do not exceed the requested max
     // nesting level.
     ExpressionFuzzer fuzzer{
-        velox::getFunctionSignatures(), 0, maxLevelOfNesting};
+        velox::getFunctionSignatures(),
+        0,
+        vectorfuzzer,
+        makeOptionsWithMaxLevelNesting(maxLevelOfNesting)};
     ExpressionFuzzer::ExprBank exprBank(seed, maxLevelOfNesting);
     for (int i = 0; i < 1000; ++i) {
-      auto expression = fuzzer.generateExpression(randomType(seed));
+      auto expression = fuzzer.fuzzExpression().expressions[0];
       exprBank.insert(expression);
     }
 

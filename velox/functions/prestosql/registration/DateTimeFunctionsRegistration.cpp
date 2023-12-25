@@ -65,6 +65,21 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "plus"});
   registerFunction<
       TimestampMinusIntervalDayTime,
+      Timestamp,
+      Timestamp,
+      IntervalDayTime>({prefix + "minus"});
+  registerFunction<
+      TimestampPlusIntervalDayTime,
+      Timestamp,
+      Timestamp,
+      IntervalDayTime>({prefix + "plus"});
+  registerFunction<
+      IntervalDayTimePlusTimestamp,
+      Timestamp,
+      IntervalDayTime,
+      Timestamp>({prefix + "plus"});
+  registerFunction<
+      TimestampMinusFunction,
       IntervalDayTime,
       Timestamp,
       Timestamp>({prefix + "minus"});
@@ -147,6 +162,11 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "date_format"});
   registerFunction<FormatDateTimeFunction, Varchar, Timestamp, Varchar>(
       {prefix + "format_datetime"});
+  registerFunction<
+      FormatDateTimeFunction,
+      Varchar,
+      TimestampWithTimezone,
+      Varchar>({prefix + "format_datetime"});
   registerFunction<
       ParseDateTimeFunction,
       TimestampWithTimezone,

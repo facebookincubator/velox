@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "OperatorUtils.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Operator.h"
@@ -135,6 +136,15 @@ class TableWriter : public Operator {
     return false;
   }
 
+  OperatorStats stats(bool clear) override {
+    auto stats = Operator::stats(clear);
+    // NOTE: file writers allocates memory through 'connectorPool_', not from
+    // the table writer operator pool. So we report the memory usage from
+    // 'connectorPool_'.
+    stats.memoryStats = MemoryStats::memStatsFromPool(connectorPool_);
+    return stats;
+  }
+
  private:
   // The memory reclaimer customized for connector which interface with the
   // memory arbitrator to reclaim memory from the file writers created within
@@ -155,6 +165,7 @@ class TableWriter : public Operator {
     uint64_t reclaim(
         memory::MemoryPool* pool,
         uint64_t targetBytes,
+        uint64_t maxWaitMs,
         memory::MemoryReclaimer::Stats& stats) override;
 
     void abort(memory::MemoryPool* pool, const std::exception_ptr& /* error */)
@@ -176,11 +187,7 @@ class TableWriter : public Operator {
 
   void abortDataSink();
 
-  // Updates physicalWrittenBytes in OperatorStats with current written bytes.
-  void updateWrittenBytes();
-
-  // Updates numWrittenFiles in runtimeStats.
-  void updateNumWrittenFiles();
+  void updateStats(const connector::DataSink::Stats& stats);
 
   std::string createTableCommitContext(bool lastOutput);
 

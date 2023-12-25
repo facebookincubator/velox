@@ -51,21 +51,6 @@ const std::vector<std::string> primitiveTypeNames() {
   return kPrimitiveTypeNames;
 }
 
-void toAppend(
-    const facebook::velox::exec::TypeSignature& signature,
-    std::string* result) {
-  result->append(signature.toString());
-}
-
-std::string TypeSignature::toString() const {
-  std::ostringstream out;
-  out << baseName_;
-  if (!parameters_.empty()) {
-    out << "(" << folly::join(",", parameters_) << ")";
-  }
-  return out.str();
-}
-
 std::string FunctionSignature::argumentsToString() const {
   std::vector<std::string> arguments;
   auto size = argumentTypes_.size();
@@ -107,38 +92,6 @@ size_t findNextComma(const std::string& str, size_t start) {
   return std::string::npos;
 }
 
-TypeSignature parseTypeSignature(const std::string& signature) {
-  auto parenPos = signature.find('(');
-  if (parenPos == std::string::npos) {
-    return TypeSignature(signature, {});
-  }
-
-  auto baseName = signature.substr(0, parenPos);
-  std::vector<TypeSignature> nestedTypes;
-
-  auto endParenPos = signature.rfind(')');
-  VELOX_CHECK(
-      endParenPos != std::string::npos,
-      "Couldn't find the closing parenthesis.");
-
-  auto prevPos = parenPos + 1;
-  auto commaPos = findNextComma(signature, prevPos);
-  while (commaPos != std::string::npos) {
-    auto token = signature.substr(prevPos, commaPos - prevPos);
-    boost::algorithm::trim(token);
-    nestedTypes.emplace_back(parseTypeSignature(token));
-
-    prevPos = commaPos + 1;
-    commaPos = findNextComma(signature, prevPos);
-  }
-
-  auto token = signature.substr(prevPos, endParenPos - prevPos);
-  boost::algorithm::trim(token);
-  nestedTypes.emplace_back(parseTypeSignature(token));
-
-  return TypeSignature(baseName, std::move(nestedTypes));
-}
-
 namespace {
 /// Returns true only if 'str' contains digits.
 bool isPositiveInteger(const std::string& str) {
@@ -168,7 +121,7 @@ void validateBaseTypeAndCollectTypeParams(
     if (!isPositiveInteger(typeName) &&
         !tryMapNameToTypeKind(typeName).has_value() &&
         !isDecimalName(typeName) && !isDateName(typeName)) {
-      VELOX_USER_CHECK(hasType(typeName), "Type doesn't exist: {}", typeName);
+      VELOX_USER_CHECK(hasType(typeName), "Type doesn't exist: '{}'", typeName);
     }
 
     // Ensure all params are similarly supported.
@@ -182,7 +135,7 @@ void validateBaseTypeAndCollectTypeParams(
     // it doesn't have parameters, e.g M[T].
     VELOX_USER_CHECK(
         arg.parameters().empty(),
-        "Named type cannot have parameters : {}",
+        "Named type cannot have parameters: '{}'",
         arg.toString())
     collectedTypeVariables.insert(arg.baseName());
   }

@@ -31,7 +31,14 @@ class SortedAggregations {
   /// @param inputType Input row type for the aggregation operator.
   /// @param pool Memory pool.
   SortedAggregations(
-      std::vector<AggregateInfo*> aggregates,
+      const std::vector<const AggregateInfo*>& aggregates,
+      const RowTypePtr& inputType,
+      memory::MemoryPool* pool);
+
+  /// Create a SortedAggregations instance using aggregation infos. Return null
+  /// if there is no sorted aggregation.
+  static std::unique_ptr<SortedAggregations> create(
+      const std::vector<AggregateInfo>& aggregates,
       const RowTypePtr& inputType,
       memory::MemoryPool* pool);
 
@@ -62,35 +69,83 @@ class SortedAggregations {
 
   void addSingleGroupInput(char* group, const RowVectorPtr& input);
 
-  void noMoreInput();
+  void addSingleGroupSpillInput(
+      char* group,
+      const VectorPtr& input,
+      vector_size_t index);
 
   /// Sorts input row for the specified groups, computes aggregations and stores
   /// results in the specified 'result' vector.
   void extractValues(folly::Range<char**> groups, const RowVectorPtr& result);
 
+  /// Clears all data accumulated so far. Used to release memory after spilling.
+  void clear();
+
  private:
   void addNewRow(char* group, char* newRow);
+
+  // A list of sorting keys along with sorting orders.
+  using SortingSpec = std::vector<std::pair<column_index_t, core::SortOrder>>;
+
+  SortingSpec toSortingSpec(const AggregateInfo& aggregate) const;
 
   bool compareRowsWithKeys(
       const char* lhs,
       const char* rhs,
-      const std::vector<std::pair<column_index_t, core::SortOrder>>& keys);
+      const SortingSpec& sortingSpec);
 
   void sortSingleGroup(
       std::vector<char*>& groupRows,
-      const AggregateInfo& aggregate);
+      const SortingSpec& sortingSpec);
 
-  std::vector<VectorPtr> extractSingleGroup(
+  vector_size_t extractSingleGroup(
       std::vector<char*>& groupRows,
-      const AggregateInfo& aggregate);
+      const AggregateInfo& aggregate,
+      std::vector<VectorPtr>& inputVectors);
 
-  const std::vector<AggregateInfo*> aggregates_;
+  void extractForSpill(folly::Range<char**> groups, VectorPtr& result) const;
 
-  /// Indices of all inputs for all aggregates.
+  struct Hash {
+    static uint64_t hashSortOrder(const core::SortOrder& sortOrder) {
+      return bits::hashMix(
+          folly::hasher<bool>{}(sortOrder.isAscending()),
+          folly::hasher<bool>{}(sortOrder.isNullsFirst()));
+    }
+
+    size_t operator()(const SortingSpec& elements) const {
+      uint64_t hash = 0;
+
+      for (auto i = 0; i < elements.size(); ++i) {
+        auto column = elements[i].first;
+        auto sortOrder = elements[i].second;
+
+        auto elementHash = bits::hashMix(
+            folly::hasher<vector_size_t>{}(column), hashSortOrder(sortOrder));
+
+        hash = (i == 0) ? elementHash : bits::hashMix(hash, elementHash);
+      }
+      return hash;
+    }
+  };
+
+  struct EqualTo {
+    bool operator()(const SortingSpec& left, const SortingSpec& right) const {
+      return left == right;
+    }
+  };
+
+  // Aggregates grouped by sorting keys and orders.
+  folly::
+      F14FastMap<SortingSpec, std::vector<const AggregateInfo*>, Hash, EqualTo>
+          aggregates_;
+
+  // Indices of all inputs for all aggregates.
   std::vector<column_index_t> inputs_;
-  /// Stores all input rows for all groups.
+
+  // Stores all input rows for all groups.
   std::unique_ptr<RowContainer> inputData_;
-  /// Mapping from the input column index to an index into 'inputs_'.
+
+  // Mapping from the input column index to an index into 'inputs_'.
   std::vector<column_index_t> inputMapping_;
 
   std::vector<DecodedVector> decodedInputs_;

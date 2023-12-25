@@ -64,6 +64,9 @@ class Window : public Operator {
     return noMoreInput_ && numRows_ == numProcessedRows_;
   }
 
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
+
  private:
   // Used for k preceding/following frames. Index is the column index if k is a
   // column. value is used to read column values from the column index when k
@@ -87,6 +90,12 @@ class Window : public Operator {
 
   // Creates WindowFunction and frame objects for this operator.
   void createWindowFunctions();
+
+  // Converts WindowNode::Frame to Window::WindowFrame.
+  WindowFrame createWindowFrame(
+      const std::shared_ptr<const core::WindowNode>& windowNode,
+      const core::WindowNode::Frame& frame,
+      const RowTypePtr& inputType);
 
   // Creates the buffers for peer and frame row
   // indices to send in window function apply invocations.
@@ -127,11 +136,6 @@ class Window : public Operator {
       vector_size_t numOutputRows,
       const RowVectorPtr& result);
 
-  // Converts WindowNode::Frame to Window::WindowFrame.
-  WindowFrame createWindowFrame(
-      core::WindowNode::Frame frame,
-      const RowTypePtr& inputType);
-
   // Update frame bounds for kPreceding, kFollowing row frames.
   void updateKRowsFrameBounds(
       bool isKPreceding,
@@ -171,15 +175,10 @@ class Window : public Operator {
   // WindowFunction is the base API implemented by all the window functions.
   // The functions are ordered by their positions in the output columns.
   std::vector<std::unique_ptr<exec::WindowFunction>> windowFunctions_;
+
   // Vector of WindowFrames corresponding to each windowFunction above.
   // It represents the frame spec for the function computation.
   std::vector<WindowFrame> windowFrames_;
-
-  // Number of input rows.
-  vector_size_t numRows_ = 0;
-
-  // Number of rows that be fit into an output block.
-  vector_size_t numRowsPerOutput_;
 
   // The following 4 Buffers are used to pass peer and frame start and
   // end values to the WindowFunction::apply method. These
@@ -204,6 +203,12 @@ class Window : public Operator {
   // output values.
   // There is one SelectivityVector per window function.
   std::vector<SelectivityVector> validFrames_;
+
+  // Number of input rows.
+  vector_size_t numRows_ = 0;
+
+  // Number of rows that be fit into an output block.
+  vector_size_t numRowsPerOutput_;
 
   // Number of rows output from the WindowOperator so far. The rows
   // are output in the same order of the pointers in sortedRows. This

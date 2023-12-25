@@ -21,6 +21,10 @@ General Aggregate Functions
 
     Returns an arbitrary non-null value of ``x``, if one exists.
 
+.. function:: any_value(x) -> [same as x]
+
+    This is an alias for :func:`arbitrary(x)`.
+
 .. function:: array_agg(x) -> array<[same as x]>
 
     Returns an array created from the input ``x`` elements. Ignores null
@@ -91,6 +95,7 @@ General Aggregate Functions
 .. function:: max_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
+    ``y`` must be an orderable type.
 
 .. function:: max_by(x, y, n) -> array([same as x])
     :noindex:
@@ -100,6 +105,7 @@ General Aggregate Functions
 .. function:: min_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the minimum value of ``y`` over all input values.
+    ``y`` must be an orderable type.
 
 .. function:: min_by(x, y, n) -> array([same as x])
     :noindex:
@@ -110,6 +116,7 @@ General Aggregate Functions
 
     Returns the maximum value of all input values.
     ``x`` must not contain nulls when it is complex type.
+    ``x`` must be an orderable type.
 
 .. function:: max(x, n) -> array<[same as x]>
     :noindex:
@@ -121,6 +128,7 @@ General Aggregate Functions
 
     Returns the minimum value of all input values.
     ``x`` must not contain nulls when it is complex type.
+    ``x`` must be an orderable type.
 
 .. function:: min(x, n) -> array<[same as x]>
     :noindex:
@@ -432,7 +440,7 @@ Statistical Aggregate Functions
 
 .. function:: stddev(x) -> double
 
-    This is an alias for stddev_samp().
+    This is an alias for :func:`stddev_samp`.
 
 .. function:: stddev_pop(x) -> double
 
@@ -444,7 +452,7 @@ Statistical Aggregate Functions
 
 .. function:: variance(x) -> double
 
-    This is an alias for var_samp().
+    This is an alias for :func:`var_samp`.
 
 .. function:: var_pop(x) -> double
 

@@ -17,6 +17,7 @@
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/common/IntCodecCommon.h"
 #include "velox/dwio/common/IntDecoder.h"
+#include "velox/dwio/common/ParallelFor.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
@@ -1666,7 +1667,7 @@ uint64_t StringDirectColumnReader::skip(uint64_t numValues) {
     totalBytes += computeSize(buffer.data(), nullptr, step);
     done += step;
   }
-  blobStream->Skip(static_cast<int32_t>(totalBytes));
+  blobStream->SkipInt64(static_cast<int64_t>(totalBytes));
   return numValues;
 }
 
@@ -1763,6 +1764,8 @@ class StructColumnReader : public ColumnReader {
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
   std::vector<std::unique_ptr<ColumnReader>> children_;
+  folly::Executor* FOLLY_NULLABLE executor_;
+  std::unique_ptr<dwio::common::ParallelFor> parallelForOnChildren_;
 
  public:
   StructColumnReader(
@@ -1770,6 +1773,8 @@ class StructColumnReader : public ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
+      folly::Executor* FOLLY_NULLABLE executor,
+      size_t decodingParallelismFactor,
       FlatMapContext flatMapContext);
   ~StructColumnReader() override = default;
 
@@ -1796,9 +1801,12 @@ StructColumnReader::StructColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
+    folly::Executor* executor,
+    size_t decodingParallelismFactor,
     FlatMapContext flatMapContext)
     : ColumnReader(fileType, stripe, streamLabels, std::move(flatMapContext)),
-      requestedType_{requestedType} {
+      requestedType_{requestedType},
+      executor_{executor} {
   DWIO_ENSURE_EQ(
       fileType_->id(),
       fileType->id(),
@@ -1810,6 +1818,9 @@ StructColumnReader::StructColumnReader(
       proto::ColumnEncoding_Kind_DIRECT,
       "Unknown encoding for StructColumnReader");
 
+  // Can parallelize if top level and doesn't have any flatmap children
+  bool canParallelize = fileType->parent() == nullptr; // isTopLevel ?
+
   // count the number of selected sub-columns
   const auto& cs = stripe.getColumnSelector();
   auto project = stripe.getRowReaderOptions().getProjectSelectedType();
@@ -1820,12 +1831,16 @@ StructColumnReader::StructColumnReader(
     // or constant reader based on its expression
     if (cs.shouldReadNode(child->id())) {
       if (i < fileType_->size()) {
-        children_.push_back(ColumnReader::build(
+        auto childColumnReader = ColumnReader::build(
             child,
             fileType_->childAt(i),
             stripe,
             streamLabels.append(folly::to<std::string>(i)),
-            makeCopyWithNullDecoder(flatMapContext_)));
+            executor,
+            decodingParallelismFactor,
+            makeCopyWithNullDecoder(flatMapContext_));
+        canParallelize = canParallelize && !childColumnReader->isFlatMap();
+        children_.push_back(std::move(childColumnReader));
       } else {
         children_.push_back(
             std::make_unique<NullColumnReader>(stripe, child->type()));
@@ -1834,6 +1849,12 @@ StructColumnReader::StructColumnReader(
       children_.emplace_back();
     }
   }
+
+  parallelForOnChildren_ = std::make_unique<dwio::common::ParallelFor>(
+      executor,
+      0,
+      children_.size(),
+      canParallelize ? decodingParallelismFactor : 0);
 }
 
 uint64_t StructColumnReader::skip(uint64_t numValues) {
@@ -1857,10 +1878,9 @@ void StructColumnReader::next(
     // the parent vector.
     childrenVectors = rowVector->children();
     DWIO_ENSURE_GE(childrenVectors.size(), children_.size());
-  }
 
-  if (result) {
-    result->resize(numValues, false);
+    // Resize rowVector
+    rowVector->unsafeResize(numValues, false);
   }
 
   BufferPtr nulls = readNulls(numValues, result, incomingNulls);
@@ -1873,16 +1893,30 @@ void StructColumnReader::next(
     // children vectors.
     childrenVectorsPtr = &rowVector->children();
     childrenVectors.clear();
+  } else {
+    childrenVectors.resize(children_.size());
+    childrenVectorsPtr = &childrenVectors;
+  }
+
+  VELOX_CHECK(parallelForOnChildren_, "ParallelFor should be initialized");
+  parallelForOnChildren_->execute(
+      [this, numValues, childrenVectorsPtr, nullsPtr](size_t i) {
+        auto& reader = children_[i];
+        if (reader) {
+          reader->next(numValues, (*childrenVectorsPtr)[i], nullsPtr);
+        }
+      });
+
+  if (result) {
     result->setNullCount(nullCount);
   } else {
     // When read-string-as-row flag is on, string readers produce ROW(BIGINT,
     // BIGINT) type instead of VARCHAR or VARBINARY. In these cases,
     // requestedType_->type is not the right type of the final struct.
-    childrenVectors.resize(children_.size());
     std::vector<TypePtr> types;
-    types.reserve(childrenVectors.size());
-    for (auto i = 0; i < childrenVectors.size(); i++) {
-      const auto& child = childrenVectors[i];
+    types.reserve(childrenVectorsPtr->size());
+    for (auto i = 0; i < childrenVectorsPtr->size(); i++) {
+      const auto& child = (*childrenVectorsPtr)[i];
       if (child) {
         types.emplace_back(child->type());
       } else {
@@ -1890,22 +1924,13 @@ void StructColumnReader::next(
       }
     }
 
-    auto rowResult = std::make_shared<RowVector>(
+    result = std::make_shared<RowVector>(
         &memoryPool_,
         ROW(std::move(types)),
         nulls,
         numValues,
         std::move(childrenVectors),
         nullCount);
-    childrenVectorsPtr = &rowResult->children();
-    result = std::move(rowResult);
-  }
-
-  for (uint64_t i = 0; i < children_.size(); ++i) {
-    auto& reader = children_[i];
-    if (reader) {
-      reader->next(numValues, (*childrenVectorsPtr)[i], nullsPtr);
-    }
   }
 }
 
@@ -1921,7 +1946,9 @@ class ListColumnReader : public ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      FlatMapContext flatMapContext);
+      FlatMapContext flatMapContext,
+      folly::Executor* FOLLY_NULLABLE executor,
+      size_t decodingParallelismFactor);
   ~ListColumnReader() override = default;
 
   uint64_t skip(uint64_t numValues) override;
@@ -1935,7 +1962,9 @@ ListColumnReader::ListColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
-    FlatMapContext flatMapContext)
+    FlatMapContext flatMapContext,
+    folly::Executor* executor,
+    size_t decodingParallelismFactor)
     : ColumnReader(fileType, stripe, streamLabels, std::move(flatMapContext)),
       requestedType_{requestedType} {
   DWIO_ENSURE_EQ(fileType_->id(), fileType->id(), "working on the same node");
@@ -1960,6 +1989,8 @@ ListColumnReader::ListColumnReader(
         fileType_->childAt(0),
         stripe,
         streamLabels,
+        executor,
+        decodingParallelismFactor,
         makeCopyWithNullDecoder(flatMapContext_));
   }
 }
@@ -2086,7 +2117,9 @@ class MapColumnReader : public ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      FlatMapContext flatMapContext);
+      FlatMapContext flatMapContext,
+      folly::Executor* FOLLY_NULLABLE executor,
+      size_t decodingParallelismFactor);
   ~MapColumnReader() override = default;
 
   uint64_t skip(uint64_t numValues) override;
@@ -2100,7 +2133,9 @@ MapColumnReader::MapColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
-    FlatMapContext flatMapContext)
+    FlatMapContext flatMapContext,
+    folly::Executor* executor,
+    size_t decodingParallelismFactor)
     : ColumnReader(fileType, stripe, streamLabels, std::move(flatMapContext)),
       requestedType_{requestedType} {
   DWIO_ENSURE_EQ(fileType_->id(), fileType->id(), "working on the same node");
@@ -2125,6 +2160,8 @@ MapColumnReader::MapColumnReader(
         fileType_->childAt(0),
         stripe,
         streamLabels,
+        executor,
+        decodingParallelismFactor,
         makeCopyWithNullDecoder(flatMapContext_));
   }
 
@@ -2135,6 +2172,8 @@ MapColumnReader::MapColumnReader(
         fileType_->childAt(1),
         stripe,
         streamLabels,
+        executor,
+        decodingParallelismFactor,
         makeCopyWithNullDecoder(flatMapContext_));
   }
 
@@ -2405,6 +2444,8 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
+    folly::Executor* executor,
+    size_t decodingParallelismFactor,
     FlatMapContext flatMapContext) {
   dwio::common::typeutils::checkTypeCompatibility(
       *fileType->type(), *requestedType->type());
@@ -2487,7 +2528,9 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
           fileType,
           stripe,
           streamLabels,
-          std::move(flatMapContext));
+          std::move(flatMapContext),
+          executor,
+          decodingParallelismFactor);
     case TypeKind::MAP:
       if (stripe.getEncoding(ek).kind() ==
           proto::ColumnEncoding_Kind_MAP_FLAT) {
@@ -2496,6 +2539,8 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
             fileType,
             stripe,
             streamLabels,
+            executor,
+            decodingParallelismFactor,
             std::move(flatMapContext));
       }
       return std::make_unique<MapColumnReader>(
@@ -2503,13 +2548,17 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
           fileType,
           stripe,
           streamLabels,
-          std::move(flatMapContext));
+          std::move(flatMapContext),
+          executor,
+          decodingParallelismFactor);
     case TypeKind::ROW:
       return std::make_unique<StructColumnReader>(
           requestedType,
           fileType,
           stripe,
           streamLabels,
+          executor,
+          decodingParallelismFactor,
           std::move(flatMapContext));
     case TypeKind::REAL:
       if (requestedType->type()->kind() == TypeKind::REAL) {

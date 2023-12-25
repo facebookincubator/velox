@@ -68,9 +68,13 @@ class Task : public std::enable_shared_from_this<Task> {
   ~Task();
 
   /// Specify directory to which data will be spilled if spilling is enabled and
-  /// required.
-  void setSpillDirectory(const std::string& spillDirectory) {
+  /// required. Set 'alreadyCreated' to true if the directory has already been
+  /// created by the caller.
+  void setSpillDirectory(
+      const std::string& spillDirectory,
+      bool alreadyCreated = true) {
     spillDirectory_ = spillDirectory;
+    spillDirectoryCreated_ = alreadyCreated;
   }
 
   std::string toString() const;
@@ -127,10 +131,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// nodes require splits and there are not enough of these.
   /// @param concurrentSplitGroups In grouped execution, maximum number of
   /// splits groups processed concurrently.
-  static void start(
-      std::shared_ptr<Task> self,
-      uint32_t maxDrivers,
-      uint32_t concurrentSplitGroups = 1);
+  void start(uint32_t maxDrivers, uint32_t concurrentSplitGroups = 1);
 
   /// If this returns true, this Task supports the single-threaded execution API
   /// next().
@@ -259,6 +260,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns time (ms) since the task execution ended or zero, if not finished.
   uint64_t timeSinceEndMs() const;
+
+  /// Returns time (ms) since the task was terminated or zero, if not terminated
+  /// yet.
+  uint64_t timeSinceTerminationMs() const;
 
   /// Returns the total number of drivers in the output pipeline, e.g. the
   /// pipeline that produces the results.
@@ -574,6 +579,12 @@ class Task : public std::enable_shared_from_this<Task> {
     return spillDirectory_;
   }
 
+  /// Returns the spill directory path. Ensures that the spill directory is
+  /// created before returning. Is thread safe. Returns an empty string if
+  /// either the spill directory is not specified during task creation or the
+  /// folder could not be created.
+  const std::string& getOrCreateSpillDirectory();
+
   /// True if produces output via OutputBufferManager.
   bool hasPartitionedOutput() const {
     return numDriversInPartitionedOutput_ > 0;
@@ -581,6 +592,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Invoked to run provided 'callback' on each alive driver of the task.
   void testingVisitDrivers(const std::function<void(Driver*)>& callback);
+
+  /// Invoked to finish the task for test purpose.
+  void testingFinish() {
+    terminate(TaskState::kFinished).wait();
+  }
 
  private:
   Task(
@@ -590,6 +606,19 @@ class Task : public std::enable_shared_from_this<Task> {
       std::shared_ptr<core::QueryCtx> queryCtx,
       ConsumerSupplier consumerSupplier,
       std::function<void(std::exception_ptr)> onError = nullptr);
+
+  // Creates driver factories.
+  void createDriverFactoriesLocked(uint32_t maxDrivers);
+
+  // Creates the output buffer in partitioned output buffer manager if needed.
+  void initializePartitionOutput();
+
+  // Creates and starts drivers.
+  void createAndStartDrivers(uint32_t concurrentSplitGroups);
+
+  // Creates a bunch of drivers for the given split group.
+  std::vector<std::shared_ptr<Driver>> createDriversLocked(
+      uint32_t splitGroupId);
 
   // Returns time (ms) since the task execution started or zero, if not started.
   uint64_t timeSinceStartMsLocked() const;
@@ -644,8 +673,12 @@ class Task : public std::enable_shared_from_this<Task> {
       const core::PlanNodeId& planNodeId,
       uint32_t pipelineId);
 
-  /// Returns task execution error message or empty string if not error
-  /// occurred. This should only be called inside mutex_ protection.
+  // Invoked to remove this task from the output buffer manager if it has set
+  // output buffer.
+  void maybeRemoveFromOutputBufferManager();
+
+  // Returns task execution error message or empty string if not error
+  // occurred. This should only be called inside mutex_ protection.
   std::string errorMessageLocked() const;
 
   class MemoryReclaimer : public exec::MemoryReclaimer {
@@ -656,6 +689,7 @@ class Task : public std::enable_shared_from_this<Task> {
     uint64_t reclaim(
         memory::MemoryPool* pool,
         uint64_t targetBytes,
+        uint64_t maxWaitMs,
         memory::MemoryReclaimer::Stats& stats) override;
 
     void abort(memory::MemoryPool* pool, const std::exception_ptr& error)
@@ -731,39 +765,33 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t maxPreloadSplits,
       std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload);
 
-  /// Creates for the given split group and fills up the 'SplitGroupState'
-  /// structure, which stores inter-operator state (local exchange, bridges).
+  // Creates for the given split group and fills up the 'SplitGroupState'
+  // structure, which stores inter-operator state (local exchange, bridges).
   void createSplitGroupStateLocked(uint32_t splitGroupId);
 
-  /// Creates a bunch of drivers for the given split group.
-  void createDriversLocked(
-      std::shared_ptr<Task>& self,
-      uint32_t splitGroupId,
-      std::vector<std::shared_ptr<Driver>>& out);
-
-  /// Checks if we have splits in a split group that haven't been processed yet
-  /// and have capacity in terms of number of concurrent split groups being
-  /// processed. If yes, creates split group state and Drivers and runs them.
-  void ensureSplitGroupsAreBeingProcessedLocked(std::shared_ptr<Task>& self);
+  // Checks if we have splits in a split group that haven't been processed yet
+  // and have capacity in terms of number of concurrent split groups being
+  // processed. If yes, creates split group state and Drivers and runs them.
+  void ensureSplitGroupsAreBeingProcessedLocked();
 
   void driverClosedLocked();
 
-  /// Returns true if Task is in kRunning state, but all output drivers finished
-  /// processing and all output has been consumed. In other words, returns true
-  /// if task should transition to kFinished state.
-  ///
-  /// In case of grouped execution, checks that all drivers, not just output
-  /// drivers finished processing.
+  // Returns true if Task is in kRunning state, but all output drivers finished
+  // processing and all output has been consumed. In other words, returns true
+  // if task should transition to kFinished state.
+  //
+  // In case of grouped execution, checks that all drivers, not just output
+  // drivers finished processing.
   bool checkIfFinishedLocked();
 
-  /// Check if we have no more split groups coming and adjust the total number
-  /// of drivers if more split groups coming. Returns true if Task is in
-  /// kRunning state, but no more split groups are commit and all drivers
-  /// finished processing and all output has been consumed. In other words,
-  /// returns true if task should transition to kFinished state.
+  // Check if we have no more split groups coming and adjust the total number
+  // of drivers if more split groups coming. Returns true if Task is in
+  // kRunning state, but no more split groups are commit and all drivers
+  // finished processing and all output has been consumed. In other words,
+  // returns true if task should transition to kFinished state.
   bool checkNoMoreSplitGroupsLocked();
 
-  /// Notifies listeners that the task is now complete.
+  // Notifies listeners that the task is now complete.
   void onTaskCompletion();
 
   // Returns true if all splits are finished processing and there are no more
@@ -816,7 +844,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Create an exchange client for the specified exchange plan node at a given
   // pipeline.
-  void createExchangeClient(
+  void createExchangeClientLocked(
       int32_t pipelineId,
       const core::PlanNodeId& planNodeId);
 
@@ -1018,6 +1046,13 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Base spill directory for this task.
   std::string spillDirectory_;
+
+  // Mutex to ensure only the first caller thread of 'getOrCreateSpillDirectory'
+  // creates the directory.
+  mutable std::mutex spillDirCreateMutex_;
+
+  // Indicates whether the spill directory has been created.
+  std::atomic<bool> spillDirectoryCreated_{false};
 };
 
 /// Listener invoked on task completion.

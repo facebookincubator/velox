@@ -20,8 +20,8 @@
 #include <unordered_set>
 
 #include <folly/Executor.h>
+#include "velox/common/base/SpillConfig.h"
 #include "velox/common/compression/Compression.h"
-#include "velox/common/config/SpillConfig.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/ColumnSelector.h"
@@ -117,6 +117,7 @@ class RowReaderOptions {
   // 'ioExecutor' enables parallelism when performing file system read
   // operations.
   std::shared_ptr<folly::Executor> decodingExecutor_;
+  size_t decodingParallelismFactor_{0};
   bool appendRowNumberColumn_ = false;
   // Function to populate metrics related to feature projection stats
   // in Koski. This gets fired in FlatMapColumnReader.
@@ -130,6 +131,7 @@ class RowReaderOptions {
   // (in dwrf row reader). todo: encapsulate this and keySelectionCallBack_ in a
   // struct
   std::function<void(uint64_t)> blockedOnIoCallback_;
+  std::function<void(uint64_t)> decodingTimeMsCallback_;
   bool eagerFirstStripeLoad = true;
   uint64_t skipRows_ = 0;
 
@@ -307,6 +309,10 @@ class RowReaderOptions {
     decodingExecutor_ = executor;
   }
 
+  void setDecodingParallelismFactor(size_t factor) {
+    decodingParallelismFactor_ = factor;
+  }
+
   /*
    * Set to true, if you want to add a new column to the results containing the
    * row numbers.  These row numbers are relative to the beginning of file (0 as
@@ -343,6 +349,14 @@ class RowReaderOptions {
     return blockedOnIoCallback_;
   }
 
+  void setDecodingTimeMsCallback(std::function<void(int64_t)> decodingTimeMs) {
+    decodingTimeMsCallback_ = std::move(decodingTimeMs);
+  }
+
+  const std::function<void(int64_t)> getDecodingTimeMsCallback() const {
+    return decodingTimeMsCallback_;
+  }
+
   void setSkipRows(uint64_t skipRows) {
     skipRows_ = skipRows;
   }
@@ -353,6 +367,10 @@ class RowReaderOptions {
 
   const std::shared_ptr<folly::Executor>& getDecodingExecutor() const {
     return decodingExecutor_;
+  }
+
+  size_t getDecodingParallelismFactor() const {
+    return decodingParallelismFactor_;
   }
 };
 
@@ -541,9 +559,11 @@ struct WriterOptions {
   TypePtr schema;
   velox::memory::MemoryPool* memoryPool;
   const velox::common::SpillConfig* spillConfig{nullptr};
+  tsan_atomic<bool>* nonReclaimableSection{nullptr};
   std::optional<velox::common::CompressionKind> compressionKind;
   std::optional<uint64_t> maxStripeSize{std::nullopt};
   std::optional<uint64_t> maxDictionaryMemory{std::nullopt};
+  std::map<std::string, std::string> serdeParameters;
 };
 
 } // namespace facebook::velox::dwio::common

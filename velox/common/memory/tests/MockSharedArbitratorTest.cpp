@@ -24,8 +24,8 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
-#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/SharedArbitrator.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -161,8 +161,11 @@ class MockMemoryOperator {
       return op_->reclaimableBytes(pool, reclaimableBytes);
     }
 
-    uint64_t reclaim(MemoryPool* pool, uint64_t targetBytes, Stats& stats)
-        override {
+    uint64_t reclaim(
+        MemoryPool* pool,
+        uint64_t targetBytes,
+        uint64_t /*unused*/,
+        Stats& stats) override {
       ++numReclaims_;
       if (!reclaimable_) {
         return 0;
@@ -171,7 +174,9 @@ class MockMemoryOperator {
         reclaimInjectCb_(pool, targetBytes);
       }
       reclaimTargetBytes_.push_back(targetBytes);
-      return op_->reclaim(pool, targetBytes);
+      auto reclaimBytes = op_->reclaim(pool, targetBytes);
+      stats.reclaimedBytes += reclaimBytes;
+      return reclaimBytes;
     }
 
     void enterArbitration() override {
@@ -383,7 +388,7 @@ MockTask::~MockTask() {
 class MockSharedArbitrationTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
-    SharedArbitrator::registerFactory();
+    exec::SharedArbitrator::registerFactory();
     FLAGS_velox_memory_leak_check_enabled = true;
     TestValue::enable();
   }
@@ -570,14 +575,15 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailsTask) {
   auto growTask = addTask(192 * MB);
   auto growOp = growTask->addMemoryOp(false);
   auto bufGrow = growOp->allocate(128 * MB);
-  EXPECT_NO_THROW(manager_->growPool(growOp->pool(), 64 * MB));
+  EXPECT_NO_THROW(manager_->testingGrowPool(growOp->pool(), 64 * MB));
   ASSERT_NE(nonReclaimTask->error(), nullptr);
   try {
     std::rethrow_exception(nonReclaimTask->error());
   } catch (const VeloxRuntimeError& e) {
     ASSERT_EQ(velox::error_code::kMemAborted, e.errorCode());
     ASSERT_TRUE(
-        std::string(e.what()).find("usage 384.00MB peak 384.00MB") !=
+        std::string(e.what()).find(
+            "usage 384.00MB reserved 384.00MB peak 384.00MB") !=
         std::string::npos);
   } catch (...) {
     FAIL();
@@ -588,7 +594,7 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailsTask) {
 
 TEST_F(MockSharedArbitrationTest, shrinkMemory) {
   std::vector<std::shared_ptr<MemoryPool>> pools;
-  ASSERT_THROW(arbitrator_->shrinkMemory(pools, 128), VeloxException);
+  ASSERT_THROW(arbitrator_->shrinkCapacity(pools, 128), VeloxException);
 }
 
 TEST_F(MockSharedArbitrationTest, singlePoolGrowWithoutArbitration) {

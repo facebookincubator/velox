@@ -30,10 +30,13 @@ class BufferedWriterTest : public testing::TestWithParam<bool> {
  protected:
   BufferedWriterTest()
       : usePool_(GetParam()),
-        pool_(memory::addDefaultLeafMemoryPool("BufferedWriterTest")) {}
+        pool_(memory::memoryManager()->addLeafPool("BufferedWriterTest")) {}
 
   void SetUp() override {}
-  static void SetUpTestCase() {}
+
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
 
   // Indicates test with buffered writer interface which takes memory pool or
   // not.
@@ -218,16 +221,47 @@ TEST_P(BufferedWriterTest, closeTest) {
     writer = std::make_unique<BufferedWriter<char, WriteFn>>(
         *pool_, bufferSize, writeFn);
   } else {
-    writer = std::make_unique<BufferedWriter<char, WriteFn>>(
-        *pool_, bufferSize, writeFn);
+    writer = std::make_unique<BufferedWriter<char, WriteFn>>(*buffer, writeFn);
   }
   writer->add('a');
   ASSERT_EQ(
       writer->toString(),
       "BufferedWriter[pos[1] capacity[1024] closed[false]]");
   writer->close();
+  ASSERT_EQ(flushCount, 1);
   // Verify all the calls on a closed object throw.
   VELOX_ASSERT_THROW(writer->close(), "");
+  VELOX_ASSERT_THROW(writer->abort(), "");
+  VELOX_ASSERT_THROW(writer->add('a'), "");
+  VELOX_ASSERT_THROW(writer->flush(), "");
+}
+
+TEST_P(BufferedWriterTest, abortTest) {
+  const int bufferSize = 1024;
+  std::unique_ptr<dwio::common::DataBuffer<char>> buffer;
+  if (!usePool_) {
+    buffer =
+        std::make_unique<dwio::common::DataBuffer<char>>(*pool_, bufferSize);
+  }
+  size_t flushCount{0};
+  auto writeFn = [&](char* buf, size_t size) { flushCount += size; };
+  std::unique_ptr<BufferedWriter<char, WriteFn>> writer;
+  if (usePool_) {
+    writer = std::make_unique<BufferedWriter<char, WriteFn>>(
+        *pool_, bufferSize, writeFn);
+  } else {
+    writer = std::make_unique<BufferedWriter<char, WriteFn>>(*buffer, writeFn);
+  }
+  writer->add('a');
+  ASSERT_EQ(
+      writer->toString(),
+      "BufferedWriter[pos[1] capacity[1024] closed[false]]");
+  writer->abort();
+  // Verify nothing has been flushed on abort.
+  ASSERT_EQ(flushCount, 0);
+  // Verify all the calls on an abort object throw.
+  VELOX_ASSERT_THROW(writer->close(), "");
+  VELOX_ASSERT_THROW(writer->abort(), "");
   VELOX_ASSERT_THROW(writer->add('a'), "");
   VELOX_ASSERT_THROW(writer->flush(), "");
 }

@@ -35,6 +35,9 @@ struct WriterOptions {
   std::shared_ptr<const Type> schema;
   velox::memory::MemoryPool* memoryPool;
   const velox::common::SpillConfig* spillConfig{nullptr};
+  // If not null, used by memory arbitration to track if a file writer is under
+  // memory reclaimable section or not.
+  tsan_atomic<bool>* nonReclaimableSection{nullptr};
   /// The default factory allows the writer to construct the default flush
   /// policy with the configs in its ctor.
   std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory;
@@ -137,11 +140,7 @@ class Writer : public dwio::common::Writer {
   bool canReclaim() const;
 
   tsan_atomic<bool>& testingNonReclaimableSection() {
-    return nonReclaimableSection_;
-  }
-
-  bool testingClosed() const {
-    return closed_;
+    return *nonReclaimableSection_;
   }
 
  protected:
@@ -159,6 +158,7 @@ class Writer : public dwio::common::Writer {
     uint64_t reclaim(
         memory::MemoryPool* pool,
         uint64_t targetBytes,
+        uint64_t maxWaitMs,
         memory::MemoryReclaimer::Stats& stats) override;
 
    private:
@@ -203,9 +203,10 @@ class Writer : public dwio::common::Writer {
 
   const std::shared_ptr<const dwio::common::TypeWithId> schema_;
   const common::SpillConfig* const spillConfig_;
-  // Indicates if this file writer has been closed or aborted.
-  bool closed_{false};
-  tsan_atomic<bool> nonReclaimableSection_{false};
+  // If not null, used by memory arbitration to track if this file writer is
+  // under memory reclaimable section or not.
+  tsan_atomic<bool>* const nonReclaimableSection_{nullptr};
+
   std::unique_ptr<DWRFFlushPolicy> flushPolicy_;
   std::unique_ptr<LayoutPlanner> layoutPlanner_;
   std::unique_ptr<ColumnWriter> writer_;

@@ -120,13 +120,14 @@ class MergeExchangeSource : public MergeSource {
       MergeExchange* mergeExchange,
       const std::string& taskId,
       int destination,
-      memory::MemoryPool* FOLLY_NONNULL pool)
+      int64_t maxQueuedBytes,
+      memory::MemoryPool* pool)
       : mergeExchange_(mergeExchange),
         client_(std::make_unique<ExchangeClient>(
             taskId,
             destination,
             pool,
-            ExchangeClient::kDefaultMaxQueuedBytes)) {
+            maxQueuedBytes)) {
     client_->addRemoteTaskId(taskId);
     client_->noMoreRemoteTasks();
   }
@@ -134,29 +135,30 @@ class MergeExchangeSource : public MergeSource {
   BlockingReason next(RowVectorPtr& data, ContinueFuture* future) override {
     data.reset();
 
-    if (atEnd_) {
+    if (atEnd_ && !currentPage_) {
       return BlockingReason::kNotBlocked;
     }
 
     if (!currentPage_) {
-      currentPage_ = client_->next(&atEnd_, future);
-      if (atEnd_) {
-        return BlockingReason::kNotBlocked;
-      }
+      auto pages = client_->next(1, &atEnd_, future);
+      VELOX_CHECK_LE(pages.size(), 1);
+      currentPage_ = pages.empty() ? nullptr : std::move(pages.front());
 
       if (!currentPage_) {
+        if (atEnd_) {
+          return BlockingReason::kNotBlocked;
+        }
         return BlockingReason::kWaitForProducer;
       }
     }
-    if (!inputStream_) {
-      inputStream_ = std::make_unique<ByteStream>();
+    if (!inputStream_.has_value()) {
       mergeExchange_->stats().wlock()->rawInputBytes += currentPage_->size();
-      currentPage_->prepareStreamForDeserialize(inputStream_.get());
+      inputStream_.emplace(currentPage_->prepareStreamForDeserialize());
     }
 
     if (!inputStream_->atEnd()) {
       VectorStreamGroup::read(
-          inputStream_.get(),
+          &inputStream_.value(),
           mergeExchange_->pool(),
           mergeExchange_->outputType(),
           &data);
@@ -170,7 +172,7 @@ class MergeExchangeSource : public MergeSource {
     if (inputStream_->atEnd()) {
       // Reached end of the stream.
       currentPage_ = nullptr;
-      inputStream_ = nullptr;
+      inputStream_.reset();
     }
 
     return BlockingReason::kNotBlocked;
@@ -186,7 +188,7 @@ class MergeExchangeSource : public MergeSource {
  private:
   MergeExchange* const mergeExchange_;
   std::unique_ptr<ExchangeClient> client_;
-  std::unique_ptr<ByteStream> inputStream_;
+  std::optional<ByteInputStream> inputStream_;
   std::unique_ptr<SerializedPage> currentPage_;
   bool atEnd_ = false;
 
@@ -207,9 +209,10 @@ std::shared_ptr<MergeSource> MergeSource::createMergeExchangeSource(
     MergeExchange* mergeExchange,
     const std::string& taskId,
     int destination,
+    int64_t maxQueuedBytes,
     memory::MemoryPool* pool) {
   return std::make_shared<MergeExchangeSource>(
-      mergeExchange, taskId, destination, pool);
+      mergeExchange, taskId, destination, maxQueuedBytes, pool);
 }
 
 namespace {

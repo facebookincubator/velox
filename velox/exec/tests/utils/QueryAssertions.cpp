@@ -68,6 +68,18 @@ template <>
 }
 
 template <>
+::duckdb::Value duckValueAt<TypeKind::INTEGER>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  auto type = vector->type();
+  if (type->isDate()) {
+    return ::duckdb::Value::DATE(::duckdb::Date::EpochDaysToDate(
+        vector->as<SimpleVector<int32_t>>()->valueAt(index)));
+  }
+  return ::duckdb::Value(vector->as<SimpleVector<int32_t>>()->valueAt(index));
+}
+
+template <>
 ::duckdb::Value duckValueAt<TypeKind::BIGINT>(
     const VectorPtr& vector,
     vector_size_t index) {
@@ -80,6 +92,12 @@ template <>
         decimalType.precision(),
         decimalType.scale());
   }
+
+  if (type->isIntervalDayTime()) {
+    return ::duckdb::Value::INTERVAL(
+        0, 0, vector->as<SimpleVector<int64_t>>()->valueAt(index));
+  }
+
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
 }
 
@@ -110,12 +128,13 @@ template <>
     return ::duckdb::Value::EMPTYLIST(duckdb::fromVeloxType(elements->type()));
   }
 
-  std::vector<::duckdb::Value> array;
+  ::duckdb::vector<::duckdb::Value> array;
   array.reserve(size);
   for (auto i = 0; i < size; i++) {
     auto innerRow = offset + i;
     if (elements->isNullAt(innerRow)) {
-      array.emplace_back(::duckdb::Value(nullptr));
+      array.emplace_back(
+          ::duckdb::Value(duckdb::fromVeloxType(elements->type())));
     } else {
       array.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           duckValueAt, elements->typeKind(), elements, innerRow));
@@ -133,7 +152,7 @@ template <>
   auto rowRow = vector->wrappedIndex(row);
   auto rowType = asRowType(rowVector->type());
 
-  std::vector<std::pair<std::string, ::duckdb::Value>> fields;
+  ::duckdb::vector<std::pair<std::string, ::duckdb::Value>> fields;
   for (auto i = 0; i < rowType->size(); ++i) {
     if (rowVector->childAt(i)->isNullAt(rowRow)) {
       fields.push_back({rowType->nameOf(i), ::duckdb::Value(nullptr)});
@@ -161,68 +180,77 @@ template <>
   const auto& mapValues = mapVector->mapValues();
   auto offset = mapVector->offsetAt(mapRow);
   auto size = mapVector->sizeAt(mapRow);
+  auto mapType = ::duckdb::ListType::GetChildType(::duckdb::LogicalType::MAP(
+      duckdb::fromVeloxType(mapKeys->type()),
+      duckdb::fromVeloxType(mapValues->type())));
   if (size == 0) {
-    return ::duckdb::Value::MAP(
-        ::duckdb::Value::EMPTYLIST(duckdb::fromVeloxType(mapKeys->type())),
-        ::duckdb::Value::EMPTYLIST(duckdb::fromVeloxType(mapValues->type())));
+    return ::duckdb::Value::MAP(mapType, ::duckdb::vector<::duckdb::Value>());
   }
 
-  std::vector<::duckdb::Value> duckKeysVector;
-  std::vector<::duckdb::Value> duckValuesVector;
-  duckKeysVector.reserve(size);
-  duckValuesVector.reserve(size);
+  ::duckdb::vector<::duckdb::Value> duckMap;
   for (auto i = 0; i < size; i++) {
     auto innerRow = offset + i;
-    duckKeysVector.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        duckValueAt, mapKeys->typeKind(), mapKeys, innerRow));
+    auto key = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        duckValueAt, mapKeys->typeKind(), mapKeys, innerRow);
+    ::duckdb::Value value;
     if (mapValues->isNullAt(innerRow)) {
-      duckValuesVector.emplace_back(::duckdb::Value(nullptr));
+      value = ::duckdb::Value(duckdb::fromVeloxType(mapValues->type()));
     } else {
-      duckValuesVector.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          duckValueAt, mapValues->typeKind(), mapValues, innerRow));
+      value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          duckValueAt, mapValues->typeKind(), mapValues, innerRow);
     }
+    ::duckdb::child_list_t<::duckdb::Value> mapStruct;
+    mapStruct.push_back(make_pair("key", key));
+    mapStruct.push_back(make_pair("value", value));
+    duckMap.push_back(::duckdb::Value::STRUCT(mapStruct));
   }
-  return ::duckdb::Value::MAP(
-      ::duckdb::Value::LIST(duckKeysVector),
-      ::duckdb::Value::LIST(duckValuesVector));
+  return ::duckdb::Value::MAP(mapType, duckMap);
 }
 
 template <TypeKind kind>
-velox::variant
-variantAt(::duckdb::DataChunk* dataChunk, int32_t row, int32_t column) {
+variant variantAt(::duckdb::DataChunk* dataChunk, int32_t row, int32_t column) {
   using T = typename KindToFlatVector<kind>::WrapperType;
-  return velox::variant(dataChunk->GetValue(column, row).GetValue<T>());
+  return variant(dataChunk->GetValue(column, row).GetValue<T>());
 }
 
 template <>
-velox::variant variantAt<TypeKind::VARCHAR>(
+variant variantAt<TypeKind::VARCHAR>(
     ::duckdb::DataChunk* dataChunk,
     int32_t row,
     int32_t column) {
-  return velox::variant(
+  return variant(
       StringView(::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
 }
 
 template <>
-velox::variant variantAt<TypeKind::VARBINARY>(
+velox::variant variantAt<TypeKind::HUGEINT>(
     ::duckdb::DataChunk* dataChunk,
     int32_t row,
     int32_t column) {
-  return velox::variant(
+  auto hugeInt = ::duckdb::HugeIntValue::Get(dataChunk->GetValue(column, row));
+  return velox::variant(HugeInt::build(hugeInt.upper, hugeInt.lower));
+}
+
+template <>
+variant variantAt<TypeKind::VARBINARY>(
+    ::duckdb::DataChunk* dataChunk,
+    int32_t row,
+    int32_t column) {
+  return variant::binary(
       StringView(::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
 }
 
 template <>
-velox::variant variantAt<TypeKind::TIMESTAMP>(
+variant variantAt<TypeKind::TIMESTAMP>(
     ::duckdb::DataChunk* dataChunk,
     int32_t row,
     int32_t column) {
-  return velox::variant::timestamp(duckdbTimestampToVelox(
+  return variant::timestamp(duckdbTimestampToVelox(
       dataChunk->GetValue(column, row).GetValue<::duckdb::timestamp_t>()));
 }
 
 template <TypeKind kind>
-velox::variant variantAt(const ::duckdb::Value& value) {
+variant variantAt(const ::duckdb::Value& value) {
   if (value.type() == ::duckdb::LogicalType::INTERVAL) {
     return ::duckdb::Interval::GetMicro(value.GetValue<::duckdb::interval_t>());
   } else if (value.type() == ::duckdb::LogicalType::DATE) {
@@ -231,34 +259,38 @@ velox::variant variantAt(const ::duckdb::Value& value) {
     // NOTE: duckdb only support native cpp type for GetValue so we need to use
     // DeepCopiedType instead of WrapperType here.
     using T = typename TypeTraits<kind>::DeepCopiedType;
-    return velox::variant(value.GetValue<T>());
+    return variant(value.GetValue<T>());
   }
 }
 
 template <>
-velox::variant variantAt<TypeKind::TIMESTAMP>(const ::duckdb::Value& value) {
-  return velox::variant::timestamp(
+velox::variant variantAt<TypeKind::HUGEINT>(const ::duckdb::Value& value) {
+  auto hugeInt = ::duckdb::HugeIntValue::Get(value);
+  return velox::variant(HugeInt::build(hugeInt.upper, hugeInt.lower));
+}
+
+template <>
+variant variantAt<TypeKind::TIMESTAMP>(const ::duckdb::Value& value) {
+  return variant::timestamp(
       duckdbTimestampToVelox(value.GetValue<::duckdb::timestamp_t>()));
 }
 
 template <>
-velox::variant variantAt<TypeKind::VARCHAR>(const ::duckdb::Value& value) {
-  return velox::variant(StringView(::duckdb::StringValue::Get(value)));
+variant variantAt<TypeKind::VARCHAR>(const ::duckdb::Value& value) {
+  return variant(StringView(::duckdb::StringValue::Get(value)));
 }
 
 template <>
-velox::variant variantAt<TypeKind::VARBINARY>(const ::duckdb::Value& value) {
-  return velox::variant(StringView(::duckdb::StringValue::Get(value)));
+variant variantAt<TypeKind::VARBINARY>(const ::duckdb::Value& value) {
+  return variant::binary(StringView(::duckdb::StringValue::Get(value)));
 }
 
 variant nullVariant(const TypePtr& type) {
   return variant(type->kind());
 }
 
-velox::variant rowVariantAt(
-    const ::duckdb::Value& vector,
-    const TypePtr& rowType) {
-  std::vector<velox::variant> values;
+variant rowVariantAt(const ::duckdb::Value& vector, const TypePtr& rowType) {
+  std::vector<variant> values;
   const auto& structValue = ::duckdb::StructValue::GetChildren(vector);
   for (size_t i = 0; i < structValue.size(); ++i) {
     auto currChild = structValue[i];
@@ -274,45 +306,41 @@ velox::variant rowVariantAt(
       values.push_back(value);
     }
   }
-  return velox::variant::row(std::move(values));
+  return variant::row(std::move(values));
 }
 
-velox::variant mapVariantAt(
-    const ::duckdb::Value& vector,
-    const TypePtr& mapType) {
+variant mapVariantAt(const ::duckdb::Value& vector, const TypePtr& mapType) {
   std::map<variant, variant> map;
-
-  const auto& mapValue = ::duckdb::StructValue::GetChildren(vector);
-  VELOX_CHECK_EQ(mapValue.size(), 2);
 
   auto mapTypePtr = dynamic_cast<const MapType*>(mapType.get());
   auto keyType = mapTypePtr->keyType();
   auto valueType = mapTypePtr->valueType();
-  const auto& keyList = ::duckdb::ListValue::GetChildren(mapValue[0]);
-  const auto& valueList = ::duckdb::ListValue::GetChildren(mapValue[1]);
-  VELOX_CHECK_EQ(keyList.size(), valueList.size());
-  for (int i = 0; i < keyList.size(); i++) {
+
+  VELOX_CHECK_EQ(vector.type().id(), ::duckdb::LogicalTypeId::MAP);
+
+  const auto& valueList = ::duckdb::ListValue::GetChildren(vector);
+  for (int i = 0; i < valueList.size(); i++) {
     // TODO: Add support for complex key and value types.
     variant variantKey;
-    if (keyList[i].IsNull()) {
-      variantKey = nullVariant(keyType);
-    } else {
-      variantKey = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          variantAt, keyType->kind(), keyList[i]);
-    }
     variant variantValue;
-    if (valueList[i].IsNull()) {
+    auto value = ::duckdb::StructValue::GetChildren(valueList[i]);
+    // Map key cannot be null.
+    VELOX_CHECK(!value[0].IsNull())
+    variantKey = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        variantAt, keyType->kind(), value[0]);
+
+    if (value[1].IsNull()) {
       variantValue = nullVariant(valueType);
     } else {
       variantValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          variantAt, valueType->kind(), valueList[i]);
+          variantAt, valueType->kind(), value[1]);
     }
     map.insert({variantKey, variantValue});
   }
-  return velox::variant::map(map);
+  return variant::map(map);
 }
 
-velox::variant arrayVariantAt(
+variant arrayVariantAt(
     const ::duckdb::Value& vector,
     const TypePtr& arrayType) {
   std::vector<variant> array;
@@ -334,12 +362,12 @@ velox::variant arrayVariantAt(
       array.push_back(variant);
     }
   }
-  return velox::variant::array(std::move(array));
+  return variant::array(std::move(array));
 }
 
 std::vector<MaterializedRow> materialize(
     ::duckdb::DataChunk* dataChunk,
-    const std::shared_ptr<const RowType>& rowType) {
+    const RowTypePtr& rowType) {
   VELOX_CHECK_EQ(
       rowType->size(), dataChunk->GetTypes().size(), "Wrong number of columns");
 
@@ -389,14 +417,19 @@ std::vector<MaterializedRow> materialize(
 }
 
 template <TypeKind kind>
-velox::variant variantAt(VectorPtr vector, int32_t row) {
+variant variantAt(VectorPtr vector, int32_t row) {
   using T = typename KindToFlatVector<kind>::WrapperType;
-  return velox::variant(vector->as<SimpleVector<T>>()->valueAt(row));
+  return variant(vector->as<SimpleVector<T>>()->valueAt(row));
+}
+
+template <>
+variant variantAt<TypeKind::VARBINARY>(VectorPtr vector, int32_t row) {
+  return variant::binary(vector->as<SimpleVector<StringView>>()->valueAt(row));
 }
 
 variant variantAt(const VectorPtr& vector, vector_size_t row);
 
-velox::variant arrayVariantAt(const VectorPtr& vector, vector_size_t row) {
+variant arrayVariantAt(const VectorPtr& vector, vector_size_t row) {
   auto arrayVector = vector->wrappedVector()->as<ArrayVector>();
   auto& elements = arrayVector->elements();
 
@@ -404,16 +437,16 @@ velox::variant arrayVariantAt(const VectorPtr& vector, vector_size_t row) {
   auto offset = arrayVector->offsetAt(wrappedRow);
   auto size = arrayVector->sizeAt(wrappedRow);
 
-  std::vector<velox::variant> array;
+  std::vector<variant> array;
   array.reserve(size);
   for (auto i = 0; i < size; i++) {
     auto innerRow = offset + i;
     array.push_back(variantAt(elements, innerRow));
   }
-  return velox::variant::array(array);
+  return variant::array(array);
 }
 
-velox::variant mapVariantAt(const VectorPtr& vector, vector_size_t row) {
+variant mapVariantAt(const VectorPtr& vector, vector_size_t row) {
   auto mapVector = vector->wrappedVector()->as<MapVector>();
   auto& mapKeys = mapVector->mapKeys();
   auto& mapValues = mapVector->mapValues();
@@ -429,18 +462,18 @@ velox::variant mapVariantAt(const VectorPtr& vector, vector_size_t row) {
     auto value = variantAt(mapValues, innerRow);
     map.insert({key, value});
   }
-  return velox::variant::map(map);
+  return variant::map(map);
 }
 
-velox::variant rowVariantAt(const VectorPtr& vector, vector_size_t row) {
+variant rowVariantAt(const VectorPtr& vector, vector_size_t row) {
   auto rowValues = vector->wrappedVector()->as<RowVector>();
   auto wrappedRow = vector->wrappedIndex(row);
 
-  std::vector<velox::variant> values;
+  std::vector<variant> values;
   for (auto& child : rowValues->children()) {
     values.push_back(variantAt(child, wrappedRow));
   }
-  return velox::variant::row(std::move(values));
+  return variant::row(std::move(values));
 }
 
 variant variantAt(const VectorPtr& vector, vector_size_t row) {
@@ -793,7 +826,10 @@ std::string generateUserFriendlyDiff(
 
 void verifyDuckDBResult(const DuckDBQueryResult& result, std::string_view sql) {
   VELOX_CHECK(
-      result->success, "DuckDB query failed: {}\n{}", result->error, sql);
+      !result->HasError(),
+      "DuckDB query failed: {}\n{}",
+      result->GetError(),
+      sql);
 }
 
 } // namespace
@@ -849,15 +885,12 @@ void DuckDbQueryRunner::createTable(
           appender.Append(duckValueAt<TypeKind::BIGINT>(columnVector, row));
         } else if (rowType.childAt(column)->isLongDecimal()) {
           appender.Append(duckValueAt<TypeKind::HUGEINT>(columnVector, row));
-        } else if (type->isIntervalDayTime()) {
-          auto value = ::duckdb::Value::INTERVAL(
-              0, 0, columnVector->as<SimpleVector<int64_t>>()->valueAt(row));
-          appender.Append(value);
-        } else if (type->isDate()) {
-          auto value = ::duckdb::Value::DATE(::duckdb::Date::EpochDaysToDate(
-              columnVector->as<SimpleVector<int32_t>>()->valueAt(row)));
-          appender.Append(value);
         } else {
+          VELOX_CHECK(
+              type->equivalent(*columnVector->type()),
+              "{} vs. {}",
+              type->toString(),
+              columnVector->toString())
           auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
               duckValueAt, type->kind(), columnVector, row);
           appender.Append(value);
@@ -875,12 +908,12 @@ DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {
   con.Query("PRAGMA default_null_order='NULLS LAST'");
   auto duckDbResult = con.Query(sql);
   verifyDuckDBResult(duckDbResult, sql);
-  return duckDbResult;
+  return std::move(duckDbResult);
 }
 
 void DuckDbQueryRunner::execute(
     const std::string& sql,
-    const std::shared_ptr<const RowType>& resultRowType,
+    const RowTypePtr& resultRowType,
     std::function<void(std::vector<MaterializedRow>&)> resultCallback) {
   auto duckDbResult = execute(sql);
 
@@ -962,6 +995,19 @@ bool assertEqualResults(
   const auto& expectedType =
       (expected.size() == 0) ? nullptr : expected.at(0)->type();
   return assertEqualResults(expectedRows, expectedType, actual);
+}
+
+bool assertEqualResults(
+    const core::PlanNodePtr& plan1,
+    const core::PlanNodePtr& plan2) {
+  CursorParameters params1;
+  params1.planNode = plan1;
+  auto [cursor1, results1] = readCursor(params1, [](Task*) {});
+
+  CursorParameters params2;
+  params2.planNode = plan2;
+  auto [cursor2, results2] = readCursor(params2, [](Task*) {});
+  return assertEqualResults(results1, results2);
 }
 
 void assertEqualTypeAndNumRows(
@@ -1091,17 +1137,20 @@ bool assertEqualResults(
 
 void assertResults(
     const std::vector<RowVectorPtr>& results,
-    const std::shared_ptr<const RowType>& resultType,
+    const RowTypePtr& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner) {
   MaterializedRowMultiset actualRows;
+  MaterializedRowMultiset expectedRows;
   for (const auto& vector : results) {
     auto rows = materialize(vector);
     std::copy(
         rows.begin(), rows.end(), std::inserter(actualRows, actualRows.end()));
   }
 
-  auto expectedRows = duckDbQueryRunner.execute(duckDbSql, resultType);
+  if (!duckDbSql.empty()) {
+    expectedRows = duckDbQueryRunner.execute(duckDbSql, resultType);
+  }
   const auto& actualType =
       (results.size() == 0) ? nullptr : results.at(0)->type();
   assertEqualResults(
@@ -1179,7 +1228,7 @@ static bool compareOrderedPartitionsVectors(
 
 void assertResultsOrdered(
     const std::vector<RowVectorPtr>& results,
-    const std::shared_ptr<const RowType>& resultType,
+    const RowTypePtr& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
     const std::vector<uint32_t>& sortingKeys) {
@@ -1257,7 +1306,22 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     addSplits(task);
   }
 
-  EXPECT_TRUE(waitForTaskCompletion(task, maxWaitMicros)) << task->taskId();
+  if (!waitForTaskCompletion(task, maxWaitMicros)) {
+    // NOTE: there is async memory arbitration might fail the task after all the
+    // results have been consumed and before the task finishes. So we might run
+    // into the failed task state in some rare case such as exposed by
+    // concurrent memory arbitration test.
+    if (task->state() != TaskState::kFinished &&
+        task->state() != TaskState::kRunning) {
+      waitForTaskDriversToFinish(task, maxWaitMicros);
+      std::rethrow_exception(task->error());
+    } else {
+      VELOX_FAIL(
+          "Failed to wait for task to complete after {}, task: {}",
+          succinctMicros(maxWaitMicros),
+          task->toString());
+    }
+  }
   return {std::move(cursor), std::move(result)};
 }
 
@@ -1404,9 +1468,7 @@ std::shared_ptr<Task> assertQuery(
   return result.first->task();
 }
 
-velox::variant readSingleValue(
-    const core::PlanNodePtr& plan,
-    int32_t maxDrivers) {
+variant readSingleValue(const core::PlanNodePtr& plan, int32_t maxDrivers) {
   CursorParameters params;
   params.planNode = plan;
   params.maxDrivers = maxDrivers;

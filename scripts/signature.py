@@ -31,8 +31,20 @@ class bcolors:
     BOLD = "\033[1m"
 
 
+def get_error_string(error_message):
+    return f"""
+Incompatible changes in function signatures have been detected.
+
+{error_message}
+
+Changing or removing function signatures breaks backwards compatibility as some users may rely on function signatures that no longer exist.
+"""
+
+
 def export(args):
     """Exports Velox function signatures."""
+    pv.clear_signatures()
+
     if args.spark:
         pv.register_spark_signatures()
 
@@ -58,43 +70,44 @@ def diff_signatures(base_signatures, contender_signatures):
         base_signatures,
         contender_signatures,
         ignore_order=True,
+        cutoff_distance_for_pairs=0.9,
         report_repetition=True,
         view="tree",
     )
     exit_status = 0
     if delta:
         if "dictionary_item_removed" in delta:
-            print(
-                f"Signature removed: {bcolors.FAIL}{delta['dictionary_item_removed']}"
-            )
+            error_message = ""
+            for dic_removed in delta["dictionary_item_removed"]:
+                error_message += (
+                    f"""Function '{dic_removed.get_root_key()}' has been removed.\n"""
+                )
+            print(get_error_string(error_message))
             exit_status = 1
 
         if "values_changed" in delta:
-            print(f"Signature changed: {bcolors.FAIL}{delta['values_changed']}")
+            error_message = ""
+            for value_change in delta["values_changed"]:
+                error_message += f"""'{value_change.get_root_key()}{value_change.t1}' is changed to '{value_change.get_root_key()}{value_change.t2}'.\n"""
+            print(get_error_string(error_message))
             exit_status = 1
 
         if "repetition_change" in delta:
-            print(f"Signature repeated: {bcolors.FAIL}{delta['repetition_change']}")
+            error_message = ""
+            for rep_change in delta["repetition_change"]:
+                error_message += f"""'{rep_change.get_root_key()}{rep_change.t1}' is repeated {rep_change.repetition['new_repeat']} times.\n"""
+            print(get_error_string(error_message))
             exit_status = 1
 
         if "iterable_item_removed" in delta:
-            print(
-                f"Iterable item removed: {bcolors.FAIL}{delta['iterable_item_removed']}"
-            )
+            error_message = ""
+            for iter_change in delta["iterable_item_removed"]:
+                error_message += f"""{iter_change.get_root_key()} has its function signature '{iter_change.t1}' removed.\n"""
+            print(get_error_string(error_message))
             exit_status = 1
-
-        print(f"Found differences: {bcolors.OKGREEN}{delta}")
 
     else:
         print(f"{bcolors.BOLD}No differences found.")
-
-    if exit_status:
-        print(
-            f""" 
-            {bcolors.BOLD}Incompatible changes in function signatures have been detected.
-            This means your changes have modified function signatures and possibly broken backwards compatibility.  
-        """
-        )
 
     return delta, exit_status
 
@@ -113,42 +126,34 @@ def bias(args):
     bias_output, status = bias_signatures(
         base_signatures, contender_signatures, tickets
     )
-    if status:
-        return status
 
     if bias_output:
         with open(args.output_path, "w") as f:
             print(f"{bias_output}", file=f, end="")
 
-    return 0
+    return status
 
 
 def bias_signatures(base_signatures, contender_signatures, tickets):
     """Returns newly added functions as string and a status flag.
     Newly added functions are biased like so `fn_name1=<ticket_count>,fn_name2=<ticket_count>`.
-    If it detects incompatible changes returns 1 in the status and empty string.
+    If it detects incompatible changes returns 1 in the status.
     """
     delta, status = diff_signatures(base_signatures, contender_signatures)
 
-    # Return if the signature check call flags incompatible changes.
-    if status:
-        return "", status
-
     if not delta:
         print(f"{bcolors.BOLD} No changes detected: Nothing to do!")
-        return "", 0
+        return "", status
 
     function_set = set()
     for items in delta.values():
         for item in items:
             function_set.add(item.get_root_key())
 
-    print(f"{bcolors.BOLD}Functions to be biased: {function_set}")
-
     if function_set:
-        return f"{f'={tickets},'.join(sorted(function_set)) + f'={tickets}'}", 0
+        return f"{f'={tickets},'.join(sorted(function_set)) + f'={tickets}'}", status
 
-    return "", 0
+    return "", status
 
 
 def get_tickets(val):
@@ -169,7 +174,7 @@ def parse_args(args):
     command = parser.add_subparsers(dest="command")
     export_command_parser = command.add_parser("export")
     export_command_parser.add_argument("--spark", action="store_true")
-    export_command_parser.add_argument("--presto", action="store_false")
+    export_command_parser.add_argument("--presto", action="store_true")
     export_command_parser.add_argument("output_file", type=argparse.FileType("w"))
 
     diff_command_parser = command.add_parser("diff")

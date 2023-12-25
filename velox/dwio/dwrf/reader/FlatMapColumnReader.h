@@ -16,9 +16,11 @@
 
 #pragma once
 
+#include <folly/Executor.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/FlatMapHelper.h"
+#include "velox/dwio/common/ParallelFor.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/ConstantColumnReader.h"
@@ -147,6 +149,8 @@ class FlatMapColumnReader : public ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
+      folly::Executor* FOLLY_NULLABLE executor,
+      size_t decodingParallelismFactor,
       FlatMapContext flatMapContext);
   ~FlatMapColumnReader() override = default;
 
@@ -157,11 +161,17 @@ class FlatMapColumnReader : public ColumnReader {
       VectorPtr& result,
       const uint64_t* FOLLY_NULLABLE nulls) override;
 
+  bool isFlatMap() const override {
+    return true;
+  }
+
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
   std::vector<std::unique_ptr<KeyNode<T>>> keyNodes_;
   std::unique_ptr<StringKeyBuffer> stringKeyBuffer_;
   bool returnFlatVector_;
+  folly::Executor* FOLLY_NULLABLE executor_;
+  std::unique_ptr<dwio::common::ParallelFor> parallelForOnKeyNodes_;
 
   void initStringKeyBuffer() {}
 
@@ -176,6 +186,8 @@ class FlatMapStructEncodingColumnReader : public ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
+      folly::Executor* FOLLY_NULLABLE executor,
+      size_t decodingParallelismFactor,
       FlatMapContext flatMapContext);
   ~FlatMapStructEncodingColumnReader() override = default;
 
@@ -186,10 +198,16 @@ class FlatMapStructEncodingColumnReader : public ColumnReader {
       VectorPtr& result,
       const uint64_t* FOLLY_NULLABLE nulls) override;
 
+  bool isFlatMap() const override {
+    return true;
+  }
+
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
   std::vector<std::unique_ptr<KeyNode<T>>> keyNodes_;
   std::unique_ptr<NullColumnReader> nullColumnReader_;
+  folly::Executor* FOLLY_NULLABLE executor_;
+  dwio::common::ParallelFor parallelForOnKeyNodes_;
   BufferPtr mergedNulls_;
 };
 
@@ -200,6 +218,8 @@ class FlatMapColumnReaderFactory {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
+      folly::Executor* FOLLY_NULLABLE executor,
+      size_t decodingParallelismFactor,
       FlatMapContext flatMapContext);
 };
 

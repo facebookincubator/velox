@@ -22,7 +22,7 @@ void ValueSet::write(
     const BaseVector& vector,
     vector_size_t index,
     HashStringAllocator::Position& position) const {
-  ByteStream stream(allocator_);
+  ByteOutputStream stream(allocator_);
   if (position.header == nullptr) {
     position = allocator_->newWrite(stream);
   } else {
@@ -53,8 +53,7 @@ void ValueSet::read(
     const HashStringAllocator::Header* header) const {
   VELOX_CHECK_NOT_NULL(header);
 
-  ByteStream stream;
-  HashStringAllocator::prepareRead(header, stream);
+  auto stream = HashStringAllocator::prepareRead(header);
   exec::ContainerRowSerde::deserialize(stream, index, vector);
 }
 

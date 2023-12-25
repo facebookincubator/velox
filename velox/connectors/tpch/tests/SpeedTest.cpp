@@ -59,7 +59,8 @@ class TpchSpeedTest {
     auto tpchConnector =
         connector::getConnectorFactory(
             connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-            ->newConnector(kTpchConnectorId_, nullptr);
+            ->newConnector(
+                kTpchConnectorId_, std::make_shared<core::MemConfig>());
     connector::registerConnector(tpchConnector);
   }
 
@@ -74,7 +75,7 @@ class TpchSpeedTest {
     core::PlanNodeId scanId;
     auto plan =
         PlanBuilder()
-            .tableScan(
+            .tpchTableScan(
                 table, folly::copy(getTableSchema(table)->names()), scaleFactor)
             .capturePlanNodeId(scanId)
             .planNode();

@@ -127,6 +127,10 @@ class ExprEncodingsTest
     : public testing::TestWithParam<std::tuple<int, int, bool>>,
       public VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
     // This test throws a lot of exceptions, so turn off stack trace capturing.
     FLAGS_velox_exception_user_stacktrace_enabled = false;
@@ -409,12 +413,12 @@ class ExprEncodingsTest
   void runWithError(const std::string& text) {
     exec::ExprSet exprs({parseExpression(text, testDataType_)}, execCtx_.get());
     auto row = testDataRow();
-    exec::EvalCtx context(execCtx_.get(), &exprs, row.get());
     auto size = row->size();
 
     vector_size_t begin = 0;
     vector_size_t end = size / 3 * 2;
     {
+      exec::EvalCtx context(execCtx_.get(), &exprs, row.get());
       auto rows = selectRange(begin, end);
       std::vector<VectorPtr> result(1);
 
@@ -426,6 +430,7 @@ class ExprEncodingsTest
     begin = size / 3;
     end = size;
     {
+      exec::EvalCtx context(execCtx_.get(), &exprs, row.get());
       auto rows = selectRange(begin, end);
       std::vector<VectorPtr> result(1);
 

@@ -168,7 +168,9 @@ class CountIfAggregate : public exec::Aggregate {
   }
 };
 
-exec::AggregateRegistrationResult registerCountIf(const std::string& name) {
+} // namespace
+
+void registerCountIfAggregate(const std::string& prefix) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("bigint")
@@ -177,7 +179,8 @@ exec::AggregateRegistrationResult registerCountIf(const std::string& name) {
           .build(),
   };
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kCountIf;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -199,12 +202,6 @@ exec::AggregateRegistrationResult registerCountIf(const std::string& name) {
 
         return std::make_unique<CountIfAggregate>();
       });
-}
-
-} // namespace
-
-void registerCountIfAggregate(const std::string& prefix) {
-  registerCountIf(prefix + kCountIf);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

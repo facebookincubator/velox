@@ -30,15 +30,22 @@ Window::Window(
           windowNode->outputType(),
           operatorId,
           windowNode->id(),
-          "Window"),
+          "Window",
+          windowNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(operatorId)
+              : std::nullopt),
       numInputColumns_(windowNode->inputType()->size()),
       windowNode_(windowNode),
       currentPartition_(nullptr),
       stringAllocator_(pool()) {
+  auto* spillConfig =
+      spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   if (windowNode->inputsSorted()) {
-    windowBuild_ = std::make_unique<StreamingWindowBuild>(windowNode, pool());
+    windowBuild_ = std::make_unique<StreamingWindowBuild>(
+        windowNode, pool(), spillConfig, &nonReclaimableSection_);
   } else {
-    windowBuild_ = std::make_unique<SortWindowBuild>(windowNode, pool());
+    windowBuild_ = std::make_unique<SortWindowBuild>(
+        windowNode, pool(), spillConfig, &nonReclaimableSection_);
   }
 }
 
@@ -50,21 +57,68 @@ void Window::initialize() {
   windowNode_.reset();
 }
 
+namespace {
+void checkRowFrameBounds(const core::WindowNode::Frame& frame) {
+  auto frameBoundCheck = [&](const core::TypedExprPtr& frameValue) -> void {
+    if (frameValue == nullptr) {
+      return;
+    }
+
+    VELOX_USER_CHECK(
+        frameValue->type() == INTEGER() || frameValue->type() == BIGINT(),
+        "k frame bound must be INTEGER or BIGINT type");
+  };
+  frameBoundCheck(frame.startValue);
+  frameBoundCheck(frame.endValue);
+}
+
+void checkKRangeFrameBounds(
+    const std::shared_ptr<const core::WindowNode>& windowNode,
+    const core::WindowNode::Frame& frame,
+    const RowTypePtr& inputType) {
+  // For k Range frame bound:
+  // i) The order by needs to be a single column for bound comparisons
+  // (Checked in WindowNode constructor).
+  // ii) The bounds values are pre-computed in the start(end)Value bound
+  // fields. So, start(end)Value bounds cannot be constants.
+  // iii) The frame bound column and the ORDER BY column must have
+  // the same type for correct comparisons.
+  auto orderByType = windowNode->sortingKeys()[0]->type();
+  auto frameBoundCheck = [&](const core::TypedExprPtr& frameValue) -> void {
+    if (frameValue == nullptr) {
+      return;
+    }
+
+    auto frameChannel = exprToChannel(frameValue.get(), inputType);
+    VELOX_USER_CHECK_NE(
+        frameChannel,
+        kConstantChannel,
+        "Window frame of type RANGE does not support constant arguments");
+
+    auto frameType = inputType->childAt(frameChannel);
+    VELOX_USER_CHECK(
+        *frameType == *orderByType,
+        "Window frame of type RANGE does not match types of the ORDER BY"
+        " and frame column");
+  };
+
+  frameBoundCheck(frame.startValue);
+  frameBoundCheck(frame.endValue);
+}
+
+}; // namespace
+
 Window::WindowFrame Window::createWindowFrame(
-    core::WindowNode::Frame frame,
+    const std::shared_ptr<const core::WindowNode>& windowNode,
+    const core::WindowNode::Frame& frame,
     const RowTypePtr& inputType) {
   if (frame.type == core::WindowNode::WindowType::kRows) {
-    auto frameBoundCheck = [&](const core::TypedExprPtr& frame) -> void {
-      if (frame == nullptr) {
-        return;
-      }
+    checkRowFrameBounds(frame);
+  }
 
-      VELOX_USER_CHECK(
-          frame->type() == INTEGER() || frame->type() == BIGINT(),
-          "k frame bound must be INTEGER or BIGINT type");
-    };
-    frameBoundCheck(frame.startValue);
-    frameBoundCheck(frame.endValue);
+  if (frame.type == core::WindowNode::WindowType::kRange &&
+      (frame.startValue || frame.endValue)) {
+    checkKRangeFrameBounds(windowNode, frame, inputType);
   }
 
   auto createFrameChannelArg =
@@ -75,9 +129,7 @@ Window::WindowFrame Window::createWindowFrame(
     }
     auto frameChannel = exprToChannel(frame.get(), inputType);
     if (frameChannel == kConstantChannel) {
-      auto constant =
-          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(frame)
-              ->value();
+      auto constant = core::TypedExprs::asConstant(frame)->value();
       VELOX_CHECK(!constant.isNull(), "Window frame offset must not be null");
       auto value = VariantConverter::convert(constant, TypeKind::BIGINT)
                        .value<int64_t>();
@@ -113,8 +165,7 @@ void Window::createWindowFunctions() {
     for (auto& arg : windowNodeFunction.functionCall->inputs()) {
       auto channel = exprToChannel(arg.get(), inputType);
       if (channel == kConstantChannel) {
-        auto constantArg =
-            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(arg);
+        auto constantArg = core::TypedExprs::asConstant(arg);
         functionArgs.push_back(
             {arg->type(), constantArg->toConstantVector(pool()), std::nullopt});
       } else {
@@ -132,13 +183,33 @@ void Window::createWindowFunctions() {
         operatorCtx_->driverCtx()->queryConfig()));
 
     windowFrames_.push_back(
-        createWindowFrame(windowNodeFunction.frame, inputType));
+        createWindowFrame(windowNode_, windowNodeFunction.frame, inputType));
   }
 }
 
 void Window::addInput(RowVectorPtr input) {
   windowBuild_->addInput(input);
   numRows_ += input->size();
+}
+
+void Window::reclaim(
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
+  VELOX_CHECK(canReclaim());
+  VELOX_CHECK(!nonReclaimableSection_);
+
+  if (noMoreInput_) {
+    ++stats.numNonReclaimableAttempts;
+    // TODO Add support for spilling after noMoreInput().
+    LOG(WARNING)
+        << "Can't reclaim from window operator which has started producing output: "
+        << pool()->name()
+        << ", usage: " << succinctBytes(pool()->currentBytes())
+        << ", reservation: " << succinctBytes(pool()->reservedBytes());
+    return;
+  }
+
+  windowBuild_->spill();
 }
 
 void Window::createPeerAndFrameBuffers() {
@@ -170,6 +241,10 @@ void Window::createPeerAndFrameBuffers() {
 void Window::noMoreInput() {
   Operator::noMoreInput();
   windowBuild_->noMoreInput();
+
+  if (auto spillStats = windowBuild_->spilledStats()) {
+    recordSpillStats(spillStats.value());
+  }
 }
 
 void Window::callResetPartition() {
@@ -252,6 +327,8 @@ void Window::updateFrameBounds(
   auto boundType = isStartBound ? windowFrame.startType : windowFrame.endType;
   auto frameArg = isStartBound ? windowFrame.start : windowFrame.end;
 
+  const vector_size_t* rawPeerBuffer =
+      isStartBound ? rawPeerStarts : rawPeerEnds;
   switch (boundType) {
     case core::WindowNode::BoundType::kUnboundedPreceding:
       std::fill_n(rawFrameBounds, numRows, 0);
@@ -261,8 +338,6 @@ void Window::updateFrameBounds(
       break;
     case core::WindowNode::BoundType::kCurrentRow: {
       if (windowType == core::WindowNode::WindowType::kRange) {
-        const vector_size_t* rawPeerBuffer =
-            isStartBound ? rawPeerStarts : rawPeerEnds;
         std::copy(rawPeerBuffer, rawPeerBuffer + numRows, rawFrameBounds);
       } else {
         // Fills the frameBound buffer with increasing value of row indices
@@ -277,7 +352,14 @@ void Window::updateFrameBounds(
         updateKRowsFrameBounds(
             true, frameArg.value(), startRow, numRows, rawFrameBounds);
       } else {
-        VELOX_NYI("k preceding frame is only supported in ROWS mode");
+        currentPartition_->computeKRangeFrameBounds(
+            isStartBound,
+            true,
+            frameArg.value().index,
+            startRow,
+            numRows,
+            rawPeerBuffer,
+            rawFrameBounds);
       }
       break;
     }
@@ -286,7 +368,14 @@ void Window::updateFrameBounds(
         updateKRowsFrameBounds(
             false, frameArg.value(), startRow, numRows, rawFrameBounds);
       } else {
-        VELOX_NYI("k following frame is only supported in ROWS mode");
+        currentPartition_->computeKRangeFrameBounds(
+            isStartBound,
+            false,
+            frameArg.value().index,
+            startRow,
+            numRows,
+            rawPeerBuffer,
+            rawFrameBounds);
       }
       break;
     }

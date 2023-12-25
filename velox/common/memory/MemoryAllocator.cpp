@@ -28,6 +28,28 @@ DECLARE_bool(velox_memory_use_hugepages);
 
 namespace facebook::velox::memory {
 
+namespace {
+std::string& cacheFailureMessage() {
+  thread_local std::string message;
+  return message;
+}
+
+std::string& allocatorFailureMessage() {
+  thread_local std::string errMsg;
+  return errMsg;
+}
+} // namespace
+
+void setCacheFailureMessage(std::string message) {
+  cacheFailureMessage() = std::move(message);
+}
+
+std::string getAndClearCacheFailureMessage() {
+  auto errMsg = std::move(cacheFailureMessage());
+  cacheFailureMessage().clear(); // ensure its in valid state
+  return errMsg;
+}
+
 std::shared_ptr<MemoryAllocator> MemoryAllocator::instance_;
 MemoryAllocator* MemoryAllocator::customInstance_;
 std::mutex MemoryAllocator::initMutex_;
@@ -347,6 +369,23 @@ void MemoryAllocator::useHugePages(
                            << folly ::errnoStr(errno);
   }
 #endif
+}
+
+void MemoryAllocator::setAllocatorFailureMessage(std::string message) {
+  allocatorFailureMessage() = std::move(message);
+}
+
+std::string MemoryAllocator::getAndClearFailureMessage() {
+  auto allocatorErrMsg = std::move(allocatorFailureMessage());
+  allocatorFailureMessage().clear();
+  if (cache()) {
+    if (allocatorErrMsg.empty()) {
+      return getAndClearCacheFailureMessage();
+    }
+    allocatorErrMsg =
+        fmt::format("{} {}", allocatorErrMsg, getAndClearCacheFailureMessage());
+  }
+  return allocatorErrMsg;
 }
 
 } // namespace facebook::velox::memory

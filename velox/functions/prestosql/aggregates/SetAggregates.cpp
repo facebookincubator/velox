@@ -419,7 +419,9 @@ std::unique_ptr<exec::Aggregate> create(
   }
 }
 
-exec::AggregateRegistrationResult registerSetAgg(const std::string& name) {
+} // namespace
+
+void registerSetAggAggregate(const std::string& prefix) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -428,7 +430,8 @@ exec::AggregateRegistrationResult registerSetAgg(const std::string& name) {
           .argumentType("T")
           .build()};
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kSetAgg;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -479,7 +482,7 @@ exec::AggregateRegistrationResult registerSetAgg(const std::string& name) {
       });
 }
 
-exec::AggregateRegistrationResult registerSetUnion(const std::string& name) {
+void registerSetUnionAggregate(const std::string& prefix) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -488,7 +491,8 @@ exec::AggregateRegistrationResult registerSetUnion(const std::string& name) {
           .argumentType("array(T)")
           .build()};
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kSetUnion;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -503,16 +507,6 @@ exec::AggregateRegistrationResult registerSetUnion(const std::string& name) {
 
         return create<SetUnionAggregate>(typeKind, resultType);
       });
-}
-
-} // namespace
-
-void registerSetAggAggregate(const std::string& prefix) {
-  registerSetAgg(prefix + kSetAgg);
-}
-
-void registerSetUnionAggregate(const std::string& prefix) {
-  registerSetUnion(prefix + kSetUnion);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

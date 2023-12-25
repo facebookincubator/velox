@@ -19,7 +19,7 @@
 #define DECLARER
 #endif /* TEST */
 
-#include "dbgen/config.h"
+#include "dbgen/config.h" // @manual
 
 #include <stdlib.h>
 #ifndef WIN32
@@ -37,7 +37,7 @@
 #include <strings.h>
 #endif
 #if (defined(WIN32) && !defined(_POSIX_))
-#include <process.h>
+#include <process.h> // @manual
 #pragma warning(disable : 4201)
 #pragma warning(disable : 4214)
 #pragma warning(disable : 4514)
@@ -62,7 +62,7 @@
 #pragma warning(default : 4214)
 #endif
 
-#include "dbgen/dss.h"
+#include "dbgen/dss.h" // @manual
 
 /*
  * txt_vp() --
@@ -167,68 +167,6 @@ static int txt_np(char* dest, seed_t* seed) {
   } /* end of while loop */
 
   return (res);
-}
-
-/*
- * txt_sentence() --
- *		generate a sentence by
- *		1) selecting a sentence form
- *		2) parsing it to select parts of speech or phrase types
- *		3) selecting appropriate words
- *		4) adding punctuation as required
- *
- *	Returns: length of generated sentence
- *	Called By: dbg_text()
- *	Calls: pick_str(), txt_np(), txt_vp()
- */
-static int txt_sentence(char* dest, seed_t* seed) {
-  char syntax[MAX_GRAMMAR_LEN + 1], *cptr;
-  int i, res = 0, len = 0;
-
-  pick_str(&grammar, seed, syntax);
-  cptr = syntax;
-
-next_token
-    : /* I hate goto's, but can't seem to have parent and child use strtok() */
-  while (*cptr && *cptr == ' ')
-    cptr++;
-  if (*cptr == '\0')
-    goto done;
-  switch (*cptr) {
-    case 'V':
-      len = txt_vp(dest, seed);
-      break;
-    case 'N':
-      len = txt_np(dest, seed);
-      break;
-    case 'P':
-      i = pick_str(&prepositions, seed, dest);
-      len = (int)strlen(DIST_MEMBER(&prepositions, i));
-      strcpy((dest + len), " the ");
-      len += 5;
-      len += txt_np(dest + len, seed);
-      break;
-    case 'T':
-      i = pick_str(
-          &terminators,
-          seed,
-          --dest); /*terminators should abut previous word */
-      len = (int)strlen(DIST_MEMBER(&terminators, i));
-      break;
-  } /* end of POS switch statement */
-  dest += len;
-  res += len;
-  cptr++;
-  if (*cptr && *cptr != ' ') /* miscelaneous fillagree, like punctuation */
-  {
-    dest += 1;
-    res += 1;
-    *dest = *cptr;
-  }
-  goto next_token;
-done:
-  *dest = '\0';
-  return (--res);
 }
 
 static char* gen_text(char* dest, seed_t* seed, distribution* s) {

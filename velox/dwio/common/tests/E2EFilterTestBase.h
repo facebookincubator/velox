@@ -78,8 +78,12 @@ class E2EFilterTestBase : public testing::Test {
  protected:
   static constexpr int32_t kRowsInGroup = 10'000;
 
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
-    rootPool_ = memory::defaultMemoryManager().addRootPool("E2EFilterTestBase");
+    rootPool_ = memory::memoryManager()->addRootPool("E2EFilterTestBase");
     leafPool_ = rootPool_->addLeafChild("E2EFilterTestBase");
   }
 

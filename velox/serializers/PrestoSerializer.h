@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 #pragma once
+
 #include "velox/common/base/Crc.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::serializer::presto {
+
 class PrestoVectorSerde : public VectorSerde {
  public:
   // Input options that the serializer recognizes.
@@ -41,10 +43,19 @@ class PrestoVectorSerde : public VectorSerde {
     std::vector<VectorEncoding::Simple> encodings;
   };
 
+  /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
+  /// '*sizes[i]'.
   void estimateSerializedSize(
       VectorPtr vector,
       const folly::Range<const IndexRange*>& ranges,
-      vector_size_t** sizes) override;
+      vector_size_t** sizes,
+      Scratch& scratch) override;
+
+  void estimateSerializedSize(
+      VectorPtr vector,
+      const folly::Range<const vector_size_t*> rows,
+      vector_size_t** sizes,
+      Scratch& scratch) override;
 
   std::unique_ptr<VectorSerializer> createSerializer(
       RowTypePtr type,
@@ -63,12 +74,27 @@ class PrestoVectorSerde : public VectorSerde {
       const Options* options,
       OutputStream* out);
 
+  bool supportsAppendInDeserialize() const override {
+    return true;
+  }
+
   void deserialize(
-      ByteStream* source,
+      ByteInputStream* source,
       velox::memory::MemoryPool* pool,
       RowTypePtr type,
-      std::shared_ptr<RowVector>* result,
+      RowVectorPtr* result,
+      const Options* options) override {
+    return deserialize(source, pool, type, result, 0, options);
+  }
+
+  void deserialize(
+      ByteInputStream* source,
+      velox::memory::MemoryPool* pool,
+      RowTypePtr type,
+      RowVectorPtr* result,
+      vector_size_t resultOffset,
       const Options* options) override;
+
   static void registerVectorSerde();
 };
 
@@ -78,7 +104,8 @@ void testingScatterStructNulls(
     vector_size_t scatterSize,
     const vector_size_t* scatter,
     const uint64_t* incomingNulls,
-    RowVector& row);
+    RowVector& row,
+    vector_size_t rowOffset);
 
 class PrestoOutputStreamListener : public OutputStreamListener {
  public:

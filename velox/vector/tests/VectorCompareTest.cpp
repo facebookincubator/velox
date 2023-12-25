@@ -25,6 +25,10 @@ namespace facebook::velox {
 class VectorCompareTest : public testing::Test,
                           public velox::test::VectorTestBase {
  public:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   bool static constexpr kExpectNull = true;
   bool static constexpr kExpectNotNull = false;
   bool static constexpr kEqualsOnly = true;
@@ -36,7 +40,7 @@ class VectorCompareTest : public testing::Test,
       bool expectNull,
       bool equalsOnly = false) {
     CompareFlags testFlags;
-    testFlags.nullHandlingMode = CompareFlags::NullHandlingMode::StopAtNull;
+    testFlags.nullHandlingMode = CompareFlags::NullHandlingMode::kStopAtNull;
     testFlags.equalsOnly = equalsOnly;
 
     ASSERT_EQ(
@@ -60,7 +64,7 @@ TEST_F(VectorCompareTest, compareStopAtNullFlat) {
 // Test SimpleVector<ComplexType>::compare()
 TEST_F(VectorCompareTest, compareStopAtNullSimpleComplex) {
   CompareFlags testFlags;
-  testFlags.nullHandlingMode = CompareFlags::NullHandlingMode::StopAtNull;
+  testFlags.nullHandlingMode = CompareFlags::NullHandlingMode::kStopAtNull;
 
   auto flatVector =
       vectorMaker_.arrayVectorNullable<int32_t>({{{1, 2, 3}}, std::nullopt});
@@ -221,7 +225,7 @@ TEST_F(VectorCompareTest, compareStopAtNullRow) {
 }
 
 TEST_F(VectorCompareTest, CompareWithNullChildVector) {
-  auto pool = memory::addDefaultLeafMemoryPool();
+  auto pool = memory::memoryManager()->addLeafPool();
   test::VectorMaker maker{pool.get()};
   auto rowType = ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()});
   const auto& rowVector1 = std::make_shared<RowVector>(

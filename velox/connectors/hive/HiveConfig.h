@@ -17,6 +17,7 @@
 
 #include <optional>
 #include <string>
+#include "velox/core/Config.h"
 
 namespace facebook::velox {
 class Config;
@@ -36,12 +37,18 @@ class HiveConfig {
       InsertExistingPartitionsBehavior behavior);
 
   /// Behavior on insert into existing partitions.
-  static constexpr const char* kInsertExistingPartitionsBehavior =
+  static constexpr const char* kInsertExistingPartitionsBehaviorSession =
       "insert_existing_partitions_behavior";
+  static constexpr const char* kInsertExistingPartitionsBehavior =
+      "insert-existing-partitions-behavior";
 
   /// Maximum number of (bucketed) partitions per a single table writer
   /// instance.
+  // TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
+  // right now this is only used for testing.
   static constexpr const char* kMaxPartitionsPerWriters =
+      "max-partitions-per-writers";
+  static constexpr const char* kMaxPartitionsPerWritersSession =
       "max_partitions_per_writers";
 
   /// Whether new data can be inserted into an unpartition table.
@@ -91,10 +98,16 @@ class HiveConfig {
   static constexpr const char* kGCSCredentials = "hive.gcs.credentials";
 
   /// Maps table field names to file field names using names, not indices.
+  // TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
+  // right now this is only used for testing.
   static constexpr const char* kOrcUseColumnNames = "hive.orc.use-column-names";
+  static constexpr const char* kOrcUseColumnNamesSession =
+      "hive_orc_use_column_names";
 
   /// Reads the source file column name as lower case.
   static constexpr const char* kFileColumnNamesReadAsLowerCase =
+      "file-column-names-read-as-lower-case";
+  static constexpr const char* kFileColumnNamesReadAsLowerCaseSession =
       "file_column_names_read_as_lower_case";
 
   /// Sets the max coalesce bytes for a request.
@@ -107,73 +120,115 @@ class HiveConfig {
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
-  /// The memory arbitrator might flush a file write to reclaim used memory if
-  /// its buffered data size is no less than this minimum threshold. The
-  /// buffered data size is measured by a file writer's memory footprint.
-  static constexpr const char* kFileWriterFlushThresholdBytes =
-      "file_writer_flush_threshold_bytes";
+  /// Enable file handle cache.
+  static constexpr const char* kEnableFileHandleCache =
+      "file-handle-cache-enabled";
 
-  // TODO: Refactor and merge config and session property.
+  /// Maximum stripe size in orc writer.
   static constexpr const char* kOrcWriterMaxStripeSize =
-      "orc_optimized_writer_max_stripe_size";
-  static constexpr const char* kOrcWriterMaxStripeSizeConfig =
       "hive.orc.writer.stripe-max-size";
+  static constexpr const char* kOrcWriterMaxStripeSizeSession =
+      "orc_optimized_writer_max_stripe_size";
 
+  /// Maximum dictionary memory that can be used in orc writer.
   static constexpr const char* kOrcWriterMaxDictionaryMemory =
-      "orc_optimized_writer_max_dictionary_memory";
-  static constexpr const char* kOrcWriterMaxDictionaryMemoryConfig =
       "hive.orc.writer.dictionary-max-memory";
+  static constexpr const char* kOrcWriterMaxDictionaryMemorySession =
+      "orc_optimized_writer_max_dictionary_memory";
 
-  static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
-      const Config* config);
+  /// Config used to create write files. This config is provided to underlying
+  /// file system through hive connector and data sink. The config is free form.
+  /// The form should be defined by the underlying file system.
+  static constexpr const char* kWriteFileCreateConfig =
+      "hive.write_file_create_config";
 
-  static uint32_t maxPartitionsPerWriters(const Config* config);
+  /// Maximum number of rows for sort writer in one batch of output.
+  static constexpr const char* kSortWriterMaxOutputRows =
+      "sort-writer-max-output-rows";
+  static constexpr const char* kSortWriterMaxOutputRowsSession =
+      "sort_writer_max_output_rows";
 
-  static bool immutablePartitions(const Config* config);
+  /// Maximum bytes for sort writer in one batch of output.
+  static constexpr const char* kSortWriterMaxOutputBytes =
+      "sort-writer-max-output-bytes";
+  static constexpr const char* kSortWriterMaxOutputBytesSession =
+      "sort_writer_max_output_bytes";
 
-  static bool s3UseVirtualAddressing(const Config* config);
+  /// Config used to create sink files. This config is provided to underlying
+  /// file system and the config is free form. The form should be defined by
+  /// the underlying file system.
+  static constexpr const char* kFileCreateConfig = "file-create-config";
 
-  static std::string s3GetLogLevel(const Config* config);
+  InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
+      const Config* session) const;
 
-  static bool s3UseSSL(const Config* config);
+  uint32_t maxPartitionsPerWriters(const Config* session) const;
 
-  static bool s3UseInstanceCredentials(const Config* config);
+  bool immutablePartitions() const;
 
-  static std::string s3Endpoint(const Config* config);
+  bool s3UseVirtualAddressing() const;
 
-  static std::optional<std::string> s3AccessKey(const Config* config);
+  std::string s3GetLogLevel() const;
 
-  static std::optional<std::string> s3SecretKey(const Config* config);
+  bool s3UseSSL() const;
 
-  static std::optional<std::string> s3IAMRole(const Config* config);
+  bool s3UseInstanceCredentials() const;
 
-  static std::string s3IAMRoleSessionName(const Config* config);
+  std::string s3Endpoint() const;
 
-  static std::string gcsEndpoint(const Config* config);
+  std::optional<std::string> s3AccessKey() const;
 
-  static std::string gcsScheme(const Config* config);
+  std::optional<std::string> s3SecretKey() const;
 
-  static std::string gcsCredentials(const Config* config);
+  std::optional<std::string> s3IAMRole() const;
 
-  static bool isOrcUseColumnNames(const Config* config);
+  std::string s3IAMRoleSessionName() const;
 
-  static bool isFileColumnNamesReadAsLowerCase(const Config* config);
+  std::string gcsEndpoint() const;
 
-  static int64_t maxCoalescedBytes(const Config* config);
+  std::string gcsScheme() const;
 
-  static int32_t maxCoalescedDistanceBytes(const Config* config);
+  std::string gcsCredentials() const;
 
-  static int32_t numCacheFileHandles(const Config* config);
+  bool isOrcUseColumnNames(const Config* session) const;
 
-  static uint64_t fileWriterFlushThresholdBytes(const Config* config);
+  bool isFileColumnNamesReadAsLowerCase(const Config* session) const;
 
-  static uint64_t getOrcWriterMaxStripeSize(
-      const Config* connectorQueryCtxConfig,
-      const Config* connectorPropertiesConfig);
+  int64_t maxCoalescedBytes() const;
 
-  static uint64_t getOrcWriterMaxDictionaryMemory(
-      const Config* connectorQueryCtxConfig,
-      const Config* connectorPropertiesConfig);
+  int32_t maxCoalescedDistanceBytes() const;
+
+  int32_t numCacheFileHandles() const;
+
+  bool isFileHandleCacheEnabled() const;
+
+  uint64_t fileWriterFlushThresholdBytes() const;
+
+  uint64_t orcWriterMaxStripeSize(const Config* session) const;
+
+  uint64_t orcWriterMaxDictionaryMemory(const Config* session) const;
+
+  std::string writeFileCreateConfig() const;
+
+  uint32_t sortWriterMaxOutputRows(const Config* session) const;
+
+  uint64_t sortWriterMaxOutputBytes(const Config* session) const;
+
+  std::string fileCreateConfig(const Config* session) const;
+
+  HiveConfig(std::shared_ptr<const Config> config) {
+    VELOX_CHECK_NOT_NULL(
+        config, "Config is null for HiveConfig initialization");
+    config_ = std::move(config);
+    // TODO: add sanity check
+  }
+
+  const std::shared_ptr<const Config>& config() const {
+    return config_;
+  }
+
+ private:
+  std::shared_ptr<const Config> config_;
 };
 
 } // namespace facebook::velox::connector::hive

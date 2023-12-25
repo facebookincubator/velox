@@ -150,6 +150,7 @@ TopNRowNumber::TopNRowNumber(
         sizeof(TopRows),
         false,
         1,
+        nullptr,
         [](auto, auto) { VELOX_UNREACHABLE(); },
         [](auto) {}};
 
@@ -190,7 +191,7 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
     ensureInputFits(input);
 
     SelectivityVector rows(numInput);
-    table_->prepareForProbe(*lookup_, input, rows, false);
+    table_->prepareForGroupProbe(*lookup_, input, rows, false);
     table_->groupProbe(*lookup_);
 
     // Initialize new partitions.
@@ -279,10 +280,10 @@ void TopNRowNumber::noMoreInput() {
     // spilled data.
     spill();
 
-    spiller_->finishSpill();
+    VELOX_CHECK_NULL(merge_);
+    auto spillPartition = spiller_->finishSpill();
+    merge_ = spillPartition.createOrderedReader(pool());
     recordSpillStats(spiller_->stats());
-
-    merge_ = spiller_->startMerge(0);
   } else {
     outputRows_.resize(outputBatchSize_);
   }
@@ -524,6 +525,9 @@ void TopNRowNumber::setupNextOutput(
     }
     next->pop();
   }
+
+  // This partition is the last partition.
+  nextRowNumber_ = 0;
 }
 
 RowVectorPtr TopNRowNumber::getOutputFromSpill() {
@@ -628,18 +632,22 @@ void TopNRowNumber::close() {
 void TopNRowNumber::reclaim(
     uint64_t /*targetBytes*/,
     memory::MemoryReclaimer::Stats& stats) {
+  VELOX_CHECK(canReclaim());
+  VELOX_CHECK(!nonReclaimableSection_);
+
   if (data_->numRows() == 0) {
     // Nothing to spill.
     return;
   }
 
-  if (nonReclaimableSection_) {
-    ++stats.numNonReclaimableAttempts;
-    return;
-  }
-
   if (noMoreInput_) {
+    ++stats.numNonReclaimableAttempts;
     // TODO Add support for spilling after noMoreInput().
+    LOG(WARNING)
+        << "Can't reclaim from topNRowNumber operator which has started producing output: "
+        << pool()->name()
+        << ", usage: " << succinctBytes(pool()->currentBytes())
+        << ", reservation: " << succinctBytes(pool()->reservedBytes());
     return;
   }
 
@@ -705,7 +713,10 @@ void TopNRowNumber::ensureInputFits(const RowVectorPtr& input) {
     }
   }
 
-  spill();
+  LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
+               << " for memory pool " << pool()->name()
+               << ", usage: " << succinctBytes(pool()->currentBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes());
 }
 
 void TopNRowNumber::spill() {
@@ -715,7 +726,7 @@ void TopNRowNumber::spill() {
 
   updateEstimatedOutputRowSize();
 
-  spiller_->spill(0, 0);
+  spiller_->spill();
   table_->clear();
   data_->clear();
   pool()->release();
@@ -726,22 +737,18 @@ void TopNRowNumber::setupSpiller() {
 
   spiller_ = std::make_unique<Spiller>(
       // TODO Replace Spiller::Type::kOrderBy.
-      Spiller::Type::kOrderBy,
+      Spiller::Type::kOrderByInput,
       data_.get(),
-      [&](folly::Range<char**> rows) {
-        // TODO Fix Spiller to allow spilling the whole container and not
-        // require erasing rows one at a time.
-        data_->eraseRows(rows);
-      },
       inputType_,
       spillCompareFlags_.size(),
       spillCompareFlags_,
-      spillConfig_->filePath,
-      std::numeric_limits<uint64_t>::max(),
+      spillConfig_->getSpillDirPathCb,
+      spillConfig_->fileNamePrefix,
       spillConfig_->writeBufferSize,
-      spillConfig_->minSpillRunSize,
       spillConfig_->compressionKind,
       memory::spillMemoryPool(),
-      spillConfig_->executor);
+      spillConfig_->executor,
+      spillConfig_->maxSpillRunRows,
+      spillConfig_->fileCreateConfig);
 }
 } // namespace facebook::velox::exec

@@ -345,7 +345,9 @@ std::unique_ptr<exec::Aggregate> createMapUnionSumAggregate(
   }
 }
 
-exec::AggregateRegistrationResult registerMapUnionSum(const std::string& name) {
+} // namespace
+
+void registerMapUnionSumAggregate(const std::string& prefix) {
   const std::vector<std::string> keyTypes = {
       "tinyint",
       "smallint",
@@ -376,7 +378,8 @@ exec::AggregateRegistrationResult registerMapUnionSum(const std::string& name) {
     }
   }
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kMapUnionSum;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -415,12 +418,6 @@ exec::AggregateRegistrationResult registerMapUnionSum(const std::string& name) {
             VELOX_UNREACHABLE();
         }
       });
-}
-
-} // namespace
-
-void registerMapUnionSumAggregate(const std::string& prefix) {
-  registerMapUnionSum(prefix + kMapUnionSum);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -23,8 +23,7 @@
 #include <utility>
 
 #include "arrow/io/memory.h"
-
-#include "parquet/exception.h"
+#include "velox/dwio/parquet/writer/arrow/Exception.h"
 
 namespace facebook::velox::parquet::arrow {
 

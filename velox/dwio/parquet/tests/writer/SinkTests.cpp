@@ -14,36 +14,27 @@
  * limitations under the License.
  */
 
-#include <utility>
-
-#include "velox/dwio/parquet/tests/writer/ParquetWriterTestBase.h"
+#include "velox/dwio/parquet/tests/ParquetTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::parquet;
 
-class SinkTest : public ParquetWriterTestBase {
- protected:
-  std::pair<std::unique_ptr<parquet::Writer>, FileSink*>
-  createWriterWithSinkPtr(
-      const std::string& filePath,
-      std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicy) {
-    auto sink = createSink(filePath);
-    auto sinkPtr = sink.get();
-    return {createWriter(std::move(sink), std::move(flushPolicy)), sinkPtr};
-  }
-
-  static constexpr uint64_t kRowsInRowGroup = 10'000;
-  static constexpr uint64_t kBytesInRowGroup = 128 * 1'024 * 1'024;
-};
+class SinkTest : public ParquetTestBase {};
 
 TEST_F(SinkTest, close) {
-  auto batches = createBatches(ROW({INTEGER(), VARCHAR()}), 2, 3);
+  auto rowType = ROW({"c0", "c1"}, {INTEGER(), VARCHAR()});
+  auto batches = createBatches(rowType, 2, 3);
   auto filePath = fs::path(fmt::format("{}/test_close.txt", tempPath_->path));
-  auto [writer, sinkPtr] = createWriterWithSinkPtr(filePath.string(), [&]() {
-    return std::make_unique<LambdaFlushPolicy>(
-        kRowsInRowGroup, kBytesInRowGroup, [&]() { return false; });
-  });
+  auto sink = createSink(filePath.string());
+  auto sinkPtr = sink.get();
+  auto writer = createWriter(
+      std::move(sink),
+      [&]() {
+        return std::make_unique<LambdaFlushPolicy>(
+            kRowsInRowGroup, kBytesInRowGroup, [&]() { return false; });
+      },
+      rowType);
 
   for (auto& batch : batches) {
     writer->write(batch);
@@ -62,12 +53,18 @@ TEST_F(SinkTest, close) {
 }
 
 TEST_F(SinkTest, abort) {
-  auto batches = createBatches(ROW({INTEGER(), VARCHAR()}), 2, 3);
+  auto rowType = ROW({"c0", "c1"}, {INTEGER(), VARCHAR()});
+  auto batches = createBatches(rowType, 2, 3);
   auto filePath = fs::path(fmt::format("{}/test_abort.txt", tempPath_->path));
-  auto [writer, sinkPtr] = createWriterWithSinkPtr(filePath.string(), [&]() {
-    return std::make_unique<LambdaFlushPolicy>(
-        kRowsInRowGroup, kBytesInRowGroup, [&]() { return false; });
-  });
+  auto sink = createSink(filePath.string());
+  auto sinkPtr = sink.get();
+  auto writer = createWriter(
+      std::move(sink),
+      [&]() {
+        return std::make_unique<LambdaFlushPolicy>(
+            kRowsInRowGroup, kBytesInRowGroup, [&]() { return false; });
+      },
+      rowType);
 
   for (auto& batch : batches) {
     writer->write(batch);

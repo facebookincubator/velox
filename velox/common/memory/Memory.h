@@ -93,6 +93,9 @@ struct MemoryManagerOptions {
   /// testing purpose.
   bool debugEnabled{FLAGS_velox_memory_pool_debug_enabled};
 
+  /// Terminates the process and generates a core file on an allocation failure
+  bool coreOnAllocationFailureEnabled{false};
+
   /// Specifies the backing memory allocator.
   MemoryAllocator* allocator{MemoryAllocator::getInstance()};
 
@@ -110,6 +113,11 @@ struct MemoryManagerOptions {
   /// The minimal memory capacity to transfer out of or into a memory pool
   /// during the memory arbitration.
   uint64_t memoryPoolTransferCapacity{32 << 20};
+
+  /// Specifies the max time to wait for memory reclaim by arbitration. The
+  /// memory reclaim might fail if the max wait time has exceeded. If it is
+  /// zero, then there is no timeout. The default is 5 mins.
+  uint64_t memoryReclaimWaitMs{300'000};
 
   /// Provided by the query system to validate the state after a memory pool
   /// enters arbitration if not null. For instance, Prestissimo provides
@@ -130,10 +138,22 @@ class MemoryManager {
 
   ~MemoryManager();
 
-  /// Tries to get the singleton memory manager. If not previously initialized,
-  /// the process singleton manager will be initialized.
-  FOLLY_EXPORT static MemoryManager& getInstance(
+  /// Creates process-wide memory manager using specified options. Throws if
+  /// memory manager has already been created by an easier call.
+  static void initialize(const MemoryManagerOptions& options);
+
+  /// Returns process-wide memory manager. Throws if 'initialize' hasn't been
+  /// called yet.
+  static MemoryManager* getInstance();
+
+  /// Deprecated. Do not use. Remove once existing call sites are updated.
+  /// Returns the process-wide default memory manager instance if exists,
+  /// otherwise creates one based on the specified 'options'.
+  FOLLY_EXPORT static MemoryManager& deprecatedGetInstance(
       const MemoryManagerOptions& options = MemoryManagerOptions{});
+
+  /// Used by test to override the process-wide memory manager.
+  static MemoryManager& testingSetInstance(const MemoryManagerOptions& options);
 
   /// Returns the memory capacity of this memory manager which puts a hard cap
   /// on memory usage, and any allocation that exceeds this capacity throws.
@@ -159,10 +179,6 @@ class MemoryManager {
   std::shared_ptr<MemoryPool> addLeafPool(
       const std::string& name = "",
       bool threadSafe = true);
-
-  /// Invoked to grows a memory pool's free capacity with at least
-  /// 'incrementBytes'. The function returns true on success, otherwise false.
-  bool growPool(MemoryPool* pool, uint64_t incrementBytes);
 
   /// Invoked to shrink alive pools to free 'targetBytes' capacity. The function
   /// returns the actual freed memory capacity in bytes.
@@ -190,8 +206,10 @@ class MemoryManager {
 
   MemoryArbitrator* arbitrator();
 
-  /// Returns debug string of this memory manager.
-  std::string toString() const;
+  /// Returns debug string of this memory manager. If 'detail' is true, it
+  /// returns the detailed tree memory usage from all the top level root memory
+  /// pools.
+  std::string toString(bool detail = false) const;
 
   /// Returns the memory manger's internal default root memory pool for testing
   /// purpose.
@@ -203,8 +221,16 @@ class MemoryManager {
     return sharedLeafPools_;
   }
 
+  bool testingGrowPool(MemoryPool* pool, uint64_t incrementBytes) {
+    return growPool(pool, incrementBytes);
+  }
+
  private:
   void dropPool(MemoryPool* pool);
+
+  // Invoked to grow a memory pool's free capacity with at least
+  // 'incrementBytes'. The function returns true on success, otherwise false.
+  bool growPool(MemoryPool* pool, uint64_t incrementBytes);
 
   //  Returns the shared references to all the alive memory pools in 'pools_'.
   std::vector<std::shared_ptr<MemoryPool>> getAlivePools() const;
@@ -216,15 +242,21 @@ class MemoryManager {
   // memory pool capacity is within the limit.
   const int64_t capacity_;
   const std::shared_ptr<MemoryAllocator> allocator_;
+  // Specifies the capacity to allocate from 'arbitrator_' for a newly created
+  // root memory pool.
+  const uint64_t poolInitCapacity_;
   // If not null, used to arbitrate the memory capacity among 'pools_'.
   const std::unique_ptr<MemoryArbitrator> arbitrator_;
   const uint16_t alignment_;
   const bool checkUsageLeak_;
   const bool debugEnabled_;
-  // The destruction callback set for the allocated  root memory pools which are
+  const bool coreOnAllocationFailureEnabled_;
+  // The destruction callback set for the allocated root memory pools which are
   // tracked by 'pools_'. It is invoked on the root pool destruction and removes
   // the pool from 'pools_'.
   const MemoryPoolImpl::DestructionCallback poolDestructionCb_;
+  // Callback invoked by the root memory pool to request memory capacity growth.
+  const MemoryPoolImpl::GrowCapacityCallback poolGrowCb_;
 
   const std::shared_ptr<MemoryPool> defaultRoot_;
   std::vector<std::shared_ptr<MemoryPool>> sharedLeafPools_;
@@ -233,12 +265,27 @@ class MemoryManager {
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> pools_;
 };
 
-MemoryManager& defaultMemoryManager();
+/// Initializes the process-wide memory manager based on the specified
+/// 'options'.
+///
+/// NOTE: user should only call this once on query system startup. Otherwise,
+/// the function throws.
+void initializeMemoryManager(const MemoryManagerOptions& options);
 
+/// Returns the process-wide memory manager.
+///
+/// NOTE: user should have already initialized memory manager by calling.
+/// Otherwise, the function throws.
+MemoryManager* memoryManager();
+
+/// Deprecated. Do not use.
+MemoryManager& deprecatedDefaultMemoryManager();
+
+/// Deprecated. Do not use.
 /// Creates a leaf memory pool from the default memory manager for memory
 /// allocation use. If 'threadSafe' is true, then creates a leaf memory pool
 /// with thread-safe memory usage tracking.
-std::shared_ptr<MemoryPool> addDefaultLeafMemoryPool(
+std::shared_ptr<MemoryPool> deprecatedAddDefaultLeafMemoryPool(
     const std::string& name = "",
     bool threadSafe = true);
 

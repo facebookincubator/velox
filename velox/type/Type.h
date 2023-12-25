@@ -541,6 +541,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   VELOX_FLUENT_CAST(Row, ROW)
   VELOX_FLUENT_CAST(Opaque, OPAQUE)
   VELOX_FLUENT_CAST(UnKnown, UNKNOWN)
+  VELOX_FLUENT_CAST(Function, FUNCTION)
 
   const ShortDecimalType& asShortDecimal() const;
   const LongDecimalType& asLongDecimal() const;
@@ -1743,12 +1744,20 @@ using T8 = TypeVariable<8>;
 
 struct AnyType {};
 
-template <typename T = AnyType>
+template <typename T = AnyType, bool comparable = false, bool orderable = false>
 struct Generic {
   Generic() = delete;
+  static_assert(!(orderable && !comparable), "Orderable implies comparable.");
 };
 
 using Any = Generic<>;
+
+template <typename T>
+using Comparable = Generic<T, true, false>;
+
+// Orderable implies comparable.
+template <typename T>
+using Orderable = Generic<T, true, true>;
 
 template <typename>
 struct isVariadicType : public std::false_type {};
@@ -1759,8 +1768,9 @@ struct isVariadicType<Variadic<T>> : public std::true_type {};
 template <typename>
 struct isGenericType : public std::false_type {};
 
-template <typename T>
-struct isGenericType<Generic<T>> : public std::true_type {};
+template <typename T, bool comparable, bool orderable>
+struct isGenericType<Generic<T, comparable, orderable>>
+    : public std::true_type {};
 
 template <typename>
 struct isOpaqueType : public std::false_type {};
@@ -1863,6 +1873,35 @@ struct Varchar {
 };
 
 template <typename T>
+struct Constant {};
+
+template <typename T>
+struct UnwrapConstantType {
+  using type = T;
+};
+
+template <typename T>
+struct UnwrapConstantType<Constant<T>> {
+  using type = T;
+};
+
+template <typename T>
+struct isConstantType {
+  static constexpr bool value = false;
+};
+
+template <typename T>
+struct isConstantType<Constant<T>> {
+  static constexpr bool value = true;
+};
+
+template <typename... TArgs>
+struct ConstantChecker {
+  static constexpr bool isConstant[sizeof...(TArgs)] = {
+      isConstantType<TArgs>::value...};
+};
+
+template <typename T>
 struct SimpleTypeTrait {};
 
 template <>
@@ -1913,8 +1952,8 @@ struct SimpleTypeTrait<IntervalYearMonth> : public SimpleTypeTrait<int32_t> {
   static constexpr const char* name = "INTERVAL YEAR TO MONTH";
 };
 
-template <typename T>
-struct SimpleTypeTrait<Generic<T>> {
+template <typename T, bool comparable, bool orderable>
+struct SimpleTypeTrait<Generic<T, comparable, orderable>> {
   static constexpr TypeKind typeKind = TypeKind::UNKNOWN;
   static constexpr bool isPrimitiveType = false;
   static constexpr bool isFixedWidth = false;

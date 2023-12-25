@@ -277,8 +277,10 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
 
   void ensureSize(size_t size) override {
     if (size > rowVector_->size()) {
+      // Note order is important here, we resize children first to ensure
+      // data_ is cached and are not reset when rowVector resizes them.
+      resizeVectorWriters<0>(size);
       rowVector_->resize(size, /*setNotNull*/ false);
-      resizeVectorWriters<0>(rowVector_->size());
     }
   }
 
@@ -487,12 +489,14 @@ struct VectorWriter<std::shared_ptr<T>> : public VectorWriterBase {
   vector_t* vector_;
 };
 
-template <typename T>
-struct VectorWriter<Generic<T>> : public VectorWriterBase {
+template <typename T, bool comparable, bool orderable>
+struct VectorWriter<Generic<T, comparable, orderable>>
+    : public VectorWriterBase {
   using exec_out_t = GenericWriter;
   using vector_t = BaseVector;
 
-  VectorWriter<Generic<T>>() : writer_{castWriter_, castType_, offset_} {}
+  VectorWriter<Generic<T, comparable, orderable>>()
+      : writer_{castWriter_, castType_, offset_} {}
 
   void setOffset(vector_size_t offset) override {
     offset_ = offset;
@@ -532,14 +536,7 @@ struct VectorWriter<Generic<T>> : public VectorWriterBase {
       castWriter_->ensureSize(size);
     } else {
       if (vector_->size() < size) {
-        if (vector_->typeKind() == TypeKind::ROW) {
-          // Avoid calling resize on all children by adding top level nulls
-          // only.
-          vector_->asUnchecked<RowVector>()->appendNulls(
-              size - vector_->size());
-        } else {
-          vector_->resize(size, false);
-        }
+        vector_->resize(size, false);
       }
     }
   }
@@ -713,10 +710,10 @@ struct VectorWriter<DynamicRow, void> : public VectorWriterBase {
 
   void ensureSize(size_t size) override {
     if (size > rowVector_->size()) {
-      rowVector_->resize(size, /*setNotNull*/ false);
       for (int i = 0; i < writer_.childrenCount_; ++i) {
         writer_.childrenWriters_[i]->ensureSize(size);
       }
+      rowVector_->resize(size, /*setNotNull*/ false);
     }
   }
 

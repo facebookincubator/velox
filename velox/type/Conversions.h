@@ -28,8 +28,13 @@ DECLARE_bool(experimental_enable_legacy_cast);
 
 namespace facebook::velox::util {
 
-template <TypeKind KIND, typename = void, bool TRUNCATE = false>
+template <
+    TypeKind KIND,
+    typename = void,
+    bool TRUNCATE = false,
+    bool LEGACY_CAST = false>
 struct Converter {
+  // TODO: simplify template parameters and evaluate performance impact.
   template <typename T>
   static typename TypeTraits<KIND>::NativeType cast(T) {
     VELOX_UNSUPPORTED(
@@ -37,8 +42,8 @@ struct Converter {
   }
 };
 
-template <>
-struct Converter<TypeKind::BOOLEAN> {
+template <bool LEGACY_CAST>
+struct Converter<TypeKind::BOOLEAN, void, false, LEGACY_CAST> {
   using T = bool;
 
   template <typename From>
@@ -63,7 +68,7 @@ struct Converter<TypeKind::BOOLEAN> {
   }
 };
 
-template <TypeKind KIND, bool TRUNCATE>
+template <TypeKind KIND, bool TRUNCATE, bool LEGACY_CAST>
 struct Converter<
     KIND,
     std::enable_if_t<
@@ -71,7 +76,8 @@ struct Converter<
             KIND == TypeKind::SMALLINT || KIND == TypeKind::INTEGER ||
             KIND == TypeKind::BIGINT || KIND == TypeKind::HUGEINT,
         void>,
-    TRUNCATE> {
+    TRUNCATE,
+    LEGACY_CAST> {
   using T = typename TypeTraits<KIND>::NativeType;
 
   template <typename From>
@@ -97,11 +103,12 @@ struct Converter<
       bool negative = false;
       // Setting decimalPoint flag
       bool decimalPoint = false;
-      if (v[0] == '-') {
+      if (v[0] == '-' || v[0] == '+') {
         if (len == 1) {
-          VELOX_USER_FAIL("Cannot cast an '-' string to an integral value.");
+          VELOX_USER_FAIL(
+              "Cannot cast an '{}' string to an integral value.", v[0]);
         }
-        negative = true;
+        negative = v[0] == '-';
         index = 1;
       }
       if (negative) {
@@ -301,11 +308,12 @@ struct Converter<
   }
 };
 
-template <TypeKind KIND, bool TRUNCATE>
+template <TypeKind KIND, bool TRUNCATE, bool LEGACY_CAST>
 struct Converter<
     KIND,
     std::enable_if_t<KIND == TypeKind::REAL || KIND == TypeKind::DOUBLE, void>,
-    TRUNCATE> {
+    TRUNCATE,
+    LEGACY_CAST> {
   using T = typename TypeTraits<KIND>::NativeType;
 
   template <typename From>
@@ -373,45 +381,115 @@ struct Converter<
   }
 };
 
-template <bool TRUNCATE>
-struct Converter<TypeKind::VARBINARY, void, TRUNCATE> {
+template <bool TRUNCATE, bool LEGACY_CAST>
+struct Converter<TypeKind::VARBINARY, void, TRUNCATE, LEGACY_CAST> {
   // Same semantics of TypeKind::VARCHAR converter.
   template <typename T>
   static std::string cast(const T& val) {
-    return Converter<TypeKind::VARCHAR, void, TRUNCATE>::cast(val);
+    return Converter<TypeKind::VARCHAR, void, TRUNCATE, LEGACY_CAST>::cast(val);
   }
 };
 
-template <bool TRUNCATE>
-struct Converter<TypeKind::VARCHAR, void, TRUNCATE> {
+template <bool TRUNCATE, bool LEGACY_CAST>
+struct Converter<TypeKind::VARCHAR, void, TRUNCATE, LEGACY_CAST> {
   template <typename T>
   static std::string cast(const T& val) {
     if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
-      auto stringValue = folly::to<std::string>(val);
-      if (!FLAGS_experimental_enable_legacy_cast &&
-          stringValue.find(".") == std::string::npos &&
-          isdigit(stringValue[stringValue.length() - 1])) {
-        stringValue += ".0";
+      if constexpr (LEGACY_CAST) {
+        auto str = folly::to<std::string>(val);
+        normalizeStandardNotation(str);
+        return str;
       }
-      return stringValue;
+
+      if (FOLLY_UNLIKELY(std::isinf(val) || std::isnan(val))) {
+        return folly::to<std::string>(val);
+      }
+      if ((val > -10'000'000 && val <= -0.001) ||
+          (val >= 0.001 && val < 10'000'000) || val == 0.0) {
+        auto str = fmt::format("{}", val);
+        normalizeStandardNotation(str);
+        return str;
+      }
+      // Precision of float is at most 8 significant decimal digits. Precision
+      // of double is at most 17 significant decimal digits.
+      auto str =
+          fmt::format(std::is_same_v<T, float> ? "{:.7E}" : "{:.16E}", val);
+      normalizeScientificNotation(str);
+      return str;
     }
+
     return folly::to<std::string>(val);
   }
 
   static std::string cast(const Timestamp& val) {
     TimestampToStringOptions options;
-    options.precision = TimestampToStringOptions::kMilliseconds;
+    options.precision = TimestampToStringOptions::Precision::kMilliseconds;
+    if constexpr (!LEGACY_CAST) {
+      options.zeroPaddingYear = true;
+      options.dateTimeSeparator = ' ';
+    }
     return val.toString(options);
   }
 
   static std::string cast(const bool& val) {
     return val ? "true" : "false";
   }
+
+  /// Normalize the given floating-point standard notation string in place, by
+  /// appending '.0' if it has only the integer part but no fractional part. For
+  /// example, for the given string '12345', replace it with '12345.0'.
+  static void normalizeStandardNotation(std::string& str) {
+    if (!FLAGS_experimental_enable_legacy_cast &&
+        str.find(".") == std::string::npos && isdigit(str[str.length() - 1])) {
+      str += ".0";
+    }
+  }
+
+  /// Normalize the given floating-point scientific notation string in place, by
+  /// removing the trailing 0s of the coefficient as well as the leading '+' and
+  /// 0s of the exponent. For example, for the given string '3.0000000E+005',
+  /// replace it with '3.0E5'. For '-1.2340000E-010', replace it with
+  /// '-1.234E-10'.
+  static void normalizeScientificNotation(std::string& str) {
+    size_t idxE = str.find('E');
+    VELOX_DCHECK_NE(
+        idxE,
+        std::string::npos,
+        "Expect a character 'E' in scientific notation.");
+
+    int endCoef = idxE - 1;
+    while (endCoef >= 0 && str[endCoef] == '0') {
+      --endCoef;
+    }
+    VELOX_DCHECK_GT(endCoef, 0, "Coefficient should not be all zeros.");
+
+    int pos = endCoef + 1;
+    if (str[endCoef] == '.') {
+      pos++;
+    }
+    str[pos++] = 'E';
+
+    int startExp = idxE + 1;
+    if (str[startExp] == '-') {
+      str[pos++] = '-';
+      startExp++;
+    }
+    while (startExp < str.length() &&
+           (str[startExp] == '0' || str[startExp] == '+')) {
+      startExp++;
+    }
+    VELOX_DCHECK_LT(
+        startExp, str.length(), "Exponent should not be all zeros.");
+    str.replace(pos, str.length() - startExp, str, startExp);
+    pos += str.length() - startExp;
+
+    str.resize(pos);
+  }
 };
 
 // Allow conversions from string to TIMESTAMP type.
-template <bool TRUNCATE>
-struct Converter<TypeKind::TIMESTAMP, void, TRUNCATE> {
+template <bool TRUNCATE, bool LEGACY_CAST>
+struct Converter<TypeKind::TIMESTAMP, void, TRUNCATE, LEGACY_CAST> {
   using T = typename TypeTraits<TypeKind::TIMESTAMP>::NativeType;
 
   template <typename From>

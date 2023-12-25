@@ -19,6 +19,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/type/Variant.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::exec::test;
@@ -450,6 +451,72 @@ TEST_F(QueryAssertionsTest, nullVariant) {
   createDuckDbTable({input});
   plan = PlanBuilder().values({input}).planNode();
   assertQuery(plan, "SELECT * FROM tmp");
+}
+
+TEST_F(QueryAssertionsTest, varbinary) {
+  auto data = makeRowVector({makeFlatVector<std::string>(
+      {"Short string", "Longer strings...", "abc"}, VARBINARY())});
+
+  auto rowType = asRowType(data->type());
+
+  createDuckDbTable({data});
+
+  auto duckResult = duckDbQueryRunner_.execute("SELECT * FROM tmp", rowType);
+  ASSERT_EQ(duckResult.size(), data->size());
+  ASSERT_EQ(duckResult.begin()->begin()->kind(), TypeKind::VARBINARY);
+  ASSERT_TRUE(assertEqualResults(duckResult, rowType, {data}));
+
+  auto plan = PlanBuilder().values({data}).planNode();
+  assertQuery(plan, "SELECT * FROM tmp");
+}
+
+TEST_F(QueryAssertionsTest, intervalDayTime) {
+  // INTERVAL_DAY_TIME needs special handling as it is a logical (vs physical)
+  // type mapping to BIGINT. Tests its use as a FLAT vector and in a MAP
+  // serialized to DuckDB to cover the specialized code-paths.
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({5, 10, 15, 0}, INTERVAL_DAY_TIME())});
+
+  createDuckDbTable({data});
+  auto plan = PlanBuilder().values({data}).planNode();
+  assertQuery(plan, "SELECT * FROM tmp");
+
+  data = makeRowVector({makeMapVectorFromJson<int64_t, double>(
+      {"null",
+       "{1: 1.1, 2: null}",
+       "{}",
+       "{3: 3.3, 4: 4.4, 5: 5.5}",
+       "null",
+       "{6: null}"},
+      MAP(INTERVAL_DAY_TIME(), DOUBLE()))});
+  createDuckDbTable({data});
+  plan = PlanBuilder().values({data}).planNode();
+  assertQuery(plan, "SELECT * FROM tmp");
+}
+
+TEST_F(QueryAssertionsTest, plansWithEqualResults) {
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto input = fuzzer.fuzzInputRow(ROW({"c0"}, {INTEGER()}));
+  auto plan1 = PlanBuilder().values({input}).orderBy({"c0"}, false).planNode();
+
+  // The input plan has 100 rows. So the limit has no effect here.
+  auto plan2 = PlanBuilder()
+                   .values({input})
+                   .orderBy({"c0"}, false)
+                   .limit(0, 100, false)
+                   .planNode();
+  assertEqualResults(plan1, plan2);
+
+  // The limit drops 50 result rows from the original plan.
+  plan2 = PlanBuilder()
+              .values({input})
+              .orderBy({"c0"}, false)
+              .limit(0, 50, false)
+              .planNode();
+  EXPECT_NONFATAL_FAILURE(
+      assertEqualResults(plan1, plan2), "Expected 100, got 50");
 }
 
 } // namespace facebook::velox::test

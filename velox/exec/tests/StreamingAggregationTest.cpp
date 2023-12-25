@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -52,6 +54,7 @@ class StreamingAggregationTest : public OperatorTestBase {
                          "max(c1)",
                          "sum(c1)",
                          "sumnonpod(1)",
+                         "sum(cast(NULL as INT))",
                          "approx_percentile(c1, 0.95)"})
                     .finalAggregation()
                     .planNode();
@@ -61,7 +64,7 @@ class StreamingAggregationTest : public OperatorTestBase {
             core::QueryConfig::kPreferredOutputBatchRows,
             std::to_string(outputBatchSize))
         .assertResults(
-            "SELECT c0, count(1), min(c1), max(c1), sum(c1), sum(1)"
+            "SELECT c0, count(1), min(c1), max(c1), sum(c1), sum(1), sum(cast(NULL as INT))"
             "     , approx_quantile(c1, 0.95) "
             "FROM tmp GROUP BY 1");
 
@@ -106,6 +109,41 @@ class StreamingAggregationTest : public OperatorTestBase {
             "SELECT c0, count(1), min(c1) filter (where c1 % 7 = 0), "
             "max(c1) filter (where c1 % 11 = 0), sum(c1) filter (where c1 % 7 = 0) "
             "FROM tmp GROUP BY 1");
+  }
+
+  void testSortedAggregation(
+      const std::vector<VectorPtr>& keys,
+      uint32_t outputBatchSize = 1'024) {
+    std::vector<RowVectorPtr> data;
+
+    vector_size_t totalSize = 0;
+    for (const auto& keyVector : keys) {
+      auto size = keyVector->size();
+      auto payload = makeFlatVector<int32_t>(
+          size, [totalSize](auto row) { return totalSize + row; });
+      data.push_back(makeRowVector({keyVector, payload, payload}));
+      totalSize += size;
+    }
+    createDuckDbTable(data);
+
+    auto plan = PlanBuilder()
+                    .values(data)
+                    .streamingAggregation(
+                        {"c0"},
+                        {"max(c1 order by c2)",
+                         "max(c1 order by c2 desc)",
+                         "array_agg(c1 order by c2)"},
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        false)
+                    .planNode();
+
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows,
+            std::to_string(outputBatchSize))
+        .assertResults(
+            "SELECT c0, max(c1 order by c2), max(c1 order by c2 desc), array_agg(c1 order by c2) FROM tmp GROUP BY c0");
   }
 
   std::vector<RowVectorPtr> addPayload(const std::vector<RowVectorPtr>& keys) {
@@ -298,4 +336,71 @@ TEST_F(StreamingAggregationTest, partialStreaming) {
   };
 
   testMultiKeyAggregation(keys, {"c0"});
+}
+
+// Test StreamingAggregation being closed without being initialized. Create a
+// pipeline with Project followed by StreamingAggregation. Make
+// Project::initialize fail by using non-existent function.
+TEST_F(StreamingAggregationTest, closeUninitialized) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+  });
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .addNode([](auto nodeId, auto source) -> core::PlanNodePtr {
+                    return std::make_shared<core::ProjectNode>(
+                        nodeId,
+                        std::vector<std::string>{"c0", "x"},
+                        std::vector<core::TypedExprPtr>{
+                            std::make_shared<core::FieldAccessTypedExpr>(
+                                BIGINT(), "c0"),
+                            std::make_shared<core::CallTypedExpr>(
+                                BIGINT(),
+                                std::vector<core::TypedExprPtr>{},
+                                "do-not-exist")},
+                        source);
+                  })
+                  .partialStreamingAggregation({"c0"}, {"sum(x)"})
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Scalar function name not registered: do-not-exist");
+}
+
+TEST_F(StreamingAggregationTest, sortedAggregations) {
+  auto size = 128;
+
+  std::vector<VectorPtr> keys = {
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(size, [size](auto row) { return (size + row); }),
+      makeFlatVector<int32_t>(
+          size, [size](auto row) { return (2 * size + row); }),
+      makeFlatVector<int32_t>(
+          78, [size](auto row) { return (3 * size + row); }),
+  };
+
+  testSortedAggregation(keys);
+  testSortedAggregation(keys, 32);
+}
+
+TEST_F(StreamingAggregationTest, distinctAggregations) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row / 4; }),
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row % 3; }),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"array_agg(distinct c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Streaming aggregation doesn't support aggregations over distinct inputs yet");
 }

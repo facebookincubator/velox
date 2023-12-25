@@ -43,22 +43,27 @@ TEST_F(MapEntriesTest, basic) {
       [](vector_size_t row) { return row % 11; },
       nullEvery(13));
 
-  auto result = evaluate<ArrayVector>("map_entries(C0)", makeRowVector({map}));
+  auto result = evaluate("map_entries(C0)", makeRowVector({map}));
   ASSERT_EQ(size, result->size());
-
-  auto resultKeys = result->elements()->as<RowVector>()->childAt(0);
-  auto resultValues = result->elements()->as<RowVector>()->childAt(1);
+  DecodedVector decodedArray(*result);
+  auto base = decodedArray.base()->as<ArrayVector>();
+  auto resultKeys = base->elements()->as<RowVector>()->childAt(0);
+  auto resultValues = base->elements()->as<RowVector>()->childAt(1);
   for (auto i = 0; i < size; i++) {
     auto isNull = map->isNullAt(i);
     ASSERT_EQ(isNull, result->isNullAt(i)) << "at " << i;
     if (!isNull) {
       auto mapSize = map->sizeAt(i);
-      ASSERT_EQ(mapSize, result->sizeAt(i)) << "at " << i;
+      ASSERT_EQ(mapSize, base->sizeAt(decodedArray.index(i))) << "at " << i;
       for (auto j = 0; j < mapSize; j++) {
         ASSERT_TRUE(map->mapKeys()->equalValueAt(
-            resultKeys.get(), map->offsetAt(i) + j, result->offsetAt(i) + j));
+            resultKeys.get(),
+            map->offsetAt(i) + j,
+            base->offsetAt(decodedArray.index(i)) + j));
         ASSERT_TRUE(map->mapValues()->equalValueAt(
-            resultValues.get(), map->offsetAt(i) + j, result->offsetAt(i) + j));
+            resultValues.get(),
+            map->offsetAt(i) + j,
+            base->offsetAt(decodedArray.index(i)) + j));
       }
     }
   }
@@ -156,4 +161,36 @@ TEST_F(MapEntriesTest, outputSizeIsBoundBySelectedRows) {
   exprSet.eval(rows, evalCtx, results);
 
   ASSERT_EQ(results[0]->size(), 5);
+}
+
+TEST_F(MapEntriesTest, differentSizedValueKeyVectors) {
+  auto keyVector =
+      makeNullableFlatVector<int64_t>({1, 2, 3, 4, std::nullopt, std::nullopt});
+  auto valueVector = makeFlatVector<int64_t>({1, 2, 3, 4});
+
+  auto offsetBuffer = makeIndices({3, 2, 1, 0, 0, 0});
+  auto sizeBuffer = makeIndices({1, 1, 1, 1, 1, 1});
+
+  auto mapVector = std::make_shared<MapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      6,
+      offsetBuffer,
+      sizeBuffer,
+      keyVector,
+      valueVector);
+
+  mapVector->validate({});
+  auto rowVector = makeRowVector({mapVector});
+
+  auto result = evaluate("map_entries(c0)", rowVector);
+
+  EXPECT_NE(result, nullptr);
+  auto elementVector = makeRowVector(
+      {makeFlatVector<int64_t>({4, 3, 2, 1, 1, 1}),
+       makeFlatVector<int64_t>({4, 3, 2, 1, 1, 1})});
+  auto arrayVector = makeArrayVector({0, 1, 2, 3, 4, 5}, elementVector);
+
+  test::assertEqualVectors(arrayVector, result);
 }

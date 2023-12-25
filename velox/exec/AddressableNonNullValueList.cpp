@@ -22,7 +22,7 @@ HashStringAllocator::Position AddressableNonNullValueList::append(
     const DecodedVector& decoded,
     vector_size_t index,
     HashStringAllocator* allocator) {
-  ByteStream stream(allocator);
+  ByteOutputStream stream(allocator);
   if (!firstHeader_) {
     // An array_agg or related begins with an allocation of 5 words and
     // 4 bytes for header. This is compact for small arrays (up to 5
@@ -52,18 +52,18 @@ HashStringAllocator::Position AddressableNonNullValueList::append(
 
 namespace {
 
-void prepareRead(
+ByteInputStream prepareRead(
     HashStringAllocator::Position position,
-    ByteStream& stream,
     bool skipHash) {
   auto header = position.header;
   auto seek = static_cast<int32_t>(position.position - header->begin());
 
-  HashStringAllocator::prepareRead(header, stream);
+  auto stream = HashStringAllocator::prepareRead(header);
   stream.seekp(seek);
   if (skipHash) {
     stream.skip(sizeof(uint64_t));
   }
+  return stream;
 }
 } // namespace
 
@@ -72,14 +72,11 @@ bool AddressableNonNullValueList::equalTo(
     HashStringAllocator::Position left,
     HashStringAllocator::Position right,
     const TypePtr& type) {
-  ByteStream leftStream;
-  prepareRead(left, leftStream, true /*skipHash*/);
+  auto leftStream = prepareRead(left, true /*skipHash*/);
+  auto rightStream = prepareRead(right, true /*skipHash*/);
 
-  ByteStream rightStream;
-  prepareRead(right, rightStream, true /*skipHash*/);
-
-  CompareFlags compareFlags;
-  compareFlags.equalsOnly = true;
+  CompareFlags compareFlags =
+      CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
   return exec::ContainerRowSerde::compare(
              leftStream, rightStream, type.get(), compareFlags) == 0;
 }
@@ -87,9 +84,7 @@ bool AddressableNonNullValueList::equalTo(
 // static
 uint64_t AddressableNonNullValueList::readHash(
     HashStringAllocator::Position position) {
-  ByteStream stream;
-  prepareRead(position, stream, false /*skipHash*/);
-
+  auto stream = prepareRead(position, false /*skipHash*/);
   return stream.read<uint64_t>();
 }
 
@@ -98,9 +93,7 @@ void AddressableNonNullValueList::read(
     HashStringAllocator::Position position,
     BaseVector& result,
     vector_size_t index) {
-  ByteStream stream;
-  prepareRead(position, stream, true /*skipHash*/);
-
+  auto stream = prepareRead(position, true /*skipHash*/);
   exec::ContainerRowSerde::deserialize(stream, index, &result);
 }
 

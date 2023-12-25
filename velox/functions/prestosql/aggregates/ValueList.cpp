@@ -39,7 +39,7 @@ void ValueList::prepareAppend(HashStringAllocator* allocator) {
 }
 
 void ValueList::writeLastNulls(HashStringAllocator* allocator) {
-  ByteStream stream(allocator);
+  ByteOutputStream stream(allocator);
   if (nullsBegin_) {
     allocator->extendWrite(nullsCurrent_, stream);
   } else {
@@ -61,16 +61,18 @@ void ValueList::appendNonNull(
     vector_size_t index,
     HashStringAllocator* allocator) {
   prepareAppend(allocator);
-  ByteStream stream(allocator);
+  ByteOutputStream stream(allocator);
   allocator->extendWrite(dataCurrent_, stream);
+  // The stream may have a tail of a previous write.
+  const auto initialSize = stream.size();
   exec::ContainerRowSerde::serialize(values, index, stream);
   ++size_;
-  bytes_ += stream.size();
+  bytes_ += stream.size() - initialSize;
 
-  // Leave space up to the size appended so far, at least 24 but no more
+  // Leave space up to half the size appended so far, at least 24 but no more
   // than 1024.
   dataCurrent_ =
-      allocator->finishWrite(stream, std::clamp(bytes_, 24, 1024)).second;
+      allocator->finishWrite(stream, std::clamp(bytes_ / 2, 24, 1024)).second;
 }
 
 void ValueList::appendValue(
@@ -102,10 +104,9 @@ void ValueList::appendRange(
 ValueListReader::ValueListReader(ValueList& values)
     : size_{values.size()},
       lastNullsStart_{size_ % 64 == 0 ? size_ - 64 : size_ - size_ % 64},
-      lastNulls_{values.lastNulls()} {
-  HashStringAllocator::prepareRead(values.dataBegin(), dataStream_);
-  HashStringAllocator::prepareRead(values.nullsBegin(), nullsStream_);
-}
+      lastNulls_{values.lastNulls()},
+      dataStream_{HashStringAllocator::prepareRead(values.dataBegin())},
+      nullsStream_{HashStringAllocator::prepareRead(values.nullsBegin())} {}
 
 bool ValueListReader::next(BaseVector& output, vector_size_t outputIndex) {
   if (pos_ == lastNullsStart_) {

@@ -21,9 +21,10 @@
 #include "velox/functions/Macros.h"
 
 namespace facebook::velox::functions {
-namespace {
+
 inline constexpr int64_t kSecondsInDay = 86'400;
 inline constexpr int64_t kDaysInWeek = 7;
+extern const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames;
 
 FOLLY_ALWAYS_INLINE const date::time_zone* getTimeZoneFromConfig(
     const core::QueryConfig& config) {
@@ -45,14 +46,13 @@ getSeconds(Timestamp timestamp, const date::time_zone* timeZone) {
     return timestamp.getSeconds();
   }
 }
-} // namespace
 
 FOLLY_ALWAYS_INLINE
 std::tm getDateTime(Timestamp timestamp, const date::time_zone* timeZone) {
   int64_t seconds = getSeconds(timestamp, timeZone);
   std::tm dateTime;
   VELOX_USER_CHECK(
-      epochToUtc(seconds, dateTime),
+      Timestamp::epochToUtc(seconds, dateTime),
       "Timestamp is too large: {} seconds since epoch",
       seconds);
   return dateTime;
@@ -64,7 +64,9 @@ std::tm getDateTime(int32_t days) {
   int64_t seconds = days * kSecondsInDay;
   std::tm dateTime;
   VELOX_USER_CHECK(
-      epochToUtc(seconds, dateTime), "Date is too large: {} days", days);
+      Timestamp::epochToUtc(seconds, dateTime),
+      "Date is too large: {} days",
+      days);
   return dateTime;
 }
 
@@ -80,6 +82,14 @@ FOLLY_ALWAYS_INLINE int getMonth(const std::tm& time) {
 
 FOLLY_ALWAYS_INLINE int getDay(const std::tm& time) {
   return time.tm_mday;
+}
+
+FOLLY_ALWAYS_INLINE int32_t getQuarter(const std::tm& time) {
+  return time.tm_mon / 3 + 1;
+}
+
+FOLLY_ALWAYS_INLINE int32_t getDayOfYear(const std::tm& time) {
+  return time.tm_yday + 1;
 }
 
 template <typename T>

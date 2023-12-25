@@ -22,11 +22,15 @@ add_executable(
   FsTest.cpp
   RangeTest.cpp
   RawVectorTest.cpp
+  ScratchTest.cpp
   RuntimeMetricsTest.cpp
   ScopedLockTest.cpp
   SemaphoreTest.cpp
   SimdUtilTest.cpp
+  SpillConfigTest.cpp
+  SpillStatsTest.cpp
   StatsReporterTest.cpp
+  StatusTest.cpp
   SuccinctPrinterTest.cpp)
 
 add_test(velox_base_test velox_base_test)
@@ -35,6 +39,7 @@ target_link_libraries(
   velox_base_test
   PRIVATE velox_common_base
           velox_time
+          velox_status
           velox_exception
           velox_temp_path
           Boost::filesystem
@@ -43,6 +48,7 @@ target_link_libraries(
           fmt::fmt
           gflags::gflags
           gtest
+          gmock
           gtest_main)
 
 add_executable(velox_id_map_test IdMapTest.cpp)

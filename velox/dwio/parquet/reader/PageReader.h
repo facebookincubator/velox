@@ -16,17 +16,18 @@
 
 #pragma once
 
-#include <arrow/util/rle_encoding.h>
 #include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
+#include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 #include "velox/dwio/parquet/reader/StringDecoder.h"
-#include "velox/vector/BaseVector.h"
+
+#include <arrow/util/rle_encoding.h>
 
 namespace facebook::velox::parquet {
 
@@ -68,45 +69,6 @@ class PageReader {
         chunkSize_(chunkSize),
         nullConcatenation_(pool_) {}
 
-  common::CompressionKind ThriftCodecToCompressionKind(
-      thrift::CompressionCodec::type codec) const {
-    switch (codec) {
-      case thrift::CompressionCodec::UNCOMPRESSED:
-        return common::CompressionKind::CompressionKind_NONE;
-        break;
-      case thrift::CompressionCodec::SNAPPY:
-        return common::CompressionKind::CompressionKind_SNAPPY;
-        break;
-      case thrift::CompressionCodec::GZIP:
-        return common::CompressionKind::CompressionKind_GZIP;
-        break;
-      case thrift::CompressionCodec::LZO:
-        return common::CompressionKind::CompressionKind_LZO;
-        break;
-      case thrift::CompressionCodec::LZ4:
-        return common::CompressionKind::CompressionKind_LZ4;
-        break;
-      case thrift::CompressionCodec::ZSTD:
-        return common::CompressionKind::CompressionKind_ZSTD;
-        break;
-      case thrift::CompressionCodec::LZ4_RAW:
-        return common::CompressionKind::CompressionKind_LZ4;
-      default:
-        VELOX_UNSUPPORTED(
-            "Unsupported compression type: " +
-            facebook::velox::parquet::thrift::to_string(codec));
-        break;
-    }
-  }
-
-  static const dwio::common::compression::CompressionOptions
-  getParquetDecompressionOptions() {
-    dwio::common::compression::CompressionOptions options;
-    options.format.zlib.windowBits =
-        dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS;
-    return options;
-  }
-
   /// Advances 'numRows' top level rows.
   void skip(int64_t numRows);
 
@@ -122,7 +84,7 @@ class PageReader {
   /// filled.
   int32_t getLengthsAndNulls(
       LevelMode mode,
-      const ::parquet::internal::LevelInfo& info,
+      const arrow::LevelInfo& info,
       int32_t begin,
       int32_t end,
       int32_t maxItems,
@@ -159,6 +121,10 @@ class PageReader {
   void clearDictionary() {
     dictionary_.clear();
     dictionaryValues_.reset();
+  }
+
+  bool isDeltaBinaryPacked() const {
+    return encoding_ == thrift::Encoding::DELTA_BINARY_PACKED;
   }
 
   /// Returns the range of repdefs for the top level rows covered by the last
@@ -237,6 +203,8 @@ class PageReader {
   // straddles buffers. Allocates or resizes 'copy' as needed.
   const char* FOLLY_NONNULL readBytes(int32_t size, BufferPtr& copy);
 
+  common::CompressionKind thriftCodecToCompressionKind();
+
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
   // producing up to 'uncompressedSize' bytes. The start of the decoding
   // result is returned. an intermediate copy may be made in 'decompresseddata_'
@@ -301,6 +269,9 @@ class PageReader {
       if (isDictionary()) {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
+        nullsFromFastPath = false;
+        deltaBpDecoder_->readWithVisitor<true>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<true>(
             nulls, visitor, nullsFromFastPath);
@@ -309,6 +280,8 @@ class PageReader {
       if (isDictionary()) {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
+        deltaBpDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<false>(
             nulls, visitor, !this->type_->type()->isShortDecimal());
@@ -393,8 +366,8 @@ class PageReader {
   // Decoder for single bit definition levels. the arrow decoders are used for
   // multibit levels pending fixing RleBpDecoder for the case.
   std::unique_ptr<RleBpDecoder> defineDecoder_;
-  std::unique_ptr<arrow::util::RleDecoder> repeatDecoder_;
-  std::unique_ptr<arrow::util::RleDecoder> wideDefineDecoder_;
+  std::unique_ptr<::arrow::util::RleDecoder> repeatDecoder_;
+  std::unique_ptr<::arrow::util::RleDecoder> wideDefineDecoder_;
 
   // True for a leaf column for which repdefs are loaded for the whole column
   // chunk. This is typically the leaftmost leaf of a list. Other leaves under
@@ -503,7 +476,7 @@ class PageReader {
   dwio::common::BitConcatenation nullConcatenation_;
 
   // LevelInfo for reading nulls for the leaf column 'this' represents.
-  ::parquet::internal::LevelInfo leafInfo_;
+  arrow::LevelInfo leafInfo_;
 
   // Base values of dictionary when reading a string dictionary.
   VectorPtr dictionaryValues_;
@@ -513,8 +486,25 @@ class PageReader {
   std::unique_ptr<RleBpDataDecoder> dictionaryIdDecoder_;
   std::unique_ptr<StringDecoder> stringDecoder_;
   std::unique_ptr<BooleanDecoder> booleanDecoder_;
+  std::unique_ptr<DeltaBpDecoder> deltaBpDecoder_;
   // Add decoders for other encodings here.
 };
+
+FOLLY_ALWAYS_INLINE dwio::common::compression::CompressionOptions
+getParquetDecompressionOptions(common::CompressionKind kind) {
+  dwio::common::compression::CompressionOptions options;
+
+  if (kind == common::CompressionKind_ZLIB ||
+      kind == common::CompressionKind_GZIP) {
+    options.format.zlib.windowBits =
+        dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS;
+  } else if (
+      kind == common::CompressionKind_LZ4 ||
+      kind == common::CompressionKind_LZO) {
+    options.format.lz4_lzo.isHadoopFrameFormat = true;
+  }
+  return options;
+}
 
 template <typename Visitor>
 void PageReader::readWithVisitor(Visitor& visitor) {

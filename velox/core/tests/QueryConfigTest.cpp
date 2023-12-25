@@ -21,30 +21,40 @@
 
 namespace facebook::velox::core::test {
 
-TEST(TestQueryConfig, emptyConfig) {
+class QueryConfigTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
+
+TEST_F(QueryConfigTest, emptyConfig) {
   std::unordered_map<std::string, std::string> configData;
   auto queryCtx = std::make_shared<QueryCtx>(nullptr, std::move(configData));
   const QueryConfig& config = queryCtx->queryConfig();
 
   ASSERT_FALSE(config.codegenEnabled());
   ASSERT_EQ(config.codegenConfigurationFilePath(), "");
+  ASSERT_FALSE(config.isLegacyCast());
   ASSERT_FALSE(config.isCastToIntByTruncate());
 }
 
-TEST(TestQueryConfig, setConfig) {
+TEST_F(QueryConfigTest, setConfig) {
   std::string path = "/tmp/CodeGenConfig";
   std::unordered_map<std::string, std::string> configData(
       {{QueryConfig::kCodegenEnabled, "true"},
-       {QueryConfig::kCodegenConfigurationFilePath, path}});
+       {QueryConfig::kCodegenConfigurationFilePath, path},
+       {QueryConfig::kLegacyCast, "true"}});
   auto queryCtx = std::make_shared<QueryCtx>(nullptr, std::move(configData));
   const QueryConfig& config = queryCtx->queryConfig();
 
   ASSERT_TRUE(config.codegenEnabled());
   ASSERT_EQ(config.codegenConfigurationFilePath(), path);
+  ASSERT_TRUE(config.isLegacyCast());
   ASSERT_FALSE(config.isCastToIntByTruncate());
 }
 
-TEST(TestQueryConfig, memConfig) {
+TEST_F(QueryConfigTest, memConfig) {
   const std::string tz = "timezone1";
   const std::unordered_map<std::string, std::string> configData(
       {{QueryConfig::kCodegenEnabled, "true"},
@@ -88,7 +98,7 @@ TEST(TestQueryConfig, memConfig) {
   }
 }
 
-TEST(TestQueryConfig, taskWriterCountConfig) {
+TEST_F(QueryConfigTest, taskWriterCountConfig) {
   struct {
     std::optional<int> numWriterCounter;
     std::optional<int> numPartitionedWriterCounter;
@@ -135,10 +145,10 @@ TEST(TestQueryConfig, taskWriterCountConfig) {
   }
 }
 
-TEST(TestQueryConfig, enableExpressionEvaluationCacheConfig) {
-  std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::defaultMemoryManager().addRootPool()};
-  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
+TEST_F(QueryConfigTest, enableExpressionEvaluationCacheConfig) {
+  std::shared_ptr<memory::MemoryPool> rootPool{
+      memory::memoryManager()->addRootPool()};
+  std::shared_ptr<memory::MemoryPool> pool{rootPool->addLeafChild("leaf")};
 
   auto testConfig = [&](bool enableExpressionEvaluationCache) {
     std::unordered_map<std::string, std::string> configData(
@@ -151,7 +161,7 @@ TEST(TestQueryConfig, enableExpressionEvaluationCacheConfig) {
         config.isExpressionEvaluationCacheEnabled(),
         enableExpressionEvaluationCache);
 
-    auto execCtx = std::make_shared<core::ExecCtx>(pool_.get(), queryCtx.get());
+    auto execCtx = std::make_shared<core::ExecCtx>(pool.get(), queryCtx.get());
     ASSERT_EQ(execCtx->exprEvalCacheEnabled(), enableExpressionEvaluationCache);
     ASSERT_EQ(
         execCtx->vectorPool() != nullptr, enableExpressionEvaluationCache);
@@ -178,7 +188,7 @@ TEST(TestQueryConfig, enableExpressionEvaluationCacheConfig) {
   testConfig(false);
 }
 
-TEST(TestQueryConfig, capacityConversion) {
+TEST_F(QueryConfigTest, capacityConversion) {
   folly::Random::DefaultGenerator rng;
   rng.seed(1);
 
@@ -215,7 +225,7 @@ TEST(TestQueryConfig, capacityConversion) {
   }
 }
 
-TEST(TestQueryConfig, durationConversion) {
+TEST_F(QueryConfigTest, durationConversion) {
   folly::Random::DefaultGenerator rng;
   rng.seed(1);
 

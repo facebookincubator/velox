@@ -348,17 +348,32 @@ class ApproxDistinctAggregate : public exec::Aggregate {
     decodedValue_.decode(*args[0], rows, true);
     if (args.size() > 1) {
       decodedMaxStandardError_.decode(*args[1], rows, true);
-      checkSetMaxStandardError();
+      checkSetMaxStandardError(rows);
     }
   }
 
-  void checkSetMaxStandardError() {
-    VELOX_USER_CHECK(
-        decodedMaxStandardError_.isConstantMapping(),
-        "Max standard error argument must be constant for all input rows");
+  void checkSetMaxStandardError(const SelectivityVector& rows) {
+    if (decodedMaxStandardError_.isConstantMapping()) {
+      const auto maxStandardError = decodedMaxStandardError_.valueAt<double>(0);
+      checkSetMaxStandardError(maxStandardError);
+      return;
+    }
 
-    auto maxStandardError = decodedMaxStandardError_.valueAt<double>(0);
-    checkSetMaxStandardError(maxStandardError);
+    rows.applyToSelected([&](auto row) {
+      VELOX_USER_CHECK(
+          !decodedMaxStandardError_.isNullAt(row),
+          "Max standard error cannot be null");
+      const auto maxStandardError =
+          decodedMaxStandardError_.valueAt<double>(row);
+      if (maxStandardError_ == -1) {
+        checkSetMaxStandardError(maxStandardError);
+      } else {
+        VELOX_USER_CHECK_EQ(
+            maxStandardError,
+            maxStandardError_,
+            "Max standard error argument must be constant for all input rows");
+      }
+    });
   }
 
   void checkSetMaxStandardError(double error) {
@@ -404,7 +419,8 @@ std::unique_ptr<exec::Aggregate> createApproxDistinct(
 exec::AggregateRegistrationResult registerApproxDistinct(
     const std::string& name,
     bool hllAsFinalResult,
-    bool hllAsRawInput) {
+    bool hllAsRawInput,
+    bool withCompanionFunctions) {
   auto returnType = hllAsFinalResult ? "hyperloglog" : "bigint";
 
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -421,6 +437,7 @@ exec::AggregateRegistrationResult registerApproxDistinct(
           "smallint",
           "integer",
           "bigint",
+          "hugeint",
           "real",
           "double",
           "varchar",
@@ -439,6 +456,21 @@ exec::AggregateRegistrationResult registerApproxDistinct(
                                .argumentType("double")
                                .build());
     }
+    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                             .integerVariable("a_precision")
+                             .integerVariable("a_scale")
+                             .returnType(returnType)
+                             .intermediateType("varbinary")
+                             .argumentType("DECIMAL(a_precision, a_scale)")
+                             .build());
+    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                             .integerVariable("a_precision")
+                             .integerVariable("a_scale")
+                             .returnType(returnType)
+                             .intermediateType("varbinary")
+                             .argumentType("DECIMAL(a_precision, a_scale)")
+                             .argumentType("double")
+                             .build());
   }
 
   return exec::registerAggregateFunction(
@@ -458,18 +490,23 @@ exec::AggregateRegistrationResult registerApproxDistinct(
             hllAsFinalResult,
             hllAsRawInput);
       },
-      /*registerCompanionFunctions*/ true);
+      withCompanionFunctions);
 }
 
 } // namespace
 
-void registerApproxDistinctAggregates(const std::string& prefix) {
+void registerApproxDistinctAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions) {
   registerCustomType(
       prefix + "hyperloglog",
       std::make_unique<const HyperLogLogTypeFactories>());
-  registerApproxDistinct(prefix + kApproxDistinct, false, false);
-  registerApproxDistinct(prefix + kApproxSet, true, false);
-  registerApproxDistinct(prefix + kMerge, true, true);
+  registerApproxDistinct(
+      prefix + kApproxDistinct, false, false, withCompanionFunctions);
+  // approx_set and merge are already companion functions themselves. Don't
+  // register companion functions for them.
+  registerApproxDistinct(prefix + kApproxSet, true, false, false);
+  registerApproxDistinct(prefix + kMerge, true, true, false);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

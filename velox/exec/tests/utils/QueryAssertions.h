@@ -17,8 +17,9 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/Cursor.h"
-#include "velox/external/duckdb/duckdb.hpp"
 #include "velox/vector/ComplexVector.h"
+
+#include <duckdb.hpp> // @manual
 
 namespace facebook::velox::exec::test {
 
@@ -46,7 +47,7 @@ class DuckDbQueryRunner {
 
   MaterializedRowMultiset execute(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType) {
+      const RowTypePtr& resultRowType) {
     MaterializedRowMultiset allRows;
     execute(
         sql,
@@ -60,7 +61,7 @@ class DuckDbQueryRunner {
 
   std::vector<MaterializedRow> executeOrdered(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType) {
+      const RowTypePtr& resultRowType) {
     std::vector<MaterializedRow> allRows;
     execute(
         sql,
@@ -76,14 +77,14 @@ class DuckDbQueryRunner {
 
   void execute(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType,
+      const RowTypePtr& resultRowType,
       std::function<void(std::vector<MaterializedRow>&)> resultCallback);
 };
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
     std::function<void(exec::Task*)> addSplits,
-    uint64_t maxWaitMicros = 1'000'000);
+    uint64_t maxWaitMicros = 5'000'000);
 
 /// The Task can return results before the Driver is finished executing.
 /// Wait upto maxWaitMicros for the Task to finish as 'expectedState' before
@@ -154,13 +155,13 @@ void assertEmptyResults(const std::vector<RowVectorPtr>& results);
 
 void assertResults(
     const std::vector<RowVectorPtr>& results,
-    const std::shared_ptr<const RowType>& resultType,
+    const RowTypePtr& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner);
 
 void assertResultsOrdered(
     const std::vector<RowVectorPtr>& results,
-    const std::shared_ptr<const RowType>& resultType,
+    const RowTypePtr& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
     const std::vector<uint32_t>& sortingKeys);
@@ -204,6 +205,11 @@ bool assertEqualResults(
     const MaterializedRowMultiset& expectedRows,
     const TypePtr& expectedRowType,
     const std::vector<RowVectorPtr>& actual);
+
+/// Ensure both plans have the same results.
+bool assertEqualResults(
+    const core::PlanNodePtr& plan1,
+    const core::PlanNodePtr& plan2);
 
 /// Ensure both datasets have the same type and number of rows.
 void assertEqualTypeAndNumRows(

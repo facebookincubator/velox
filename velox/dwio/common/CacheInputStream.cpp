@@ -105,7 +105,7 @@ void CacheInputStream::BackUp(int32_t count) {
   position_ -= unsignedCount;
 }
 
-bool CacheInputStream::Skip(int32_t count) {
+bool CacheInputStream::SkipInt64(int64_t count) {
   if (count < 0) {
     return false;
   }
@@ -217,6 +217,7 @@ void CacheInputStream::loadSync(Region region) {
       }
       ioStats_->read().increment(region.length);
       ioStats_->queryThreadIoLatency().increment(usec);
+      ioStats_->incTotalScanTime(usec * 1'000);
       entry->setExclusiveToShared();
     } else {
       // Hit memory cache.

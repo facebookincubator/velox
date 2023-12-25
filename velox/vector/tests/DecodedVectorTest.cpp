@@ -32,6 +32,10 @@ namespace facebook::velox::test {
 
 class DecodedVectorTest : public testing::Test, public VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   DecodedVectorTest() : allSelected_(10010), halfSelected_(10010) {
     allSelected_.setAll();
     halfSelected_.setAll();
@@ -602,7 +606,7 @@ TEST_F(DecodedVectorTest, dictionaryOverLazy) {
     checkUnloaded(decoded);
   }
   dictionaryVector->loadedVector();
-  EXPECT_TRUE(dictionaryVector->valueVector()->as<LazyVector>()->isLoaded());
+  EXPECT_TRUE(!dictionaryVector->valueVector()->isLazy());
   {
     SelectivityVector selection(dictionarySize);
     DecodedVector decoded(*dictionaryVector, selection, false);

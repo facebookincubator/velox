@@ -18,6 +18,7 @@
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
 #include "velox/expression/VectorReaders.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -25,6 +26,10 @@ using namespace facebook::velox::test;
 
 class RowContainerTest : public exec::test::RowContainerTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void testExtractColumn(
       RowContainer& container,
       const std::vector<char*>& rows,
@@ -255,6 +260,27 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     }
     auto usage = data.stringAllocator().cumulativeBytes();
     EXPECT_EQ(usage, sum);
+  }
+
+  std::vector<char*> store(
+      RowContainer& rowContainer,
+      const RowVectorPtr& data) {
+    std::vector<DecodedVector> decodedVectors;
+    for (auto& vector : data->children()) {
+      decodedVectors.emplace_back(*vector);
+    }
+
+    std::vector<char*> rows;
+    for (auto i = 0; i < data->size(); ++i) {
+      auto* row = rowContainer.newRow();
+      rows.push_back(row);
+
+      for (auto j = 0; j < decodedVectors.size(); ++j) {
+        rowContainer.store(decodedVectors[j], i, row, j);
+      }
+    }
+
+    return rows;
   }
 
   std::vector<char*> store(
@@ -1035,64 +1061,15 @@ TEST_F(RowContainerTest, estimateRowSize) {
   EXPECT_EQ(0x440000, rowContainer->stringAllocator().retainedSize());
 }
 
-class AggregateWithAlignment : public Aggregate {
- public:
-  explicit AggregateWithAlignment(TypePtr resultType, int alignment)
-      : Aggregate(std::move(resultType)), alignment_(alignment) {}
-
-  int32_t accumulatorFixedWidthSize() const override {
-    return 42;
-  }
-
-  int32_t accumulatorAlignmentSize() const override {
-    return alignment_;
-  }
-
-  void initializeNewGroups(
-      char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/) override {}
-
-  void addRawInput(
-      char** /*groups*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void extractValues(
-      char** /*groups*/,
-      int32_t /*numGroups*/,
-      VectorPtr* /*result*/) override {}
-
-  void addIntermediateResults(
-      char** /*groups*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void addSingleGroupRawInput(
-      char* /*group*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void addSingleGroupIntermediateResults(
-      char* /*group*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void extractAccumulators(
-      char** /*groups*/,
-      int32_t /*numGroups*/,
-      VectorPtr* /*result*/) override {}
-
- private:
-  int alignment_;
-};
-
 TEST_F(RowContainerTest, alignment) {
-  AggregateWithAlignment aggregate(BIGINT(), 64);
-  std::vector<Accumulator> accumulators{Accumulator(&aggregate)};
+  std::vector<Accumulator> accumulators{Accumulator(
+      true, // isFixedSize
+      42, // fixedSize
+      false, // usesExternalMemory
+      64, // alignment
+      nullptr, // spillType
+      [](auto, auto) { VELOX_UNREACHABLE(); },
+      [](auto) {})};
   RowContainer data(
       {SMALLINT()},
       true,
@@ -1500,4 +1477,135 @@ TEST_F(RowContainerTest, unknown) {
       [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
         return rowContainer->compareRows(l.second, r.second) < 0;
       }));
+}
+
+TEST_F(RowContainerTest, toString) {
+  std::vector<TypePtr> keyTypes = {BIGINT(), VARCHAR()};
+  std::vector<TypePtr> dependentTypes = {TINYINT(), REAL(), ARRAY(BIGINT())};
+  auto rowContainer =
+      std::make_unique<RowContainer>(keyTypes, dependentTypes, pool_.get());
+
+  EXPECT_EQ(
+      rowContainer->toString(),
+      "Keys: BIGINT, VARCHAR Dependents: TINYINT, REAL, ARRAY<BIGINT> Num rows: 0");
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatVector<std::string>({"summer", "fall", "winter", "spring"}),
+      makeFlatVector<int16_t>({11, 12, 13}),
+      makeFlatVector<float>({0.1, 2.34, 123.003}),
+      makeArrayVectorFromJson<int64_t>({"[1, 2, 3]", "[4, 5]", "null"}),
+  });
+
+  std::vector<DecodedVector> decoded;
+  for (auto i = 0; i < data->childrenSize(); ++i) {
+    decoded.emplace_back(*data->childAt(i));
+  }
+
+  const auto numRows = data->size();
+  std::vector<char*> rows(numRows);
+  for (auto row = 0; row < numRows; ++row) {
+    rows[row] = rowContainer->newRow();
+    for (auto i = 0; i < decoded.size(); ++i) {
+      rowContainer->store(decoded[i], row, rows[row], i);
+    }
+  }
+
+  EXPECT_EQ(
+      rowContainer->toString(),
+      "Keys: BIGINT, VARCHAR Dependents: TINYINT, REAL, ARRAY<BIGINT> Num rows: 3");
+
+  EXPECT_EQ(
+      rowContainer->toString(rows[0]),
+      "{1, summer, 11, 0.10000000149011612, 3 elements starting at 0 {1, 2, 3}}");
+  EXPECT_EQ(
+      rowContainer->toString(rows[1]),
+      "{2, fall, 0, 2.3399999141693115, 2 elements starting at 0 {4, 5}}");
+  EXPECT_EQ(
+      rowContainer->toString(rows[2]),
+      "{3, winter, 12, 123.00299835205078, null}");
+}
+
+TEST_F(RowContainerTest, partialWriteComplexTypedRow) {
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>(1, [](auto row) { return row; }),
+       makeFlatVector<std::string>({"non-inline string"}),
+       makeArrayVector<int64_t>({{1, 2, 3, 4, 5}}),
+       makeMapVector<int64_t, int64_t>({{{4, 41}}}),
+       makeRowVector({makeFlatVector<std::string>({"non-inline string"})})});
+
+  auto rowContainer = std::make_unique<RowContainer>(
+      data->type()->asRow().children(), pool_.get());
+
+  std::vector<DecodedVector> decodedVectors;
+  for (auto& vectorPtr : data->children()) {
+    decodedVectors.emplace_back(*vectorPtr);
+  }
+
+  // No write at all.
+  auto row = rowContainer->newRow();
+  rowContainer->initializeFields(row);
+  rowContainer->eraseRows(folly::Range<char**>(&row, 1));
+
+  row = rowContainer->newRow();
+  rowContainer->initializeFields(row);
+  for (auto i = 0; i < decodedVectors.size(); ++i) {
+    rowContainer->store(decodedVectors[i], 0, row, i);
+  }
+  // Partial writes should not break initializeRow for reuse.
+  rowContainer->initializeRow(row, true);
+  rowContainer->initializeFields(row);
+  for (auto i = 0; i < 3; ++i) {
+    rowContainer->store(decodedVectors[i], 0, row, i);
+  }
+  rowContainer->initializeRow(row, true);
+
+  rowContainer->initializeFields(row);
+  rowContainer->eraseRows(folly::Range<char**>(&row, 1));
+}
+
+TEST_F(RowContainerTest, extractSerializedRow) {
+  VectorFuzzer fuzzer(
+      {
+          .vectorSize = 100,
+          .nullRatio = 0.1,
+      },
+      pool());
+
+  for (auto i = 0; i < 100; ++i) {
+    SCOPED_TRACE(fmt::format("Iteration #: {}", i));
+
+    auto rowType = fuzzer.randRowType();
+    auto data = fuzzer.fuzzInputRow(rowType);
+
+    SCOPED_TRACE(data->toString());
+
+    RowContainer rowContainer{rowType->children(), pool()};
+
+    auto rows = store(rowContainer, data);
+
+    // Extract serialized rows.
+    auto serialized = BaseVector::create<FlatVector<StringView>>(
+        VARBINARY(), data->size(), pool());
+    rowContainer.extractSerializedRows(
+        folly::Range(rows.data(), rows.size()), serialized);
+
+    rowContainer.clear();
+    rows.clear();
+
+    // Load serialized rows back.
+    for (auto i = 0; i < data->size(); ++i) {
+      rows.push_back(rowContainer.newRow());
+      rowContainer.storeSerializedRow(*serialized, i, rows.back());
+    }
+
+    // Extract into regular vector.
+    auto copy = BaseVector::create<RowVector>(rowType, data->size(), pool());
+    for (auto i = 0; i < copy->childrenSize(); ++i) {
+      rowContainer.extractColumn(
+          rows.data(), copy->size(), i, copy->childAt(i));
+    }
+
+    assertEqualVectors(data, copy);
+  }
 }

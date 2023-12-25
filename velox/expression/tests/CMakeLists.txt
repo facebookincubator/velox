@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_expression_test_utility ArgumentTypeFuzzer.cpp
-                                          FuzzerToolkit.cpp)
-
-target_link_libraries(velox_expression_test_utility velox_type
-                      velox_expression_functions gtest)
+add_subdirectory(utils)
 
 add_executable(
   velox_expression_test
@@ -32,8 +28,8 @@ add_executable(
   CoalesceTest.cpp
   ConjunctTest.cpp
   ConstantFlatVectorReaderTest.cpp
+  Main.cpp
   MapWriterTest.cpp
-  ArrayWriterTest.cpp
   ReverseSignatureBinderTest.cpp
   RowWriterTest.cpp
   EvalSimplifiedTest.cpp
@@ -92,7 +88,8 @@ target_link_libraries(
   velox_expression_verifier velox_vector_test_lib velox_vector_fuzzer
   velox_type velox_expression_test_utility)
 
-add_library(velox_expression_fuzzer ExpressionFuzzer.cpp FuzzerRunner.cpp)
+add_library(velox_expression_fuzzer ExpressionFuzzer.cpp FuzzerRunner.cpp
+                                    ExpressionFuzzerVerifier.cpp)
 
 target_link_libraries(
   velox_expression_fuzzer

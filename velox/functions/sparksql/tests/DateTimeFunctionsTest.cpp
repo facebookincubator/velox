@@ -291,7 +291,7 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
 
 TEST_F(DateTimeFunctionsTest, dayOfYear) {
   const auto day = [&](std::optional<int32_t> date) {
-    return evaluateOnce<int64_t, int32_t>("dayofyear(c0)", {date}, {DATE()});
+    return evaluateOnce<int32_t, int32_t>("dayofyear(c0)", {date}, {DATE()});
   };
   EXPECT_EQ(std::nullopt, day(std::nullopt));
   EXPECT_EQ(100, day(parseDate("2016-04-09")));
@@ -301,7 +301,7 @@ TEST_F(DateTimeFunctionsTest, dayOfYear) {
 
 TEST_F(DateTimeFunctionsTest, dayOfMonth) {
   const auto day = [&](std::optional<int32_t> date) {
-    return evaluateOnce<int64_t, int32_t>("dayofmonth(c0)", {date}, {DATE()});
+    return evaluateOnce<int32_t, int32_t>("dayofmonth(c0)", {date}, {DATE()});
   };
   EXPECT_EQ(std::nullopt, day(std::nullopt));
   EXPECT_EQ(30, day(parseDate("2009-07-30")));
@@ -431,5 +431,77 @@ TEST_F(DateTimeFunctionsTest, addMonths) {
       addMonths("2023-07-10", kMax),
       fmt::format("Integer overflow in add_months(2023-07-10, {})", kMax));
 }
+
+TEST_F(DateTimeFunctionsTest, monthDate) {
+  const auto month = [&](const std::string& dateString) {
+    return evaluateOnce<int32_t, int32_t>(
+        "month(c0)", {parseDate(dateString)}, {DATE()});
+  };
+
+  EXPECT_EQ(4, month("2015-04-08"));
+  EXPECT_EQ(11, month("2013-11-08"));
+  EXPECT_EQ(1, month("1987-01-08"));
+  EXPECT_EQ(8, month("1954-08-08"));
+}
+
+TEST_F(DateTimeFunctionsTest, quarterDate) {
+  const auto quarter = [&](const std::string& dateString) {
+    return evaluateOnce<int32_t, int32_t>(
+        "quarter(c0)", {parseDate(dateString)}, {DATE()});
+  };
+
+  EXPECT_EQ(2, quarter("2015-04-08"));
+  EXPECT_EQ(4, quarter("2013-11-08"));
+  EXPECT_EQ(1, quarter("1987-01-08"));
+  EXPECT_EQ(3, quarter("1954-08-08"));
+}
+
+TEST_F(DateTimeFunctionsTest, nextDay) {
+  const auto nextDay = [&](const std::string& date,
+                           const std::string& dayOfWeek) {
+    auto startDates =
+        makeNullableFlatVector<int32_t>({parseDate(date)}, DATE());
+    auto dayOfWeeks = makeNullableFlatVector<std::string>({dayOfWeek});
+
+    auto result = evaluateOnce<int32_t>(
+        fmt::format("next_day(c0, '{}')", dayOfWeek),
+        makeRowVector({startDates}));
+
+    auto anotherResult = evaluateOnce<int32_t>(
+        "next_day(c0, c1)", makeRowVector({startDates, dayOfWeeks}));
+
+    EXPECT_EQ(result, anotherResult);
+    std::optional<std::string> res;
+    if (result.has_value()) {
+      res = DATE()->toString(result.value());
+    }
+    return res;
+  };
+
+  EXPECT_EQ(nextDay("2015-07-23", "Mon"), "2015-07-27");
+  EXPECT_EQ(nextDay("2015-07-23", "mo"), "2015-07-27");
+  EXPECT_EQ(nextDay("2015-07-23", "monday"), "2015-07-27");
+  EXPECT_EQ(nextDay("2015-07-23", "Tue"), "2015-07-28");
+  EXPECT_EQ(nextDay("2015-07-23", "tu"), "2015-07-28");
+  EXPECT_EQ(nextDay("2015-07-23", "tuesday"), "2015-07-28");
+  EXPECT_EQ(nextDay("2015-07-23", "we"), "2015-07-29");
+  EXPECT_EQ(nextDay("2015-07-23", "wed"), "2015-07-29");
+  EXPECT_EQ(nextDay("2015-07-23", "wednesday"), "2015-07-29");
+  EXPECT_EQ(nextDay("2015-07-23", "Thu"), "2015-07-30");
+  EXPECT_EQ(nextDay("2015-07-23", "TH"), "2015-07-30");
+  EXPECT_EQ(nextDay("2015-07-23", "thursday"), "2015-07-30");
+  EXPECT_EQ(nextDay("2015-07-23", "Fri"), "2015-07-24");
+  EXPECT_EQ(nextDay("2015-07-23", "fr"), "2015-07-24");
+  EXPECT_EQ(nextDay("2015-07-23", "friday"), "2015-07-24");
+  EXPECT_EQ(nextDay("2015-07-31", "wed"), "2015-08-05");
+  EXPECT_EQ(nextDay("2015-07-23", "saturday"), "2015-07-25");
+  EXPECT_EQ(nextDay("2015-07-23", "sunday"), "2015-07-26");
+  EXPECT_EQ(nextDay("2015-12-31", "Fri"), "2016-01-01");
+
+  EXPECT_EQ(nextDay("2015-07-23", "xx"), std::nullopt);
+  EXPECT_EQ(nextDay("2015-07-23", "\"quote"), std::nullopt);
+  EXPECT_EQ(nextDay("2015-07-23", ""), std::nullopt);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

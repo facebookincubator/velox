@@ -17,6 +17,7 @@
 
 #include "velox/common/compression/Compression.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
@@ -196,12 +197,14 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::DWRF,
       std::shared_ptr<HiveBucketProperty> bucketProperty = nullptr,
-      std::optional<common::CompressionKind> compressionKind = {})
+      std::optional<common::CompressionKind> compressionKind = {},
+      const std::unordered_map<std::string, std::string>& serdeParameters = {})
       : inputColumns_(std::move(inputColumns)),
         locationHandle_(std::move(locationHandle)),
         tableStorageFormat_(tableStorageFormat),
         bucketProperty_(std::move(bucketProperty)),
-        compressionKind_(compressionKind) {
+        compressionKind_(compressionKind),
+        serdeParameters_(serdeParameters) {
     if (compressionKind.has_value()) {
       VELOX_CHECK(
           compressionKind.value() != common::CompressionKind_MAX,
@@ -226,6 +229,10 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
 
   dwio::common::FileFormat tableStorageFormat() const {
     return tableStorageFormat_;
+  }
+
+  const std::unordered_map<std::string, std::string>& serdeParameters() const {
+    return serdeParameters_;
   }
 
   bool supportsMultiThreading() const override {
@@ -254,6 +261,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const dwio::common::FileFormat tableStorageFormat_;
   const std::shared_ptr<HiveBucketProperty> bucketProperty_;
   const std::optional<common::CompressionKind> compressionKind_;
+  const std::unordered_map<std::string, std::string> serdeParameters_;
 };
 
 /// Parameters for Hive writers.
@@ -346,11 +354,17 @@ struct HiveWriterInfo {
       std::shared_ptr<memory::MemoryPool> _sinkPool,
       std::shared_ptr<memory::MemoryPool> _sortPool)
       : writerParameters(std::move(parameters)),
+        nonReclaimableSectionHolder(new tsan_atomic<bool>(false)),
+        spillStats(new common::SpillStats()),
         writerPool(std::move(_writerPool)),
         sinkPool(std::move(_sinkPool)),
         sortPool(std::move(_sortPool)) {}
 
   const HiveWriterParameters writerParameters;
+  const std::unique_ptr<tsan_atomic<bool>> nonReclaimableSectionHolder;
+  /// Collects the spill stats from sort writer if the spilling has been
+  /// triggered.
+  const std::unique_ptr<common::SpillStats> spillStats;
   const std::shared_ptr<memory::MemoryPool> writerPool;
   const std::shared_ptr<memory::MemoryPool> sinkPool;
   const std::shared_ptr<memory::MemoryPool> sortPool;
@@ -402,7 +416,7 @@ class HiveDataSink : public DataSink {
       std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
-      const std::shared_ptr<const Config>& connectorProperties);
+      const std::shared_ptr<const HiveConfig>& hiveConfig);
 
   static uint32_t maxBucketCount() {
     static const uint32_t kMaxBucketCount = 100'000;
@@ -411,20 +425,28 @@ class HiveDataSink : public DataSink {
 
   void appendData(RowVectorPtr input) override;
 
-  int64_t getCompletedBytes() const override;
+  Stats stats() const override;
 
-  int32_t numWrittenFiles() const override;
+  std::vector<std::string> close() override;
 
-  std::vector<std::string> close(bool success) override;
+  void abort() override;
 
   bool canReclaim() const;
 
  private:
+  enum class State { kRunning = 0, kAborted = 1, kClosed = 2 };
+
+  static std::string stateString(State state);
+
+  // Validates the state transition from 'oldState' to 'newState'.
+  void checkStateTransition(State oldState, State newState);
+  void setState(State newState);
+
   class WriterReclaimer : public exec::MemoryReclaimer {
    public:
     static std::unique_ptr<memory::MemoryReclaimer> create(
-        bool canReclaim,
-        uint64_t flushThresholdBytes);
+        HiveDataSink* dataSink,
+        HiveWriterInfo* writerInfo);
 
     bool reclaimableBytes(
         const memory::MemoryPool& pool,
@@ -433,16 +455,20 @@ class HiveDataSink : public DataSink {
     uint64_t reclaim(
         memory::MemoryPool* pool,
         uint64_t targetBytes,
+        uint64_t maxWaitMs,
         memory::MemoryReclaimer::Stats& stats) override;
 
    private:
-    WriterReclaimer(bool canReclaim, uint64_t flushThresholdBytes)
+    WriterReclaimer(HiveDataSink* dataSink, HiveWriterInfo* writerInfo)
         : exec::MemoryReclaimer(),
-          canReclaim_(canReclaim),
-          flushThresholdBytes_(flushThresholdBytes) {}
+          dataSink_(dataSink),
+          writerInfo_(writerInfo) {
+      VELOX_CHECK_NOT_NULL(dataSink_);
+      VELOX_CHECK_NOT_NULL(writerInfo_);
+    }
 
-    const bool canReclaim_{false};
-    const uint64_t flushThresholdBytes_;
+    HiveDataSink* const dataSink_;
+    HiveWriterInfo* const writerInfo_;
   };
 
   FOLLY_ALWAYS_INLINE bool sortWrite() const {
@@ -465,6 +491,8 @@ class HiveDataSink : public DataSink {
 
   std::shared_ptr<memory::MemoryPool> createWriterPool(
       const HiveWriterId& writerId);
+
+  void setMemoryReclaimers(HiveWriterInfo* writerInfo);
 
   // Compute the partition id and bucket id for each row in 'input'.
   void computePartitionAndBucketIds(const RowVectorPtr& input);
@@ -503,29 +531,20 @@ class HiveDataSink : public DataSink {
 
   HiveWriterParameters::UpdateMode getUpdateMode() const;
 
-  FOLLY_ALWAYS_INLINE bool closedOrAborted() const {
-    VELOX_CHECK(!(closed_ && aborted_));
-    return closed_ || aborted_;
-  }
-
-  FOLLY_ALWAYS_INLINE void checkNotClosed() const {
-    VELOX_CHECK(!closed_, "Hive data sink has been closed");
-  }
-
-  FOLLY_ALWAYS_INLINE void checkNotAborted() const {
-    VELOX_CHECK(!aborted_, "Hive data sink hash been aborted");
+  FOLLY_ALWAYS_INLINE void checkRunning() const {
+    VELOX_CHECK_EQ(state_, State::kRunning, "Hive data sink is not running");
   }
 
   // Invoked to write 'input' to the specified file writer.
   void write(size_t index, const VectorPtr& input);
 
-  void closeInternal(bool abort);
+  void closeInternal();
 
   const RowTypePtr inputType_;
   const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const CommitStrategy commitStrategy_;
-  const std::shared_ptr<const Config> connectorProperties_;
+  const std::shared_ptr<const HiveConfig> hiveConfig_;
   const uint32_t maxOpenWriters_;
   const std::vector<column_index_t> partitionChannels_;
   const std::unique_ptr<PartitionIdGenerator> partitionIdGenerator_;
@@ -537,10 +556,8 @@ class HiveDataSink : public DataSink {
   std::vector<column_index_t> sortColumnIndices_;
   std::vector<CompareFlags> sortCompareFlags_;
 
-  bool closed_{false};
-  bool aborted_{false};
+  State state_{State::kRunning};
 
-  uint32_t numSpillRuns_{0};
   tsan_atomic<bool> nonReclaimableSection_{false};
 
   // The map from writer id to the writer index in 'writers_' and 'writerInfo_'.

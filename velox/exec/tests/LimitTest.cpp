@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -35,18 +36,27 @@ TEST_F(LimitTest, basic) {
   }
   createDuckDbTable(vectors);
 
-  auto makePlan = [&](int32_t offset, int32_t limit) {
+  auto makePlan = [&](int64_t offset, int64_t limit) {
     return PlanBuilder().values(vectors).limit(offset, limit, true).planNode();
   };
 
   assertQuery(makePlan(0, 10), "SELECT * FROM tmp LIMIT 10");
-  assertQuery(makePlan(0, 1'000), "SELECT * FROM tmp LIMIT 1000");
+  int64_t limit = (int64_t)(std::numeric_limits<int32_t>::max()) + 1000000;
+  int64_t offset = (int64_t)(std::numeric_limits<int32_t>::max()) + 1000;
+  assertQuery(
+      makePlan(0, limit), fmt::format("SELECT * FROM tmp LIMIT {}", limit));
   assertQuery(makePlan(0, 1'234), "SELECT * FROM tmp LIMIT 1234");
 
   assertQuery(makePlan(17, 10), "SELECT * FROM tmp OFFSET 17 LIMIT 10");
   assertQuery(makePlan(17, 983), "SELECT * FROM tmp OFFSET 17 LIMIT 983");
-  assertQuery(makePlan(17, 1'000), "SELECT * FROM tmp OFFSET 17 LIMIT 1000");
   assertQuery(makePlan(17, 2'000), "SELECT * FROM tmp OFFSET 17 LIMIT 2000");
+  assertQuery(
+      makePlan(offset, limit),
+      fmt::format("SELECT * FROM tmp OFFSET {} LIMIT {}", offset, limit));
+
+  assertQuery(
+      makePlan(offset, 2000),
+      fmt::format("SELECT * FROM tmp OFFSET {} LIMIT 2000", offset));
 
   assertQuery(makePlan(1'000, 145), "SELECT * FROM tmp OFFSET 1000 LIMIT 145");
   assertQuery(
@@ -96,4 +106,37 @@ TEST_F(LimitTest, limitOverLocalExchange) {
 
   ASSERT_EQ(20, numRead);
   ASSERT_TRUE(waitForTaskCompletion(cursor.task().get()));
+}
+
+TEST_F(LimitTest, partialLimitEagerFlush) {
+  std::vector<RowVectorPtr> batches(
+      10, makeRowVector({makeFlatVector(std::vector<int64_t>(1, 0))}));
+  auto test = [&](bool projectInBetween) {
+    SCOPED_TRACE(fmt::format("projectInBetween={}", projectInBetween));
+    CursorParameters params;
+    auto builder = PlanBuilder().values(batches).limit(0, 10, true);
+    if (projectInBetween) {
+      builder = builder.project({"c0 + 1 as c0"});
+    }
+    params.planNode = builder.partitionedOutput({}, 1).planNode();
+    TaskCursor cursor(params);
+    ASSERT_FALSE(cursor.moveNext());
+    auto bufferManager = exec::OutputBufferManager::getInstance().lock();
+    auto [numPagesPromise, numPagesFuture] = folly::makePromiseContract<int>();
+    ASSERT_TRUE(bufferManager->getData(
+        cursor.task()->taskId(),
+        0,
+        INT32_MAX,
+        0,
+        [numPagesPromise =
+             std::make_shared<folly::Promise<int>>(std::move(numPagesPromise))](
+            std::vector<std::unique_ptr<folly::IOBuf>> pages,
+            int64_t /*sequence*/) {
+          numPagesPromise->setValue(pages.size());
+        }));
+    ASSERT_GE(std::move(numPagesFuture).get(std::chrono::seconds(1)), 10);
+    cursor.task()->requestCancel();
+  };
+  test(true);
+  test(false);
 }

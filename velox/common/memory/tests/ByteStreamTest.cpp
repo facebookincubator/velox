@@ -100,7 +100,7 @@ TEST_F(ByteStreamTest, outputStream) {
   EXPECT_EQ(0, mmapAllocator_->numAllocated());
 }
 
-TEST_F(ByteStreamTest, resetInput) {
+TEST_F(ByteStreamTest, inputStream) {
   uint8_t* const kFakeBuffer = reinterpret_cast<uint8_t*>(this);
   std::vector<ByteRange> byteRanges;
   size_t totalBytes{0};
@@ -110,12 +110,8 @@ TEST_F(ByteStreamTest, resetInput) {
     totalBytes += 4096 + i;
   }
   lastRangeEnd = byteRanges.back().size;
-  ByteStream byteStream;
-  ASSERT_EQ(byteStream.size(), 0);
-  ASSERT_EQ(byteStream.lastRangeEnd(), 0);
-  byteStream.resetInput(std::move(byteRanges));
+  ByteInputStream byteStream(std::move(byteRanges));
   ASSERT_EQ(byteStream.size(), totalBytes);
-  ASSERT_EQ(byteStream.lastRangeEnd(), lastRangeEnd);
 }
 
 TEST_F(ByteStreamTest, remainingSize) {
@@ -128,8 +124,7 @@ TEST_F(ByteStreamTest, remainingSize) {
     byteRanges.push_back(
         ByteRange{reinterpret_cast<uint8_t*>(buffers.back()), kBufferSize, 0});
   }
-  ByteStream byteStream;
-  byteStream.resetInput(std::move(byteRanges));
+  ByteInputStream byteStream(std::move(byteRanges));
   const int32_t kReadBytes = 2048;
   int32_t remainingSize = kSize * kBufferSize;
   uint8_t* tempBuffer = reinterpret_cast<uint8_t*>(pool_->allocate(kReadBytes));
@@ -155,19 +150,19 @@ TEST_F(ByteStreamTest, toString) {
     byteRanges.push_back(
         ByteRange{reinterpret_cast<uint8_t*>(buffers.back()), kBufferSize, 0});
   }
-  ByteStream byteStream;
-  byteStream.resetInput(std::move(byteRanges));
+  ByteInputStream byteStream(std::move(byteRanges));
   const int32_t kReadBytes = 2048;
   uint8_t* tempBuffer = reinterpret_cast<uint8_t*>(pool_->allocate(kReadBytes));
   for (int32_t i = 0; i < kSize / 2; i++) {
     byteStream.readBytes(tempBuffer, kReadBytes);
   }
-  std::string byteStreamStr = byteStream.toString();
+
   EXPECT_EQ(
-      byteStreamStr,
-      "ByteStream[lastRangeEnd 4096, 10 ranges "
+      byteStream.toString(),
+      "10 ranges "
       "(position/size) [(4096/4096),(4096/4096),(2048/4096 current),"
-      "(0/4096),(0/4096),(0/4096),(0/4096),(0/4096),(0/4096),(0/4096)]]");
+      "(0/4096),(0/4096),(0/4096),(0/4096),(0/4096),(0/4096),(0/4096)]");
+
   for (int32_t i = 0; i < kSize; i++) {
     pool_->free(buffers[i], kBufferSize);
   }
@@ -241,7 +236,7 @@ TEST_F(ByteStreamTest, newRangeAllocation) {
 
     const auto prevAllocCount = pool_->stats().numAllocs;
     auto arena = newArena();
-    ByteStream byteStream(arena.get());
+    ByteOutputStream byteStream(arena.get());
     byteStream.startWrite(0);
     for (int i = 0; i < testData.newRangeSizes.size(); ++i) {
       const auto newRangeSize = testData.newRangeSizes[i];
@@ -249,8 +244,8 @@ TEST_F(ByteStreamTest, newRangeAllocation) {
           "iteration {} allocation size {}",
           i,
           succinctBytes(testData.newRangeSizes[i])));
-      byteStream.appendStringPiece(
-          folly::StringPiece(std::string(newRangeSize, 'a')));
+      std::string value(newRangeSize, 'a');
+      byteStream.appendStringView(value);
       ASSERT_EQ(arena->size(), testData.expectedArenaAllocationSizes[i]);
       ASSERT_EQ(
           pool_->stats().numAllocs - prevAllocCount,
@@ -265,9 +260,9 @@ TEST_F(ByteStreamTest, newRangeAllocation) {
 TEST_F(ByteStreamTest, randomRangeAllocationFromMultiStreamsTest) {
   auto arena = newArena();
   const int numByteStreams = 10;
-  std::vector<std::unique_ptr<ByteStream>> byteStreams;
+  std::vector<std::unique_ptr<ByteOutputStream>> byteStreams;
   for (int i = 0; i < numByteStreams; ++i) {
-    byteStreams.push_back(std::make_unique<ByteStream>(arena.get()));
+    byteStreams.push_back(std::make_unique<ByteOutputStream>(arena.get()));
     byteStreams.back()->startWrite(0);
   }
   const int testIterations = 1000;
@@ -284,9 +279,76 @@ TEST_F(ByteStreamTest, randomRangeAllocationFromMultiStreamsTest) {
       } break;
       case 2: {
         const int size = folly::Random::rand32(rng_) % 8192 + 1;
-        byteStream->appendStringPiece(
-            folly::StringPiece(std::string(size, 'a')));
+        const std::string value(size, 'a');
+        byteStream->appendStringView(value);
       } break;
     }
   }
+}
+
+TEST_F(ByteStreamTest, bits) {
+  std::vector<uint64_t> bits;
+  uint64_t seed = 0x12345689abcdefLLU;
+  for (auto i = 0; i < 1000; ++i) {
+    bits.push_back(seed * (i + 1));
+  }
+  auto arena = newArena();
+  ByteOutputStream bitStream(arena.get(), true);
+  bitStream.startWrite(11);
+  int32_t offset = 0;
+  // Odd number of sizes.
+  std::vector<int32_t> bitSizes = {1, 19, 52, 58, 129};
+  int32_t counter = 0;
+  auto totalBits = bits.size() * 64;
+  while (offset < totalBits) {
+    // Every second uses the fast path for aligned source and append only.
+    auto numBits = std::min<int32_t>(
+        totalBits - offset, bitSizes[counter % bitSizes.size()]);
+    if (counter % 1 == 0) {
+      bitStream.appendBits(bits.data(), offset, offset + numBits);
+    } else {
+      uint64_t aligned[10];
+      bits::copyBits(bits.data(), offset, aligned, 0, numBits);
+      bitStream.appendBitsFresh(aligned, 0, numBits);
+    }
+    offset += numBits;
+    ++counter;
+  }
+  std::stringstream stringStream;
+  OStreamOutputStream out(&stringStream);
+  bitStream.flush(&out);
+  EXPECT_EQ(
+      0,
+      memcmp(
+          stringStream.str().data(),
+          bits.data(),
+          bits.size() * sizeof(bits[0])));
+}
+
+TEST_F(ByteStreamTest, appendWindow) {
+  Scratch scratch;
+  std::vector<uint64_t> words;
+  uint64_t seed = 0x12345689abcdefLLU;
+  for (auto i = 0; i < 1000; ++i) {
+    words.push_back(seed * (i + 1));
+  }
+  auto arena = newArena();
+
+  ByteOutputStream stream(arena.get());
+  int32_t offset = 0;
+  std::vector<int32_t> sizes = {1, 19, 52, 58, 129};
+  int32_t counter = 0;
+  while (offset < words.size()) {
+    auto numWords =
+        std::min<int32_t>(words.size() - offset, sizes[counter % sizes.size()]);
+    AppendWindow<uint64_t> window(stream, scratch);
+    auto ptr = window.get(numWords);
+    memcpy(ptr, words.data() + offset, numWords * sizeof(words[0]));
+    offset += numWords;
+    ++counter;
+  }
+  std::stringstream stringStream;
+  OStreamOutputStream out(&stringStream);
+  stream.flush(&out);
+  EXPECT_EQ(0, memcmp(stringStream.str().data(), words.data(), words.size()));
 }

@@ -17,7 +17,6 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveIntegerColumnReader.h"
-#include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 
 namespace facebook::velox::parquet {
 
@@ -35,7 +34,8 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
             std::move(fileType)) {}
 
   bool hasBulkPath() const override {
-    return !this->fileType().type()->isLongDecimal() &&
+    return !formatData_->as<ParquetData>().isDeltaBinaryPacked() &&
+        !this->fileType().type()->isLongDecimal() &&
         ((this->fileType().type()->isShortDecimal())
              ? formatData_->as<ParquetData>().hasDictionary()
              : true);
@@ -51,6 +51,17 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
   uint64_t skip(uint64_t numValues) override {
     formatData_->as<ParquetData>().skip(numValues);
     return numValues;
+  }
+
+  void getValues(RowSet rows, VectorPtr* result) override {
+    auto& fileType = static_cast<const ParquetTypeWithId&>(*fileType_);
+    auto logicalType = fileType.logicalType_;
+    if (logicalType.has_value() && logicalType.value().__isset.INTEGER &&
+        !logicalType.value().INTEGER.isSigned) {
+      getUnsignedIntValues(rows, requestedType_, result);
+    } else {
+      getIntValues(rows, requestedType_, result);
+    }
   }
 
   void read(

@@ -20,6 +20,7 @@
 
 #include <fmt/format.h>
 #include <folly/chrono/Hardware.h>
+#include <folly/container/F14Set.h>
 #include <folly/futures/SharedPromise.h>
 #include "folly/GLog.h"
 #include "velox/common/base/BitUtil.h"
@@ -30,6 +31,7 @@
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/caching/StringIdMap.h"
 #include "velox/common/file/File.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryAllocator.h"
 
 namespace facebook::velox::cache {
@@ -235,6 +237,10 @@ class AsyncDataCacheEntry {
 
   uint64_t ssdOffset() const {
     return ssdOffset_;
+  }
+
+  bool ssdSaveable() const {
+    return ssdSaveable_;
   }
 
   void setTrackingId(TrackingId id) {
@@ -503,12 +509,18 @@ struct CacheStats {
   // Number of times a user waited for an entry to transit from exclusive to
   // shared mode.
   int64_t numWaitExclusive{0};
+  // Total number of entries that are aged out and beyond TTL.
+  int64_t numAgedOut{};
   // Cumulative clocks spent in allocating or freeing memory for backing cache
   // entries.
   uint64_t allocClocks{0};
   // Sum of scores of evicted entries. This serves to infer an average
   // lifetime for entries in cache.
   int64_t sumEvictScore{0};
+
+  // Total size of shared/exclusive pinned entries.
+  int64_t sharedPinnedBytes{0};
+  int64_t exclusivePinnedBytes{0};
 
   std::shared_ptr<SsdCacheStats> ssdStats = nullptr;
 
@@ -544,17 +556,17 @@ class CacheShard {
   /// graceful shutdown. The shard will no longer be valid after this call.
   void shutdown();
 
-  // removes 'bytesToFree' worth of entries or as many entries as are
-  // not pinned. This favors first removing older and less frequently
-  // used entries. If 'evictAllUnpinned' is true, anything that is
-  // not pinned is evicted at first sight. This is for out of memory
-  // emergencies. If 'pagesToAcquire' is set, up to this amount is added to
-  // 'allocation'. A smaller amount can be added if not enough evictable data is
-  // found.
-  void evict(
+  /// removes 'bytesToFree' worth of entries or as many entries as are
+  /// not pinned. This favors first removing older and less frequently
+  /// used entries. If 'evictAllUnpinned' is true, anything that is
+  /// not pinned is evicted at first sight. This is for out of memory
+  /// emergencies. If 'pagesToAcquire' is set, up to this amount is added
+  /// to 'allocation'. A smaller amount can be added if not enough evictable
+  /// data is found. The function returns the total evicted bytes.
+  uint64_t evict(
       uint64_t bytesToFree,
       bool evictAllUnpinned,
-      int32_t pagesToAcquire,
+      memory::MachinePageCount pagesToAcquire,
       memory::Allocation& acquiredAllocation);
 
   // Removes 'entry' from 'this'. Removes a possible promise from the entry
@@ -572,6 +584,14 @@ class CacheShard {
   // are pinned for read. 'pins' should be written or dropped before
   // calling this a second time.
   void appendSsdSaveable(std::vector<CachePin>& pins);
+
+  /// Remove cache entries from this shard for files in the fileNum set
+  /// 'filesToRemove'. If successful, return true, and 'filesRetained' contains
+  /// entries that should not be removed, ex., in exclusive mode or in shared
+  /// mode. Otherwise, return false and 'filesRetained' could be ignored.
+  bool removeFileEntries(
+      const folly::F14FastSet<uint64_t>& filesToRemove,
+      folly::F14FastSet<uint64_t>& filesRetained);
 
   auto& allocClocks() {
     return allocClocks_;
@@ -628,6 +648,8 @@ class CacheShard {
   // Count of entries considered for eviction. This divided by
   // 'numEvict_' measured efficiency of eviction.
   uint64_t numEvictChecks_{0};
+  // Count of entries aged out due to TTL.
+  uint64_t numAgedOut_{};
   // Sum of evict scores. This divided by 'numEvict_' correlates to
   // time data stays in cache.
   uint64_t sumEvictScore_{0};
@@ -667,6 +689,8 @@ class AsyncDataCache : public memory::Cache {
       memory::MachinePageCount numPages,
       std::function<bool(memory::Allocation& allocation)> allocate) override;
 
+  uint64_t shrink(uint64_t targetBytes) override;
+
   memory::MemoryAllocator* allocator() const override {
     return allocator_;
   }
@@ -690,9 +714,13 @@ class AsyncDataCache : public memory::Cache {
   /// Returns true if there is an entry for 'key'. Updates access time.
   bool exists(RawFileCacheKey key) const;
 
+  /// Returns snapshot of the aggregated stats from all shards and the stats of
+  /// SSD cache if used.
   CacheStats refreshStats() const;
 
-  std::string toString() const;
+  /// If 'details' is true, returns the stats of the backing memory allocator
+  /// and ssd cache. Otherwise, only returns the cache stats.
+  std::string toString(bool details = true) const;
 
   memory::MachinePageCount incrementCachedPages(int64_t pages) {
     // The counter is unsigned and the increment is signed.
@@ -757,6 +785,14 @@ class AsyncDataCache : public memory::Cache {
   tsan_atomic<int32_t>& numSkippedSaves() {
     return numSkippedSaves_;
   }
+
+  /// Remove cache entries from all shards for files in the fileNum set
+  /// 'filesToRemove'. If successful, return true, and 'filesRetained' contains
+  /// entries that should not be removed, ex., in exclusive mode or in shared
+  /// mode. Otherwise, return false and 'filesRetained' could be ignored.
+  bool removeFileEntries(
+      const folly::F14FastSet<uint64_t>& filesToRemove,
+      folly::F14FastSet<uint64_t>& filesRetained);
 
  private:
   static constexpr int32_t kNumShards = 4; // Must be power of 2.
