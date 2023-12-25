@@ -146,6 +146,43 @@ class StreamingAggregationTest : public OperatorTestBase {
             "SELECT c0, max(c1 order by c2), max(c1 order by c2 desc), array_agg(c1 order by c2) FROM tmp GROUP BY c0");
   }
 
+  void testDistinctAggregation(
+      const std::vector<VectorPtr>& keys,
+      uint32_t outputBatchSize = 1'024) {
+    std::vector<RowVectorPtr> data;
+
+    vector_size_t totalSize = 0;
+    for (const auto& keyVector : keys) {
+      auto size = keyVector->size();
+      auto payload = makeFlatVector<int32_t>(
+          size, [totalSize](auto row) { return totalSize + row; });
+      data.push_back(makeRowVector({keyVector, payload, payload}));
+      totalSize += size;
+    }
+    createDuckDbTable(data);
+
+    auto plan = PlanBuilder()
+                    .values(data)
+                    .streamingAggregation(
+                        {"c0"},
+                        {"array_agg(distinct c1)",
+                         "array_agg(c1 order by c2)",
+                         "min(c1)",
+                         "array_agg(c2)"},
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        false)
+                    .planNode();
+
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows,
+            std::to_string(outputBatchSize))
+        .assertResults(
+            "SELECT c0, array_agg(distinct c1), array_agg(c1 order by c2), "
+            "min(c1), array_agg(c2) FROM tmp GROUP BY c0");
+  }
+
   std::vector<RowVectorPtr> addPayload(const std::vector<RowVectorPtr>& keys) {
     auto numKeys = keys[0]->type()->size();
 
@@ -385,22 +422,17 @@ TEST_F(StreamingAggregationTest, sortedAggregations) {
 }
 
 TEST_F(StreamingAggregationTest, distinctAggregations) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row / 4; }),
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row % 3; }),
-  });
+  auto size = 128;
 
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .streamingAggregation(
-                      {"c0"},
-                      {"array_agg(distinct c1)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
+  std::vector<VectorPtr> keys = {
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(size, [size](auto row) { return (size + row); }),
+      makeFlatVector<int32_t>(
+          size, [size](auto row) { return (2 * size + row); }),
+      makeFlatVector<int32_t>(
+          78, [size](auto row) { return (3 * size + row); }),
+  };
 
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
-      "Streaming aggregation doesn't support aggregations over distinct inputs yet");
+  testDistinctAggregation(keys);
+  testDistinctAggregation(keys, 32);
 }
