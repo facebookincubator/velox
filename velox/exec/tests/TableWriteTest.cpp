@@ -2463,11 +2463,11 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
       if (commitStrategy_ == CommitStrategy::kNoCommit) {
         ASSERT_EQ(writeFileName, targetFileName);
       } else {
-        std::string suffix = ".parquet";
-        if (folly::StringPiece(targetFileName).endsWith(suffix)) {
+        const std::string kParquetSuffix  = ".parquet";
+        if (folly::StringPiece(targetFileName).endsWith(kParquetSuffix)) {
           // Remove the .parquet suffix.
           auto trimmedFilename =
-              targetFileName.substr(0, targetFileName.size() - suffix.size());
+              targetFileName.substr(0, targetFileName.size() - kParquetSuffix.size());
           ASSERT_TRUE(writeFileName.find(trimmedFilename) != std::string::npos);
         } else {
           ASSERT_TRUE(writeFileName.find(targetFileName) != std::string::npos);
