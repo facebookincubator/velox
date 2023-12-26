@@ -158,14 +158,20 @@ std::string FileUtils::unescapePathName(const std::string& data) {
 }
 
 std::string FileUtils::makePartName(
-    const std::vector<std::pair<std::string, std::string>>& entries) {
+    const std::vector<std::pair<std::string, std::string>>& entries,
+    bool partitionPathAsLowerCase) {
   size_t size = 0;
   size_t escapeCount = 0;
   std::for_each(entries.begin(), entries.end(), [&](auto& pair) {
     auto keySize = pair.first.size();
     DWIO_ENSURE_GT(keySize, 0);
     size += keySize;
-    escapeCount += countEscape(pair.first);
+    if (partitionPathAsLowerCase) {
+      escapeCount += countEscape(toLower(pair.first));
+    } else {
+      escapeCount += countEscape(pair.first);
+    }
+
     auto valSize = pair.second.size();
     if (valSize == 0) {
       size += DEFAULT_PARTITION_VALUE.size();

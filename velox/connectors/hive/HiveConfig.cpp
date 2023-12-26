@@ -148,6 +148,11 @@ bool HiveConfig::isFileColumnNamesReadAsLowerCase(const Config* session) const {
   return config_->get<bool>(kFileColumnNamesReadAsLowerCase, false);
 }
 
+bool HiveConfig::isPartitionPathAsLowerCaseSession(
+    const Config* session) const {
+  return config_->get<bool>(kPartitionPathAsLowerCaseSession, true);
+}
+
 int64_t HiveConfig::maxCoalescedBytes() const {
   return config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20);
 }
