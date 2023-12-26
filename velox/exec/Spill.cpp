@@ -65,9 +65,8 @@ int32_t SpillMergeStream::compare(const MergeStream& other) const {
 }
 
 SpillState::SpillState(
-    common::GetSpillDirectoryPathCB getSpillDirPathCb,
-    const common::UpdateSpilledBytesAndCheckLimitCB&
-        updateSpilledBytesAndCheckLimitCb,
+    const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
+    const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     const std::string& fileNamePrefix,
     int32_t maxPartitions,
     int32_t numSortKeys,
@@ -79,7 +78,7 @@ SpillState::SpillState(
     folly::Synchronized<common::SpillStats>* stats,
     const std::string& fileCreateConfig)
     : getSpillDirPathCb_(getSpillDirPathCb),
-      updateSpilledBytesAndCheckLimitCb_(updateSpilledBytesAndCheckLimitCb),
+      updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
       fileNamePrefix_(fileNamePrefix),
       maxPartitions_(maxPartitions),
       numSortKeys_(numSortKeys),
@@ -131,9 +130,9 @@ uint64_t SpillState::appendToPartition(
         targetFileSize_,
         writeBufferSize_,
         fileCreateConfig_,
+        updateAndCheckSpillLimitCb_,
         pool_,
-        stats_,
-        updateSpilledBytesAndCheckLimitCb_);
+        stats_);
   }
 
   updateSpilledInputBytes(rows->estimateFlatSize());

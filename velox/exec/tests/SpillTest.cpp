@@ -418,7 +418,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
   std::unique_ptr<SpillState> state_;
   std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
   std::unique_ptr<TestRuntimeStatWriter> statWriter_;
-  common::UpdateSpilledBytesAndCheckLimitCB updateSpilledBytesCb_;
+  common::UpdateAndCheckSpillLimitCB updateSpilledBytesCb_;
 };
 
 TEST_P(SpillTest, spillState) {

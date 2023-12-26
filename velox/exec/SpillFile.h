@@ -118,10 +118,9 @@ class SpillWriter {
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       const std::string& fileCreateConfig,
+      common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* stats,
-      common::UpdateSpilledBytesAndCheckLimitCB&
-          updateSpilledBytesAndCheckLimitCb);
+      folly::Synchronized<common::SpillStats>* stats);
 
   /// Adds 'rows' for the positions in 'indices' into 'this'. The indices
   /// must produce a view where the rows are sorted if sorting is desired.
@@ -183,6 +182,10 @@ class SpillWriter {
   const uint64_t targetFileSize_;
   const uint64_t writeBufferSize_;
   const std::string fileCreateConfig_;
+
+  // A callback function that updates the spilled bytes query level, which
+  // would throw if exceeds the maxSpillBytes limitation.
+  common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
 
@@ -191,10 +194,6 @@ class SpillWriter {
   std::unique_ptr<VectorStreamGroup> batch_;
   std::unique_ptr<SpillWriteFile> currentFile_;
   SpillFiles finishedFiles_;
-
-  // A callback function that updates the spilled bytes query level, which
-  // would throw if exceeds the maxSpillBytes limitation.
-  common::UpdateSpilledBytesAndCheckLimitCB updateSpilledBytesAndCheckLimitCb_;
 };
 
 /// Input stream backed by spill file.

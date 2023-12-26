@@ -28,13 +28,13 @@ using GetSpillDirectoryPathCB = std::function<const std::string&()>;
 
 /// Defining type for a callback function that updates the spilled bytes in
 /// query level, which would throw if exceeds the maxSpillBytes limitation.
-using UpdateSpilledBytesAndCheckLimitCB = std::function<void(uint64_t)>;
+using UpdateAndCheckSpillLimitCB = std::function<void(uint64_t)>;
 
 /// Specifies the config for spilling.
 struct SpillConfig {
   SpillConfig(
       GetSpillDirectoryPathCB _getSpillDirPathCb,
-      UpdateSpilledBytesAndCheckLimitCB _updateSpilledBytesAndCheckLimitCb,
+      UpdateAndCheckSpillLimitCB _updateAndCheckSpillLimitCb,
       std::string _filePath,
       uint64_t _maxFileSize,
       uint64_t _writeBufferSize,
@@ -67,7 +67,7 @@ struct SpillConfig {
 
   /// A callback function that updates the spilled bytes query level, which
   /// would throw if exceeds the maxSpillBytes limitation.
-  UpdateSpilledBytesAndCheckLimitCB updateSpilledBytesAndCheckLimitCb;
+  UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb;
 
   /// Prefix for spill files.
   std::string fileNamePrefix;

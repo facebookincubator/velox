@@ -81,12 +81,11 @@ QueryCtx::QueryCtx(
 
 void QueryCtx::updateSpilledBytesAndCheckLimit(uint64_t bytes) {
   const auto numSpilledBytes = numSpilledBytes_.fetch_add(bytes) + bytes;
-  if (queryConfig_.maxSpillBytes() > 0) {
-    VELOX_USER_CHECK_LE(
-        numSpilledBytes,
-        queryConfig_.maxSpillBytes(),
-        "Query exceeded per-query local spill limit of {}.",
-        succinctBytes(queryConfig_.maxSpillBytes()));
+  if (queryConfig_.maxSpillBytes() > 0 &&
+      numSpilledBytes > queryConfig_.maxSpillBytes()) {
+    VELOX_SPILL_LIMIT_EXCEEDED(fmt::format(
+        "Query exceeded per-query local spill limit of {}",
+        succinctBytes(queryConfig_.maxSpillBytes())));
   }
 }
 

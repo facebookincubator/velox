@@ -320,9 +320,8 @@ class SpillState {
   /// target size of a single file.  'pool' owns the memory for state and
   /// results.
   SpillState(
-      common::GetSpillDirectoryPathCB getSpillDirectoryPath,
-      const common::UpdateSpilledBytesAndCheckLimitCB&
-          updateSpilledBytesAndCheckLimitCb,
+      const common::GetSpillDirectoryPathCB& getSpillDirectoryPath,
+      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       const std::string& fileNamePrefix,
       int32_t maxPartitions,
       int32_t numSortKeys,
@@ -410,7 +409,7 @@ class SpillState {
 
   // A callback function that updates the spilled bytes query level, which
   // would throw if exceeds the maxSpillBytes limitation.
-  common::UpdateSpilledBytesAndCheckLimitCB updateSpilledBytesAndCheckLimitCb_;
+  common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb_;
 
   /// Prefix for spill files.
   const std::string fileNamePrefix_;

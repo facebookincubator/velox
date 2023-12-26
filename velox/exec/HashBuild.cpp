@@ -239,7 +239,7 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       tableType_,
       std::move(hashBits),
       spillConfig.getSpillDirPathCb,
-      spillConfig.updateSpilledBytesAndCheckLimitCb,
+      spillConfig.updateAndCheckSpillLimitCb,
       spillConfig.fileNamePrefix,
       spillConfig.maxFileSize,
       spillConfig.writeBufferSize,

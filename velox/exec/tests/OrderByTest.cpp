@@ -227,18 +227,6 @@ class OrderByTest : public OperatorTestBase {
         ->testingSetCapacity(oldCapacity);
   }
 
-  std::vector<RowVectorPtr>
-  createVectors(const RowTypePtr& type, size_t vectorSize, uint64_t byteSize) {
-    VectorFuzzer fuzzer({.vectorSize = vectorSize}, pool());
-    uint64_t totalSize{0};
-    std::vector<RowVectorPtr> vectors;
-    while (totalSize < byteSize) {
-      vectors.push_back(fuzzer.fuzzInputRow(type));
-      totalSize += vectors.back()->estimateFlatSize();
-    }
-    return vectors;
-  }
-
   folly::Random::DefaultGenerator rng_;
   memory::MemoryReclaimer::Stats reclaimerStats_;
 };
@@ -497,7 +485,6 @@ TEST_F(OrderByTest, spill) {
                   .config(
                       QueryConfig::kOrderBySpillMemoryThreshold,
                       std::to_string(32 << 20))
-                  .config(QueryConfig::kMaxSpillBytes, std::to_string(1))
                   .assertResults(expectedResult);
   auto taskStats = exec::toPlanStats(task->taskStats());
   auto& planStats = taskStats.at(orderNodeId);
@@ -1361,50 +1348,42 @@ TEST_F(OrderByTest, maxSpillBytes) {
           .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
           .capturePlanNodeId(orderNodeId)
           .planNode();
-  const auto expectedResult = AssertQueryBuilder(plan).copyResults(pool_.get());
-
   auto spillDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
 
-  // Default maxSpillBytes is greater than the input size.
-  AssertQueryBuilder(plan)
-      .spillDirectory(spillDirectory->path)
-      .queryCtx(queryCtx)
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(core::QueryConfig::kOrderBySpillEnabled, "true")
-      // Set a small capacity to trigger threshold based spilling
-      .config(
-          QueryConfig::kOrderBySpillMemoryThreshold, std::to_string(5 << 20))
-      .copyResults(pool_.get());
-
-  auto testSpill = [&](int32_t maxSpilledBytes) {
-    AssertQueryBuilder(plan)
-        .spillDirectory(spillDirectory->path)
-        .queryCtx(queryCtx)
-        .config(core::QueryConfig::kSpillEnabled, "true")
-        .config(core::QueryConfig::kOrderBySpillEnabled, "true")
-        // Set a small capacity to trigger threshold based spilling
-        .config(
-            QueryConfig::kOrderBySpillMemoryThreshold, std::to_string(5 << 20))
-        .config(QueryConfig::kMaxSpillBytes, std::to_string(maxSpilledBytes))
-        .copyResults(pool_.get());
-  };
-
   struct {
     int32_t maxSpilledBytes;
+    bool expectedExceedLimit;
     std::string debugString() const {
       return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
     }
-  } testSettings[] = {{16 << 20}, {0}};
+  } testSettings[] = {{1 << 30, false}, {16 << 20, true}, {0, false}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    if (testData.maxSpilledBytes != 0) {
-      VELOX_ASSERT_THROW(
-          testSpill(testData.maxSpilledBytes),
-          "Query exceeded per-query local spill limit of 16.00MB");
-    } else {
-      testSpill(testData.maxSpilledBytes);
+    try {
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->path)
+          .queryCtx(queryCtx)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+          // Set a small capacity to trigger threshold based spilling
+          .config(
+              QueryConfig::kOrderBySpillMemoryThreshold,
+              std::to_string(5 << 20))
+          .config(
+              QueryConfig::kMaxSpillBytes,
+              std::to_string(testData.maxSpilledBytes))
+          .copyResults(pool_.get());
+      ASSERT_FALSE(testData.expectedExceedLimit);
+    } catch (const VeloxRuntimeError& e) {
+      ASSERT_TRUE(testData.expectedExceedLimit);
+      ASSERT_NE(
+          e.message().find(
+              "Query exceeded per-query local spill limit of 16.00MB"),
+          std::string::npos);
+      ASSERT_EQ(
+          e.errorCode(), facebook::velox::error_code::kSpillLimitExceeded);
     }
   }
 }

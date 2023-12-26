@@ -299,9 +299,10 @@ Spilling
      - The maximum allowed spill file size. Zero means unlimited.
    * - max_spill_bytes
      - integer
-     - 109951162777600
-     - The max bytes to fill for each query. This is used to cap the storage used for spilling. If it is zero, then
-       there is no limit and spilling might exhaust the storage. The default value is set to 100 TB.
+     - 107374182400
+     - The max spill bytes limit set for each query. This is used to cap the storage used for spilling.
+       If it is zero, then there is no limit and spilling might exhaust the storage or takes too long to run.
+       The default value is set to 100 GB.
    * - spill_write_buffer_size
      - integer
      - 4MB

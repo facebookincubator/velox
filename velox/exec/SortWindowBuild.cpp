@@ -146,7 +146,7 @@ void SortWindowBuild::setupSpiller() {
       spillCompareFlags_.size(),
       spillCompareFlags_,
       spillConfig_->getSpillDirPathCb,
-      spillConfig_->updateSpilledBytesAndCheckLimitCb,
+      spillConfig_->updateAndCheckSpillLimitCb,
       spillConfig_->fileNamePrefix,
       spillConfig_->writeBufferSize,
       spillConfig_->compressionKind,

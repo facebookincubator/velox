@@ -244,9 +244,10 @@ class QueryConfig {
   /// which uses ~128MB memory when to fill a spill run.
   static constexpr const char* kMaxSpillRunRows = "max_spill_run_rows";
 
-  /// The max bytes to fill for each query. This is used to cap the storage used
-  /// for spilling. If it is zero, then there is no limit and spilling might
-  /// exhaust the storage. The default value is set to 100 TB.
+  /// The max spill bytes limit set for each query. This is used to cap the
+  /// storage used for spilling. If it is zero, then there is no limit and
+  /// spilling might exhaust the storage or takes too long to run. The default
+  /// value is set to 100 GB.
   static constexpr const char* kMaxSpillBytes = "max_spill_bytes";
 
   static constexpr const char* kTestingSpillPct = "testing.spill_pct";
@@ -416,12 +417,12 @@ class QueryConfig {
   }
 
   uint64_t maxSpillRunRows() const {
-    static constexpr uint64_t kDefault = 12L << 20;
+    static constexpr uint64_t kDefault = 12UL << 20;
     return get<uint64_t>(kMaxSpillRunRows, kDefault);
   }
 
   uint64_t maxSpillBytes() const {
-    static constexpr uint64_t kDefault = 100L << 30;
+    static constexpr uint64_t kDefault = 100UL << 30;
     return get<uint64_t>(kMaxSpillBytes, kDefault);
   }
 
