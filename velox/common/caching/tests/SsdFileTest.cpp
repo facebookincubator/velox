@@ -16,10 +16,10 @@
 
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
+#include "velox/common/memory/MmapAllocator.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <folly/executors/QueuedImmediateExecutor.h>
-#include <glog/logging.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
@@ -46,6 +46,10 @@ class SsdFileTest : public testing::Test {
       ssdFile_->deleteFile();
     }
     if (cache_) {
+      auto ssdCache = cache_->ssdCache();
+      if (ssdCache) {
+        ssdCache->testingDeleteFiles();
+      }
       cache_->shutdown();
     }
   }
@@ -54,9 +58,18 @@ class SsdFileTest : public testing::Test {
       int64_t maxBytes,
       int64_t ssdBytes = 0,
       bool setNoCowFlag = false) {
+    if (cache_ != nullptr) {
+      cache_->shutdown();
+    }
+    cache_.reset();
+    allocator_.reset();
+
     // tmpfs does not support O_DIRECT, so turn this off for testing.
     FLAGS_ssd_odirect = false;
-    cache_ = AsyncDataCache::create(MemoryAllocator::getInstance());
+    allocator_ = std::make_shared<facebook::velox::memory::MmapAllocator>(
+        facebook::velox::memory::MmapAllocator::Options{
+            .capacity = 1024L * 1024L});
+    cache_ = AsyncDataCache::create(allocator_.get());
 
     fileName_ = StringIdLease(fileIds(), "fileInStorage");
 
@@ -227,6 +240,7 @@ class SsdFileTest : public testing::Test {
   std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
 
   std::shared_ptr<AsyncDataCache> cache_;
+  std::shared_ptr<MemoryAllocator> allocator_;
   StringIdLease fileName_;
 
   std::unique_ptr<SsdFile> ssdFile_;
