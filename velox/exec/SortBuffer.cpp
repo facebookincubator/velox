@@ -269,15 +269,8 @@ void SortBuffer::spillInput() {
         spillerStoreType_,
         data_->keyTypes().size(),
         sortCompareFlags_,
-        spillConfig_->getSpillDirPathCb,
-        spillConfig_->updateAndCheckSpillLimitCb,
-        spillConfig_->fileNamePrefix,
-        spillConfig_->writeBufferSize,
-        spillConfig_->compressionKind,
-        memory::spillMemoryPool(),
-        spillConfig_->executor,
-        spillConfig_->maxSpillRunRows,
-        spillConfig_->fileCreateConfig);
+        spillConfig_,
+        memory::spillMemoryPool());
   }
   spiller_->spill();
   data_->clear();
@@ -297,15 +290,8 @@ void SortBuffer::spillOutput() {
       Spiller::Type::kOrderByOutput,
       data_.get(),
       spillerStoreType_,
-      spillConfig_->getSpillDirPathCb,
-      spillConfig_->updateAndCheckSpillLimitCb,
-      spillConfig_->fileNamePrefix,
-      spillConfig_->writeBufferSize,
-      spillConfig_->compressionKind,
-      memory::spillMemoryPool(),
-      spillConfig_->executor,
-      0,
-      spillConfig_->fileCreateConfig);
+      spillConfig_,
+      memory::spillMemoryPool());
   auto spillRows = std::vector<char*>(
       sortedRows_.begin() + numOutputRows_, sortedRows_.end());
   spiller_->spill(spillRows);

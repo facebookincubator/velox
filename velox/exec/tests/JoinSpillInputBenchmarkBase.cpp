@@ -31,19 +31,26 @@ const int numSampleVectors = 100;
 
 void JoinSpillInputBenchmarkBase::setUp() {
   SpillerBenchmarkBase::setUp();
+  common::SpillConfig spillConfig;
+  spillConfig.getSpillDirPathCb = [&]() -> const std::string& {
+    return spillDir_;
+  };
+  spillConfig.updateAndCheckSpillLimitCb = [&](uint64_t) {};
+  spillConfig.fileNamePrefix = FLAGS_spiller_benchmark_name;
+  spillConfig.writeBufferSize = FLAGS_spiller_benchmark_write_buffer_size;
+  spillConfig.executor = executor_.get();
+  spillConfig.compressionKind =
+      stringToCompressionKind(FLAGS_spiller_benchmark_compression_kind);
+  spillConfig.maxSpillRunRows = 0;
+  spillConfig.fileCreateConfig = {};
 
   spiller_ = std::make_unique<Spiller>(
       exec::Spiller::Type::kHashJoinProbe,
       rowType_,
       HashBitRange{29, 29},
-      [&]() -> const std::string& { return spillDir_; },
-      [&](uint64_t) {},
-      FLAGS_spiller_benchmark_name,
+      &spillConfig,
       FLAGS_spiller_benchmark_max_spill_file_size,
-      FLAGS_spiller_benchmark_write_buffer_size,
-      stringToCompressionKind(FLAGS_spiller_benchmark_compression_kind),
-      memory::spillMemoryPool(),
-      executor_.get());
+      memory::spillMemoryPool());
   spiller_->setPartitionsSpilled({0});
 }
 

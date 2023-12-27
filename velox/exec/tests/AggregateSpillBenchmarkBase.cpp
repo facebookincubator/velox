@@ -126,6 +126,19 @@ void AggregateSpillBenchmarkBase::writeSpillData() {
 }
 
 std::unique_ptr<Spiller> AggregateSpillBenchmarkBase::makeSpiller() const {
+  common::SpillConfig spillConfig;
+  spillConfig.getSpillDirPathCb = [&]() -> const std::string& {
+    return spillDir_;
+  };
+  spillConfig.updateAndCheckSpillLimitCb = [&](uint64_t) {};
+  spillConfig.fileNamePrefix = FLAGS_spiller_benchmark_name;
+  spillConfig.writeBufferSize = FLAGS_spiller_benchmark_write_buffer_size;
+  spillConfig.executor = executor_.get();
+  spillConfig.compressionKind =
+      stringToCompressionKind(FLAGS_spiller_benchmark_compression_kind);
+  spillConfig.maxSpillRunRows = 0;
+  spillConfig.fileCreateConfig = {};
+
   if (spillerType_ == Spiller::Type::kAggregateInput) {
     return std::make_unique<Spiller>(
         spillerType_,
@@ -133,28 +146,16 @@ std::unique_ptr<Spiller> AggregateSpillBenchmarkBase::makeSpiller() const {
         rowType_,
         rowContainer_->keyTypes().size(),
         std::vector<CompareFlags>{},
-        [&]() -> const std::string& { return spillDir_; },
-        [&](uint64_t) {},
-        FLAGS_spiller_benchmark_name,
-        FLAGS_spiller_benchmark_write_buffer_size,
-        stringToCompressionKind(FLAGS_spiller_benchmark_compression_kind),
-        spillerPool_.get(),
-        executor_.get(),
-        0);
+        &spillConfig,
+        spillerPool_.get());
   } else {
     // TODO: Add config flag to control the max spill rows.
     return std::make_unique<Spiller>(
         spillerType_,
         rowContainer_.get(),
         rowType_,
-        [&]() -> const std::string& { return spillDir_; },
-        [&](uint64_t) {},
-        FLAGS_spiller_benchmark_name,
-        FLAGS_spiller_benchmark_write_buffer_size,
-        stringToCompressionKind(FLAGS_spiller_benchmark_compression_kind),
-        spillerPool_.get(),
-        executor_.get(),
-        0);
+        &spillConfig,
+        spillerPool_.get());
   }
 }
 } // namespace facebook::velox::exec::test

@@ -948,15 +948,8 @@ void GroupingSet::spill() {
         makeSpillType(),
         rows->keyTypes().size(),
         std::vector<CompareFlags>(),
-        spillConfig_->getSpillDirPathCb,
-        spillConfig_->updateAndCheckSpillLimitCb,
-        spillConfig_->fileNamePrefix,
-        spillConfig_->writeBufferSize,
-        spillConfig_->compressionKind,
-        memory::spillMemoryPool(),
-        spillConfig_->executor,
-        spillConfig_->maxSpillRunRows,
-        spillConfig_->fileCreateConfig);
+        spillConfig_,
+        memory::spillMemoryPool());
   }
   spiller_->spill();
   if (sortedAggregations_) {
@@ -978,15 +971,8 @@ void GroupingSet::spill(const RowContainerIterator& rowIterator) {
       Spiller::Type::kAggregateOutput,
       rows,
       makeSpillType(),
-      spillConfig_->getSpillDirPathCb,
-      spillConfig_->updateAndCheckSpillLimitCb,
-      spillConfig_->fileNamePrefix,
-      spillConfig_->writeBufferSize,
-      spillConfig_->compressionKind,
-      memory::spillMemoryPool(),
-      spillConfig_->executor,
-      spillConfig_->maxSpillRunRows,
-      spillConfig_->fileCreateConfig);
+      spillConfig_,
+      memory::spillMemoryPool());
 
   spiller_->spill(rowIterator);
   table_->clear();

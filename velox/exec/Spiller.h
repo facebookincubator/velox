@@ -47,67 +47,45 @@ class Spiller {
 
   using SpillRows = std::vector<char*, memory::StlAllocator<char*>>;
 
-  // The constructor without specifying hash bits which will only use one
-  // partition by default.
+  /// The constructor without specifying hash bits which will only use one
+  /// partition by default.
+
+  /// type == Type::kOrderByInput || type == Type::kAggregateInput
   Spiller(
       Type type,
       RowContainer* container,
       RowTypePtr rowType,
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
-      const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
-      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
-      const std::string& fileNamePrefix,
-      uint64_t writeBufferSize,
-      common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
-      folly::Executor* executor,
-      uint64_t maxSpillRunRows,
-      const std::string& fileCreateConfig = {});
+      const common::SpillConfig* spillConfig,
+      memory::MemoryPool* pool);
 
+  /// type == Type::kAggregateOutput || type == Type::kOrderByOutput
   Spiller(
       Type type,
       RowContainer* container,
       RowTypePtr rowType,
-      const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
-      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
-      const std::string& fileNamePrefix,
-      uint64_t writeBufferSize,
-      common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
-      folly::Executor* executor,
-      uint64_t maxSpillRunRows,
-      const std::string& fileCreateConfig = {});
+      const common::SpillConfig* spillConfig,
+      memory::MemoryPool* pool);
 
+  /// type == Type::kHashJoinProbe
   Spiller(
       Type type,
       RowTypePtr rowType,
       HashBitRange bits,
-      const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
-      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
-      const std::string& fileNamePrefix,
+      const common::SpillConfig* spillConfig,
       uint64_t targetFileSize,
-      uint64_t writeBufferSize,
-      common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
-      folly::Executor* executor,
-      const std::string& fileCreateConfig = {});
+      memory::MemoryPool* pool);
 
+  /// type == Type::kHashJoinBuild
   Spiller(
       Type type,
       RowContainer* container,
       RowTypePtr rowType,
       HashBitRange bits,
-      const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
-      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
-      const std::string& fileNamePrefix,
+      const common::SpillConfig* spillConfig,
       uint64_t targetFileSize,
-      uint64_t writeBufferSize,
-      common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
-      folly::Executor* executor,
-      uint64_t maxSpillRunRows,
-      const std::string& fileCreateConfig = {});
+      memory::MemoryPool* pool);
 
   Type type() const {
     return type_;
