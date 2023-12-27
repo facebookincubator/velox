@@ -6198,14 +6198,6 @@ TEST_F(HashJoinTest, maxSpillBytes) {
 }
 
 TEST_F(HashJoinTest, onlyHashBuildMaxSpillBytes) {
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::Driver::runInternal::addInput",
-      std::function<void(Operator*)>([&](Operator* op) {
-        if (op->operatorType() != "HashBuild") {
-          return;
-        }
-      }));
-
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto probeVectors = createVectors(rowType, 32, 128);
