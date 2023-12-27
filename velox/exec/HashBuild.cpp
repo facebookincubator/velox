@@ -239,8 +239,7 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       tableType_,
       std::move(hashBits),
       &spillConfig,
-      spillConfig.maxFileSize,
-      memory::spillMemoryPool());
+      spillConfig.maxFileSize);
 
   const int32_t numPartitions = spiller_->hashBits().numPartitions();
   spillInputIndicesBuffers_.resize(numPartitions);

@@ -61,7 +61,6 @@ std::unique_ptr<RowContainer> setupSpillContainer(
 void AggregateSpillBenchmarkBase::setUp() {
   SpillerBenchmarkBase::setUp();
 
-  spillerPool_ = rootPool_->addLeafChild("spillerPool");
   rowContainer_ = setupSpillContainer(
       rowType_, FLAGS_spiller_benchmark_num_key_columns, pool_);
   writeSpillData();
@@ -84,7 +83,7 @@ void AggregateSpillBenchmarkBase::printStats() const {
   LOG(INFO) << "total execution time: " << succinctMicros(executionTimeUs_);
   LOG(INFO) << numInputVectors_ << " vectors each with " << inputVectorSize_
             << " rows have been processed";
-  const auto memStats = spillerPool_->stats();
+  const auto memStats = memory::spillMemoryPool()->stats();
   LOG(INFO) << "peak memory usage[" << succinctBytes(memStats.peakBytes)
             << "] cumulative memory usage["
             << succinctBytes(memStats.cumulativeBytes) << "]";
@@ -146,16 +145,11 @@ std::unique_ptr<Spiller> AggregateSpillBenchmarkBase::makeSpiller() const {
         rowType_,
         rowContainer_->keyTypes().size(),
         std::vector<CompareFlags>{},
-        &spillConfig,
-        spillerPool_.get());
+        &spillConfig);
   } else {
     // TODO: Add config flag to control the max spill rows.
     return std::make_unique<Spiller>(
-        spillerType_,
-        rowContainer_.get(),
-        rowType_,
-        &spillConfig,
-        spillerPool_.get());
+        spillerType_, rowContainer_.get(), rowType_, &spillConfig);
   }
 }
 } // namespace facebook::velox::exec::test

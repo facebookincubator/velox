@@ -49,8 +49,7 @@ void JoinSpillInputBenchmarkBase::setUp() {
       rowType_,
       HashBitRange{29, 29},
       &spillConfig,
-      FLAGS_spiller_benchmark_max_spill_file_size,
-      memory::spillMemoryPool());
+      FLAGS_spiller_benchmark_max_spill_file_size);
   spiller_->setPartitionsSpilled({0});
 }
 

@@ -269,8 +269,7 @@ void SortBuffer::spillInput() {
         spillerStoreType_,
         data_->keyTypes().size(),
         sortCompareFlags_,
-        spillConfig_,
-        memory::spillMemoryPool());
+        spillConfig_);
   }
   spiller_->spill();
   data_->clear();
@@ -290,8 +289,7 @@ void SortBuffer::spillOutput() {
       Spiller::Type::kOrderByOutput,
       data_.get(),
       spillerStoreType_,
-      spillConfig_,
-      memory::spillMemoryPool());
+      spillConfig_);
   auto spillRows = std::vector<char*>(
       sortedRows_.begin() + numOutputRows_, sortedRows_.end());
   spiller_->spill(spillRows);

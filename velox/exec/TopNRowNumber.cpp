@@ -743,7 +743,6 @@ void TopNRowNumber::setupSpiller() {
       inputType_,
       spillCompareFlags_.size(),
       spillCompareFlags_,
-      &spillConfig_.value(),
-      memory::spillMemoryPool());
+      &spillConfig_.value());
 }
 } // namespace facebook::velox::exec

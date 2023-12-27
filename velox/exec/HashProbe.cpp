@@ -254,8 +254,7 @@ void HashProbe::maybeSetupSpillInput(
           spillInputPartitionIds_.begin()->partitionBitOffset() +
               spillConfig.joinPartitionBits),
       &spillConfig,
-      spillConfig.maxFileSize,
-      memory::spillMemoryPool());
+      spillConfig.maxFileSize);
   // Set the spill partitions to the corresponding ones at the build side. The
   // hash probe operator itself won't trigger any spilling.
   spiller_->setPartitionsSpilled(toPartitionNumSet(spillInputPartitionIds_));

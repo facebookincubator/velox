@@ -38,8 +38,7 @@ Spiller::Spiller(
     RowTypePtr rowType,
     int32_t numSortingKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
-    const common::SpillConfig* spillConfig,
-    memory::MemoryPool* pool)
+    const common::SpillConfig* spillConfig)
     : Spiller(
           type,
           container,
@@ -53,7 +52,6 @@ Spiller::Spiller(
           std::numeric_limits<uint64_t>::max(),
           spillConfig->writeBufferSize,
           spillConfig->compressionKind,
-          pool,
           spillConfig->executor,
           spillConfig->maxSpillRunRows,
           spillConfig->fileCreateConfig) {
@@ -69,8 +67,7 @@ Spiller::Spiller(
     Type type,
     RowContainer* container,
     RowTypePtr rowType,
-    const common::SpillConfig* spillConfig,
-    memory::MemoryPool* pool)
+    const common::SpillConfig* spillConfig)
     : Spiller(
           type,
           container,
@@ -84,7 +81,6 @@ Spiller::Spiller(
           std::numeric_limits<uint64_t>::max(),
           spillConfig->writeBufferSize,
           spillConfig->compressionKind,
-          pool,
           spillConfig->executor,
           spillConfig->maxSpillRunRows,
           spillConfig->fileCreateConfig) {
@@ -101,8 +97,7 @@ Spiller::Spiller(
     RowTypePtr rowType,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    uint64_t targetFileSize,
-    memory::MemoryPool* pool)
+    uint64_t targetFileSize)
     : Spiller(
           type,
           nullptr,
@@ -116,7 +111,6 @@ Spiller::Spiller(
           targetFileSize,
           spillConfig->writeBufferSize,
           spillConfig->compressionKind,
-          pool,
           spillConfig->executor,
           0,
           spillConfig->fileCreateConfig) {
@@ -133,8 +127,7 @@ Spiller::Spiller(
     RowTypePtr rowType,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    uint64_t targetFileSize,
-    memory::MemoryPool* pool)
+    uint64_t targetFileSize)
     : Spiller(
           type,
           container,
@@ -148,7 +141,6 @@ Spiller::Spiller(
           targetFileSize,
           spillConfig->writeBufferSize,
           spillConfig->compressionKind,
-          pool,
           spillConfig->executor,
           spillConfig->maxSpillRunRows,
           spillConfig->fileCreateConfig) {
@@ -172,14 +164,12 @@ Spiller::Spiller(
     uint64_t targetFileSize,
     uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
-    memory::MemoryPool* pool,
     folly::Executor* executor,
     uint64_t maxSpillRunRows,
     const std::string& fileCreateConfig)
     : type_(type),
       container_(container),
       executor_(executor),
-      pool_(pool),
       bits_(bits),
       rowType_(std::move(rowType)),
       maxSpillRunRows_(maxSpillRunRows),
@@ -193,7 +183,7 @@ Spiller::Spiller(
           targetFileSize,
           writeBufferSize,
           compressionKind,
-          pool_,
+          memory::spillMemoryPool(),
           &stats_,
           fileCreateConfig) {
   TestValue::adjust(
@@ -202,7 +192,7 @@ Spiller::Spiller(
   VELOX_CHECK_EQ(container_ == nullptr, type_ == Type::kHashJoinProbe);
   spillRuns_.reserve(state_.maxPartitions());
   for (int i = 0; i < state_.maxPartitions(); ++i) {
-    spillRuns_.emplace_back(*pool_);
+    spillRuns_.emplace_back(*memory::spillMemoryPool());
   }
 }
 

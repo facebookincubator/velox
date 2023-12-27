@@ -492,12 +492,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     if (type_ == Spiller::Type::kHashJoinProbe) {
       // kHashJoinProbe doesn't have associated row container.
       spiller_ = std::make_unique<Spiller>(
-          type_,
-          rowType_,
-          hashBits_,
-          &spillConfig,
-          targetFileSize,
-          pool_.get());
+          type_, rowType_, hashBits_, &spillConfig, targetFileSize);
     } else if (
         type_ == Spiller::Type::kOrderByInput ||
         type_ == Spiller::Type::kAggregateInput) {
@@ -509,13 +504,12 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           rowType_,
           rowContainer_->keyTypes().size(),
           compareFlags_,
-          &spillConfig,
-          pool_.get());
+          &spillConfig);
     } else if (
         type_ == Spiller::Type::kAggregateOutput ||
         type_ == Spiller::Type::kOrderByOutput) {
       spiller_ = std::make_unique<Spiller>(
-          type_, rowContainer_.get(), rowType_, &spillConfig, pool_.get());
+          type_, rowContainer_.get(), rowType_, &spillConfig);
     } else {
       VELOX_CHECK_EQ(type_, Spiller::Type::kHashJoinBuild);
       spiller_ = std::make_unique<Spiller>(
@@ -524,8 +518,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           rowType_,
           hashBits_,
           &spillConfig,
-          targetFileSize,
-          pool_.get());
+          targetFileSize);
     }
     ASSERT_EQ(spiller_->state().maxPartitions(), numPartitions_);
     ASSERT_FALSE(spiller_->isAllSpilled());

@@ -145,8 +145,7 @@ void SortWindowBuild::setupSpiller() {
       inputType_,
       spillCompareFlags_.size(),
       spillCompareFlags_,
-      spillConfig_,
-      memory::spillMemoryPool());
+      spillConfig_);
 }
 
 void SortWindowBuild::spill() {

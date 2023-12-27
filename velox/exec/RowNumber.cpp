@@ -395,8 +395,7 @@ void RowNumber::setupHashTableSpiller() {
       tableType,
       std::move(hashBits),
       &spillConfig,
-      spillConfig.maxFileSize,
-      memory::spillMemoryPool());
+      spillConfig.maxFileSize);
 }
 
 void RowNumber::setupInputSpiller() {
@@ -409,8 +408,7 @@ void RowNumber::setupInputSpiller() {
       inputType_,
       hashBits,
       &spillConfig,
-      spillConfig.maxFileSize,
-      memory::spillMemoryPool());
+      spillConfig.maxFileSize);
 
   const auto& hashers = table_->hashers();
 

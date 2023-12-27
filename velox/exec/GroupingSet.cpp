@@ -948,8 +948,7 @@ void GroupingSet::spill() {
         makeSpillType(),
         rows->keyTypes().size(),
         std::vector<CompareFlags>(),
-        spillConfig_,
-        memory::spillMemoryPool());
+        spillConfig_);
   }
   spiller_->spill();
   if (sortedAggregations_) {
@@ -968,11 +967,7 @@ void GroupingSet::spill(const RowContainerIterator& rowIterator) {
   auto* rows = table_->rows();
   VELOX_CHECK(pool_.trackUsage());
   spiller_ = std::make_unique<Spiller>(
-      Spiller::Type::kAggregateOutput,
-      rows,
-      makeSpillType(),
-      spillConfig_,
-      memory::spillMemoryPool());
+      Spiller::Type::kAggregateOutput, rows, makeSpillType(), spillConfig_);
 
   spiller_->spill(rowIterator);
   table_->clear();

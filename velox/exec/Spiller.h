@@ -57,16 +57,14 @@ class Spiller {
       RowTypePtr rowType,
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
-      const common::SpillConfig* spillConfig,
-      memory::MemoryPool* pool);
+      const common::SpillConfig* spillConfig);
 
   /// type == Type::kAggregateOutput || type == Type::kOrderByOutput
   Spiller(
       Type type,
       RowContainer* container,
       RowTypePtr rowType,
-      const common::SpillConfig* spillConfig,
-      memory::MemoryPool* pool);
+      const common::SpillConfig* spillConfig);
 
   /// type == Type::kHashJoinProbe
   Spiller(
@@ -74,8 +72,7 @@ class Spiller {
       RowTypePtr rowType,
       HashBitRange bits,
       const common::SpillConfig* spillConfig,
-      uint64_t targetFileSize,
-      memory::MemoryPool* pool);
+      uint64_t targetFileSize);
 
   /// type == Type::kHashJoinBuild
   Spiller(
@@ -84,8 +81,7 @@ class Spiller {
       RowTypePtr rowType,
       HashBitRange bits,
       const common::SpillConfig* spillConfig,
-      uint64_t targetFileSize,
-      memory::MemoryPool* pool);
+      uint64_t targetFileSize);
 
   Type type() const {
     return type_;
@@ -196,7 +192,6 @@ class Spiller {
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
       folly::Executor* executor,
       uint64_t maxSpillRunRows,
       const std::string& fileCreateConfig);
@@ -306,7 +301,6 @@ class Spiller {
   // the spiller.
   RowContainer* const container_{nullptr};
   folly::Executor* const executor_;
-  memory::MemoryPool* const pool_;
   const HashBitRange bits_;
   const RowTypePtr rowType_;
   const uint64_t maxSpillRunRows_;
