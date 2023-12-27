@@ -431,13 +431,20 @@ Relation between spill rows and memory usage are as follows:</p>
 <td><p>0</p></td>
 <td><p>The maximum allowed spill file size. Zero means unlimited.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_write_buffer_size</p></td>
+<tr class="row-odd"><td><p>max_spill_bytes</p></td>
+<td><p>integer</p></td>
+<td><p>107374182400</p></td>
+<td><p>The max spill bytes limit set for each query. This is used to cap the storage used for spilling.
+If it is zero, then there is no limit and spilling might exhaust the storage or takes too long to run.
+The default value is set to 100 GB.</p></td>
+</tr>
+<tr class="row-even"><td><p>spill_write_buffer_size</p></td>
 <td><p>integer</p></td>
 <td><p>4MB</p></td>
 <td><p>The maximum size in bytes to buffer the serialized spill data before write to disk for IO efficiency.
 If set to zero, buffering is disabled.</p></td>
 </tr>
-<tr class="row-even"><td><p>min_spill_run_size</p></td>
+<tr class="row-odd"><td><p>min_spill_run_size</p></td>
 <td><p>integer</p></td>
 <td><p>256MB</p></td>
 <td><p>The minimum spill run size (bytes) limit used to select partitions for spilling. The spiller tries to spill a
@@ -446,25 +453,25 @@ If the limit is zero, then the spiller always spills a previously spilled partit
 to avoid spill from a partition with a small amount of data which might result in generating too many small
 spilled files.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_compression_codec</p></td>
+<tr class="row-even"><td><p>spill_compression_codec</p></td>
 <td><p>string</p></td>
 <td><p>none</p></td>
 <td><p>Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
 efficiency. The supported compression codecs are: ZLIB, SNAPPY, LZO, ZSTD, LZ4 and GZIP.
 NONE means no compression.</p></td>
 </tr>
-<tr class="row-even"><td><p>spiller_start_partition_bit</p></td>
+<tr class="row-odd"><td><p>spiller_start_partition_bit</p></td>
 <td><p>integer</p></td>
 <td><p>29</p></td>
 <td><p>The start partition bit which is used with <cite>spiller_partition_bits</cite> together to calculate the spilling partition number.</p></td>
 </tr>
-<tr class="row-odd"><td><p>join_spiller_partition_bits</p></td>
+<tr class="row-even"><td><p>join_spiller_partition_bits</p></td>
 <td><p>integer</p></td>
 <td><p>2</p></td>
 <td><p>The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
 value is 3, meaning we only support up to 8-way spill partitioning.ing.</p></td>
 </tr>
-<tr class="row-even"><td><p>testing.spill_pct</p></td>
+<tr class="row-odd"><td><p>testing.spill_pct</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.</p></td>
