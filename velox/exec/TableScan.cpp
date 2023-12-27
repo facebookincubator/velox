@@ -165,6 +165,13 @@ RowVectorPtr TableScan::getOutput() {
       if (connectorSplit->dataSource) {
         curStatus_ = "getOutput: preloaded split";
         ++numPreloadedSplits_;
+        if (auto iter = std::find(
+                preloadingSplits_.begin(),
+                preloadingSplits_.end(),
+                connectorSplit);
+            iter != preloadingSplits_.end()) {
+          preloadingSplits_.erase(iter);
+        }
         // The AsyncSource returns a unique_ptr to a shared_ptr. The unique_ptr
         // will be nullptr if there was a cancellation.
         numReadyPreloadedSplits_ += connectorSplit->dataSource->hasValue();
@@ -308,6 +315,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
         dataSource->addSplit(split);
         return dataSource;
       });
+  preloadingSplits_.push_back(split);
 }
 
 void TableScan::checkPreload() {
@@ -325,8 +333,7 @@ void TableScan::checkPreload() {
            this](const std::shared_ptr<connector::ConnectorSplit>& split) {
             preload(split);
 
-            executor->add([taskHolder = operatorCtx_->task(),
-                           connectorSplit = split]() mutable {
+            executor->add([connectorSplit = split]() mutable {
               connectorSplit->dataSource->prepare();
               connectorSplit.reset();
             });
