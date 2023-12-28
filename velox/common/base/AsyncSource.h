@@ -158,10 +158,8 @@ class AsyncSource {
     ContinueFuture wait;
     {
       std::lock_guard<std::mutex> l(mutex_);
-      if (making_) {
-        if (!promise_) {
-          promise_ = std::make_unique<ContinuePromise>();
-        }
+      if (making_ && !promise_) {
+        promise_ = std::make_unique<ContinuePromise>();
         wait = promise_->getSemiFuture();
       }
       if (make_) {
