@@ -131,10 +131,8 @@ class VectorTestBase {
 
   std::vector<RowVectorPtr> createVectors(
       const RowTypePtr& type,
-      size_t vectorSize,
       uint64_t byteSize,
-      VectorFuzzer::Options fuzzerOpts = {}) {
-    fuzzerOpts.vectorSize = vectorSize;
+      const VectorFuzzer::Options& fuzzerOpts) {
     VectorFuzzer fuzzer(fuzzerOpts, pool());
     uint64_t totalSize{0};
     std::vector<RowVectorPtr> vectors;
@@ -143,6 +141,11 @@ class VectorTestBase {
       totalSize += vectors.back()->estimateFlatSize();
     }
     return vectors;
+  }
+
+  std::vector<RowVectorPtr>
+  createVectors(const RowTypePtr& type, size_t vectorSize, uint64_t byteSize) {
+    return createVectors(type, byteSize, {.vectorSize = vectorSize});
   }
 
   /// Splits input vector into 'n' vectors evenly. Input vector must have at
