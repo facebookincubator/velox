@@ -1352,6 +1352,50 @@ TEST_F(TableScanTest, multipleSplits) {
   }
 }
 
+TEST_F(TableScanTest, preloadingSplitClose) {
+  auto filePaths = makeFilePaths(100);
+  auto vectors = makeVectors(100, 100);
+  for (int32_t i = 0; i < vectors.size(); i++) {
+    writeToFile(filePaths[i]->path, vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  auto executors = ioExecutor_.get();
+  std::atomic<bool> stop = false;
+  std::atomic<int32_t> finishedCnt = 0;
+  // Simulate a busy IO thread pool by blocking all threads.
+  for (int32_t i = 0; i < executors->numThreads(); ++i) {
+    executors->add([&stop, &finishedCnt]() {
+      while (!stop) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+      ++finishedCnt;
+    });
+  }
+  ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
+  auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp", 2);
+  auto stats = getTableScanRuntimeStats(task);
+
+  ASSERT_GT(stats.at("preloadedSplits").sum, 10);
+
+  task.reset();
+  int32_t waiting = 0;
+  while (Task::numCreatedTasks() != Task::numDeletedTasks() && waiting++ < 90) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  auto createdTasks = Task::numCreatedTasks();
+  auto deletedTasks = Task::numDeletedTasks();
+  // Clean bloking items in the IO thread pool before assert.
+  stop = true;
+  while (finishedCnt != executors->numThreads()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  // Once all task references are cleared, the count of deleted tasks should
+  // promptly match the count of created tasks (waiting == 0).
+  ASSERT_EQ(createdTasks, deletedTasks);
+  ASSERT_EQ(waiting, 0);
+}
+
 TEST_F(TableScanTest, waitForSplit) {
   auto filePaths = makeFilePaths(10);
   auto vectors = makeVectors(10, 1'000);
