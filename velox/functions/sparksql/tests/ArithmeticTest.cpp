@@ -417,6 +417,45 @@ TEST_F(ArithmeticTest, isNanDouble) {
   EXPECT_EQ(false, isNan(std::nullopt));
 }
 
+TEST_F(ArithmeticTest, hex) {
+  const auto toHexWithVarbinary = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("hex(cast(c0 as varbinary))", value);
+  };
+  const auto toHexWithVarchar = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("hex(c0)", value);
+  };
+  const auto toHexWithBigint = [&](std::optional<int64_t> value) {
+    return evaluateOnce<std::string>("hex(c0)", value);
+  };
+
+  EXPECT_EQ(std::nullopt, toHexWithVarbinary(std::nullopt));
+  EXPECT_EQ("", toHexWithVarbinary(""));
+  EXPECT_EQ("537061726B2053514C", toHexWithVarbinary("Spark SQL"));
+  EXPECT_EQ("537061726B652153514C", toHexWithVarbinary("Spark\x65\x21SQL"));
+  EXPECT_EQ("616263", toHexWithVarbinary("abc"));
+  EXPECT_EQ("68656C6C6F20776F726C64", toHexWithVarbinary("hello world"));
+  EXPECT_EQ(
+      "48656C6C6F20576F726C642066726F6D2056656C6F7821",
+      toHexWithVarbinary("Hello World from Velox!"));
+
+  EXPECT_EQ(std::nullopt, toHexWithVarchar(std::nullopt));
+  EXPECT_EQ("", toHexWithVarchar(""));
+  EXPECT_EQ("537061726B2053514C", toHexWithVarchar("Spark SQL"));
+  EXPECT_EQ("537061726BE695B0E68DAE53514C", toHexWithVarchar("Spark\u6570\u636ESQL"));
+  EXPECT_EQ("616263", toHexWithVarchar("abc"));
+  EXPECT_EQ("68656C6C6F20776F726C64", toHexWithVarchar("hello world"));
+  EXPECT_EQ(
+      "48656C6C6F20576F726C642066726F6D2056656C6F7821",
+      toHexWithVarchar("Hello World from Velox!"));
+
+  EXPECT_EQ(std::nullopt, toHexWithBigint(std::nullopt));
+  EXPECT_EQ("11", toHexWithBigint(17));
+  EXPECT_EQ("1C", toHexWithBigint(28));
+  EXPECT_EQ("FFFFFFFFFFFFFFE4", toHexWithBigint(-28));
+  EXPECT_EQ("177828FED4", toHexWithBigint(100800200404L));
+  EXPECT_EQ("FFFFFFE887D7012C", toHexWithBigint(-100800200404L));
+}
+
 class LogNTest : public SparkFunctionBaseTest {
  protected:
   static constexpr float kInf = std::numeric_limits<double>::infinity();
