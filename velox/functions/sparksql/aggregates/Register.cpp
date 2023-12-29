@@ -39,7 +39,8 @@ void registerAggregateFunctions(
   registerFirstLastAggregates(prefix, withCompanionFunctions, overwrite);
   registerMinMaxByAggregates(prefix, withCompanionFunctions, overwrite);
   registerBitwiseXorAggregate(prefix, withCompanionFunctions, overwrite);
-  registerBloomFilterAggAggregate(prefix + "bloom_filter_agg");
+  registerBloomFilterAggAggregate(
+      prefix + "bloom_filter_agg", withCompanionFunctions, overwrite);
   registerAverage(prefix + "avg", withCompanionFunctions, overwrite);
   registerSum(prefix + "sum", withCompanionFunctions, overwrite);
 }
