@@ -341,4 +341,13 @@ void TableScan::addDynamicFilter(
   pendingDynamicFilters_.emplace(outputChannel, filter);
 }
 
+void TableScan::close() {
+  if (dataSource_) {
+    dataSource_->close();
+    dataSource_.reset();
+  }
+  pendingDynamicFilters_.clear();
+  Operator::close();
+}
+
 } // namespace facebook::velox::exec

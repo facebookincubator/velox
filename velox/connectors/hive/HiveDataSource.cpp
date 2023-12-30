@@ -239,6 +239,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VLOG(1) << "Adding split " << split_->toString();
 
   if (splitReader_) {
+    splitReader_->close();
     splitReader_.reset();
   }
 

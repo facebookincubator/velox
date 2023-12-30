@@ -108,6 +108,8 @@ class SplitReader {
 
   std::string toString() const;
 
+  void close();
+
  protected:
   // Different table formats may have different meatadata columns. This function
   // will be used to update the scanSpec for these columns.

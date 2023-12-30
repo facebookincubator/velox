@@ -98,11 +98,9 @@ class CachedBufferedInput : public BufferedInput {
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
 
-  ~CachedBufferedInput() override {
-    for (auto& load : allCoalescedLoads_) {
-      load->cancel();
-    }
-  }
+  ~CachedBufferedInput() override;
+
+  void close() override;
 
   std::unique_ptr<SeekableInputStream> enqueue(
       velox::common::Region region,

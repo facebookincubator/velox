@@ -145,6 +145,8 @@ class BufferedInput {
     return 0;
   }
 
+  virtual void close() {}
+
  protected:
   std::shared_ptr<ReadFileInputStream> input_;
   memory::MemoryPool& pool_;

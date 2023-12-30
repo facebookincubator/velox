@@ -84,6 +84,8 @@ class ReaderBase {
   /// the data still exists in the buffered inputs.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
+  void close();
+
  private:
   // Reads and parses file footer.
   void loadFileMetaData();
@@ -137,6 +139,18 @@ ReaderBase::ReaderBase(
 
   loadFileMetaData();
   initializeSchema();
+}
+
+void ReaderBase::close() {
+  if (input_) {
+    input_->close();
+    input_.reset();
+  }
+  for (auto& input : inputs_) {
+    input.second->close();
+    input.second.reset();
+  }
+  inputs_.clear();
 }
 
 void ReaderBase::loadFileMetaData() {
@@ -874,6 +888,12 @@ std::unique_ptr<dwio::common::RowReader> ParquetReader::createRowReader(
 
 FileMetaDataPtr ParquetReader::fileMetaData() const {
   return readerBase_->fileMetaData();
+}
+
+void ParquetReader::close() {
+  if (readerBase_) {
+    readerBase_->close();
+  }
 }
 
 } // namespace facebook::velox::parquet

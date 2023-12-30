@@ -105,6 +105,8 @@ class ParquetReader : public dwio::common::Reader {
 
   FileMetaDataPtr fileMetaData() const;
 
+  void close() override;
+
  private:
   std::shared_ptr<ReaderBase> readerBase_;
 };

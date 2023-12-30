@@ -80,6 +80,12 @@ class HiveDataSource : public DataSource {
       bool negated,
       SubfieldFilters& filters);
 
+  void close() override {
+    if (splitReader_) {
+      splitReader_->close();
+    }
+  }
+
  protected:
   virtual std::unique_ptr<SplitReader> createSplitReader();
 
