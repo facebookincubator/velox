@@ -68,7 +68,8 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<ToBinaryStringFunction, Varchar, int64_t>({prefix + "bin"});
   registerFunction<ToHexBigintFunction, Varchar, int64_t>({prefix + "hex"});
   registerFunction<ToHexVarcharFunction, Varchar, Varchar>({prefix + "hex"});
-  registerFunction<ToHexVarbinaryFunction, Varchar, Varbinary>({prefix + "hex"});
+  registerFunction<ToHexVarbinaryFunction, Varchar, Varbinary>(
+      {prefix + "hex"});
   registerFunction<ExpFunction, double, double>({prefix + "exp"});
   registerBinaryIntegral<PModIntFunction>({prefix + "pmod"});
   registerBinaryFloatingPoint<PModFloatFunction>({prefix + "pmod"});

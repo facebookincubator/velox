@@ -441,7 +441,8 @@ TEST_F(ArithmeticTest, hex) {
   EXPECT_EQ(std::nullopt, toHexWithVarchar(std::nullopt));
   EXPECT_EQ("", toHexWithVarchar(""));
   EXPECT_EQ("537061726B2053514C", toHexWithVarchar("Spark SQL"));
-  EXPECT_EQ("537061726BE695B0E68DAE53514C", toHexWithVarchar("Spark\u6570\u636ESQL"));
+  EXPECT_EQ(
+      "537061726BE695B0E68DAE53514C", toHexWithVarchar("Spark\u6570\u636ESQL"));
   EXPECT_EQ("616263", toHexWithVarchar("abc"));
   EXPECT_EQ("68656C6C6F20776F726C64", toHexWithVarchar("hello world"));
   EXPECT_EQ(
