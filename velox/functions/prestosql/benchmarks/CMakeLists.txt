@@ -176,3 +176,8 @@ add_executable(velox_functions_prestosql_benchmarks_map_subscript
                MapSubscriptCachingBenchmark.cpp)
 target_link_libraries(velox_functions_prestosql_benchmarks_map_subscript
                       ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_functions_prestosql_benchmarks_avg
+               AverageAggregateBenchmark.cpp)
+target_link_libraries(velox_functions_prestosql_benchmarks_avg velox_aggregates
+                      velox_aggregation_benchmark_builder ${FOLLY_BENCHMARK})
