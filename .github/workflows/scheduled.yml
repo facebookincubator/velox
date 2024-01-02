@@ -176,6 +176,12 @@ jobs:
         with:
           name: spark
 
+      - name: "List out build artifacts"
+        run: |
+             pwd
+             ls
+             ls -R ./_build
+
       - name: "Run Spark Fuzzer"
         run: |
           mkdir -p /tmp/spark_fuzzer_repro/
