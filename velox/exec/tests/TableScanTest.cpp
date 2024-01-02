@@ -1383,6 +1383,8 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   while (Task::numCreatedTasks() != Task::numDeletedTasks() && waiting++ < 90) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
+  // Once all task references are cleared, the count of deleted tasks should
+  // promptly match the count of created tasks (waiting == 0).
   auto createdTasks = Task::numCreatedTasks();
   auto deletedTasks = Task::numDeletedTasks();
   // Clean bloking items in the IO thread pool before assert.
@@ -1390,8 +1392,7 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   while (finishedCnt != executors->numThreads()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
-  // Once all task references are cleared, the count of deleted tasks should
-  // promptly match the count of created tasks (waiting == 0).
+
   ASSERT_EQ(createdTasks, deletedTasks);
   ASSERT_EQ(waiting, 0);
 }
