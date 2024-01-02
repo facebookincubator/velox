@@ -118,6 +118,7 @@ class SpillWriter {
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       const std::string& fileCreateConfig,
+      common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats);
 
@@ -181,6 +182,10 @@ class SpillWriter {
   const uint64_t targetFileSize_;
   const uint64_t writeBufferSize_;
   const std::string fileCreateConfig_;
+
+  // Updates the aggregated spill bytes of this query, and throws if exceeds
+  // the max spill bytes limit.
+  common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
 

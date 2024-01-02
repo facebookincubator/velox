@@ -329,12 +329,9 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
       uint64_t memoryPoolTransferCapacity = kMemoryPoolTransferCapacity,
       uint64_t maxReclaimWaitMs = 0) {
     memoryCapacity = (memoryCapacity != 0) ? memoryCapacity : kMemoryCapacity;
-    allocator_ = std::make_shared<MallocAllocator>(memoryCapacity);
     MemoryManagerOptions options;
-    options.allocator = allocator_.get();
-    options.capacity = allocator_->capacity();
+    options.allocatorCapacity = memoryCapacity;
     options.arbitratorKind = "SHARED";
-    options.capacity = options.capacity;
     options.memoryPoolInitCapacity = memoryPoolInitCapacity;
     options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
     options.memoryReclaimWaitMs = maxReclaimWaitMs;
@@ -349,22 +346,6 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
   RowVectorPtr newVector() {
     VectorFuzzer fuzzer(fuzzerOpts_, pool());
     return fuzzer.fuzzRow(rowType_);
-  }
-
-  std::vector<RowVectorPtr> newVectors(size_t vectorSize, size_t expectedSize) {
-    VectorFuzzer::Options fuzzerOpts;
-    fuzzerOpts.vectorSize = vectorSize;
-    fuzzerOpts.stringVariableLength = false;
-    fuzzerOpts.stringLength = 1024;
-    fuzzerOpts.allowLazyVector = false;
-    VectorFuzzer fuzzer(fuzzerOpts_, pool());
-    uint64_t totalSize{0};
-    std::vector<RowVectorPtr> vectors;
-    while (totalSize < expectedSize) {
-      vectors.push_back(fuzzer.fuzzInputRow(rowType_));
-      totalSize += vectors.back()->estimateFlatSize();
-    }
-    return vectors;
   }
 
   std::shared_ptr<core::QueryCtx> newQueryCtx(
@@ -699,7 +680,6 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
   }
 
   static inline FakeMemoryOperatorFactory* fakeOperatorFactory_;
-  std::shared_ptr<MemoryAllocator> allocator_;
   std::unique_ptr<MemoryManager> memoryManager_;
   SharedArbitrator* arbitrator_;
   RowTypePtr rowType_;
@@ -1167,7 +1147,8 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromAggregation) {
 
 TEST_F(SharedArbitrationTest, reclaimFromDistinctAggregation) {
   const uint64_t maxQueryCapacity = 20L << 20;
-  std::vector<RowVectorPtr> vectors = newVectors(1024, maxQueryCapacity * 2);
+  std::vector<RowVectorPtr> vectors =
+      createVectors(rowType_, maxQueryCapacity * 2, fuzzerOpts_);
   createDuckDbTable(vectors);
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
   core::PlanNodeId aggrNodeId;
@@ -1869,7 +1850,8 @@ TEST_F(SharedArbitrationTest, reclaimFromCompletedJoinBuilder) {
 }
 
 TEST_F(SharedArbitrationTest, reclaimFromJoinBuilderWithMultiDrivers) {
-  const auto vectors = newVectors(256, 64 << 20);
+  fuzzerOpts_.vectorSize = 256;
+  const auto vectors = createVectors(rowType_, 64 << 20, fuzzerOpts_);
   const int numDrivers = 4;
   const auto expectedResult =
       runHashJoinTask(vectors, nullptr, numDrivers, false).data;
@@ -1889,113 +1871,68 @@ TEST_F(SharedArbitrationTest, reclaimFromJoinBuilderWithMultiDrivers) {
 DEBUG_ONLY_TEST_F(
     SharedArbitrationTest,
     failedToReclaimFromHashJoinBuildersInNonReclaimableSection) {
-  const int numVectors = 32;
-  std::vector<RowVectorPtr> vectors;
-  fuzzerOpts_.vectorSize = 128;
-  fuzzerOpts_.stringVariableLength = false;
-  fuzzerOpts_.stringLength = 512;
-  for (int i = 0; i < numVectors; ++i) {
-    vectors.push_back(newVector());
-  }
-  const int numDrivers = 4;
-  createDuckDbTable(vectors);
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
-  std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
-      newQueryCtx(kMemoryCapacity);
-  std::shared_ptr<core::QueryCtx> joinQueryCtx = newQueryCtx(kMemoryCapacity);
+  fuzzerOpts_.vectorSize = 256;
+  const auto vectors = createVectors(rowType_, 32 << 10, fuzzerOpts_);
+  const int numDrivers = 1;
+  std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(kMemoryCapacity);
+  const auto expectedResult =
+      runHashJoinTask(vectors, queryCtx, numDrivers, false).data;
 
-  std::atomic<bool> allocationWaitFlag{true};
-  folly::EventCount allocationWait;
-  std::atomic<bool> allocationDoneWaitFlag{true};
-  folly::EventCount allocationDoneWait;
-
-  const auto joinMemoryUsage = 8L << 20;
-  const auto fakeAllocationSize = kMemoryCapacity - joinMemoryUsage / 3;
-
-  std::atomic<bool> injectAllocationOnce{true};
-  fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
-    if (!injectAllocationOnce.exchange(false)) {
-      return TestAllocation{};
-    }
-    allocationWait.await([&]() { return !allocationWaitFlag.load(); });
-    EXPECT_ANY_THROW(op->pool()->allocate(fakeAllocationSize));
-    allocationDoneWaitFlag = false;
-    allocationDoneWait.notifyAll();
-    return TestAllocation{};
-  });
+  std::atomic_bool nonReclaimableSectionWaitFlag{true};
+  folly::EventCount nonReclaimableSectionWait;
+  std::atomic_bool memoryArbitrationWaitFlag{true};
+  folly::EventCount memoryArbitrationWait;
 
   std::atomic<bool> injectNonReclaimableSectionOnce{true};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::common::memory::MemoryPoolImpl::allocateNonContiguous",
       std::function<void(memory::MemoryPoolImpl*)>(
           ([&](memory::MemoryPoolImpl* pool) {
-            const std::string re(".*HashBuild");
-            if (!RE2::FullMatch(pool->name(), re)) {
-              return;
-            }
-            if (pool->parent()->currentBytes() < joinMemoryUsage) {
+            if (!isHashBuildMemoryPool(*pool)) {
               return;
             }
             if (!injectNonReclaimableSectionOnce.exchange(false)) {
               return;
             }
-            allocationWaitFlag = false;
-            allocationWait.notifyAll();
+
+            // Signal the test control that one of the hash build operator has
+            // entered into non-reclaimable section.
+            nonReclaimableSectionWaitFlag = false;
+            nonReclaimableSectionWait.notifyAll();
 
             // Suspend the driver to simulate the arbitration.
             pool->reclaimer()->enterArbitration();
-            allocationDoneWait.await(
-                [&]() { return !allocationDoneWaitFlag.load(); });
+            // Wait for the memory arbitration to complete.
+            memoryArbitrationWait.await(
+                [&]() { return !memoryArbitrationWaitFlag.load(); });
             pool->reclaimer()->leaveArbitration();
           })));
 
   std::thread joinThread([&]() {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto task =
-        AssertQueryBuilder(duckDbQueryRunner_)
-            .spillDirectory(spillDirectory->path)
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kJoinSpillEnabled, "true")
-            .config(core::QueryConfig::kJoinSpillPartitionBits, "2")
-            .maxDrivers(numDrivers)
-            .queryCtx(joinQueryCtx)
-            .plan(PlanBuilder(planNodeIdGenerator)
-                      .values(vectors, true)
-                      .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
-                      .hashJoin(
-                          {"t0"},
-                          {"u1"},
-                          PlanBuilder(planNodeIdGenerator)
-                              .values(vectors, true)
-                              .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
-                              .planNode(),
-                          "",
-                          {"t1"},
-                          core::JoinType::kInner)
-                      .planNode())
-            .assertResults(
-                "SELECT t.c1 FROM tmp as t, tmp AS u WHERE t.c0 == u.c1");
-    // We expect the spilling is not triggered because of non-reclaimable
-    // section.
-    auto stats = task->taskStats().pipelineStats;
-    ASSERT_EQ(stats[1].operatorStats[2].spilledBytes, 0);
+    const auto result =
+        runHashJoinTask(vectors, queryCtx, numDrivers, true, expectedResult);
+    auto taskStats = exec::toPlanStats(result.task->taskStats());
+    auto& planStats = taskStats.at(result.planNodeId);
+    ASSERT_EQ(planStats.spilledBytes, 0);
   });
 
-  std::thread memThread([&]() {
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .queryCtx(fakeMemoryQueryCtx)
-        .plan(PlanBuilder()
-                  .values(vectors)
-                  .addNode([&](std::string id, core::PlanNodePtr input) {
-                    return std::make_shared<FakeMemoryNode>(id, input);
-                  })
-                  .planNode())
-        .assertResults("SELECT * FROM tmp");
-  });
+  auto fakePool = queryCtx->pool()->addLeafChild(
+      "fakePool", true, FakeMemoryReclaimer::create());
+  // Wait for the hash build operators to enter into non-reclaimable section.
+  nonReclaimableSectionWait.await(
+      [&]() { return !nonReclaimableSectionWaitFlag.load(); });
+
+  // We expect capacity grow fails as we can't reclaim from hash join operators.
+  ASSERT_FALSE(
+      memoryManager_->testingGrowPool(fakePool.get(), kMemoryCapacity));
+
+  // Notify the hash build operator that memory arbitration has been done.
+  memoryArbitrationWaitFlag = false;
+  memoryArbitrationWait.notifyAll();
+
   joinThread.join();
-  memThread.join();
   waitForAllTasksToBeDeleted();
-  ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 2);
+  ASSERT_EQ(arbitrator_->stats().numNonReclaimableAttempts, 1);
   ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
 }
 
@@ -2003,7 +1940,7 @@ DEBUG_ONLY_TEST_F(
     SharedArbitrationTest,
     reclaimFromHashJoinBuildInWaitForTableBuild) {
   setupMemory(kMemoryCapacity, 0);
-  const auto vectors = newVectors(256, 32 << 10);
+  const auto vectors = createVectors(rowType_, 32 << 10, fuzzerOpts_);
   const int numDrivers = 4;
   const auto expectedResult =
       runHashJoinTask(vectors, nullptr, numDrivers, false).data;
@@ -2754,7 +2691,9 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, tableWriteReclaimOnClose) {
 DEBUG_ONLY_TEST_F(SharedArbitrationTest, raceBetweenWriterCloseAndTaskReclaim) {
   const uint64_t memoryCapacity = 512 * MB;
   setupMemory(memoryCapacity);
-  std::vector<RowVectorPtr> vectors = newVectors(1'000, memoryCapacity / 8);
+  fuzzerOpts_.vectorSize = 1'000;
+  std::vector<RowVectorPtr> vectors =
+      createVectors(rowType_, memoryCapacity / 8, fuzzerOpts_);
   const auto expectedResult = runWriteTask(vectors, nullptr, 1, false).data;
 
   std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(memoryCapacity);
@@ -2788,7 +2727,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, raceBetweenWriterCloseAndTaskReclaim) {
   // Creates a fake pool to trigger memory arbitration.
   auto fakePool = queryCtx->pool()->addLeafChild(
       "fakePool", true, FakeMemoryReclaimer::create());
-  ASSERT_TRUE(memoryManager_->growPool(
+  ASSERT_TRUE(memoryManager_->testingGrowPool(
       fakePool.get(),
       arbitrator_->stats().freeCapacityBytes +
           queryCtx->pool()->capacity() / 2));
@@ -2865,7 +2804,9 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, taskWaitTimeout) {
   const int queryMemoryCapacity = 128 << 20;
   // Creates a large number of vectors based on the query capacity to trigger
   // memory arbitration.
-  const auto vectors = newVectors(1'000, queryMemoryCapacity / 2);
+  fuzzerOpts_.vectorSize = 10'000;
+  const auto vectors =
+      createVectors(rowType_, queryMemoryCapacity / 2, fuzzerOpts_);
   const int numDrivers = 4;
   const auto expectedResult =
       runHashJoinTask(vectors, nullptr, numDrivers, false).data;

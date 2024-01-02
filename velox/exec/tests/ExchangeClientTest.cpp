@@ -53,7 +53,7 @@ class ExchangeClientTest : public testing::Test,
     auto listener = bufferManager_->newListener();
     IOBufOutputStream stream(*pool(), listener.get(), data->size());
     data->flush(&stream);
-    return std::make_unique<SerializedPage>(stream.getIOBuf());
+    return std::make_unique<SerializedPage>(stream.getIOBuf(), nullptr, size);
   }
 
   std::shared_ptr<Task> makeTask(
@@ -61,7 +61,7 @@ class ExchangeClientTest : public testing::Test,
       const core::PlanNodePtr& planNode) {
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
-        memory::MemoryManager::getInstance()->addRootPool(queryCtx->queryId()));
+        memory::memoryManager()->addRootPool(queryCtx->queryId()));
     return Task::create(
         taskId, core::PlanFragment{planNode}, 0, std::move(queryCtx));
   }

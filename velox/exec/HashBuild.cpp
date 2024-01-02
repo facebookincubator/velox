@@ -238,15 +238,8 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       table_->rows(),
       tableType_,
       std::move(hashBits),
-      spillConfig.getSpillDirPathCb,
-      spillConfig.fileNamePrefix,
-      spillConfig.maxFileSize,
-      spillConfig.writeBufferSize,
-      spillConfig.compressionKind,
-      memory::spillMemoryPool(),
-      spillConfig.executor,
-      spillConfig.maxSpillRunRows,
-      spillConfig.fileCreateConfig);
+      &spillConfig,
+      spillConfig.maxFileSize);
 
   const int32_t numPartitions = spiller_->hashBits().numPartitions();
   spillInputIndicesBuffers_.resize(numPartitions);
@@ -455,7 +448,7 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
       rows->stringAllocator().retainedSize() - outOfLineFreeBytes;
   const auto outOfLineBytesPerRow =
       std::max<uint64_t>(1, numRows == 0 ? 0 : outOfLineBytes / numRows);
-  const auto currentUsage = pool()->parent()->currentBytes();
+  const auto currentUsage = pool()->currentBytes();
 
   if (numRows != 0) {
     // Test-only spill path.
@@ -467,9 +460,10 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
 
     // We check usage from the parent pool to take peers' allocations into
     // account.
-    if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
+    const auto nodeUsage = pool()->parent()->currentBytes();
+    if (spillMemoryThreshold_ != 0 && nodeUsage > spillMemoryThreshold_) {
       const int64_t bytesToSpill =
-          currentUsage * spillConfig()->spillableReservationGrowthPct / 100;
+          nodeUsage * spillConfig()->spillableReservationGrowthPct / 100;
       numSpillRows_ = std::max<int64_t>(
           1, bytesToSpill / (rows->fixedRowSize() + outOfLineBytesPerRow));
       numSpillBytes_ = numSpillRows_ * outOfLineBytesPerRow;

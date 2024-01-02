@@ -50,10 +50,6 @@ std::string getAndClearCacheFailureMessage() {
   return errMsg;
 }
 
-std::shared_ptr<MemoryAllocator> MemoryAllocator::instance_;
-MemoryAllocator* MemoryAllocator::customInstance_;
-std::mutex MemoryAllocator::initMutex_;
-
 std::string MemoryAllocator::kindString(Kind kind) {
   switch (kind) {
     case Kind::kMalloc:
@@ -119,36 +115,6 @@ MemoryAllocator::SizeMix MemoryAllocator::allocationSize(
   }
   mix.totalPages = pagesToAlloc;
   return mix;
-}
-
-// static
-MemoryAllocator* MemoryAllocator::getInstance() {
-  std::lock_guard<std::mutex> l(initMutex_);
-  if (customInstance_ != nullptr) {
-    return customInstance_;
-  }
-  if (instance_ != nullptr) {
-    return instance_.get();
-  }
-  instance_ = createDefaultInstance();
-  return instance_.get();
-}
-
-// static
-std::shared_ptr<MemoryAllocator> MemoryAllocator::createDefaultInstance() {
-  return std::make_shared<MallocAllocator>(kDefaultCapacityBytes);
-}
-
-// static
-void MemoryAllocator::setDefaultInstance(MemoryAllocator* instance) {
-  std::lock_guard<std::mutex> l(initMutex_);
-  customInstance_ = instance;
-}
-
-// static
-void MemoryAllocator::testingDestroyInstance() {
-  std::lock_guard<std::mutex> l(initMutex_);
-  instance_ = nullptr;
 }
 
 // static
@@ -387,5 +353,4 @@ std::string MemoryAllocator::getAndClearFailureMessage() {
   }
   return allocatorErrMsg;
 }
-
 } // namespace facebook::velox::memory

@@ -38,14 +38,7 @@ Spiller::Spiller(
     RowTypePtr rowType,
     int32_t numSortingKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
-    common::GetSpillDirectoryPathCB getSpillDirPathCb,
-    const std::string& fileNamePrefix,
-    uint64_t writeBufferSize,
-    common::CompressionKind compressionKind,
-    memory::MemoryPool* pool,
-    folly::Executor* executor,
-    uint64_t maxSpillRunRows,
-    const std::string& fileCreateConfig)
+    const common::SpillConfig* spillConfig)
     : Spiller(
           type,
           container,
@@ -53,15 +46,15 @@ Spiller::Spiller(
           HashBitRange{},
           numSortingKeys,
           sortCompareFlags,
-          getSpillDirPathCb,
-          fileNamePrefix,
+          spillConfig->getSpillDirPathCb,
+          spillConfig->updateAndCheckSpillLimitCb,
+          spillConfig->fileNamePrefix,
           std::numeric_limits<uint64_t>::max(),
-          writeBufferSize,
-          compressionKind,
-          pool,
-          executor,
-          maxSpillRunRows,
-          fileCreateConfig) {
+          spillConfig->writeBufferSize,
+          spillConfig->compressionKind,
+          spillConfig->executor,
+          spillConfig->maxSpillRunRows,
+          spillConfig->fileCreateConfig) {
   VELOX_CHECK(
       type_ == Type::kOrderByInput || type_ == Type::kAggregateInput,
       "Unexpected spiller type: {}",
@@ -74,14 +67,7 @@ Spiller::Spiller(
     Type type,
     RowContainer* container,
     RowTypePtr rowType,
-    common::GetSpillDirectoryPathCB getSpillDirPathCb,
-    const std::string& fileNamePrefix,
-    uint64_t writeBufferSize,
-    common::CompressionKind compressionKind,
-    memory::MemoryPool* pool,
-    folly::Executor* executor,
-    uint64_t maxSpillRunRows,
-    const std::string& fileCreateConfig)
+    const common::SpillConfig* spillConfig)
     : Spiller(
           type,
           container,
@@ -89,15 +75,15 @@ Spiller::Spiller(
           HashBitRange{},
           0,
           {},
-          getSpillDirPathCb,
-          fileNamePrefix,
+          spillConfig->getSpillDirPathCb,
+          spillConfig->updateAndCheckSpillLimitCb,
+          spillConfig->fileNamePrefix,
           std::numeric_limits<uint64_t>::max(),
-          writeBufferSize,
-          compressionKind,
-          pool,
-          executor,
-          maxSpillRunRows,
-          fileCreateConfig) {
+          spillConfig->writeBufferSize,
+          spillConfig->compressionKind,
+          spillConfig->executor,
+          spillConfig->maxSpillRunRows,
+          spillConfig->fileCreateConfig) {
   VELOX_CHECK(
       type_ == Type::kAggregateOutput || type_ == Type::kOrderByOutput,
       "Unexpected spiller type: {}",
@@ -110,14 +96,8 @@ Spiller::Spiller(
     Type type,
     RowTypePtr rowType,
     HashBitRange bits,
-    common::GetSpillDirectoryPathCB getSpillDirPathCb,
-    const std::string& fileNamePrefix,
-    uint64_t targetFileSize,
-    uint64_t writeBufferSize,
-    common::CompressionKind compressionKind,
-    memory::MemoryPool* pool,
-    folly::Executor* executor,
-    const std::string& fileCreateConfig)
+    const common::SpillConfig* spillConfig,
+    uint64_t targetFileSize)
     : Spiller(
           type,
           nullptr,
@@ -125,15 +105,15 @@ Spiller::Spiller(
           bits,
           0,
           {},
-          getSpillDirPathCb,
-          fileNamePrefix,
+          spillConfig->getSpillDirPathCb,
+          spillConfig->updateAndCheckSpillLimitCb,
+          spillConfig->fileNamePrefix,
           targetFileSize,
-          writeBufferSize,
-          compressionKind,
-          pool,
-          executor,
+          spillConfig->writeBufferSize,
+          spillConfig->compressionKind,
+          spillConfig->executor,
           0,
-          fileCreateConfig) {
+          spillConfig->fileCreateConfig) {
   VELOX_CHECK_EQ(
       type_,
       Type::kHashJoinProbe,
@@ -146,15 +126,8 @@ Spiller::Spiller(
     RowContainer* container,
     RowTypePtr rowType,
     HashBitRange bits,
-    common::GetSpillDirectoryPathCB getSpillDirPathCb,
-    const std::string& fileNamePrefix,
-    uint64_t targetFileSize,
-    uint64_t writeBufferSize,
-    common::CompressionKind compressionKind,
-    memory::MemoryPool* pool,
-    folly::Executor* executor,
-    uint64_t maxSpillRunRows,
-    const std::string& fileCreateConfig)
+    const common::SpillConfig* spillConfig,
+    uint64_t targetFileSize)
     : Spiller(
           type,
           container,
@@ -162,15 +135,15 @@ Spiller::Spiller(
           bits,
           0,
           {},
-          getSpillDirPathCb,
-          fileNamePrefix,
+          spillConfig->getSpillDirPathCb,
+          spillConfig->updateAndCheckSpillLimitCb,
+          spillConfig->fileNamePrefix,
           targetFileSize,
-          writeBufferSize,
-          compressionKind,
-          pool,
-          executor,
-          maxSpillRunRows,
-          fileCreateConfig) {
+          spillConfig->writeBufferSize,
+          spillConfig->compressionKind,
+          spillConfig->executor,
+          spillConfig->maxSpillRunRows,
+          spillConfig->fileCreateConfig) {
   VELOX_CHECK_EQ(
       type_,
       Type::kHashJoinBuild,
@@ -185,24 +158,24 @@ Spiller::Spiller(
     HashBitRange bits,
     int32_t numSortingKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
-    common::GetSpillDirectoryPathCB getSpillDirPathCb,
+    const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
+    const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     const std::string& fileNamePrefix,
     uint64_t targetFileSize,
     uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
-    memory::MemoryPool* pool,
     folly::Executor* executor,
     uint64_t maxSpillRunRows,
     const std::string& fileCreateConfig)
     : type_(type),
       container_(container),
       executor_(executor),
-      pool_(pool),
       bits_(bits),
       rowType_(std::move(rowType)),
       maxSpillRunRows_(maxSpillRunRows),
       state_(
           getSpillDirPathCb,
+          updateAndCheckSpillLimitCb,
           fileNamePrefix,
           bits.numPartitions(),
           numSortingKeys,
@@ -210,7 +183,7 @@ Spiller::Spiller(
           targetFileSize,
           writeBufferSize,
           compressionKind,
-          pool_,
+          memory::spillMemoryPool(),
           &stats_,
           fileCreateConfig) {
   TestValue::adjust(
@@ -219,7 +192,7 @@ Spiller::Spiller(
   VELOX_CHECK_EQ(container_ == nullptr, type_ == Type::kHashJoinProbe);
   spillRuns_.reserve(state_.maxPartitions());
   for (int i = 0; i < state_.maxPartitions(); ++i) {
-    spillRuns_.emplace_back(*pool_);
+    spillRuns_.emplace_back(*memory::spillMemoryPool());
   }
 }
 

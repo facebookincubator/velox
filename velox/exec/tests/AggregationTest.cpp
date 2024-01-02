@@ -2027,9 +2027,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::MemoryManager::getInstance()->addRootPool(
-            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2170,9 +2169,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  queryCtx->testingOverrideMemoryPool(
-      memory::MemoryManager::getInstance()->addRootPool(
-          queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
   auto expectedResult =
       AssertQueryBuilder(PlanBuilder()
                              .values(batches)
@@ -2281,8 +2279,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
-        memory::MemoryManager::getInstance()->addRootPool(
-            queryCtx->queryId(), kMaxBytes));
+        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2406,9 +2403,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::MemoryManager::getInstance()->addRootPool(
-            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2551,8 +2547,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
-        memory::MemoryManager::getInstance()->addRootPool(
-            queryCtx->queryId(), kMaxBytes));
+        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2704,8 +2699,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
-        memory::MemoryManager::getInstance()->addRootPool(
-            queryCtx->queryId(), kMaxBytes));
+        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2838,9 +2832,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::MemoryManager::getInstance()->addRootPool(
-            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2927,9 +2920,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::MemoryManager::getInstance()->addRootPool(
-            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -3115,9 +3107,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyInput) {
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  queryCtx->testingOverrideMemoryPool(
-      memory::MemoryManager::getInstance()->addRootPool(
-          queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
   core::PlanNodeId aggNodeId;
   auto task =
       AssertQueryBuilder(
@@ -3188,9 +3179,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  queryCtx->testingOverrideMemoryPool(
-      memory::MemoryManager::getInstance()->addRootPool(
-          queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
   core::PlanNodeId aggNodeId;
   auto task =
       AssertQueryBuilder(PlanBuilder()
@@ -3214,5 +3204,57 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
   auto taskStats = exec::toPlanStats(task->taskStats());
   ASSERT_EQ(taskStats.at(aggNodeId).spilledBytes, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+}
+
+TEST_F(AggregationTest, maxSpillBytes) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto vectors = createVectors(rowType, 1024, 15 << 20);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId aggregationNodeId;
+  const auto plan = PlanBuilder(planNodeIdGenerator)
+                        .values(vectors)
+                        .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                        .capturePlanNodeId(aggregationNodeId)
+                        .planNode();
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+
+  struct {
+    int32_t maxSpilledBytes;
+    bool expectedExceedLimit;
+    std::string debugString() const {
+      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+    }
+  } testSettings[] = {{1 << 30, false}, {16 << 20, true}, {0, false}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    try {
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->path)
+          .queryCtx(queryCtx)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+          // Set a small capacity to trigger threshold based spilling
+          .config(
+              QueryConfig::kAggregationSpillMemoryThreshold,
+              std::to_string(5 << 20))
+          .config(
+              QueryConfig::kMaxSpillBytes,
+              std::to_string(testData.maxSpilledBytes))
+          .copyResults(pool_.get());
+      ASSERT_FALSE(testData.expectedExceedLimit);
+    } catch (const VeloxRuntimeError& e) {
+      ASSERT_TRUE(testData.expectedExceedLimit);
+      ASSERT_NE(
+          e.message().find(
+              "Query exceeded per-query local spill limit of 16.00MB"),
+          std::string::npos);
+      ASSERT_EQ(
+          e.errorCode(), facebook::velox::error_code::kSpillLimitExceeded);
+    }
+  }
 }
 } // namespace facebook::velox::exec::test

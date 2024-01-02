@@ -20,6 +20,7 @@
 #include <arrow/table.h>
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::parquet {
@@ -132,6 +133,7 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   }
   properties =
       properties->compression(getArrowParquetCompression(options.compression));
+  properties = properties->encoding(options.encoding);
   properties = properties->data_pagesize(options.dataPageSize);
   properties = properties->max_row_group_length(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
@@ -229,6 +231,7 @@ Writer::Writer(
   }
   arrowContext_->properties =
       getArrowParquetWriterOptions(options, flushPolicy_);
+  setMemoryReclaimers();
 }
 
 Writer::Writer(
@@ -379,6 +382,23 @@ parquet::WriterOptions getParquetOptions(
     parquetOptions.compression = options.compressionKind.value();
   }
   return parquetOptions;
+}
+
+void Writer::setMemoryReclaimers() {
+  VELOX_CHECK(
+      !pool_->isLeaf(),
+      "The root memory pool for parquet writer can't be leaf: {}",
+      pool_->name());
+  VELOX_CHECK_NULL(pool_->reclaimer());
+
+  if ((pool_->parent() == nullptr) ||
+      (pool_->parent()->reclaimer() == nullptr)) {
+    return;
+  }
+
+  // TODO https://github.com/facebookincubator/velox/issues/8190
+  pool_->setReclaimer(exec::MemoryReclaimer::create());
+  generalPool_->setReclaimer(exec::MemoryReclaimer::create());
 }
 
 std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(

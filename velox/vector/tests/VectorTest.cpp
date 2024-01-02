@@ -1474,6 +1474,20 @@ TEST_F(VectorTest, wrapInConstant) {
   for (auto i = 0; i < size; i++) {
     ASSERT_TRUE(constArrayVector->isNullAt(i));
   }
+
+  // Wrap a loaded lazy complex vector that will be retained as a valueVector.
+  // Ensure the lazy layer is stripped away and the valueVector points to the
+  // loaded Vector underneath it.
+  auto lazyOverArray = std::make_shared<LazyVector>(
+      pool(),
+      arrayVector->type(),
+      size,
+      std::make_unique<TestingLoader>(arrayVector));
+  lazyOverArray->loadedVector();
+  EXPECT_TRUE(lazyOverArray->isLoaded());
+  constArrayVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
+      BaseVector::wrapInConstant(size, 22, lazyOverArray));
+  EXPECT_FALSE(constArrayVector->valueVector()->isLazy());
 }
 
 TEST_F(VectorTest, wrapInConstantWithCopy) {
@@ -2246,6 +2260,23 @@ TEST_F(VectorTest, nestedLazy) {
   EXPECT_TRUE(lazy->isLoaded());
 }
 
+TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
+  // Ensure the lazy layer is stripped away and the dictionaryValues vector
+  // points to the loaded Vector underneath it.
+  vector_size_t size = 10;
+  auto lazy = std::make_shared<LazyVector>(
+      pool(),
+      INTEGER(),
+      size,
+      std::make_unique<TestingLoader>(
+          makeFlatVector<int64_t>(size, [](auto row) { return row; })));
+  lazy->loadedVector();
+  EXPECT_TRUE(lazy->isLoaded());
+  auto dict = wrapInDictionary(makeIndices(size, folly::identity), size, lazy);
+  auto valuesVector = dict->valueVector();
+  EXPECT_FALSE(valuesVector->isLazy());
+}
+
 TEST_F(VectorTest, dictionaryResize) {
   vector_size_t size = 10;
   std::vector<int64_t> elements{0, 1, 2, 3, 4};
@@ -2580,7 +2611,7 @@ TEST_F(VectorTest, mapSliceMutability) {
 TEST_F(VectorTest, lifetime) {
   ASSERT_DEATH(
       {
-        auto childPool = memory::MemoryManager::getInstance()->addLeafPool();
+        auto childPool = memory::memoryManager()->addLeafPool();
         auto v = BaseVector::create(INTEGER(), 10, childPool.get());
 
         // BUG: Memory pool needs to stay alive until all memory allocated from

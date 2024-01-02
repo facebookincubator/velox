@@ -378,11 +378,13 @@ MemoryPoolImpl::MemoryPoolImpl(
     Kind kind,
     std::shared_ptr<MemoryPool> parent,
     std::unique_ptr<MemoryReclaimer> reclaimer,
+    GrowCapacityCallback growCapacityCb,
     DestructionCallback destructionCb,
     const Options& options)
     : MemoryPool{name, kind, parent, options},
       manager_{memoryManager},
-      allocator_{&manager_->allocator()},
+      allocator_{manager_->allocator()},
+      growCapacityCb_(std::move(growCapacityCb)),
       destructionCb_(std::move(destructionCb)),
       debugPoolNameRegex_(debugEnabled_ ? *(debugPoolNameRegex().rlock()) : ""),
       reclaimer_(std::move(reclaimer)),
@@ -398,6 +400,10 @@ MemoryPoolImpl::MemoryPoolImpl(
       "Child memory pool {} shall only set memory reclaimer if its parent {} has also set",
       name_,
       parent_->name());
+  VELOX_CHECK(
+      isRoot() || (destructionCb_ == nullptr && growCapacityCb_ == nullptr),
+      "Only root memory pool allows to set destruction and capacity grow callbacks: {}",
+      name_);
 }
 
 MemoryPoolImpl::~MemoryPoolImpl() {
@@ -408,16 +414,17 @@ MemoryPoolImpl::~MemoryPoolImpl() {
 
   if (isLeaf()) {
     if (usedReservationBytes_ > 0) {
+      LOG(ERROR) << "Memory leak (Used memory): " << toString();
       RECORD_METRIC_VALUE(
           kMetricMemoryPoolUsageLeakBytes, usedReservationBytes_);
     }
 
     if (minReservationBytes_ > 0) {
+      LOG(ERROR) << "Memory leak (Reserved Memory): " << toString();
       RECORD_METRIC_VALUE(
           kMetricMemoryPoolReservationLeakBytes, minReservationBytes_);
     }
   }
-
   VELOX_DCHECK(
       (usedReservationBytes_ == 0) && (reservationBytes_ == 0) &&
           (minReservationBytes_ == 0),
@@ -661,6 +668,7 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
       parent,
       std::move(reclaimer),
       nullptr,
+      nullptr,
       Options{
           .alignment = alignment_,
           .trackUsage = trackUsage_,
@@ -771,7 +779,7 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
   }
   VELOX_CHECK_NULL(parent_);
 
-  if (manager_->growPool(requestor, size)) {
+  if (growCapacityCb_(requestor, size)) {
     TestValue::adjust(
         "facebook::velox::memory::MemoryPoolImpl::incrementReservationThreadSafe::AfterGrowCallback",
         this);
