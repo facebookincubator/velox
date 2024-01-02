@@ -363,7 +363,7 @@ class QueryConfig {
   /// Maximum number of splits to preload. Set to 0 to disable preloading.
   static constexpr const char* kMaxSplitPreloadPerDriver =
       "max_split_preload_per_driver";
-
+  
   /// If not zero, specifies the cpu time slice limit in ms that a driver thread
   /// can continuously run without yielding. If it is zero, then there is no
   /// limit.
@@ -732,7 +732,7 @@ class QueryConfig {
   }
 
   uint32_t driverCpuTimeSliceLimitMs() const {
-    return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 0);
+    return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 1'000);
   }
 
   template <typename T>
