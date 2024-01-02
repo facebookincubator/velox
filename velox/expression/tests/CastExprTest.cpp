@@ -1793,6 +1793,7 @@ TEST_F(CastExprTest, nulls) {
 
 TEST_F(CastExprTest, testNullOnFailure) {
   auto input =
+
       makeNullableFlatVector<std::string>({"1", "2", "", "3.4", std::nullopt});
   auto expected = makeNullableFlatVector<int32_t>(
       {1, 2, std::nullopt, std::nullopt, std::nullopt});
