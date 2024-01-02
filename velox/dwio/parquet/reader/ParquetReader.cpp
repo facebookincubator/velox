@@ -763,6 +763,7 @@ bool ParquetRowReader::advanceToNextRowGroup() {
 void ParquetRowReader::updateRuntimeStats(
     dwio::common::RuntimeStatistics& stats) const {
   stats.skippedStrides += skippedRowGroups_;
+  stats.processedStrides += rowGroupIds_.size();
 }
 
 void ParquetRowReader::resetFilterCaches() {
