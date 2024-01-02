@@ -151,6 +151,7 @@ class AsyncSource {
   /// 2. Resets the 'make_' function if it has not started yet.
   /// 3. Cleans up the 'item_' if 'make_' has completed, but the result 'item_'
   /// has not been returned to the caller.
+  /// Invoke this function only when 'move()' is not called.
   void close() {
     if (closed_) {
       return;

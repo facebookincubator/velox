@@ -182,10 +182,12 @@ class DataCounter {
  private:
   static std::atomic<uint64_t> numCreatedDataCounters_;
   static std::atomic<uint64_t> numDeletedDataCounters_;
+
   uint64_t objectNumber_{0};
 };
 
 std::atomic<uint64_t> DataCounter::numCreatedDataCounters_ = 0;
+
 std::atomic<uint64_t> DataCounter::numDeletedDataCounters_ = 0;
 
 TEST(AsyncSourceTest, close) {
@@ -200,9 +202,11 @@ TEST(AsyncSourceTest, close) {
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 0);
   countAsyncSource.close();
+
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 1);
   DataCounter::reset();
+
   // If 'prepare()' is executed within the thread pool but 'move()' is not
   // invoked, invoking 'close()' will set 'item_' to nullptr. The deletion of
   // 'dateCounter' is used as a verification for this behavior.
@@ -215,9 +219,11 @@ TEST(AsyncSourceTest, close) {
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 0);
   asyncSource->close();
+
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 1);
   DataCounter::reset();
+
   // If 'prepare()' is currently being executed within the thread pool,
   // 'close()' should wait for the completion of 'prepare()' and set 'item_' to
   // nullptr.
@@ -234,6 +240,7 @@ TEST(AsyncSourceTest, close) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   sleepAsyncSource->close();
+
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 1);
   thread1.join();
