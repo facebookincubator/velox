@@ -109,9 +109,8 @@ benchmarks-basic-build:
 
 benchmarks-build:
 	$(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
-                                            -DVELOX_ENABLE_BENCHMARKS=ON \
-                                            -DVELOX_ENABLE_BENCHMARKS_BASIC=ON \
-                                            -DVELOX_BUILD_TESTING=OFF"
+                                            -DVELOX_BUILD_TESTING=OFF \
+                                            -DVELOX_ENABLE_BENCHMARKS=ON"
 
 benchmarks-basic-run:
 	scripts/benchmark-runner.py run \
