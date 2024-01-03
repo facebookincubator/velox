@@ -75,10 +75,13 @@ class WindowFuzzer : public AggregationFuzzerBase {
   bool verifyWindow(
       const std::vector<std::string>& partitionKeys,
       const std::vector<std::string>& sortingKeys,
+      const std::string& frameClause,
       const std::vector<std::string>& aggregates,
       const std::vector<RowVectorPtr>& input,
       bool customVerification,
       bool enableWindowVerification);
+
+  const std::string generateFrameClause();
 
   const std::unordered_set<std::string> orderDependentFunctions_;
 

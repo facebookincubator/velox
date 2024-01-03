@@ -16,6 +16,7 @@
 
 #include "velox/exec/fuzzer/WindowFuzzer.h"
 
+#include <boost/random/uniform_int_distribution.hpp>
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 DEFINE_bool(
@@ -86,6 +87,7 @@ void WindowFuzzer::go() {
       sortingKeys = generateSortingKeys("s", argNames, argTypes);
     }
     auto partitionKeys = generateKeys("p", argNames, argTypes);
+    auto frameClause = generateFrameClause();
     auto input = generateInputDataWithRowNumber(argNames, argTypes, signature);
     // If the function is order-dependent, sort all input rows by row_number
     // additionally.
@@ -99,6 +101,7 @@ void WindowFuzzer::go() {
     bool failed = verifyWindow(
         partitionKeys,
         sortingKeys,
+        frameClause,
         {call},
         input,
         customVerification,
@@ -139,9 +142,63 @@ void WindowFuzzer::updateReferenceQueryStats(
   }
 }
 
+const std::string WindowFuzzer::generateFrameClause() {
+  auto frameType = [](int value) -> const std::string {
+    switch (value) {
+      case 0:
+        return "ROWS";
+      case 1:
+        return "RANGE";
+      default:
+        VELOX_UNREACHABLE("Unknown value for frame bound generation");
+    }
+  };
+  auto frameTypeValue =
+      boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+  auto frameTypeString = frameType(frameTypeValue);
+
+  auto frameBound = [&](int value, bool start) -> const std::string {
+    // Generating only constant bounded k PRECEDING/FOLLOWING frames for now.
+    auto kValue =
+        boost::random::uniform_int_distribution<uint32_t>(1, 10)(rng_);
+    switch (value) {
+      case 0:
+        return "CURRENT ROW";
+      case 1:
+        return start ? "UNBOUNDED PRECEDING" : "UNBOUNDED FOLLOWING";
+      case 2:
+        return fmt::format("{} FOLLOWING", kValue);
+      case 3:
+        return fmt::format("{} PRECEDING", kValue);
+      default:
+        VELOX_UNREACHABLE("Unknown option for frame clause generation");
+    }
+  };
+
+  // Generating k PRECEDING and k FOLLOWING frames only for ROWS type.
+  // k RANGE frames require more work as we have to generate columns with the
+  // frame bound values.
+  auto startValue = boost::random::uniform_int_distribution<uint32_t>(
+      0, frameTypeValue == 0 ? 3 : 1)(rng_);
+  auto startBound = frameBound(startValue, true);
+  // Frame end has additional limitation that if the frameStart is k FOLLOWING
+  // or CURRENT ROW then the frameEnd cannot be k PRECEDING or CURRENT ROW.
+  auto startLimit =
+      frameTypeValue == 0 ? (startValue == 2 | startValue == 0 ? 1 : 0) : 0;
+  auto endLimit =
+      frameTypeValue == 0 ? (startValue == 2 | startValue == 0 ? 2 : 3) : 1;
+  auto endBound = frameBound(
+      boost::random::uniform_int_distribution<uint32_t>(
+          startLimit, endLimit)(rng_),
+      false);
+
+  return frameTypeString + " BETWEEN " + startBound + " AND " + endBound;
+}
+
 bool WindowFuzzer::verifyWindow(
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortingKeys,
+    const std::string& frameClause,
     const std::vector<std::string>& functionCalls,
     const std::vector<RowVectorPtr>& input,
     bool customVerification,
@@ -152,7 +209,7 @@ bool WindowFuzzer::verifyWindow(
   if (!sortingKeys.empty()) {
     frame << " order by " << folly::join(", ", sortingKeys);
   }
-  // TODO: allow randomly generated frames.
+  frame << " " << frameClause;
   auto plan =
       PlanBuilder()
           .values(input)
