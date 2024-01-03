@@ -1,0 +1,226 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>Hash table &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Aggregations" href="aggregations.html" />
+    <link rel="prev" title="Arena Allocation" href="arena.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="aggregations.html" title="Aggregations"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="arena.html" title="Arena Allocation"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Hash table</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="hash-table">
+<h1>Hash table<a class="headerlink" href="#hash-table" title="Permalink to this heading">¶</a></h1>
+<p>The hash table used in Velox is similar to the
+<a class="reference external" href="https://engineering.fb.com/2019/04/25/developer-tools/f14/">F14 hash table</a>.
+The main difference is that the Velox hash table allows vectorized inserts and lookups, while F14 doesn’t.</p>
+<section id="layout">
+<h2>Layout<a class="headerlink" href="#layout" title="Permalink to this heading">¶</a></h2>
+<p>The hash table is implemented as an array of buckets. It is a linear data structure.
+Each bucket uses 128 bytes (2 * 64 = 2 cache lines) and contains 16 slots.
+Each hash table entry occupies one slot. The hash table’s capacity is the total number of slots: total
+number of buckets * 16. The hash table’s capacity is always a power of 2.</p>
+<p>Each slot consists of 2 pieces: a tag (7 bits) and a pointer (6 bytes).
+There are a total of 16 tags and 16 pointers in a bucket. These are stored tags first, followed by
+pointers. Each tag occupies 1 byte (only 7 bits are used). 16 tags occupy 16 bytes. Each pointer
+occupies 6 bytes. 16 pointers occupy 96 bytes. There are 16 bytes left unused at the end of the bucket.
+These are referred to as padding.</p>
+<img alt="../_images/ht-layout.png" class="align-center" src="../_images/ht-layout.png" />
+<p>A hash table is never full. There are always some empty slots. Velox allows the hash table to fill up to
+<span class="raw-html"><text style="font-size:1.2em;background-color:none">⅞</text></span> of capacity before resizing.
+On resize the hash table’s capacity doubles.</p>
+<p>Individual buckets may be completely empty, partially filled or full. Buckets are filled left to right.
+If a bucket is partially full, then first N tags and N pointers are filled and the rest are free (N &lt; 16).</p>
+</section>
+<section id="inserting-an-entry">
+<h2>Inserting an entry<a class="headerlink" href="#inserting-an-entry" title="Permalink to this heading">¶</a></h2>
+<p>To insert a new entry we need to figure out which slot to put it in.
+A slot is identified by bucket and offset within the bucket. First, we compute a hash of the entry.
+Then, we compute a tag and a bucket number from the hash.</p>
+<p>We use 7 bits of the hash for the tag: bits 32-38 inclusive. We use N bits of the hash for the bucket
+starting from bit 8.</p>
+<p>The number of bits used for the bucket is decided based on the hash table capacity.
+Remember that capacity is always a power of 2: <span class="m math notranslate nohighlight">\(2^n\)</span>. Each bucket stores 16 entries, hence, we
+need <span class="m math notranslate nohighlight">\(2^{(n-4)}\)</span> buckets to store <span class="m math notranslate nohighlight">\(2^n\)</span> entries. Hence, we need to use n-4 bits of the hash for the bucket.</p>
+<p>Let’s say we have a hash table that can store a million entries: <span class="m math notranslate nohighlight">\(2^{20}\)</span> = 1,048,576. Here, n = 20 and
+N = n - 4 = 16. We will use 16 bits for the bucket.</p>
+<p>Given hash number:</p>
+<p>01011011 11001010 01111100 0<span class="raw-html"><text style="background-color:orange">1101001</text></span> 10110111
+1<span class="raw-html"><text style="background-color:#ADD8E6">0010100 11111000 1</text></span>1001110</p>
+<p>We compute the tag as 1<span class="raw-html"><text style="background-color:orange">1101001</text></span> and bucket offset
+as 1,374,336 (00000000 00000000 00000000 00000000 00000000
+0<span class="raw-html"><text style="background-color:#ADD8E6">0010100 11111000 1</text></span>0000000).
+Bucket offset is the number of bytes from the start of the hash table.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">bucket</span><span class="w"> </span><span class="n">offset</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bucket</span><span class="w"> </span><span class="n">number</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">128</span><span class="w"></span>
+<span class="n">bucket</span><span class="w"> </span><span class="n">number</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bucket</span><span class="w"> </span><span class="n">offset</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">128</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The bucket offset is used to get to the bucket, in this case bucket number 10737.
+The candidate bucket can be empty, partially filled or full.</p>
+<p><strong>The bucket is empty.</strong></p>
+<img alt="../_images/ht-empty.png" class="align-center" src="../_images/ht-empty.png" />
+<p>In this case, we simply insert our entry into the first slot of the bucket.
+We store only the tag (7 bits of the hash value) in the hash table. The hash number itself is not stored.
+The pointer refers to memory outside of the hash table where the complete value is stored.
+This is usually a row in a RowContainer. The hash table can be viewed as an index on top of a RowContainer
+that helps locate records with matching keys faster. The hash table itself doesn’t store data or keys.</p>
+<img alt="../_images/ht-insert1.png" class="align-center" src="../_images/ht-insert1.png" />
+<p><strong>The bucket is partially filled.</strong></p>
+<p>For example, the bucket has one slot occupied (like above).
+In this case there is a possibility that the new entry is a duplicate of the one already stored.
+Hence, we compare the tag of the new entry with tags stored in the bucket.
+If none match, this entry is not a duplicate, so we store it in the next available slot in the bucket.</p>
+<img alt="../_images/ht-insert2.png" class="align-center" src="../_images/ht-insert2.png" />
+<p>However, if one or more existing tags match the tag of the new entry, we follow the pointers to compare
+the keys to determine whether there is a match or not. If there is no match we insert a new entry.
+Otherwise, there is a duplicate. The row is chained to the row list pointed to by the row entry
+and no new entry is inserted.</p>
+<p><strong>The bucket is full.</strong></p>
+<img alt="../_images/ht-full.png" class="align-center" src="../_images/ht-full.png" />
+<p>First, we need to check if the new entry is a duplicate of one of the 16 entries stored in the bucket.
+We compare tags and if necessary follow the pointers to compare the keys.
+If there is a match, the row is chained to the row list pointed to by the row entry
+and no new entry is inserted. If there is no match, we go to the
+next bucket and repeat the process. In rare cases, we may end up checking many buckets until we find a
+duplicate existing entry or an empty slot for the new entry. That’s why it is important to ensure that
+the hash table is never full and there are enough gaps in the form of empty slots.</p>
+</section>
+<section id="resizing">
+<h2>Resizing<a class="headerlink" href="#resizing" title="Permalink to this heading">¶</a></h2>
+<p>If the hash table fills up beyond <span class="raw-html"><text style="font-size:1.2em;background-color:none">⅞</text></span>
+of capacity, it needs to be resized. Each resize doubles the capacity.
+A new hash table is allocated and all existing entries inserted using the “Inserting an entry” process.
+Since we know that all entries are unique, the “Inserting an entry” process can be simplified to
+eliminate the logic for checking whether a new entry is a duplicate of an existing one. Hence, to
+insert an entry, we compute a hash, extract tag and bucket number, go to the bucket and insert the
+entry if there is space. If the bucket is full, we proceed to the next bucket and continue until we
+find a bucket with an empty slot. We insert the new entry there.</p>
+</section>
+<section id="use-cases">
+<h2>Use Cases<a class="headerlink" href="#use-cases" title="Permalink to this heading">¶</a></h2>
+<p>The main use cases for the hash table are <a class="reference external" href="joins.html">Join</a> and
+<a class="reference external" href="aggregations.html">Aggregation</a> operators.</p>
+<p>The HashBuild operator builds the hash table to store unique values of the join keys found on the build
+side of the join. The HashProbe operator looks up entries in the hash table using join keys from the
+probe side. The HashProbe operator does not insert new entries into the hash table and never triggers
+a resize. The pointers in the hash table refer to rows in a RowContainer that store individual
+rows for the build side of the join.</p>
+<p>The HashAggregation operator stores unique grouping keys in the hash table. The pointers in the hash table
+refer to rows in a RowContainer that store grouping keys along with accumulators of the aggregate
+functions.</p>
+</section>
+<section id="implementation">
+<h2>Implementation<a class="headerlink" href="#implementation" title="Permalink to this heading">¶</a></h2>
+<p>The hash table is implemented by the <code class="docutils literal notranslate"><span class="pre">HashTable</span></code> class in namespace <code class="docutils literal notranslate"><span class="pre">facebook::velox::exec</span></code>.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Hash table</a><ul>
+<li><a class="reference internal" href="#layout">Layout</a></li>
+<li><a class="reference internal" href="#inserting-an-entry">Inserting an entry</a></li>
+<li><a class="reference internal" href="#resizing">Resizing</a></li>
+<li><a class="reference internal" href="#use-cases">Use Cases</a></li>
+<li><a class="reference internal" href="#implementation">Implementation</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="arena.html"
+                          title="previous chapter">Arena Allocation</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="aggregations.html"
+                          title="next chapter">Aggregations</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/hash-table.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="aggregations.html" title="Aggregations"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="arena.html" title="Arena Allocation"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Hash table</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>
