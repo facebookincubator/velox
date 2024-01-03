@@ -204,8 +204,6 @@ class HiveConfig {
 
   bool isFileColumnNamesReadAsLowerCase(const Config* session) const;
 
-  bool isPartitionPathAsLowerCaseSession(const Config* session) const;
-
   int64_t maxCoalescedBytes() const;
 
   int32_t maxCoalescedDistanceBytes() const;

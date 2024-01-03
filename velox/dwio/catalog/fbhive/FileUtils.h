@@ -41,7 +41,7 @@ class FileUtils {
   /// pairs, will do url-encoding when needed.
   static std::string makePartName(
       const std::vector<std::pair<std::string, std::string>>& entries,
-      bool partitionPathAsLowerCase = true);
+      bool partitionPathAsLowerCase);
 
   /// Converts the hive-metastore-compliant path name back to the corresponding
   /// partition key/value pairs.
@@ -49,7 +49,9 @@ class FileUtils {
       const std::string& partName);
 
   /// Converts a path name to a hive-metastore-compliant path name.
-  static std::string extractPartitionName(const std::string& filePath);
+  static std::string extractPartitionName(
+      const std::string& filePath,
+      bool partitionPathAsLowerCase);
 };
 
 } // namespace fbhive

@@ -307,7 +307,7 @@ HiveDataSink::HiveDataSink(
                     partitionChannels_,
                     maxOpenWriters_,
                     connectorQueryCtx_->memoryPool(),
-                    hiveConfig_->isPartitionPathAsLowerCaseSession(
+                    hiveConfig_->isFileColumnNamesReadAsLowerCase(
                         connectorQueryCtx->sessionProperties()))
               : nullptr),
       bucketCount_(
