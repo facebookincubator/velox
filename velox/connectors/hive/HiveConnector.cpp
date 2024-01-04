@@ -89,7 +89,7 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
           connectorQueryCtx->sessionProperties()));
   options.setUseColumnNamesForColumnMapping(
       hiveConfig_->isOrcUseColumnNames(connectorQueryCtx->sessionProperties()));
-  options.setDirectorySizeGuess(hiveConfig_->directorySizeGuess());
+  options.setFooterEstimatedSize(hiveConfig_->footerEstimatedSize());
   options.setFilePreloadThreshold(hiveConfig_->filePreloadThreshold());
 
   return std::make_unique<HiveDataSource>(

@@ -222,8 +222,8 @@ uint64_t HiveConfig::sortWriterMaxOutputBytes(const Config* session) const {
   return 10UL << 20;
 }
 
-uint64_t HiveConfig::directorySizeGuess() const {
-  return config_->get<uint64_t>(kDirectorySizeGuess, 1UL << 20);
+uint64_t HiveConfig::footerEstimatedSize() const {
+  return config_->get<uint64_t>(kFooterEstimatedSize, 1UL << 20);
 }
 
 uint64_t HiveConfig::filePreloadThreshold() const {

@@ -133,7 +133,7 @@ class HiveConfig {
   /// The size in bytes to be fetched with Meta data together, used when the
   /// data after meta data will be used later. Optimization to decrease small IO
   /// request
-  static constexpr const char* kDirectorySizeGuess = "footer-estimated-sized";
+  static constexpr const char* kFooterEstimatedSize = "footer-estimated-size";
 
   /// The threshold of file size in bytes when the whole file is fetched with
   /// meta data together. Optimization to decrease the small IO requests
@@ -225,7 +225,7 @@ class HiveConfig {
 
   uint64_t sortWriterMaxOutputBytes(const Config* session) const;
 
-  uint64_t directorySizeGuess() const;
+  uint64_t footerEstimatedSize() const;
 
   uint64_t filePreloadThreshold() const;
 
