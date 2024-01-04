@@ -2953,13 +2953,14 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
 
   auto planStats = exec::toPlanStats(task->taskStats());
   auto& stats = planStats.at(tableWriteNodeId_);
-  for (const auto& entry : stats.operatorStats) {
-    if (entry.first == "TableWrite") {
-      ASSERT_GT(entry.second->physicalWrittenBytes, fixedWrittenBytes);
-      ASSERT_EQ(
-          entry.second->customStats.at("numWrittenFiles").sum, numWrittenFiles);
-    }
-  }
+  ASSERT_GT(
+      stats.operatorStats.at("TableWrite")->physicalWrittenBytes,
+      fixedWrittenBytes);
+  ASSERT_EQ(
+      stats.operatorStats.at("TableWrite")
+          ->customStats.at("numWrittenFiles")
+          .sum,
+      numWrittenFiles);
 }
 
 DEBUG_ONLY_TEST_P(
