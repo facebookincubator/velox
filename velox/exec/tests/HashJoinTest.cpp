@@ -23,6 +23,7 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -4729,6 +4730,87 @@ TEST_F(HashJoinTest, dynamicFiltersWithSkippedSplits) {
           .run();
     }
   }
+}
+
+TEST_F(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
+  vector_size_t size = 1000;
+  const int32_t numSplits = 5;
+  std::vector<RowVectorPtr> probeVectors;
+  probeVectors.reserve(numSplits);
+
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  for (int32_t i = 0; i < numSplits; ++i) {
+    auto rowVector = makeRowVector({
+        makeFlatVector<int64_t>(
+            size, [&](auto row) { return (row + 1) * (i + 1); }),
+        makeFlatVector<int64_t>(size, [&](auto /*row*/) { return i; }),
+    });
+    probeVectors.push_back(rowVector);
+    tempFiles.push_back(TempFilePath::create());
+    writeToFile(tempFiles.back()->path, rowVector);
+  }
+  createDuckDbTable("u", probeVectors);
+
+  std::vector<RowVectorPtr> buildVectors{
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({0, numSplits})})};
+  createDuckDbTable("t", buildVectors);
+
+  auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
+    return [&] {
+      std::vector<exec::Split> probeSplits;
+      for (int32_t i = 0; i < numSplits; ++i) {
+        auto value = std::to_string(i);
+        auto split = facebook::velox::exec::test::HiveConnectorSplitBuilder(
+                         tempFiles[i]->path)
+                         .partitionKey("k", value)
+                         .build();
+        probeSplits.push_back(exec::Split(split));
+      }
+      SplitInput splits;
+      splits.emplace(nodeId, probeSplits);
+      return splits;
+    };
+  };
+  auto outputType =
+      ROW({"n1_0", "n1_1", "n1_2"}, {BIGINT(), BIGINT(), BIGINT()});
+  ColumnHandleMap assignments = {
+      {"n1_0", regularColumn("c0", BIGINT())},
+      {"n1_1", regularColumn("c1", BIGINT())},
+      {"n1_2", partitionKey("k", BIGINT())}};
+  core::PlanNodeId probeScanId;
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto op =
+      PlanBuilder(planNodeIdGenerator)
+          .startTableScan()
+          .outputType(outputType)
+          .assignments(assignments)
+          .endTableScan()
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"n1_2"},
+              {"c0"},
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+              "",
+              {"c0"},
+              core::JoinType::kInner)
+          .project({"c0"})
+          .planNode();
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .planNode(std::move(op))
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "3")
+      .makeInputSplits(makeInputSplits(probeScanId))
+      .referenceQuery("select t.c0 from t, u where t.c0 = u.c1")
+      .checkSpillStats(false)
+      .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+        SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+        if (!hasSpill) {
+          ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+          ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+          ASSERT_EQ(4, getOperatorRuntimeStats(task, 0, "skippedSplits").sum);
+          ASSERT_LT(0, getOperatorRuntimeStats(task, 0, "preloadedSplits").sum);
+        }
+      })
+      .run();
 }
 
 // Verify the size of the join output vectors when projecting build-side

@@ -256,7 +256,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
        ctx = operatorCtx_->createConnectorQueryCtx(
            split->connectorId, planNodeId(), connectorPool_),
        task = operatorCtx_->task(),
-       pendingDynamicFilters = pendingDynamicFilters_,
+       &pendingDynamicFilters = pendingDynamicFilters_,
        split]() -> std::unique_ptr<connector::DataSource> {
         if (task->isCancelled()) {
           return nullptr;
@@ -313,9 +313,8 @@ void TableScan::addDynamicFilter(
     const std::shared_ptr<common::Filter>& filter) {
   if (dataSource_) {
     dataSource_->addDynamicFilter(outputChannel, filter);
-  } else {
-    pendingDynamicFilters_.emplace(outputChannel, filter);
   }
+  pendingDynamicFilters_.emplace(outputChannel, filter);
 }
 
 } // namespace facebook::velox::exec
