@@ -5,7 +5,7 @@ December 2023 Update
 Documentation
 =============
 
-* Add documentation for :doc:`Runtime Metric</metrics>`.
+* Add documentation for :doc:`Runtime Metrics</metrics>`.
 
 Core Library
 ============
