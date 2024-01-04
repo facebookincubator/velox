@@ -139,16 +139,13 @@ if(${VELOX_BUILD_TESTING})
   set(VELOX_ENABLE_TPCH_CONNECTOR ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
   set(VELOX_ENABLE_EXAMPLES ON)
-else()
-  set(VELOX_ENABLE_PARSE OFF)
 endif()
 
 if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
   set(cpr_SOURCE BUNDLED)
   resolve_dependency(cpr)
   set(VELOX_ENABLE_DUCKDB ON)
-else()
-  set(VELOX_ENABLE_DUCKDB OFF)
+  set(VELOX_ENABLE_PARSE ON)
 endif()
 
 if(${VELOX_ENABLE_EXAMPLES})
@@ -469,10 +466,10 @@ endif()
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   set(FILESYSTEM "stdc++fs")
 
-  # Ensure we have gcc at least 8+.
-  if(CMAKE_CXX_COMPILER_VERSION LESS 8.0)
+  # Ensure we have gcc at least 9+.
+  if(CMAKE_CXX_COMPILER_VERSION LESS 9.0)
     message(
-      FATAL_ERROR "VELOX requires gcc > 8. Found ${CMAKE_CXX_COMPILER_VERSION}")
+      FATAL_ERROR "VELOX requires gcc > 9. Found ${CMAKE_CXX_COMPILER_VERSION}")
   endif()
 
   # Find Threads library

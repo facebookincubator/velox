@@ -378,15 +378,30 @@ void Task::initTaskPool() {
 }
 
 velox::memory::MemoryPool* Task::getOrAddNodePool(
-    const core::PlanNodeId& planNodeId,
-    bool isHashJoinNode) {
+    const core::PlanNodeId& planNodeId) {
   if (nodePools_.count(planNodeId) == 1) {
     return nodePools_[planNodeId];
   }
   childPools_.push_back(pool_->addAggregateChild(
-      fmt::format("node.{}", planNodeId), createNodeReclaimer(isHashJoinNode)));
+      fmt::format("node.{}", planNodeId), createNodeReclaimer(false)));
   auto* nodePool = childPools_.back().get();
   nodePools_[planNodeId] = nodePool;
+  return nodePool;
+}
+
+memory::MemoryPool* Task::getOrAddJoinNodePool(
+    const core::PlanNodeId& planNodeId,
+    uint32_t splitGroupId) {
+  const std::string nodeId = splitGroupId == kUngroupedGroupId
+      ? planNodeId
+      : fmt::format("{}[{}]", planNodeId, splitGroupId);
+  if (nodePools_.count(nodeId) == 1) {
+    return nodePools_[nodeId];
+  }
+  childPools_.push_back(pool_->addAggregateChild(
+      fmt::format("node.{}", nodeId), createNodeReclaimer(true)));
+  auto* nodePool = childPools_.back().get();
+  nodePools_[nodeId] = nodePool;
   return nodePool;
 }
 
@@ -421,11 +436,16 @@ std::unique_ptr<memory::MemoryReclaimer> Task::createTaskReclaimer() {
 
 velox::memory::MemoryPool* Task::addOperatorPool(
     const core::PlanNodeId& planNodeId,
+    uint32_t splitGroupId,
     int pipelineId,
     uint32_t driverId,
     const std::string& operatorType) {
-  auto* nodePool =
-      getOrAddNodePool(planNodeId, isHashJoinOperator(operatorType));
+  velox::memory::MemoryPool* nodePool;
+  if (isHashJoinOperator(operatorType)) {
+    nodePool = getOrAddJoinNodePool(planNodeId, splitGroupId);
+  } else {
+    nodePool = getOrAddNodePool(planNodeId);
+  }
   childPools_.push_back(nodePool->addLeafChild(fmt::format(
       "op.{}.{}.{}.{}", planNodeId, pipelineId, driverId, operatorType)));
   return childPools_.back().get();
@@ -633,7 +653,7 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
     }
     initializePartitionOutput();
     createAndStartDrivers(concurrentSplitGroups);
-  } catch (const std::exception& e) {
+  } catch (const std::exception&) {
     if (isRunning()) {
       setError(std::current_exception());
     } else {
@@ -1738,7 +1758,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
         VELOX_FAIL(
             state_ == TaskState::kCanceled ? "Cancelled"
                                            : "Aborted for external error");
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
         exception_ = std::current_exception();
       }
     }
@@ -2261,7 +2281,7 @@ void Task::setError(const std::string& message) {
   // std::current_exception().
   try {
     throw std::runtime_error(message);
-  } catch (const std::runtime_error& e) {
+  } catch (const std::runtime_error&) {
     setError(std::current_exception());
   }
 }

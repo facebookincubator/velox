@@ -606,9 +606,9 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   options.nonReclaimableSection =
       writerInfo_.back()->nonReclaimableSectionHolder.get();
   options.maxStripeSize = std::optional(
-      hiveConfig_->getOrcWriterMaxStripeSize(connectorSessionProperties));
+      hiveConfig_->orcWriterMaxStripeSize(connectorSessionProperties));
   options.maxDictionaryMemory = std::optional(
-      hiveConfig_->getOrcWriterMaxDictionaryMemory(connectorSessionProperties));
+      hiveConfig_->orcWriterMaxDictionaryMemory(connectorSessionProperties));
   ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
 
   // Prevents the memory allocation during the writer creation.
@@ -735,6 +735,12 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
   const std::string writeFileName = isCommitRequired()
       ? fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid())
       : targetFileName;
+  if (insertTableHandle_->tableStorageFormat() ==
+      dwio::common::FileFormat::PARQUET) {
+    return {
+        fmt::format("{}{}", targetFileName, ".parquet"),
+        fmt::format("{}{}", writeFileName, ".parquet")};
+  }
   return {targetFileName, writeFileName};
 }
 

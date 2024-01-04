@@ -413,13 +413,10 @@ class MockSharedArbitrationTest : public testing::Test {
       memoryPoolTransferCapacity = kMemoryPoolTransferCapacity;
     }
     memoryCapacity = (memoryCapacity != 0) ? memoryCapacity : kMemoryCapacity;
-    allocator_ = std::make_shared<MallocAllocator>(memoryCapacity);
     MemoryManagerOptions options;
-    options.allocator = allocator_.get();
-    options.capacity = allocator_->capacity();
+    options.allocatorCapacity = memoryCapacity;
     std::string arbitratorKind = "SHARED";
     options.arbitratorKind = arbitratorKind;
-    options.capacity = options.capacity;
     options.memoryPoolInitCapacity = memoryPoolInitCapacity;
     options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
     options.arbitrationStateCheckCb = std::move(arbitrationStateCheckCb);
@@ -449,7 +446,6 @@ class MockSharedArbitrationTest : public testing::Test {
     tasks_.clear();
   }
 
-  std::shared_ptr<MemoryAllocator> allocator_;
   std::unique_ptr<MemoryManager> manager_;
   SharedArbitrator* arbitrator_;
   std::vector<std::shared_ptr<MockTask>> tasks_;
@@ -575,7 +571,7 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailsTask) {
   auto growTask = addTask(192 * MB);
   auto growOp = growTask->addMemoryOp(false);
   auto bufGrow = growOp->allocate(128 * MB);
-  EXPECT_NO_THROW(manager_->growPool(growOp->pool(), 64 * MB));
+  EXPECT_NO_THROW(manager_->testingGrowPool(growOp->pool(), 64 * MB));
   ASSERT_NE(nonReclaimTask->error(), nullptr);
   try {
     std::rethrow_exception(nonReclaimTask->error());
@@ -594,7 +590,7 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailsTask) {
 
 TEST_F(MockSharedArbitrationTest, shrinkMemory) {
   std::vector<std::shared_ptr<MemoryPool>> pools;
-  ASSERT_THROW(arbitrator_->shrinkMemory(pools, 128), VeloxException);
+  ASSERT_THROW(arbitrator_->shrinkCapacity(pools, 128), VeloxException);
 }
 
 TEST_F(MockSharedArbitrationTest, singlePoolGrowWithoutArbitration) {

@@ -378,11 +378,13 @@ MemoryPoolImpl::MemoryPoolImpl(
     Kind kind,
     std::shared_ptr<MemoryPool> parent,
     std::unique_ptr<MemoryReclaimer> reclaimer,
+    GrowCapacityCallback growCapacityCb,
     DestructionCallback destructionCb,
     const Options& options)
     : MemoryPool{name, kind, parent, options},
       manager_{memoryManager},
-      allocator_{&manager_->allocator()},
+      allocator_{manager_->allocator()},
+      growCapacityCb_(std::move(growCapacityCb)),
       destructionCb_(std::move(destructionCb)),
       debugPoolNameRegex_(debugEnabled_ ? *(debugPoolNameRegex().rlock()) : ""),
       reclaimer_(std::move(reclaimer)),
@@ -398,6 +400,10 @@ MemoryPoolImpl::MemoryPoolImpl(
       "Child memory pool {} shall only set memory reclaimer if its parent {} has also set",
       name_,
       parent_->name());
+  VELOX_CHECK(
+      isRoot() || (destructionCb_ == nullptr && growCapacityCb_ == nullptr),
+      "Only root memory pool allows to set destruction and capacity grow callbacks: {}",
+      name_);
 }
 
 MemoryPoolImpl::~MemoryPoolImpl() {
@@ -419,7 +425,6 @@ MemoryPoolImpl::~MemoryPoolImpl() {
           kMetricMemoryPoolReservationLeakBytes, minReservationBytes_);
     }
   }
-
   VELOX_DCHECK(
       (usedReservationBytes_ == 0) && (reservationBytes_ == 0) &&
           (minReservationBytes_ == 0),
@@ -663,6 +668,7 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
       parent,
       std::move(reclaimer),
       nullptr,
+      nullptr,
       Options{
           .alignment = alignment_,
           .trackUsage = trackUsage_,
@@ -680,7 +686,7 @@ bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
   const auto reservationToAdd = bits::roundUp(increment, kGrowthQuantum);
   try {
     reserve(reservationToAdd, true);
-  } catch (const std::exception& e) {
+  } catch (const std::exception&) {
     if (aborted()) {
       // NOTE: we shall throw to stop the query execution if the root memory
       // pool has been aborted. It is also unsafe to proceed as the memory abort
@@ -731,7 +737,7 @@ void MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
         "facebook::velox::memory::MemoryPoolImpl::reserveThreadSafe", this);
     try {
       incrementReservationThreadSafe(this, increment);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       // When race with concurrent memory reservation free, we might end up with
       // unused reservation but no used reservation if a retry memory
       // reservation attempt run into memory capacity exceeded error.
@@ -773,7 +779,7 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
   }
   VELOX_CHECK_NULL(parent_);
 
-  if (manager_->growPool(requestor, size)) {
+  if (growCapacityCb_(requestor, size)) {
     TestValue::adjust(
         "facebook::velox::memory::MemoryPoolImpl::incrementReservationThreadSafe::AfterGrowCallback",
         this);

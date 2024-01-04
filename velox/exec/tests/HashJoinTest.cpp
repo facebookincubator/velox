@@ -561,10 +561,10 @@ class HashJoinBuilder {
     runTest(planNode, false, maxSpillLevel_.value_or(-1));
     if (injectSpill_) {
       if (maxSpillLevel_.has_value()) {
-        runTest(planNode, true, maxSpillLevel_.value());
+        runTest(planNode, true, maxSpillLevel_.value(), 100);
       } else {
-        runTest(planNode, true, 0);
-        runTest(planNode, true, 2);
+        runTest(planNode, true, 0, 100);
+        runTest(planNode, true, 2, 100);
       }
     }
   }
@@ -572,7 +572,8 @@ class HashJoinBuilder {
   void runTest(
       const core::PlanNodePtr& planNode,
       bool injectSpill,
-      int32_t maxSpillLevel = -1) {
+      int32_t maxSpillLevel = -1,
+      uint32_t maxDriverYieldTimeMs = 0) {
     AssertQueryBuilder builder(planNode, duckDbQueryRunner_);
     builder.maxDrivers(numDrivers_);
     if (makeInputSplits_) {
@@ -611,6 +612,11 @@ class HashJoinBuilder {
     config(
         core::QueryConfig::kHashProbeFinishEarlyOnEmptyBuild,
         hashProbeFinishEarlyOnEmptyBuild_ ? "true" : "false");
+    if (maxDriverYieldTimeMs != 0) {
+      config(
+          core::QueryConfig::kDriverCpuTimeSliceLimitMs,
+          std::to_string(maxDriverYieldTimeMs));
+    }
 
     if (!configs_.empty()) {
       auto configCopy = configs_;
@@ -6133,5 +6139,128 @@ TEST_F(HashJoinTest, exceededMaxSpillLevel) {
   ASSERT_EQ(
       common::globalSpillStats().spillMaxLevelExceededCount,
       exceededMaxSpillLevelCount + 4);
+}
+
+TEST_F(HashJoinTest, maxSpillBytes) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto probeVectors = createVectors(rowType, 1024, 10 << 20);
+  const auto buildVectors = createVectors(rowType, 1024, 10 << 20);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors, true)
+                  .project({"c0", "c1", "c2"})
+                  .hashJoin(
+                      {"c0"},
+                      {"u1"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors, true)
+                          .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                          .planNode(),
+                      "",
+                      {"c0", "c1", "c2"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+
+  struct {
+    int32_t maxSpilledBytes;
+    bool expectedExceedLimit;
+    std::string debugString() const {
+      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+    }
+  } testSettings[] = {{1 << 30, false}, {16 << 20, true}, {0, false}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    try {
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->path)
+          .queryCtx(queryCtx)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kJoinSpillEnabled, "true")
+          // Set a small capacity to trigger threshold based spilling
+          .config(
+              core::QueryConfig::kJoinSpillMemoryThreshold,
+              std::to_string(5 << 20))
+          .config(
+              core::QueryConfig::kMaxSpillBytes,
+              std::to_string(testData.maxSpilledBytes))
+          .copyResults(pool_.get());
+      ASSERT_FALSE(testData.expectedExceedLimit);
+    } catch (const VeloxRuntimeError& e) {
+      ASSERT_TRUE(testData.expectedExceedLimit);
+      ASSERT_NE(
+          e.message().find(
+              "Query exceeded per-query local spill limit of 16.00MB"),
+          std::string::npos);
+      ASSERT_EQ(
+          e.errorCode(), facebook::velox::error_code::kSpillLimitExceeded);
+    }
+  }
+}
+
+TEST_F(HashJoinTest, onlyHashBuildMaxSpillBytes) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto probeVectors = createVectors(rowType, 32, 128);
+  const auto buildVectors = createVectors(rowType, 1024, 10 << 20);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors, true)
+                  .hashJoin(
+                      {"c0"},
+                      {"u1"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors, true)
+                          .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                          .planNode(),
+                      "",
+                      {"c0", "c1", "c2"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+
+  struct {
+    int32_t maxSpilledBytes;
+    bool expectedExceedLimit;
+    std::string debugString() const {
+      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+    }
+  } testSettings[] = {{1 << 30, false}, {16 << 20, true}, {0, false}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    try {
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->path)
+          .queryCtx(queryCtx)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kJoinSpillEnabled, "true")
+          // Set a small capacity to trigger threshold based spilling
+          .config(
+              core::QueryConfig::kJoinSpillMemoryThreshold,
+              std::to_string(5 << 20))
+          .config(
+              core::QueryConfig::kMaxSpillBytes,
+              std::to_string(testData.maxSpilledBytes))
+          .copyResults(pool_.get());
+      ASSERT_FALSE(testData.expectedExceedLimit);
+    } catch (const VeloxRuntimeError& e) {
+      ASSERT_TRUE(testData.expectedExceedLimit);
+      ASSERT_NE(
+          e.message().find(
+              "Query exceeded per-query local spill limit of 16.00MB"),
+          std::string::npos);
+      ASSERT_EQ(
+          e.errorCode(), facebook::velox::error_code::kSpillLimitExceeded);
+    }
+  }
 }
 } // namespace
