@@ -30,6 +30,8 @@ class PartitionIdGenerator {
   /// @param maxPartitions The max number of distinct partitions.
   /// @param pool Memory pool. Used to allocate memory for storing unique
   /// partition key values.
+  /// @param partitionPathAsLowerCase Used to control whether the partition path
+  /// need to convert to lower case.
   PartitionIdGenerator(
       const RowTypePtr& inputType,
       std::vector<column_index_t> partitionChannels,
@@ -78,7 +80,7 @@ class PartitionIdGenerator {
 
   const uint32_t maxPartitions_;
 
-  bool partitionPathAsLowerCase_;
+  const bool partitionPathAsLowerCase_;
 
   std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
 

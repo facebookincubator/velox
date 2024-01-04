@@ -56,6 +56,18 @@ TEST(FileUtilsTests, ExtractPartitionName) {
     std::string partitionName;
   };
 
+  std::vector<TestCase> testUpperCases{
+      {"", ""},
+      // identity
+      {"ds=2016-01-01/FOO=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac=a%23b%3Ac",
+       "ds=2016-01-01/FOO=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac=a%23b%3Ac"},
+      // escaped partition name is not a special case.
+      {"ds=2016-01-01/FOO=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac%3Da%23b%3Ac",
+       "ds=2016-01-01/FOO=__HIVE_DEFAULT_PARTITION__"},
+      // full path
+      {"ws://nobodycares/notimportant/somethingsomething/yaddayadda/ds=2016-01-01/FOO=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac=a%23b%3Ac/part0",
+       "ds=2016-01-01/FOO=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac=a%23b%3Ac"}};
+
   std::vector<TestCase> testCases{
       {"", ""},
       // identity
@@ -68,9 +80,12 @@ TEST(FileUtilsTests, ExtractPartitionName) {
       {"ws://nobodycares/notimportant/somethingsomething/yaddayadda/ds=2016-01-01/foo=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac=a%23b%3Ac/part0",
        "ds=2016-01-01/foo=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac=a%23b%3Ac"}};
 
-  for (auto testCase : testCases) {
+  for (auto i = 0; i < testUpperCases.size(); i++) {
     EXPECT_EQ(
-        testCase.partitionName,
-        FileUtils::extractPartitionName(testCase.filePath, true));
+        testCases[i].partitionName,
+        FileUtils::extractPartitionName(testUpperCases[i].filePath, true));
+    EXPECT_EQ(
+        testUpperCases[i].partitionName,
+        FileUtils::extractPartitionName(testUpperCases[i].filePath, false));
   }
 }
