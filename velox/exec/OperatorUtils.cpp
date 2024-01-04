@@ -420,4 +420,23 @@ void projectChildren(
         wrapChild(size, mapping, src[inputChannel]);
   }
 }
+
+void mergeVector(
+    RowVectorPtr& dest,
+    const RowVectorPtr& src,
+    int32_t destRows,
+    int32_t srcRows) {
+  VELOX_DCHECK_EQ(
+      dest->childrenSize(),
+      src->childrenSize(),
+      "The childrenSize of source row vector and dest row vector should be "
+      "equal in mergeVector()");
+
+  dest->resize(destRows + srcRows);
+  const auto& children = src->children();
+  for (auto i = 0; i < children.size(); i++) {
+    const auto& vectorPtr = dest->childAt(i);
+    vectorPtr->copy(children[i].get(), destRows, 0, srcRows);
+  }
+}
 } // namespace facebook::velox::exec
