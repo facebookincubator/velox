@@ -55,6 +55,11 @@ int main(int argc, char** argv) {
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
   };
+  std::unordered_set<std::string> overrideFunctions = {
+      "empty_approx_set",
+      "regexp_replace",
+      "switch",
+  };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return FuzzerRunner::run(initialSeed, skipFunctions);
+  return FuzzerRunner::run(initialSeed, skipFunctions, overrideFunctions);
 }

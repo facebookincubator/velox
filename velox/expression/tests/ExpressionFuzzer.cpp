@@ -727,14 +727,33 @@ ExpressionFuzzer::ExpressionFuzzer(
     addToTypeToExpressionListByTicketTimes("row", "row_constructor");
     addToTypeToExpressionListByTicketTimes(kTypeParameterName, "dereference");
   }
-
   // Register function override (for cases where we want to restrict the types
   // or parameters we pass to functions).
-  registerFuncOverride(
-      &ExpressionFuzzer::generateEmptyApproxSetArgs, "empty_approx_set");
-  registerFuncOverride(
-      &ExpressionFuzzer::generateRegexpReplaceArgs, "regexp_replace");
-  registerFuncOverride(&ExpressionFuzzer::generateSwitchArgs, "switch");
+  // Override functions are passed as a set of strings
+  // into FuzzerRunner::run() and are specific to
+  // an execution engine.
+  if (!options_.overrideFunctions.empty()) {
+    initializeMemberFunctionMap();
+    applyOverrides();
+  }
+}
+
+void ExpressionFuzzer::applyOverrides() {
+  for (const auto& functionName : options_.overrideFunctions) {
+    auto it = memberFunctionMap.find(functionName);
+    if (it != memberFunctionMap.end()) {
+      registerFuncOverride(it->second, functionName);
+    }
+  }
+}
+
+void ExpressionFuzzer::initializeMemberFunctionMap() {
+  // Presto Functions
+  memberFunctionMap["empty_approx_set"] =
+      &ExpressionFuzzer::generateEmptyApproxSetArgs;
+  memberFunctionMap["regexp_replace"] =
+      &ExpressionFuzzer::generateRegexpReplaceArgs;
+  memberFunctionMap["switch"] = &ExpressionFuzzer::generateSwitchArgs;
 }
 
 void ExpressionFuzzer::getTicketsForFunctions() {

@@ -52,5 +52,10 @@ int main(int argc, char** argv) {
       "replace",
       "might_contain",
       "unix_timestamp"};
-  return FuzzerRunner::run(FLAGS_seed, skipFunctions);
+  // All execution engines use 'switch' so its parameter
+  // overrides must be included.
+  std::unordered_set<std::string> overrideFunctions = {
+      "switch",
+  };
+  return FuzzerRunner::run(FLAGS_seed, skipFunctions, overrideFunctions);
 }

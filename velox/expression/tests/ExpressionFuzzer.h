@@ -90,6 +90,10 @@ class ExpressionFuzzer {
     //   "width_bucket",
     //   "array_sort(array(T),constant function(T,T,bigint)) -> array(T)"}
     std::unordered_set<std::string> skipFunctions;
+
+    // This list should be composed of functions supported
+    // in ExpressionFuzzer::initializeMemberFunctionMap().
+    std::unordered_set<std::string> overrideFunctions;
   };
 
   ExpressionFuzzer(
@@ -337,6 +341,9 @@ class ExpressionFuzzer {
   // Returns random integer between min and max inclusive.
   int32_t rand32(int32_t min, int32_t max);
 
+  void initializeMemberFunctionMap();
+  void applyOverrides();
+
   static const inline std::string kTypeParameterName = "T";
 
   const Options options_;
@@ -380,6 +387,10 @@ class ExpressionFuzzer {
 
   std::unordered_map<std::string, ArgsOverrideFunc> funcArgOverrides_;
 
+  using MemberFuncPtr = std::vector<std::shared_ptr<const core::ITypedExpr>> (
+      ExpressionFuzzer::*)(const CallableSignature&);
+
+  std::unordered_map<std::string, MemberFuncPtr> memberFunctionMap;
   std::shared_ptr<VectorFuzzer> vectorFuzzer_;
 
   FuzzerGenerator rng_;

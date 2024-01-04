@@ -31,11 +31,13 @@ class FuzzerRunner {
  public:
   static int run(
       size_t seed,
-      const std::unordered_set<std::string>& skipFunctions);
+      const std::unordered_set<std::string>& skipFunctions,
+      const std::unordered_set<std::string>& overrideFunctions);
 
   static void runFromGtest(
       size_t seed,
-      const std::unordered_set<std::string>& skipFunctions);
+      const std::unordered_set<std::string>& skipFunctions,
+      const std::unordered_set<std::string>& overrideFunctions);
 };
 
 } // namespace facebook::velox::test
