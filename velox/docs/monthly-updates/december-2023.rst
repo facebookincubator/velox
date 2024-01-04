@@ -74,7 +74,7 @@ Performance and Correctness
 ===========================
 
 * Add support for lambda functions to ExpressionFuzzer.
-* Add support for ExchangeFuzzer.
+* Add ExchangeFuzzer.
 
 Build
 =====
