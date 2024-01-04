@@ -96,6 +96,11 @@ class Exchange : public SourceOperator {
   std::shared_ptr<ExchangeClient> exchangeClient_;
   std::vector<std::unique_ptr<SerializedPage>> currentPages_;
   bool atEnd_{false};
+
+  // To support VectorSerde implementation without
+  // `supportsAppendInDeserialize`.
+  size_t currentPageIdx_{0};
+  std::optional<ByteInputStream> inputStream_;
 };
 
 } // namespace facebook::velox::exec

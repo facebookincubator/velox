@@ -105,20 +105,42 @@ RowVectorPtr Exchange::getOutput() {
   }
 
   uint64_t rawInputBytes{0};
-  vector_size_t resultOffset = 0;
-  for (const auto& page : currentPages_) {
-    rawInputBytes += page->size();
+  if (getSerde()->supportsAppendInDeserialize()) {
+    vector_size_t resultOffset = 0;
+    for (const auto& page : currentPages_) {
+      rawInputBytes += page->size();
 
-    auto inputStream = page->prepareStreamForDeserialize();
+      auto inputStream = page->prepareStreamForDeserialize();
 
-    while (!inputStream.atEnd()) {
-      getSerde()->deserialize(
-          &inputStream, pool(), outputType_, &result_, resultOffset);
-      resultOffset = result_->size();
+      while (!inputStream.atEnd()) {
+        getSerde()->deserialize(
+            &inputStream, pool(), outputType_, &result_, resultOffset);
+        resultOffset = result_->size();
+      }
+    }
+
+    currentPages_.clear();
+  } else {
+    // The currentPages_ only has 1 page when supportsAppendInDeserialize is
+    // false, refer Exchange::isBlocked.
+    if (!inputStream_.has_value()) {
+      rawInputBytes += currentPages_[currentPageIdx_]->size();
+      inputStream_.emplace(
+          currentPages_[currentPageIdx_]->prepareStreamForDeserialize());
+      currentPageIdx_++;
+    }
+
+    getSerde()->deserialize(
+        &inputStream_.value(), pool(), outputType_, &result_);
+
+    if (inputStream_->atEnd()) {
+      inputStream_.reset();
+      if (currentPageIdx_ >= currentPages_.size()) {
+        currentPages_.clear();
+        currentPageIdx_ = 0;
+      }
     }
   }
-
-  currentPages_.clear();
 
   {
     auto lockedStats = stats_.wlock();
@@ -131,6 +153,7 @@ RowVectorPtr Exchange::getOutput() {
 
 void Exchange::close() {
   SourceOperator::close();
+  inputStream_.reset();
   currentPages_.clear();
   result_ = nullptr;
   if (exchangeClient_) {
