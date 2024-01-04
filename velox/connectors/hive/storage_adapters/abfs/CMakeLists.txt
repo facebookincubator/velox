@@ -17,7 +17,8 @@
 add_library(velox_abfs RegisterAbfsFileSystem.cpp)
 
 if(VELOX_ENABLE_ABFS)
-  target_sources(velox_abfs PRIVATE AbfsFileSystem.cpp AbfsUtils.cpp)
+  target_sources(velox_abfs PRIVATE AbfsFileSystem.cpp AbfsWriteFile.cpp
+                                    AbfsUtils.cpp)
   target_link_libraries(
     velox_abfs
     PUBLIC velox_file
