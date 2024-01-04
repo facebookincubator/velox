@@ -105,6 +105,13 @@ class TypedDistinctAggregations : public DistinctAggregations {
 
   void extractValues(folly::Range<char**> groups, const RowVectorPtr& result)
       override {
+    extractValues(groups, result, true);
+  }
+
+  void extractValues(
+      folly::Range<char**> groups,
+      const RowVectorPtr& result,
+      bool destroy) override {
     SelectivityVector rows;
     for (auto i = 0; i < aggregates_.size(); ++i) {
       const auto& aggregate = *aggregates_[i];
@@ -134,7 +141,9 @@ class TypedDistinctAggregations : public DistinctAggregations {
 
       // Release memory back to HashStringAllocator to allow next
       // aggregate to re-use it.
-      aggregate.function->destroy(groups);
+      if (destroy) {
+        aggregate.function->destroy(groups);
+      }
     }
   }
 

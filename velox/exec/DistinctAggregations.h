@@ -75,6 +75,12 @@ class DistinctAggregations {
       folly::Range<char**> groups,
       const RowVectorPtr& result) = 0;
 
+  /// Computes aggregations and stores results in the specified 'result' vector.
+  virtual void extractValues(
+      folly::Range<char**> groups,
+      const RowVectorPtr& result,
+      bool destroy) = 0;
+
  protected:
   HashStringAllocator* allocator_;
   int32_t offset_;
