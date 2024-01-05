@@ -394,6 +394,16 @@ TEST_F(ArithmeticTest, atan2) {
   EXPECT_EQ(atan2(-1.0, -1.0), std::atan2(-1.0, -1.0));
 }
 
+TEST_F(ArithmeticTest, isNan) {
+  const auto isNan = [&](std::optional<float> a) {
+    return evaluateOnce<bool>("is_nan(c0)", a);
+  };
+
+  EXPECT_EQ(false, isNan(0.0f));
+  EXPECT_EQ(true, isNan(kNan));
+  EXPECT_EQ(true, isNan(0.0f / 0.0f));
+}
+
 class LogNTest : public SparkFunctionBaseTest {
  protected:
   static constexpr float kInf = std::numeric_limits<double>::infinity();
