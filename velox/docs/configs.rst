@@ -316,6 +316,11 @@ Spilling
        If the limit is zero, then the spiller always spills a previously spilled partition if it has any data. This is
        to avoid spill from a partition with a small amount of data which might result in generating too many small
        spilled files.
+   * - spiller_max_used_space_threshold
+     - double
+     - 0.9
+     - Specifies the max used space threshold. If disk space usage ratio of a given spill path is above this threshold,
+       this spill path is not eligible for spilling, and an exception will be thrown.
    * - spill_compression_codec
      - string
      - none

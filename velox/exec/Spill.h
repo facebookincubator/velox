@@ -328,6 +328,7 @@ class SpillState {
       const std::vector<CompareFlags>& sortCompareFlags,
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
+      double maxUsedSpaceThreshold,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats,
@@ -418,6 +419,7 @@ class SpillState {
   const std::vector<CompareFlags> sortCompareFlags_;
   const uint64_t targetFileSize_;
   const uint64_t writeBufferSize_;
+  const double maxUsedSpaceThreshold_;
   const common::CompressionKind compressionKind_;
   const std::string fileCreateConfig_;
   memory::MemoryPool* const pool_;

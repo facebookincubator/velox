@@ -59,6 +59,7 @@ class SortBufferTest : public OperatorTestBase {
         0,
         0,
         0,
+        0.9,
         "none");
   }
 
@@ -301,6 +302,7 @@ TEST_F(SortBufferTest, batchOutput) {
         0,
         0,
         100, //  testSpillPct
+        0.9,
         "none");
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,
@@ -399,6 +401,7 @@ TEST_F(SortBufferTest, spill) {
         0,
         0,
         0,
+        0.9,
         "none");
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,

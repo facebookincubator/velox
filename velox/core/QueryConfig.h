@@ -273,6 +273,12 @@ class QueryConfig {
   /// spilled files.
   static constexpr const char* kMinSpillRunSize = "min_spill_run_size";
 
+  /// Specifies the max used space threshold. If disk space usage ratio of a
+  /// given spill path is above this threshold, this spill path is not
+  /// eligible for spilling.
+  static constexpr const char* kMaxUsedSpaceThreshold =
+      "spiller_max_used_space_threshold";
+
   static constexpr const char* kSpillCompressionKind =
       "spill_compression_codec";
 
@@ -626,6 +632,11 @@ class QueryConfig {
   uint64_t minSpillRunSize() const {
     constexpr uint64_t kDefaultMinSpillRunSize = 256 << 20; // 256MB.
     return get<uint64_t>(kMinSpillRunSize, kDefaultMinSpillRunSize);
+  }
+
+  double maxUsedSpaceThreshold() const {
+    constexpr double kDefaultMaxUsedSpaceThreshold = 0.9;
+    return get<double>(kMaxUsedSpaceThreshold, kDefaultMaxUsedSpaceThreshold);
   }
 
   std::string spillCompressionKind() const {

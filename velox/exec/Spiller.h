@@ -191,6 +191,7 @@ class Spiller {
       const std::string& fileNamePrefix,
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
+      double maxUsedSpaceThreshold,
       common::CompressionKind compressionKind,
       folly::Executor* executor,
       uint64_t maxSpillRunRows,

@@ -160,6 +160,7 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       queryConfig.maxSpillRunRows(),
       queryConfig.writerFlushThresholdBytes(),
       queryConfig.testingSpillPct(),
+      queryConfig.maxUsedSpaceThreshold(),
       queryConfig.spillCompressionKind(),
       queryConfig.spillFileCreateConfig());
 }
