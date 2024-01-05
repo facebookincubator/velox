@@ -49,9 +49,7 @@ class FileUtils {
       const std::string& partName);
 
   /// Converts a path name to a hive-metastore-compliant path name.
-  static std::string extractPartitionName(
-      const std::string& filePath,
-      bool partitionPathAsLowerCase);
+  static std::string extractPartitionName(const std::string& filePath);
 };
 
 } // namespace fbhive

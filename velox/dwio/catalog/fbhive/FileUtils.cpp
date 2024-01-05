@@ -216,13 +216,9 @@ std::vector<std::pair<std::string, std::string>> FileUtils::parsePartKeyValues(
   return ret;
 }
 
-std::string FileUtils::extractPartitionName(
-    const std::string& filePath,
-    bool partitionPathAsLowerCase) {
+std::string FileUtils::extractPartitionName(const std::string& filePath) {
   const auto& partitionParts = extractPartitionKeyValues(filePath);
-  return partitionParts.empty()
-      ? ""
-      : makePartName(partitionParts, partitionPathAsLowerCase);
+  return partitionParts.empty() ? "" : makePartName(partitionParts, true);
 }
 
 } // namespace fbhive
