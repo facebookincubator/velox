@@ -438,7 +438,7 @@ Each query can override the config by setting corresponding query session proper
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
        the input column name and filter is also lower case to achive case-insensitive read.
-       True if extracting the partition path as lower case.
+       If true, the partition directory will be converted to lowercase when executing a table write operation.
    * - max-coalesced-bytes
      -
      - integer
