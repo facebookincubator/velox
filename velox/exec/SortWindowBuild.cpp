@@ -43,14 +43,12 @@ SortWindowBuild::SortWindowBuild(
     const std::shared_ptr<const core::WindowNode>& node,
     velox::memory::MemoryPool* pool,
     const common::SpillConfig* spillConfig,
-    tsan_atomic<bool>* nonReclaimableSection,
-    bool binarySearch)
+    tsan_atomic<bool>* nonReclaimableSection)
     : WindowBuild(node, pool, spillConfig, nonReclaimableSection),
       numPartitionKeys_{node->partitionKeys().size()},
       spillCompareFlags_{
           makeSpillCompareFlags(numPartitionKeys_, node->sortingOrders())},
-      pool_(pool),
-      binarySearch_(binarySearch) {
+      pool_(pool) {
   VELOX_CHECK_NOT_NULL(pool_);
   allKeyInfo_.reserve(partitionKeyInfo_.size() + sortKeyInfo_.size());
   allKeyInfo_.insert(
@@ -167,11 +165,35 @@ void SortWindowBuild::spill() {
   data_->pool()->release();
 }
 
-void SortWindowBuild::computePartitionStartRows() {
-  partitionStartRows_.reserve(numRows_);
+// Use double front and back search algorithm to find next partition start row.
+// It is more efficient than linear or binary search.
+// This algorithm is described at
+// https://medium.com/@insomniocode/search-algorithm-double-front-and-back-20f5f28512e7
+vector_size_t SortWindowBuild::findNextPartitionStartRow(vector_size_t start) {
   auto partitionCompare = [&](const char* lhs, const char* rhs) -> bool {
     return compareRowsWithKeys(lhs, rhs, partitionKeyInfo_);
   };
+
+  auto left = start;
+  auto right = left + 1;
+  auto lastPosition = sortedRows_.size();
+  while (right < lastPosition) {
+    auto distance = 1;
+    for (; distance < lastPosition - left; distance *= 2) {
+      right = left + distance;
+      if (partitionCompare(sortedRows_[left], sortedRows_[right]) != 0) {
+        lastPosition = right;
+        break;
+      }
+    }
+    left += distance / 2;
+    right = left + 1;
+  }
+  return right;
+}
+
+void SortWindowBuild::computePartitionStartRows() {
+  partitionStartRows_.reserve(numRows_);
 
   // Using a sequential traversal to find changing partitions.
   // This algorithm is inefficient and can be changed
@@ -181,36 +203,12 @@ void SortWindowBuild::computePartitionStartRows() {
   partitionStartRows_.push_back(0);
 
   VELOX_CHECK_GT(sortedRows_.size(), 0);
-  int32_t start = 0;
-  if (binarySearch_) {
-    while (start < sortedRows_.size()) {
-      int left = start;
-      int right = left + 1;
-      int endPosition = sortedRows_.size();
-      while (right < endPosition) {
-        int distance = 1;
-        for (; distance < endPosition - left; distance *= 2) {
-          right = left + distance;
-          if (partitionCompare(sortedRows_[left], sortedRows_[right]) != 0) {
-            endPosition = right;
-            break;
-          }
-        }
-        left = left + distance / 2;
-        right = left + 1;
-      }
-      partitionStartRows_.push_back(right);
-      start = right;
-    }
-  } else {
-    for (auto i = 1; i < sortedRows_.size(); i++) {
-      if (partitionCompare(sortedRows_[i - 1], sortedRows_[i])) {
-        partitionStartRows_.push_back(i);
-      }
-    }
-    // Setting the startRow of the (last + 1) partition to be
-    // returningRows.size() to help for last partition related calculations.
-    partitionStartRows_.push_back(sortedRows_.size());
+
+  vector_size_t start = 0;
+  while (start < sortedRows_.size()) {
+    auto next = findNextPartitionStartRow(start);
+    partitionStartRows_.push_back(next);
+    start = next;
   }
 }
 

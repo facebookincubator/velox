@@ -2118,8 +2118,7 @@ class WindowNode : public PlanNode {
       std::vector<std::string> windowColumnNames,
       std::vector<Function> windowFunctions,
       bool inputsSorted,
-      PlanNodePtr source,
-      bool binarySearch);
+      PlanNodePtr source);
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
@@ -2163,10 +2162,6 @@ class WindowNode : public PlanNode {
     return inputsSorted_;
   }
 
-  bool binarySearch() const {
-    return binarySearch_;
-  }
-
   std::string_view name() const override {
     return "Window";
   }
@@ -2186,8 +2181,6 @@ class WindowNode : public PlanNode {
   const std::vector<Function> windowFunctions_;
 
   const bool inputsSorted_;
-
-  const bool binarySearch_;
 
   const std::vector<PlanNodePtr> sources_;
 

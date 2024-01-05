@@ -1658,8 +1658,7 @@ bool equalSortOrderList(
 
 PlanBuilder& PlanBuilder::window(
     const std::vector<std::string>& windowFunctions,
-    bool inputSorted,
-    bool binarySearch) {
+    bool inputSorted) {
   VELOX_CHECK_NOT_NULL(planNode_, "Window cannot be the source node");
   VELOX_CHECK_GT(
       windowFunctions.size(),
@@ -1742,24 +1741,18 @@ PlanBuilder& PlanBuilder::window(
       windowNames,
       windowNodeFunctions,
       inputSorted,
-      planNode_,
-      binarySearch);
+      planNode_);
   return *this;
 }
 
 PlanBuilder& PlanBuilder::window(
     const std::vector<std::string>& windowFunctions) {
-  return window(windowFunctions, false, false);
-}
-
-PlanBuilder& PlanBuilder::windowBinarySearch(
-    const std::vector<std::string>& windowFunctions) {
-  return window(windowFunctions, false, true);
+  return window(windowFunctions, false);
 }
 
 PlanBuilder& PlanBuilder::streamingWindow(
     const std::vector<std::string>& windowFunctions) {
-  return window(windowFunctions, true, false);
+  return window(windowFunctions, true);
 }
 
 PlanBuilder& PlanBuilder::rowNumber(

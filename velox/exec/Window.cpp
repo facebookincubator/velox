@@ -45,11 +45,7 @@ Window::Window(
         windowNode, pool(), spillConfig, &nonReclaimableSection_);
   } else {
     windowBuild_ = std::make_unique<SortWindowBuild>(
-        windowNode,
-        pool(),
-        spillConfig,
-        &nonReclaimableSection_,
-        windowNode->binarySearch());
+        windowNode, pool(), spillConfig, &nonReclaimableSection_);
   }
 }
 

@@ -913,9 +913,6 @@ class PlanBuilder {
   ///  rows between a + 10 preceding and 10 following)"
   PlanBuilder& window(const std::vector<std::string>& windowFunctions);
 
-  PlanBuilder& windowBinarySearch(
-      const std::vector<std::string>& windowFunctions);
-
   /// Adds WindowNode to compute window functions over pre-sorted inputs.
   /// All functions must use same partition by and sorting keys and input must
   /// be already sorted on these.
@@ -1056,8 +1053,7 @@ class PlanBuilder {
   /// window functions.
   PlanBuilder& window(
       const std::vector<std::string>& windowFunctions,
-      bool inputSorted,
-      bool binarySearch);
+      bool inputSorted);
 
  protected:
   core::PlanNodePtr planNode_;
