@@ -68,9 +68,9 @@ TEST(FileUtilsTests, ExtractPartitionName) {
       {"ws://nobodycares/notimportant/somethingsomething/yaddayadda/ds=2016-01-01/foo=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac=a%23b%3Ac/part0",
        "ds=2016-01-01/foo=__HIVE_DEFAULT_PARTITION__/a%0Ab%3Ac=a%23b%3Ac"}};
 
-  for (auto i = 0; i < testCases.size(); i++) {
+  for (auto testCase : testCases) {
     EXPECT_EQ(
-        testCases[i].partitionName,
-        FileUtils::extractPartitionName(testCases[i].filePath));
+        testCase.partitionName,
+        FileUtils::extractPartitionName(testCase.filePath));
   }
 }
