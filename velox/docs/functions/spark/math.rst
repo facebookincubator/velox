@@ -216,3 +216,8 @@ Mathematical Functions
 .. spark:function:: unaryminus(x) -> [same as x]
 
     Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+
+.. spark:function:: is_nan(x) -> boolean
+
+    Returns true if x is NaN, or false otherwise.
+    Supported types are: FLOAT.
