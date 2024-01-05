@@ -47,6 +47,14 @@ TEST(AsyncSourceTest, basic) {
   EXPECT_TRUE(error.hasValue());
 }
 
+TEST(AsyncSourceTest, doNotAccountForOffThreadTimes) {
+  FLAGS_account_for_off_thread_times = false;
+  AsyncSource<Gizmo> gizmo([]() { return std::make_unique<Gizmo>(11); });
+  EXPECT_FALSE(gizmo.hasValue());
+  gizmo.prepare();
+  EXPECT_EQ(0, gizmo.prepareTiming().count);
+}
+
 TEST(AsyncSourceTest, threads) {
   constexpr int32_t kNumThreads = 10;
   constexpr int32_t kNumGizmos = 2000;
