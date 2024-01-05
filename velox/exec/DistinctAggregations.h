@@ -70,6 +70,11 @@ class DistinctAggregations {
       const RowVectorPtr& input,
       const SelectivityVector& rows) = 0;
 
+  virtual void addSingleGroupSpillInput(
+      char* group,
+      const VectorPtr& input,
+      vector_size_t index) = 0;
+
   /// Computes aggregations and stores results in the specified 'result' vector.
   virtual void extractValues(
       folly::Range<char**> groups,

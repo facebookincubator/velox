@@ -1115,6 +1115,13 @@ void GroupingSet::initializeRow(SpillMergeStream& stream, char* row) {
         &row, folly::Range<const vector_size_t*>(&zero, 1));
   }
 
+  for (auto i = 0; i < distinctAggregations_.size(); ++i) {
+    if (distinctAggregations_[i] != nullptr) {
+      distinctAggregations_[i]->initializeNewGroups(
+          &row, folly::Range<const vector_size_t*>(&zero, 1));
+    }
+  }
+
   if (sortedAggregations_ != nullptr) {
     sortedAggregations_->initializeNewGroups(
         &row, folly::Range<const vector_size_t*>(&zero, 1));
@@ -1154,6 +1161,15 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
         input.current().childAt(aggregates_.size() + keyChannels_.size());
     sortedAggregations_->addSingleGroupSpillInput(
         row, vector, input.currentIndex());
+  }
+
+  for (auto i = 0; i < distinctAggregations_.size(); ++i) {
+    if (distinctAggregations_[i] != nullptr) {
+      const auto& vector =
+          input.current().childAt(aggregates_.size() + keyChannels_.size());
+      distinctAggregations_[i]->addSingleGroupSpillInput(
+          row, vector, input.currentIndex());
+    }
   }
 }
 

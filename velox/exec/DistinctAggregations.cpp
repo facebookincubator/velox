@@ -43,9 +43,9 @@ class TypedDistinctAggregations : public DistinctAggregations {
         sizeof(AccumulatorType),
         false, // usesExternalMemory
         1, // alignment
-        nullptr,
-        [](folly::Range<char**> /*groups*/, VectorPtr& /*result*/) {
-          VELOX_UNREACHABLE();
+        ARRAY(VARBINARY()),
+        [this](folly::Range<char**> groups, VectorPtr& result) {
+          extractForSpill(groups, result);
         },
         [this](folly::Range<char**> groups) {
           for (auto* group : groups) {
@@ -101,6 +101,20 @@ class TypedDistinctAggregations : public DistinctAggregations {
     });
 
     inputForAccumulator_.reset();
+  }
+
+  void addSingleGroupSpillInput(
+      char* group,
+      const VectorPtr& input,
+      vector_size_t index) override {
+    auto* arrayVector = input->as<ArrayVector>();
+    auto* elementsVector = arrayVector->elements()->asFlatVector<StringView>();
+
+    const auto size = arrayVector->sizeAt(index);
+    const auto offset = arrayVector->offsetAt(index);
+    auto* accumulator = reinterpret_cast<AccumulatorType*>(group + offset_);
+
+    accumulator->addFromSpill(*elementsVector, allocator_);
   }
 
   void extractValues(folly::Range<char**> groups, const RowVectorPtr& result)
@@ -183,6 +197,47 @@ class TypedDistinctAggregations : public DistinctAggregations {
       return {std::move(input)};
     }
     return input->template asUnchecked<RowVector>()->children();
+  }
+
+  void extractForSpill(folly::Range<char**> groups, VectorPtr& result) const {
+    auto* arrayVector = result->as<ArrayVector>();
+    arrayVector->resize(groups.size());
+
+    auto* rawOffsets =
+        arrayVector->mutableOffsets(groups.size())->asMutable<vector_size_t>();
+    auto* rawSizes =
+        arrayVector->mutableSizes(groups.size())->asMutable<vector_size_t>();
+
+    size_t totalBytes = 0;
+    vector_size_t offset = 0;
+    for (auto i = 0; i < groups.size(); ++i) {
+      auto* accumulator =
+          reinterpret_cast<AccumulatorType*>(groups[i] + offset_);
+      rawSizes[i] = accumulator->maxSpillSize();
+      rawOffsets[i] = offset;
+      offset += accumulator->maxSpillSize();
+      totalBytes += accumulator->maxSpillSize();
+    }
+
+    auto& elementsVector = arrayVector->elements();
+    elementsVector->resize(totalBytes);
+
+    auto* flatVector = arrayVector->elements()->asFlatVector<StringView>();
+    flatVector->resize(1);
+    auto* rawBuffer = flatVector->getRawStringBufferWithSpace(totalBytes, true);
+
+    offset = 0;
+    for (auto i = 0; i < groups.size(); ++i) {
+      auto* accumulator =
+          reinterpret_cast<AccumulatorType*>(groups[i] + offset_);
+
+      offset +=
+          accumulator->extractForSpill(rawBuffer + offset, totalBytes - offset);
+
+      accumulator->clear(*allocator_);
+    }
+
+    flatVector->setNoCopy(0, StringView(rawBuffer, offset));
   }
 
   memory::MemoryPool* const pool_;

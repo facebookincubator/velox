@@ -53,6 +53,14 @@ class AddressableNonNullValueList {
       vector_size_t index,
       HashStringAllocator* allocator);
 
+  /// Append an (opaque) serialized set of data. The data passed in should ONLY come
+  /// from an copySerializedTo call. It must be appended in the exact ascending order
+  /// of indices it was copied from.
+  HashStringAllocator::Position appendSerialized(
+      HashStringAllocator* allocator,
+      const char* buffer,
+      size_t size);
+
   /// Removes last element. 'position' must be a value returned from the latest
   /// call to 'append'.
   void removeLast(HashStringAllocator::Position position) {
@@ -80,11 +88,32 @@ class AddressableNonNullValueList {
       BaseVector& result,
       vector_size_t index);
 
+  /// Gets the size of the (opaque) serialized payload for the given position.
+  static size_t getSerializedSize(HashStringAllocator::Position position);
+
+  /// Copies the (opaque) serialized payload for the given position to the given
+  /// buffer that was previously sized with a call to getSerializedSize.
+  static size_t copySerializedTo(
+      HashStringAllocator::Position position,
+      char* buffer,
+      size_t size);
+
   void free(HashStringAllocator& allocator) {
     if (size_ > 0) {
       allocator.free(firstHeader_);
+      firstHeader_ = nullptr;
+      currentPosition_ = {nullptr, nullptr};
+      size_ = 0;
     }
   }
+
+ private:
+  std::unique_ptr<ByteOutputStream> makeOutputStream(
+    HashStringAllocator* allocator);
+
+  HashStringAllocator::Position finishWrite(
+    HashStringAllocator* allocator,
+    std::unique_ptr<ByteOutputStream>&& stream);
 
  private:
   // Memory allocation (potentially multi-part).

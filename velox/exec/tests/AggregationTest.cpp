@@ -1775,7 +1775,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, minSpillableMemoryReservation) {
   }
 }
 
-TEST_F(AggregationTest, distinctWithSpilling) {
+TEST_F(AggregationTest, distinctWithoutSpilling) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
   auto spillDirectory = exec::test::TempDirectoryPath::create();
@@ -1811,16 +1811,48 @@ TEST_F(AggregationTest, spillingForAggrsWithDistinct) {
           .config(QueryConfig::kTestingSpillPct, "100")
           .plan(PlanBuilder()
                     .values(vectors)
-                    .singleAggregation({"c1"}, {"count(DISTINCT c0)"}, {})
+                    .singleAggregation({"c0"}, {"count(DISTINCT c0)"}, {})
                     .capturePlanNodeId(aggrNodeId)
                     .planNode())
-          .assertResults("SELECT c1, count(DISTINCT c0) FROM tmp GROUP BY c1");
-  // Verify that spilling is not triggered.
+          .assertResults("SELECT c0, count(DISTINCT c0) FROM tmp GROUP BY 1");
+
   const auto& queryConfig = task->queryCtx()->queryConfig();
   ASSERT_TRUE(queryConfig.spillEnabled());
   ASSERT_TRUE(queryConfig.aggregationSpillEnabled());
   ASSERT_EQ(100, queryConfig.testingSpillPct());
-  ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  auto& stats = taskStats.at(aggrNodeId);
+  checkSpillStats(stats, true);
+  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+}
+
+TEST_F(AggregationTest, spillingForAggrsWithDistinctVarchar) {
+  auto vectors = makeVectors(rowType_, 100, 10);
+  createDuckDbTable(vectors);
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  core::PlanNodeId aggrNodeId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .spillDirectory(spillDirectory->path)
+          .config(QueryConfig::kSpillEnabled, "true")
+          .config(QueryConfig::kAggregationSpillEnabled, "true")
+          .config(QueryConfig::kTestingSpillPct, "100")
+          .plan(PlanBuilder()
+                    .values(vectors)
+                    .singleAggregation({"c6"}, {"count(DISTINCT c6)"}, {})
+                    .capturePlanNodeId(aggrNodeId)
+                    .planNode())
+          .assertResults("SELECT c6, count(DISTINCT c6) FROM tmp GROUP BY 1");
+
+  const auto& queryConfig = task->queryCtx()->queryConfig();
+  ASSERT_TRUE(queryConfig.spillEnabled());
+  ASSERT_TRUE(queryConfig.aggregationSpillEnabled());
+  ASSERT_EQ(100, queryConfig.testingSpillPct());
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  auto& stats = taskStats.at(aggrNodeId);
+  checkSpillStats(stats, true);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 

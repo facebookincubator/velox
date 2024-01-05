@@ -22,7 +22,32 @@ HashStringAllocator::Position AddressableNonNullValueList::append(
     const DecodedVector& decoded,
     vector_size_t index,
     HashStringAllocator* allocator) {
-  ByteOutputStream stream(allocator);
+  auto stream = makeOutputStream(allocator);
+
+  // Write hash.
+  stream->appendOne(decoded.base()->hashValueAt(decoded.index(index)));
+  // Write value.
+  exec::ContainerRowSerde::serialize(
+      *decoded.base(), decoded.index(index), *stream);
+
+  return finishWrite(allocator, std::move(stream));
+}
+
+HashStringAllocator::Position AddressableNonNullValueList::appendSerialized(
+    HashStringAllocator* allocator,
+    const char* buffer,
+    size_t size) {
+  auto stream = makeOutputStream(allocator);
+
+  stream->append(folly::Range<const char*>(buffer, size));
+
+  return finishWrite(allocator, std::move(stream));
+}
+
+std::unique_ptr<ByteOutputStream> AddressableNonNullValueList::makeOutputStream(
+    HashStringAllocator* allocator) {
+  std::unique_ptr<ByteOutputStream> stream{std::make_unique<ByteOutputStream>(allocator)};
+
   if (!firstHeader_) {
     // An array_agg or related begins with an allocation of 5 words and
     // 4 bytes for header. This is compact for small arrays (up to 5
@@ -31,21 +56,21 @@ HashStringAllocator::Position AddressableNonNullValueList::append(
     // sizes for lots of small arrays.
     static constexpr int kInitialSize = 44;
 
-    currentPosition_ = allocator->newWrite(stream, kInitialSize);
+    currentPosition_ = allocator->newWrite(*stream, kInitialSize);
     firstHeader_ = currentPosition_.header;
   } else {
-    allocator->extendWrite(currentPosition_, stream);
+    allocator->extendWrite(currentPosition_, *stream);
   }
 
-  // Write hash.
-  stream.appendOne(decoded.base()->hashValueAt(decoded.index(index)));
-  // Write value.
-  exec::ContainerRowSerde::serialize(
-      *decoded.base(), decoded.index(index), stream);
+  return stream;
+}
 
+HashStringAllocator::Position AddressableNonNullValueList::finishWrite(
+  HashStringAllocator* allocator,
+  std::unique_ptr<ByteOutputStream>&& stream) {
   ++size_;
 
-  auto startAndFinish = allocator->finishWrite(stream, 1024);
+  auto startAndFinish = allocator->finishWrite(*stream, 1024);
   currentPosition_ = startAndFinish.second;
   return startAndFinish.first;
 }
@@ -95,6 +120,30 @@ void AddressableNonNullValueList::read(
     vector_size_t index) {
   auto stream = prepareRead(position, true /*skipHash*/);
   exec::ContainerRowSerde::deserialize(stream, index, &result);
+}
+
+// static
+size_t AddressableNonNullValueList::getSerializedSize(
+    HashStringAllocator::Position position) {
+  // Note that we need the hash to make sure it's there when we put back.
+  return prepareRead(position, false /*skipHash*/).size();
+}
+
+// static
+size_t AddressableNonNullValueList::copySerializedTo(
+    HashStringAllocator::Position position,
+    char* buffer,
+    size_t size) {
+  auto stream = prepareRead(position, false /*skipHash*/);
+
+  const auto streamSize = stream.size();
+
+  VELOX_CHECK_GE(size, streamSize);
+
+  stream.seekp(0);
+  stream.readBytes(buffer, streamSize);
+
+  return streamSize;
 }
 
 } // namespace facebook::velox::aggregate::prestosql
