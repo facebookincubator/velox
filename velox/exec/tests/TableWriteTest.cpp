@@ -2953,6 +2953,7 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
 
   auto planStats = exec::toPlanStats(task->taskStats());
   auto& stats = planStats.at(tableWriteNodeId_);
+  ASSERT_GT(stats.physicalWrittenBytes, fixedWrittenBytes);
   ASSERT_GT(
       stats.operatorStats.at("TableWrite")->physicalWrittenBytes,
       fixedWrittenBytes);
