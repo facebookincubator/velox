@@ -1,0 +1,965 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>Memory Management &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Spilling" href="spilling.html" />
+    <link rel="prev" title="SIMD Usage in Velox" href="simd.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="spilling.html" title="Spilling"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="simd.html" title="SIMD Usage in Velox"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Memory Management</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="memory-management">
+<h1>Memory Management<a class="headerlink" href="#memory-management" title="Permalink to this heading">¶</a></h1>
+<section id="background">
+<h2>Background<a class="headerlink" href="#background" title="Permalink to this heading">¶</a></h2>
+<p>The Velox memory system is built on top of the <a class="reference external" href="https://man7.org/linux/man-pages/man2/mmap.2.html">std::mmap</a> library to avoid the
+<a class="reference external" href="https://stackoverflow.com/questions/3770457/what-is-memory-fragmentation">memory fragmentation issue</a> with std::malloc. It provides the basic
+memory allocation functions for query execution as well as the advanced
+memory management functions such as fair memory sharing, transparent file cache
+and server out-of-memory (OOM) prevention.</p>
+<p>Velox provides the large contiguous and noncontiguous buffer allocation
+functions to optimize the query memory allocation patterns. For example, a
+query can allocate a large contiguous memory for a hash table
+(<em>HashTable::allocateTables</em>) by using std::mmap to allocate physical memory from
+the OS directly. For small buffer allocations, a query can allocate a large
+chunk of non-contiguous memory, and then use <a class="reference external" href="https://nullprogram.com/blog/2023/09/27/">memory arena technique</a> like
+<em>StreamArena</em> or <em>HashStringAllocator</em> to provide the small allocations on top of
+it to reduce the number of expensive actual memory allocations.</p>
+<p>Velox provides fair memory sharing among running queries by adjusting their
+memory capacities at runtime in response to their memory usage changes. This
+process is called memory arbitration. It ensures the total allocated memory
+capacity of all the queries is within the system configured query memory limit.
+It also prevents each individual query from running out of the user configured
+per-query memory limit. When a query tries to allocate more memory than its
+current capacity, the memory arbitration either increases the query’s capacity
+by reclaiming the used memory from the other queries with larger capacities, or
+reclaiming from the query itself if it exceeds per-query memory limit, to free
+up space within its current capacity. The memory reclaim is achieved through
+techniques like <a class="reference external" href="https://facebookincubator.github.io/velox/develop/spilling.html">disk spilling</a>.</p>
+<p>Velox provides transparent file cache to accelerate table scan through the hot
+data reuse and prefetch. The file cache is integrated with the memory system to
+achieve dynamic memory sharing between file cache and query memory. When a
+query fails to allocate memory, we retry the allocation by shrinking the file
+cache. Therefore, the file cache size is automatically adjusted in response to
+the query memory usage change.</p>
+<p>Velox provides server out of memory (OOM) prevention by managing the physical
+memory allocation on its own through the std::mmap library. This allows us to
+enforce explicit control on <a class="reference external" href="https://en.wikipedia.org/wiki/Resident_set_size#:~:text=In%20computing%2C%20resident%20set%20size,in%20main%20memory%20(RAM).">Resident Set Size (RSS)</a> of Velox memory usage. The
+memory allocator in Velox handles all the memory allocations from both file
+cache and query memory. It ensures the total allocated memory won’t exceed the
+system memory limit configured for Velox to use. To further handle the spiky
+memory usage from the non-Velox components, Velox provides a generic server
+memory pushback mechanism to automatically shrink the file cache to return the
+unused Velox memory back to the OS when the server is detected under low memory
+condition.</p>
+</section>
+<section id="overall-design">
+<h2>Overall Design<a class="headerlink" href="#overall-design" title="Permalink to this heading">¶</a></h2>
+<p>Velox memory system consists of the following major memory components: memory
+manager (<em>MemoryManager</em>), memory allocator (<em>MemoryAllocator</em>), file cache
+(<em>AsyncDataCache</em>), memory arbitrator (<em>MemoryArbitrator</em>) and a number of memory
+pools (<em>MemoryPool</em>). The memory manager creates all the other components. It
+creates the memory allocator and memory arbitrator when initializing the memory
+system, and creates the memory pool on-demand for query execution.</p>
+<a class="reference internal image-reference" href="../_images/memory-system.png"><img alt="../_images/memory-system.png" class="align-center" src="../_images/memory-system.png" style="width: 600px;" /></a>
+<p>When a query starts execution, it first creates a root memory pool (query pool)
+from the memory manager, and then creates a tree of child memory pools from the
+root according to the query plan: a child memory pool for each query task
+(task pool), a grandchild memory pool for each plan node (node pool) and a
+great-grandchild memory pool for each operator instance (operator pool). During
+the query execution, it allocates memory from the leaf operator pools and
+propagates the memory usage up to the root query pool. If the aggregated memory
+usage at the root exceeds the current query memory capacity, the query pool
+sends a request to the memory arbitrator to grow its capacity. The memory
+arbitrator either grows the requestor query pool’s capacity by reclaiming the
+used memory from the other queries which has the largest capacity in the
+system, or reclaiming from the request query pool itself to free up space
+within its current capacity if it exceeds the per-query memory limit or it has
+the largest capacity in the system. The used memory reclaim is achieved through
+techniques like <a class="reference external" href="https://facebookincubator.github.io/velox/develop/spilling.html">disk spilling</a>. If the memory arbitration succeeds, the leaf
+operator pool can proceed with the actual memory allocation from memory
+allocator. However, if the memory arbitration fails, then the query which has
+the largest capacity in the system is chosen to fail with query memory capacity
+exceeded error (local OOM). The failed query may or may not be the requestor
+query pool itself.</p>
+<p>The memory allocator does the actual memory allocation from its own managed
+memory space in units of machine pages (4KB). It tracks the amount of allocated
+memory, and returns an error if an allocation request exceeds the system memory
+limit. This enables explicit control on RSS of Velox memory usage to help
+prevent the server OOM.</p>
+<p>The file cache provides the in-memory hot data cache and prefetch functions
+when the user query accesses the remote storage. It allocates memory from the
+memory allocator directly which is not counted in query memory usage. To
+prevent the memory allocation failure because of excessive file cache memory
+usage, the file cache retries the allocation failure by shrinking the file
+cache. This achieves dynamic memory sharing between file cache and query memory
+in response to the user query workload changes.</p>
+<a class="reference internal image-reference" href="../_images/memory-function.png"><img alt="Memory Management Functions" class="align-center" src="../_images/memory-function.png" style="width: 800px;" /></a>
+<p>To summarize, the memory manager manages the memory pools and coordinates the
+accesses between different memory components. The memory pool tracks a query’s
+memory usage and interacts with the memory arbitrator to adjust the memory
+capacity allocations among running queries to achieve fair memory sharing. The
+memory allocator manages the physical memory allocations to prevent server OOM,
+and interacts with file cache to achieve dynamic memory sharing between query
+memory and file cache to maximize the memory efficiency. The rest of the
+document describes each memory component in detail.</p>
+</section>
+<section id="memory-manager">
+<h2>Memory Manager<a class="headerlink" href="#memory-manager" title="Permalink to this heading">¶</a></h2>
+<a class="reference internal image-reference" href="../_images/memory-manager.png"><img alt="Memory Manager" class="align-center" src="../_images/memory-manager.png" style="width: 600px;" /></a>
+<p>The memory manager is created on server startup with provided
+<em>MemoryManagerOption</em>. It creates a memory allocator instance to manage the
+physical memory allocations for both query memory allocated through memory pool
+and cache memory allocated through the file cache. It ensures the total
+allocated memory is within the system memory limit (specified by
+<em>MemoryManagerOptions::allocatorCapacity</em>). The memory manager also creates a
+memory arbitrator instance to arbitrate the memory capacity among running
+queries. It ensures the total allocated query memory capacity is within the
+query memory limit (specified by <em>MemoryManagerOptions::arbitratorCapacity</em>). The
+memory arbitrator also prevents each individual query running out of its
+per-query memory limit (specified by <em>QueryConfig::query_max_memory_per_node</em>) by
+reclaiming overused memory through <a class="reference external" href="https://facebookincubator.github.io/velox/develop/spilling.html">disk spilling</a> (refer to <a class="reference external" href="#memory-arbitrator">memory arbitrator
+section</a> for details).</p>
+<p>After setting up the Velox memory system, the memory manager manages the memory
+pools for query execution. When a query starts, it creates a root query pool
+from the memory manager, and then creates a tree of child pools from the query
+pool according to the query plan (see <a class="reference external" href="#memory-pool">memory pool section</a> for detail) for
+memory allocations and usage tracking.</p>
+<p>The memory manager keeps track of all the live query pools for the memory
+arbitration process. When a query pool sends a request to the memory manager to
+grow its capacity (<em>MemoryManager::growPool</em>), the memory manager forwards the
+request to the memory arbitrator with the list of alive query pools as the
+arbitration candidates. The memory arbitrator reclaims the used memory from the
+candidates with the largest capacity first, and increases the requestor pool’s
+capacity with the freed memory space accordingly. If the requestor pool already
+has the largest capacity among all the candidates, then the memory arbitrator
+reclaims memory from the requestor itself to free up space within its current
+capacity. See <a class="reference external" href="#memory-arbitration-process">memory arbitration process section</a> for detailed description of
+the memory arbitration process.</p>
+<p>The memory manager doesn’t have ownership of user created query pools but only
+tracks their liveness through <em>MemoryManager::dropPool</em> method which is invoked
+by the query pool’s destructor to remove itself from the tracked list
+(<em>MemoryManager::pools_</em>). The <em>QueryCtx</em> object owns the query pool which stays
+alive until the query finishes.</p>
+<p>The memory manager creates and owns a system root pool for Velox internal
+operations such as <a class="reference external" href="https://facebookincubator.github.io/velox/develop/spilling.html">disk spilling</a>. The difference between system root pool and
+user created query root pool is that there is no per-query memory limit for the
+system root pool so it doesn’t participate in the memory arbitration. The
+reason is that the system operations are not executed on behalf of a particular
+user query. Take <a class="reference external" href="https://facebookincubator.github.io/velox/develop/spilling.html">disk spilling</a> for example, it is triggered by memory
+arbitration to free up used memory from the queries. We don’t expect
+significant memory usage during a system operation, and eventually the memory
+allocator guarantees the actual allocated memory are within the system memory
+limit no matter if it is for system operation or for user query execution. In
+practice, we shall reserve some space from the memory allocator to compensate
+for such system memory usage. We can do that by configuring a smaller query
+memory limit (<em>MemoryManagerOptions::arbitratorCapacity</em>) than system memory
+limit (<em>MemoryManagerOptions::allocatorCapacity</em>) (refer to <a class="reference external" href="#server-oom-prevention">OOM prevention section</a>
+for detail).</p>
+<section id="memory-system-setup">
+<h3>Memory System Setup<a class="headerlink" href="#memory-system-setup" title="Permalink to this heading">¶</a></h3>
+<p>Here is the code block from Prestissimo that initializes the Velox memory system:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">PrestoServer::initializeVeloxMemory</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos"> 2</span><span class="w">   </span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">systemConfig</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SystemConfig</span><span class="o">::</span><span class="n">instance</span><span class="p">();</span><span class="w"></span>
+<span class="linenos"> 3</span><span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">memoryGb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">systemMemoryGb</span><span class="p">();</span><span class="w"></span>
+<span class="linenos"> 4</span><span class="w">   </span><span class="n">MemoryManagerOptions</span><span class="w"> </span><span class="n">options</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 5</span><span class="w">   </span><span class="n">options</span><span class="p">.</span><span class="n">allocatorCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memoryGb</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">30</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 6</span><span class="w">   </span><span class="n">options</span><span class="p">.</span><span class="n">useMmapAllocator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">useMmapAllocator</span><span class="p">();</span><span class="w"></span>
+<span class="linenos"> 7</span><span class="w">   </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">memoryArbitratorKind</span><span class="p">().</span><span class="n">empty</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos"> 8</span><span class="w">     </span><span class="n">options</span><span class="p">.</span><span class="n">arbitratorKind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">memoryArbitratorKind</span><span class="p">();</span><span class="w"></span>
+<span class="linenos"> 9</span><span class="w">     </span><span class="k">const</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">queryMemoryGb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">queryMemoryGb</span><span class="p">();</span><span class="w"></span>
+<span class="linenos">10</span><span class="w">     </span><span class="n">options</span><span class="p">.</span><span class="n">queryMemoryCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">queryMemoryGb</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">30</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">11</span><span class="w">     </span><span class="p">...</span><span class="w"></span>
+<span class="linenos">12</span><span class="w">   </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">13</span><span class="w">   </span><span class="n">memory</span><span class="o">::</span><span class="n">initializeMemoryManager</span><span class="p">(</span><span class="n">options</span><span class="p">);</span><span class="w"></span>
+<span class="linenos">14</span>
+<span class="linenos">15</span><span class="w">   </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">asyncDataCacheEnabled</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos">16</span><span class="w">     </span><span class="p">...</span><span class="w"></span>
+<span class="linenos">17</span><span class="w">     </span><span class="n">cache_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">cache</span><span class="o">::</span><span class="n">AsyncDataCache</span><span class="o">&gt;</span><span class="p">(</span><span class="w"></span>
+<span class="linenos">18</span><span class="w">        </span><span class="n">memoryManager</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">allocator</span><span class="p">(),</span><span class="w"> </span><span class="n">memoryBytes</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">ssd</span><span class="p">));</span><span class="w"></span>
+<span class="linenos">19</span><span class="w">   </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">20</span><span class="w">   </span><span class="p">...</span><span class="w"></span>
+<span class="linenos">21</span><span class="w"> </span><span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>L6: set the memory allocator capacity (system memory limit) from
+Prestissimo system config</p></li>
+<li><p>L7: set the memory allocator type from Prestissimo system config. If
+<em>useMmapAllocator</em> is true, we use <em>MmapAllocator</em>, otherwise use
+<em>MallocAllocator</em>. <a class="reference external" href="#memory-allocator">Memory Allocator section</a> describes these two
+types of allocators</p></li>
+<li><p>L9: set the memory arbitrator kind from the Prestissimo system config.
+Currently, we only support the <em>“SHARED”</em> arbitrator kind (see <a class="reference external" href="#memory-arbitrator">memory arbitrator section</a>).
+<em>“NOOP”</em> arbitrator kind will be deprecated soon (<a class="reference external" href="https://github.com/facebookincubator/velox/issues/8220">#8220</a>)</p></li>
+<li><p>L11: set the memory arbitrator capacity (query memory limit) from
+Prestissimo system config</p></li>
+<li><p>L14: creates the process-wide memory manager which creates memory
+allocator and arbitrator inside based on MemoryManagerOptions initialized from previous steps</p></li>
+<li><p>L15-19: creates the file cache if it is enabled in Prestissimo system
+config</p></li>
+</ul>
+</section>
+</section>
+<section id="memory-pool">
+<h2>Memory Pool<a class="headerlink" href="#memory-pool" title="Permalink to this heading">¶</a></h2>
+<p>The memory pool provides memory allocation functions for query execution. It
+also tracks a query’s memory usage for per-query memory limit enforcement.
+As shown in the Query Memory Pool Hierarchy figure, a query creates a tree of
+memory pools that mirrors the query plan to have a fine-grained tracking of
+memory usage for figuring out which task(s) or operator(s) use most of the
+memory. At the root of the tree, <em>QueryCtx</em> creates a root query pool from the
+memory manager. Each query task creates a child task pool from the query pool.
+A query task executes a fragment of the query plan (e.g. an execution stage in
+a distributed query execution plan in Prestissimo). Each plan node in a task’s
+plan fragment creates a child node pool from the task pool
+(<em>Task::getOrAddNodePool</em>). Each plan node belongs to one or more task
+execution pipelines. Each pipeline might have multiple driver instances running
+in parallel. Each driver instance consists of a pipeline of query operators,
+and an operator is an instantiation of a query plan node in a driver. Hence
+each operator creates a child operator pool from the node pool
+(<em>Task::addOperatorPool</em>).</p>
+<a class="reference internal image-reference" href="../_images/memory-pool.png"><img alt="Memory Pool" class="align-center" src="../_images/memory-pool.png" style="width: 500px;" /></a>
+<p>Query allocates memory from the operator pool at the leaf of the tree and
+propagates the memory usage all the way up to the query pool at the root of the
+tree to check if the memory usage has exceeded the per-query memory limit or
+not. The memory allocation always happens at the leaf operator pool, the
+intermediate pools only aggregate the memory usage (node pool and task pool),
+and it is the root query pool that enforces the per-query memory limit. Given
+that, we introduce two memory pool types (defined by <em>MemoryPool::Kind</em>) to
+simplify the memory pool management: one is <em>LEAF</em> type which only allows the
+memory allocations and the other is <em>AGGREGATE</em> type which aggregates the
+memory usage from all its children but is not allowed to allocate memory
+directly. Hence, the operator pool is <em>LEAF</em> type and all the others are
+<em>AGGREGATE</em> type. We only enforce the memory limit check at the root query
+pool.</p>
+<section id="memory-usage-tracking">
+<h3>Memory Usage Tracking<a class="headerlink" href="#memory-usage-tracking" title="Permalink to this heading">¶</a></h3>
+<p>To track query memory usage, a leaf operator pool needs to propagate the memory
+usage all the way up to the root query pool and check the memory limit for
+every allocation, but this would be slow. Hence, memory pool uses a memory
+reservation mechanism to track the query memory usage. A memory reservation is
+made in 1MB or larger chunks to avoid excessive locking, propagating and
+checking memory usage for every single allocation (see <em>MemoryPool::quantizedSize</em>
+description below). A leaf operator pool maintains two counters for memory
+reservation: one is the actual used memory (<em>MemoryPoolImpl::usedReservationBytes_</em>)
+and the other is the memory reserved from the root query pool
+(<em>MemoryPoolImpl::reservationBytes_</em>). The difference between the two counters
+is the available memory for a leaf operator pool to use.</p>
+<p>The intermediate pools only use <em>reservationBytes_</em> to count the aggregated memory
+reservations held by all its child pools. The root query pool has two additional
+counters for memory limit check: one is its current memory capacity
+(<em>MemoryPoolImpl::capacity_</em>) which is the amount of memory available for the
+query to use. The memory arbitrator sets this based on how many queries are
+running, the total query memory limit and how much memory each query needs. The
+other is max capacity (<em>MemoryPool::maxCapacity_</em>) which is the max capacity that
+a query can grow up to. It is set by the user and is fixed during a query’s
+lifetime (<em>QueryConfig::kQueryMaxMemoryPerNode</em>). The memory arbitrator can’t
+set a query’s <em>capacity_</em> beyond its <em>maxCapacity_</em> limit.</p>
+<p>When the root query pool receives a new memory reservation request, it increases
+<em>reservationBytes_</em> and checks if it is within its current <em>capacity_</em> limit. If
+it does, the root query pool accepts the request. If not, the root query pool
+asks the memory arbitrator (via memory manager) to grow its capacity through the
+memory arbitration (see <a class="reference external" href="#memory-arbitrator">memory arbitrator section</a> for details).
+If the memory arbitration fails, the root query pool fails the request with a
+query memory capacity exceeded error (local OOM error).</p>
+<p><em>MemoryPool::reserve</em> and <em>MemoryPool::release</em> are the two methods used by the
+memory pool for memory reservation. The memory reservation is thread-safe and
+<em>MemoryPool::reserveThreadSafe</em> is the main function that implements the memory
+reservation logic:</p>
+<ol class="arabic">
+<li><p>The leaf memory pool calls <em>MemoryPool::reservationSizeLocked</em> to calculate
+the new required reservation (<em>incrementBytes</em>). It is based on the memory
+allocation size, and available memory reservation
+(<em>reservationBytes_ -  usedReservationBytes_</em>).</p></li>
+<li><p>If <em>incrementBytes</em> is zero, the leaf memory pool has sufficient available
+reservation so it doesn’t need new reservation and just update
+<em>usedReservationBytes_</em> to reflect the new memory usage.</p></li>
+<li><p>If <em>incrementBytes</em> is not zero, the leaf memory pool needs to call
+<em>MemoryPool::incrementReservationThreadSafe</em> (see below) to propagate the
+increment all the way up to the root memory pool to check if the new
+reservation request exceeds the query’s current capacity or not. If not,
+accept the reservation by incrementing <em>reservationBytes_</em> accordingly.</p>
+<p>Note that if <em>MemoryPool::incrementReservationThreadSafe</em> fails, it throws an
+exception to fail the memory allocation request with a local OOM error.</p>
+</li>
+<li><p>The leaf memory pool goes back to step-1 to check if there is sufficient
+available reservation for the allocation request after the reservation
+succeeds.</p>
+<p>Note that the concurrent allocation requests to the same leaf memory pool
+might steal away the reservation made in step-3 so we have to check again.
+We don’t hold the leaf memory pool’s lock while making a reservation from
+the root memory pool, which could be a blocking operation if memory
+arbitration is involved. Therefore, there could be a race condition if there
+are two concurrent memory reservation requests from the same leaf memory
+pool. But we don’t expect it to happen very often in practice.</p>
+</li>
+</ol>
+<p>As mentioned above, to avoid frequent concurrent memory reservations to the
+root memory pool to reduce the cpu cost, the leaf memory pool does quantized
+memory reservation. It rounds up the actual reservation bytes to the next large
+quantized reservation value (MemoryPool::quantizedSize):</p>
+<ul class="simple">
+<li><p>round up to next MB if size &lt; 16MB</p></li>
+<li><p>round up to next 4MB if size &lt; 64MB</p></li>
+<li><p>round up to next 8MB if size &gt;= 64MB</p></li>
+</ul>
+<p>With the quantized reservation, we never reserve less than 1 MB of memory. Even
+if we only need 1KB, we’ll have to reserve 1MB and if there is not enough
+memory available the query will fail. It also means that if we run at
+concurrency of 15, each driver thread will reserve at least 1MB and therefore
+the query would require at least 15 MB of memory even if it uses just a few KB.</p>
+<p>The implementation of MemoryPool::incrementReservationThreadSafe:</p>
+<ol class="arabic simple">
+<li><p>A non-root memory pool calls its parent pool’s <em>incrementReservationThreadSafe</em>
+method recursively to propagate the reservation request all the way up to
+the root memory pool</p></li>
+<li><p>Check <em>MemoryPool::incrementReservationThreadSafe</em> result from the parent pool:</p>
+<ol class="loweralpha simple">
+<li><p>If the function returns true, the reservation succeeds from the root
+memory pool and proceeds to accept the reservation (Step-3)</p></li>
+<li><p>If the function returns false, then reservation succeeds but has conflicts
+with other concurrent reservation requests detected at the root memory
+pool. We need to retry from the leaf memory pool again by returning false
+to <em>MemoryPoolImpl::reserveThreadSafe</em></p></li>
+<li><p>If the memory reservation fails at the root memory pool, the function
+expects a query memory capacity exceeded exception thrown and the memory
+allocation fails</p></li>
+</ol>
+</li>
+<li><p>Call <em>MemoryPool::maybeIncrementReservationLocked</em> to try to increment the
+reservation and check the result:</p>
+<ol class="loweralpha simple">
+<li><p>For a non-root memory pool, this should always succeed as we only check
+capacity at the root memory pool</p></li>
+<li><p>For a root memory pool, the function might return false if the reservation
+request exceeds its current capacity and goes to step-4 to request memory
+arbitration</p></li>
+</ol>
+</li>
+<li><p>The root memory pool calls <em>MemoryManager::growPool</em> to grow its capacity.
+This triggers the memory arbitration process inside the memory arbitrator</p></li>
+<li><p>If <em>MemoryManager::growPool</em> returns true, then we succeed in growing memory
+capacity (or reducing the memory usage within its current capacity). The
+function calls <em>MemoryPool::maybeIncrementReservation</em> again to check if the
+memory reservation can be satisfied or not. If not, then there should be a
+concurrent memory reservation request that takes away the grown memory
+capacity. Returns false to retry from the leaf memory pool again in this case
+(step2-b). Otherwise, returns true (step2-a).</p></li>
+<li><p>If <em>MemoryManager::growPool</em> returns false, then we fail to grow capacity
+from the memory arbitrator and throws an query memory capacity exceeded error
+(step2-c)</p></li>
+</ol>
+</section>
+<section id="memory-pool-apis">
+<h3>Memory Pool APIs<a class="headerlink" href="#memory-pool-apis" title="Permalink to this heading">¶</a></h3>
+<p>Memory pool has three sets of APIs for memory pool management, memory allocation
+and memory arbitration. The following is a list of the major APIs to use in each
+of the three sets.</p>
+<section id="memory-pool-management">
+<h4>Memory Pool Management<a class="headerlink" href="#memory-pool-management" title="Permalink to this heading">¶</a></h4>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Creates a root memory pool with specified &#39;name&#39; and &#39;capacity&#39;.</span>
+<span class="c1">/// &#39;reclaimer&#39; is provided for memory arbitration process.</span>
+<span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryManager</span><span class="o">::</span><span class="n">addRootPool</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">capacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMaxMemory</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">MemoryReclaimer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">/// Create an aggregate child memory pool which allows to create child memory</span>
+<span class="c1">/// pools from it, and it used to aggregate memory usage from its child pools. /// Aggregate memory pool is not allowed to allocate memory directly.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryPool</span><span class="o">::</span><span class="n">addAggregateChild</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">/// Create a leaf child memory pool which allows to allocate memory but are not</span>
+<span class="c1">/// allowed to create child pools.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryPool</span><span class="o">::</span><span class="n">addLeafChild</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">/// Creates new instance of MemoryPool for an operator, stores it in the task</span>
+<span class="c1">/// to ensure lifetime and returns a raw pointer.</span>
+<span class="n">velox</span><span class="o">::</span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="nf">Task::addOperatorPool</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">PlanNodeId</span><span class="o">&amp;</span><span class="w"> </span><span class="n">planNodeId</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="kt">int</span><span class="w"> </span><span class="n">pipelineId</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">driverId</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operatorType</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">/// Creates new instance of MemoryPool for a plan node, stores it in the task</span>
+<span class="c1">/// to ensure lifetime and returns a raw pointer.</span>
+<span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="nf">Task::getOrAddNodePool</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">PlanNodeId</span><span class="o">&amp;</span><span class="w"> </span><span class="n">planNodeId</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="memory-allocation">
+<h4>Memory Allocation<a class="headerlink" href="#memory-allocation" title="Permalink to this heading">¶</a></h4>
+<p>The memory pool provides three types of memory allocations. If a user needs a
+large chunk of buffer allocation and the allocated buffer doesn’t need to be
+contiguous, then it can use <em>MemoryPool::allocateNonContiguous</em> to allocate a
+number of variable sized buffers (see <a class="reference external" href="#non-contiguous-allocation">non-contiguous allocation section</a> for details). Velox uses this allocation for
+<em>RowContainer</em>, <em>StreamArena</em>/<em>HashStringAllocator</em> and <em>AsyncDataCache</em> etc. If a user
+needs a large contiguous buffer allocation with size &gt; 1MB, then it can use
+<em>MemoryPool::allocateContiguous</em> to allocate a large chunk of physical memory
+from the OS directly through std::mmap (see <a class="reference external" href="#contiguous-allocation">contiguous allocation section</a> for
+details). Velox uses this allocation for <em>HashTable</em>. For any other ad hoc
+allocations, we can use <em>MemoryPool::allocate</em>. The memory allocator determines
+how to allocate memory based on the actual allocation size (see
+<a class="reference external" href="#small-allocation">small allocation section</a> for details).</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Allocates a buffer with specified &#39;size&#39;. If the memory allocation is</span>
+<span class="c1">/// smaller than a predefined threshold, then we delegate the allocation to</span>
+<span class="c1">/// std::malloc (MmapAllocator::Options::maxMallocBytes).</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="nf">MemoryPool::allocate</span><span class="p">(</span><span class="kt">int64_t</span><span class="w"> </span><span class="n">size</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">/// Frees an allocated buffer.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::free</span><span class="p">(</span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="n">p</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">size</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">/// Allocates one or more runs that add up to at least &#39;numPages&#39;, with the</span>
+<span class="c1">/// smallest run being at least &#39;minSizeClass&#39; pages. &#39;minSizeClass&#39; must</span>
+<span class="c1">/// be &lt;= the size of the largest size class (see non-contiguous allocation</span>
+<span class="c1">/// section for size class definition). The new memory is returned in &#39;out&#39; on</span>
+<span class="c1">/// success and any memory formerly referenced by &#39;out&#39; is freed. The function</span>
+<span class="c1">/// throws if allocation fails and &#39;out&#39; references no memory and any partially</span>
+<span class="c1">/// allocated memory is freed.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::allocateNonContiguous</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">minSizeClass</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">/// Frees non-contiguous &#39;allocation&#39;. &#39;allocation&#39; is empty on return.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::freeNonContiguous</span><span class="p">(</span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">/// Makes a large contiguous mmap of &#39;numPages&#39;. The new mapped pages are</span>
+<span class="c1">/// returned in &#39;out&#39; on success. Any formly mapped pages referenced by &#39;out&#39;</span>
+<span class="c1">/// is unmapped in all the cases even if the allocation fails.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::allocateContiguous</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">/// Frees contiguous &#39;allocation&#39;. &#39;allocation&#39; is empty on return.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::freeContiguous</span><span class="p">(</span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="memory-arbitration">
+<h4>Memory Arbitration<a class="headerlink" href="#memory-arbitration" title="Permalink to this heading">¶</a></h4>
+<p>The <a class="reference external" href="#memory-arbitrator">memory arbitrator section</a> below discusses how these memory arbitration
+related methods are used in the memory arbitration and reclaim process.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns the number of bytes that haven&#39;t been reserved for use, and can be</span>
+<span class="c1">/// freed by reducing this memory pool&#39;s limit.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::freeBytes</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">/// Invoked to bump up the memory pool&#39;s capacity by &#39;bytes&#39;. The function</span>
+<span class="c1">/// returns the memory pool&#39;s new capacity after the grow.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::grow</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">bytes</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">/// Invoked to free up to the specified amount of unused memory reservations by</span>
+<span class="c1">/// reducing this memory pool&#39;s capacity without actually freeing up any</span>
+<span class="c1">/// used memory. The function returns the actually freed memory bytes. If</span>
+<span class="c1">/// &#39;targetBytes&#39; is zero, the function frees all the unused memory reservation</span>
+<span class="c1">/// bytes.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::shrink</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetBytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">/// Invoked by the memory arbitrator to enter memory arbitration processing. It</span>
+<span class="c1">/// is a noop if &#39;reclaimer_&#39; is not set, otherwise invoke the reclaimer&#39;s</span>
+<span class="c1">/// corresponding method.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::enterArbitration</span><span class="p">();</span><span class="w"></span>
+
+<span class="c1">/// Invoked by the memory arbitrator to leave memory arbitration processing. It</span>
+<span class="c1">/// is a noop if &#39;reclaimer_&#39; is not set, otherwise invoke the reclaimer&#39;s</span>
+<span class="c1">/// corresponding method.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::leaveArbitration</span><span class="p">();</span><span class="w"></span>
+
+<span class="c1">/// Returns how many bytes is reclaimable from this memory pool. The function</span>
+<span class="c1">/// true if we can reclaim memory from this memory pool, and returns the number</span>
+<span class="c1">/// of reclaimable bytes in &#39;bytes&#39;. Otherwise returns false. The function</span>
+<span class="c1">/// returns false if if &#39;reclaimer_&#39; is not set, otherwise invoke the</span>
+<span class="c1">/// reclaimer&#39;s corresponding method.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">MemoryPool::reclaimableBytes</span><span class="p">(</span><span class="kt">uint64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">bytes</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">/// Invoked by the memory arbitrator to reclaim memory from this memory pool</span>
+<span class="c1">/// with specified reclaim target bytes. If &#39;targetBytes&#39; is zero, then it</span>
+<span class="c1">/// tries to reclaim all the reclaimable memory from the memory pool. It is</span>
+<span class="c1">/// noop if the reclaimer is not set, otherwise invoke the reclaimer&#39;s</span>
+<span class="c1">/// corresponding method.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::reclaim</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetBytes</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+<section id="memory-arbitrator">
+<h2>Memory Arbitrator<a class="headerlink" href="#memory-arbitrator" title="Permalink to this heading">¶</a></h2>
+<p>The memory arbitrator is used to arbitrate the memory capacity across running
+queries to achieve fair memory sharing and prevent a query from running out of
+its memory limit. To arbitrate memory capacity between running queries, the
+memory arbitrator needs to be able to reclaim the used memory from a query
+through techniques such as <a class="reference external" href="https://facebookincubator.github.io/velox/develop/spilling.html">disk spilling</a>, and then transfer the freed memory
+between queries by adjusting their memory pool’s capacities accordingly (see
+<a class="reference external" href="#memory-arbitration-process">memory arbitration process section</a> for detail).</p>
+<p>The <em>MemoryArbitrator</em> is defined to support different implementations for
+different query systems. As for now, we implement <em>SharedArbitrator</em> for both
+Prestissimo and Prestissimo-on-Spark. <a class="reference external" href="https://github.com/oap-project/gluten">Gulten</a> implements its own memory
+arbitrator to integrate with the <a class="reference external" href="https://www.linkedin.com/pulse/apache-spark-memory-management-deep-dive-deepak-rajak/">Spark memory system</a>. <em>SharedArbitrator</em>
+ensures the total allocated memory capacity is within the query memory limit
+(<em>MemoryManagerOptions::arbitratorCapacity</em>), and also ensures each individual
+query’s capacity is within the per-query memory limit (<em>MemoryPool::maxCapacity_</em>).
+When a query needs to grow its capacity, <em>SharedArbitrator</em> either reclaims the
+used memory from the query itself if it has exceeded its max memory capacity,
+or increases its capacity by reclaiming used memory from the other queries with
+the largest memory capacity in the system.</p>
+<section id="memory-arbitration-process">
+<h3>Memory Arbitration Process<a class="headerlink" href="#memory-arbitration-process" title="Permalink to this heading">¶</a></h3>
+<a class="reference internal image-reference" href="../_images/memory-arbitration.png"><img alt="Memory Arbitration Process" class="align-center" src="../_images/memory-arbitration.png" style="width: 800px;" /></a>
+<p>The end-to-end memory arbitration process in <em>SharedArbitrator</em> works as follows:</p>
+<ol class="arabic simple">
+<li><p>The query operator A allocates memory from its leaf operator pool (operator
+pool A)</p></li>
+<li><p>The operator pool A sends the memory reservation request to the root query
+pool (query pool A)</p></li>
+<li><p>The query pool A is the root memory pool and it checks if the memory
+reservation request is within the current capacity or not
+(<em>MemoryPoolImpl::capacity_</em>). Let’s assume the request has exceeded the
+current capacity to trigger memory arbitration</p></li>
+<li><p>The query pool A sends a request to the memory manager to grow its capacity
+for the new reservation (<em>MemoryManager::growPool</em>)</p></li>
+<li><p>The memory manager forwards the request to the memory arbitrator
+(<em>MemoryArbitrator::growCapacity</em>) with the requestor memory pool plus the list
+of the root query pools as the memory arbitration candidates. The memory
+manager keeps the candidate query pools alive during the memory arbitration
+process</p></li>
+<li><p>The memory arbitrator serializes the memory arbitration processing with one
+request at a time to ensure a consistent view of memory capacity allocated
+among queries. The memory arbitrator might receive concurrent arbitration
+requests from different queries or even from different driver threads of the
+same query. For each memory arbitration request:</p>
+<ol class="loweralpha simple">
+<li><p>The memory arbitrator invokes <em>MemoryPool::enterArbitration</em> method of the
+requestor memory pool before starting memory arbitration. The request
+memory pool here is the operator pool A which initiates the memory
+reservation request. It calls <em>MemoryReclaimer::enterArbitration</em> method of
+the associated operator reclaimer (<em>Operator::MemoryReclaimer</em>). The
+operator reclaimer puts the driver thread into the suspension state
+(<em>Task::enterSuspended</em>). To reclaim memory from a query task, we need to
+first pause the task to stop all its driver threads to avoid any
+concurrent updates to its operator states during the memory reclamation.
+If the query task of the request memory pool is chosen to reclaim memory,
+then we have to put its driver thread into suspension state, otherwise
+the query task will never be paused as the request driver thread is under
+the memory arbitration process. Note a suspended driver thread is not
+counted as running in task pause processing.</p></li>
+<li><p>The memory arbitrator calls <em>SharedArbitrator::ensureCapacity</em> to check if
+the requestor query pool exceeds its max memory capacity limit with the
+new reservation or not (<em>MemoryPool::maxCapacity_</em>). If not, proceed to
+step-6-c. Otherwise, the memory arbitrator tries to reclaim used memory
+from the requestor pool itself. If memory reclamation has freed up
+sufficient memory from the requestor pool for the new reservation within
+its current capacity, then memory arbitration succeeds. If the requestor
+pool still exceeds the max memory capacity limit, then memory arbitration
+fails. Otherwise proceed to step-6-c.</p></li>
+<li><p>The memory arbitrator runs the fast path
+(<em>SharedArbitrator::reclaimFreeMemoryFromCandidates</em>) to reclaim the unused
+memory reservations from the candidate query pools without actually
+freeing the used memory. It first tries to reclaim from itself and then
+from the candidate pools which have the most free capacity
+(<em>MemoryPool::freeBytes</em>) until it reaches the memory reclaim target. Note
+that we set the memory reclaim target to a large value
+(<em>MemoryManagerOptions::memoryPoolTransferCapacity</em>) which could be more
+than the actual needed size, to avoid the frequent memory arbitrations.</p></li>
+<li><p>If the memory arbitrator hasn’t reclaimed enough free memory on fast
+path, it runs the slow path
+(<em>SharedArbitrator::reclaimUsedMemoryFromCandidates</em>) to reclaim the used
+memory from the candidate pools with the most reclaimable memory (see
+<a class="reference external" href="#memory-reclaim-process">memory reclaim process section</a> for the detailed memory
+reclaim process within a query).</p></li>
+<li><p>If the memory arbitrator has reclaimed enough memory, it grants the
+reclaimed memory to the requestor pool by increasing its memory capacity
+(<em>MemoryPool::grow</em>). If not, the memory arbitrator has to call
+<em>SharedArbitrator::handleOOM</em> to send the memory pool abort
+(<em>MemoryPool::abort</em>) request to the candidate memory pool with the largest
+capacity as victim to free up memory to let the other running queries
+with enough memory proceed. The memory pool abort fails the query
+execution and waits for its completion to release all the held memory
+resources.</p></li>
+<li><p>If the victim query pool is the requestor pool itself, then memory
+arbitration fails. Otherwise, go back to step-6-c to retry the memory
+arbitration one more time before giving up.</p></li>
+<li><p>The memory arbitrator invokes <em>MemoryPool::leaveArbitration</em> method of the
+requestor memory pool at the end of memory arbitration. The operator
+reclaimer moves its driver thread out of suspension state
+(<em>Task::leaveSuspended</em>).</p></li>
+</ol>
+</li>
+</ol>
+</section>
+<section id="memory-reclaim-process">
+<h3>Memory Reclaim Process<a class="headerlink" href="#memory-reclaim-process" title="Permalink to this heading">¶</a></h3>
+<p>Here is the memory reclaim process within a query:</p>
+<ol class="arabic simple">
+<li><p>The memory arbitrator invokes <em>MemoryPool::reclaim</em> method of a candidate
+query pool with a reclaim target in bytes, which calls the corresponding
+method of the associated memory reclaimer object (<em>MemoryReclaimer::reclaim</em>).
+The query pool uses the default implementation which sorts its child task
+pools based on the reclaimable bytes (<em>MemoryPool::reclaimableBytes</em>), and
+reclaim from the task with the most reclaimable bytes until reaches the
+reclaim target</p></li>
+<li><p>The query pool invokes the reclaim method of the task pool which in turn
+calls into the associated task reclaimer (<em>Task::MemoryReclaimer</em>). The
+latter first pauses the task execution (<em>Task::requestPause</em>), and then
+sorts its child node pools based on the reclaimable bytes and reclaims
+memory from the node pools with the most reclaimable bytes. After reaching
+the reclaim target or having reclaimed from all the node pools, task
+reclaimer resumes the task execution (<em>Task::resume</em>)</p></li>
+<li><p>The task pool invokes the reclaim method of the node pool which reclaim
+memory from its child operator pool with the most reclaimable bytes</p></li>
+<li><p>The node pool eventually calls the operator pool to do the actual memory
+reclamation (<em>Operator::MemoryReclaimer</em>). Currently we support memory
+reclamation through disk spilling and table writer flush. <em>Operator::reclaim</em>
+is added to support memory reclamation with the default implementation does
+nothing. Only spillable operators override that method: <em>OrderBy</em>, <em>HashBuild</em>,
+<em>HashAggregation</em>, <em>RowNumber</em>, <em>TopNRowNumber</em>, <em>Window</em> and <em>TableWriter</em>.
+As for now, we simply spill everything from the spillable operator’s row
+container to free up memory. After we add memory compaction support for row
+containers, we could leverage fine-grained disk spilling features in Velox
+to only spill and free the required amounts of memory.</p></li>
+</ol>
+<p>Note memory arbitrator can’t reclaim from a spillable operator if it has
+triggered memory arbitration in the middle of data processing even after it
+has stopped its query task execution. To prevent this, we added
+<em>Operator::nonReclaimableSection_</em> to indicate if an operator is under a
+non-reclaimable section or not, and the memory arbitrator can’t reclaim memory
+from an operator which is under a non-reclaimable section. The driver execution
+framework sets a running operator in the non-reclaimable section by default.
+The spillable operator chooses to clear the non-reclaimable section at specific
+call sites such as the memory reservation (<em>MemoryPool::maybeReserve</em>) before the
+actual data processing to allow the memory arbitrator to reclaim memory.</p>
+</section>
+</section>
+<section id="memory-allocator">
+<h2>Memory Allocator<a class="headerlink" href="#memory-allocator" title="Permalink to this heading">¶</a></h2>
+<p>The memory allocator manages the physical memory allocations for both query
+memory allocated through memory pool and cache memory allocated directly from
+file cache. The memory allocator ensures the total allocated memory is always
+within the system memory limit. <em>MemoryAllocator</em> defines the memory allocator
+interface. We have two allocator implementations: <em>MallocAllocator</em> delegates
+all the memory allocations to std::malloc which is simple and reliable. We
+provide it as the default option but we believe it has the issue with RSS
+variation caused by memory fragmentation. Therefore we built <em>MMapAllocator</em> to
+manage the physical memory allocations using the std::mmap to have explicit
+control on RSS. We haven’t yet confirmed whether <em>MmapAllocator</em> works better
+than <em>MallocAllocator</em>, but we are able to run a sizable Prestissimo workload
+using it. We will compare that workload using two allocators to determine which
+one is better in the future. Users can choose the allocator for their
+application by setting <em>MemoryManagerOptions::useMmapAllocator</em> (see
+<a class="reference external" href="#memory-system-setup">memory system setup section</a> for example).</p>
+<section id="non-contiguous-allocation">
+<h3>Non-Contiguous Allocation<a class="headerlink" href="#non-contiguous-allocation" title="Permalink to this heading">¶</a></h3>
+<a class="reference internal image-reference" href="../_images/size-class.png"><img alt="Size Class" class="align-center" src="../_images/size-class.png" style="width: 500px;" /></a>
+<p>A non-contiguous allocation is defined as an <em>Allocation</em> object which consists
+of a number of PageRun(s). Each page run contains a contiguous buffer and the
+buffers from different page runs don’t have to be contiguous. <em>MMapAllocator</em>
+defines <em>MmapAllocator::SizeClass</em> data structure (similar to the one used in
+<a class="reference external" href="https://db.in.tum.de/~freitag/papers/p29-neumann-cidr20.pdf">Umbra</a>) to manage the non-contiguous allocation. A <em>SizeClass</em> object provides
+allocation of a fixed size buffer (class page) which is a power of 2 of a
+machine page size. <em>MMapAllocator</em> creates 9 different <em>SizeClass</em> objects with
+class page size ranging from 1 machine page (4KB) to 512 machine pages (1MB).
+To allocate a large number of machines pages, <em>MmapAllocator</em> calls
+&amp;MemoryAllocator::allocationSize* to build the allocation plan
+(<em>MemoryAllocator::SizeMix</em>) which consists of a list of chosen <em>SizeClass</em> objects
+and the number of class pages to allocate from each of them.</p>
+<p><em>MemoryAllocator::allocationSize</em> generates the allocation plan by searching from
+the largest fit <em>SizeClass</em> to the min <em>SizeClass</em> as specified by the user. If min
+<em>SizeClass</em> is not 1, there could be waste of memory in the last allocated class
+page. As the example in the diagram, for an allocation request of 150 pages and
+min <em>SizeClass</em> of 4, we choose to allocate 2 class pages from <em>SizeClass/64</em>, 1
+from <em>SizeClass/16</em> and 2 from <em>SizeClass/4</em>. The total number of allocated machine
+pages is 152. There are two machine pages wasted in the last allocated class
+page from <em>SizeClass/4</em>. The memory allocator allocates memory from each of the
+chosen <em>SizeClass</em> objects based on the allocation plan. The allocation result is
+returned in an <em>Allocation</em> object which consists of 4 page runs: two runs from
+<em>SizeClass/64</em> (the two allocated class pages are not contiguous in memory), one
+from <em>SizeClass/16</em> and one from <em>SizeClass/4</em> (the two allocated class pages are
+contiguous in memory).</p>
+<p>Each <em>SizeClass</em> object sets up its own memory space using std::mmap with the
+same size of the system memory limit. The setup memory space doesn’t cause any
+memory allocation from the OS (or have backing memory) until the user writes
+into the allocated memory space. The SizeClass object divides its own memory
+space into a number of class pages, and uses <em>SizeClass::pageAllocated_</em> bitmap
+to track if a class page is allocated or not. It uses the other bitmap
+<em>SizeClass::pageMapped_</em> to track if a class page has backing memory or not
+(mapped class page). To ensure RSS of Velox memory usage is within the system
+memory limit, we assume an allocated class page always has backing memory, and
+a freed class page also has backing memory until we call std::madvise to free
+it back to the OS. To free a class page, we just clear the allocation bit in
+<em>pageAllocated_</em> bitmap but we don’t call std::madvise to free the backing memory
+immediately as std::madvise is an expensive OS call. We also expect a freed
+class page is very likely to be reused again. Given that, we only remove
+backing memory of a freed class page for new allocation if the total number of
+mapped class pages reaches the system memory limit. <em>numMappedFreePages_</em> is used
+to track the number of freed class pages that still have backing memory in each
+<em>SizeClass</em> object. <em>SizeClass::adviseAway</em> implements the lazy backing memory
+free control logic.</p>
+<p>We apply two optimizations to accelerate the free class page lookup. One is to
+use an aggregated bitmap (<em>mappedFreeLookup_</em>) to track the free class pages in
+a group. Each bit in <em>mappedFreeLookup_</em> corresponds to 512 bits (8 words) in
+<em>pageAllocated_</em>. If a bit is set in <em>mappedFreeLookup_</em>, then at least one of 512
+bits in <em>pageAllocated_</em> is not set. The other is to use simd instruction to
+operate on the bitmap to further accelerate the cpu execution.</p>
+<p>The simplified <em>MmapAllocator::allocateNonContiguous</em> implementation:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">MmapAllocator::allocateNonContiguous</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">ReservationCallback</span><span class="w"> </span><span class="n">reservationCB</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">minSizeClass</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<ol class="arabic simple">
+<li><p>calls <em>MemoryAllocator::allocationSize</em> with <em>numPages</em> and <em>minSizeClass</em>.
+<em>numPages</em> specifies the number of machine pages to allocate. <em>minSizeClass</em>
+specifies the minimum class page size to allocate from. The function returns
+the number of class pages to allocate from each chosen <em>SizeClasses</em> in
+<em>SizeClass::SizeMix</em>. The sum of machine pages to allocate from <em>SizeClasses</em>
+should be no less than the requested <em>numPages</em></p></li>
+<li><p>increase the memory allocator’s memory usage and check if it exceeds the
+system memory limit (<em>MemoryAllocator::capacity_</em>). If it exceeds, then fails
+the allocation and reverts the memory usage update. Otherwise, proceeds to
+make reservation in memory pool in step-3.</p>
+<ul class="simple">
+<li><p><em>MMapAllocator</em> uses <em>MallocAllocator::numAllocated_</em> to count the allocated
+memory in units of machines pages</p></li>
+<li><p><em>MMapAllocator</em> allocations are wrapped by <em>AsyncDataCache::makeSpace</em> which
+retries the allocation failure by shrinking the file cache for a number of
+times before giving up. Each retry takes a backoff delay and make it
+harder to evict from cache</p></li>
+<li><p><em>AsyncDataCache::makeSpace</em> not only retries the allocation from the memory
+pool but also from the file cache itself. In the latter case, the old
+cache entries will be evicted out to make space for new cache data</p></li>
+</ul>
+</li>
+<li><p>invokes <em>reservationCB</em> to increase the memory pool’s reservation to check if
+the new allocation exceeds the query memory limit or not. If it exceeds, we
+revert the memory usage update made in step-2 and re-throws the query memory
+capacity exceeded exception caught from <em>reservationCB</em>. The <em>reservationCB</em> is
+null if the allocation is from file cache.</p></li>
+<li><p>allocates class pages from each of chosen SizeClass objects. If any one of
+the <em>SizeClass</em> allocation fails, then the entire allocation fails. We free
+the succeeded <em>SizeClass</em> allocations, and revert the memory pool reservation
+(step-3) and memory usage (step-2) updates.</p></li>
+<li><p>The class page allocations return the number of machine pages needed to set
+up backing memory. This refers to the allocated class pages which don’t have
+the backing memory and the corresponding bits in <em>SizeClass::pageMapped_</em> are
+not set. We call <em>MmapAllocator::ensureEnoughMappedPages</em> to ensure the total
+number of mapped class pages that have backing memory with this new
+allocation doesn’t exceed the system memory limit. If it exceeds, we call
+<em>MmapAllocator::adviseAway</em> to remove the backing memory of the freed class
+pages. If <em>MmapAllocator::adviseAway</em> call fails, then we fail the allocation
+and revert all the changes made in previous steps for this allocation.</p></li>
+<li><p>calls <em>MmapAllocator::markAllMapped</em> to set all the allocated class pages as
+mapped in <em>SizeClass::pageMapped_</em> and the allocation succeeds.</p></li>
+</ol>
+</section>
+<section id="contiguous-allocation">
+<h3>Contiguous Allocation<a class="headerlink" href="#contiguous-allocation" title="Permalink to this heading">¶</a></h3>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">MemoryAllocator::allocateContiguous</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">Allocation</span><span class="o">*</span><span class="w"> </span><span class="n">collateral</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">ReservationCallback</span><span class="w"> </span><span class="n">reservationCB</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Contiguous allocation is defined as a <em>ContiguousAllocation</em> object which
+contains a large contiguous buffer. It is used for very large contiguous buffer
+allocation (&gt;1MB) like allocating a hash table. Its implementation is very
+simple. It calls std::mmap to allocate a contiguous chunk of physical memory
+from the OS directly. Similar to non-contiguous allocation, it needs to call
+<em>MmapAllocator::ensureEnoughMappedPages</em> to ensure the size of the mapped
+memory space is within the system memory limit. To free a contiguous
+allocation, the memory allocator calls std::munmap to return the physical
+memory back to the OS right away.</p>
+</section>
+<section id="small-allocation">
+<h3>Small Allocation<a class="headerlink" href="#small-allocation" title="Permalink to this heading">¶</a></h3>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="nf">MmapAllocator::allocateBytes</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">bytes</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="kt">uint16_t</span><span class="w"> </span><span class="n">alignment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMinAlignment</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p><em>MmapAllocator::allocateBytes</em> allocate memory in three different ways based on
+the actual allocation size (bytes). If the allocation size is smaller than a
+configured threshold (<em>MmapAllocator::Options::maxMallocBytes</em>), <em>MmapAllocator</em>
+delegates the allocation to std::malloc. If the allocation size is within class
+page size range (&lt;= 1MB), it allocates the buffer as a class page from one of
+<em>SizeClass</em> objects. Otherwise, it allocates the buffer as a large contiguous
+allocation.</p>
+<p>We don’t expect many small memory allocations from the query systems using
+<em>MmapAllocator</em>. In Prestissimo, only very few small memory allocations are
+delegated to std::malloc. The large in-memory state such as <em>RowContainer</em> and
+<em>HashTable</em> allocate either contiguous or non-contiguous allocations. As for now,
+we don’t cap the memory allocations delegated to std::malloc in the
+<em>MmapAllocator</em>. We provide an option
+(<em>MmapAllocator::Options::smallAllocationReservePct</em>) for the query system to
+reserve a small amount of memory capacity in <em>MmapAllocator</em> to compensate for
+these ad-hoc small allocations in practice.</p>
+</section>
+</section>
+<section id="server-oom-prevention">
+<h2>Server OOM Prevention<a class="headerlink" href="#server-oom-prevention" title="Permalink to this heading">¶</a></h2>
+<p>The memory allocator ensures all the memory usage from Velox doesn’t exceed
+system memory limit. This is critical to prevent the server from running out
+of memory as we expect Velox to use a significant portion of the server memory
+in operation. For instance, Prestissimo in Meta configures 80% of server memory
+for Velox and the rest 20% for the non-Velox components such as program binary,
+http streaming shuffle and remote storage client etc.</p>
+<p>However, the memory capacity enforcement in Velox itself is not sufficient to
+prevent the server from running out of memory in face of spiky memory usage
+from non-Velox components. For instance, we found in Prestissimo that the http
+streaming shuffle in a large Prestissimo setup (&gt;400 workers) can cause very
+high spiky memory usage that easily leads to Prestissimo worker OOMs. In a
+large cluster, each worker (<em>PrestoExchangeSource</em>) might receive the streaming
+data from a large number of sources at the same time. The memory profiles
+collected at times close to OOM show that &gt;50% of non-Velox memory are allocated
+from http proxygen. To prevent server OOM caused by http streaming shuffle, we
+added throttle control in Prestissimo streaming shuffle to limit the number of
+sources to read at a time to cap the streaming shuffle memory usage.</p>
+<p>In addition to building the throttle mechanism specific to each non-Velox
+component, we also provide a generic server memory pushback mechanism in Meta
+Prestissimo to collaborate with Velox to handle the spiky memory usage from
+non-Velox components. A <em>PeriodicMemoryChecker</em> is running in the background to
+check the system memory usage periodically. Whenever the system memory usage
+exceeds a certain threshold, it tries to free up memory from Velox by shrinking
+the file cache (<em>AsyncDataCache::shrink</em>), and returns the freed cache memory
+back to the OS. This way we can automatically shrink the file cache in response
+to the transient spiky memory usage from non-Velox components in a query system.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Memory Management</a><ul>
+<li><a class="reference internal" href="#background">Background</a></li>
+<li><a class="reference internal" href="#overall-design">Overall Design</a></li>
+<li><a class="reference internal" href="#memory-manager">Memory Manager</a><ul>
+<li><a class="reference internal" href="#memory-system-setup">Memory System Setup</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#memory-pool">Memory Pool</a><ul>
+<li><a class="reference internal" href="#memory-usage-tracking">Memory Usage Tracking</a></li>
+<li><a class="reference internal" href="#memory-pool-apis">Memory Pool APIs</a><ul>
+<li><a class="reference internal" href="#memory-pool-management">Memory Pool Management</a></li>
+<li><a class="reference internal" href="#memory-allocation">Memory Allocation</a></li>
+<li><a class="reference internal" href="#memory-arbitration">Memory Arbitration</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#memory-arbitrator">Memory Arbitrator</a><ul>
+<li><a class="reference internal" href="#memory-arbitration-process">Memory Arbitration Process</a></li>
+<li><a class="reference internal" href="#memory-reclaim-process">Memory Reclaim Process</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#memory-allocator">Memory Allocator</a><ul>
+<li><a class="reference internal" href="#non-contiguous-allocation">Non-Contiguous Allocation</a></li>
+<li><a class="reference internal" href="#contiguous-allocation">Contiguous Allocation</a></li>
+<li><a class="reference internal" href="#small-allocation">Small Allocation</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#server-oom-prevention">Server OOM Prevention</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="simd.html"
+                          title="previous chapter">SIMD Usage in Velox</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="spilling.html"
+                          title="next chapter">Spilling</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/memory.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="spilling.html" title="Spilling"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="simd.html" title="SIMD Usage in Velox"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Memory Management</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>
