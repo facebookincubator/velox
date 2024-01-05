@@ -54,7 +54,7 @@ query engine.</p>
 (velox_tpch_benchmark) executable. To build the benchmark executable
 (<em>_build/release/velox/benchamrks/tpch/velox_tpch_benchmark</em>), use the
 following command line to do the build with S3 support:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$ make release <span class="nv">EXTRA_CMAKE_FLAGS</span><span class="o">=</span><span class="s2">&quot;-DVELOX_BUILD_BENCHMARKS=ON -DVELOX_ENABLE_S3=ON&quot;</span>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$ make benchmarks-build <span class="nv">EXTRA_CMAKE_FLAGS</span><span class="o">=</span><span class="s2">&quot;-DVELOX_ENABLE_S3=ON&quot;</span>
 </pre></div>
 </div>
 </section>
