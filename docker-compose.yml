@@ -90,3 +90,21 @@ services:
     volumes:
       - .:/velox:delegated
     command: /bin/bash -c "scl enable gcc-toolset-9 '/velox/scripts/docker-command.sh'"
+
+  linux-adapters:
+    # Usage:
+    #   docker-compose pull linux-adapters or docker-compose build linux-adapters
+    #   docker-compose run --rm linux-adapters
+    #   or
+    #   docker-compose run -e NUM_THREADS=<NUMBER_OF_THREADS_TO_USE> --rm linux-adapters
+    #   to set the number of threads used during compilation
+    image: ghcr.io/facebookincubator/velox-dev:linux-adapters
+    build:
+      context: .
+      dockerfile: scripts/adapters-container.dockerfile
+    environment:
+      NUM_THREADS: 8 # default value for NUM_THREADS
+      CCACHE_DIR: "/velox/.ccache"
+    volumes:
+      - .:/velox:delegated
+    command: /bin/bash -c "scl enable gcc-toolset-9 '/velox/scripts/docker-command.sh'"
