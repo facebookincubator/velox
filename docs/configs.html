@@ -187,7 +187,14 @@ cause failures or crashes by helping identify which operator is generating them.
 <td><p>Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
 evalWithMemo are enabled.</p></td>
 </tr>
-<tr class="row-odd"><td><p>driver_cpu_time_slice_limit_ms</p></td>
+<tr class="row-odd"><td><p>max_shared_subexpr_results_cached</p></td>
+<td><p>integer</p></td>
+<td><p>10</p></td>
+<td><p>For a given shared subexpression, the maximum distinct sets of inputs we cache results for. Lambdas can call
+the same expression with different inputs many times, causing the results we cache to explode in size. Putting
+a limit contains the memory usage.</p></td>
+</tr>
+<tr class="row-even"><td><p>driver_cpu_time_slice_limit_ms</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>If it is not zero, specifies the time limit that a driver can continuously
