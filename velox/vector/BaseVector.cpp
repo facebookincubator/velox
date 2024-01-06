@@ -340,7 +340,12 @@ VectorPtr BaseVector::createInternal(
     case TypeKind::UNKNOWN: {
       BufferPtr nulls = allocateNulls(size, pool, bits::kNull);
       return std::make_shared<FlatVector<UnknownValue>>(
-          pool, UNKNOWN(), std::move(nulls), size, nullptr, std::vector<BufferPtr>());
+          pool,
+          UNKNOWN(),
+          std::move(nulls),
+          size,
+          nullptr,
+          std::vector<BufferPtr>());
     }
     default:
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
@@ -757,10 +762,7 @@ VectorPtr BaseVector::transpose(BufferPtr indices, VectorPtr&& source) {
   // there are no other users of its indices.
   vector_size_t size = indices->size() / sizeof(vector_size_t);
   return wrapInDictionary(
-      BufferPtr(nullptr),
-      std::move(indices),
-      size,
-      std::move(source));
+      BufferPtr(nullptr), std::move(indices), size, std::move(source));
 }
 
 bool isLazyNotLoaded(const BaseVector& vector) {
