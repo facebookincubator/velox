@@ -181,47 +181,48 @@ TEST_F(AddressableNonNullValueListTest, row) {
 }
 
 TEST_F(AddressableNonNullValueListTest, serializationDeserialization) {
-    AddressableNonNullValueList source;
+  AddressableNonNullValueList source;
 
-    const auto data = makeMapVector<int16_t, int64_t>({
-        {{1, 10}, {2, 20}},
-        {{3, 30}, {4, 40}, {5, 50}},
-        {{3, 30}, {4, 40}, {5, 50}},
-        {{1, 10}, {2, 20}},
-        {{1, 10}, {3, 30}, {4, 40}, {6, 60}},
-        {},
-        {{1, 10}, {2, 20}},
-        {},
-        {{3, 30}, {4, 40}, {5, 50}},
-    });
+  const auto data = makeMapVector<int16_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{3, 30}, {4, 40}, {5, 50}},
+      {{3, 30}, {4, 40}, {5, 50}},
+      {{1, 10}, {2, 20}},
+      {{1, 10}, {3, 30}, {4, 40}, {6, 60}},
+      {},
+      {{1, 10}, {2, 20}},
+      {},
+      {{3, 30}, {4, 40}, {5, 50}},
+  });
 
-    std::vector<HashStringAllocator::Position> positions;
+  std::vector<HashStringAllocator::Position> positions;
 
-    DecodedVector decodedVector(*data);
-    for (auto i = 0; i < data->size(); ++i) {
-      auto position = source.append(decodedVector, i, allocator());
-      positions.push_back(position);
-    }
+  DecodedVector decodedVector(*data);
+  for (auto i = 0; i < data->size(); ++i) {
+    auto position = source.append(decodedVector, i, allocator());
+    positions.push_back(position);
+  }
 
-    std::vector<std::vector<char>> buffers(data->size());
-    for (auto i = 0; i < data->size(); ++i) {
-      const auto serializedSize = source.getSerializedSize(positions[i]);
-      buffers[i].resize(serializedSize);
-      source.copySerializedTo(positions[i], buffers[i].data(), buffers[i].size());
-    }
+  std::vector<std::vector<char>> buffers(data->size());
+  for (auto i = 0; i < data->size(); ++i) {
+    const auto serializedSize = source.getSerializedSize(positions[i]);
+    buffers[i].resize(serializedSize);
+    source.copySerializedTo(positions[i], buffers[i].data(), buffers[i].size());
+  }
 
-    AddressableNonNullValueList destination;
+  AddressableNonNullValueList destination;
 
-    for (auto i = 0; i < data->size(); ++i) {
-      destination.appendSerialized(allocator(), buffers[i].data(), buffers[i].size());
-    }
+  for (auto i = 0; i < data->size(); ++i) {
+    destination.appendSerialized(
+        allocator(), buffers[i].data(), buffers[i].size());
+  }
 
-    auto copy = BaseVector::create(data->type(), data->size(), pool());
-    for (auto i = 0; i < positions.size(); ++i) {
-      AddressableNonNullValueList::read(positions[i], *copy, i);
-    }
+  auto copy = BaseVector::create(data->type(), data->size(), pool());
+  for (auto i = 0; i < positions.size(); ++i) {
+    AddressableNonNullValueList::read(positions[i], *copy, i);
+  }
 
-    test::assertEqualVectors(data, copy);
+  test::assertEqualVectors(data, copy);
 }
 
 } // namespace

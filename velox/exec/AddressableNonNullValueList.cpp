@@ -46,7 +46,8 @@ HashStringAllocator::Position AddressableNonNullValueList::appendSerialized(
 
 std::unique_ptr<ByteOutputStream> AddressableNonNullValueList::makeOutputStream(
     HashStringAllocator* allocator) {
-  std::unique_ptr<ByteOutputStream> stream{std::make_unique<ByteOutputStream>(allocator)};
+  std::unique_ptr<ByteOutputStream> stream{
+      std::make_unique<ByteOutputStream>(allocator)};
 
   if (!firstHeader_) {
     // An array_agg or related begins with an allocation of 5 words and
@@ -66,8 +67,8 @@ std::unique_ptr<ByteOutputStream> AddressableNonNullValueList::makeOutputStream(
 }
 
 HashStringAllocator::Position AddressableNonNullValueList::finishWrite(
-  HashStringAllocator* allocator,
-  std::unique_ptr<ByteOutputStream>&& stream) {
+    HashStringAllocator* allocator,
+    std::unique_ptr<ByteOutputStream>&& stream) {
   ++size_;
 
   auto startAndFinish = allocator->finishWrite(*stream, 1024);

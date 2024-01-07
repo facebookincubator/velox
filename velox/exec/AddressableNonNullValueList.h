@@ -53,9 +53,9 @@ class AddressableNonNullValueList {
       vector_size_t index,
       HashStringAllocator* allocator);
 
-  /// Append an (opaque) serialized set of data. The data passed in should ONLY come
-  /// from an copySerializedTo call. It must be appended in the exact ascending order
-  /// of indices it was copied from.
+  /// Append an (opaque) serialized set of data. The data passed in should ONLY
+  /// come from an copySerializedTo call. It must be appended in the exact
+  /// ascending order of indices it was copied from.
   HashStringAllocator::Position appendSerialized(
       HashStringAllocator* allocator,
       const char* buffer,
@@ -109,11 +109,11 @@ class AddressableNonNullValueList {
 
  private:
   std::unique_ptr<ByteOutputStream> makeOutputStream(
-    HashStringAllocator* allocator);
+      HashStringAllocator* allocator);
 
   HashStringAllocator::Position finishWrite(
-    HashStringAllocator* allocator,
-    std::unique_ptr<ByteOutputStream>&& stream);
+      HashStringAllocator* allocator,
+      std::unique_ptr<ByteOutputStream>&& stream);
 
  private:
   // Memory allocation (potentially multi-part).
