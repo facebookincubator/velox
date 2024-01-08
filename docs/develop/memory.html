@@ -141,7 +141,7 @@ document describes each memory component in detail.</p>
 <section id="memory-manager">
 <h2>Memory Manager<a class="headerlink" href="#memory-manager" title="Permalink to this heading">¶</a></h2>
 <a class="reference internal image-reference" href="../_images/memory-manager.png"><img alt="Memory Manager" class="align-center" src="../_images/memory-manager.png" style="width: 600px;" /></a>
-<p>The memory manager is created on server startup with provided
+<p>The memory manager is created on server startup with the provided
 <em>MemoryManagerOption</em>. It creates a memory allocator instance to manage the
 physical memory allocations for both query memory allocated through memory pool
 and cache memory allocated through the file cache. It ensures the total
@@ -186,8 +186,8 @@ significant memory usage during a system operation, and eventually the memory
 allocator guarantees the actual allocated memory are within the system memory
 limit no matter if it is for system operation or for user query execution. In
 practice, we shall reserve some space from the memory allocator to compensate
-for such system memory usage. We can do that by configuring a smaller query
-memory limit (<em>MemoryManagerOptions::arbitratorCapacity</em>) than system memory
+for such system memory usage. We can do that by configuring the query
+memory limit (<em>MemoryManagerOptions::arbitratorCapacity</em>) to be smaller than the system memory
 limit (<em>MemoryManagerOptions::allocatorCapacity</em>) (refer to <a class="reference external" href="#server-oom-prevention">OOM prevention section</a>
 for detail).</p>
 <section id="memory-system-setup">
@@ -217,18 +217,18 @@ for detail).</p>
 </pre></div>
 </div>
 <ul class="simple">
-<li><p>L6: set the memory allocator capacity (system memory limit) from
-Prestissimo system config</p></li>
-<li><p>L7: set the memory allocator type from Prestissimo system config. If
+<li><p>L5: set the memory allocator capacity (system memory limit) from
+the Prestissimo system config</p></li>
+<li><p>L6: set the memory allocator type from the Prestissimo system config. If
 <em>useMmapAllocator</em> is true, we use <em>MmapAllocator</em>, otherwise use
 <em>MallocAllocator</em>. <a class="reference external" href="#memory-allocator">Memory Allocator section</a> describes these two
 types of allocators</p></li>
-<li><p>L9: set the memory arbitrator kind from the Prestissimo system config.
+<li><p>L8: set the memory arbitrator kind from the Prestissimo system config.
 Currently, we only support the <em>“SHARED”</em> arbitrator kind (see <a class="reference external" href="#memory-arbitrator">memory arbitrator section</a>).
 <em>“NOOP”</em> arbitrator kind will be deprecated soon (<a class="reference external" href="https://github.com/facebookincubator/velox/issues/8220">#8220</a>)</p></li>
-<li><p>L11: set the memory arbitrator capacity (query memory limit) from
+<li><p>L10: set the memory arbitrator capacity (query memory limit) from the
 Prestissimo system config</p></li>
-<li><p>L14: creates the process-wide memory manager which creates memory
+<li><p>L13: creates the process-wide memory manager which creates memory
 allocator and arbitrator inside based on MemoryManagerOptions initialized from previous steps</p></li>
 <li><p>L15-19: creates the file cache if it is enabled in Prestissimo system
 config</p></li>
