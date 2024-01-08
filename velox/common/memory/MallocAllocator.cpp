@@ -123,8 +123,8 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
   }
 
   {
-    std::lock_guard<std::mutex> l(mallocsMutex_);
-    mallocs_.insert(pages.begin(), pages.end());
+    std::lock_guard<std::mutex> l(nonContiguousMallocsMutex_);
+    nonContiguousMallocs_.insert(pages.begin(), pages.end());
   }
 
   // Successfully allocated all pages.
@@ -243,27 +243,27 @@ int64_t MallocAllocator::freeNonContiguous(Allocation& allocation) {
   for (int32_t i = 0; i < allocation.numRuns(); ++i) {
     Allocation::PageRun run = allocation.runAt(i);
     void* ptr = run.data();
-    MachinePageCount numPages;
+    int64_t numPages;
     {
-      std::lock_guard<std::mutex> l(mallocsMutex_);
-      const auto mapElement = mallocs_.find(ptr);
+      std::lock_guard<std::mutex> l(nonContiguousMallocsMutex_);
+      const auto it = nonContiguousMallocs_.find(ptr);
       VELOX_CHECK(
-          mapElement != mallocs_.end(), "Bad free page pointer: {}", ptr);
-      numPages = mapElement->second;
-      mallocs_.erase(mapElement);
+          it != nonContiguousMallocs_.end(), "Bad free page pointer: {}", ptr);
+      numPages = static_cast<int64_t>(it->second);
+      nonContiguousMallocs_.erase(it);
     }
     numFreed += numPages;
     stats_.recordFree(AllocationTraits::pageBytes(numPages), [&]() {
       ::free(ptr); // NOLINT
     });
-    auto pagesInCurrentRun = run.numPages();
+    numPages -= static_cast<int64_t>(run.numPages());
     // It is possible that an allocation spans multiple PageRuns.
-    while (numPages > pagesInCurrentRun) {
-      numPages -= pagesInCurrentRun;
-      VELOX_CHECK_LT(++i, allocation.numRuns());
-      pagesInCurrentRun = allocation.runAt(i).numPages();
+    while (numPages > 0) {
+      ++i;
+      VELOX_CHECK_LT(i, allocation.numRuns());
+      numPages -= allocation.runAt(i).numPages();
     }
-    VELOX_CHECK_EQ(numPages, pagesInCurrentRun);
+    VELOX_CHECK_EQ(numPages, 0);
   }
 
   const auto freedBytes = AllocationTraits::pageBytes(numFreed);
