@@ -217,7 +217,7 @@ Mathematical Functions
 
     Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
 
-.. spark:function:: is_nan(x) -> boolean
+.. spark:function:: isnan(x) -> boolean
 
     Returns true if x is NaN, or false otherwise.
-    Supported types are: FLOAT.
+    Supported types are: FLOAT, DOUBLE.

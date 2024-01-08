@@ -301,4 +301,16 @@ struct Log10Function {
     return true;
   }
 };
+
+template <typename T>
+struct IsNanFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void callNullable(bool& result, const TInput* a) {
+    if (a) {
+      result = std::isnan(*a);
+    } else {
+      result = false;
+    }
+  }
+};
 } // namespace facebook::velox::functions::sparksql

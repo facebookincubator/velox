@@ -21,7 +21,6 @@
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
@@ -79,7 +78,6 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_not, prefix + "not");
   registerIsNullFunction(prefix + "isnull");
   registerIsNotNullFunction(prefix + "isnotnull");
-  registerFunction<IsNanFunction, bool, float>({prefix + "is_nan"});
 }
 
 namespace sparksql {
