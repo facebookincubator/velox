@@ -23,7 +23,6 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <velox/buffer/StringViewBufferHolder.h>
-#include <velox/dwio/dwrf/writer/Writer.h>
 #include <velox/expression/Expr.h>
 #include <velox/functions/prestosql/registration/RegistrationFunctions.h>
 #include <velox/parse/Expressions.h>
@@ -34,7 +33,6 @@
 #include <velox/vector/ComplexVector.h>
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
-#include <velox/vector/tests/utils/VectorMaker.h>
 #include "folly/json.h"
 
 #include "context.h"
@@ -493,7 +491,6 @@ static void addVectorBindings(
         checkBounds(indices, idx);
         return indices.indices->as<vector_size_t>()[idx];
       });
-
   m.def(
       "from_list",
       [](const py::list& list, const Type* dtype = nullptr) mutable {
@@ -507,7 +504,6 @@ static void addVectorBindings(
       },
       py::arg("list"),
       py::arg("dtype") = nullptr);
-
   m.def(
       "constant_vector",
       [](const py::handle& obj, vector_size_t length, TypePtr type) {

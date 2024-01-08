@@ -51,4 +51,6 @@ class TestVeloxSubstrait(unittest.TestCase):
 
         with self.assertRaises(ValueError) as cm:
             pv.run_substrait_query(other_path)
-        self.assertEqual('plan should be path to a plan in JSON format.', str(cm.exception))
+        self.assertEqual(
+            "plan should be path to a plan in JSON format.", str(cm.exception)
+        )

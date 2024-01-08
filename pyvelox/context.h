@@ -107,7 +107,9 @@ struct PySubstraitContext {
   std::shared_ptr<facebook::velox::connector::Connector> connector_ =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kConnectorId, std::make_shared<facebook::velox::core::MemConfig>());
+          ->newConnector(
+              kConnectorId,
+              std::make_shared<facebook::velox::core::MemConfig>());
 
   static inline std::unique_ptr<PySubstraitContext> instance_;
 };

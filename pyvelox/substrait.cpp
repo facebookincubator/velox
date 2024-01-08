@@ -15,6 +15,7 @@
  */
 
 #include "substrait.h" // @manual
+
 #include <google/protobuf/util/json_util.h>
 #include <velox/common/base/Exceptions.h>
 #include <velox/exec/tests/utils/AssertQueryBuilder.h>
@@ -22,12 +23,14 @@
 #include <velox/exec/tests/utils/TempDirectoryPath.h>
 #include <velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h>
 #include <velox/functions/prestosql/registration/RegistrationFunctions.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
+
 #include "context.h"
 
 namespace facebook::velox::py {

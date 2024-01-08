@@ -17,8 +17,14 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
                       ${CMAKE_SOURCE_DIR}/velox/external/xxhash)
   add_definitions(-DCREATE_PYVELOX_MODULE -DVELOX_DISABLE_GOOGLETEST)
   # Define our Python module:
-  pybind11_add_module(pyvelox MODULE pyvelox.cpp serde.cpp signatures.cpp
-                      conversion.cpp substrait.cpp)
+  pybind11_add_module(
+    pyvelox
+    MODULE
+    pyvelox.cpp
+    serde.cpp
+    signatures.cpp
+    conversion.cpp
+    substrait.cpp)
   # Link with Velox:
   target_link_libraries(
     pyvelox
