@@ -147,7 +147,7 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
-  static constexpr double kNanD = std::numeric_limits<double>::quiet_NaN();
+  static constexpr double kNanDouble = std::numeric_limits<double>::quiet_NaN();
   static constexpr float kInf = std::numeric_limits<float>::infinity();
 };
 
@@ -412,7 +412,7 @@ TEST_F(ArithmeticTest, isNanDouble) {
   };
 
   EXPECT_EQ(false, isNan(0.0));
-  EXPECT_EQ(true, isNan(kNanD));
+  EXPECT_EQ(true, isNan(kNanDouble));
   EXPECT_EQ(true, isNan(0.0 / 0.0));
   EXPECT_EQ(false, isNan(std::nullopt));
 }
