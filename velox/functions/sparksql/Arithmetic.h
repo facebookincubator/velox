@@ -338,25 +338,14 @@ struct ToHexFunctionBase {
     const int64_t inputSize = stringImpl::length<isAscii>(input);
     const unsigned char* inputBuffer =
         reinterpret_cast<const unsigned char*>(input.data());
+    const auto validRange =
+        stringCore::getByteRange<isAscii>(input.data(), 1, inputSize);
+    result.resize((validRange.second - validRange.first) * 2);
+    char* resultBuffer = result.data();
 
-    if constexpr (!isAscii) {
-      auto byteRange =
-          stringCore::getByteRange<false>(input.data(), 1, inputSize);
-      result.resize((byteRange.second - byteRange.first) * 2);
-      char* resultBuffer = result.data();
-
-      for (auto i = byteRange.first; i < byteRange.second; ++i) {
-        resultBuffer[i * 2] = kHexTable[inputBuffer[i] * 2];
-        resultBuffer[i * 2 + 1] = kHexTable[inputBuffer[i] * 2 + 1];
-      }
-    } else {
-      result.resize(inputSize * 2);
-      char* resultBuffer = result.data();
-
-      for (auto i = 0; i < inputSize; ++i) {
-        resultBuffer[i * 2] = kHexTable[inputBuffer[i] * 2];
-        resultBuffer[i * 2 + 1] = kHexTable[inputBuffer[i] * 2 + 1];
-      }
+    for (auto i = validRange.first; i < validRange.second; ++i) {
+      resultBuffer[i * 2] = kHexTable[inputBuffer[i] * 2];
+      resultBuffer[i * 2 + 1] = kHexTable[inputBuffer[i] * 2 + 1];
     }
   }
 };
