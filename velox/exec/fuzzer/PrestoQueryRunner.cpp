@@ -212,13 +212,15 @@ std::string toTypeSql(const TypePtr& type) {
   }
 }
 
-std::string toCallSql(const core::CallTypedExprPtr& call) {
-  std::stringstream sql;
-  sql << call->name() << "(";
-  for (auto i = 0; i < call->inputs().size(); ++i) {
+std::string toCallSql(const core::CallTypedExprPtr& call);
+
+void toCallInputsSql(
+    const std::vector<core::TypedExprPtr>& inputs,
+    std::stringstream& sql) {
+  for (auto i = 0; i < inputs.size(); ++i) {
     appendComma(i, sql);
 
-    const auto& input = call->inputs()[i];
+    const auto& input = inputs.at(i);
     if (auto field =
             std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
                 input)) {
@@ -236,9 +238,9 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
       VELOX_CHECK_NOT_NULL(body);
 
       sql << "(";
-      for (auto i = 0; i < signature->size(); ++i) {
-        appendComma(i, sql);
-        sql << signature->nameOf(i);
+      for (auto j = 0; j < signature->size(); ++j) {
+        appendComma(j, sql);
+        sql << signature->nameOf(j);
       }
 
       sql << ") -> " << toCallSql(body);
@@ -246,7 +248,12 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
       VELOX_NYI();
     }
   }
+}
 
+std::string toCallSql(const core::CallTypedExprPtr& call) {
+  std::stringstream sql;
+  sql << call->name() << "(";
+  toCallInputsSql(call->inputs(), sql);
   sql << ")";
   return sql.str();
 }
@@ -264,37 +271,7 @@ std::string toAggregateCallSql(
     sql << "distinct ";
   }
 
-  for (auto i = 0; i < call->inputs().size(); ++i) {
-    appendComma(i, sql);
-
-    const auto& input = call->inputs()[i];
-    if (auto field =
-            std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
-                input)) {
-      sql << field->name();
-    } else if (
-        auto call =
-            std::dynamic_pointer_cast<const core::CallTypedExpr>(input)) {
-      sql << toCallSql(call);
-    } else if (
-        auto lambda =
-            std::dynamic_pointer_cast<const core::LambdaTypedExpr>(input)) {
-      const auto& signature = lambda->signature();
-      const auto& body =
-          std::dynamic_pointer_cast<const core::CallTypedExpr>(lambda->body());
-      VELOX_CHECK_NOT_NULL(body);
-
-      sql << "(";
-      for (auto i = 0; i < signature->size(); ++i) {
-        appendComma(i, sql);
-        sql << signature->nameOf(i);
-      }
-
-      sql << ") -> " << toCallSql(body);
-    } else {
-      VELOX_NYI();
-    }
-  }
+  toCallInputsSql(call->inputs(), sql);
 
   if (!sortingKeys.empty()) {
     sql << " ORDER BY ";
