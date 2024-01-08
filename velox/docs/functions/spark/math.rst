@@ -233,3 +233,7 @@ Mathematical Functions
 .. spark:function:: unaryminus(x) -> [same as x]
 
     Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+
+.. spark:function:: unhex(x) -> varbinary
+
+    Converts hexadecimal ``x`` to binary.
