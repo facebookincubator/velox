@@ -305,9 +305,14 @@ struct Log10Function {
 template <typename T>
 struct IsNanFunction {
   template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(bool& result, TInput a) {
+    result = std::isnan(a);
+  }
+
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void callNullable(bool& result, const TInput* a) {
     if (a) {
-      result = std::isnan(*a);
+      call(result, *a);
     } else {
       result = false;
     }
