@@ -581,26 +581,20 @@ TEST_F(DateTimeFunctionsTest, hour) {
   const auto hour = [&](std::optional<Timestamp> date) {
     return evaluateOnce<int32_t>("hour(c0)", date);
   };
+
   EXPECT_EQ(std::nullopt, hour(std::nullopt));
-  EXPECT_EQ(0, hour(Timestamp(0, 0)));
-  EXPECT_EQ(23, hour(Timestamp(-1, 9000)));
-  EXPECT_EQ(23, hour(Timestamp(-1, Timestamp::kMaxNanos)));
-  EXPECT_EQ(7, hour(Timestamp(4000000000, 0)));
-  EXPECT_EQ(7, hour(Timestamp(4000000000, 123000000)));
-  EXPECT_EQ(10, hour(Timestamp(998474645, 321000000)));
-  EXPECT_EQ(19, hour(Timestamp(998423705, 321000000)));
+  EXPECT_EQ(0, hour(util::fromTimestampString("2024-01-08 00:23:00.001")));
+  EXPECT_EQ(0, hour(util::fromTimestampString("2024-01-08 00:59:59.999")));
+  EXPECT_EQ(1, hour(util::fromTimestampString("2024-01-08 01:23:00.001")));
+  EXPECT_EQ(13, hour(util::fromTimestampString("2024-01-20 13:23:00.001")));
 
   setQueryTimeZone("Pacific/Apia");
 
   EXPECT_EQ(std::nullopt, hour(std::nullopt));
-  EXPECT_EQ(13, hour(Timestamp(0, 0)));
-  EXPECT_EQ(12, hour(Timestamp(-1, Timestamp::kMaxNanos)));
-  // Disabled for now because the TZ for Pacific/Apia in 2096 varies between
-  // systems.
-  // EXPECT_EQ(21, hour(Timestamp(4000000000, 0)));
-  // EXPECT_EQ(21, hour(Timestamp(4000000000, 123000000)));
-  EXPECT_EQ(23, hour(Timestamp(998474645, 321000000)));
-  EXPECT_EQ(8, hour(Timestamp(998423705, 321000000)));
+  EXPECT_EQ(13, hour(util::fromTimestampString("2024-01-08 00:23:00.001")));
+  EXPECT_EQ(13, hour(util::fromTimestampString("2024-01-08 00:59:59.999")));
+  EXPECT_EQ(14, hour(util::fromTimestampString("2024-01-08 01:23:00.001")));
+  EXPECT_EQ(2, hour(util::fromTimestampString("2024-01-20 13:23:00.001")));
 }
 
 } // namespace

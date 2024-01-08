@@ -518,8 +518,7 @@ struct NextDayFunction {
 };
 
 template <typename T>
-struct HourFunction : public InitSessionTimezone<T>,
-                      public TimestampWithTimezoneSupport<T> {
+struct HourFunction : public InitSessionTimezone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(

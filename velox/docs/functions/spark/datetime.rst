@@ -83,6 +83,12 @@ These functions support TIMESTAMP and DATE input types.
         SELECT get_timestamp('1970-01-01', null);  -- NULL
         SELECT get_timestamp('2020-06-10', 'A');  -- (throws exception)
 
+.. spark:function:: hour(timestamp) -> integer
+
+    Returns the hour of ``timestamp``.::
+
+        SELECT hour('2009-07-30 12:58:59'); -- 12
+
 .. spark:function:: last_day(date) -> date
 
     Returns the last day of the month which the date belongs to.
@@ -124,12 +130,6 @@ These functions support TIMESTAMP and DATE input types.
         SELECT next_day('2015-07-23', "Tue"); -- '2015-07-28'
         SELECT next_day('2015-07-23', "tu"); -- '2015-07-28'
         SELECT next_day('2015-07-23', "we"); -- '2015-07-29'
-
-.. spark:function:: hour(timestamp) -> integer
-
-    Returns the hour of ``timestamp``. ::
-
-        SELECT hour('2009-07-30 12:58:59'); -- 12
 
 .. spark:function:: to_unix_timestamp(string) -> integer
 
