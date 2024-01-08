@@ -421,13 +421,6 @@ TEST_F(ArithmeticTest, hex) {
   const auto toHexWithVarbinary = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("hex(cast(c0 as varbinary))", value);
   };
-  const auto toHexWithVarchar = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("hex(c0)", value);
-  };
-  const auto toHexWithBigint = [&](std::optional<int64_t> value) {
-    return evaluateOnce<std::string>("hex(c0)", value);
-  };
-
   EXPECT_EQ(std::nullopt, toHexWithVarbinary(std::nullopt));
   EXPECT_EQ("", toHexWithVarbinary(""));
   EXPECT_EQ("537061726B2053514C", toHexWithVarbinary("Spark SQL"));
@@ -438,6 +431,9 @@ TEST_F(ArithmeticTest, hex) {
       "48656C6C6F20576F726C642066726F6D2056656C6F7821",
       toHexWithVarbinary("Hello World from Velox!"));
 
+  const auto toHexWithVarchar = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("hex(c0)", value);
+  };
   EXPECT_EQ(std::nullopt, toHexWithVarchar(std::nullopt));
   EXPECT_EQ("", toHexWithVarchar(""));
   EXPECT_EQ("537061726B2053514C", toHexWithVarchar("Spark SQL"));
@@ -449,6 +445,9 @@ TEST_F(ArithmeticTest, hex) {
       "48656C6C6F20576F726C642066726F6D2056656C6F7821",
       toHexWithVarchar("Hello World from Velox!"));
 
+  const auto toHexWithBigint = [&](std::optional<int64_t> value) {
+    return evaluateOnce<std::string>("hex(c0)", value);
+  };
   EXPECT_EQ(std::nullopt, toHexWithBigint(std::nullopt));
   EXPECT_EQ("11", toHexWithBigint(17));
   EXPECT_EQ("1C", toHexWithBigint(28));

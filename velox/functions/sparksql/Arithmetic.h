@@ -331,7 +331,7 @@ struct ToHexFunctionBase {
       "C0C1C2C3C4C5C6C7C8C9CACBCCCDCECFD0D1D2D3D4D5D6D7D8D9DADBDCDDDEDF"
       "E0E1E2E3E4E5E6E7E8E9EAEBECEDEEEFF0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF";
 
-  template <bool isAscii, bool isVarchar>
+  template <bool isAscii>
   FOLLY_ALWAYS_INLINE void doCall(
       exec::StringWriter<false>& result,
       StringView input) {
@@ -339,7 +339,7 @@ struct ToHexFunctionBase {
     const unsigned char* inputBuffer =
         reinterpret_cast<const unsigned char*>(input.data());
 
-    if constexpr (isVarchar && !isAscii) {
+    if constexpr (!isAscii) {
       auto byteRange =
           stringCore::getByteRange<false>(input.data(), 1, inputSize);
       result.resize((byteRange.second - byteRange.first) * 2);
@@ -368,7 +368,7 @@ struct ToHexVarbinaryFunction : public ToHexFunctionBase {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    ToHexFunctionBase::doCall<false, false>(result, input);
+    ToHexFunctionBase::doCall<false>(result, input);
   }
 };
 
@@ -382,13 +382,13 @@ struct ToHexVarcharFunction : public ToHexFunctionBase {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
-    ToHexFunctionBase::doCall<false, true>(result, input);
+    ToHexFunctionBase::doCall<false>(result, input);
   }
 
   FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
-    ToHexFunctionBase::doCall<true, true>(result, input);
+    ToHexFunctionBase::doCall<true>(result, input);
   }
 };
 
