@@ -35,13 +35,14 @@ void Allocation::append(uint8_t* address, MachinePageCount numPages) {
   VELOX_CHECK(
       runs_.empty() || address != runs_.back().data(),
       "Appending a duplicate address into a PageRun");
-  while (numPages > 0) {
-    const auto numPagesInRun = std::min(
-        numPages, static_cast<MachinePageCount>(PageRun::kMaxPagesInRun));
-    runs_.emplace_back(address, numPagesInRun);
-    address += AllocationTraits::pageBytes(numPagesInRun);
-    numPages -= numPagesInRun;
+  // Split an allocation into multiple PageRuns if the number of pages are
+  // greater than 'PageRun::kMaxPagesInRun'.
+  while (numPages > PageRun::kMaxPagesInRun) {
+    runs_.emplace_back(address, PageRun::kMaxPagesInRun);
+    address += AllocationTraits::pageBytes(PageRun::kMaxPagesInRun);
+    numPages -= PageRun::kMaxPagesInRun;
   }
+  runs_.emplace_back(address, numPages);
 }
 
 void Allocation::appendMove(Allocation& other) {
