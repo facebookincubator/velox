@@ -28,25 +28,18 @@
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 /// Benchmark for MergingVectorOutput by different vector size. Merge the
-/// output vector of filter can improve the following operator's performance,
+/// output vector of filter can improve the downstream operator's performance,
 /// But merge the vector also have additional costs, in this benchmark, we
-/// choose FilterProject with merging output, and aggregation or join as
-/// following operator, to determine the optimization and the cost of merging,
+/// choose FilterProject with merging output, and aggregation as downstream
+/// operator, to determine the optimization and the cost of merging,
 ///
 /// Benchmarks run tow plan:
-///   1 FilterProject and aggregation, the input data are two 1000 * 10K row
-///     vectors, one is 5 columns bigint, the other is 1 column bigint and
-///     4 string columns. The benchmarks first run filter, with passes 2, 16,
-///     32, 100, 1000 rows, each run with mergeOff(set kMinOutputBatchRows = 0)
-///     and mergeOffOn(set kMinOutputBatchRows=passes), the following operator
-///     aggregation improved by the merging output.
-///   2 FilterProject and join, the build side is only one bigint column r0
-///     used for join key, the prob side are two 1000 * 10K row vectors, one is
-///     5 columns bigint, the other is 1 column bigint and 4 string columns.
-///     both build and probe size has a filter, with passes 2, 16, 32, 100,
-///     1000 rows, each run with mergeOff(set kMinOutputBatchRows = 0) and
-///     mergeOffOn(set kMinOutputBatchRows=passes), the following join operator
-///     improved by the merging output.
+///   1 Filter and aggregation,
+///      * The input data are two 1000 * 10K row vectors.
+///      * The filter pass percents contain 0.02%, 0.16%, 0.32%, 1%, 10%
+///      * Group keys contain 1, 2, 4 group keys.
+///      * Data types contain bigint, varchar and complex type array.
+///      * Aggregation functions contain count, sum, max.
 ///
 /// String data is benchmarked with either flat or dictionary encoded
 /// input. The dictionary encoded case is either with a different set
@@ -65,15 +58,15 @@ struct TestCase {
   // Dataset for join build side
   std::vector<RowVectorPtr> joinBuildRows;
 
-  // Plan with filter selecting 10000 * 10% = 1000
+  // Plan with filter pass 10000 * 10% = 1000
   core::PlanNodePtr plan1000;
-  // Plan with filter selecting 10000 * 1% = 100
+  // Plan with filter pass 10000 * 1% = 100
   core::PlanNodePtr plan100;
-  // Plan with filter selecting 10000 * 0.32% = 32
+  // Plan with filter pass 10000 * 0.32% = 32
   core::PlanNodePtr plan32;
-  // Plan with filter selecting 10000 * 0.16% = 16
+  // Plan with filter pass 10000 * 0.16% = 16
   core::PlanNodePtr plan16;
-  // Plan with filter selecting 10000 * 0.02% = 2
+  // Plan with filter pass 10000 * 0.02% = 2
   core::PlanNodePtr plan2;
 };
 
@@ -101,6 +94,27 @@ class MergingVectorOutputBenchmark : public VectorTestBase {
     }
   }
 
+  template <typename T = int64_t>
+  void
+  setRandomArrays(int32_t column, int32_t max, std::vector<RowVectorPtr> rows) {
+    for (auto& r : rows) {
+      if (VectorEncoding::Simple::ARRAY == r->childAt(column)->encoding()) {
+        auto arrayVector = r->childAt(column)->as<ArrayVector>();
+        auto& arrayType = arrayVector->type()->as<TypeKind::ARRAY>();
+        switch (arrayType.childAt(0)->kind()) {
+          case TypeKind::BIGINT:
+            auto arrays = arrayVector->elements()->as<FlatVector<T>>();
+            auto sizeSize = arrays->size();
+            // arrays->size() is random size.(49471)
+            for (auto i = 0; i < sizeSize; ++i) {
+              arrays->set(i, folly::Random::rand32(rng_) % max);
+            }
+            break;
+        }
+      }
+    }
+  }
+
   core::PlanNodePtr makeFilterAndAggregationPlan(
       float passPct,
       std::shared_ptr<TestCase> testCase) {
@@ -109,12 +123,12 @@ class MergingVectorOutputBenchmark : public VectorTestBase {
     auto& type = testCase->rows[0]->type()->as<TypeKind::ROW>();
     builder.values(testCase->rows);
     builder.filter(fmt::format(
-        "c0 >= {}",
+        "k0 >= {}",
         static_cast<int32_t>(maxRandomInt - (passPct / 100.0) * maxRandomInt)));
 
-    std::vector<std::string> projections = {"c0"};
-    for (auto i = 1; i < type.size(); ++i) {
-      projections.push_back(fmt::format("c{}", i));
+    std::vector<std::string> projections = {};
+    for (auto i = 0; i < type.size(); ++i) {
+      projections.push_back(type.nameOf(i));
     }
     builder.project(projections);
 
@@ -122,15 +136,20 @@ class MergingVectorOutputBenchmark : public VectorTestBase {
     std::vector<std::string> finalProjection;
     bool needFinalProjection = false;
     for (auto i = 0; i < type.size(); ++i) {
-      finalProjection.push_back(fmt::format("c{}", i));
+      auto columnName = type.nameOf(i);
+      finalProjection.push_back(columnName);
+      // group by key, should not aggregate
+      if (columnName[0] == 'k') {
+        continue ;
+      }
       switch (type.childAt(i)->kind()) {
         case TypeKind::BIGINT:
-          aggregates.push_back(fmt::format("avg(c{})", i));
+          aggregates.push_back(fmt::format("avg({})", columnName));
           break;
         case TypeKind::VARCHAR:
           needFinalProjection = true;
-          finalProjection.back() = fmt::format("length(c{}) as c{}", i, i);
-          aggregates.push_back(fmt::format("max(c{})", i));
+          finalProjection.back() = fmt::format("length({}) as {}", columnName, columnName);
+          aggregates.push_back(fmt::format("max({})", columnName));
           break;
         default:
           break;
@@ -139,7 +158,14 @@ class MergingVectorOutputBenchmark : public VectorTestBase {
     if (needFinalProjection) {
       builder.project(finalProjection);
     }
-    builder.singleAggregation({"c0"}, aggregates);
+    std::vector<std::string> groupingKeys;
+    for (auto i = 0; i < type.size(); ++i) {
+      auto columnName = type.nameOf(i);
+      if (columnName[0] == 'k') {
+        groupingKeys.push_back(columnName);
+      }
+    }
+    builder.singleAggregation(groupingKeys, aggregates);
     return builder.planNode();
   }
 
@@ -154,9 +180,9 @@ class MergingVectorOutputBenchmark : public VectorTestBase {
     exec::test::PlanBuilder builder(planNodeIdGenerator, pool_.get());
     auto& type = testCase->rows[0]->type()->as<TypeKind::ROW>();
     builder.values(testCase->rows);
-    builder.filter(fmt::format("c0 >= {}", max));
+    builder.filter(fmt::format("k0 >= {}", max));
 
-    std::vector<std::string> projections = {"c0"};
+    std::vector<std::string> projections = {"k0"};
     for (auto i = 1; i < type.size(); ++i) {
       projections.push_back(fmt::format("c{}", i));
     }
@@ -173,7 +199,7 @@ class MergingVectorOutputBenchmark : public VectorTestBase {
       projections.push_back(fmt::format("c{}", i));
     }
     builder.hashJoin(
-        {"c0"}, {"r0"}, joinBuildPlanBuilder.planNode(), "", finalProjections);
+        {"k0"}, {"r0"}, joinBuildPlanBuilder.planNode(), "", finalProjections);
     return builder.planNode();
   }
 
@@ -328,7 +354,20 @@ class MergingVectorOutputBenchmark : public VectorTestBase {
       bool stringNulls = false) {
     auto test = std::make_shared<TestCase>();
     test->rows = makeRows(type, numVectors, numPerVector);
-    setRandomInts(0, maxRandomInt, test->rows);
+
+    for (auto i = 0; i < type->size(); ++i) {
+      switch (type->childAt(i)->kind()) {
+        case TypeKind::BIGINT:
+          setRandomInts(i, maxRandomInt, test->rows);
+          break;
+        case TypeKind::ARRAY:
+          setRandomArrays(i, maxRandomInt, test->rows);
+          break;
+        default:
+          break;
+      }
+    }
+
     prepareStringColumns(
         test->rows,
         stringCardinality,
@@ -340,7 +379,7 @@ class MergingVectorOutputBenchmark : public VectorTestBase {
     setRandomInts(0, maxRandomInt, test->joinBuildRows);
 
     addBenchmark(name + "filter_agg_pass", test, true);
-    addBenchmark(name + "filter_join_pass", test, false);
+    //addBenchmark(name + "filter_join_pass", test, false);
   }
 
   int64_t run(core::PlanNodePtr plan, int32_t minRows) {
@@ -371,33 +410,50 @@ int main(int argc, char** argv) {
 
   MergingVectorOutputBenchmark bm;
 
-  auto bigint4 = ROW(
-      {{"c0", BIGINT()},
+  auto arrayType = ARRAY(BIGINT());
+
+  auto simpleType = ROW(
+      {{"k0", BIGINT()},
        {"c1", BIGINT()},
        {"c2", BIGINT()},
-       {"c3", BIGINT()},
-       {"c4", BIGINT()}});
+       {"c3", VARCHAR()}});
 
-  auto varchar4 = ROW(
-      {{"c0", BIGINT()},
-       {"c1", VARCHAR()},
-       {"c2", VARCHAR()},
-       {"c3", VARCHAR()},
-       {"c4", VARCHAR()}});
+  auto group2Keys = ROW(
+      {{"k0", BIGINT()},
+       {"k1", BIGINT()},
+       {"c2", BIGINT()},
+       {"c3", VARCHAR()}});
+
+  auto group4Keys = ROW(
+      {{"k0", BIGINT()},
+       {"k1", BIGINT()},
+       {"k2", BIGINT()},
+       {"k3", BIGINT()},
+       {"c5", BIGINT()}});
+
+  auto complexType = ROW(
+      {{"k0", BIGINT()},
+       {"c1", BIGINT()},
+       {"c2", BIGINT()},
+       {"c3", arrayType}});
 
   int32_t numVectors = 1000;
   int32_t rowsPerVector = 10000;
 
-  // Flat bigint.
-  bm.makeBenchmark("Bigint4_", bigint4, numVectors, rowsPerVector);
+  // Flat simple types.
+  bm.makeBenchmark("SimpleType_", simpleType, numVectors, rowsPerVector);
 
-  // Flat string.
-  bm.makeBenchmark("String4_", varchar4, numVectors, rowsPerVector);
+  bm.makeBenchmark("Group2Keys_", group2Keys, numVectors, rowsPerVector);
+
+  bm.makeBenchmark("Group4Keys_", group4Keys, numVectors, rowsPerVector);
+
+  // Flat complexType.
+  bm.makeBenchmark("ComplexType_", complexType, numVectors, rowsPerVector);
 
   // Strings dictionary encoded.
   bm.makeBenchmark(
-      "StringDict4_10K",
-      varchar4,
+      "StringDict_",
+      simpleType,
       numVectors,
       rowsPerVector,
       200,
@@ -407,8 +463,8 @@ int main(int argc, char** argv) {
 
   // Strings with dictionary base values shared between batches.
   bm.makeBenchmark(
-      "StringRepDict4_10K",
-      varchar4,
+      "StringRepDict_",
+      simpleType,
       numVectors,
       rowsPerVector,
       200,
