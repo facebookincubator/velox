@@ -1181,6 +1181,56 @@ TEST_F(VectorTest, unknown) {
       ASSERT_TRUE(slice->isNullAt(i));
     }
   }
+
+  auto lazyVector = std::make_shared<LazyVector>(
+      pool_.get(),
+      UNKNOWN(),
+      100,
+      std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
+        return BaseVector::create(UNKNOWN(), 10, pool());
+      }));
+
+  ASSERT_FALSE(lazyVector->isScalar());
+  ASSERT_EQ(TypeKind::UNKNOWN, lazyVector->typeKind());
+  ASSERT_EQ(100, lazyVector->size());
+}
+
+TEST_F(VectorTest, opaque) {
+  // Creates a const OPAQUE vector.
+  auto constOpaqueVector = BaseVector::createConstant(
+      OpaqueType::create<int32_t>(),
+      variant::opaque(std::make_shared<int32_t>(123)),
+      100,
+      pool_.get());
+  ASSERT_TRUE(constOpaqueVector->isScalar());
+  ASSERT_EQ(TypeKind::OPAQUE, constOpaqueVector->typeKind());
+  ASSERT_EQ(100, constOpaqueVector->size());
+  for (auto i = 0; i < constOpaqueVector->size(); i++) {
+    ASSERT_FALSE(constOpaqueVector->isNullAt(i));
+  }
+
+  // Creates a flat OPAQUE vector.
+  auto flatOpaqueVector =
+      BaseVector::create(OpaqueType::create<int32_t>(), 10, pool());
+  ASSERT_EQ(VectorEncoding::Simple::FLAT, flatOpaqueVector->encoding());
+  ASSERT_TRUE(flatOpaqueVector->isScalar());
+  for (int i = 0; i < flatOpaqueVector->size(); ++i) {
+    ASSERT_FALSE(flatOpaqueVector->isNullAt(i));
+  }
+
+  auto lazyVector = std::make_shared<LazyVector>(
+      pool_.get(),
+      OpaqueType::create<int32_t>(),
+      100,
+      std::make_unique<test::SimpleVectorLoader>(
+          [&](auto rows) { return constOpaqueVector; }));
+
+  ASSERT_TRUE(lazyVector->isScalar());
+  ASSERT_EQ(TypeKind::OPAQUE, lazyVector->typeKind());
+  ASSERT_EQ(100, lazyVector->size());
+  for (auto i = 0; i < lazyVector->size(); i++) {
+    ASSERT_FALSE(lazyVector->isNullAt(i));
+  }
 }
 
 TEST_F(VectorTest, copyBoolAllNullFlatVector) {
