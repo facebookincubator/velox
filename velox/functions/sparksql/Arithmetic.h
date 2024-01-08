@@ -390,18 +390,24 @@ struct ToHexBigintFunction {
       const arg_type<int64_t>& input) {
     static const char* const kHexTable = "0123456789ABCDEF";
 
-    std::string str;
-    str.resize(16);
-
-    char* buffer = str.data();
     uint64_t num = input;
     int32_t len = 0;
     do {
       len += 1;
-      buffer[str.size() - len] = kHexTable[num & 0xF];
       num >>= 4;
     } while (num != 0);
-    result = str.substr(str.size() - len);
+
+    result.resize(len);
+    char* buffer = result.data();
+    const auto resultSize = len;
+
+    num = input;
+    len = 0;
+    do {
+      len += 1;
+      buffer[resultSize - len] = kHexTable[num & 0xF];
+      num >>= 4;
+    } while (num != 0);
   }
 };
 } // namespace facebook::velox::functions::sparksql
