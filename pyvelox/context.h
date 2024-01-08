@@ -44,9 +44,6 @@ struct PyVeloxContext {
   facebook::velox::core::ExecCtx* execCtx() {
     return execCtx_.get();
   }
-  facebook::velox::memory::MemoryPool* rootPool() {
-    return rootPool_.get();
-  }
 
   static inline void cleanup() {
     if (instance_) {
@@ -61,8 +58,6 @@ struct PyVeloxContext {
   PyVeloxContext& operator=(const PyVeloxContext&) = delete;
   PyVeloxContext& operator=(const PyVeloxContext&&) = delete;
 
-  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool_{
-      memory::defaultMemoryManager().addRootPool()};
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_ =
       facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx_ =
@@ -112,7 +107,7 @@ struct PySubstraitContext {
   std::shared_ptr<facebook::velox::connector::Connector> connector_ =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kConnectorId, nullptr);
+          ->newConnector(kConnectorId, std::make_shared<facebook::velox::core::MemConfig>());
 
   static inline std::unique_ptr<PySubstraitContext> instance_;
 };

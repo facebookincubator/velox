@@ -181,19 +181,6 @@ static py::object getItemFromSimpleVector(
     SimpleVectorPtr<NativeType>& vector,
     vector_size_t idx);
 
-inline void checkRowVectorBounds(const RowVectorPtr& v, vector_size_t idx) {
-  if (idx < 0 || size_t(idx) >= v->childrenSize()) {
-    throw std::out_of_range("Index out of range");
-  }
-}
-
-inline VectorPtr getVectorFromRowVectorPtr(
-    const RowVectorPtr& v,
-    vector_size_t idx) {
-  checkRowVectorBounds(v, idx);
-  return v->childAt(idx);
-}
-
 template <typename NativeType>
 inline void setItemInFlatVector(
     FlatVectorPtr<NativeType>& vector,
@@ -507,9 +494,19 @@ static void addVectorBindings(
         return indices.indices->as<vector_size_t>()[idx];
       });
 
-  m.def("from_list", [](const py::list& list) mutable {
-    return pyListToVector(list, PyVeloxContext::getSingletonInstance().pool());
-  });
+  m.def(
+      "from_list",
+      [](const py::list& list, const Type* dtype = nullptr) mutable {
+        if (!dtype || py::isinstance<py::none>(py::cast(*dtype))) {
+          return pyListToVector(
+              list, PyVeloxContext::getSingletonInstance().pool());
+        } else {
+          return pyListToVector(
+              list, *dtype, PyVeloxContext::getSingletonInstance().pool());
+        }
+      },
+      py::arg("list"),
+      py::arg("dtype") = nullptr);
 
   m.def(
       "constant_vector",
