@@ -278,6 +278,17 @@ Task::~Task() {
 
   TestValue::adjust("facebook::velox::exec::Task::~Task", this);
 
+  try {
+    if (hasPartitionedOutput()) {
+      if (auto bufferManager = bufferManager_.lock()) {
+        bufferManager->removeTask(taskId_);
+      }
+    }
+  } catch (const std::exception& e) {
+    LOG(WARNING) << "Caught exception in Task " << taskId()
+                 << " destructor: " << e.what();
+  }
+
   clearStage = "removeSpillDirectoryIfExists";
   removeSpillDirectoryIfExists();
 
