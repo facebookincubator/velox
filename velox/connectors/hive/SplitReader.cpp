@@ -69,6 +69,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
+    core::ExpressionEvaluator* expressionEvaluator,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats) {
@@ -83,6 +84,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         partitionKeys,
         fileHandleFactory,
         executor,
+        expressionEvaluator,
         connectorQueryCtx,
         hiveConfig,
         ioStats);
@@ -95,6 +97,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         partitionKeys,
         fileHandleFactory,
         executor,
+        expressionEvaluator,
         connectorQueryCtx,
         hiveConfig,
         ioStats);
@@ -111,6 +114,7 @@ SplitReader::SplitReader(
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
+    core::ExpressionEvaluator* expressionEvaluator,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats)
@@ -122,6 +126,7 @@ SplitReader::SplitReader(
       pool_(connectorQueryCtx->memoryPool()),
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
+      expressionEvaluator_(expressionEvaluator),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
       ioStats_(ioStats),
@@ -140,6 +145,7 @@ void SplitReader::configureReaderOptions(
 
 void SplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
+    std::shared_ptr<exec::ExprSet>& remainingFilterExprSet,
     dwio::common::RuntimeStatistics& runtimeStats) {
   createReader();
 
@@ -171,6 +177,11 @@ bool SplitReader::emptySplit() const {
 
 void SplitReader::resetSplit() {
   hiveSplit_.reset();
+}
+
+std::shared_ptr<const dwio::common::TypeWithId> SplitReader::baseFileSchema() {
+  VELOX_CHECK_NOT_NULL(baseReader_.get());
+  return baseReader_->typeWithId();
 }
 
 int64_t SplitReader::estimatedRowSize() const {

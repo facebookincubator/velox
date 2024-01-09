@@ -313,6 +313,18 @@ void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr) {
   }
 }
 
+folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+toSubfieldsMap(const RowTypePtr& rowType) {
+  folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+      subfieldsMap;
+  for (int i = 0; i < rowType->size(); i++) {
+    const std::string& name = rowType->nameOf(i);
+    common::Subfield subfield(name);
+    subfieldsMap[name].push_back(&subfield);
+  }
+  return subfieldsMap;
+}
+
 std::shared_ptr<common::ScanSpec> makeScanSpec(
     const RowTypePtr& rowType,
     const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&

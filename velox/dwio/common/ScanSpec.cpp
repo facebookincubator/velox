@@ -43,6 +43,40 @@ ScanSpec& ScanSpec::operator=(const ScanSpec& other) {
   return *this;
 }
 
+std::shared_ptr<ScanSpec> ScanSpec::clone() {
+  if (children_.empty()) {
+    return std::make_shared<ScanSpec>(*this);
+  }
+
+  std::vector<std::shared_ptr<ScanSpec>> childrenCopy;
+  folly::F14FastMap<std::string, ScanSpec*> childByFieldNameCopy;
+  std::vector<ScanSpec*> stableChildrenCopy;
+  stableChildrenCopy.resize(stableChildren_.size());
+
+  for (auto& child : children_) {
+    auto childCopy = child->clone();
+    if (child->filter_) {
+      childCopy->filter_ = child->filter_->clone();
+    }
+
+    childrenCopy.push_back(childCopy);
+    childByFieldNameCopy[childCopy->fieldName()] = childCopy.get();
+
+    auto iter =
+        std::find(stableChildren_.begin(), stableChildren_.end(), child.get());
+    if (iter != stableChildren_.end()) {
+      stableChildrenCopy[iter - stableChildren_.begin()] = childCopy.get();
+    }
+  }
+
+  auto copy = std::make_shared<ScanSpec>(*this);
+  copy->children_ = childrenCopy;
+  copy->childByFieldName_ = childByFieldNameCopy;
+  copy->stableChildren_ = stableChildrenCopy;
+
+  return copy;
+}
+
 ScanSpec* ScanSpec::getOrCreateChild(const Subfield& subfield) {
   auto container = this;
   auto& path = subfield.path();

@@ -64,6 +64,7 @@ class SplitReader {
           partitionKeys,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
+      core::ExpressionEvaluator* expressionEvaluator,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStats);
@@ -78,6 +79,7 @@ class SplitReader {
           partitionKeys,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
+      core::ExpressionEvaluator* expressionEvaluator,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStats);
@@ -92,6 +94,7 @@ class SplitReader {
   /// files or log files, and add column adapatations for metadata columns
   virtual void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
+      std::shared_ptr<exec::ExprSet>& remainingFilterExprSet,
       dwio::common::RuntimeStatistics& runtimeStats);
 
   virtual uint64_t next(uint64_t size, VectorPtr& output);
@@ -101,6 +104,8 @@ class SplitReader {
   bool emptySplit() const;
 
   void resetSplit();
+
+  std::shared_ptr<const dwio::common::TypeWithId> baseFileSchema();
 
   int64_t estimatedRowSize() const;
 
@@ -139,6 +144,7 @@ class SplitReader {
   std::unique_ptr<dwio::common::RowReader> baseRowReader_;
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
+  core::ExpressionEvaluator* expressionEvaluator_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<HiveConfig> hiveConfig_;
   std::shared_ptr<io::IoStatistics> ioStats_;

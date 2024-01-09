@@ -667,6 +667,8 @@ class ExprSet {
       core::ExecCtx* FOLLY_NONNULL execCtx,
       bool enableConstantFolding = true);
 
+  ExprSet(const ExprSet& another);
+
   virtual ~ExprSet();
 
   // Initialize and evaluate all expressions available in this ExprSet.
@@ -703,6 +705,10 @@ class ExprSet {
   const std::shared_ptr<Expr>& expr(int32_t index) const {
     return exprs_[index];
   }
+
+  void addExpr(const std::shared_ptr<Expr>& expr);
+
+  void addExprs(const std::vector<std::shared_ptr<Expr>>& exprs);
 
   const std::vector<FieldReference*>& distinctFields() const {
     return distinctFields_;
@@ -840,7 +846,7 @@ bool unregisterExprSetListener(
 class SimpleExpressionEvaluator : public core::ExpressionEvaluator {
  public:
   SimpleExpressionEvaluator(core::QueryCtx* queryCtx, memory::MemoryPool* pool)
-      : queryCtx_(queryCtx), pool_(pool) {}
+      : pool_(pool), queryCtx_(queryCtx) {}
 
   std::unique_ptr<ExprSet> compile(
       const core::TypedExprPtr& expression) override {
@@ -858,12 +864,28 @@ class SimpleExpressionEvaluator : public core::ExpressionEvaluator {
     return pool_;
   }
 
- private:
+ protected:
   core::ExecCtx* ensureExecCtx();
 
-  core::QueryCtx* const queryCtx_;
   memory::MemoryPool* const pool_;
+
+ private:
+  core::QueryCtx* const queryCtx_;
   std::unique_ptr<core::ExecCtx> execCtx_;
+};
+
+class LogicalExpressionEvaluator : public SimpleExpressionEvaluator {
+ public:
+  LogicalExpressionEvaluator(core::QueryCtx* queryCtx, memory::MemoryPool* pool)
+      : SimpleExpressionEvaluator(queryCtx, pool) {}
+
+  /// Evaluate all Exprs in the exprSet using AND semantics. The result would be
+  /// stored in result, which is vector of flat bools.
+  void evaluate(
+      ExprSet* exprSet,
+      const SelectivityVector& rows,
+      const RowVector& input,
+      VectorPtr& result) override;
 };
 
 class Subscript : public exec::VectorFunction {

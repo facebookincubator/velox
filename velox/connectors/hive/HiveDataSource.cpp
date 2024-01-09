@@ -172,6 +172,7 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
       &partitionKeys_,
       fileHandleFactory_,
       executor_,
+      expressionEvaluator_,
       connectorQueryCtx_,
       hiveConfig_,
       ioStats_);
@@ -191,10 +192,12 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 
   splitReader_ = createSplitReader();
+
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
   splitReader_->configureReaderOptions(randomSkip_);
-  splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
+  splitReader_->prepareSplit(
+      metadataFilter_, remainingFilterExprSet_, runtimeStats_);
 }
 
 std::optional<RowVectorPtr> HiveDataSource::next(
@@ -351,11 +354,16 @@ int64_t HiveDataSource::estimatedRowSize() {
 vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
   auto filterStartMicros = getCurrentTimeMicro();
   filterRows_.resize(output_->size());
-
   expressionEvaluator_->evaluate(
       remainingFilterExprSet_.get(), filterRows_, *rowVector, filterResult_);
-  auto res = exec::processFilterResults(
-      filterResult_, filterRows_, filterEvalCtx_, pool_);
+  auto filterResult = std::static_pointer_cast<RowVector>(filterResult_);
+
+  vector_size_t res;
+  for (int i = 0; i < filterResult->childrenSize(); i++) {
+    res = exec::processFilterResults(
+        filterResult->childAt(i), filterRows_, filterEvalCtx_, pool_);
+  }
+
   totalRemainingFilterTime_.fetch_add(
       (getCurrentTimeMicro() - filterStartMicros) * 1000,
       std::memory_order_relaxed);
