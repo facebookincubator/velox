@@ -892,3 +892,75 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
     }
   }
 }
+
+TEST_F(ParquetReaderTest, readMapIssueData) {
+  FLAGS_logtostderr = true;
+  const std::string sample(getExampleFilePath("map_issue.parquet"));
+
+  auto file = std::make_shared<LocalReadFile>(sample);
+  auto input = std::make_unique<BufferedInput>(file, *leafPool_);
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(input), readerOptions);
+
+  auto schema =
+      ROW({"a", "b"},
+          {BIGINT(), createType<TypeKind::MAP>({VARCHAR(), INTEGER()})});
+  auto rowReaderOpts = getReaderOpts(schema);
+  auto scanSpec = makeScanSpec(schema);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  VectorPtr result = BaseVector::create(schema, 0, leafPool_.get());
+  auto readRowNum = rowReader->next(1000, result);
+  while (readRowNum != 0) {
+    auto rowVector = result->as<RowVector>();
+    auto a = rowVector->childAt(0)->asFlatVector<int64_t>()->rawValues();
+    auto b = rowVector->childAt(1);
+    SelectivityVector rows(b->size());
+    DecodedVector decoded(*b, rows);
+    auto base = decoded.base()->as<MapVector>();
+    auto indices = decoded.indices();
+    SelectivityVector nestedRows(base->mapKeys()->size());
+    DecodedVector decodedKeys(*base->mapKeys(), nestedRows);
+    DecodedVector decodedValues(*base->mapValues(), nestedRows);
+    for (auto row = 0; row < result->size(); row++) {
+      if (a[row] == 120666245) {
+        std::stringstream keyStream;
+        std::stringstream valueStream;
+        if (decoded.isNullAt(row)) {
+          LOG(INFO) << "all null in map!";
+        } else {
+          auto size = base->sizeAt(indices[row]);
+          auto offset = base->offsetAt(indices[row]);
+          for (auto i = 0; i < size; ++i) {
+            std::optional<StringView> bKey;
+            std::optional<int32_t> bValue;
+            if (!decodedKeys.isNullAt(offset + i)) {
+              bKey = decodedKeys.valueAt<StringView>(offset + i);
+            } else {
+              bKey = std::nullopt;
+            }
+            if (!decodedValues.isNullAt(offset + i)) {
+              bValue = decodedValues.valueAt<int32_t>(offset + i);
+            } else {
+              bValue = std::nullopt;
+            }
+            keyStream << (bKey.has_value() ? bKey.value() : "null");
+            valueStream << (bValue.has_value() ? std::to_string(bValue.value())
+                                              : "null");
+            if (i != size - 1) {
+              keyStream << ", ";
+              valueStream << ", ";
+            }
+          }
+        }
+        LOG(INFO) << keyStream.str();
+        LOG(INFO) << valueStream.str();
+        break;
+      }
+    }
+    readRowNum = rowReader->next(1000, result);
+  }
+}
