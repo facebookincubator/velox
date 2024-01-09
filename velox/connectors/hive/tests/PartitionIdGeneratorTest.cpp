@@ -147,9 +147,13 @@ TEST_F(PartitionIdGeneratorTest, stableIdsMultipleKeys) {
 
 TEST_F(PartitionIdGeneratorTest, partitionKeysCaseSensitive) {
   PartitionIdGenerator idGenerator(
-      ROW({"c0", "C1", "C2"},{BIGINT(), VARCHAR(), INTEGER()}), {1, 2}, 100, pool(), false);
+      ROW({"c0", "C1", "C2"}, {BIGINT(), VARCHAR(), INTEGER()}),
+      {1, 2},
+      100,
+      pool(),
+      false);
 
-  const vector_size_t size = 1'000;  
+  const vector_size_t size = 1'000;
   auto input = makeRowVector({
       makeFlatVector<int64_t>(size, [](auto row) { return row; }),
       makeFlatVector<StringView>(
@@ -162,9 +166,8 @@ TEST_F(PartitionIdGeneratorTest, partitionKeysCaseSensitive) {
 
   raw_vector<uint64_t> firstTimeIds;
   idGenerator.run(input, firstTimeIds);
-  EXPECT_EQ("C1=2019-04-15/C2=1",idGenerator.partitionName(1));
+  EXPECT_EQ("C1=2019-04-15/C2=1", idGenerator.partitionName(1));
 }
-
 
 TEST_F(PartitionIdGeneratorTest, numPartitions) {
   PartitionIdGenerator idGenerator(ROW({BIGINT()}), {0}, 100, pool(), true);
