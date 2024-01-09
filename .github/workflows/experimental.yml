@@ -115,6 +115,10 @@ jobs:
         with:
           name: aggregation
 
+      - name: "Start Presto Java"
+        - run: |
+            - /opt/start-prestojava.sh
+
       - name: "Run Aggregate Fuzzer"
         run: |
           mkdir -p /tmp/aggregate_fuzzer_repro/
@@ -128,6 +132,7 @@ jobs:
                 --minloglevel=0 \
                 --repro_persist_path=/tmp/aggregate_fuzzer_repro \
                 --enable_sorted_aggregations=true \
+                --presto_url=http://127.0.0.1:8080 \
           && echo -e "\n\nAggregation fuzzer run finished successfully."
       - name: Archive aggregate production artifacts
         if: always()

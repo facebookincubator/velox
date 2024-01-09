@@ -36,12 +36,13 @@ RUN dnf install -y java-11-openjdk less procps python3 \
     && ln -s /opt/presto-cli /usr/local/bin/ \
     && mkdir -p $PRESTO_HOME/etc \
     && mkdir -p $PRESTO_HOME/etc/catalog \
-    && mkdir -p /var/lib/presto/data \
+    && mkdir -p $PRESTO_HOME/etc/data \
     && mkdir -p /usr/lib/presto/utils
 
 COPY scripts/etc/config.properties.example $PRESTO_HOME/etc/config.properties
 COPY scripts/etc/jvm.config.example $PRESTO_HOME/etc/jvm.config
 COPY scripts/etc/node.properties $PRESTO_HOME/etc/node.properties
+COPY scripts/etc/hive.properties $PRESTO_HOME/etc/catalog
 COPY scripts/start-prestojava.sh /opt
 
 WORKDIR /velox
