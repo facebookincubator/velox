@@ -502,12 +502,11 @@ related methods are used in the memory arbitration and reclaim process.</p>
 <span class="c1">/// corresponding method.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::leaveArbitration</span><span class="p">();</span><span class="w"></span>
 
-<span class="c1">/// Returns how many bytes is reclaimable from this memory pool. The function</span>
-<span class="c1">/// true if we can reclaim memory from this memory pool, and returns the number</span>
-<span class="c1">/// of reclaimable bytes in &#39;bytes&#39;. Otherwise returns false. The function</span>
-<span class="c1">/// returns false if if &#39;reclaimer_&#39; is not set, otherwise invoke the</span>
-<span class="c1">/// reclaimer&#39;s corresponding method.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">MemoryPool::reclaimableBytes</span><span class="p">(</span><span class="kt">uint64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">bytes</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w"></span>
+<span class="c1">/// Function estimates the number of reclaimable bytes and returns in</span>
+<span class="c1">/// &#39;reclaimableBytes&#39;. If the &#39;reclaimer&#39; is not set, the function returns</span>
+<span class="c1">/// std::nullopt. Otherwise, it will invoke the corresponding method of the</span>
+<span class="c1">/// reclaimer.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimableBytes</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 
 <span class="c1">/// Invoked by the memory arbitrator to reclaim memory from this memory pool</span>
 <span class="c1">/// with specified reclaim target bytes. If &#39;targetBytes&#39; is zero, then it</span>
