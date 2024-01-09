@@ -165,6 +165,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
         compareFlags,
         targetFileSize,
         writeBufferSize,
+        0.9,
         compressionKind_,
         pool(),
         &stats_);
@@ -464,6 +465,7 @@ TEST_P(SpillTest, spillTimestamp) {
       emptyCompareFlags,
       1024,
       0,
+      0.9,
       compressionKind_,
       pool(),
       &stats_);

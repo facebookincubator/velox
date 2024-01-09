@@ -87,8 +87,11 @@ SpillWriter::SpillWriter(
     const RowTypePtr& type,
     const uint32_t numSortKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
+    const std::string& spillDir,
+    const std::string& fileNamePrefix,
+    uint32_t partition,
+    double maxUsedSpaceThreshold,
     common::CompressionKind compressionKind,
-    const std::string& pathPrefix,
     uint64_t targetFileSize,
     uint64_t writeBufferSize,
     const std::string& fileCreateConfig,
@@ -99,7 +102,8 @@ SpillWriter::SpillWriter(
       numSortKeys_(numSortKeys),
       sortCompareFlags_(sortCompareFlags),
       compressionKind_(compressionKind),
-      pathPrefix_(pathPrefix),
+      pathPrefix_(
+          fmt::format("{}/{}-spill-{}", spillDir, fileNamePrefix, partition)),
       targetFileSize_(targetFileSize),
       writeBufferSize_(writeBufferSize),
       fileCreateConfig_(fileCreateConfig),
@@ -110,6 +114,19 @@ SpillWriter::SpillWriter(
   // comparison flags, then it must match the number of sorting keys.
   VELOX_CHECK(
       sortCompareFlags_.empty() || sortCompareFlags_.size() == numSortKeys_);
+
+  struct statvfs diskInfo {};
+  VELOX_CHECK(
+      statvfs(spillDir.c_str(), &diskInfo) == 0,
+      "Error getting disk space information. path: {}",
+      spillDir);
+
+  auto availableSpace = diskInfo.f_frsize * diskInfo.f_bavail;
+  auto totalSpace = diskInfo.f_frsize * diskInfo.f_blocks;
+
+  VELOX_CHECK(
+      availableSpace > totalSpace * (1.0 - maxUsedSpaceThreshold),
+      "No free space available for spill");
 }
 
 SpillWriteFile* SpillWriter::ensureFile() {

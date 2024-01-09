@@ -61,6 +61,7 @@ struct SpillConfig {
       uint64_t _maxSpillRunRows,
       uint64_t _writerFlushThresholdSize,
       int32_t _testSpillPct,
+      double _maxUsedSpaceThreshold,
       const std::string& _compressionKind,
       const std::string& _fileCreateConfig = {});
 
@@ -140,6 +141,11 @@ struct SpillConfig {
   /// Percentage of input batches to be spilled for testing. 0 means no
   /// spilling for test.
   int32_t testSpillPct;
+
+  /// Specifies the max used space threshold. If disk space usage ratio of a
+  /// given spill path is above this threshold, this spill path is not
+  /// eligible for spilling.
+  double maxUsedSpaceThreshold;
 
   /// CompressionKind when spilling, CompressionKind_NONE means no compression.
   common::CompressionKind compressionKind;

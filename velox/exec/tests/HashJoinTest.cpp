@@ -6263,4 +6263,70 @@ TEST_F(HashJoinTest, onlyHashBuildMaxSpillBytes) {
     }
   }
 }
+
+TEST_F(HashJoinTest, spillWithDiskLimit) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto probeVectors = createVectors(rowType, 32, 128);
+  const auto buildVectors = createVectors(rowType, 1024, 10 << 20);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+
+  struct {
+    double maxUsedSpaceThreshold;
+    bool expectSpill;
+    std::string debugString() const {
+      return fmt::format(
+          "maxUsedSpaceThreshold: {}, expectSpill: {}",
+          maxUsedSpaceThreshold,
+          expectSpill);
+    }
+  } testSettings[] = {// 0.0 means that no disk space can be used
+                      {0.0, false},
+                      // 0.9 means that we can spill if the disk space
+                      // utilization is less than 90%
+                      {0.9, true},
+                      // 1.0 means there is no limit on disk space usage
+                      {1.0, true}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    try {
+      AssertQueryBuilder(
+          PlanBuilder(planNodeIdGenerator)
+              .values(probeVectors, true)
+              .hashJoin(
+                  {"c0"},
+                  {"u1"},
+                  PlanBuilder(planNodeIdGenerator)
+                      .values(buildVectors, true)
+                      .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                      .planNode(),
+                  "",
+                  {"c0", "c1", "c2"},
+                  core::JoinType::kInner)
+              .planNode())
+          .spillDirectory(spillDirectory->path)
+          .queryCtx(queryCtx)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kJoinSpillEnabled, "true")
+          // Set a small capacity to trigger threshold based spilling
+          .config(
+              core::QueryConfig::kJoinSpillMemoryThreshold,
+              std::to_string(5 << 20))
+          .config(
+              core::QueryConfig::kMaxUsedSpaceThreshold,
+              std::to_string(testData.maxUsedSpaceThreshold))
+          .copyResults(pool_.get());
+      ASSERT_TRUE(testData.expectSpill);
+    } catch (const VeloxRuntimeError& e) {
+      ASSERT_FALSE(testData.expectSpill);
+      ASSERT_NE(
+          e.message().find("No free space available for spill"),
+          std::string::npos);
+    }
+  }
+}
 } // namespace

@@ -1598,4 +1598,76 @@ TEST_F(OrderByTest, reclaimFromCompletedOrderBy) {
   }
 }
 
+TEST_F(OrderByTest, spillWithDiskLimit) {
+  constexpr int32_t kNumRows = 2000;
+  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
+  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
+  VectorFuzzer fuzzer({}, pool());
+  const int32_t numBatches = 5;
+  std::vector<RowVectorPtr> batches;
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(fuzzer.fuzzRow(rowType));
+  }
+
+  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  queryCtx->testingOverrideMemoryPool(
+      memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
+
+  struct {
+    double maxUsedSpaceThreshold;
+    bool expectSpill;
+    std::string debugString() const {
+      return fmt::format(
+          "maxUsedSpaceThreshold: {}, expectSpill: {}",
+          maxUsedSpaceThreshold,
+          expectSpill);
+    }
+  } testSettings[] = {// 0.0 means that no disk space can be used
+                      {0.0, false},
+                      // 0.9 means that we can spill if the disk space
+                      // utilization is less than 90%
+                      {0.9, true},
+                      // 1.0 means there is no limit on disk space usage
+                      {1.0, true}};
+
+  for (const auto& testData : testSettings) {
+    try {
+      auto plan = PlanBuilder()
+                      .values(batches)
+                      .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                      .planNode();
+      auto results =
+          AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool_.get());
+
+      auto task =
+          AssertQueryBuilder(plan)
+              .queryCtx(queryCtx)
+              .spillDirectory(tempDirectory->path)
+              .config(core::QueryConfig::kSpillEnabled, "true")
+              .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+              .config(
+                  QueryConfig::kOrderBySpillMemoryThreshold,
+                  // Memory limit is too small so always trigger spilling.
+                  std::to_string(1))
+              .config(
+                  QueryConfig::kMaxUsedSpaceThreshold,
+                  std::to_string(testData.maxUsedSpaceThreshold))
+              .assertResults(results);
+      auto stats = task->taskStats().pipelineStats;
+      ASSERT_EQ(
+          testData.expectSpill,
+          stats[0].operatorStats[1].spilledInputBytes > 0);
+      ASSERT_EQ(
+          testData.expectSpill, stats[0].operatorStats[1].spilledBytes > 0);
+      OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+    } catch (const VeloxRuntimeError& e) {
+      ASSERT_FALSE(testData.expectSpill);
+      ASSERT_NE(
+          e.message().find("No free space available for spill"),
+          std::string::npos);
+    }
+  }
+}
+
 } // namespace facebook::velox::exec::test

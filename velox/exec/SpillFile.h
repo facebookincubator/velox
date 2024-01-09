@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/container/F14Set.h>
+#include <sys/statvfs.h>
 
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/base/SpillStats.h"
@@ -113,8 +114,11 @@ class SpillWriter {
       const RowTypePtr& type,
       const uint32_t numSortKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
+      const std::string& spillDir,
+      const std::string& fileNamePrefix,
+      uint32_t partition,
+      double maxUsedSpaceThreshold,
       common::CompressionKind compressionKind,
-      const std::string& pathPrefix,
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       const std::string& fileCreateConfig,

@@ -259,6 +259,7 @@ class E2EWriterTest : public testing::Test {
         0,
         writerFlushThresholdSize,
         0,
+        0.9,
         "none");
   }
 

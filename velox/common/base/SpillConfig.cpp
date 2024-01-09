@@ -34,6 +34,7 @@ SpillConfig::SpillConfig(
     uint64_t _maxSpillRunRows,
     uint64_t _writerFlushThresholdSize,
     int32_t _testSpillPct,
+    double _maxUsedSpaceThreshold,
     const std::string& _compressionKind,
     const std::string& _fileCreateConfig)
     : getSpillDirPathCb(std::move(_getSpillDirPathCb)),
@@ -53,6 +54,7 @@ SpillConfig::SpillConfig(
       maxSpillRunRows(_maxSpillRunRows),
       writerFlushThresholdSize(_writerFlushThresholdSize),
       testSpillPct(_testSpillPct),
+      maxUsedSpaceThreshold(_maxUsedSpaceThreshold),
       compressionKind(common::stringToCompressionKind(_compressionKind)),
       fileCreateConfig(_fileCreateConfig) {
   VELOX_USER_CHECK_GE(
