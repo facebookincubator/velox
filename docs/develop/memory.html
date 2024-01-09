@@ -361,7 +361,7 @@ expects a query memory capacity exceeded exception thrown and the memory
 allocation fails</p></li>
 </ol>
 </li>
-<li><p>Call <em>MemoryPool::maybeIncrementReservationLocked</em> to try to increment the
+<li><p>Call <em>MemoryPool::maybeIncrementReservation</em> to try to increment the
 reservation and check the result:</p>
 <ol class="loweralpha simple">
 <li><p>For a non-root memory pool, this should always succeed as we only check
