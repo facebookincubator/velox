@@ -198,9 +198,23 @@ if pos + len is negative, it refers to -(pos + len)th element before the end of 
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="replace">
-<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#replace" title="Permalink to this definition">¶</a></dt>
-<dd><p>Replaces all occurrences of <cite>search</cite> with <cite>replace</cite>.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">replace</span><span class="p">(</span><span class="s1">&#39;ABCabc&#39;</span><span class="p">,</span> <span class="s1">&#39;abc&#39;</span><span class="p">,</span> <span class="s1">&#39;DEF&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ABCDEF</span>
+<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replaced</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#replace" title="Permalink to this definition">¶</a></dt>
+<dd><p>Removes all instances of <code class="docutils literal notranslate"><span class="pre">replaced</span></code> from <code class="docutils literal notranslate"><span class="pre">input</span></code>.
+If <code class="docutils literal notranslate"><span class="pre">replaced</span></code> is an empty string, returns the original <code class="docutils literal notranslate"><span class="pre">input</span></code> string.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">replace</span><span class="p">(</span><span class="s1">&#39;ABCabc&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ABCabc</span>
+<span class="n">SELECT</span> <span class="n">replace</span><span class="p">(</span><span class="s1">&#39;ABCabc&#39;</span><span class="p">,</span> <span class="s1">&#39;bc&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ABCc</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="id0">
+<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replaced</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replacement</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>Replaces all instances of <code class="docutils literal notranslate"><span class="pre">replaced</span></code> with <code class="docutils literal notranslate"><span class="pre">replacement</span></code> in <code class="docutils literal notranslate"><span class="pre">input</span></code>.
+If <code class="docutils literal notranslate"><span class="pre">replaced</span></code> is an empty string, returns the original <code class="docutils literal notranslate"><span class="pre">input</span></code> string.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">replace</span><span class="p">(</span><span class="s1">&#39;ABCabc&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;DEF&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ABCabc</span>
+<span class="n">SELECT</span> <span class="n">replace</span><span class="p">(</span><span class="s1">&#39;ABCabc&#39;</span><span class="p">,</span> <span class="s1">&#39;abc&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ABC</span>
+<span class="n">SELECT</span> <span class="n">replace</span><span class="p">(</span><span class="s1">&#39;ABCabc&#39;</span><span class="p">,</span> <span class="s1">&#39;abc&#39;</span><span class="p">,</span> <span class="s1">&#39;DEF&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ABCDEF</span>
 </pre></div>
 </div>
 </dd></dl>
