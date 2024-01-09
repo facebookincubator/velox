@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
+#include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/BufferUtil.h"
@@ -30,12 +31,13 @@ IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<velox::connector::hive::HiveConnectorSplit>&
         hiveSplit,
     const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
-    const std::shared_ptr<common::ScanSpec> scanSpec,
+    std::shared_ptr<common::ScanSpec> scanSpec,
     const RowTypePtr readerOutputType,
     std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
+    core::ExpressionEvaluator* expressionEvaluator,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig> hiveConfig,
     std::shared_ptr<io::IoStatistics> ioStats)
@@ -47,14 +49,24 @@ IcebergSplitReader::IcebergSplitReader(
           partitionKeys,
           fileHandleFactory,
           executor,
+          expressionEvaluator,
           connectorQueryCtx,
           hiveConfig,
           ioStats),
       baseReadOffset_(0),
       splitOffset_(0) {}
+      originalScanSpec_(nullptr),
+      originalRemainingFilters_(nullptr) {}
+
+IcebergSplitReader::~IcebergSplitReader() {
+  if (originalScanSpec_) {
+    *scanSpec_ = *originalScanSpec_;
+  }
+}
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
+    std::shared_ptr<exec::ExprSet>& remainingFilterExprSet,
     dwio::common::RuntimeStatistics& runtimeStats) {
   createReader();
 
@@ -71,6 +83,58 @@ void IcebergSplitReader::prepareSplit(
   positionalDeleteFileReaders_.clear();
 
   const auto& deleteFiles = icebergSplit->deleteFiles;
+
+  // Process the equality delete files to update the scan spec and remaining
+  // filters. It needs to be done after creating the Reader and before creating
+  // the RowReader.
+
+  SubfieldFilters subfieldFilters;
+  std::unique_ptr<exec::ExprSet> exprSet;
+
+  for (const auto& deleteFile : deleteFiles) {
+    if (deleteFile.content == FileContent::kEqualityDeletes &&
+        deleteFile.recordCount > 0) {
+      // TODO: build cache of <DeleteFile, ExprSet> to avoid repeating file
+      // parsing across queries
+      auto equalityDeleteReader = std::make_unique<EqualityDeleteFileReader>(
+          deleteFile,
+          baseFileSchema(),
+          fileHandleFactory_,
+          executor_,
+          expressionEvaluator_,
+          connectorQueryCtx_,
+          hiveConfig_,
+          ioStats_,
+          runtimeStats,
+          hiveSplit_->connectorId);
+      equalityDeleteReader->readDeleteValues(subfieldFilters, exprSet);
+    }
+  }
+
+  if (!subfieldFilters.empty()) {
+    originalScanSpec_ = scanSpec_->clone();
+
+    for (auto iter = subfieldFilters.begin(); iter != subfieldFilters.end();
+         iter++) {
+      auto childSpec = scanSpec_->getOrCreateChild(iter->first);
+      childSpec->addFilter(*iter->second);
+      childSpec->setSubscript(scanSpec_->children().size() - 1);
+    }
+  }
+
+  if (exprSet && exprSet->size() > 0) {
+    originalRemainingFilters_ = remainingFilterExprSet;
+    remainingFilterExprSet->addExprs(exprSet->exprs());
+  }
+
+  createRowReader(metadataFilter);
+
+  baseReadOffset_ = 0;
+  splitOffset_ = baseRowReader_->nextRowNumber();
+
+  // Create the positional deletes file readers. They need to be created after
+  // the RowReader is created.
+  positionalDeleteFileReaders_.clear();
   for (const auto& deleteFile : deleteFiles) {
     if (deleteFile.content == FileContent::kPositionalDeletes &&
         deleteFile.recordCount > 0) {
