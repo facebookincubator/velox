@@ -51,8 +51,8 @@ std::shared_ptr<facebook::velox::common::ScanSpec> makeScanSpec(
   return scanSpec;
 }
 
-// An executable program that reads from parquet file and prints its meta data and
-// content. Usage: velox_dwio_print_parquet {parquet_file_path}
+// An executable program that reads from parquet file and prints its meta data
+// and content. Usage: velox_dwio_print_parquet {parquet_file_path}
 int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
@@ -82,7 +82,8 @@ int main(int argc, char** argv) {
   uint64_t numRowsToRead = FLAGS_rows_to_read;
 
   while (numRowsToRead > 0) {
-    int numRowsScanned = rowReader->next(std::min(FLAGS_batch_size, numRowsToRead), result);
+    int numRowsScanned =
+        rowReader->next(std::min(FLAGS_batch_size, numRowsToRead), result);
 
     if (numRowsScanned <= 0) {
       break;
