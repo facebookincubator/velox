@@ -147,26 +147,17 @@ TEST_F(PartitionIdGeneratorTest, stableIdsMultipleKeys) {
 
 TEST_F(PartitionIdGeneratorTest, partitionKeysCaseSensitive) {
   PartitionIdGenerator idGenerator(
-      ROW({"cc0", "Cc1", "Cc2"}, {BIGINT(), VARCHAR(), INTEGER()}),
-      {1, 2},
-      100,
-      pool(),
-      false);
+      ROW({"cc0", "Cc1"}, {BIGINT(), VARCHAR()}), {1}, 100, pool(), false);
 
-  const vector_size_t size = 1'000;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
-      makeFlatVector<StringView>(
-          size,
-          [](auto row) {
-            return StringView::makeInline(DATE()->toString(18000 + row % 3));
-          }),
-      makeFlatVector<int32_t>(size, [](auto row) { return row % 7; }),
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatVector<std::string>({"apple", "orange", "apple"}),
   });
 
   raw_vector<uint64_t> firstTimeIds;
   idGenerator.run(input, firstTimeIds);
-  EXPECT_EQ("Cc1=2019-04-15/Cc2=1", idGenerator.partitionName(1));
+  EXPECT_EQ("Cc1=apple", idGenerator.partitionName(0));
+  EXPECT_EQ("Cc1=orange", idGenerator.partitionName(1));
 }
 
 TEST_F(PartitionIdGeneratorTest, numPartitions) {
