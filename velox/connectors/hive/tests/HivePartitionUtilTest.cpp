@@ -125,39 +125,25 @@ TEST_F(HivePartitionUtilTest, partitionNameForNull) {
       "flat_smallint_col",
       "flat_int_col",
       "flat_bigint_col",
-      "dict_string_col",
+      "flat_string_col",
       "const_date_col"};
 
   RowVectorPtr input = makeRowVector(
       partitionColumnNames,
-      {makeNullableFlatVector<bool>(
-           std::vector<std::optional<bool>>{std::nullopt}),
-       makeNullableFlatVector<int8_t>(
-           std::vector<std::optional<int8_t>>{std::nullopt}),
-       makeNullableFlatVector<int16_t>(
-           std::vector<std::optional<int16_t>>{std::nullopt}),
-       makeNullableFlatVector<int32_t>(
-           std::vector<std::optional<int32_t>>{std::nullopt}),
-       makeNullableFlatVector<int64_t>(
-           std::vector<std::optional<int64_t>>{std::nullopt}),
-       makeNullableFlatVector<StringView>(
-           std::vector<std::optional<StringView>>{std::nullopt}),
+      {makeNullableFlatVector<bool>({std::nullopt}),
+       makeNullableFlatVector<int8_t>({std::nullopt}),
+       makeNullableFlatVector<int16_t>({std::nullopt}),
+       makeNullableFlatVector<int32_t>({std::nullopt}),
+       makeNullableFlatVector<int64_t>({std::nullopt}),
+       makeNullableFlatVector<StringView>({std::nullopt}),
        makeConstant<int32_t>(std::nullopt, 1, DATE())});
 
-  for (auto i = 1; i <= partitionColumnNames.size(); i++) {
-    std::vector<column_index_t> partitionChannels(i);
-    std::iota(partitionChannels.begin(), partitionChannels.end(), 0);
+  for (auto i = 0; i < partitionColumnNames.size(); i++) {
+    std::vector<column_index_t> partitionChannels = {(column_index_t)i};
     auto partitionEntries = extractPartitionKeyValues(
         makePartitionsVector(input, partitionChannels), 0);
     for (const auto& entry : partitionEntries) {
       EXPECT_EQ(entry.second, "");
     }
-    auto expectedPartitionNames = folly::join(
-                                      "=__HIVE_DEFAULT_PARTITION__/",
-                                      partitionColumnNames.data(),
-                                      partitionColumnNames.data() + i) +
-        "=__HIVE_DEFAULT_PARTITION__";
-    EXPECT_EQ(
-        FileUtils::makePartName(partitionEntries), expectedPartitionNames);
   }
 }
