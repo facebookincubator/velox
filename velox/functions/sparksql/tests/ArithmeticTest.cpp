@@ -450,10 +450,10 @@ TEST_F(ArithmeticTest, hex) {
   };
   EXPECT_EQ(std::nullopt, toHexWithBigint(std::nullopt));
   EXPECT_EQ("11", toHexWithBigint(17));
-  EXPECT_EQ("1C", toHexWithBigint(28));
-  EXPECT_EQ("FFFFFFFFFFFFFFE4", toHexWithBigint(-28));
-  EXPECT_EQ("177828FED4", toHexWithBigint(100800200404L));
-  EXPECT_EQ("FFFFFFE887D7012C", toHexWithBigint(-100800200404L));
+  EXPECT_EQ("0", toHexWithBigint(0));
+  EXPECT_EQ("FFFFFFFFFFFFFFFF", toHexWithBigint(-1));
+  EXPECT_EQ("7FFFFFFFFFFFFFFF", toHexWithBigint(INT64_MAX));
+  EXPECT_EQ("8000000000000000", toHexWithBigint(INT64_MIN));
 }
 
 class LogNTest : public SparkFunctionBaseTest {

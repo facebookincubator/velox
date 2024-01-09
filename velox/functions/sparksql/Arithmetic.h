@@ -21,6 +21,7 @@
 #include <system_error>
 #include <type_traits>
 
+#include "velox/common/base/BitUtil.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
@@ -389,19 +390,18 @@ struct ToHexBigintFunction {
       out_type<Varbinary>& result,
       const arg_type<int64_t>& input) {
     static const char* const kHexTable = "0123456789ABCDEF";
+    if (input == 0) {
+      result = "0";
+      return;
+    }
 
     uint64_t num = input;
-    int32_t len = 0;
-    do {
-      len += 1;
-      num >>= 4;
-    } while (num != 0);
+    int32_t len = ((64 - bits::countLeadingZeros(num)) + 3) / 4;
 
     result.resize(len);
     char* buffer = result.data();
     const auto resultSize = len;
 
-    num = input;
     len = 0;
     do {
       len += 1;
