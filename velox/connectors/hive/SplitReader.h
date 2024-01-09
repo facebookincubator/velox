@@ -63,6 +63,7 @@ class SplitReader {
           partitionKeys,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
+      core::ExpressionEvaluator* expressionEvaluator,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStats);
@@ -77,6 +78,7 @@ class SplitReader {
           partitionKeys,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
+      core::ExpressionEvaluator* expressionEvaluator,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStats);
@@ -90,15 +92,18 @@ class SplitReader {
   /// files or log files, and add column adapatations for metadata columns
   virtual void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
+      std::shared_ptr<exec::ExprSet>& remainingFilterExprSet,
       dwio::common::RuntimeStatistics& runtimeStats);
 
-  virtual uint64_t next(int64_t size, VectorPtr& output);
+  virtual uint64_t next(uint64_t size, VectorPtr& output);
 
   void resetFilterCaches();
 
   bool emptySplit() const;
 
   void resetSplit();
+
+  std::shared_ptr<const dwio::common::TypeWithId> baseFileSchema();
 
   int64_t estimatedRowSize() const;
 
@@ -109,6 +114,12 @@ class SplitReader {
   std::string toString() const;
 
  protected:
+  void createReader();
+
+  bool testEmptySplit(dwio::common::RuntimeStatistics& runtimeStats);
+
+  void createRowReader(std::shared_ptr<common::MetadataFilter> metadataFilter);
+
   // Different table formats may have different meatadata columns. This function
   // will be used to update the scanSpec for these columns.
   virtual std::vector<TypePtr> adaptColumns(
@@ -140,13 +151,12 @@ class SplitReader {
   std::unique_ptr<dwio::common::RowReader> baseRowReader_;
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
+  core::ExpressionEvaluator* expressionEvaluator_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<HiveConfig> hiveConfig_;
   std::shared_ptr<io::IoStatistics> ioStats_;
   dwio::common::ReaderOptions baseReaderOpts_;
   dwio::common::RowReaderOptions baseRowReaderOpts_;
-
- private:
   bool emptySplit_;
 };
 
