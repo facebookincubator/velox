@@ -2110,5 +2110,48 @@ TEST_F(MinMaxByNTest, stringComparison) {
   }
 }
 
+TEST_F(MinMaxByNTest, windowOperation) {
+  // SELECT
+  //  c0, c1, c2, c3, c4,
+  //  min_by(c0, c1, c2) over (partition by c3 order by c4 asc)
+  // FROM (
+  //  VALUES
+  //      (4, 2, 1, false, 0),
+  //      (3, 1, 1, false, 0),
+  //      (2, 0, 1, false, 1),
+  //      (1, null, 1, false, 2)
+  // ) AS t(c0, c1, c2, c3, c4);
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({4, 3, 2, 1}),
+      makeNullableFlatVector<int64_t>({2, 1, 0, std::nullopt}),
+      makeFlatVector<int64_t>({1, 1, 1, 1}),
+      makeFlatVector<bool>({false, false, false, false}),
+      makeFlatVector<int64_t>({0, 0, 1, 2}),
+  });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({"min_by(c0, c1, c2) over (partition by c3 order by c4 asc)"})
+          .planNode();
+
+  // Expected result: {4, 2, 1, false, 0, [3]}, {3, 1, 1, false, 0,
+  // null}, {2, 0, 1, false, 1, [2]}, {1, null, 1, false, 2, null}.
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({4, 3, 2, 1}),
+      makeNullableFlatVector<int64_t>({2, 1, 0, std::nullopt}),
+      makeFlatVector<int64_t>({1, 1, 1, 1}),
+      makeFlatVector<bool>({false, false, false, false}),
+      makeFlatVector<int64_t>({0, 0, 1, 2}),
+      makeNullableArrayVector<int32_t>(
+          {{std::vector<std::optional<int32_t>>(1, 3)},
+           std::nullopt,
+           {std::vector<std::optional<int32_t>>(1, 2)},
+           std::nullopt}),
+  });
+  velox::test::assertEqualVectors(expected, result);
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test

@@ -646,6 +646,7 @@ class MinMaxByNAggregate : public exec::Aggregate {
     }
 
     auto [rawOffsets, rawSizes] = rawOffsetAndSizes(*valuesArray);
+    auto rawNulls = valuesArray->mutableRawNulls();
 
     vector_size_t offset = 0;
     for (auto i = 0; i < numGroups; ++i) {
@@ -655,12 +656,17 @@ class MinMaxByNAggregate : public exec::Aggregate {
         auto* accumulator = value(group);
         const vector_size_t size = accumulator->size();
 
-        rawOffsets[i] = offset;
-        rawSizes[i] = size;
+        if (size > 0) {
+          rawOffsets[i] = offset;
+          rawSizes[i] = size;
 
-        extractor->extractValues(accumulator, offset);
-
-        offset += size;
+          extractor->extractValues(accumulator, offset);
+          offset += size;
+        } else {
+          bits::setNull(rawNulls, i, true);
+        }
+      } else {
+        bits::setNull(rawNulls, i, true);
       }
     }
   }
