@@ -147,7 +147,7 @@ TEST_F(PartitionIdGeneratorTest, stableIdsMultipleKeys) {
 
 TEST_F(PartitionIdGeneratorTest, partitionKeysCaseSensitive) {
   PartitionIdGenerator idGenerator(
-      ROW({"c0", "C1", "C2"}, {BIGINT(), VARCHAR(), INTEGER()}),
+      ROW({"cc0", "Cc1", "Cc2"}, {BIGINT(), VARCHAR(), INTEGER()}),
       {1, 2},
       100,
       pool(),
@@ -166,7 +166,7 @@ TEST_F(PartitionIdGeneratorTest, partitionKeysCaseSensitive) {
 
   raw_vector<uint64_t> firstTimeIds;
   idGenerator.run(input, firstTimeIds);
-  EXPECT_EQ("C1=2019-04-15/C2=1", idGenerator.partitionName(1));
+  EXPECT_EQ("Cc1=2019-04-15/Cc2=1", idGenerator.partitionName(1));
 }
 
 TEST_F(PartitionIdGeneratorTest, numPartitions) {
