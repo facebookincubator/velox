@@ -590,7 +590,7 @@ TEST_F(DateTimeFunctionsTest, hour) {
   EXPECT_EQ(13, hour("2024-01-20 13:23:00.001"));
   EXPECT_EQ(13, hour("1969-01-01 13:23:00.001"));
 
-  // set time zone to Pacific/Apia (13 hours ahead of UTC)
+  // Set time zone to Pacific/Apia (13 hours ahead of UTC).
   setQueryTimeZone("Pacific/Apia");
 
   EXPECT_EQ(13, hour("2024-01-08 00:23:00.001"));
