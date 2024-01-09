@@ -117,3 +117,66 @@ TEST_F(HivePartitionUtilTest, partitionName) {
         "Unsupported partition type: MAP");
   }
 }
+
+TEST_F(HivePartitionUtilTest, partitionNameForNull) {
+  RowVectorPtr input = makeRowVector(
+      {"flat_bool_col",
+       "flat_tinyint_col",
+       "flat_smallint_col",
+       "flat_int_col",
+       "flat_bigint_col",
+       "dict_string_col",
+       "const_date_col"},
+      {makeNullableFlatVector<bool>(
+           std::vector<std::optional<bool>>{std::nullopt}),
+       makeNullableFlatVector<int8_t>(
+           std::vector<std::optional<int8_t>>{std::nullopt}),
+       makeNullableFlatVector<int16_t>(
+           std::vector<std::optional<int16_t>>{std::nullopt}),
+       makeNullableFlatVector<int32_t>(
+           std::vector<std::optional<int32_t>>{std::nullopt}),
+       makeNullableFlatVector<int64_t>(
+           std::vector<std::optional<int64_t>>{std::nullopt}),
+       makeNullableFlatVector<StringView>(
+           std::vector<std::optional<StringView>>{std::nullopt}),
+       makeConstant<int32_t>(std::nullopt, 1, DATE())});
+
+  std::vector<std::pair<std::string, std::string>> expectedPartitionKeyValues{
+      std::make_pair("flat_bool_col", ""),
+      std::make_pair("flat_tinyint_col", ""),
+      std::make_pair("flat_smallint_col", ""),
+      std::make_pair("flat_int_col", ""),
+      std::make_pair("flat_bigint_col", ""),
+      std::make_pair("dict_string_col", ""),
+      std::make_pair("const_date_col", "")};
+
+  std::vector<std::string> expectedPartitionNames;
+  expectedPartitionNames.reserve(expectedPartitionKeyValues.size());
+  std::transform(
+      expectedPartitionKeyValues.begin(),
+      expectedPartitionKeyValues.end(),
+      std::back_inserter(expectedPartitionNames),
+      [](const std::pair<std::string, std::string>& p) {
+        return p.first + "=__HIVE_DEFAULT_PARTITION__";
+      });
+
+  std::vector<column_index_t> partitionChannels;
+  for (auto i = 1; i <= expectedPartitionKeyValues.size(); i++) {
+    partitionChannels.resize(i);
+    std::iota(partitionChannels.begin(), partitionChannels.end(), 0);
+
+    auto partitionEntries = extractPartitionKeyValues(
+        makePartitionsVector(input, partitionChannels), 0);
+    for (auto j = 0; j < partitionEntries.size(); j++) {
+      EXPECT_EQ(partitionEntries[j], expectedPartitionKeyValues[j]);
+    }
+
+    EXPECT_EQ(
+        FileUtils::makePartName(partitionEntries),
+        folly::join(
+            "/",
+            std::vector<std::string>(
+                expectedPartitionNames.data(),
+                expectedPartitionNames.data() + i)));
+  }
+}
