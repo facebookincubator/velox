@@ -396,13 +396,11 @@ struct ToHexBigintFunction {
     }
 
     uint64_t num = input;
-    int32_t len = ((64 - bits::countLeadingZeros(num)) + 3) / 4;
-
-    result.resize(len);
+    const auto resultSize = ((64 - bits::countLeadingZeros(num)) + 3) / 4;
+    result.resize(resultSize);
     char* buffer = result.data();
-    const auto resultSize = len;
 
-    len = 0;
+    int32_t len = 0;
     do {
       len += 1;
       buffer[resultSize - len] = kHexTable[num & 0xF];
