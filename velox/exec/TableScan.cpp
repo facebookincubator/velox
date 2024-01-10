@@ -256,7 +256,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
        ctx = operatorCtx_->createConnectorQueryCtx(
            split->connectorId, planNodeId(), connectorPool_),
        task = operatorCtx_->task(),
-       &pendingDynamicFilters = pendingDynamicFilters_,
+       pendingDynamicFilters = pendingDynamicFilters_,
        split]() -> std::unique_ptr<connector::DataSource> {
         if (task->isCancelled()) {
           return nullptr;
