@@ -242,36 +242,6 @@ time (instead of a space), and the year part is not padded.</p></td>
 <td><p>false</p></td>
 <td><p>This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.</p></td>
 </tr>
-<tr class="row-even"><td><p>cast_to_int_by_truncate</p></td>
-<td><p>bool</p></td>
-<td><p>false</p></td>
-<td><p>This flags forces the cast from float/double/decimal/string to integer to be performed by truncating the decimal part instead of rounding.</p></td>
-</tr>
-<tr class="row-odd"><td><p>cast_string_to_date_is_iso_8601</p></td>
-<td><p>bool</p></td>
-<td><p>true</p></td>
-<td><p>If set, cast from string to date allows only ISO 8601 formatted strings: <code class="docutils literal notranslate"><span class="pre">[+-](YYYY-MM-DD)</span></code>.
-Otherwise, allows all patterns supported by Spark:</p>
-<blockquote>
-<div><ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">[+-]yyyy*</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">[+-]yyyy*-[m]m</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">[+-]yyyy*-[m]m-[d]d</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">[+-]yyyy*-[m]m-[d]d</span> <span class="pre">*</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">[+-]yyyy*-[m]m-[d]dT*</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>The asterisk <code class="docutils literal notranslate"><span class="pre">*</span></code> in <code class="docutils literal notranslate"><span class="pre">yyyy*</span></code> stands for any numbers.
-For the last two patterns, the trailing <code class="docutils literal notranslate"><span class="pre">*</span></code> can represent none or any sequence of characters, e.g:</p>
-<blockquote>
-<div><ul class="simple">
-<li><p>“1970-01-01 123”</p></li>
-<li><p>“1970-01-01 (BC)”</p></li>
-</ul>
-</div></blockquote>
-<p>Regardless of this setting’s value, leading spaces will be trimmed.</p>
-</td>
-</tr>
 </tbody>
 </table>
 </section>
