@@ -551,13 +551,43 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     int32_t precision =
         schemaElement.__isset.precision ? schemaElement.precision : 0;
     int32_t scale = schemaElement.__isset.scale ? schemaElement.scale : 0;
-    int32_t type_length =
+    int32_t typeLength =
         schemaElement.__isset.type_length ? schemaElement.type_length : 0;
     std::vector<std::unique_ptr<dwio::common::TypeWithId>> children;
-    const std::optional<thrift::LogicalType> logicalType_ =
+    std::optional<thrift::LogicalType> logicalType_ =
         schemaElement.__isset.logicalType
         ? std::optional<thrift::LogicalType>(schemaElement.logicalType)
         : std::nullopt;
+
+    if (veloxType->kind() == TypeKind::TIMESTAMP &&
+        schemaElement.type == thrift::Type::INT64 &&
+        !logicalType_.has_value()) {
+      // Construct logical type from deprecated converted type of Parquet.
+      thrift::TimestampType timestamp;
+      timestamp.__set_isAdjustedToUTC(true);
+      thrift::TimeUnit unit;
+
+      if (schemaElement.converted_type ==
+          thrift::ConvertedType::TIMESTAMP_MICROS) {
+        thrift::MicroSeconds micros;
+        unit.__set_MICROS(micros);
+      } else if (
+          schemaElement.converted_type ==
+          thrift::ConvertedType::TIMESTAMP_MILLIS) {
+        thrift::MilliSeconds millis;
+        unit.__set_MILLIS(millis);
+      } else {
+        VELOX_NYI(
+            "{} Timestamp unit not supported.", schemaElement.converted_type);
+      }
+
+      timestamp.__set_unit(unit);
+      thrift::LogicalType newLogicalType;
+      newLogicalType.__set_TIMESTAMP(timestamp);
+
+      logicalType_ = std::optional<thrift::LogicalType>(newLogicalType);
+    }
+
     auto leafTypePtr = std::make_unique<ParquetTypeWithId>(
         veloxType,
         std::move(children),
@@ -573,7 +603,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         isRepeated,
         precision,
         scale,
-        type_length);
+        typeLength);
 
     if (schemaElement.repetition_type ==
         thrift::FieldRepetitionType::REPEATED) {
