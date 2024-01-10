@@ -76,9 +76,7 @@ struct ArrayMinSimpleFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(
-      TInput& out,
-      const arg_type<Array<TInput>>& array) {
+  bool call(TInput& out, const arg_type<Array<TInput>>& array) {
     if (array.size() == 0) {
       return false; // NULL
     }
@@ -112,7 +110,7 @@ struct ArrayMinDefaultContainsNullsBehaviorFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool callNullFree(
+  bool callNullFree(
       TInput& out,
       const null_free_arg_type<Array<TInput>>& array) {
     if (array.size() == 0) {
@@ -136,9 +134,7 @@ struct ArrayMinNullFreeFastPathFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(
-      TInput& out,
-      const arg_type<Array<TInput>>& array) {
+  bool call(TInput& out, const arg_type<Array<TInput>>& array) {
     if (array.size() == 0) {
       return false; // NULL
     }
@@ -167,7 +163,7 @@ struct ArrayMinNullFreeFastPathFunction {
   }
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool callNullFree(
+  bool callNullFree(
       TInput& out,
       const null_free_arg_type<Array<TInput>>& array) {
     if (array.size() == 0) {

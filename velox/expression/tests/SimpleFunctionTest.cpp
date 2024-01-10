@@ -222,9 +222,7 @@ template <typename T>
 struct ArrayReaderFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      int64_t& out,
-      const arg_type<Array<int64_t>>& input) {
+  bool call(int64_t& out, const arg_type<Array<int64_t>>& input) {
     out = 0;
     for (const auto& v : input) {
       if (v) {
@@ -251,9 +249,7 @@ template <typename T>
 struct ArrayArrayReaderFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      int64_t& out,
-      const arg_type<Array<Array<int64_t>>>& input) {
+  bool call(int64_t& out, const arg_type<Array<Array<int64_t>>>& input) {
     out = 0;
     for (const auto& inner : input) {
       if (inner) {
@@ -294,7 +290,7 @@ template <typename T>
 struct RowWriterFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Row<int64_t, double>>& out,
       const arg_type<int64_t>& input) {
     out = std::make_tuple(rowVectorCol1[input], rowVectorCol2[input]);
@@ -322,9 +318,7 @@ template <typename T>
 struct RowReaderFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      int64_t& out,
-      const arg_type<Row<int64_t, double>>& input) {
+  bool call(int64_t& out, const arg_type<Row<int64_t, double>>& input) {
     out = *input.template at<0>();
     return true;
   }
@@ -349,9 +343,7 @@ template <typename T>
 struct RowArrayReaderFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      int64_t& out,
-      const arg_type<Row<Array<int64_t>, double>>& input) {
+  bool call(int64_t& out, const arg_type<Row<Array<int64_t>, double>>& input) {
     out = 0;
     const auto& arrayInput = *input.template at<0>();
     for (const auto& v : arrayInput) {
@@ -390,7 +382,7 @@ template <typename T>
 struct ArrayRowWriterFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Array<Row<int64_t, double>>>& out,
       const arg_type<int32_t>& input) {
     // Appends each row three times.
@@ -431,9 +423,7 @@ template <typename T>
 struct ArrayRowReaderFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      int64_t& out,
-      const arg_type<Array<Row<int64_t, double>>>& input) {
+  bool call(int64_t& out, const arg_type<Array<Row<int64_t, double>>>& input) {
     out = 0;
     for (size_t i = 0; i < input.size(); i++) {
       auto&& row = *input.at(i);
@@ -477,7 +467,7 @@ template <typename T>
 struct RowOpaqueWriterFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Row<std::shared_ptr<MyType>, int64_t>>& out,
       const arg_type<int64_t>& input) {
     out.template get_writer_at<0>() =
@@ -519,7 +509,7 @@ template <typename T>
 struct RowOpaqueReaderFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       int64_t& out,
       const arg_type<Row<std::shared_ptr<MyType>, int64_t>>& input) {
     const auto& myType = *input.template at<0>();
@@ -555,7 +545,7 @@ template <typename T>
 struct DefaultNullBehaviorFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(out_type<bool>&, int64_t) {
+  bool call(out_type<bool>&, int64_t) {
     throw std::runtime_error(
         "Function not supposed to be called on null inputs.");
     return true;
@@ -608,14 +598,14 @@ TEST_F(SimpleFunctionTest, nonDefaultNullBehavior) {
 // Ensure that functions can return null (return false).
 template <typename T>
 struct ReturnNullCallFunction {
-  FOLLY_ALWAYS_INLINE bool call(bool& out, const int64_t& input) {
+  bool call(bool& out, const int64_t& input) {
     return false;
   }
 };
 
 template <typename T>
 struct ReturnNullCallNullableFunction {
-  FOLLY_ALWAYS_INLINE bool callNullable(bool& out, const int64_t* input) {
+  bool callNullable(bool& out, const int64_t* input) {
     return false;
   }
 };

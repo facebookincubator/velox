@@ -40,7 +40,7 @@ template <typename T>
 struct JsonExtractScalarFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Varchar>& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
@@ -62,7 +62,7 @@ template <typename T>
 struct JsonExtractFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Json>& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
@@ -86,7 +86,7 @@ template <typename T>
 struct JsonArrayLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Json>& json) {
+  bool call(int64_t& result, const arg_type<Json>& json) {
     auto parsedJson = folly::parseJson(json);
     if (!parsedJson.isArray()) {
       return false;
@@ -141,7 +141,7 @@ template <typename T>
 struct JsonSizeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       int64_t& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {

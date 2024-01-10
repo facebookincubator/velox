@@ -106,7 +106,7 @@ struct ArrayMinMaxFunction {
   }
 
   template <typename TReturn, typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TReturn& out, const TInput& array) {
+  bool call(TReturn& out, const TInput& array) {
     // Result is null if array is empty.
     if (array.size() == 0) {
       return false;
@@ -196,7 +196,7 @@ struct ArrayJoinFunction {
     }
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<velox::Varchar>& result,
       const arg_type<velox::Array<T>>& inputArray,
       const arg_type<velox::Varchar>& delim) {
@@ -204,7 +204,7 @@ struct ArrayJoinFunction {
     return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<velox::Varchar>& result,
       const arg_type<velox::Array<T>>& inputArray,
       const arg_type<velox::Varchar>& delim,
@@ -377,9 +377,7 @@ template <typename T>
 struct ArrayAverageFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      double& out,
-      const arg_type<Array<double>>& array) {
+  bool call(double& out, const arg_type<Array<double>>& array) {
     // If the array is empty, then set result to null.
     if (array.size() == 0) {
       return false;
@@ -399,7 +397,7 @@ struct ArrayAverageFunction {
     return count != 0;
   }
 
-  FOLLY_ALWAYS_INLINE bool callNullFree(
+  bool callNullFree(
       double& out,
       const null_free_arg_type<Array<double>>& array) {
     // If the array is empty, then set result to null.

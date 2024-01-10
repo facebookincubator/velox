@@ -222,9 +222,7 @@ struct UrlExtractProtocolFunction {
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
 
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<Varchar>& result,
-      const arg_type<Varchar>& url) {
+  bool call(out_type<Varchar>& result, const arg_type<Varchar>& url) {
     if (!isValidURI(url)) {
       return false;
     }

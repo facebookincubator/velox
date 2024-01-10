@@ -139,7 +139,7 @@ an array:
     VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
 
     template <typename TInput>
-    FOLLY_ALWAYS_INLINE bool callNullFree(
+    bool callNullFree(
         TInput& out,
         const null_free_arg_type<Array<TInput>>& array) {
       out = INT32_MAX;
@@ -433,7 +433,7 @@ The code below shows an example of a function that concatenates a variable numbe
      struct VariadicArgsReaderFunction {
        VELOX_DEFINE_FUNCTION_TYPES(T);
 
-       FOLLY_ALWAYS_INLINE bool call(
+       bool call(
            out_type<Varchar>& out,
            const arg_type<Variadic<Varchar>>& inputs) {
          for (const auto& input : inputs) {

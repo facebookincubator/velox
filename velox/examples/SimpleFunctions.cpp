@@ -156,7 +156,7 @@ template <typename T>
 struct MyNonDeterministicFunction {
   static constexpr bool is_deterministic = false;
 
-  FOLLY_ALWAYS_INLINE bool call(double& result) {
+  bool call(double& result) {
     result = folly::Random::randDouble01();
     return true;
   }
@@ -288,9 +288,7 @@ struct MySimpleSplitFunction {
 
   const char splitChar{' '};
 
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<Array<Varchar>>& out,
-      const arg_type<Varchar>& input) {
+  bool call(out_type<Array<Varchar>>& out, const arg_type<Varchar>& input) {
     auto start = input.begin();
     auto cur = start;
 
@@ -405,7 +403,7 @@ struct MyComplexTimesTwoFunction {
   // complex types. This one takes and returns an Array. Arrays proxy objects
   // are currently implemented based on std::vector. Vector elements are
   // currently wrapped by std::optional to represent their nullability.
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Array<int64_t>>& result,
       const arg_type<Array<int64_t>>& inputArray) {
     result.reserve(inputArray.size());
@@ -417,7 +415,7 @@ struct MyComplexTimesTwoFunction {
 
   // This method takes and returns a Map. Map proxy objects are implemented
   // using std::unordered_map; values are wrapped by std::optional.
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Map<int64_t, double>>& result,
       const arg_type<Map<int64_t, double>>& inputMap) {
     result.reserve(inputMap.size());
@@ -430,7 +428,7 @@ struct MyComplexTimesTwoFunction {
 
   // Takes and returns a Row. Rows are backed by std::tuple; individual elements
   // are std::optional.
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Row<int64_t, double>>& result,
       const arg_type<Row<int64_t, double>>& inputRow) {
     const auto& elem0 = inputRow.template at<0>();

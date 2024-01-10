@@ -194,9 +194,7 @@ template <typename T>
 struct MapSumValuesAndKeysSimple {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      int64_t& out,
-      const arg_type<Map<int64_t, int64_t>>& map) {
+  bool call(int64_t& out, const arg_type<Map<int64_t, int64_t>>& map) {
     out = 0;
     for (const auto& entry : map) {
       out += entry.first;
@@ -210,7 +208,7 @@ template <typename T>
 struct NestedMapSumValuesAndKeysSimple {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       int64_t& out,
       const arg_type<Map<int64_t, Map<int64_t, int64_t>>>& map) {
     out = 0;
@@ -229,7 +227,7 @@ template <typename T>
 struct NestedMapSumStructBind {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       int64_t& out,
       const arg_type<Map<int64_t, Map<int64_t, int64_t>>>& map) {
     out = 0;
