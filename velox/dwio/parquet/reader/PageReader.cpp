@@ -582,6 +582,28 @@ void PageReader::decodeRepDefs(int32_t numTopLevelRows) {
   }
 }
 
+int32_t PageReader::getLeafNulls(int16_t maxDefLevel, int32_t begin, int32_t end, uint64_t* nulls, int32_t nullsStartIndex) const {
+  VELOX_CHECK(begin == 0, "not support begin not 0");
+  int32_t valueExistIndex = 0;
+  for(int i = begin; i < end; i++) {
+    int16_t def = definitionLevels_[i];
+
+    // value exist
+    if (def >= maxDefLevel - 1) {
+      // set not null
+      if (def == maxDefLevel) {
+        bits::setBit(nulls, valueExistIndex, true);
+      } else {
+        // set null
+        VELOX_CHECK_EQ(def, maxDefLevel - 1, "def level error")
+        bits::setBit(nulls, valueExistIndex, false);
+      }
+      valueExistIndex++;
+    }
+  }
+  return valueExistIndex;
+}
+
 int32_t PageReader::getLengthsAndNulls(
     LevelMode mode,
     const arrow::LevelInfo& info,
@@ -600,8 +622,7 @@ int32_t PageReader::getLengthsAndNulls(
 
   switch (mode) {
     case LevelMode::kNulls:
-      DefLevelsToBitmap(
-          definitionLevels_.data() + begin, end - begin, info, &bits);
+      return getLeafNulls(info.def_level, begin, end, nulls, nullsStartIndex);
       break;
     case LevelMode::kList: {
       arrow::DefRepLevelsToList(

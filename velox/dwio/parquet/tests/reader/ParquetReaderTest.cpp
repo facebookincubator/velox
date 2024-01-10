@@ -892,3 +892,47 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
     }
   }
 }
+
+TEST_F(ParquetReaderTest, testArray) {
+  const std::string sample(getExampleFilePath("test_array.parquet"));
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 12ULL);
+
+  // Verify schema is ROW<test:ARRAY<INTEGER>>.
+  auto rowType = reader->typeWithId();
+  EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(rowType->size(), 1ULL);
+
+  auto arrayType = rowType->childAt(0);
+  EXPECT_EQ(arrayType->type()->kind(), TypeKind::ARRAY);
+
+  auto integerType = arrayType->childAt(0);
+  EXPECT_EQ(integerType->type()->kind(), TypeKind::INTEGER);
+
+  auto fileSchema = ROW({"test"}, {createType<TypeKind::ARRAY>({INTEGER()})});
+  auto rowReaderOpts = getReaderOpts(fileSchema);
+  auto scanSpec = makeScanSpec(fileSchema);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    auto arrayVector = makeNullableArrayVector<int32_t>(
+          {{1, std::nullopt, 3},
+           {5},
+           {std::nullopt, std::nullopt, std::nullopt},
+           {},
+           {7, 11},
+            {std::nullopt},
+            {13},
+            {17},
+            {1, std::nullopt, 3},
+            {5},
+            {std::nullopt, std::nullopt, std::nullopt, 7},
+            {11, std::nullopt, 13}});
+
+   auto expected = makeRowVector({arrayVector});
+
+  assertReadWithReaderAndExpected(fileSchema, *rowReader, expected,
+  *leafPool_);
+}
