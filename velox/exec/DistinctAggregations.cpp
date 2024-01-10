@@ -201,16 +201,17 @@ class TypedDistinctAggregations : public DistinctAggregations {
 
   void extractForSpill(folly::Range<char**> groups, VectorPtr& result) const {
     auto* arrayVector = result->as<ArrayVector>();
-    arrayVector->resize(groups.size());
+    const auto groupsSize = groups.size();
+    arrayVector->resize(groupsSize);
 
     auto* rawOffsets =
-        arrayVector->mutableOffsets(groups.size())->asMutable<vector_size_t>();
+        arrayVector->mutableOffsets(groupsSize)->asMutable<vector_size_t>();
     auto* rawSizes =
-        arrayVector->mutableSizes(groups.size())->asMutable<vector_size_t>();
+        arrayVector->mutableSizes(groupsSize)->asMutable<vector_size_t>();
 
     size_t totalBytes = 0;
     vector_size_t offset = 0;
-    for (auto i = 0; i < groups.size(); ++i) {
+    for (auto i = 0; i < groupsSize; ++i) {
       auto* accumulator =
           reinterpret_cast<AccumulatorType*>(groups[i] + offset_);
       rawSizes[i] = accumulator->maxSpillSize();
@@ -222,12 +223,12 @@ class TypedDistinctAggregations : public DistinctAggregations {
     auto& elementsVector = arrayVector->elements();
     elementsVector->resize(totalBytes);
 
-    auto* flatVector = arrayVector->elements()->asFlatVector<StringView>();
+    auto* flatVector = elementsVector->asFlatVector<StringView>();
     flatVector->resize(1);
     auto* rawBuffer = flatVector->getRawStringBufferWithSpace(totalBytes, true);
 
     offset = 0;
-    for (auto i = 0; i < groups.size(); ++i) {
+    for (auto i = 0; i < groupsSize; ++i) {
       auto* accumulator =
           reinterpret_cast<AccumulatorType*>(groups[i] + offset_);
 
