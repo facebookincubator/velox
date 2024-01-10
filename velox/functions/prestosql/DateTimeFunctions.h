@@ -502,13 +502,15 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
       out_type<TimestampWithTimezone>& result,
       const arg_type<TimestampWithTimezone>& tsWithTz,
       const arg_type<Varchar>& timeZone) {
+
     auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
     auto zone = date::locate_zone(timeZoneStr);
-    std::chrono::system_clock::time_point tp{
-        std::chrono::seconds{ts.getSeconds()}};
 
-    const auto inputMs = *timestampWithTimezone.template at<0>();
-    const auto inputTz = *timestampWithTimezone.template at<1>();
+    const auto inputMs = *tsWithTz.template at<0>();
+    const auto inputTz = *tsWithTz.template at<1>();
+
+    std::chrono::system_clock::time_point tp{
+    std::chrono::seconds{(inputMs/1000)}};
 
     // We are to interpret the input timestamp as being at GMT;
     // Africa/Abidjan has offset +00:00; use this timezone to establish GMT as
