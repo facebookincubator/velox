@@ -4741,6 +4741,7 @@ TEST_F(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
 
   // Prepare probe side table.
   std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  std::vector<exec::Split> probeSplits;
   for (int32_t i = 0; i < numSplits; ++i) {
     auto rowVector = makeRowVector(
         {"p0", "p1"},
@@ -4752,24 +4753,12 @@ TEST_F(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
     writeToFile(tempFiles.back()->path, rowVector);
+    auto split = HiveConnectorSplitBuilder(tempFiles.back()->path)
+                     .partitionKey("p1", std::to_string(i))
+                     .build();
+    probeSplits.push_back(exec::Split(split));
   }
 
-  auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
-    return [&] {
-      std::vector<exec::Split> probeSplits;
-      for (int32_t i = 0; i < numSplits; ++i) {
-        auto value = std::to_string(i);
-        auto split = facebook::velox::exec::test::HiveConnectorSplitBuilder(
-                         tempFiles[i]->path)
-                         .partitionKey("p1", value)
-                         .build();
-        probeSplits.push_back(exec::Split(split));
-      }
-      SplitInput splits;
-      splits.emplace(nodeId, probeSplits);
-      return splits;
-    };
-  };
   auto outputType = ROW({"p0", "p1"}, {BIGINT(), BIGINT()});
   ColumnHandleMap assignments = {
       {"p0", regularColumn("p0", BIGINT())},
@@ -4805,25 +4794,24 @@ TEST_F(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
           .capturePlanNodeId(joinNodeId)
           .project({"p0"})
           .planNode();
+  SplitInput splits = {{probeScanId, probeSplits}};
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
       .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "3")
-      .makeInputSplits(makeInputSplits(probeScanId))
+      .injectSpill(false)
+      .inputSplits(splits)
       .referenceQuery("select p.p0 from p, b where b.b0 = p.p1")
       .checkSpillStats(false)
-      .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-        SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
-        if (!hasSpill) {
-          auto planStats = toPlanStats(task->taskStats());
-          auto getStatSum = [&](const core::PlanNodeId& id,
-                                const std::string& name) {
-            return planStats.at(id).customStats.at(name).sum;
-          };
-          ASSERT_EQ(1, getStatSum(joinNodeId, "dynamicFiltersProduced"));
-          ASSERT_EQ(1, getStatSum(probeScanId, "dynamicFiltersAccepted"));
-          ASSERT_EQ(4, getStatSum(probeScanId, "skippedSplits"));
-          ASSERT_LT(1, getStatSum(probeScanId, "preloadedSplits"));
-        }
+      .verifier([&](const std::shared_ptr<Task>& task, bool /*hasSpill*/) {
+        auto planStats = toPlanStats(task->taskStats());
+        auto getStatSum = [&](const core::PlanNodeId& id,
+                              const std::string& name) {
+          return planStats.at(id).customStats.at(name).sum;
+        };
+        ASSERT_EQ(1, getStatSum(joinNodeId, "dynamicFiltersProduced"));
+        ASSERT_EQ(1, getStatSum(probeScanId, "dynamicFiltersAccepted"));
+        ASSERT_EQ(4, getStatSum(probeScanId, "skippedSplits"));
+        ASSERT_LT(1, getStatSum(probeScanId, "preloadedSplits"));
       })
       .run();
 }
