@@ -134,4 +134,12 @@ inline Timestamp fromTimestampString(const StringView& str) {
 
 Timestamp fromDatetime(int64_t daysSinceEpoch, int64_t microsSinceMidnight);
 
+inline Timestamp fromUTCMillisParquet(int64_t millis) {
+  return Timestamp(millis / 1000, (millis % 1000) * 1000000);
+}
+
+inline Timestamp fromUTCMicrosParquet(int64_t micros) {
+  return Timestamp(micros / 1000000, (micros % 1000000) * 1000);
+}
+
 } // namespace facebook::velox::util
