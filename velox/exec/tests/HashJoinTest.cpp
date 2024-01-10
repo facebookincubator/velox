@@ -4775,7 +4775,8 @@ TEST_F(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
   // first one are expected to be pruned. The result 'preloadedSplits' > 1
   // confirms the successful push of dynamic filters to the preloading data
   // source.
-  core::PlanNodeId probeScanId, joinNodeId;
+  core::PlanNodeId probeScanId;
+  core::PlanNodeId joinNodeId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto op =
       PlanBuilder(planNodeIdGenerator)
@@ -4794,12 +4795,11 @@ TEST_F(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
           .capturePlanNodeId(joinNodeId)
           .project({"p0"})
           .planNode();
-  SplitInput splits = {{probeScanId, probeSplits}};
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
       .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "3")
       .injectSpill(false)
-      .inputSplits(splits)
+      .inputSplits({{probeScanId, probeSplits}})
       .referenceQuery("select p.p0 from p, b where b.b0 = p.p1")
       .checkSpillStats(false)
       .verifier([&](const std::shared_ptr<Task>& task, bool /*hasSpill*/) {
