@@ -28,7 +28,7 @@ ARG PRESTO_CLI_JAR=presto-cli-$PRESTO_VERSION-executable.jar
 ENV PRESTO_HOME="/opt/presto-server"
 RUN cp $PRESTO_CLI_JAR /opt/presto-cli
 
-RUN dnf install -y java-11-openjdk less procps python3 \
+RUN dnf install -y java-11-openjdk less procps python3 tzdata \
     && ln -s $(which python3) /usr/bin/python \
     && tar -zxf $PRESTO_PKG \
     && mv ./presto-server-$PRESTO_VERSION $PRESTO_HOME \
@@ -38,6 +38,10 @@ RUN dnf install -y java-11-openjdk less procps python3 \
     && mkdir -p $PRESTO_HOME/etc/catalog \
     && mkdir -p $PRESTO_HOME/etc/data \
     && mkdir -p /usr/lib/presto/utils
+
+
+# Setting timezone to deal with Velox timezone conversion problem
+ENV TZ=America/Bahia_Banderas
 
 COPY scripts/etc/config.properties.example $PRESTO_HOME/etc/config.properties
 COPY scripts/etc/jvm.config.example $PRESTO_HOME/etc/jvm.config

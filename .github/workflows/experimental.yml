@@ -84,7 +84,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: aggregation
-          path: velox/_build/debug/velox/exec/tests/velox_aggregation_fuzzer_test
+          path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
 
       - name: Upload spark fuzzer
         uses: actions/upload-artifact@v3
@@ -115,12 +115,9 @@ jobs:
         with:
           name: aggregation
 
-      - name: "Start Presto Java"
-        - run: |
-            - /opt/start-prestojava.sh
-
       - name: "Run Aggregate Fuzzer"
         run: |
+          /opt/start-prestojava.sh 2>&1 >> /tmp/server.log &
           mkdir -p /tmp/aggregate_fuzzer_repro/
           rm -rfv /tmp/aggregate_fuzzer_repro/*
           chmod -R 777 /tmp/aggregate_fuzzer_repro
@@ -134,6 +131,7 @@ jobs:
                 --enable_sorted_aggregations=true \
                 --presto_url=http://127.0.0.1:8080 \
           && echo -e "\n\nAggregation fuzzer run finished successfully."
+
       - name: Archive aggregate production artifacts
         if: always()
         uses: actions/upload-artifact@v3
