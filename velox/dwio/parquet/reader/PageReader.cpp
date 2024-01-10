@@ -345,8 +345,10 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           ? sizeof(float)
           : sizeof(double);
       auto numBytes = dictionary_.numValues * typeSize;
-      if (type_->type()->isShortDecimal() &&
-          parquetType == thrift::Type::INT32) {
+      if ((type_->type()->isShortDecimal() &&
+           parquetType == thrift::Type::INT32) ||
+          (type_->type()->isTimestamp() &&
+           parquetType == thrift::Type::INT64)) {
         auto veloxTypeLength = type_->type()->cppSizeInBytes();
         auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
         dictionary_.values =
@@ -372,6 +374,32 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           // Expand the Parquet type length values to Velox type length.
           // We start from the end to allow in-place expansion.
           values[i] = parquetValues[i];
+        }
+      } else if (
+          type_->type()->isTimestamp() && parquetType == thrift::Type::INT64) {
+        VELOX_CHECK(type_->logicalType_.has_value());
+        auto logicalType = type_->logicalType_.value();
+        if (logicalType.__isset.TIMESTAMP) {
+          if (!logicalType.TIMESTAMP.isAdjustedToUTC) {
+            VELOX_NYI("Only UTC adjusted Timestamp is supported.");
+          }
+          auto values = dictionary_.values->asMutable<Timestamp>();
+          auto parquetValues = dictionary_.values->asMutable<char>();
+          int64_t units;
+
+          if (logicalType.TIMESTAMP.unit.__isset.MICROS) {
+            for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
+              memcpy(&units, parquetValues + i * typeSize, typeSize);
+              values[i] = Timestamp::fromMicros(units);
+            }
+          } else if (logicalType.TIMESTAMP.unit.__isset.MILLIS) {
+            for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
+              memcpy(&units, parquetValues + i * typeSize, typeSize);
+              values[i] = Timestamp::fromMillis(units);
+            }
+          } else {
+            VELOX_NYI("Nano Timestamp unit is not supported.");
+          }
         }
       }
       break;
@@ -679,6 +707,32 @@ void PageReader::makeDecoder() {
                     true);
           }
           break;
+        case thrift::Type::INT64: {
+          std::optional<TimestampPrecision> precisionUnit;
+          if (type_->logicalType_.has_value() &&
+              type_->logicalType_.value().__isset.TIMESTAMP) {
+            auto logicalType = type_->logicalType_.value();
+
+            VELOX_CHECK(
+                logicalType.TIMESTAMP.isAdjustedToUTC,
+                "Only UTC adjusted Timestamp is supported.");
+            VELOX_CHECK(
+                !logicalType.TIMESTAMP.unit.__isset.NANOS,
+                "Nano Timestamp unit not supported.");
+
+            precisionUnit = logicalType.TIMESTAMP.unit.__isset.MICROS
+                ? TimestampPrecision::kMicroseconds
+                : TimestampPrecision::kMilliseconds;
+          }
+
+          directDecoder_ = std::make_unique<dwio::common::DirectDecoder<true>>(
+              std::make_unique<dwio::common::SeekableArrayInputStream>(
+                  pageData_, encodedDataSize_),
+              false,
+              parquetTypeBytes(type_->parquetType_.value()),
+              false,
+              precisionUnit);
+        } break;
         default: {
           directDecoder_ = std::make_unique<dwio::common::DirectDecoder<true>>(
               std::make_unique<dwio::common::SeekableArrayInputStream>(
