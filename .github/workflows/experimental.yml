@@ -47,7 +47,7 @@ permissions:
 
 jobs:
   compile:
-    runs-on: 16-core
+    runs-on: 8-core
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
@@ -209,6 +209,7 @@ jobs:
 
       - name: "Run Join Fuzzer"
         run: |
+          ls /lib64
           mkdir -p /tmp/join_fuzzer_repro/
           rm -rfv /tmp/join_fuzzer_repro/*
           chmod -R 777 /tmp/join_fuzzer_repro
