@@ -15,7 +15,12 @@
  */
 #pragma once
 
+#include <time.h>
+#include <chrono>
+#include <string>
 #include <string_view>
+#include "velox/external/date/date.h"
+#include "velox/external/date/tz.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -461,6 +466,67 @@ struct TimestampMinusIntervalDayTime {
 #endif
   {
     result = Timestamp::fromMillisNoError(a.toMillis() - b);
+  }
+};
+
+template <typename T>
+struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<Timestamp>& ts,
+      const arg_type<Varchar>& timeZone) {
+    auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
+    auto zone = date::locate_zone(timeZoneStr);
+    std::chrono::system_clock::time_point tp{
+        std::chrono::seconds{ts.getSeconds()}};
+
+    // We are to interpret the input timestamp as being at GMT;
+    // Africa/Abidjan has offset +00:00; use this timezone to establish GMT as
+    // our starting offset.
+    auto startZonedTime = date::make_zoned("Africa/Abidjan", tp);
+
+    // Find corresponding time at input timezone.
+    auto adjustedZonedTime = date::make_zoned(zone, startZonedTime);
+    auto localTime = adjustedZonedTime.get_local_time();
+    auto adjustedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+                               localTime.time_since_epoch())
+                               .count();
+
+    result.template get_writer_at<0>() = adjustedSeconds;
+    result.template get_writer_at<1>() = util::getTimeZoneID(timeZoneStr);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<TimestampWithTimezone>& tsWithTz,
+      const arg_type<Varchar>& timeZone) {
+    auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
+    auto zone = date::locate_zone(timeZoneStr);
+    std::chrono::system_clock::time_point tp{
+        std::chrono::seconds{ts.getSeconds()}};
+
+    const auto inputMs = *timestampWithTimezone.template at<0>();
+    const auto inputTz = *timestampWithTimezone.template at<1>();
+
+    // We are to interpret the input timestamp as being at GMT;
+    // Africa/Abidjan has offset +00:00; use this timezone to establish GMT as
+    // our starting offset.
+    auto startZonedTime = date::make_zoned("Africa/Abidjan", tp);
+
+    // Find corresponding time at input timezone.
+    auto adjustedZonedTime = date::make_zoned(zone, startZonedTime);
+    auto localTime = adjustedZonedTime.get_local_time();
+    auto adjustedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+                               localTime.time_since_epoch())
+                               .count();
+
+    // theory is that the milliseconds part of TimestampWithTimezone always 
+    // contains milliseconds relative to GMT - so the input and output TimestampWithTimezones should
+    // not have different millisecond values (<0>), just timezone <1> should differ
+    result.template get_writer_at<0>() = inputMs;
+    result.template get_writer_at<1>() = util::getTimeZoneID(timeZoneStr);
   }
 };
 

@@ -120,6 +120,26 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         rowVector->children()[1]->as<SimpleVector<int16_t>>()->valueAt(0)};
   }
 
+  std::optional<TimestampWithTimezone> timestampAtTimezone(
+      const std::optional<Timestamp> t1,
+      const std::optional<std::string>& t2) {
+    auto resultVector = evaluate(
+        "timezone(c0, c1)",
+        makeRowVector(
+            {makeNullableFlatVector<Timestamp>({t1}),
+             makeNullableFlatVector<std::string>({t2})}));
+    EXPECT_EQ(1, resultVector->size());
+
+    if (resultVector->isNullAt(0)) {
+      return std::nullopt;
+    }
+
+    auto rowVector = resultVector->as<RowVector>();
+    return TimestampWithTimezone{
+        rowVector->children()[0]->as<SimpleVector<int64_t>>()->valueAt(0),
+        rowVector->children()[1]->as<SimpleVector<int16_t>>()->valueAt(0)};
+  }
+
   std::optional<Timestamp> dateParse(
       const std::optional<std::string>& input,
       const std::optional<std::string>& format) {
@@ -949,6 +969,43 @@ TEST_F(DateTimeFunctionsTest, minusTimestamp) {
   VELOX_ASSERT_THROW(
       minus(Timestamp::kMinSeconds, Timestamp::kMaxSeconds),
       "Could not convert Timestamp(-9223372036854776, 0) to milliseconds");
+}
+
+TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTest) {
+  // GMT -06:00, -21600 sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          1500101514 - 21600, util::getTimeZoneID("America/Boise")),
+      timestampAtTimezone(Timestamp(1500101514, 0), "America/Boise"));
+
+  // GMT +03:00, +10800 sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          1500101514 + 10800, util::getTimeZoneID("Asia/Baghdad")),
+      timestampAtTimezone(Timestamp(1500101514, 0), "Asia/Baghdad"));
+
+  // GMT +0:00
+  EXPECT_EQ(
+      TimestampWithTimezone(1500101514, util::getTimeZoneID("Africa/Bamako")),
+      timestampAtTimezone(Timestamp(1500101514, 0), "Africa/Bamako"));
+
+  // GMT -07:00, -25200 sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          1513299114 - 25200, util::getTimeZoneID("America/Boise")),
+      timestampAtTimezone(Timestamp(1513299114, 0), "America/Boise"));
+
+  // GMT +01:00, +3600 sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          507034293 + 3600, util::getTimeZoneID("Europe/Prague")),
+      timestampAtTimezone(Timestamp(507034293, 0), "Europe/Prague"));
+
+  // GMT +05:45, +20700 sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          75325423914 + 20700, util::getTimeZoneID("Asia/Kathmandu")),
+      timestampAtTimezone(Timestamp(75325423914, 0), "Asia/Kathmandu"));
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfMonthTimestampWithTimezone) {
