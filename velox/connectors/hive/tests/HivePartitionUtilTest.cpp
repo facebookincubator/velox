@@ -142,8 +142,8 @@ TEST_F(HivePartitionUtilTest, partitionNameForNull) {
     std::vector<column_index_t> partitionChannels = {(column_index_t)i};
     auto partitionEntries = extractPartitionKeyValues(
         makePartitionsVector(input, partitionChannels), 0);
-    for (const auto& entry : partitionEntries) {
-      EXPECT_EQ(entry.second, "");
-    }
+    EXPECT_EQ(1, partitionEntries.size());
+    EXPECT_EQ(partitionColumnNames[i], partitionEntries[0].first);
+    EXPECT_EQ("", partitionEntries[0].second);
   }
 }
