@@ -220,11 +220,12 @@ class TypedDistinctAggregations : public DistinctAggregations {
       totalBytes += accumulator->maxSpillSize();
     }
 
+    // We will an array with an opaque serialized set of bytes per group.
     auto& elementsVector = arrayVector->elements();
-    elementsVector->resize(totalBytes);
+    elementsVector->resize(groupsSize);
 
     auto* flatVector = elementsVector->asFlatVector<StringView>();
-    flatVector->resize(1);
+    flatVector->resize(totalBytes);
     auto* rawBuffer = flatVector->getRawStringBufferWithSpace(totalBytes, true);
 
     offset = 0;
