@@ -3884,17 +3884,17 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
           ((long long) 1353344400) * 1000,
           "America/Los_Angeles"));
 
-//   EXPECT_EQ(
-//       "2012-11-29T20:00:00.000-05:00",
-//       toISO8601(
-//           ((long long) 1354237200) * 1000,
-//           "America/Toronto"));
+  EXPECT_EQ(
+      "2012-11-29T20:00:00.000-05:00",
+      toISO8601(
+          ((long long) 1354237200) * 1000,
+          "America/Toronto"));
 
-//   EXPECT_EQ(
-//       "2012-11-30T12:30:00.000+11:30",
-//       toISO8601(
-//           ((long long) 1354237200) * 1000,
-//           "Pacific/Norfolk"));
+  EXPECT_EQ(
+      "2012-11-30T12:30:00.000+11:30",
+      toISO8601(
+          ((long long) 1354237200) * 1000,
+          "Pacific/Norfolk"));
 
 //   // Last second of day 0
 //   EXPECT_EQ(
