@@ -105,9 +105,15 @@ Mathematical Functions
 
     Converts ``x`` to hexadecimal.
     Supported types are: BIGINT, VARBINARY and VARCHAR.
-    If the argument is a BIGINT or binary, hex returns the number as a STRING in hexadecimal format.
-    Otherwise if the number is a STRING, it converts each character into its hex representation
-    and returns the resulting STRING. Negative numbers would be treated as two's complement.
+    If the argument is a BIGINT or VARBINARY, hex returns the argument as a VARCHAR in hexadecimal format.
+    Otherwise if the argument is a STRING, it converts each character into its hex representation
+    and returns the resulting string.
+    Negative BIGINT argument would be treated as two's complement. ::
+
+        SELECT hex("Spark SQL"); -- 537061726B2053514C
+        SELECT hex(17); -- 11
+        SELECT hex(-1); -- FFFFFFFFFFFFFFFF
+
 
 .. spark:function:: hypot(a, b) -> double
 
