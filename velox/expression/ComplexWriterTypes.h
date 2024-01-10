@@ -173,6 +173,30 @@ class ArrayWriter {
     }
   }
 
+  void add_items(const std::vector<std::optional<GenericView>>& items) {
+    if (elementIsPrimitive) {
+      auto kind = this->elementsVector()->typeKind();
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+          addItemsGenericPrimitiveVector, kind, items);
+    } else {
+      for (auto& item : items) {
+        push_back(item);
+      }
+    }
+  }
+
+  void add_items(const std::vector<GenericView>& items) {
+    if (elementIsPrimitive) {
+      auto kind = this->elementsVector()->typeKind();
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+          addItemsGenericPrimitiveVector, kind, items);
+    } else {
+      for (auto& item : items) {
+        push_back(item);
+      }
+    }
+  }
+
   // Add a new null item to the array.
   void add_null() {
     resize(length_ + 1);
@@ -307,6 +331,54 @@ class ArrayWriter {
   }
 
  private:
+  // Input is vector<GenericView> or std::vector<std::optional<GenericView>>.
+  // Note note all GenericView here coming from same
+  template <TypeKind kind, bool optional, typename T>
+  void addItemsGenericPrimitiveVector(const std::vector<T>& data) {
+    static_assert(
+        std::is_same_v<T, GenericView> ||
+        std::is_same_v<T, std::optional<GenericView>>);
+
+    auto start = length_ + valuesOffset_;
+    resize(length_ + data.size());
+    using ElementSimpleType = typename KindToSimpleType<kind>::type;
+    auto* flatOutput =
+        elementsVector()
+            ->template asUnchecked<FlatVector<
+                typename VectorExec::resolver<ElementSimpleType>::in_type>>();
+    auto* rawValues = flatOutput->mutableRawValues();
+    flatOutput->clearNulls(start, start + data.size());
+
+    for (int i = 0; i < data.size(); i++) {
+      if constexpr (std::is_same_v<T, std::optional<GenericView>>) {
+        if (!data[i].has_value()) {
+          flatOutput->setNull(i + start, true);
+          continue;
+        } else {
+          if constexpr (
+              kind == TypeKind::BOOLEAN || kind == TypeKind::VARBINARY ||
+              kind == TypeKind::VARCHAR) {
+            flatOutput->set(
+                i + start, data[i]->template castTo<ElementSimpleType>());
+          } else {
+            rawValues[i + start] =
+                data[i]->template castTo<ElementSimpleType>();
+          }
+        }
+      } else {
+        if constexpr (
+            kind == TypeKind::BOOLEAN || kind == TypeKind::VARBINARY ||
+            kind == TypeKind::VARCHAR) {
+          flatOutput->set(
+              i + start, data[i].template castTo<ElementSimpleType>());
+        } else {
+          rawValues[i + start] = data[i].template castTo<ElementSimpleType>();
+        }
+      }
+    }
+  }
+
+  // Inputs are comming from ArrayView.
   template <TypeKind kind, typename VectorType>
   void addItemsGenericPrimitive(const VectorType& data) {
     if constexpr (kind == TypeKind::BOOLEAN) {

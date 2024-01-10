@@ -810,9 +810,7 @@ struct ArrayRemoveFunction {
       }
     }
 
-    for (const auto& item : toCopyItems) {
-      out.push_back(item);
-    }
+    out.addItems(toCopyItems);
   }
 };
 
