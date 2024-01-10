@@ -300,6 +300,14 @@ class AggregateWindowFunction : public exec::WindowFunction {
       auto currentFrameEnd = rawFrameEnds[i] - startFrame + 1;
       if (currentFrameEnd > prevFrameEnd) {
         computeAggregate(rows, prevFrameEnd, currentFrameEnd);
+      } else {
+        // It's necessary to call extractValues() even if the current frame is
+        // the same as the previous because some functions may have changed the
+        // accumulator by the previous extractValues call, e.g., min_by(x, y, n)
+        // and max_by(x, y, n).
+        BaseVector::prepareForReuse(aggregateResultVector_, 1);
+        aggregate_->extractValues(
+            &rawSingleGroupRow_, 1, &aggregateResultVector_);
       }
 
       result->copy(aggregateResultVector_.get(), resultOffset + i, 0, 1);
