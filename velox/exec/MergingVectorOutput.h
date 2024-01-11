@@ -29,29 +29,27 @@ class MergingVectorOutput {
       int32_t preferredOutputRows,
       int32_t minOutputBatchRows);
 
+  /// Adds input vector. It will be merged into a big vector if smaller than
+  /// minOutputBatchRows.
+  /// @param input input vector.
   void addVector(RowVectorPtr input);
 
-  RowVectorPtr getOutput();
-
-  bool needsInput() const {
-    return !noMoreInput_ && outputQueue_.empty();
-  }
-
-  void noMoreInput() {
-    noMoreInput_ = true;
-  }
-
-  bool isFinished() {
-    return noMoreInput_ && bufferRows_ == 0 && outputQueue_.empty();
-  }
+  /// Returns a RowVector after merging, or return nullptr if we haven't
+  /// accumulated enough just yet.
+  /// @return RowVector or nullptr.
+  /// @param noMoreInput whether more data is expected to be added via
+  /// addVector.
+  RowVectorPtr getOutput(bool noMoreInput);
 
  private:
   // Push the buffer vector to the queue, and reset bufferInputs_,
-  // bufferBytes_ and bufferRows_.
+  // bufferBytes_ and numBufferRows_.
   void flush();
 
   // If the input vector is small enough, copy it to the buffer vector.
   void buffer(RowVectorPtr input);
+
+  bool canMerge(VectorPtr vector);
 
   velox::memory::MemoryPool* pool_;
 
@@ -72,11 +70,9 @@ class MergingVectorOutput {
   RowVectorPtr bufferInputs_;
 
   // The buffer row count in bufferInputs_.
-  int32_t bufferRows_ = 0;
+  int32_t numBufferRows_ = 0;
 
   // The buffer bytes in bufferInputs_.
   int64_t bufferBytes_ = 0;
-
-  bool noMoreInput_ = false;
 };
 } // namespace facebook::velox::exec

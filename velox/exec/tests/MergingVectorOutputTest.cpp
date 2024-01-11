@@ -38,40 +38,43 @@ class MergingVectorOutputTest : public testing::Test,
 };
 
 TEST_F(MergingVectorOutputTest, bufferSmallVector) {
-  vector_size_t batchSize = 10;
+  auto count = 0;
   std::vector<RowVectorPtr> vectors;
-  for (int32_t i = 0; i < 110; ++i) {
+  vector_size_t batchSize;
+  while (count <= 1024) {
+    batchSize = folly::Random::rand32() % 14 + 1;
+    count += batchSize;
     auto c0 = makeFlatVector<int64_t>(
         batchSize,
-        [&](auto row) { return batchSize * i + row; },
+        [&](auto row) { return batchSize + row; },
         VectorTestBase::nullEvery(5));
     auto c1 = makeFlatVector<int64_t>(
-        batchSize, [&](auto row) { return row; }, nullEvery(5));
+        batchSize, [&](auto row) { return 123; }, nullEvery(5));
+
+    auto indices =
+        makeIndices(c1->size(), [](auto row) { return row; });
+    auto c1Dict = wrapInDictionary(indices, c1->size(), c1);
+
     auto c2 = makeFlatVector<double>(
         batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
     auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
       return StringView::makeInline(std::to_string(row));
     });
-    vectors.push_back(makeRowVector({c0, c1, c2, c3}));
+    vectors.push_back(makeRowVector({c0, c1Dict, c2, c3}));
   }
 
-  EXPECT_EQ(mergingVectorOutput_->needsInput(), true);
-  EXPECT_EQ(mergingVectorOutput_->getOutput(), nullptr);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(false), nullptr);
 
   for (auto i = 0; i < vectors.size(); i++) {
     mergingVectorOutput_->addVector(vectors[i]);
   }
 
-  EXPECT_EQ(mergingVectorOutput_->needsInput(), false);
-  EXPECT_EQ(mergingVectorOutput_->getOutput()->size(), 1020);
-  EXPECT_EQ(mergingVectorOutput_->getOutput(), nullptr);
+  auto actualCount = mergingVectorOutput_->getOutput(false)->size();
+  EXPECT_EQ(mergingVectorOutput_->getOutput(false), nullptr);
 
-  mergingVectorOutput_->noMoreInput();
-  EXPECT_EQ(mergingVectorOutput_->isFinished(), false);
-  EXPECT_EQ(mergingVectorOutput_->needsInput(), false);
-  EXPECT_EQ(mergingVectorOutput_->getOutput()->size(), 80);
-  EXPECT_EQ(mergingVectorOutput_->getOutput(), nullptr);
-  EXPECT_EQ(mergingVectorOutput_->isFinished(), true);
+  actualCount += mergingVectorOutput_->getOutput(true)->size();
+  EXPECT_EQ(actualCount, count);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(true), nullptr);
 }
 
 TEST_F(MergingVectorOutputTest, bufferLargeVector) {
@@ -89,13 +92,11 @@ TEST_F(MergingVectorOutputTest, bufferLargeVector) {
     return StringView::makeInline(std::to_string(row));
   });
 
-  EXPECT_EQ(mergingVectorOutput_->needsInput(), true);
-  EXPECT_EQ(mergingVectorOutput_->getOutput(), nullptr);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(false), nullptr);
 
   mergingVectorOutput_->addVector(makeRowVector({c0, c1, c2, c3}));
 
-  EXPECT_EQ(mergingVectorOutput_->needsInput(), false);
-  EXPECT_EQ(mergingVectorOutput_->getOutput()->size(), batchSize);
-  EXPECT_EQ(mergingVectorOutput_->getOutput(), nullptr);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(false)->size(), batchSize);
+  EXPECT_EQ(mergingVectorOutput_->getOutput(true), nullptr);
 }
 } // namespace facebook::velox::exec::test
