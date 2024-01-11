@@ -15,8 +15,5 @@
 
 set -e
 
-nohup $PRESTO_HOME/bin/launcher --pid-file=/tmp/pidfile  run >  /tmp/server.log
-#wait a few seconds for presto to start
-sleep 60
-echo 'CREATE SCHEMA hive.tpch;' > /tmp/hive_create.sql
-/opt/presto-cli --server 127.0.0.1:8080 --file /tmp/hive_create.sql
+$PRESTO_HOME/bin/launcher --pid-file=/tmp/pidfile  run
+

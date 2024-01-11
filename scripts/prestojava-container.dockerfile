@@ -39,9 +39,9 @@ RUN dnf install -y java-11-openjdk less procps python3 tzdata \
     && mkdir -p $PRESTO_HOME/etc/data \
     && mkdir -p /usr/lib/presto/utils
 
-
-# Setting timezone to deal with Velox timezone conversion problem
-ENV TZ=America/Bahia_Banderas
+# We set the timezone to America/Los_Angeles due to issue
+# detailed here : https://github.com/facebookincubator/velox/issues/8127
+ENV TZ=America/Los_Angeles
 
 COPY scripts/etc/config.properties.example $PRESTO_HOME/etc/config.properties
 COPY scripts/etc/jvm.config.example $PRESTO_HOME/etc/jvm.config
