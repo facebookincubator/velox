@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/expression/CastHooks.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
 
@@ -73,20 +72,14 @@ class CastExpr : public SpecialForm {
   /// @param type The target type of the cast expression
   /// @param expr The expression to cast
   /// @param trackCpuUsage Whether to track CPU usage
-  CastExpr(
-      TypePtr type,
-      ExprPtr&& expr,
-      bool trackCpuUsage,
-      bool nullOnFailure,
-      std::shared_ptr<CastHooks> hooks)
+  CastExpr(TypePtr type, ExprPtr&& expr, bool trackCpuUsage, bool nullOnFailure)
       : SpecialForm(
             type,
             std::vector<ExprPtr>({expr}),
             nullOnFailure ? kTryCast.data() : kCast.data(),
             false /* supportsFlatNoNullsFastPath */,
             trackCpuUsage),
-        nullOnFailure_(nullOnFailure),
-        hooks_(std::move(hooks)) {}
+        nullOnFailure_(nullOnFailure) {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
@@ -280,7 +273,6 @@ class CastExpr : public SpecialForm {
   folly::F14FastMap<std::string, CastOperatorPtr> castOperators_;
 
   bool nullOnFailure_;
-  std::shared_ptr<CastHooks> hooks_;
 
   bool inTopLevel = false;
 };

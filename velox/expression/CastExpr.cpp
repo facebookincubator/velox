@@ -22,7 +22,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/PeeledEncoding.h"
-#include "velox/expression/PrestoCastHooks.h"
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -104,10 +103,13 @@ VectorPtr CastExpr::castToDate(
   switch (fromType->kind()) {
     case TypeKind::VARCHAR: {
       auto* inputVector = input.as<SimpleVector<StringView>>();
+      const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
+      auto isIso8601 = queryConfig.isIso8601();
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         try {
+          auto inputString = inputVector->valueAt(row);
           resultFlatVector->set(
-              row, hooks_->castStringToDate(inputVector->valueAt(row)));
+              row, util::castFromDateString(inputString, isIso8601));
         } catch (const VeloxUserError& ue) {
           VELOX_USER_FAIL(
               makeErrorMessage(input, row, DATE()) + " " + ue.message());
@@ -550,6 +552,7 @@ void CastExpr::applyPeeled(
     } else {
       applyCustomCast();
     }
+
   } else if (fromType->isDate()) {
     result = castFromDate(rows, input, context, toType);
   } else if (toType->isDate()) {
@@ -748,18 +751,14 @@ ExprPtr CastCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
-    const core::QueryConfig& config) {
+    const core::QueryConfig& /*config*/) {
   VELOX_CHECK_EQ(
       compiledChildren.size(),
       1,
-      "CAST statements expect exactly 1 argument, received {}.",
+      "CAST statements expect exactly 1 argument, received {}",
       compiledChildren.size());
   return std::make_shared<CastExpr>(
-      type,
-      std::move(compiledChildren[0]),
-      trackCpuUsage,
-      false,
-      std::make_shared<PrestoCastHooks>(config));
+      type, std::move(compiledChildren[0]), trackCpuUsage, false);
 }
 
 TypePtr TryCastCallToSpecialForm::resolveType(
@@ -771,17 +770,13 @@ ExprPtr TryCastCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
-    const core::QueryConfig& config) {
+    const core::QueryConfig& /*config*/) {
   VELOX_CHECK_EQ(
       compiledChildren.size(),
       1,
-      "TRY CAST statements expect exactly 1 argument, received {}.",
+      "TRY CAST statements expect exactly 1 argument, received {}",
       compiledChildren.size());
   return std::make_shared<CastExpr>(
-      type,
-      std::move(compiledChildren[0]),
-      trackCpuUsage,
-      true,
-      std::make_shared<PrestoCastHooks>(config));
+      type, std::move(compiledChildren[0]), trackCpuUsage, true);
 }
 } // namespace facebook::velox::exec

@@ -198,29 +198,16 @@ void CastExpr::applyCastKernel(
   try {
     auto inputRowValue = input->valueAt(row);
 
-    if constexpr (
-        FromKind == TypeKind::TIMESTAMP &&
-        (ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY)) {
-      auto writer = exec::StringWriter<>(result, row);
-      hooks_->castTimestampToString(inputRowValue, writer);
-      return;
-    }
-
     // Optimize empty input strings casting by avoiding throwing exceptions.
     if constexpr (
         FromKind == TypeKind::VARCHAR || FromKind == TypeKind::VARBINARY) {
       if constexpr (
           TypeTraits<ToKind>::isPrimitiveType &&
           TypeTraits<ToKind>::isFixedWidth) {
-        inputRowValue = hooks_->removeWhiteSpaces(inputRowValue);
         if (inputRowValue.size() == 0) {
           setError("Empty string");
           return;
         }
-      }
-      if constexpr (ToKind == TypeKind::TIMESTAMP) {
-        result->set(row, hooks_->castStringToTimestamp(inputRowValue));
-        return;
       }
     }
 
@@ -342,39 +329,37 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
-  if (hooks_->truncate()) {
-    applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-      resultBuffer[row] =
-          static_cast<To>(simpleInput->valueAt(row) / scaleFactor);
-    });
-  } else {
-    applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-      auto value = simpleInput->valueAt(row);
-      auto integralPart = value / scaleFactor;
+  const auto castToIntByTruncate =
+      context.execCtx()->queryCtx()->queryConfig().isCastToIntByTruncate();
+  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+    auto value = simpleInput->valueAt(row);
+    auto integralPart = value / scaleFactor;
+    if (!castToIntByTruncate) {
       auto fractionPart = value % scaleFactor;
       auto sign = value >= 0 ? 1 : -1;
       bool needsRoundUp =
           (scaleFactor != 1) && (sign * fractionPart >= (scaleFactor >> 1));
       integralPart += needsRoundUp ? sign : 0;
-      if (integralPart > std::numeric_limits<To>::max() ||
-          integralPart < std::numeric_limits<To>::min()) {
-        if (setNullInResultAtError()) {
-          result->setNull(row, true);
-        } else {
-          context.setVeloxExceptionError(
-              row,
-              makeBadCastException(
-                  result->type(),
-                  input,
-                  row,
-                  makeErrorMessage(input, row, toType) + "Out of bounds."));
-        }
-        return;
-      }
+    }
 
-      resultBuffer[row] = static_cast<To>(integralPart);
-    });
-  }
+    if (integralPart > std::numeric_limits<To>::max() ||
+        integralPart < std::numeric_limits<To>::min()) {
+      if (setNullInResultAtError()) {
+        result->setNull(row, true);
+      } else {
+        context.setVeloxExceptionError(
+            row,
+            makeBadCastException(
+                result->type(),
+                input,
+                row,
+                makeErrorMessage(input, row, toType) + "Out of bounds."));
+      }
+      return;
+    }
+
+    resultBuffer[row] = static_cast<To>(integralPart);
+  });
   return result;
 }
 
@@ -504,10 +489,11 @@ void CastExpr::applyCastPrimitives(
   auto* resultFlatVector = result->as<FlatVector<To>>();
   auto* inputSimpleVector = input.as<SimpleVector<From>>();
 
+  const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
   auto& resultType = resultFlatVector->type();
 
-  if (!hooks_->truncate()) {
-    if (!hooks_->legacy()) {
+  if (!queryConfig.isCastToIntByTruncate()) {
+    if (!queryConfig.isLegacyCast()) {
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
         applyCastKernel<ToKind, FromKind, false /*truncate*/, false /*legacy*/>(
             row, context, inputSimpleVector, resultFlatVector);
@@ -519,7 +505,7 @@ void CastExpr::applyCastPrimitives(
       });
     }
   } else {
-    if (!hooks_->legacy()) {
+    if (!queryConfig.isLegacyCast()) {
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
         applyCastKernel<ToKind, FromKind, true /*truncate*/, false /*legacy*/>(
             row, context, inputSimpleVector, resultFlatVector);
@@ -535,7 +521,6 @@ void CastExpr::applyCastPrimitives(
   // If we're converting to a TIMESTAMP, check if we need to adjust the
   // current GMT timezone to the user provided session timezone.
   if constexpr (ToKind == TypeKind::TIMESTAMP) {
-    const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
     // If user explicitly asked us to adjust the timezone.
     if (queryConfig.adjustTimestampToTimezone()) {
       auto sessionTzName = queryConfig.sessionTimezone();
