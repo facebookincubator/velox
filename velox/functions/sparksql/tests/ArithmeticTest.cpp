@@ -417,6 +417,34 @@ TEST_F(ArithmeticTest, isNanDouble) {
   EXPECT_EQ(false, isNan(std::nullopt));
 }
 
+TEST_F(ArithmeticTest, nanvlFloat) {
+  const auto nanvl = [&](std::optional<float> a, std::optional<float> b) {
+    return evaluateOnce<float>("nanvl(c0, c1)", a, b);
+  };
+
+  EXPECT_EQ(0.0f, nanvl(0.0f, kNan));
+  EXPECT_EQ(0.0f, nanvl(kNan, 0.0f));
+  EXPECT_EQ(0.0f, nanvl(0.0f / 0.0f, 0.0f));
+  EXPECT_EQ(std::nullopt, nanvl(0.0f / 0.0f, std::nullopt));
+  EXPECT_EQ(std::nullopt, nanvl(std::nullopt, 0.0f));
+  EXPECT_EQ(std::nullopt, nanvl(std::nullopt, kNan));
+  EXPECT_EQ(std::nullopt, nanvl(std::nullopt, std::nullopt));
+}
+
+TEST_F(ArithmeticTest, nanvlDouble) {
+  const auto nanvl = [&](std::optional<double> a, std::optional<double> b) {
+    return evaluateOnce<double>("nanvl(c0, c1)", a, b);
+  };
+
+  EXPECT_EQ(0.0, nanvl(0.0, kNanDouble));
+  EXPECT_EQ(0.0, nanvl(kNanDouble, 0.0));
+  EXPECT_EQ(0.0, nanvl(0.0 / 0.0, 0.0));
+  EXPECT_EQ(std::nullopt, nanvl(0.0 / 0.0, std::nullopt));
+  EXPECT_EQ(std::nullopt, nanvl(std::nullopt, 0.0));
+  EXPECT_EQ(std::nullopt, nanvl(std::nullopt, kNanDouble));
+  EXPECT_EQ(std::nullopt, nanvl(std::nullopt, std::nullopt));
+}
+
 class LogNTest : public SparkFunctionBaseTest {
  protected:
   static constexpr float kInf = std::numeric_limits<double>::infinity();

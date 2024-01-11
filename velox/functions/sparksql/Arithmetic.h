@@ -318,4 +318,31 @@ struct IsNanFunction {
     }
   }
 };
+
+template <typename T>
+struct NanvlFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
+    result = std::isnan(a) ? b : a;
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  callNullable(TInput& result, const TInput* a, const TInput* b) {
+    if (a == nullptr) {
+      return false;
+    }
+
+    if (std::isnan(*a)) {
+      if (b == nullptr) {
+        return false;
+      } else {
+        result = *b;
+      }
+    } else {
+      result = *a;
+    }
+    return true;
+  }
+};
 } // namespace facebook::velox::functions::sparksql
