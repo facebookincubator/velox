@@ -83,6 +83,9 @@ class WindowFuzzer : public AggregationFuzzerBase {
 
   const std::string generateFrameClause();
 
+  const std::string generateOrderByClause(
+      const std::vector<std::string>& sortingKeys);
+
   const std::unordered_set<std::string> orderDependentFunctions_;
 
   struct Stats {

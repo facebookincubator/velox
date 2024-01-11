@@ -195,6 +195,34 @@ const std::string WindowFuzzer::generateFrameClause() {
   return frameTypeString + " BETWEEN " + startBound + " AND " + endBound;
 }
 
+const std::string WindowFuzzer::generateOrderByClause(
+    const std::vector<std::string>& sortingKeys) {
+  std::stringstream frame;
+  if (!sortingKeys.empty()) {
+    frame << " order by ";
+    for (auto i = 0; i < sortingKeys.size(); ++i) {
+      if (i != 0) {
+        frame << ", ";
+      }
+      frame << sortingKeys[i] << " ";
+      auto asc = boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+      if (asc == 0) {
+        frame << "asc ";
+      } else {
+        frame << "desc ";
+      }
+      auto nullsFirst =
+          boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+      if (nullsFirst == 0) {
+        frame << "nulls first";
+      } else {
+        frame << "nulls last";
+      }
+    }
+  }
+  return frame.str();
+}
+
 bool WindowFuzzer::verifyWindow(
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortingKeys,
@@ -203,13 +231,13 @@ bool WindowFuzzer::verifyWindow(
     const std::vector<RowVectorPtr>& input,
     bool customVerification,
     bool enableWindowVerification) {
-  std::stringstream frame;
   VELOX_CHECK(!partitionKeys.empty());
+
+  std::stringstream frame;
   frame << "partition by " << folly::join(", ", partitionKeys);
-  if (!sortingKeys.empty()) {
-    frame << " order by " << folly::join(", ", sortingKeys);
-  }
+  frame << generateOrderByClause(sortingKeys);
   frame << " " << frameClause;
+
   auto plan =
       PlanBuilder()
           .values(input)
