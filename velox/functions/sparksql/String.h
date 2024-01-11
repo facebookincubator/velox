@@ -1130,4 +1130,52 @@ struct ReplaceFunction {
   }
 };
 
+template <typename T>
+struct FindInSetFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& str,
+      const arg_type<Varchar>& strArray) {
+    int32_t index = 1;
+    int32_t lastComma = -1;
+
+    auto match = std::string_view(str);
+    auto arrayStr = std::string_view(strArray);
+
+    if (match.find(',') != std::string::npos) {
+      result = 0;
+      return;
+    }
+
+    auto arrayData = arrayStr.data();
+    size_t arraySize = arrayStr.size();
+    size_t matchSize = match.size();
+
+    for (int i = 0; i < arraySize; i++) {
+      if (arrayData[i] == ',') {
+        if (i - (lastComma + 1) == matchSize &&
+            arrayStr.compare(lastComma + 1, i - (lastComma + 1), match) == 0) {
+          result = index;
+          return;
+        }
+        lastComma = i;
+        index++;
+      }
+    }
+
+    if (arraySize - (lastComma + 1) == matchSize) {
+      if (arrayStr.compare(lastComma + 1, arraySize - (lastComma + 1), match) ==
+          0) {
+        result = index;
+        return;
+      }
+    }
+
+    result = 0;
+    return;
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
