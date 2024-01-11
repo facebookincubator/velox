@@ -180,6 +180,11 @@ void registerSimpleFunctions(const std::string& prefix) {
       TimestampWithTimezone,
       Timestamp,
       Varchar>({prefix + "timezone"});
+  registerFunction<
+      TimestampAtTimezoneFunction,
+      TimestampWithTimezone,
+      TimestampWithTimezone,
+      Varchar>({prefix + "timezone"});
 }
 } // namespace
 

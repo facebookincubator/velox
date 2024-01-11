@@ -473,28 +473,37 @@ template <typename T>
 struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  std::string sessionTzName;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>& ts,
+      const arg_type<Varchar>& timeZone) {
+
+    auto sessionTzName = config.sessionTimezone();
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<Timestamp>& ts,
       const arg_type<Varchar>& timeZone) {
     auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
-    auto zone = date::locate_zone(timeZoneStr);
     std::chrono::system_clock::time_point tp{
         std::chrono::seconds{ts.getSeconds()}};
 
-    // We are to interpret the input timestamp as being at GMT;
-    // Africa/Abidjan has offset +00:00; use this timezone to establish GMT as
-    // our starting offset.
-    auto startZonedTime = date::make_zoned("Africa/Abidjan", tp);
+    // We are to interpret the input timestamp as being at session timezone;
+    // we must convert it to UTC to derive the UTC millisecond offset
+    // with which we can create the output TimestampWithTimezone type.
+    // Africa/Abidjan has offset +00:00; use this timezone to convert to UTC.
+    auto starting_timepoint = date::make_zoned(sessionTzName, tp);
+    auto UTC_timepoint = date::make_zoned("Africa/Abidjan", starting_timepoint);
 
-    // Find corresponding time at input timezone.
-    auto adjustedZonedTime = date::make_zoned(zone, startZonedTime);
-    auto localTime = adjustedZonedTime.get_local_time();
-    auto adjustedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
-                               localTime.time_since_epoch())
+    auto UTC_time = UTC_timepoint.get_local_time();
+    auto UTC_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                               UTC_time.time_since_epoch())
                                .count();
 
-    result.template get_writer_at<0>() = adjustedSeconds;
+    result.template get_writer_at<0>() = UTC_seconds;
     result.template get_writer_at<1>() = util::getTimeZoneID(timeZoneStr);
   }
 
@@ -509,24 +518,10 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
     const auto inputMs = *tsWithTz.template at<0>();
     const auto inputTz = *tsWithTz.template at<1>();
 
-    std::chrono::system_clock::time_point tp{
-    std::chrono::seconds{(inputMs/1000)}};
-
-    // We are to interpret the input timestamp as being at GMT;
-    // Africa/Abidjan has offset +00:00; use this timezone to establish GMT as
-    // our starting offset.
-    auto startZonedTime = date::make_zoned("Africa/Abidjan", tp);
-
-    // Find corresponding time at input timezone.
-    auto adjustedZonedTime = date::make_zoned(zone, startZonedTime);
-    auto localTime = adjustedZonedTime.get_local_time();
-    auto adjustedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
-                               localTime.time_since_epoch())
-                               .count();
-
-    // theory is that the milliseconds part of TimestampWithTimezone always 
-    // contains milliseconds relative to GMT - so the input and output TimestampWithTimezones should
-    // not have different millisecond values (<0>), just timezone <1> should differ
+    // <0> of a TimestampWithTimezone tuple always represents 
+    // milliseconds relative to GMT - so the input and output TimestampWithTimezones should
+    // not have different millisecond values (<0>), rather solely timezone <1> should differ.
+    // The millisecond offset is then resolved to the respective timezone at the time of display.
     result.template get_writer_at<0>() = inputMs;
     result.template get_writer_at<1>() = util::getTimeZoneID(timeZoneStr);
   }
