@@ -117,7 +117,11 @@ jobs:
 
       - name: "Run Aggregate Fuzzer"
         run: |
-          /opt/start-prestojava.sh 2>&1 >> /tmp/server.log &
+          ls -lR $PRESTO_HOME/etc
+          /opt/start-prestojava.sh > /tmp/server.log 2>&1 &
+          sleep 60
+          echo 'CREATE SCHEMA hive.tpch;' > /tmp/hive_create.sql
+          /opt/presto-cli --server 127.0.0.1:8080 --file /tmp/hive_create.sql
           mkdir -p /tmp/aggregate_fuzzer_repro/
           rm -rfv /tmp/aggregate_fuzzer_repro/*
           chmod -R 777 /tmp/aggregate_fuzzer_repro
@@ -139,6 +143,7 @@ jobs:
           name: aggregate-fuzzer-failure-artifacts
           path: |
             /tmp/aggregate_fuzzer_repro
+            /tmp/server.log
 
   linux-spark-fuzzer-run:
     runs-on: ubuntu-latest

@@ -40,7 +40,6 @@ RUN dnf install -y java-11-openjdk less procps python3 tzdata \
     && mkdir -p /usr/lib/presto/utils
 
 
-# Setting timezone to deal with Velox timezone conversion problem
 ENV TZ=America/Bahia_Banderas
 
 COPY scripts/etc/config.properties.example $PRESTO_HOME/etc/config.properties
