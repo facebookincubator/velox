@@ -23,6 +23,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/ToHex.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -321,65 +322,25 @@ struct IsNanFunction {
   }
 };
 
-struct ToHexFunctionBase {
-  // Lookup table to translate unsigned char to its hexadecimal format.
-  constexpr static const char* const kHexTable =
-      "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
-      "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
-      "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-      "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
-      "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
-      "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
-      "C0C1C2C3C4C5C6C7C8C9CACBCCCDCECFD0D1D2D3D4D5D6D7D8D9DADBDCDDDEDF"
-      "E0E1E2E3E4E5E6E7E8E9EAEBECEDEEEFF0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF";
-
-  template <bool isAscii>
-  FOLLY_ALWAYS_INLINE void doCall(
-      exec::StringWriter<false>& result,
-      StringView input) {
-    const int64_t inputSize = stringImpl::length<isAscii>(input);
-    const unsigned char* inputBuffer =
-        reinterpret_cast<const unsigned char*>(input.data());
-    const auto validRange =
-        stringCore::getByteRange<isAscii>(input.data(), 1, inputSize);
-    result.resize((validRange.second - validRange.first) * 2);
-    char* resultBuffer = result.data();
-
-    for (auto i = validRange.first; i < validRange.second; ++i) {
-      resultBuffer[i * 2] = kHexTable[inputBuffer[i] * 2];
-      resultBuffer[i * 2 + 1] = kHexTable[inputBuffer[i] * 2 + 1];
-    }
-  }
-};
-
 template <typename T>
-struct ToHexVarbinaryFunction : public ToHexFunctionBase {
+struct ToHexVarbinaryFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    ToHexFunctionBase::doCall<false>(result, input);
+    ToHexUtil::toHex(result, input);
   }
 };
 
 template <typename T>
-struct ToHexVarcharFunction : public ToHexFunctionBase {
+struct ToHexVarcharFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  // ASCII input always produces ASCII result.
-  static constexpr bool is_default_ascii_behavior = true;
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
-    ToHexFunctionBase::doCall<false>(result, input);
-  }
-
-  FOLLY_ALWAYS_INLINE void callAscii(
-      out_type<Varchar>& result,
-      const arg_type<Varchar>& input) {
-    ToHexFunctionBase::doCall<true>(result, input);
+    ToHexUtil::toHex(result, input);
   }
 };
 

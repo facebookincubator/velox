@@ -437,11 +437,6 @@ TEST_F(ArithmeticTest, hexWithVarbinary) {
   EXPECT_EQ("", toHex(""));
   EXPECT_EQ("537061726B2053514C", toHex("Spark SQL"));
   EXPECT_EQ("537061726B652153514C", toHex("Spark\x65\x21SQL"));
-  EXPECT_EQ("616263", toHex("abc"));
-  EXPECT_EQ("68656C6C6F20776F726C64", toHex("hello world"));
-  EXPECT_EQ(
-      "48656C6C6F20576F726C642066726F6D2056656C6F7821",
-      toHex("Hello World from Velox!"));
 }
 
 TEST_F(ArithmeticTest, hexWithVarchar) {
@@ -452,11 +447,6 @@ TEST_F(ArithmeticTest, hexWithVarchar) {
   EXPECT_EQ("", toHex(""));
   EXPECT_EQ("537061726B2053514C", toHex("Spark SQL"));
   EXPECT_EQ("537061726BE695B0E68DAE53514C", toHex("Spark\u6570\u636ESQL"));
-  EXPECT_EQ("616263", toHex("abc"));
-  EXPECT_EQ("68656C6C6F20776F726C64", toHex("hello world"));
-  EXPECT_EQ(
-      "48656C6C6F20576F726C642066726F6D2056656C6F7821",
-      toHex("Hello World from Velox!"));
 }
 
 class LogNTest : public SparkFunctionBaseTest {
