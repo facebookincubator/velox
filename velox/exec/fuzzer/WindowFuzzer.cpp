@@ -88,7 +88,8 @@ void WindowFuzzer::go() {
     }
     auto partitionKeys = generateKeys("p", argNames, argTypes);
     auto frameClause = generateFrameClause();
-    auto input = generateInputDataWithRowNumber(argNames, argTypes, signature);
+    auto input = generateInputDataWithRowNumber(
+        argNames, argTypes, partitionKeys, signature);
     // If the function is order-dependent, sort all input rows by row_number
     // additionally.
     if (requireSortedInput) {
@@ -221,6 +222,60 @@ const std::string WindowFuzzer::generateOrderByClause(
     }
   }
   return frame.str();
+}
+
+std::vector<RowVectorPtr> WindowFuzzer::generateInputDataWithRowNumber(
+    std::vector<std::string>& names,
+    std::vector<TypePtr>& types,
+    const std::vector<std::string>& partitionKeys,
+    const CallableSignature& signature) {
+  names.push_back("row_number");
+  types.push_back(BIGINT());
+
+  std::unordered_set<std::string> partitionSet;
+  partitionSet.reserve(partitionKeys.size());
+  for (const auto& key : partitionKeys) {
+    partitionSet.insert(key);
+  }
+
+  auto generator = findInputGenerator(signature);
+
+  std::vector<RowVectorPtr> input;
+  auto size = vectorFuzzer_.getOptions().vectorSize;
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  int64_t rowNumber = 0;
+
+  auto partitionNumRows =
+      boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_) * size / 10;
+  for (auto j = 0; j < FLAGS_num_batches; ++j) {
+    std::vector<VectorPtr> children;
+
+    if (generator != nullptr) {
+      children =
+          generator->generate(signature.args, vectorFuzzer_, rng_, pool_.get());
+    }
+
+    for (auto i = children.size(); i < types.size() - 1; ++i) {
+      if (partitionSet.count(names[i]) != 0) {
+        // The partition keys are built with a dictionary over a smaller set of
+        // values. This is done to introduce some repetition of key values for
+        // windowing.
+        auto baseVector = vectorFuzzer_.fuzz(types[i], partitionNumRows);
+        children.push_back(vectorFuzzer_.fuzzDictionary(baseVector, size));
+      } else {
+        children.push_back(vectorFuzzer_.fuzz(types[i], size));
+      }
+    }
+    children.push_back(vectorMaker.flatVector<int64_t>(
+        size, [&](auto /*row*/) { return rowNumber++; }));
+    input.push_back(vectorMaker.rowVector(names, children));
+  }
+
+  if (generator != nullptr) {
+    generator->reset();
+  }
+
+  return input;
 }
 
 bool WindowFuzzer::verifyWindow(

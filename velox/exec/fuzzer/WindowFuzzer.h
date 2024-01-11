@@ -86,6 +86,12 @@ class WindowFuzzer : public AggregationFuzzerBase {
   const std::string generateOrderByClause(
       const std::vector<std::string>& sortingKeys);
 
+  std::vector<RowVectorPtr> generateInputDataWithRowNumber(
+      std::vector<std::string>& names,
+      std::vector<TypePtr>& types,
+      const std::vector<std::string>& partitionKeys,
+      const CallableSignature& signature);
+
   const std::unordered_set<std::string> orderDependentFunctions_;
 
   struct Stats {
