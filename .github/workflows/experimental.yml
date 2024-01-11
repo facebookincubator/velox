@@ -84,7 +84,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: aggregation
-          path: velox/_build/debug/velox/exec/tests/velox_aggregation_fuzzer_test
+          path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
 
       - name: Upload spark aggregation fuzzer
         uses: actions/upload-artifact@v3
@@ -106,7 +106,7 @@ jobs:
 
 
   presto-java-aggregation-fuzzer-run:
-    runs-on: ubuntu-latest
+    runs-on: 8-core
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
     timeout-minutes: 120
@@ -115,10 +115,11 @@ jobs:
       - name: "Checkout Repo"
         uses: actions/checkout@v3
         with:
+          path: velox
           ref: "${{ inputs.ref || 'main' }}"
 
       - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
+        run: cd  velox && source ./scripts/setup-centos8.sh
 
       - name: Download aggregation fuzzer
         uses: actions/download-artifact@v3
@@ -127,18 +128,26 @@ jobs:
 
       - name: "Run Aggregate Fuzzer"
         run: |
+          cd  velox
+          cp ./scripts/etc/hive.properties $PRESTO_HOME/etc/catalog
+          ls -lR $PRESTO_HOME/etc
+          /opt/start-prestojava.sh > /tmp/server.log 2>&1 &
+          sleep 60
+          /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
           mkdir -p /tmp/aggregate_fuzzer_repro/
           rm -rfv /tmp/aggregate_fuzzer_repro/*
           chmod -R 777 /tmp/aggregate_fuzzer_repro
-          chmod +x velox_aggregation_fuzzer_test
-          ./velox_aggregation_fuzzer_test \
+          chmod +x ../velox_aggregation_fuzzer_test
+          ../velox_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec 3600 \
                 --logtostderr=1 \
                 --minloglevel=0 \
                 --repro_persist_path=/tmp/aggregate_fuzzer_repro \
                 --enable_sorted_aggregations=true \
+                --presto_url=http://127.0.0.1:8080 \
           && echo -e "\n\nAggregation fuzzer run finished successfully."
+
       - name: Archive aggregate production artifacts
         if: always()
         uses: actions/upload-artifact@v3
@@ -146,6 +155,7 @@ jobs:
           name: aggregate-fuzzer-failure-artifacts
           path: |
             /tmp/aggregate_fuzzer_repro
+            /tmp/server.log
 
   linux-spark-fuzzer-run:
     runs-on: ubuntu-latest
