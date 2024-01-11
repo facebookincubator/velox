@@ -125,6 +125,12 @@ These functions support TIMESTAMP and DATE input types.
         SELECT next_day('2015-07-23', "tu"); -- '2015-07-28'
         SELECT next_day('2015-07-23', "we"); -- '2015-07-29'
 
+.. spark:function:: hour(timestamp) -> integer
+
+    Returns the hour of ``timestamp``. ::
+
+        SELECT hour('2009-07-30 12:58:59'); -- 12
+
 .. spark:function:: to_unix_timestamp(string) -> integer
 
     Alias for ``unix_timestamp(string) -> integer``.

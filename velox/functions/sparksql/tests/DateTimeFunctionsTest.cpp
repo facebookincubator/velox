@@ -577,5 +577,31 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
       "Specifier I is not supported");
 }
 
+TEST_F(DateTimeFunctionsTest, hour) {
+  const auto hour = [&](std::optional<Timestamp> date) {
+    return evaluateOnce<int32_t>("hour(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, hour(std::nullopt));
+  EXPECT_EQ(0, hour(Timestamp(0, 0)));
+  EXPECT_EQ(23, hour(Timestamp(-1, 9000)));
+  EXPECT_EQ(23, hour(Timestamp(-1, Timestamp::kMaxNanos)));
+  EXPECT_EQ(7, hour(Timestamp(4000000000, 0)));
+  EXPECT_EQ(7, hour(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(10, hour(Timestamp(998474645, 321000000)));
+  EXPECT_EQ(19, hour(Timestamp(998423705, 321000000)));
+
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(std::nullopt, hour(std::nullopt));
+  EXPECT_EQ(13, hour(Timestamp(0, 0)));
+  EXPECT_EQ(12, hour(Timestamp(-1, Timestamp::kMaxNanos)));
+  // Disabled for now because the TZ for Pacific/Apia in 2096 varies between
+  // systems.
+  // EXPECT_EQ(21, hour(Timestamp(4000000000, 0)));
+  // EXPECT_EQ(21, hour(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(23, hour(Timestamp(998474645, 321000000)));
+  EXPECT_EQ(8, hour(Timestamp(998423705, 321000000)));
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
