@@ -17,6 +17,7 @@
 #include "velox/exec/fuzzer/WindowFuzzer.h"
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 DEFINE_bool(
     enable_window_reference_verification,
@@ -47,6 +48,17 @@ std::string getFrame(
     frame << " order by " << folly::join(", ", sortingKeys);
   }
   return frame.str();
+}
+
+bool supportIgnoreNulls(const std::string& name) {
+  static std::unordered_set<std::string> supportFunctions{
+      "first_value",
+      "last_value",
+      "nth_value",
+      "lead",
+      "lag",
+  };
+  return supportFunctions.count(name) > 0;
 }
 
 } // namespace
@@ -91,7 +103,9 @@ void WindowFuzzer::go() {
     std::vector<TypePtr> argTypes = signature.args;
     std::vector<std::string> argNames = makeNames(argTypes.size());
 
-    auto call = makeFunctionCall(signature.name, argNames, false);
+    bool ignoreNulls =
+        supportIgnoreNulls(signature.name) && vectorFuzzer_.coinToss(0.5);
+    auto call = makeFunctionCall(signature.name, argNames, false, ignoreNulls);
 
     std::vector<std::string> sortingKeys;
     // 50% chance without order-by clause.
@@ -152,6 +166,71 @@ void WindowFuzzer::updateReferenceQueryStats(
   }
 }
 
+void WindowFuzzer::testAlternativePlans(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    const std::string& frame,
+    const std::string& functionCall,
+    const std::vector<RowVectorPtr>& input,
+    bool customVerification,
+    const velox::test::ResultOrError& expected) {
+  std::vector<AggregationFuzzerBase::PlanWithSplits> plans;
+
+  std::vector<std::string> allKeys{partitionKeys.size()};
+  for (const auto& key : partitionKeys) {
+    allKeys.push_back(fmt::format("{} NULLS FIRST", key));
+  }
+  allKeys.insert(allKeys.end(), sortingKeys.begin(), sortingKeys.end());
+
+  // Streaming window from values.
+  if (!allKeys.empty()) {
+    plans.push_back(
+        {PlanBuilder()
+             .values(input)
+             .orderBy(allKeys, false)
+             .streamingWindow(
+                 {fmt::format("{} over ({})", functionCall, frame)})
+             .planNode(),
+         {}});
+  }
+
+  // With TableScan.
+  auto directory = exec::test::TempDirectoryPath::create();
+  const auto inputRowType = asRowType(input[0]->type());
+  if (isTableScanSupported(inputRowType)) {
+    auto splits = makeSplits(input, directory->path);
+
+    plans.push_back(
+        {PlanBuilder()
+             .tableScan(inputRowType)
+             .localPartition(partitionKeys)
+             .window({fmt::format("{} over ({})", functionCall, frame)})
+             .planNode(),
+         splits});
+
+    if (!allKeys.empty()) {
+      plans.push_back(
+          {PlanBuilder()
+               .tableScan(inputRowType)
+               .orderBy(allKeys, false)
+               .streamingWindow(
+                   {fmt::format("{} over ({})", functionCall, frame)})
+               .planNode(),
+           splits});
+    }
+  }
+
+  for (const auto& plan : plans) {
+    testPlan(
+        plan,
+        false,
+        false,
+        customVerification,
+        /*customVerifiers*/ {},
+        expected);
+  }
+}
+
 bool WindowFuzzer::verifyWindow(
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortingKeys,
@@ -167,8 +246,10 @@ bool WindowFuzzer::verifyWindow(
   if (persistAndRunOnce_) {
     persistReproInfo({{plan, {}}}, reproPersistPath_);
   }
+
+  velox::test::ResultOrError resultOrError;
   try {
-    auto resultOrError = execute(plan);
+    resultOrError = execute(plan);
     if (resultOrError.exceptionPtr) {
       ++stats_.numFailed;
     }
@@ -194,13 +275,25 @@ bool WindowFuzzer::verifyWindow(
       ++stats_.numVerificationSkipped;
     }
 
-    return resultOrError.exceptionPtr != nullptr;
+    testAlternativePlans(
+        partitionKeys,
+        sortingKeys,
+        frame,
+        functionCall,
+        input,
+        customVerification,
+        resultOrError);
+
+    if (resultOrError.exceptionPtr != nullptr) {
+      return true;
+    }
   } catch (...) {
     if (!reproPersistPath_.empty()) {
       persistReproInfo({{plan, {}}}, reproPersistPath_);
     }
     throw;
   }
+  return false;
 }
 
 void windowFuzzer(

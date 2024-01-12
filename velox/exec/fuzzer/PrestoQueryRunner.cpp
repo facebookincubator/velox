@@ -286,6 +286,19 @@ std::string toAggregateCallSql(
   return sql.str();
 }
 
+std::string toWindowCallSql(
+    const core::CallTypedExprPtr& call,
+    bool ignoreNulls = false) {
+  std::stringstream sql;
+  sql << call->name() << "(";
+  toCallInputsSql(call->inputs(), sql);
+  if (ignoreNulls) {
+    sql << " IGNORE NULLS";
+  }
+  sql << ")";
+  return sql.str();
+}
+
 bool isSupportedDwrfType(const TypePtr& type) {
   if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown()) {
     return false;
@@ -402,7 +415,7 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   const auto& functions = windowNode->windowFunctions();
   for (auto i = 0; i < functions.size(); ++i) {
     appendComma(i, sql);
-    sql << toCallSql(functions[i].functionCall);
+    sql << toWindowCallSql(functions[i].functionCall, functions[i].ignoreNulls);
   }
   sql << " OVER (";
 

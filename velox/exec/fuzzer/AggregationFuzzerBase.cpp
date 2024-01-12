@@ -567,11 +567,15 @@ void printStats(const AggregationFuzzerBase::FunctionsStats& stats) {
 std::string makeFunctionCall(
     const std::string& name,
     const std::vector<std::string>& argNames,
-    bool sortedInputs) {
+    bool sortedInputs,
+    bool ignoreNulls) {
   std::ostringstream call;
   call << name << "(" << folly::join(", ", argNames);
   if (sortedInputs) {
     call << " ORDER BY " << folly::join(", ", argNames);
+  }
+  if (ignoreNulls) {
+    call << " IGNORE NULLS";
   }
   call << ")";
 
