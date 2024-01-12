@@ -743,22 +743,30 @@ void CastExpr::apply(
     const TypePtr& fromType,
     const TypePtr& toType,
     VectorPtr& result) {
-  LocalDecodedVector decoded(context, *input, rows);
+  LocalSelectivityVector remainingRows(*context.execCtx(), rows.end());
+  *remainingRows = rows;
+  context.deselectErrors(*remainingRows);
+
+  LocalDecodedVector decoded(context, *input, *remainingRows);
   auto* rawNulls = decoded->nulls();
 
-  LocalSelectivityVector nonNullRows(*context.execCtx(), rows.end());
-  *nonNullRows = rows;
   if (rawNulls) {
-    nonNullRows->deselectNulls(rawNulls, rows.begin(), rows.end());
+    remainingRows->deselectNulls(
+        rawNulls, remainingRows->begin(), remainingRows->end());
   }
 
   VectorPtr localResult;
-  if (!nonNullRows->hasSelections()) {
+  if (!remainingRows->hasSelections()) {
     localResult =
         BaseVector::createNullConstant(toType, rows.end(), context.pool());
   } else if (decoded->isIdentityMapping()) {
     applyPeeled(
-        *nonNullRows, *decoded->base(), context, fromType, toType, localResult);
+        *remainingRows,
+        *decoded->base(),
+        context,
+        fromType,
+        toType,
+        localResult);
   } else {
     withContextSaver([&](ContextSaver& saver) {
       LocalSelectivityVector newRowsHolder(*context.execCtx());
@@ -766,32 +774,32 @@ void CastExpr::apply(
       LocalDecodedVector localDecoded(context);
       std::vector<VectorPtr> peeledVectors;
       auto peeledEncoding = PeeledEncoding::peel(
-          {input}, *nonNullRows, localDecoded, true, peeledVectors);
+          {input}, *remainingRows, localDecoded, true, peeledVectors);
       VELOX_CHECK_EQ(peeledVectors.size(), 1);
       if (peeledVectors[0]->isLazy()) {
         peeledVectors[0] =
             peeledVectors[0]->as<LazyVector>()->loadedVectorShared();
       }
       auto newRows =
-          peeledEncoding->translateToInnerRows(*nonNullRows, newRowsHolder);
+          peeledEncoding->translateToInnerRows(*remainingRows, newRowsHolder);
       // Save context and set the peel.
-      context.saveAndReset(saver, *nonNullRows);
+      context.saveAndReset(saver, *remainingRows);
       context.setPeeledEncoding(peeledEncoding);
       applyPeeled(
           *newRows, *peeledVectors[0], context, fromType, toType, localResult);
 
       localResult = context.getPeeledEncoding()->wrap(
-          toType, context.pool(), localResult, *nonNullRows);
+          toType, context.pool(), localResult, *remainingRows);
     });
   }
-  context.moveOrCopyResult(localResult, *nonNullRows, result);
+  context.moveOrCopyResult(localResult, *remainingRows, result);
   context.releaseVector(localResult);
 
   // If there are nulls in input, add nulls to the result at the same rows.
   VELOX_CHECK_NOT_NULL(result);
-  if (rawNulls) {
+  if (rawNulls || context.errors()) {
     EvalCtx::addNulls(
-        rows, nonNullRows->asRange().bits(), context, toType, result);
+        rows, remainingRows->asRange().bits(), context, toType, result);
   }
 }
 
