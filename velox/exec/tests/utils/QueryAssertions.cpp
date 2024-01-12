@@ -40,6 +40,14 @@ template <TypeKind kind>
 }
 
 template <>
+::duckdb::Value duckValueAt<TypeKind::BOOLEAN>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  return ::duckdb::Value::BOOLEAN(
+      vector->as<SimpleVector<bool>>()->valueAt(index));
+}
+
+template <>
 ::duckdb::Value duckValueAt<TypeKind::VARCHAR>(
     const VectorPtr& vector,
     vector_size_t index) {
