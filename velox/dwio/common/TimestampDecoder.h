@@ -31,7 +31,7 @@ class TimestampDecoder : public DirectDecoder<false> {
       uint32_t numBytes,
       bool bigEndian = false)
       : DirectDecoder<false>{std::move(input), useVInts, numBytes, bigEndian},
-        _precision(precision) {}
+        precision_(precision) {}
 
   template <bool hasNulls, typename Visitor>
   void readWithVisitor(
@@ -62,15 +62,12 @@ class TimestampDecoder : public DirectDecoder<false> {
       }
       if constexpr (std::is_same_v<typename Visitor::DataType, int128_t>) {
         auto units = IntDecoder<false>::template readInt<int64_t>();
-        Timestamp timestap;
-        if (_precision == TIMESTAMP_PRECISION::MILLIS) {
-          timestap = facebook::velox::util::fromUTCMillisParquet(units);
-        } else {
-          timestap = facebook::velox::util::fromUTCMicrosParquet(units);
-        }
+        Timestamp timestamp = precision_ == TIMESTAMP_PRECISION::MILLIS
+            ? util::fromUTCMillis(units)
+            : util::fromUTCMicros(units);
 
         toSkip =
-            visitor.process(*reinterpret_cast<int128_t*>(&timestap), atEnd);
+            visitor.process(*reinterpret_cast<int128_t*>(&timestamp), atEnd);
       } else {
         toSkip = visitor.process(
             IntDecoder<false>::template readInt<int64_t>(), atEnd);
@@ -88,6 +85,6 @@ class TimestampDecoder : public DirectDecoder<false> {
   }
 
  private:
-  TIMESTAMP_PRECISION _precision;
+  TIMESTAMP_PRECISION precision_;
 };
 } // namespace facebook::velox::dwio::common

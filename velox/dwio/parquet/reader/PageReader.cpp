@@ -380,12 +380,12 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           if (logicalType.TIMESTAMP.unit.__isset.MICROS) {
             for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
               memcpy(&units, parquetValues + i * typeSize, typeSize);
-              values[i] = facebook::velox::util::fromUTCMicrosParquet(units);
+              values[i] = util::fromUTCMicros(units);
             }
           } else if (logicalType.TIMESTAMP.unit.__isset.MILLIS) {
             for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
               memcpy(&units, parquetValues + i * typeSize, typeSize);
-              values[i] = facebook::velox::util::fromUTCMillisParquet(units);
+              values[i] = util::fromUTCMillis(units);
             }
           } else {
             VELOX_NYI("Unsupported timestamp unit");

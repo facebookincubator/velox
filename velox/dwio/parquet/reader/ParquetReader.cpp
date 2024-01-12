@@ -395,7 +395,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     if (veloxType->kind() == TypeKind::TIMESTAMP &&
         schemaElement.type == thrift::Type::INT64 &&
         !logicalType_.has_value()) {
-      // Construct logical type from deprecated converted type of Parquet
+      // Construct logical type from deprecated converted type of Parquet.
       thrift::TimestampType timestamp;
       timestamp.__set_isAdjustedToUTC(true);
       thrift::TimeUnit unit;
