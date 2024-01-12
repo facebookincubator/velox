@@ -501,7 +501,6 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
     }
   };
   if (input.empty()) {
-    emtpyOutput;
     return;
   }
 
@@ -520,7 +519,6 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
     }
 
     if (curStartPos >= input.size()) {
-      emtpyOutput;
       return;
     }
   }
