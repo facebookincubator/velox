@@ -185,9 +185,9 @@ const std::string WindowFuzzer::generateFrameClause() {
   // Frame end has additional limitation that if the frameStart is k FOLLOWING
   // or CURRENT ROW then the frameEnd cannot be k PRECEDING or CURRENT ROW.
   auto startLimit =
-      frameTypeValue == 0 ? (startValue == 2 | startValue == 0 ? 1 : 0) : 0;
+      frameTypeValue == 0 ? ((startValue == 2) | (startValue == 0)) ? 1 : 0 : 0;
   auto endLimit =
-      frameTypeValue == 0 ? (startValue == 2 | startValue == 0 ? 2 : 3) : 1;
+      frameTypeValue == 0 ? ((startValue == 2) | (startValue == 0)) ? 2 : 3 : 1;
   auto endBound = frameBound(
       boost::random::uniform_int_distribution<uint32_t>(
           startLimit, endLimit)(rng_),
@@ -198,27 +198,26 @@ const std::string WindowFuzzer::generateFrameClause() {
 
 const std::string WindowFuzzer::generateOrderByClause(
     const std::vector<std::string>& sortingKeys) {
+  VELOX_CHECK(!sortingKeys.empty());
   std::stringstream frame;
-  if (!sortingKeys.empty()) {
-    frame << " order by ";
-    for (auto i = 0; i < sortingKeys.size(); ++i) {
-      if (i != 0) {
-        frame << ", ";
-      }
-      frame << sortingKeys[i] << " ";
-      auto asc = boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
-      if (asc == 0) {
-        frame << "asc ";
-      } else {
-        frame << "desc ";
-      }
-      auto nullsFirst =
-          boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
-      if (nullsFirst == 0) {
-        frame << "nulls first";
-      } else {
-        frame << "nulls last";
-      }
+  frame << " order by ";
+  for (auto i = 0; i < sortingKeys.size(); ++i) {
+    if (i != 0) {
+      frame << ", ";
+    }
+    frame << sortingKeys[i] << " ";
+    auto asc = boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+    if (asc == 0) {
+      frame << "asc ";
+    } else {
+      frame << "desc ";
+    }
+    auto nullsFirst =
+        boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+    if (nullsFirst == 0) {
+      frame << "nulls first";
+    } else {
+      frame << "nulls last";
     }
   }
   return frame.str();
@@ -290,7 +289,9 @@ bool WindowFuzzer::verifyWindow(
 
   std::stringstream frame;
   frame << "partition by " << folly::join(", ", partitionKeys);
-  frame << generateOrderByClause(sortingKeys);
+  if (!sortingKeys.empty()) {
+    frame << generateOrderByClause(sortingKeys);
+  }
   frame << " " << frameClause;
 
   auto plan =
