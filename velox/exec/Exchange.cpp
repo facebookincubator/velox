@@ -105,9 +105,13 @@ RowVectorPtr Exchange::getOutput() {
   }
 
   uint64_t rawInputBytes{0};
+  uint64_t rawInputPositions{0};
   vector_size_t resultOffset = 0;
   for (const auto& page : currentPages_) {
     rawInputBytes += page->size();
+    if (page->numRows().has_value()) {
+      rawInputPositions += page->numRows().value();
+    }
 
     auto inputStream = page->prepareStreamForDeserialize();
 
@@ -123,6 +127,7 @@ RowVectorPtr Exchange::getOutput() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->rawInputBytes += rawInputBytes;
+    lockedStats->rawInputPositions += rawInputPositions;
     lockedStats->addInputVector(result_->estimateFlatSize(), result_->size());
   }
 
