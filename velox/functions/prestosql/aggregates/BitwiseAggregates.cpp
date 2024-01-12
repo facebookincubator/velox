@@ -101,7 +101,7 @@ class BitwiseAndAggregate : public BitwiseAggregateBase<T> {
 
 } // namespace
 
-void registerBitwiseAggregates(const std::string& prefix) {
+void registerBitwiseAggregates(const std::string& prefix, bool onlyPrestoSignatures) {
   registerBitwise<BitwiseOrAggregate>(prefix + kBitwiseOr);
   registerBitwise<BitwiseAndAggregate>(prefix + kBitwiseAnd);
 }

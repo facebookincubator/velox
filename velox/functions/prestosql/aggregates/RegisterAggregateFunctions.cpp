@@ -60,15 +60,16 @@ extern void registerVarianceAggregates(const std::string& prefix);
 
 void registerAllAggregateFunctions(
     const std::string& prefix,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool onlyPrestoSignatures) {
   registerApproxDistinctAggregates(prefix, withCompanionFunctions);
   registerApproxMostFrequentAggregate(prefix);
   registerApproxPercentileAggregate(prefix, withCompanionFunctions);
   registerArbitraryAggregate(prefix);
   registerArrayAggAggregate(prefix, withCompanionFunctions);
   registerAverageAggregate(prefix, withCompanionFunctions);
-  registerBitwiseAggregates(prefix);
-  registerBitwiseXorAggregate(prefix);
+  registerBitwiseAggregates(prefix, onlyPrestoSignatures);
+  registerBitwiseXorAggregate(prefix, onlyPrestoSignatures);
   registerBoolAggregates(prefix);
   registerCentralMomentsAggregates(prefix);
   registerChecksumAggregate(prefix);
