@@ -22,5 +22,4 @@ namespace facebook::velox::test {
 std::string getDataFilePath(
     const std::string& baseDir,
     const std::string& filePath);
-
 }
