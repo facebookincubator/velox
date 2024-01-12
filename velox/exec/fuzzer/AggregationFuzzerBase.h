@@ -149,7 +149,7 @@ class AggregationFuzzerBase {
     seed(rng_());
   }
 
-  // Generate at least one and up to 5 scalar columns to be used as grouping,
+  // Generates at least one and up to 5 scalar columns to be used as grouping,
   // partition or sorting keys.
   // Column names are generated using template '<prefix>N', where N is
   // zero-based ordinal number of the column.
@@ -260,7 +260,7 @@ void printStats(const AggregationFuzzerBase::FunctionsStats& stats);
 // Prints (n / total) in percentage format.
 std::string printPercentageStat(size_t n, size_t total);
 
-// Make an aggregation call string for the given function name and arguments.
+// Makes an aggregation call string for the given function name and arguments.
 std::string makeFunctionCall(
     const std::string& name,
     const std::vector<std::string>& argNames,
@@ -269,9 +269,16 @@ std::string makeFunctionCall(
 // Returns a list of column names from c0 to cn.
 std::vector<std::string> makeNames(size_t n);
 
-// Persist plans to files under basePath.
+// Persists plans to files under basePath.
 void persistReproInfo(
     const std::vector<AggregationFuzzerBase::PlanWithSplits>& plans,
     const std::string& basePath);
+
+// Returns a PrestoQueryRunner instance if prestoUrl is non-empty. Otherwise,
+// returns a DuckQueryRunner instance and set disabled aggregation functions
+// properly.
+std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
+    const std::string& prestoUrl,
+    const std::string& runnerName);
 
 } // namespace facebook::velox::exec::test

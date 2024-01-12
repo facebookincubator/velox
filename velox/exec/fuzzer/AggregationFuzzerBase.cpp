@@ -20,6 +20,8 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/fuzzer/DuckQueryRunner.h"
+#include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/tests/utils/ArgumentTypeFuzzer.h"
@@ -646,6 +648,24 @@ void persistReproInfo(
   } catch (std::exception& e) {
     LOG(ERROR) << "Failed to store aggregation plans to " << planPath << ": "
                << e.what();
+  }
+}
+
+std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
+    const std::string& prestoUrl,
+    const std::string& runnerName) {
+  if (prestoUrl.empty()) {
+    auto duckQueryRunner = std::make_unique<DuckQueryRunner>();
+    duckQueryRunner->disableAggregateFunctions({
+        "skewness",
+        // DuckDB results on constant inputs are incorrect. Should be NaN,
+        // but DuckDB returns some random value.
+        "kurtosis",
+        "entropy",
+    });
+    return duckQueryRunner;
+  } else {
+    return std::make_unique<PrestoQueryRunner>(prestoUrl, runnerName);
   }
 }
 
