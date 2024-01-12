@@ -219,10 +219,6 @@ struct HmacMd5Function {
   }
 };
 
-FOLLY_ALWAYS_INLINE unsigned char toHex(unsigned char c) {
-  return c < 10 ? (c + '0') : (c + 'A' - 10);
-}
-
 template <typename T>
 struct ToHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);

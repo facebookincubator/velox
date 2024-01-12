@@ -351,23 +351,7 @@ struct ToHexBigintFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<int64_t>& input) {
-    static const char* const kHexTable = "0123456789ABCDEF";
-    if (input == 0) {
-      result = "0";
-      return;
-    }
-
-    uint64_t num = input;
-    const auto resultSize = ((64 - bits::countLeadingZeros(num)) + 3) / 4;
-    result.resize(resultSize);
-    char* buffer = result.data();
-
-    int32_t len = 0;
-    do {
-      len += 1;
-      buffer[resultSize - len] = kHexTable[num & 0xF];
-      num >>= 4;
-    } while (num != 0);
+    ToHexUtil::toHex(result, input);
   }
 };
 } // namespace facebook::velox::functions::sparksql

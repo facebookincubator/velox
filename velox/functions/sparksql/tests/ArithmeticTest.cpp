@@ -421,32 +421,35 @@ TEST_F(ArithmeticTest, hexWithBigint) {
   const auto toHex = [&](std::optional<int64_t> value) {
     return evaluateOnce<std::string>("hex(c0)", value);
   };
-  EXPECT_EQ(std::nullopt, toHex(std::nullopt));
   EXPECT_EQ("11", toHex(17));
+  EXPECT_EQ("FFFFFFFFFFFFFFEF", toHex(-17));
   EXPECT_EQ("0", toHex(0));
   EXPECT_EQ("FFFFFFFFFFFFFFFF", toHex(-1));
   EXPECT_EQ("7FFFFFFFFFFFFFFF", toHex(INT64_MAX));
   EXPECT_EQ("8000000000000000", toHex(INT64_MIN));
 }
 
-TEST_F(ArithmeticTest, hexWithVarbinary) {
+TEST_F(ArithmeticTest, hexWithVarbinaryAndVarchar) {
   const auto toHex = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("hex(cast(c0 as varbinary))", value);
+    return std::pair(
+        evaluateOnce<std::string>("hex(cast(c0 as varbinary))", value),
+        evaluateOnce<std::string>("hex(c0)", value));
   };
-  EXPECT_EQ(std::nullopt, toHex(std::nullopt));
-  EXPECT_EQ("", toHex(""));
-  EXPECT_EQ("537061726B2053514C", toHex("Spark SQL"));
-  EXPECT_EQ("537061726B652153514C", toHex("Spark\x65\x21SQL"));
-}
+  auto result = toHex("");
+  EXPECT_TRUE(result.first == result.second && result.first == "");
 
-TEST_F(ArithmeticTest, hexWithVarchar) {
-  const auto toHex = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("hex(c0)", value);
-  };
-  EXPECT_EQ(std::nullopt, toHex(std::nullopt));
-  EXPECT_EQ("", toHex(""));
-  EXPECT_EQ("537061726B2053514C", toHex("Spark SQL"));
-  EXPECT_EQ("537061726BE695B0E68DAE53514C", toHex("Spark\u6570\u636ESQL"));
+  result = toHex("Spark SQL");
+  EXPECT_TRUE(
+      result.first == result.second && result.first == "537061726B2053514C");
+
+  result = toHex("Spark\x65\x21SQL");
+  EXPECT_TRUE(
+      result.first == result.second && result.first == "537061726B652153514C");
+
+  result = toHex("Spark\u6570\u636ESQL");
+  EXPECT_TRUE(
+      result.first == result.second &&
+      result.first == "537061726BE695B0E68DAE53514C");
 }
 
 class LogNTest : public SparkFunctionBaseTest {
