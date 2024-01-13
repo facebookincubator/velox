@@ -113,8 +113,8 @@ void constructType(const variant& v, TypePtr& type, ElementCounter& counter) {
   }
 }
 
-// Function is called with the typekind, the variant to be added,
-// the target variant and the element counter. The element counter
+// Function is called with the variant to be added,
+// the target vector and the element counter. The element counter
 // is used to track the number of elements already inserted, so as
 // to get the index for the next element to insert. For an array
 // vector, the required offset and size is first set into the vector
