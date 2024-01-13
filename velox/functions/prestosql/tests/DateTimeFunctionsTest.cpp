@@ -140,26 +140,26 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         rowVector->children()[0]->as<SimpleVector<int64_t>>()->valueAt(0),
         rowVector->children()[1]->as<SimpleVector<int16_t>>()->valueAt(0)};
   }
-  
+
   std::optional<TimestampWithTimezone> timestampWithTimezoneAtTimezone(
       std::optional<int64_t> timestamp,
       const std::optional<std::string>& timeZoneName,
       const std::optional<std::string>& newTimeZoneName) {
-
-        facebook::velox::VectorPtr resultVector;
+    facebook::velox::VectorPtr resultVector;
     if (!timestamp.has_value() || !timeZoneName.has_value()) {
-        resultVector = evaluate(
-        "at_timezone(c0, c1)",
-        makeRowVector(
-            {BaseVector::createNullConstant(
-              TIMESTAMP_WITH_TIME_ZONE(), 1, pool()),
-            makeNullableFlatVector<std::string>({newTimeZoneName})}));
+      resultVector = evaluate(
+          "at_timezone(c0, c1)",
+          makeRowVector(
+              {BaseVector::createNullConstant(
+                   TIMESTAMP_WITH_TIME_ZONE(), 1, pool()),
+               makeNullableFlatVector<std::string>({newTimeZoneName})}));
     } else {
-        resultVector = evaluate(
-        "at_timezone(c0, c1)",
-        makeRowVector(
-            {makeTimestampWithTimeZoneVector(timestamp.value(), timeZoneName.value().c_str()),
-            makeNullableFlatVector<std::string>({newTimeZoneName})}));
+      resultVector = evaluate(
+          "at_timezone(c0, c1)",
+          makeRowVector(
+              {makeTimestampWithTimeZoneVector(
+                   timestamp.value(), timeZoneName.value().c_str()),
+               makeNullableFlatVector<std::string>({newTimeZoneName})}));
     }
 
     EXPECT_EQ(1, resultVector->size());
@@ -1006,7 +1006,6 @@ TEST_F(DateTimeFunctionsTest, minusTimestamp) {
 }
 
 TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampInput) {
-
   setQueryTimeZone("America/New_York");
   // New York = GMT -04:00, -14400 sec
   EXPECT_EQ(
@@ -1014,65 +1013,67 @@ TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampInput) {
           1500101514 - 14400, util::getTimeZoneID("America/Boise")),
       timestampAtTimezone(Timestamp(1500101514, 0), "America/Boise"));
 
-//   // GMT +03:00, +10800 sec
-//   EXPECT_EQ(
-//       TimestampWithTimezone(
-//           1500101514 + 10800, util::getTimeZoneID("Asia/Baghdad")),
-//       timestampAtTimezone(Timestamp(1500101514, 0), "Asia/Baghdad"));
+  //   // GMT +03:00, +10800 sec
+  //   EXPECT_EQ(
+  //       TimestampWithTimezone(
+  //           1500101514 + 10800, util::getTimeZoneID("Asia/Baghdad")),
+  //       timestampAtTimezone(Timestamp(1500101514, 0), "Asia/Baghdad"));
 
-//   // GMT +0:00
-//   EXPECT_EQ(
-//       TimestampWithTimezone(1500101514, util::getTimeZoneID("Africa/Bamako")),
-//       timestampAtTimezone(Timestamp(1500101514, 0), "Africa/Bamako"));
+  //   // GMT +0:00
+  //   EXPECT_EQ(
+  //       TimestampWithTimezone(1500101514,
+  //       util::getTimeZoneID("Africa/Bamako")),
+  //       timestampAtTimezone(Timestamp(1500101514, 0), "Africa/Bamako"));
 
-//   // GMT -07:00, -25200 sec
-//   EXPECT_EQ(
-//       TimestampWithTimezone(
-//           1513299114 - 25200, util::getTimeZoneID("America/Boise")),
-//       timestampAtTimezone(Timestamp(1513299114, 0), "America/Boise"));
+  //   // GMT -07:00, -25200 sec
+  //   EXPECT_EQ(
+  //       TimestampWithTimezone(
+  //           1513299114 - 25200, util::getTimeZoneID("America/Boise")),
+  //       timestampAtTimezone(Timestamp(1513299114, 0), "America/Boise"));
 
-//   // GMT +01:00, +3600 sec
-//   EXPECT_EQ(
-//       TimestampWithTimezone(
-//           507034293 + 3600, util::getTimeZoneID("Europe/Prague")),
-//       timestampAtTimezone(Timestamp(507034293, 0), "Europe/Prague"));
+  //   // GMT +01:00, +3600 sec
+  //   EXPECT_EQ(
+  //       TimestampWithTimezone(
+  //           507034293 + 3600, util::getTimeZoneID("Europe/Prague")),
+  //       timestampAtTimezone(Timestamp(507034293, 0), "Europe/Prague"));
 
-//   // GMT +05:45, +20700 sec
-//   EXPECT_EQ(
-//       TimestampWithTimezone(
-//           75325423914 + 20700, util::getTimeZoneID("Asia/Kathmandu")),
-//       timestampAtTimezone(Timestamp(75325423914, 0), "Asia/Kathmandu"));
+  //   // GMT +05:45, +20700 sec
+  //   EXPECT_EQ(
+  //       TimestampWithTimezone(
+  //           75325423914 + 20700, util::getTimeZoneID("Asia/Kathmandu")),
+  //       timestampAtTimezone(Timestamp(75325423914, 0), "Asia/Kathmandu"));
 }
 
-TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampWithTimezoneInput) {
+TEST_F(
+    DateTimeFunctionsTest,
+    timestampAtTimezoneTestTimestampWithTimezoneInput) {
+  //   EXPECT_EQ(
+  //       TimestampWithTimezone(1500101514,
+  //       util::getTimeZoneID("America/Boise")), timestampAtTimezone(
+  //             TimestampWithTimezone(1500101514,
+  //             util::getTimeZoneID("Asia/Kathmandu")),
+  //                                     "America/Boise"));
 
-//   EXPECT_EQ(
-//       TimestampWithTimezone(1500101514, util::getTimeZoneID("America/Boise")),
-//       timestampAtTimezone(
-//             TimestampWithTimezone(1500101514, util::getTimeZoneID("Asia/Kathmandu")), 
-//                                     "America/Boise"));
-
-//   EXPECT_EQ(
-//       1973,
-//       evaluateWithTimestampWithTimezone<int64_t>(
-//           "year(c0)", 123456789000, "+14:00"));
+  //   EXPECT_EQ(
+  //       1973,
+  //       evaluateWithTimestampWithTimezone<int64_t>(
+  //           "year(c0)", 123456789000, "+14:00"));
 
   EXPECT_EQ(
       TimestampWithTimezone(1500101514, util::getTimeZoneID("America/Boise")),
-      timestampWithTimezoneAtTimezone(1500101514, "Asia/Kathmandu", "America/Boise")
-      );
+      timestampWithTimezoneAtTimezone(
+          1500101514, "Asia/Kathmandu", "America/Boise"));
 
   EXPECT_EQ(
       TimestampWithTimezone(1500101514, util::getTimeZoneID("Europe/London")),
-      timestampWithTimezoneAtTimezone(1500101514, "Asia/Kathmandu", "Europe/London")
-      );
+      timestampWithTimezoneAtTimezone(
+          1500101514, "Asia/Kathmandu", "Europe/London"));
 
   // should fail
   EXPECT_EQ(
       TimestampWithTimezone(1500101514, util::getTimeZoneID("Europe/London")),
-      timestampWithTimezoneAtTimezone(1500101513, "Asia/Kathmandu", "Europe/London")
-      );
-
+      timestampWithTimezoneAtTimezone(
+          1500101513, "Asia/Kathmandu", "Europe/London"));
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfMonthTimestampWithTimezone) {

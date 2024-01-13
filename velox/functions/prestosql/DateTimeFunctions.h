@@ -479,7 +479,6 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
       const core::QueryConfig& config,
       const arg_type<Timestamp>& ts,
       const arg_type<Varchar>& timeZone) {
-
     auto sessionTzName = config.sessionTimezone();
   }
 
@@ -500,8 +499,8 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
 
     auto UTC_time = UTC_timepoint.get_local_time();
     auto UTC_seconds = std::chrono::duration_cast<std::chrono::seconds>(
-                               UTC_time.time_since_epoch())
-                               .count();
+                           UTC_time.time_since_epoch())
+                           .count();
 
     result.template get_writer_at<0>() = UTC_seconds;
     result.template get_writer_at<1>() = util::getTimeZoneID(timeZoneStr);
@@ -511,17 +510,17 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
       out_type<TimestampWithTimezone>& result,
       const arg_type<TimestampWithTimezone>& tsWithTz,
       const arg_type<Varchar>& timeZone) {
-
     auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
     auto zone = date::locate_zone(timeZoneStr);
 
     const auto inputMs = *tsWithTz.template at<0>();
     const auto inputTz = *tsWithTz.template at<1>();
 
-    // <0> of a TimestampWithTimezone tuple always represents 
-    // milliseconds relative to GMT - so the input and output TimestampWithTimezones should
-    // not have different millisecond values (<0>), rather solely timezone <1> should differ.
-    // The millisecond offset is then resolved to the respective timezone at the time of display.
+    // <0> of a TimestampWithTimezone tuple always represents
+    // milliseconds relative to GMT - so the input and output
+    // TimestampWithTimezones should not have different millisecond values
+    // (<0>), rather solely timezone <1> should differ. The millisecond offset
+    // is then resolved to the respective timezone at the time of display.
     result.template get_writer_at<0>() = inputMs;
     result.template get_writer_at<1>() = util::getTimeZoneID(timeZoneStr);
   }
