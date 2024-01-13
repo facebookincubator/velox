@@ -124,7 +124,9 @@ void constructType(const variant& v, TypePtr& type, ElementCounter& counter) {
 static void insertVariantIntoVector(
     const variant& v,
     VectorPtr& vector,
-    ElementCounter& counter) {
+    ElementCounter& counter,
+    vector_size_t previous_size,
+    vector_size_t previous_offset) {
   if (v.isNull()) {
     vector->setNull(counter.insertedElements, true);
   } else {
@@ -133,16 +135,13 @@ static void insertVariantIntoVector(
         auto asArray = vector->as<ArrayVector>();
         asArray->elements()->resize(counter.children[0].totalElements);
         const std::vector<variant>& elements = v.array();
-        vector_size_t offset = 0;
-        if (counter.insertedElements != 0) {
-          offset = asArray->offsetAt(counter.insertedElements - 1) +
-              asArray->sizeAt(counter.insertedElements - 1);
-        }
+        vector_size_t offset = previous_offset + previous_size;
+        vector_size_t size = elements.size();
         asArray->setOffsetAndSize(
-            counter.insertedElements, offset, elements.size());
+            counter.insertedElements, offset, size);
         for (const variant& elt : elements) {
           insertVariantIntoVector(
-              elt, asArray->elements(), counter.children[0]);
+              elt, asArray->elements(), counter.children[0], offset, size);
         }
 
         break;
@@ -172,7 +171,8 @@ VectorPtr variantsToVector(
   VectorPtr resultVector =
       BaseVector::create(std::move(type), variants.size(), pool);
   for (const variant& v : variants) {
-    insertVariantIntoVector(v, resultVector, counter);
+    insertVariantIntoVector(v, resultVector, counter, /*previous_size*/ 0,
+                            /*previous_offset*/ 0);
   }
   return resultVector;
 }
