@@ -121,13 +121,13 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
   }
 
   std::optional<TimestampWithTimezone> timestampAtTimezone(
-      const std::optional<Timestamp> t1,
-      const std::optional<std::string>& t2) {
+      const std::optional<Timestamp> timestamp,
+      const std::optional<std::string>& timeZoneName) {
     auto resultVector = evaluate(
-        "timezone(c0, c1)",
+        "at_timezone(c0, c1)",
         makeRowVector(
-            {makeNullableFlatVector<Timestamp>({t1}),
-             makeNullableFlatVector<std::string>({t2})}));
+            {makeNullableFlatVector<Timestamp>({timestamp}),
+             makeNullableFlatVector<std::string>({timeZoneName})}));
 
     EXPECT_EQ(1, resultVector->size());
 
@@ -141,24 +141,26 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         rowVector->children()[1]->as<SimpleVector<int16_t>>()->valueAt(0)};
   }
   
-  std::optional<TimestampWithTimezone> evaluateWithTimestampWithTimezone2(
+  std::optional<TimestampWithTimezone> timestampWithTimezoneAtTimezone(
       std::optional<int64_t> timestamp,
       const std::optional<std::string>& timeZoneName,
       const std::optional<std::string>& newTimeZoneName) {
-    // if (!timestamp.has_value() || !timeZoneName.has_value()) {
-    //   return evaluateOnce<T>(
-    //       "timezone(c0, c1)",
-    //       makeRowVector(
-    //         {BaseVector::createNullConstant(
-    //           TIMESTAMP_WITH_TIME_ZONE(), 1, pool()),
-    //         makeNullableFlatVector<std::string>({newTimeZoneName})}));
-    // }
 
-    auto resultVector = evaluate(
-        "timezone(c0, c1)",
+        facebook::velox::VectorPtr resultVector;
+    if (!timestamp.has_value() || !timeZoneName.has_value()) {
+        resultVector = evaluate(
+        "at_timezone(c0, c1)",
+        makeRowVector(
+            {BaseVector::createNullConstant(
+              TIMESTAMP_WITH_TIME_ZONE(), 1, pool()),
+            makeNullableFlatVector<std::string>({newTimeZoneName})}));
+    } else {
+        resultVector = evaluate(
+        "at_timezone(c0, c1)",
         makeRowVector(
             {makeTimestampWithTimeZoneVector(timestamp.value(), timeZoneName.value().c_str()),
             makeNullableFlatVector<std::string>({newTimeZoneName})}));
+    }
 
     EXPECT_EQ(1, resultVector->size());
 
@@ -1057,18 +1059,18 @@ TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampWithTimezoneInput)
 
   EXPECT_EQ(
       TimestampWithTimezone(1500101514, util::getTimeZoneID("America/Boise")),
-      evaluateWithTimestampWithTimezone2(1500101514, "Asia/Kathmandu", "America/Boise")
+      timestampWithTimezoneAtTimezone(1500101514, "Asia/Kathmandu", "America/Boise")
       );
 
   EXPECT_EQ(
       TimestampWithTimezone(1500101514, util::getTimeZoneID("Europe/London")),
-      evaluateWithTimestampWithTimezone2(1500101514, "Asia/Kathmandu", "Europe/London")
+      timestampWithTimezoneAtTimezone(1500101514, "Asia/Kathmandu", "Europe/London")
       );
 
   // should fail
   EXPECT_EQ(
       TimestampWithTimezone(1500101514, util::getTimeZoneID("Europe/London")),
-      evaluateWithTimestampWithTimezone2(1500101513, "Asia/Kathmandu", "Europe/London")
+      timestampWithTimezoneAtTimezone(1500101513, "Asia/Kathmandu", "Europe/London")
       );
 
 }
