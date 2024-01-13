@@ -57,13 +57,14 @@ void setElementInFlatVector(
   asFlat->set(idx, NativeType{v.value<NativeType>()});
 }
 
-// Function responsible to construct the type for the passed variant
-// for a complex vector. It is supposed to run a recursive call with a
-// pre-instantiated TypePtr, the target variant and the counter. The
-// passed variant is checked for its data type, and for any complex
-// type involved, the function is called again. The counter here is used
-// to keep in track of the number of elements inserted and the number of
-// types of elements allowed if a complex vector is involved in the variant.
+// This function determines the type and the number of elements for a variant.
+// Takes reference to Type and ElementCounter which will be set after the run.
+// It is supposed to run a recursive call with a pre-instantiated TypePtr,
+// the target variant and the counter. The passed variant is checked for its
+// data type, and for any complex type involved, the function is called again.
+// The counter here is used to keep in track of the number of elements inserted
+// and the number of types of elements allowed if a complex vector is involved
+// in the variant.
 void constructType(const variant& v, TypePtr& type, ElementCounter& counter) {
   ++counter.totalElements;
 
