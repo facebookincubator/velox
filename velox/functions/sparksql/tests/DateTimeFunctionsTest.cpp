@@ -229,9 +229,10 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
 
 TEST_F(DateTimeFunctionsTest, dateAdd) {
   const auto dateAdd = [&](std::optional<int32_t> date,
-                           std::optional<int32_t> value) {
+                           std::optional<int32_t> value,
+                           std::string expr = "date_add(c0, c1)") {
     return evaluateOnce<int32_t, int32_t>(
-        "date_add(c0, c1)", {date, value}, {DATE(), INTEGER()});
+        expr, {date, value}, {DATE(), INTEGER()});
   };
 
   // Check null behaviors
@@ -258,18 +259,38 @@ TEST_F(DateTimeFunctionsTest, dateAdd) {
   EXPECT_EQ(
       parseDate("-5877641-06-23"), dateAdd(parseDate("1970-01-01"), kMin));
   EXPECT_EQ(parseDate("1969-12-31"), dateAdd(parseDate("5881580-07-11"), kMin));
+
+  // Check smallint type num_days.
+  auto smallintExpr = "date_add(c0, cast(c1 as smallint))";
+  EXPECT_EQ(
+      parseDate("2019-02-28"),
+      dateAdd(parseDate("2019-03-01"), -1, smallintExpr));
+  EXPECT_EQ(
+      parseDate("2019-03-01"),
+      dateAdd(parseDate("2019-02-28"), 1, smallintExpr));
+
+  // Check tinyint type num_days.
+  auto tinyintExpr = "date_add(c0, cast(c1 as tinyint))";
+  EXPECT_EQ(
+      parseDate("2019-02-28"),
+      dateAdd(parseDate("2019-03-01"), -1, tinyintExpr));
+  EXPECT_EQ(
+      parseDate("2019-03-01"),
+      dateAdd(parseDate("2019-02-28"), 1, tinyintExpr));
 }
 
 TEST_F(DateTimeFunctionsTest, dateSub) {
   const auto dateSubFunc = [&](std::optional<int32_t> date,
-                               std::optional<int32_t> value) {
+                               std::optional<int32_t> value,
+                               std::string expr = "date_sub(c0, c1)") {
     return evaluateOnce<int32_t, int32_t>(
-        "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
+        expr, {date, value}, {DATE(), INTEGER()});
   };
 
   const auto dateSub = [&](const std::string& dateStr,
-                           std::optional<int32_t> value) {
-    return dateSubFunc(parseDate(dateStr), value);
+                           std::optional<int32_t> value,
+                           std::string expr = "date_sub(c0, c1)") {
+    return dateSubFunc(parseDate(dateStr), value, expr);
   };
 
   // Check simple tests.
@@ -287,6 +308,16 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("5881580-07-11", kMax));
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("-5877641-06-23", kMin));
   EXPECT_EQ(parseDate("5881580-07-11"), dateSub("1969-12-31", kMin));
+
+  // Check smallint type num_days.
+  auto smallintExpr = "date_sub(c0, cast(c1 as smallint))";
+  EXPECT_EQ(parseDate("2019-02-28"), dateSub("2019-03-01", 1, smallintExpr));
+  EXPECT_EQ(parseDate("2019-03-01"), dateSub("2019-02-28", -1, smallintExpr));
+
+  // Check tinyint type num_days.
+  auto tinyintExpr = "date_sub(c0, cast(c1 as tinyint))";
+  EXPECT_EQ(parseDate("2019-02-28"), dateSub("2019-03-01", 1, tinyintExpr));
+  EXPECT_EQ(parseDate("2019-03-01"), dateSub("2019-02-28", -1, tinyintExpr));
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfYear) {
