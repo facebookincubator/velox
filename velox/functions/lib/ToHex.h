@@ -23,8 +23,8 @@ namespace facebook::velox::functions {
 
 struct ToHexUtil {
   FOLLY_ALWAYS_INLINE static void toHex(
-      exec::StringWriter<false>& result,
-      StringView input) {
+      StringView input,
+      exec::StringWriter<false>& result) {
     // Lookup table to translate unsigned char to its hexadecimal format.
     static const char* const kHexTable =
         "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
@@ -49,25 +49,25 @@ struct ToHexUtil {
   }
 
   FOLLY_ALWAYS_INLINE static void toHex(
-      exec::StringWriter<false>& result,
-      const int64_t& input) {
+      uint64_t input,
+      exec::StringWriter<false>& result) {
     static const char* const kHexTable = "0123456789ABCDEF";
     if (input == 0) {
       result = "0";
       return;
     }
 
-    uint64_t num = input;
-    const auto resultSize = ((64 - bits::countLeadingZeros(num)) + 3) / 4;
+    const auto resultSize =
+        ((64 - bits::countLeadingZeros(input)) + 3) / 4;
     result.resize(resultSize);
     char* buffer = result.data();
 
     int32_t len = 0;
     do {
       len += 1;
-      buffer[resultSize - len] = kHexTable[num & 0xF];
-      num >>= 4;
-    } while (num != 0);
+      buffer[resultSize - len] = kHexTable[input & 0xF];
+      input >>= 4;
+    } while (input != 0);
   }
 };
 

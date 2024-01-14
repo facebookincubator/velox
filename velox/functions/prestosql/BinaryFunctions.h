@@ -226,7 +226,7 @@ struct ToHexFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varbinary>& result,
       const arg_type<Varchar>& input) {
-    ToHexUtil::toHex(result, input);
+    ToHexUtil::toHex(input, result);
   }
 };
 

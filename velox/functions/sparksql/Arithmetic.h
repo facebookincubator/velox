@@ -329,7 +329,7 @@ struct ToHexVarbinaryFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    ToHexUtil::toHex(result, input);
+    ToHexUtil::toHex(input, result);
   }
 };
 
@@ -340,7 +340,7 @@ struct ToHexVarcharFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
-    ToHexUtil::toHex(result, input);
+    ToHexUtil::toHex(input, result);
   }
 };
 
@@ -351,7 +351,7 @@ struct ToHexBigintFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<int64_t>& input) {
-    ToHexUtil::toHex(result, input);
+    ToHexUtil::toHex(input, result);
   }
 };
 } // namespace facebook::velox::functions::sparksql
