@@ -154,5 +154,12 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
         "covar_pop",
         "corr",
         "regr_intercept",
-        "regr_slope"));
+        "regr_slope",
+        "regr_count",
+        "regr_avgy",
+        "regr_avgx",
+        "regr_sxy",
+        "regr_sxx",
+        "regr_syy",
+        "regr_r2"));
 } // namespace facebook::velox::aggregate::test
