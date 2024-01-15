@@ -38,10 +38,10 @@ struct ElementCounter {
 };
 } // namespace
 
-void checkOrAssignType(TypePtr& type, const std::function<TypePtr()>& func) {
+void checkOrAssignType(TypePtr& type, const TypePtr& expected_type) {
   if (type->kind() == TypeKind::UNKNOWN) {
-    type = func();
-  } else if (!(type->kindEquals(func()))) {
+    type = expected_type;
+  } else if (!(type->kindEquals(expected_type))) {
     throw py::type_error(
         "Cannot construct type tree, invalid variant for complex type");
   }
@@ -99,14 +99,12 @@ void constructType(const variant& v, TypePtr& type, ElementCounter& counter) {
         if (childType->kind() == TypeKind::UNKNOWN) {
           throw py::value_error("Cannot construct array with all None values");
         }
-        checkOrAssignType(type, [&childType]() {
-          return createType<TypeKind::ARRAY>({childType});
-        });
+        checkOrAssignType(type, createType<TypeKind::ARRAY>({childType}));
         break;
       }
 
       default: {
-        checkOrAssignType(type, [&v]() { return createScalarType(v.kind()); });
+        checkOrAssignType(type, createScalarType(v.kind()));
         break;
       }
     }
