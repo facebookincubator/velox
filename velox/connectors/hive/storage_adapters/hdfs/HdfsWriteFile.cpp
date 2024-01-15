@@ -27,7 +27,6 @@ HdfsWriteFile::HdfsWriteFile(
     : hdfsClient_(hdfsClient), filePath_(path) {
   auto pos = filePath_.rfind("/");
   auto parentDir = filePath_.substr(0, pos + 1);
-  // Check whether the parentDir exist, create it if not exist.
   if (hdfsExists(hdfsClient_, parentDir.c_str()) == -1) {
     hdfsCreateDirectory(hdfsClient_, parentDir.c_str());
   }
