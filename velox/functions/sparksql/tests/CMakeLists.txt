@@ -41,6 +41,7 @@ add_executable(
   StringTest.cpp
   StringToMapTest.cpp
   UnscaledValueFunctionTest.cpp
+  URLFunctionsTest.cpp
   XxHash64Test.cpp)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)

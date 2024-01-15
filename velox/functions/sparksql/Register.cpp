@@ -39,6 +39,7 @@
 #include "velox/functions/sparksql/Size.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
+#include "velox/functions/sparksql/URLFunctions.h"
 #include "velox/functions/sparksql/UnscaledValueFunction.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
@@ -328,6 +329,11 @@ void registerFunctions(const std::string& prefix) {
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
       {prefix + "might_contain"});
+
+  registerFunction<ParseUrlFunction, Varchar, Varchar, Varchar>(
+      {prefix + "parse_url"});
+  registerFunction<ParseUrlFunction, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "parse_url"});
 
   registerArrayMinMaxFunctions(prefix);
 
