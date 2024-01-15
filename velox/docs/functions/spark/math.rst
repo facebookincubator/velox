@@ -141,7 +141,7 @@ Mathematical Functions
 
 .. spark:function:: nanvl(x, y) -> [same as x]
 
-    Returns ``x`` if it's not NaN, or y otherwise. The types of ``x`` and ``y`` must be the same.
+    Returns ``x`` if it's not NaN, or ``y`` otherwise. The types of ``x`` and ``y`` must be the same.
     Supported types are: REAL, DOUBLE.
 
 .. spark:function:: not(x) -> boolean
