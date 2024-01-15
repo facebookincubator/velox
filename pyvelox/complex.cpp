@@ -135,8 +135,7 @@ static void insertVariantIntoVector(
         const std::vector<variant>& elements = v.array();
         vector_size_t offset = previous_offset + previous_size;
         vector_size_t size = elements.size();
-        asArray->setOffsetAndSize(
-            counter.insertedElements, offset, size);
+        asArray->setOffsetAndSize(counter.insertedElements, offset, size);
         for (const variant& elt : elements) {
           insertVariantIntoVector(
               elt, asArray->elements(), counter.children[0], offset, size);
@@ -169,8 +168,12 @@ VectorPtr variantsToVector(
   VectorPtr resultVector =
       BaseVector::create(std::move(type), variants.size(), pool);
   for (const variant& v : variants) {
-    insertVariantIntoVector(v, resultVector, counter, /*previous_size*/ 0,
-                            /*previous_offset*/ 0);
+    insertVariantIntoVector(
+        v,
+        resultVector,
+        counter,
+        /*previous_size*/ 0,
+        /*previous_offset*/ 0);
   }
   return resultVector;
 }
