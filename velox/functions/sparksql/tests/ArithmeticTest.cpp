@@ -425,6 +425,7 @@ TEST_F(ArithmeticTest, nanvlFloat) {
   EXPECT_EQ(0.0f, nanvl(0.0f, kNan));
   EXPECT_EQ(0.0f, nanvl(kNan, 0.0f));
   EXPECT_EQ(0.0f, nanvl(0.0f / 0.0f, 0.0f));
+  EXPECT_EQ(0.0f, nanvl(0.0f, std::nullopt));
   EXPECT_EQ(std::nullopt, nanvl(0.0f / 0.0f, std::nullopt));
   EXPECT_EQ(std::nullopt, nanvl(std::nullopt, 0.0f));
   EXPECT_EQ(std::nullopt, nanvl(std::nullopt, kNan));
@@ -439,6 +440,7 @@ TEST_F(ArithmeticTest, nanvlDouble) {
   EXPECT_EQ(0.0, nanvl(0.0, kNanDouble));
   EXPECT_EQ(0.0, nanvl(kNanDouble, 0.0));
   EXPECT_EQ(0.0, nanvl(0.0 / 0.0, 0.0));
+  EXPECT_EQ(0.0, nanvl(0.0, std::nullopt));
   EXPECT_EQ(std::nullopt, nanvl(0.0 / 0.0, std::nullopt));
   EXPECT_EQ(std::nullopt, nanvl(std::nullopt, 0.0));
   EXPECT_EQ(std::nullopt, nanvl(std::nullopt, kNanDouble));
