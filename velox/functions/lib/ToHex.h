@@ -57,8 +57,7 @@ struct ToHexUtil {
       return;
     }
 
-    const auto resultSize =
-        ((64 - bits::countLeadingZeros(input)) + 3) / 4;
+    const auto resultSize = ((64 - bits::countLeadingZeros(input)) + 3) / 4;
     result.resize(resultSize);
     char* buffer = result.data();
 
