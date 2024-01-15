@@ -323,7 +323,7 @@ struct DateAddFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void
   call(out_type<Date>& result, const arg_type<Date>& date, const TInput value) {
-    result = addToDate(date, DateTimeUnit::kDay, static_cast<int32_t>(value));
+    result = addToDate(date, DateTimeUnit::kDay, value);
   }
 };
 
