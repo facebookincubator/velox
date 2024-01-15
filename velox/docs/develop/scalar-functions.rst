@@ -242,10 +242,45 @@ not go away prematurely. The output types can be scalar strings (varchar and
 varbinaries), but also complex types containing strings, such as arrays, maps,
 and rows.
 
+The :func:`setNoCopy` and :func:`setEmpty` methods of the out_type template
+can be used to set the result to a string in the input argument.
+
 .. code-block:: c++
 
   // Results refer to strings in the first argument.
   static constexpr int32_t reuse_strings_from_arg = 0;
+
+
+Here is an example of a zero-copy function:
+
+.. code-block:: c++
+
+  template <typename T>
+  struct UrlExtractProtocolFunction {
+    VELOX_DEFINE_FUNCTION_TYPES(T);
+
+    // Results refer to strings in the first argument.
+    static constexpr int32_t reuse_strings_from_arg = 0;
+
+    // ASCII input always produces ASCII result.
+    static constexpr bool is_default_ascii_behavior = true;
+
+    FOLLY_ALWAYS_INLINE bool call(
+        out_type<Varchar>& result,
+        const arg_type<Varchar>& url) {
+      if (!isValidURI(url)) {
+        return false;
+      }
+
+      if (auto protocol = parse(url, kScheme)) {
+        result.setNoCopy(protocol.value());
+      } else {
+        result.setEmpty();
+      }
+      return true;
+    }
+  };
+
 
 Access to Session Properties and Constant Inputs
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
