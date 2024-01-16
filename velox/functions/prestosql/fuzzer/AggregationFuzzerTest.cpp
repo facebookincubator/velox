@@ -112,6 +112,9 @@ int main(int argc, char** argv) {
       "stddev_pop",
       // Lambda functions are not supported yet.
       "reduce_agg",
+      "bitwise_and_agg",
+      "bitwise_or_agg",
+      "bitwise_xor_agg"
   };
 
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
