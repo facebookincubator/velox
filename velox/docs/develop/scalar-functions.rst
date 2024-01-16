@@ -257,13 +257,8 @@ Here is an example of a zero-copy function:
 
   template <typename T>
   struct UrlExtractProtocolFunction {
-    VELOX_DEFINE_FUNCTION_TYPES(T);
-
     // Results refer to strings in the first argument.
     static constexpr int32_t reuse_strings_from_arg = 0;
-
-    // ASCII input always produces ASCII result.
-    static constexpr bool is_default_ascii_behavior = true;
 
     FOLLY_ALWAYS_INLINE bool call(
         out_type<Varchar>& result,
