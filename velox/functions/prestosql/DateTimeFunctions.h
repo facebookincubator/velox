@@ -479,7 +479,10 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
       const core::QueryConfig& config,
       const arg_type<Timestamp>& ts,
       const arg_type<Varchar>& timeZone) {
-    auto sessionTzName = config.sessionTimezone();
+    
+    // Check if session timezone was provided. 
+    // If not, fallback to UTC (represented by "Africa/Abidjan" timezone).
+    auto sessionTzName = (config.sessionTimezone().empty() ? "Africa/Abidjan" : config.sessionTimezone());
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -493,7 +496,8 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
     // We are to interpret the input timestamp as being at session timezone;
     // we must convert it to UTC to derive the UTC millisecond offset
     // with which we can create the output TimestampWithTimezone type.
-    // Africa/Abidjan has offset +00:00; use this timezone to convert to UTC.
+    // "Africa/Abidjan" timezone has offset +00:00; use this timezone to convert to UTC.
+
     auto starting_timepoint = date::make_zoned(sessionTzName, tp);
     auto UTC_timepoint = date::make_zoned("Africa/Abidjan", starting_timepoint);
 
