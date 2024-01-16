@@ -24,6 +24,7 @@
 
 namespace facebook::velox::functions {
 extern void registerArrayConcatFunctions(const std::string& prefix);
+extern void registerArrayNGramsFunctions(const std::string& prefix);
 
 template <typename T>
 inline void registerArrayMinMaxFunctions(const std::string& prefix) {
@@ -179,6 +180,7 @@ void registerArrayFunctions(const std::string& prefix) {
       {prefix + "array_average"});
 
   registerArrayConcatFunctions(prefix);
+  registerArrayNGramsFunctions(prefix);
 
   registerFunction<
       ArrayFlattenFunction,

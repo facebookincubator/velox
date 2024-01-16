@@ -276,10 +276,11 @@ struct CombinationsFunction {
         innerArray.add_null();
         continue;
       }
+
       if constexpr (std::is_same_v<T, Varchar>) {
         innerArray.add_item().setNoCopy(array[idx].value());
       } else {
-        innerArray.add_item() = array[idx].value();
+        innerArray.push_back(array[idx].value());
       }
     }
   }
@@ -573,24 +574,13 @@ struct ArrayConcatFunction {
     }
   }
 
-  template <typename B, typename U>
-  void assignElement(B& out, const U& input) {
-    if constexpr (SimpleTypeTrait<T>::isPrimitiveType) {
-      // Primitives we just assign. copy_from not defined for primitives.
-      out = input;
-    } else {
-      out.copy_from(input);
-    }
-  }
-
   void call(
       out_type<Array<T>>& out,
       const arg_type<Array<T>>& array,
       const arg_type<T>& element) {
     out.reserve(array.size() + 1);
     out.add_items(array);
-    auto& newItem = out.add_item();
-    assignElement(newItem, element);
+    out.push_back(element);
   }
 
   void call(
@@ -598,8 +588,7 @@ struct ArrayConcatFunction {
       const arg_type<T>& element,
       const arg_type<Array<T>>& array) {
     out.reserve(array.size() + 1);
-    auto& newItem = out.add_item();
-    assignElement(newItem, element);
+    out.push_back(element);
     out.add_items(array);
   }
 };
@@ -628,12 +617,7 @@ struct ArrayTrimFunction {
 
     int64_t end = inputArray.size() - size;
     for (int i = 0; i < end; ++i) {
-      if (inputArray[i].has_value()) {
-        auto& newItem = out.add_item();
-        newItem = inputArray[i].value();
-      } else {
-        out.add_null();
-      }
+      out.push_back(inputArray[i]);
     }
   }
 
@@ -646,12 +630,7 @@ struct ArrayTrimFunction {
 
     int64_t end = inputArray.size() - size;
     for (int i = 0; i < end; ++i) {
-      if (inputArray[i].has_value()) {
-        auto& newItem = out.add_item();
-        newItem.copy_from(inputArray[i].value());
-      } else {
-        out.add_null();
-      }
+      out.push_back(inputArray[i]);
     }
   }
 };
@@ -690,8 +669,7 @@ struct ArrayRemoveNullFunction {
   FOLLY_ALWAYS_INLINE void call(Out& out, const In& inputArray) {
     for (int i = 0; i < inputArray.size(); ++i) {
       if (inputArray[i].has_value()) {
-        auto& newItem = out.add_item();
-        newItem = inputArray[i].value();
+        out.push_back(inputArray[i].value());
       }
     }
   }
@@ -702,8 +680,7 @@ struct ArrayRemoveNullFunction {
       const arg_type<Array<Generic<T1>>>& inputArray) {
     for (int i = 0; i < inputArray.size(); ++i) {
       if (inputArray[i].has_value()) {
-        auto& newItem = out.add_item();
-        newItem.copy_from(inputArray[i].value());
+        out.push_back(inputArray[i].value());
       }
     }
   }
@@ -723,6 +700,94 @@ struct ArrayRemoveNullFunctionString {
       if (inputArray[i].has_value()) {
         auto& newItem = out.add_item();
         newItem.setNoCopy(inputArray[i].value());
+      }
+    }
+  }
+};
+
+template <typename T>
+struct ArrayNGramsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T)
+
+  // Fast path for primitives.
+  template <typename Out, typename In>
+  void call(Out& out, const In& input, int64_t n) {
+    VELOX_USER_CHECK_GT(n, 0, "N must be greater than zero.");
+
+    if (n > input.size()) {
+      auto& newItem = out.add_item();
+      newItem.copy_from(input);
+      return;
+    }
+
+    for (auto i = 0; i <= input.size() - n; ++i) {
+      auto& newItem = out.add_item();
+      for (auto j = 0; j < n; ++j) {
+        if (input[i + j].has_value()) {
+          auto& newGranularItem = newItem.add_item();
+          newGranularItem = input[i + j].value();
+        } else {
+          newItem.add_null();
+        }
+      }
+    }
+  }
+
+  // Generic implementation.
+  void call(
+      out_type<Array<Array<Generic<T1>>>>& out,
+      const arg_type<Array<Generic<T1>>>& input,
+      int64_t n) {
+    VELOX_USER_CHECK_GT(n, 0, "N must be greater than zero.");
+
+    if (n > input.size()) {
+      auto& newItem = out.add_item();
+      newItem.copy_from(input);
+      return;
+    }
+
+    for (auto i = 0; i <= input.size() - n; ++i) {
+      auto& newItem = out.add_item();
+      for (auto j = 0; j < n; ++j) {
+        if (input[i + j].has_value()) {
+          auto& newGranularItem = newItem.add_item();
+          newGranularItem.copy_from(input[i + j].value());
+        } else {
+          newItem.add_null();
+        }
+      }
+    }
+  }
+};
+
+template <typename T>
+struct ArrayNGramsFunctionFunctionString {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // String version that avoids copy of strings.
+  void call(
+      out_type<Array<Array<Varchar>>>& out,
+      const arg_type<Array<Varchar>>& input,
+      int64_t n) {
+    VELOX_USER_CHECK_GT(n, 0, "N must be greater than zero.");
+
+    if (n > input.size()) {
+      auto& newItem = out.add_item();
+      newItem.copy_from(input);
+      return;
+    }
+
+    for (auto i = 0; i <= input.size() - n; ++i) {
+      auto& newItem = out.add_item();
+      for (auto j = 0; j < n; ++j) {
+        if (input[i + j].has_value()) {
+          auto& newGranularItem = newItem.add_item();
+          newGranularItem.setNoCopy(input[i + j].value());
+        } else {
+          newItem.add_null();
+        }
       }
     }
   }
@@ -766,7 +831,6 @@ template <typename T>
 struct ArrayUnionFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T)
 
-  // Fast path for primitives.
   template <typename Out, typename In>
   void call(Out& out, const In& inputArray1, const In& inputArray2) {
     folly::F14FastSet<typename In::element_t> elementSet;
@@ -775,31 +839,7 @@ struct ArrayUnionFunction {
       for (const auto& item : inputArray) {
         if (item.has_value()) {
           if (elementSet.insert(item.value()).second) {
-            auto& newItem = out.add_item();
-            newItem = item.value();
-          }
-        } else if (!nullAdded) {
-          nullAdded = true;
-          out.add_null();
-        }
-      }
-    };
-    addItems(inputArray1);
-    addItems(inputArray2);
-  }
-
-  void call(
-      out_type<Array<Generic<T1>>>& out,
-      const arg_type<Array<Generic<T1>>>& inputArray1,
-      const arg_type<Array<Generic<T1>>>& inputArray2) {
-    folly::F14FastSet<exec::GenericView> elementSet;
-    bool nullAdded = false;
-    auto addItems = [&](auto& inputArray) {
-      for (const auto& item : inputArray) {
-        if (item.has_value()) {
-          if (elementSet.insert(item.value()).second) {
-            auto& newItem = out.add_item();
-            newItem.copy_from(item.value());
+            out.push_back(item.value());
           }
         } else if (!nullAdded) {
           nullAdded = true;
@@ -827,8 +867,7 @@ struct ArrayRemoveFunction {
     for (const auto& item : inputArray) {
       if (item.has_value()) {
         if (element != item.value()) {
-          auto& newItem = out.add_item();
-          newItem = item.value();
+          out.push_back(item.value());
         }
       } else {
         out.add_null();
@@ -845,26 +884,22 @@ struct ArrayRemoveFunction {
         CompareFlags::NullHandlingMode::kNullAsIndeterminate);
     std::vector<std::optional<exec::GenericView>> toCopyItems;
     for (const auto& item : array) {
-      if (item.has_value()) {
-        auto result = element.compare(item.value(), kFlags);
-        VELOX_USER_CHECK(
-            result.has_value(),
-            "array_remove does not support arrays with elements that are null or contain null")
-        if (result.value()) {
-          toCopyItems.push_back(item.value());
-        }
-      } else {
+      if (!item.has_value()) {
         toCopyItems.push_back(std::nullopt);
+        continue;
+      }
+
+      auto result = element.compare(item.value(), kFlags);
+      VELOX_USER_CHECK(
+          result.has_value(),
+          "array_remove does not support arrays with elements that are null or contain null")
+      if (result.value()) {
+        toCopyItems.push_back(item.value());
       }
     }
 
     for (const auto& item : toCopyItems) {
-      if (item.has_value()) {
-        auto& newItem = out.add_item();
-        newItem.copy_from(item.value());
-      } else {
-        out.add_null();
-      }
+      out.push_back(item);
     }
   }
 };
@@ -884,8 +919,7 @@ struct ArrayRemoveFunctionString {
       if (item.has_value()) {
         auto result = element.compare(item.value());
         if (result) {
-          auto& newItem = out.add_item();
-          newItem.setNoCopy(item.value());
+          out.push_back(item.value());
         }
       } else {
         out.add_null();
