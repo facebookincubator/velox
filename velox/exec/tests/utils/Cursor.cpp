@@ -125,9 +125,52 @@ bool TaskQueue::hasNext() {
   return !queue_.empty();
 }
 
-std::atomic<int32_t> TaskCursor::serial_;
+class MultiThreadedTaskCursor : public TaskCursor {
+ public:
+  explicit MultiThreadedTaskCursor(const CursorParameters& params);
 
-TaskCursor::TaskCursor(const CursorParameters& params)
+  virtual ~MultiThreadedTaskCursor() {
+    queue_->close();
+    if (task_ && !atEnd_) {
+      task_->requestCancel();
+    }
+  }
+
+  /// Starts the task if not started yet.
+  void start() override;
+
+  /// Fetches another batch from the task queue.
+  /// Starts the task if not started yet.
+  bool moveNext() override;
+
+  bool hasNext() override;
+
+  RowVectorPtr& current() override {
+    return current_;
+  }
+
+  const std::shared_ptr<Task>& task() override {
+    return task_;
+  }
+
+ private:
+  static std::atomic<int32_t> serial_;
+
+  const int32_t maxDrivers_;
+  const int32_t numConcurrentSplitGroups_;
+  const int32_t numSplitGroups_;
+
+  std::shared_ptr<folly::Executor> executor_;
+  bool started_ = false;
+  std::shared_ptr<TaskQueue> queue_;
+  std::shared_ptr<exec::Task> task_;
+  RowVectorPtr current_;
+  bool atEnd_{false};
+};
+
+std::atomic<int32_t> MultiThreadedTaskCursor::serial_;
+
+MultiThreadedTaskCursor::MultiThreadedTaskCursor(const CursorParameters& params)
     : maxDrivers_{params.maxDrivers},
       numConcurrentSplitGroups_{params.numConcurrentSplitGroups},
       numSplitGroups_{params.numSplitGroups} {
@@ -207,7 +250,7 @@ TaskCursor::TaskCursor(const CursorParameters& params)
   }
 }
 
-void TaskCursor::start() {
+void MultiThreadedTaskCursor::start() {
   if (!started_) {
     started_ = true;
     task_->start(maxDrivers_, numConcurrentSplitGroups_);
@@ -215,7 +258,7 @@ void TaskCursor::start() {
   }
 }
 
-bool TaskCursor::moveNext() {
+bool MultiThreadedTaskCursor::moveNext() {
   start();
   current_ = queue_->dequeue();
   if (task_->error()) {
@@ -230,8 +273,12 @@ bool TaskCursor::moveNext() {
   return current_ != nullptr;
 }
 
-bool TaskCursor::hasNext() {
+bool MultiThreadedTaskCursor::hasNext() {
   return queue_->hasNext();
+}
+
+std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
+  return std::unique_ptr<TaskCursor>(new MultiThreadedTaskCursor(params));
 }
 
 bool RowCursor::next() {

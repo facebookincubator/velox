@@ -121,51 +121,28 @@ class TaskQueue {
 
 class TaskCursor {
  public:
-  explicit TaskCursor(const CursorParameters& params);
+  virtual ~TaskCursor() = default;
 
-  ~TaskCursor() {
-    queue_->close();
-    if (task_ && !atEnd_) {
-      task_->requestCancel();
-    }
-  }
+  static std::unique_ptr<TaskCursor> create(const CursorParameters& params);
 
   /// Starts the task if not started yet.
-  void start();
+  virtual void start() = 0;
 
   /// Fetches another batch from the task queue.
   /// Starts the task if not started yet.
-  bool moveNext();
+  virtual bool moveNext() = 0;
 
-  bool hasNext();
+  virtual bool hasNext() = 0;
 
-  RowVectorPtr& current() {
-    return current_;
-  }
+  virtual RowVectorPtr& current() = 0;
 
-  const std::shared_ptr<Task>& task() {
-    return task_;
-  }
-
- private:
-  static std::atomic<int32_t> serial_;
-
-  const int32_t maxDrivers_;
-  const int32_t numConcurrentSplitGroups_;
-  const int32_t numSplitGroups_;
-
-  std::shared_ptr<folly::Executor> executor_;
-  bool started_ = false;
-  std::shared_ptr<TaskQueue> queue_;
-  std::shared_ptr<exec::Task> task_;
-  RowVectorPtr current_;
-  bool atEnd_{false};
+  virtual const std::shared_ptr<Task>& task() = 0;
 };
 
 class RowCursor {
  public:
   explicit RowCursor(CursorParameters& params) {
-    cursor_ = std::make_unique<TaskCursor>(params);
+    cursor_ = TaskCursor::create(params);
   }
 
   bool isNullAt(int32_t columnIndex) const {
