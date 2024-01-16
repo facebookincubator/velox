@@ -134,7 +134,7 @@ struct RegexpReplaceFunction {
       const arg_type<Varchar>& stringInput,
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace,
-      const arg_type<int64_t>& position) {
+      const arg_type<int32_t>& position) {
     VELOX_USER_CHECK_GE(position, 1, "regexp_replace requires a position >= 1");
 
     re2::RE2* patternRegex = getCachedRegex(pattern.str());
@@ -245,7 +245,7 @@ void registerRegexpReplace(const std::string& prefix) {
       Varchar,
       Varchar,
       Varchar,
-      int64_t>({prefix + "REGEXP_REPLACE"});
+      int32_t>({prefix + "REGEXP_REPLACE"});
 }
 
 } // namespace facebook::velox::functions::sparksql
