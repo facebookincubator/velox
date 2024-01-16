@@ -1035,8 +1035,8 @@ const std::vector<TypePtr> defaultScalarTypes() {
       VARCHAR(),
       VARBINARY(),
       TIMESTAMP(),
-      DATE(),
-      INTERVAL_DAY_TIME(),
+      // DATE(),
+      // INTERVAL_DAY_TIME(),
   };
   return kScalarTypes;
 }

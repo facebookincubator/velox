@@ -30,7 +30,7 @@ target_link_libraries(
   velox_dwio_dwrf_writer
   velox_type
   velox_vector_fuzzer
-  velox_exec_test_lib
+  velox_fuzzer_util
   velox_expression_test_utility
   velox_vector
   velox_core)

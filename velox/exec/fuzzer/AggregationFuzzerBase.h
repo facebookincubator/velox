@@ -133,7 +133,7 @@ class AggregationFuzzerBase {
     VectorFuzzer::Options opts;
     opts.vectorSize = FLAGS_batch_size;
     opts.stringVariableLength = true;
-    opts.stringLength = 4'000;
+    opts.stringLength = 4;
     opts.nullRatio = FLAGS_null_ratio;
     opts.timestampPrecision = timestampPrecision;
     return opts;

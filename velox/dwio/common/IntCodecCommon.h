@@ -31,7 +31,7 @@ constexpr __int128_t INT128_BASE_256_MASK = 0xff;
 // Timezone constants
 constexpr int64_t SECONDS_PER_HOUR = 60 * 60;
 // Timezone offset of PST from UTC.
-constexpr int64_t TIMEZONE_OFFSET = (8 * SECONDS_PER_HOUR);
+constexpr int64_t TIMEZONE_OFFSET = (6 * SECONDS_PER_HOUR);
 // ORC base epoch: 2015-01-01 00:00:00 in UTC, as seconds from UNIX epoch.
 constexpr int64_t UTC_EPOCH_OFFSET = 1420070400;
 // ORC actual epoch: 2015-01-01 00:00:00 in PST

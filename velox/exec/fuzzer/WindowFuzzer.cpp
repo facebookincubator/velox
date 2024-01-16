@@ -16,6 +16,7 @@
 
 #include "velox/exec/fuzzer/WindowFuzzer.h"
 
+#include <boost/random/uniform_int_distribution.hpp>
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -35,19 +36,6 @@ void logVectors(const std::vector<RowVectorPtr>& vectors) {
       VLOG(1) << "\tRow " << j << ": " << vectors[i]->toString(j);
     }
   }
-}
-
-std::string getFrame(
-    const std::vector<std::string>& partitionKeys,
-    const std::vector<std::string>& sortingKeys) {
-  // TODO: allow randomly generated frames.
-  std::stringstream frame;
-  VELOX_CHECK(!partitionKeys.empty());
-  frame << "partition by " << folly::join(", ", partitionKeys);
-  if (!sortingKeys.empty()) {
-    frame << " order by " << folly::join(", ", sortingKeys);
-  }
-  return frame.str();
 }
 
 bool supportIgnoreNulls(const std::string& name) {
@@ -113,7 +101,10 @@ void WindowFuzzer::go() {
       sortingKeys = generateSortingKeys("s", argNames, argTypes);
     }
     auto partitionKeys = generateSortingKeys("p", argNames, argTypes);
-    auto input = generateInputDataWithRowNumber(argNames, argTypes, signature);
+    auto frameClause = generateFrameClause();
+    auto input = generateInputDataWithRowNumber(
+        argNames, argTypes, partitionKeys, signature);
+    // auto input = generateInputDataWithRowNumber(argNames, argTypes, signature);
     // If the function is order-dependent, sort all input rows by row_number
     // additionally.
     if (requireSortedInput) {
@@ -126,6 +117,7 @@ void WindowFuzzer::go() {
     bool failed = verifyWindow(
         partitionKeys,
         sortingKeys,
+        frameClause,
         call,
         input,
         customVerification,
@@ -166,6 +158,157 @@ void WindowFuzzer::updateReferenceQueryStats(
   }
 }
 
+const std::string WindowFuzzer::generateFrameClause() {
+  auto frameType = [](int value) -> const std::string {
+    switch (value) {
+      case 0:
+        return "ROWS";
+      case 1:
+        return "RANGE";
+      default:
+        VELOX_UNREACHABLE("Unknown value for frame bound generation");
+    }
+  };
+  auto frameTypeValue =
+      boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+  auto frameTypeString = frameType(frameTypeValue);
+
+  auto frameBound = [&](int value, bool start) -> const std::string {
+    // Generating only constant bounded k PRECEDING/FOLLOWING frames for now.
+    auto kValue =
+        boost::random::uniform_int_distribution<uint32_t>(1, 10)(rng_);
+    switch (value) {
+      case 0:
+        return "CURRENT ROW";
+      case 1:
+        return start ? "UNBOUNDED PRECEDING" : "UNBOUNDED FOLLOWING";
+      case 2:
+        return fmt::format("{} FOLLOWING", kValue);
+      case 3:
+        return fmt::format("{} PRECEDING", kValue);
+      default:
+        VELOX_UNREACHABLE("Unknown option for frame clause generation");
+    }
+  };
+
+  // Generating k PRECEDING and k FOLLOWING frames only for ROWS type.
+  // k RANGE frames require more work as we have to generate columns with the
+  // frame bound values.
+  auto startValue = boost::random::uniform_int_distribution<uint32_t>(
+      0, frameTypeValue == 0 ? 3 : 1)(rng_);
+  auto startBound = frameBound(startValue, true);
+  // Frame end has additional limitation that if the frameStart is k FOLLOWING
+  // or CURRENT ROW then the frameEnd cannot be k PRECEDING or CURRENT ROW.
+  auto startLimit =
+      frameTypeValue == 0 ? ((startValue == 2) | (startValue == 0)) ? 1 : 0 : 0;
+  auto endLimit =
+      frameTypeValue == 0 ? ((startValue == 2) | (startValue == 0)) ? 2 : 3 : 1;
+  auto endBound = frameBound(
+      boost::random::uniform_int_distribution<uint32_t>(
+          startLimit, endLimit)(rng_),
+      false);
+
+  return frameTypeString + " BETWEEN " + startBound + " AND " + endBound;
+}
+
+const std::string WindowFuzzer::generateOrderByClause(
+    const std::vector<std::string>& sortingKeys) {
+  VELOX_CHECK(!sortingKeys.empty());
+  std::stringstream frame;
+  frame << " order by ";
+  for (auto i = 0; i < sortingKeys.size(); ++i) {
+    if (i != 0) {
+      frame << ", ";
+    }
+    frame << sortingKeys[i] << " ";
+    auto asc = boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+    if (asc == 0) {
+      frame << "asc ";
+    } else {
+      frame << "desc ";
+    }
+    auto nullsFirst =
+        boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+    if (nullsFirst == 0) {
+      frame << "nulls first";
+    } else {
+      frame << "nulls last";
+    }
+  }
+  return frame.str();
+}
+
+std::string WindowFuzzer::getFrame(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    const std::string& frameClause) {
+  // TODO: allow randomly generated frames.
+  std::stringstream frame;
+  VELOX_CHECK(!partitionKeys.empty());
+  frame << "partition by " << folly::join(", ", partitionKeys);
+  if (!sortingKeys.empty()) {
+    // frame << " order by " << folly::join(", ", sortingKeys);
+    frame << generateOrderByClause(sortingKeys);
+  }
+  frame << " " << frameClause;
+  return frame.str();
+}
+
+std::vector<RowVectorPtr> WindowFuzzer::generateInputDataWithRowNumber(
+    std::vector<std::string>& names,
+    std::vector<TypePtr>& types,
+    const std::vector<std::string>& partitionKeys,
+    const CallableSignature& signature) {
+  names.push_back("row_number");
+  types.push_back(BIGINT());
+
+  std::unordered_set<std::string> partitionSet;
+  partitionSet.reserve(partitionKeys.size());
+  for (const auto& key : partitionKeys) {
+    partitionSet.insert(key);
+  }
+
+  auto generator = findInputGenerator(signature);
+
+  std::vector<RowVectorPtr> input;
+  auto size = vectorFuzzer_.getOptions().vectorSize;
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  int64_t rowNumber = 0;
+
+  auto partitionNumRows =
+      boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_) * size / 10;
+  partitionNumRows = partitionNumRows > 0 ? partitionNumRows : 1;
+  for (auto j = 0; j < FLAGS_num_batches; ++j) {
+    std::vector<VectorPtr> children;
+
+    if (generator != nullptr) {
+      children =
+          generator->generate(signature.args, vectorFuzzer_, rng_, pool_.get());
+    }
+
+    for (auto i = children.size(); i < types.size() - 1; ++i) {
+      if (partitionSet.count(names[i]) != 0) {
+        // The partition keys are built with a dictionary over a smaller set of
+        // values. This is done to introduce some repetition of key values for
+        // windowing.
+        auto baseVector = vectorFuzzer_.fuzz(types[i], partitionNumRows);
+        children.push_back(vectorFuzzer_.fuzzDictionary(baseVector, size));
+      } else {
+        children.push_back(vectorFuzzer_.fuzz(types[i], size));
+      }
+    }
+    children.push_back(vectorMaker.flatVector<int64_t>(
+        size, [&](auto /*row*/) { return rowNumber++; }));
+    input.push_back(vectorMaker.rowVector(names, children));
+  }
+
+  if (generator != nullptr) {
+    generator->reset();
+  }
+
+  return input;
+}
+
 void WindowFuzzer::testAlternativePlans(
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortingKeys,
@@ -176,9 +319,9 @@ void WindowFuzzer::testAlternativePlans(
     const velox::test::ResultOrError& expected) {
   std::vector<AggregationFuzzerBase::PlanWithSplits> plans;
 
-  std::vector<std::string> allKeys{partitionKeys.size()};
+  std::vector<std::string> allKeys;
   for (const auto& key : partitionKeys) {
-    allKeys.push_back(fmt::format("{} NULLS FIRST", key));
+    allKeys.push_back(key + " NULLS FIRST");
   }
   allKeys.insert(allKeys.end(), sortingKeys.begin(), sortingKeys.end());
 
@@ -234,11 +377,12 @@ void WindowFuzzer::testAlternativePlans(
 bool WindowFuzzer::verifyWindow(
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortingKeys,
+    const std::string& frameClause,
     const std::string& functionCall,
     const std::vector<RowVectorPtr>& input,
     bool customVerification,
     bool enableWindowVerification) {
-  auto frame = getFrame(partitionKeys, sortingKeys);
+  auto frame = getFrame(partitionKeys, sortingKeys, frameClause);
   auto plan = PlanBuilder()
                   .values(input)
                   .window({fmt::format("{} over ({})", functionCall, frame)})

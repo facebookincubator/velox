@@ -56,7 +56,7 @@ class WindowFuzzer : public AggregationFuzzerBase {
     // Presto doesn't allow complex-typed vectors with NULL elements to be
     // partition keys, so we disable it for all inputs.
     // TODO: allow complex-typed vectors with NULL elements as non-key columns.
-    if (dynamic_cast<PrestoQueryRunner*>(referenceQueryRunner.get())) {
+    if (dynamic_cast<PrestoQueryRunner*>(referenceQueryRunner_.get())) {
       auto options = vectorFuzzer_.getOptions();
       options.containerHasNulls = false;
       vectorFuzzer_.setOptions(options);
@@ -81,10 +81,27 @@ class WindowFuzzer : public AggregationFuzzerBase {
   void updateReferenceQueryStats(
       AggregationFuzzerBase::ReferenceQueryErrorCode ec);
 
+  std::string getFrame(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      const std::string& frameClause);
+
+  const std::string generateFrameClause();
+
+  const std::string generateOrderByClause(
+      const std::vector<std::string>& sortingKeys);
+
+  std::vector<RowVectorPtr> generateInputDataWithRowNumber(
+      std::vector<std::string>& names,
+      std::vector<TypePtr>& types,
+      const std::vector<std::string>& partitionKeys,
+      const CallableSignature& signature);
+
   // Return 'true' if query plans failed.
   bool verifyWindow(
       const std::vector<std::string>& partitionKeys,
       const std::vector<std::string>& sortingKeys,
+      const std::string& frameClause,
       const std::string& functionCall,
       const std::vector<RowVectorPtr>& input,
       bool customVerification,

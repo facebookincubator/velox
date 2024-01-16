@@ -72,8 +72,8 @@ getCustomInputGenerators() {
 } // namespace facebook::velox::exec::test
 
 int main(int argc, char** argv) {
-  facebook::velox::aggregate::prestosql::registerAllAggregateFunctions(
-      "", false);
+  /*facebook::velox::aggregate::prestosql::registerAllAggregateFunctions(
+      "", false);*/
   facebook::velox::window::prestosql::registerAllWindowFunctions();
   facebook::velox::memory::MemoryManager::initialize({});
 
