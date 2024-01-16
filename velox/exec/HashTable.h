@@ -825,7 +825,7 @@ class HashTable : public BaseHashTable {
   // or distinct mode VectorHashers in a group by hash table. 0 for
   // join build sides.
   int32_t reservePct() const {
-    return isJoinBuild_ ? 0 : 50;
+    return (isJoinBuild_ && allowDuplicates_) ? 0 : 50;
   }
 
   // Returns the byte offset of the bucket for 'hash' starting from 'table_'.
@@ -886,6 +886,7 @@ class HashTable : public BaseHashTable {
 
   int8_t sizeBits_;
   bool isJoinBuild_ = false;
+  bool allowDuplicates_ = false;
 
   // Set at join build time if the table has duplicates, meaning that
   // the join can be cardinality increasing. Atomic for tsan because

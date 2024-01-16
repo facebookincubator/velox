@@ -343,8 +343,8 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     numAddedPools_ = 0;
   }
 
-  RowVectorPtr newVector() {
-    VectorFuzzer fuzzer(fuzzerOpts_, pool());
+  RowVectorPtr newVector(size_t seed = 123456) {
+    VectorFuzzer fuzzer(fuzzerOpts_, pool(), seed);
     return fuzzer.fuzzRow(rowType_);
   }
 
@@ -877,7 +877,8 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromJoinBuilder) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
-    vectors.push_back(newVector());
+    auto seed = folly::Random::rand32();
+    vectors.push_back(newVector(seed));
   }
   createDuckDbTable(vectors);
   std::vector<bool> sameQueries = {false, true};
@@ -898,7 +899,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromJoinBuilder) {
     std::atomic_bool taskPauseDone{false};
     folly::EventCount taskPauseWait;
 
-    const auto joinMemoryUsage = 32L << 20;
+    const auto joinMemoryUsage = 20L << 20;
     const auto fakeAllocationSize = kMemoryCapacity - joinMemoryUsage / 2;
 
     std::atomic<bool> injectAllocationOnce{true};
@@ -958,8 +959,8 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromJoinBuilder) {
                         .values(vectors)
                         .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
                         .hashJoin(
-                            {"t0"},
-                            {"u0"},
+                            {"t2"},
+                            {"u2"},
                             PlanBuilder(planNodeIdGenerator)
                                 .values(vectors)
                                 .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
@@ -1018,7 +1019,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
     folly::EventCount taskPauseWait;
     auto taskPauseWaitKey = taskPauseWait.prepareWait();
 
-    const auto fakeAllocationSize = kMemoryCapacity - (32L << 20);
+    const auto fakeAllocationSize = kMemoryCapacity - (2L << 20);
 
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {

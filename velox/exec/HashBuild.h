@@ -270,6 +270,8 @@ class HashBuild final : public Operator {
   // Container for the rows being accumulated.
   std::unique_ptr<BaseHashTable> table_;
 
+  std::unique_ptr<HashLookup> lookup_;
+
   // Key channels in 'input_'
   std::vector<column_index_t> keyChannels_;
 
@@ -296,6 +298,13 @@ class HashBuild final : public Operator {
   // True if this is a build side of an anti or left semi project join and has
   // at least one entry with null join keys.
   bool joinHasNullKeys_{false};
+
+  // Indicates whether the hash table ignore null keys.
+  bool ignoreNullKeys_{false};
+
+  // Indicates whether drop duplicate rows. Rows containing duplicate keys
+  // can be removed for left semi and anti join.
+  bool dropDuplicates_{false};
 
   // Counts input batches and triggers spilling if folly hash of this % 100 <=
   // 'testSpillPct_';.

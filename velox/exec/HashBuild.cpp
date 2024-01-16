@@ -150,6 +150,7 @@ void HashBuild::setupTable() {
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
       joinNode_->isRightSemiProjectJoin()) {
     // Do not ignore null keys.
+    ignoreNullKeys_ = false;
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
         dependentTypes,
@@ -162,18 +163,23 @@ void HashBuild::setupTable() {
   } else {
     // (Left) semi and anti join with no extra filter only needs to know whether
     // there is a match. Hence, no need to store entries with duplicate keys.
-    const bool dropDuplicates = !joinNode_->filter() &&
+    dropDuplicates_ = !joinNode_->filter() &&
         (joinNode_->isLeftSemiFilterJoin() ||
          joinNode_->isLeftSemiProjectJoin() || isAntiJoin(joinType_));
+    if (dropDuplicates_) {
+      // Left semi and anti join do not require storing non-join key columns.
+      dependentTypes = std::vector<TypePtr>{};
+    }
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
     if (isLeftNullAwareJoinWithFilter(joinNode_)) {
       // We need to check null key rows in build side in case of null-aware anti
       // or left semi project join with filter set.
+      ignoreNullKeys_ = false;
       table_ = HashTable<false>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          !dropDuplicates, // allowDuplicates
+          !dropDuplicates_, // allowDuplicates
           needProbedFlag, // hasProbedFlag
           operatorCtx_->driverCtx()
               ->queryConfig()
@@ -181,10 +187,11 @@ void HashBuild::setupTable() {
           pool());
     } else {
       // Ignore null keys
+      ignoreNullKeys_ = true;
       table_ = HashTable<true>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          !dropDuplicates, // allowDuplicates
+          !dropDuplicates_, // allowDuplicates
           needProbedFlag, // hasProbedFlag
           operatorCtx_->driverCtx()
               ->queryConfig()
@@ -192,6 +199,7 @@ void HashBuild::setupTable() {
           pool());
     }
   }
+  lookup_ = std::make_unique<HashLookup>(table_->hashers());
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
 }
 
@@ -373,6 +381,12 @@ void HashBuild::addInput(RowVectorPtr input) {
 
   spillInput(input);
   if (!activeRows_.hasSelections()) {
+    return;
+  }
+
+  if (dropDuplicates_) {
+    table_->prepareForGroupProbe(*lookup_, input, activeRows_, ignoreNullKeys_);
+    table_->groupProbe(*lookup_);
     return;
   }
 
