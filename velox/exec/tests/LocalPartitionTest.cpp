@@ -514,7 +514,7 @@ TEST_F(LocalPartitionTest, earlyCancelation) {
   task->requestCancel();
 
   // Fetch the remaining results. This will throw since only one vector can be
-  // buffered in the cursor->
+  // buffered in the cursor.
   try {
     while (cursor->moveNext()) {
       ;
