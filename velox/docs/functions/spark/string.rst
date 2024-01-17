@@ -20,9 +20,9 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT space(1); -- " "
         SELECT space(5); -- "     "
-        SELECT startswith(0); -- ""
-        SELECT startswith(-1); -- ""
-        SELECT startswith(null); -- NULL
+        SELECT space(0); -- ""
+        SELECT space(-1); -- ""
+        SELECT space(null); -- NULL
 
 .. spark:function:: contains(left, right) -> boolean
 
