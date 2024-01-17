@@ -24,7 +24,6 @@ General Aggregate Functions
 .. spark:function:: bloom_filter_agg(hash, estimatedNumItems, numBits) -> varbinary
 
     Creates bloom filter from input hashes and returns it serialized into VARBINARY.
-    The caller is expected to apply xxhash64 function to input data before calling bloom_filter_agg.
 
     For example, 
         bloom_filter_agg(xxhash64(x), 100, 1024)
