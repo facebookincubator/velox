@@ -96,8 +96,8 @@ void ensureRegexIsConstantAndCompatible(
       std::string(pattern.data(), pattern.size()), functionName);
 }
 
-// REGEXP_REPLACE(string, pattern, overwrite) → string
-// REGEXP_REPLACE(string, pattern, overwrite, position) → string
+// regexp_replace(string, pattern, overwrite) → string
+// regexp_replace(string, pattern, overwrite, position) → string
 //
 // If a string has a substring that matches the given pattern, replace
 // the match in the string wither overwrite and return the string. If
@@ -238,14 +238,14 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
 
 void registerRegexpReplace(const std::string& prefix) {
   registerFunction<RegexpReplaceFunction, Varchar, Varchar, Varchar, Varchar>(
-      {prefix + "REGEXP_REPLACE"});
+      {prefix + "regexp_replace"});
   registerFunction<
       RegexpReplaceFunction,
       Varchar,
       Varchar,
       Varchar,
       Varchar,
-      int32_t>({prefix + "REGEXP_REPLACE"});
+      int32_t>({prefix + "regexp_replace"});
 }
 
 } // namespace facebook::velox::functions::sparksql
