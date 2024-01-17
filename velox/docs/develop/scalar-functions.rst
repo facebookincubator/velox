@@ -783,7 +783,8 @@ Use exec::registerVectorFunction to register a stateless vector function.
 exec::registerVectorFunction takes a name, a list of supported signatures
 and unique_ptr to an instance of the function. An optional “overwrite” flag
 specifies whether to overwrite a function if a function with the specified
-name already exists.
+name already exists. The function name cannot be empty or Velox will throw
+an exception.
 
 Use exec::registerStatefulVectorFunction to register a stateful vector
 function.

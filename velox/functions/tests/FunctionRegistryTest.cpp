@@ -95,6 +95,17 @@ struct VariadicFunc {
   }
 };
 
+template <typename T>
+struct EmtpyFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& /* result */,
+      const int64_t& /* arg1 */) {
+    return true;
+  }
+};
+
 class VectorFuncOne : public velox::exec::VectorFunction {
  public:
   void apply(
@@ -222,6 +233,14 @@ inline void registerTestFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_two, "vector_func_two");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_three, "vector_func_three");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_four, "vector_func_four");
+}
+
+inline void registerEmtpyScalarFunction() {
+  registerFunction<EmtpyFunction, int64_t, int64_t>({""});
+}
+
+inline void registerEmptyVectorFunction() {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_four, "");
 }
 } // namespace
 
@@ -385,6 +404,11 @@ TEST_F(FunctionRegistryTest, getFunctionSignatures) {
 TEST_F(FunctionRegistryTest, hasSimpleFunctionSignature) {
   auto result = resolveFunction("func_one", {VARCHAR()});
   ASSERT_EQ(*result, *VARCHAR());
+}
+
+TEST_F(FunctionRegistryTest, registerEmptyFunction) {
+  EXPECT_THROW(registerEmtpyScalarFunction(), VeloxRuntimeError);
+  EXPECT_THROW(registerEmptyVectorFunction(), VeloxRuntimeError);
 }
 
 TEST_F(FunctionRegistryTest, hasSimpleFunctionSignatureWrongArgType) {
