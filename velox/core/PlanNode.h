@@ -19,7 +19,6 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 
-#include "velox/vector/arrow/Abi.h"
 #include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::core {
