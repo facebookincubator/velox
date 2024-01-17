@@ -578,7 +578,7 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
 }
 
 TEST_F(DateTimeFunctionsTest, hour) {
-  const auto hour = [&](const StringView& timestampStr) {
+  const auto hour = [&](const StringView timestampStr) {
     const auto timeStamp =
         std::make_optional(util::fromTimestampString(timestampStr));
     return evaluateOnce<int32_t>("hour(c0)", timeStamp);

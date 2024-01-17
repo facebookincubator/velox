@@ -83,9 +83,9 @@ These functions support TIMESTAMP and DATE input types.
         SELECT get_timestamp('1970-01-01', null);  -- NULL
         SELECT get_timestamp('2020-06-10', 'A');  -- (throws exception)
 
-.. spark:function:: hour(timestamp) -> integer
+.. spark:function:: hour(string/timestamp) -> integer
 
-    Returns the hour of ``timestamp``.::
+    Returns the hour of ``string/timestamp``.::
 
         SELECT hour('2009-07-30 12:58:59'); -- 12
 
