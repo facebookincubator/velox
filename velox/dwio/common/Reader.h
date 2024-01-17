@@ -45,6 +45,8 @@ class RowReader {
 
   virtual ~RowReader() = default;
 
+  virtual void close() {}
+
   /**
    * Fetch the next portion of rows.
    * @param size Max number of rows to read

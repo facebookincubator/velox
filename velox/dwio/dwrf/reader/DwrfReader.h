@@ -40,6 +40,8 @@ class DwrfRowReader : public StrideIndexProvider,
 
   ~DwrfRowReader() override = default;
 
+  void close() override;
+
   // Select the columns from the options object
   const dwio::common::ColumnSelector& getColumnSelector() const {
     return *columnSelector_;
@@ -235,6 +237,8 @@ class DwrfReader : public dwio::common::Reader {
 
   ~DwrfReader() override = default;
 
+  void close() override;
+
   common::CompressionKind getCompression() const {
     return readerBase_->getCompressionKind();
   }
@@ -332,13 +336,6 @@ class DwrfReader : public dwio::common::Reader {
 
   std::unique_ptr<DwrfRowReader> createDwrfRowReader(
       const dwio::common::RowReaderOptions& options = {}) const;
-
-  void close() override {
-    if (readerBase_) {
-      readerBase_->close();
-      readerBase_.reset();
-    }
-  }
 
   /**
    * Create a reader to the for the dwrf file.

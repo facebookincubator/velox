@@ -306,6 +306,9 @@ void SplitReader::close() {
   if (baseReader_) {
     baseReader_->close();
   }
+  if (baseRowReader_) {
+    baseRowReader_->close();
+  }
 }
 
 } // namespace facebook::velox::connector::hive

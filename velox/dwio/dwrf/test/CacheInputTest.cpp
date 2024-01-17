@@ -335,6 +335,7 @@ class CacheTest : public testing::Test {
           readStream(*currentStripe, columnIndex);
         }
       }
+      currentStripe->input->close();
     }
   }
 
@@ -623,6 +624,12 @@ class FileWithReadAhead {
     bufferedInput_->load(LogType::FILE);
   }
 
+  void close() {
+    if (bufferedInput_) {
+      bufferedInput_->close();
+    }
+  }
+
   bool next(const void*& buffer, int32_t& size) {
     return stream_->Next(&buffer, &size);
   }
@@ -682,6 +689,9 @@ TEST_F(CacheTest, readAhead) {
               // End of file. Check that a multiple of file size has been read.
               EXPECT_EQ(0, totalRead[i] % FileWithReadAhead::kFileSize);
               if (totalRead[i] >= 3 * FileWithReadAhead::kFileSize) {
+                if (files[i]) {
+                  files[i]->close();
+                }
                 files[i] = nullptr;
                 break;
               }
@@ -690,6 +700,9 @@ TEST_F(CacheTest, readAhead) {
                   "prefetch_{}",
                   (static_cast<int64_t>(firstFileNumber) + i + i) * 1000000000 +
                       totalRead[i]);
+              if (files[i]) {
+                files[i]->close();
+              }
               files[i] = std::make_unique<FileWithReadAhead>(
                   newName, cache_.get(), threadStats, *pool_, executor_.get());
               continue;
@@ -698,6 +711,11 @@ TEST_F(CacheTest, readAhead) {
             bytesLeft[i] += size;
           }
           bytesLeft[i] -= bytesNeeded;
+        }
+      }
+      for (const auto& file : files) {
+        if (file) {
+          file->close();
         }
       }
     }));

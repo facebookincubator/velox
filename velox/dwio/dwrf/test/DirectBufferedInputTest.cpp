@@ -97,6 +97,7 @@ class DirectBufferedInputTest : public testing::Test {
       }
     }
     EXPECT_EQ(numIos, file_->numIos() - previous);
+    input->close();
   }
 
   // Marks the numStreams first streams as densely read. A large number of
