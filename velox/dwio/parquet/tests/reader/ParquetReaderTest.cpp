@@ -917,22 +917,21 @@ TEST_F(ParquetReaderTest, testArray) {
   rowReaderOpts.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
-    auto arrayVector = makeNullableArrayVector<int32_t>(
-          {{1, std::nullopt, 3},
-           {5},
-           {std::nullopt, std::nullopt, std::nullopt},
-           {},
-           {7, 11},
-            {std::nullopt},
-            {13},
-            {17},
-            {1, std::nullopt, 3},
-            {5},
-            {std::nullopt, std::nullopt, std::nullopt, 7},
-            {11, std::nullopt, 13}});
+  auto arrayVector = makeNullableArrayVector<int32_t>(
+      {{1, std::nullopt, 3},
+       {5},
+       {std::nullopt, std::nullopt, std::nullopt},
+       {},
+       {7, 11},
+       {std::nullopt},
+       {13},
+       {17},
+       {1, std::nullopt, 3},
+       {5},
+       {std::nullopt, std::nullopt, std::nullopt, 7},
+       {11, std::nullopt, 13}});
 
-   auto expected = makeRowVector({arrayVector});
+  auto expected = makeRowVector({arrayVector});
 
-  assertReadWithReaderAndExpected(fileSchema, *rowReader, expected,
-  *leafPool_);
+  assertReadWithReaderAndExpected(fileSchema, *rowReader, expected, *leafPool_);
 }

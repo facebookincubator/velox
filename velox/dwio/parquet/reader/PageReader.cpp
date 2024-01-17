@@ -582,10 +582,15 @@ void PageReader::decodeRepDefs(int32_t numTopLevelRows) {
   }
 }
 
-int32_t PageReader::getLeafNulls(int16_t maxDefLevel, int32_t begin, int32_t end, uint64_t* nulls, int32_t nullsStartIndex) const {
+int32_t PageReader::getLeafNulls(
+    int16_t maxDefLevel,
+    int32_t begin,
+    int32_t end,
+    uint64_t* nulls,
+    int32_t nullsStartIndex) const {
   VELOX_CHECK(begin == 0, "not support begin not 0");
   int32_t valueExistIndex = 0;
-  for(int i = begin; i < end; i++) {
+  for (int i = begin; i < end; i++) {
     int16_t def = definitionLevels_[i];
 
     // value exist
