@@ -1006,7 +1006,8 @@ TEST_F(DateTimeFunctionsTest, minusTimestamp) {
 }
 
 TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampInput) {
-  setQueryTimeZone("America/New_York");
+    
+    setQueryTimeZone("America/New_York");
   // New York = GMT -04:00, -14400 sec
   EXPECT_EQ(
       TimestampWithTimezone(

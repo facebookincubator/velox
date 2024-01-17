@@ -473,17 +473,17 @@ template <typename T>
 struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::string sessionTzName;
+  std::string sessionTzName = "";
+  const date::time_zone* sessionTimezone = nullptr;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const core::QueryConfig& config,
-      const arg_type<Timestamp>& ts,
-      const arg_type<Varchar>& timeZone) {
-    // Check if session timezone was provided.
-    // If not, fallback to UTC (represented by "Africa/Abidjan" timezone).
-    auto sessionTzName =
-        (config.sessionTimezone().empty() ? "Africa/Abidjan"
-                                          : config.sessionTimezone());
+      const arg_type<Timestamp>* /*ts*/,
+      const arg_type<Varchar>* /*timestamp*/) {
+    sessionTimezone = getTimeZoneFromConfig(config);
+    sessionTzName =
+         (sessionTimezone != NULL ? sessionTimezone->name()
+                                           : "Africa/Abidjan");
   }
 
   FOLLY_ALWAYS_INLINE void call(
