@@ -40,6 +40,22 @@ template <TypeKind kind>
 }
 
 template <>
+::duckdb::Value duckValueAt<TypeKind::TINYINT>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  return ::duckdb::Value::TINYINT(
+      vector->as<SimpleVector<int8_t>>()->valueAt(index));
+}
+
+template <>
+::duckdb::Value duckValueAt<TypeKind::SMALLINT>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  return ::duckdb::Value::SMALLINT(
+      vector->as<SimpleVector<int16_t>>()->valueAt(index));
+}
+
+template <>
 ::duckdb::Value duckValueAt<TypeKind::BOOLEAN>(
     const VectorPtr& vector,
     vector_size_t index) {
@@ -148,6 +164,25 @@ template <>
           duckValueAt, elements->typeKind(), elements, innerRow));
     }
   }
+
+  for (auto i = 1; i < size; i++) {
+    if (array[i].type() != array[0].type()) {
+      LOG(ERROR) << i << ": " << array[i].type().ToString() << " vs. "
+                 << array[0].type().ToString() << ", "
+                 << elements->toString(offset + i) << " vs. "
+                 << elements->toString(offset);
+    }
+    //    VELOX_CHECK(
+    //        array[i].type() == array[0].type(),
+    //        "Type mismatch: {}: {} vs. {}, {}",
+    //        i,
+    //        array[i].type().ToString(),
+    //        array[0].type().ToString(),
+    //        elements->toString(offset + i));
+  }
+
+  //  return ::duckdb::Value::LIST(duckdb::fromVeloxType(elements->type()),
+  //  array);
 
   return ::duckdb::Value::LIST(array);
 }
