@@ -222,6 +222,22 @@ std::vector<std::string> AggregationFuzzerBase::generateSortingKeys(
   return keys;
 }
 
+std::vector<AggregationFuzzerBase::SortingKeyAndOrder>
+AggregationFuzzerBase::generateSortingKeysAndOrders(
+    const std::string& prefix,
+    std::vector<std::string>& names,
+    std::vector<TypePtr>& types) {
+  auto keys = generateSortingKeys(prefix, names, types);
+  std::vector<AggregationFuzzerBase::SortingKeyAndOrder> results;
+  for (auto i = 0; i < keys.size(); ++i) {
+    std::string order = boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_) ? "asc" : "desc";
+    std::string nullsOrder =
+        boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_) ? "nulls first" : "nulls last";
+    results.push_back(SortingKeyAndOrder(keys[i], order, nullsOrder));
+  }
+  return results;
+}
+
 std::shared_ptr<InputGenerator> AggregationFuzzerBase::findInputGenerator(
     const CallableSignature& signature) {
   auto generatorIt = customInputGenerators_.find(signature.name);

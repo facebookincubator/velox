@@ -83,13 +83,15 @@ class WindowFuzzer : public AggregationFuzzerBase {
 
   std::string getFrame(
       const std::vector<std::string>& partitionKeys,
-      const std::vector<std::string>& sortingKeys,
+      // const std::vector<std::string>& sortingKeys,
+      const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
       const std::string& frameClause);
 
   const std::string generateFrameClause();
 
   const std::string generateOrderByClause(
-      const std::vector<std::string>& sortingKeys);
+      // const std::vector<std::string>& sortingKeys
+      const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders);
 
   std::vector<RowVectorPtr> generateInputDataWithRowNumber(
       std::vector<std::string>& names,
@@ -100,7 +102,8 @@ class WindowFuzzer : public AggregationFuzzerBase {
   // Return 'true' if query plans failed.
   bool verifyWindow(
       const std::vector<std::string>& partitionKeys,
-      const std::vector<std::string>& sortingKeys,
+      // const std::vector<std::string>& sortingKeys,
+      const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
       const std::string& frameClause,
       const std::string& functionCall,
       const std::vector<RowVectorPtr>& input,
@@ -109,7 +112,8 @@ class WindowFuzzer : public AggregationFuzzerBase {
 
   void testAlternativePlans(
       const std::vector<std::string>& partitionKeys,
-      const std::vector<std::string>& sortingKeys,
+      // const std::vector<std::string>& sortingKeys,
+      const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
       const std::string& frame,
       const std::string& functionCall,
       const std::vector<RowVectorPtr>& input,

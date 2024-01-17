@@ -165,6 +165,25 @@ class AggregationFuzzerBase {
       std::vector<std::string>& names,
       std::vector<TypePtr>& types);
 
+  struct SortingKeyAndOrder {
+    std::string key_;
+    std::string order_;
+    std::string nullsOrder_;
+
+    SortingKeyAndOrder() = delete;
+
+    SortingKeyAndOrder(const std::string& key, const std::string& order, const std::string& nullsOrder) {
+      key_ = key;
+      order_ = order;
+      nullsOrder_ = nullsOrder;
+    }
+  };
+
+  std::vector<AggregationFuzzerBase::SortingKeyAndOrder> generateSortingKeysAndOrders(
+      const std::string& prefix,
+      std::vector<std::string>& names,
+      std::vector<TypePtr>& types);
+
   std::pair<CallableSignature, SignatureStats&> pickSignature();
 
   std::vector<RowVectorPtr> generateInputData(

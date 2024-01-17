@@ -95,10 +95,12 @@ void WindowFuzzer::go() {
         supportIgnoreNulls(signature.name) && vectorFuzzer_.coinToss(0.5);
     auto call = makeFunctionCall(signature.name, argNames, false, ignoreNulls);
 
-    std::vector<std::string> sortingKeys;
+    // std::vector<std::string> sortingKeys;
+    std::vector<SortingKeyAndOrder> sortingKeysAndOrders;
     // 50% chance without order-by clause.
     if (vectorFuzzer_.coinToss(0.5)) {
-      sortingKeys = generateSortingKeys("s", argNames, argTypes);
+      // sortingKeys = generateSortingKeys("s", argNames, argTypes);
+      sortingKeysAndOrders = generateSortingKeysAndOrders("s", argNames, argTypes);
     }
     auto partitionKeys = generateSortingKeys("p", argNames, argTypes);
     auto frameClause = generateFrameClause();
@@ -108,7 +110,8 @@ void WindowFuzzer::go() {
     // If the function is order-dependent, sort all input rows by row_number
     // additionally.
     if (requireSortedInput) {
-      sortingKeys.push_back("row_number");
+      // sortingKeys.push_back("row_number");
+      sortingKeysAndOrders.push_back(SortingKeyAndOrder("row_number", "asc", "nulls last"));
       ++stats_.numSortedInputs;
     }
 
@@ -116,7 +119,8 @@ void WindowFuzzer::go() {
 
     bool failed = verifyWindow(
         partitionKeys,
-        sortingKeys,
+        // sortingKeys,
+        sortingKeysAndOrders,
         frameClause,
         call,
         input,
@@ -212,16 +216,19 @@ const std::string WindowFuzzer::generateFrameClause() {
 }
 
 const std::string WindowFuzzer::generateOrderByClause(
-    const std::vector<std::string>& sortingKeys) {
-  VELOX_CHECK(!sortingKeys.empty());
+    // const std::vector<std::string>& sortingKeys
+    const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders) {
+  VELOX_CHECK(!sortingKeysAndOrders.empty());
   std::stringstream frame;
   frame << " order by ";
-  for (auto i = 0; i < sortingKeys.size(); ++i) {
+  for (auto i = 0; i < sortingKeysAndOrders.size(); ++i) {
     if (i != 0) {
       frame << ", ";
     }
-    frame << sortingKeys[i] << " ";
-    auto asc = boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+    frame << sortingKeysAndOrders[i].key_ << " "
+          << sortingKeysAndOrders[i].order_ << " "
+          << sortingKeysAndOrders[i].nullsOrder_;
+    /*auto asc = boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
     if (asc == 0) {
       frame << "asc ";
     } else {
@@ -233,22 +240,23 @@ const std::string WindowFuzzer::generateOrderByClause(
       frame << "nulls first";
     } else {
       frame << "nulls last";
-    }
+    }*/
   }
   return frame.str();
 }
 
 std::string WindowFuzzer::getFrame(
     const std::vector<std::string>& partitionKeys,
-    const std::vector<std::string>& sortingKeys,
+    // const std::vector<std::string>& sortingKeys,
+    const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
     const std::string& frameClause) {
   // TODO: allow randomly generated frames.
   std::stringstream frame;
   VELOX_CHECK(!partitionKeys.empty());
   frame << "partition by " << folly::join(", ", partitionKeys);
-  if (!sortingKeys.empty()) {
+  if (!sortingKeysAndOrders.empty()) {
     // frame << " order by " << folly::join(", ", sortingKeys);
-    frame << generateOrderByClause(sortingKeys);
+    frame << generateOrderByClause(sortingKeysAndOrders);
   }
   frame << " " << frameClause;
   return frame.str();
@@ -311,7 +319,8 @@ std::vector<RowVectorPtr> WindowFuzzer::generateInputDataWithRowNumber(
 
 void WindowFuzzer::testAlternativePlans(
     const std::vector<std::string>& partitionKeys,
-    const std::vector<std::string>& sortingKeys,
+    // const std::vector<std::string>& sortingKeys,
+    const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
     const std::string& frame,
     const std::string& functionCall,
     const std::vector<RowVectorPtr>& input,
@@ -323,7 +332,11 @@ void WindowFuzzer::testAlternativePlans(
   for (const auto& key : partitionKeys) {
     allKeys.push_back(key + " NULLS FIRST");
   }
-  allKeys.insert(allKeys.end(), sortingKeys.begin(), sortingKeys.end());
+  for (const auto& keyAndOrder : sortingKeysAndOrders) {
+    allKeys.push_back(folly::to<std::string>(
+        keyAndOrder.key_, " ", keyAndOrder.order_, " ", keyAndOrder.nullsOrder_));
+  }
+  // allKeys.insert(allKeys.end(), sortingKeys.begin(), sortingKeys.end());
 
   // Streaming window from values.
   if (!allKeys.empty()) {
@@ -376,13 +389,14 @@ void WindowFuzzer::testAlternativePlans(
 
 bool WindowFuzzer::verifyWindow(
     const std::vector<std::string>& partitionKeys,
-    const std::vector<std::string>& sortingKeys,
+    // const std::vector<std::string>& sortingKeys,
+    const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
     const std::string& frameClause,
     const std::string& functionCall,
     const std::vector<RowVectorPtr>& input,
     bool customVerification,
     bool enableWindowVerification) {
-  auto frame = getFrame(partitionKeys, sortingKeys, frameClause);
+  auto frame = getFrame(partitionKeys, sortingKeysAndOrders, frameClause);
   auto plan = PlanBuilder()
                   .values(input)
                   .window({fmt::format("{} over ({})", functionCall, frame)})
@@ -421,7 +435,7 @@ bool WindowFuzzer::verifyWindow(
 
     testAlternativePlans(
         partitionKeys,
-        sortingKeys,
+        sortingKeysAndOrders,
         frame,
         functionCall,
         input,
