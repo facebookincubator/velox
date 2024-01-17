@@ -388,9 +388,7 @@ template <typename T>
 struct NestedArrayF {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      int64_t& out,
-      const arg_type<Array<Array<int64_t>>>& input) {
+  bool call(int64_t& out, const arg_type<Array<Array<int64_t>>>& input) {
     out = 0;
     for (const auto& inner : input) {
       if (inner) {

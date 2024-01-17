@@ -29,9 +29,7 @@ struct ArrayMinSimpleFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(
-      TInput& out,
-      const arg_type<Array<TInput>>& array) {
+  bool call(TInput& out, const arg_type<Array<TInput>>& array) {
     if (array.size() == 0) {
       return false; // NULL
     }
@@ -65,9 +63,7 @@ struct ArrayMinSimpleFunctionIterator {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(
-      TInput& out,
-      const arg_type<Array<TInput>>& array) {
+  bool call(TInput& out, const arg_type<Array<TInput>>& array) {
     const auto size = array.size();
     if (size == 0) {
       return false; // NULL
@@ -105,9 +101,7 @@ struct ArrayMinSimpleFunctionSkipNullIterator {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(
-      TInput& out,
-      const arg_type<Array<TInput>>& array) {
+  bool call(TInput& out, const arg_type<Array<TInput>>& array) {
     const auto size = array.size();
     if (size == 0) {
       return false; // NULL

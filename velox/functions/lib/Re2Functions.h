@@ -205,7 +205,7 @@ struct Re2RegexpReplace {
     initialize(config, string, pattern, &emptyReplacement);
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Varchar>& out,
       const arg_type<Varchar>& string,
       const arg_type<Varchar>& /*pattern*/,

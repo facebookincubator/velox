@@ -389,9 +389,7 @@ template <typename T>
 struct VariadicArgsReaderFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<Varchar>& out,
-      const arg_type<Variadic<Varchar>>& inputs) {
+  bool call(out_type<Varchar>& out, const arg_type<Variadic<Varchar>>& inputs) {
     writeInputToOutput(out, &inputs);
 
     return true;
@@ -456,7 +454,7 @@ template <typename T>
 struct VariadicArgsReaderWithNullsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Varchar>& out,
       const arg_type<Varchar>& first,
       const arg_type<Variadic<Varchar>>& inputs) {
@@ -467,7 +465,7 @@ struct VariadicArgsReaderWithNullsFunction {
     return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool callNullable(
+  bool callNullable(
       out_type<Varchar>& out,
       const arg_type<Varchar>* first,
       const arg_type<Variadic<Varchar>>* inputs) {
@@ -557,16 +555,14 @@ template <typename T>
 struct VariadicArgsReaderWithAsciiFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<Varchar>& out,
-      const arg_type<Variadic<Varchar>>& inputs) {
+  bool call(out_type<Varchar>& out, const arg_type<Variadic<Varchar>>& inputs) {
     out += callPrefix;
     writeInputToOutput(out, &inputs);
 
     return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool callAscii(
+  bool callAscii(
       out_type<Varchar>& out,
       const arg_type<Variadic<Varchar>>& inputs) {
     out += callAsciiPrefix;

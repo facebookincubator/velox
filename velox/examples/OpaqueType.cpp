@@ -98,7 +98,7 @@ template <typename T>
 struct MapResolverSimpleFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       arg_type<std::shared_ptr<UserDefinedOutput>>& out,
       const arg_type<std::shared_ptr<UserDefinedMap>>& state,
       const int64_t& idx) {

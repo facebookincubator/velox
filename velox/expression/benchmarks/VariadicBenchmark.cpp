@@ -31,7 +31,7 @@ template <typename T>
 struct StringConcatSimple {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Varchar>& out,
       const arg_type<Varchar>& str1,
       const arg_type<Varchar>& str2,
@@ -48,7 +48,7 @@ template <typename T>
 struct StringConcatVariadic {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Varchar>& out,
       const arg_type<Variadic<Varchar>>& strings) {
     for (const auto& string : strings) {

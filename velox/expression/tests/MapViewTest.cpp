@@ -610,9 +610,7 @@ template <typename T>
 struct MapComplexKeyF {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      double& out,
-      const arg_type<Map<Array<double>, double>>& input) {
+  bool call(double& out, const arg_type<Map<Array<double>, double>>& input) {
     out = 0;
     for (const auto& entry : input) {
       for (auto v : entry.first) {

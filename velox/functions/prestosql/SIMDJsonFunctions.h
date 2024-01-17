@@ -140,7 +140,7 @@ template <typename T>
 struct SIMDJsonArrayLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(int64_t& len, const arg_type<Json>& json) {
+  bool call(int64_t& len, const arg_type<Json>& json) {
     ParserContext ctx(json.data(), json.size());
 
     try {
@@ -171,7 +171,7 @@ template <typename T>
 struct SIMDJsonExtractScalarFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Varchar>& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
@@ -297,7 +297,7 @@ template <typename T>
 struct SIMDJsonSizeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       int64_t& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
