@@ -431,25 +431,20 @@ TEST_F(ArithmeticTest, hexWithBigint) {
 
 TEST_F(ArithmeticTest, hexWithVarbinaryAndVarchar) {
   const auto toHex = [&](std::optional<std::string> value) {
-    return std::pair(
-        evaluateOnce<std::string>("hex(cast(c0 as varbinary))", value),
-        evaluateOnce<std::string>("hex(c0)", value));
+    auto varbinaryResult =
+        evaluateOnce<std::string>("hex(cast(c0 as varbinary))", value);
+    auto varcharResult = evaluateOnce<std::string>("hex(c0)", value);
+
+    EXPECT_TRUE(varbinaryResult.has_value());
+    EXPECT_TRUE(varcharResult.has_value());
+    EXPECT_EQ(varbinaryResult.value(), varcharResult.value());
+
+    return varcharResult.value();
   };
-  auto result = toHex("");
-  EXPECT_TRUE(result.first == result.second && result.first == "");
-
-  result = toHex("Spark SQL");
-  EXPECT_TRUE(
-      result.first == result.second && result.first == "537061726B2053514C");
-
-  result = toHex("Spark\x65\x21SQL");
-  EXPECT_TRUE(
-      result.first == result.second && result.first == "537061726B652153514C");
-
-  result = toHex("Spark\u6570\u636ESQL");
-  EXPECT_TRUE(
-      result.first == result.second &&
-      result.first == "537061726BE695B0E68DAE53514C");
+  ASSERT_EQ(toHex(""), "");
+  ASSERT_EQ(toHex("Spark SQL"), "537061726B2053514C");
+  ASSERT_EQ(toHex("Spark\x65\x21SQL"), "537061726B652153514C");
+  ASSERT_EQ(toHex("Spark\u6570\u636ESQL"), "537061726BE695B0E68DAE53514C");
 }
 
 class LogNTest : public SparkFunctionBaseTest {

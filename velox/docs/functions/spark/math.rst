@@ -105,7 +105,7 @@ Mathematical Functions
 
     Converts ``x`` to hexadecimal.
     Supported types are: BIGINT, VARBINARY and VARCHAR.
-    If the argument is a VARBINARY or VARBINARY, the result is string where each input bytes is represented using 2 hex characters.
+    If the argument is a VARCHAR or VARBINARY, the result is string where each input byte is represented using 2 hex characters.
     If the argument is a positive BIGINT, the result is a hex representation of the number (up to 16 characters),
     if the argument is a negative BIGINT, the result is a hex representation of the number which will be treated as two's complement. ::
 
