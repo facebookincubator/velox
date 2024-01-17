@@ -218,6 +218,28 @@ struct Sha2HexStringFunction {
   }
 };
 
+/// space function
+/// space(int) -> string
+/// Returns a string consisting of `n` spaces.
+template <typename T>
+struct SpaceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const int32_t& count){
+    if(count <= 0) {
+      result.setEmpty();
+      return;
+    }
+    result.append(generateSpaces(count));
+  }
+
+  std::string generateSpaces(int32_t count) {
+    return std::string(count, ' ');
+  }
+};
+
 /// contains function
 /// contains(string, string) -> bool
 /// Searches the second argument in the first one.

@@ -184,6 +184,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<Sha2HexStringFunction, Varchar, Varbinary, int32_t>(
       {prefix + "sha2"});
 
+  registerFunction<sparksql::SpaceFunction, Varchar, int32_t>(
+        {prefix + "space"});
+
   exec::registerStatefulVectorFunction(
       prefix + "regexp_extract", re2ExtractSignatures(), makeRegexExtract);
   exec::registerStatefulVectorFunction(

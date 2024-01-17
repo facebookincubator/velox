@@ -97,6 +97,11 @@ class StringTest : public SparkFunctionBaseTest {
         "sha2(cast(c0 as varbinary), c1)", str, bitLength);
   }
 
+  std::optional<std::string> space(
+      std::optional<int32_t> count) {
+    return evaluateOnce<std::string>("space(c0)", count);
+   }
+
   bool compareFunction(
       const std::string& function,
       const std::optional<std::string>& str,
@@ -361,6 +366,16 @@ TEST_F(StringTest, sha2) {
       sha2("0123456789abcdefghijklmnopqrstuvwxyz", 512),
       "95cadc34aa46b9fdef432f62fe5bad8d9f475bfbecf797d5802bb5f2937a85d9"
       "3ce4857a6262b03834c01c610d74cd1215f9a466dc6ad3dd15078e3309a03a6d");
+}
+
+TEST_F(StringTest, space) {
+  EXPECT_EQ(space(1), " ");
+  EXPECT_EQ(space(2), "  ");
+  EXPECT_EQ(space(5), "     ");
+  EXPECT_EQ(space(0), "");
+  EXPECT_EQ(space(-1), "");
+  EXPECT_EQ(space(-10), "");
+  EXPECT_EQ(space(std::nullopt), std::nullopt);
 }
 
 TEST_F(StringTest, startsWith) {
