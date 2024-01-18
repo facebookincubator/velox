@@ -16,7 +16,14 @@
 
 // This file is a drop-in copy of Arrow's C Data Interface, as defined in:
 //   https://arrow.apache.org/docs/format/CDataInterface.html
-
+//
+// Note: Do not include this header in other Velox's public header
+//   files. We let user decide including one of the following:
+//   1. <arrow/c/abi.h> or
+//   2. "velox/vector/arrow/Abi.h"
+//
+// Try including velox/vector/arrow/Bridge.h instead, if Arrow ABI structs'
+//   declarations are needed in Velox's public header files.
 #pragma once
 
 #include <stdint.h>
