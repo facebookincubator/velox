@@ -242,8 +242,9 @@ not go away prematurely. The output types can be scalar strings (varchar and
 varbinaries), but also complex types containing strings, such as arrays, maps,
 and rows.
 
-The :func:`setNoCopy` and :func:`setEmpty` methods of the out_type template
-can be used to set the result to a string in the input argument.
+The setNoCopy method of the out_type template can be used to set the result
+to a string in the input argument without copying. The setEmpty method
+can be used to set the result to an empty string.
 
 .. code-block:: c++
 
@@ -255,24 +256,18 @@ Here is an example of a zero-copy function:
 
 .. code-block:: c++
 
-  template <typename T>
-  struct UrlExtractProtocolFunction {
+  template <typename TExecParams>
+  struct TrimFunction {
+    VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
+
     // Results refer to strings in the first argument.
     static constexpr int32_t reuse_strings_from_arg = 0;
 
-    FOLLY_ALWAYS_INLINE bool call(
+    FOLLY_ALWAYS_INLINE void call(
         out_type<Varchar>& result,
-        const arg_type<Varchar>& url) {
-      if (!isValidURI(url)) {
-        return false;
-      }
-
-      if (auto protocol = parse(url, kScheme)) {
-        result.setNoCopy(protocol.value());
-      } else {
-        result.setEmpty();
-      }
-      return true;
+        const arg_type<Varchar>& input) {
+      std::string_view trimmed = stringImpl::trimUnicodeWhiteSpace(input);
+      result.setNoCopy(trimmed);
     }
   };
 
