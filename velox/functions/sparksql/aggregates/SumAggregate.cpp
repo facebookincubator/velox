@@ -37,6 +37,12 @@ TypePtr getDecimalSumType(
   }
   return resultType;
 }
+
+void checkAccumulatorRowType(const TypePtr& type) {
+  VELOX_CHECK_EQ(type->kind(), TypeKind::ROW);
+  VELOX_CHECK(type->childAt(0)->isShortDecimal() || type->childAt(0)->isLongDecimal());
+  VELOX_CHECK_EQ(type->childAt(1)->kind(), TypeKind::BOOLEAN);
+}
 } // namespace
 
 exec::AggregateRegistrationResult registerSum(const std::string& name) {
@@ -130,6 +136,7 @@ exec::AggregateRegistrationResult registerSum(const std::string& name) {
                 DOUBLE());
           case TypeKind::ROW: {
             VELOX_DCHECK(!exec::isRawInput(step));
+            checkAccumulatorRowType(inputType);
             auto sumType = getDecimalSumType(resultType, step);
             // For intermediate input agg, input intermediate sum type
             // is equal to final result sum type.
