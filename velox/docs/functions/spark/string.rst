@@ -14,16 +14,6 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     If ``n < 0``, the result is an empty string.
     If ``n >= 256``, the result is equivalent to chr(``n % 256``).
 
-.. spark:function:: space(count) -> varchar
-
-    Returns a string consisting of `n` spaces. ::
-
-        SELECT space(1); -- " "
-        SELECT space(5); -- "     "
-        SELECT space(0); -- ""
-        SELECT space(-1); -- ""
-        SELECT space(null); -- NULL
-
 .. spark:function:: contains(left, right) -> boolean
 
     Returns true if 'right' is found in 'left'. Otherwise, returns false. ::
@@ -173,6 +163,16 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     ``trimCharacters`` can be empty and may contain duplicate characters. ::
 
         SELECT rtrim('kr', 'spark'); -- "spa"
+
+.. spark:function:: space(count) -> varchar
+
+    Returns a string consisting of `n` spaces. ::
+
+        SELECT space(1); -- " "
+        SELECT space(5); -- "     "
+        SELECT space(0); -- ""
+        SELECT space(-1); -- ""
+        SELECT space(null); -- NULL
 
 .. spark:function:: split(string, delimiter) -> array(string)
 
