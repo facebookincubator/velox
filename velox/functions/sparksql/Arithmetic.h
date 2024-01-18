@@ -21,10 +21,8 @@
 #include <system_error>
 #include <type_traits>
 
-#include "velox/common/base/BitUtil.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
-#include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::functions::sparksql {
 
