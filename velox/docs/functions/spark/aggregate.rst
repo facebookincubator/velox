@@ -107,10 +107,16 @@ General Aggregate Functions
 
     Returns the sum of `x`.
 
-    Supported types are TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
+    Supported types are TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE and DECIMAL.
 
     When x is of type DOUBLE, the result type is DOUBLE.
     When x is of type REAL, the result type is REAL.
+
+    When x is of type DECIMAL(p, s), the result type is DECIMAL(p + 10, s), and p + 10 will not exceed 38.
+    For DECIMAL type, the initial value of sum is 0. We need to keep sum unchanged if the input is null, as sum
+    function ignores null input. Currently, only non-ANSI mode is supported, and the sum can only be null if
+    overflow happens.
+
     For all other input types, the result type is BIGINT.
 
     Note: When the sum of BIGINT values exceeds its limit, it cycles to the overflowed value rather than raising an error.

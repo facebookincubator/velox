@@ -40,7 +40,8 @@ TypePtr getDecimalSumType(
 
 void checkAccumulatorRowType(const TypePtr& type) {
   VELOX_CHECK_EQ(type->kind(), TypeKind::ROW);
-  VELOX_CHECK(type->childAt(0)->isShortDecimal() || type->childAt(0)->isLongDecimal());
+  VELOX_CHECK(
+      type->childAt(0)->isShortDecimal() || type->childAt(0)->isLongDecimal());
   VELOX_CHECK_EQ(type->childAt(1)->kind(), TypeKind::BOOLEAN);
 }
 } // namespace
