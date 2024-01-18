@@ -232,7 +232,8 @@ struct SpaceFunction {
       result.setEmpty();
       return;
     }
-    result.append(generateSpaces(count));
+    result.resize(count);
+    result = generateSpaces(count);
   }
 
   std::string generateSpaces(int32_t count) {
