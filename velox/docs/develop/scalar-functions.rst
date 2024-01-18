@@ -270,8 +270,7 @@ Here is an example of a zero-copy function:
         result.setEmpty();
         return;
       }
-      StringView trimmed = stringImpl::trimUnicodeWhiteSpace(input);
-      result.setNoCopy(trimmed);
+      result.setNoCopy(stringImpl::trimUnicodeWhiteSpace(input));
     }
   };
 
