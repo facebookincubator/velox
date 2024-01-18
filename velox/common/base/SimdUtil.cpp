@@ -38,15 +38,15 @@ void gatherBits(
   }
   int32_t i = 0;
   for (; i + kStep < size; i += kStep) {
-      uint16_t flags =
-          simd::gather8Bits(bits, xsimd::load_unaligned(indices + i), kStep);
-      bits::storeBitsToByte<kStep>(flags, resultPtr, i);
+    uint16_t flags =
+        simd::gather8Bits(bits, xsimd::load_unaligned(indices + i), kStep);
+    bits::storeBitsToByte<kStep>(flags, resultPtr, i);
   }
   auto bitsLeft = size - i;
   if (bitsLeft > 0) {
-      uint16_t flags =
-          simd::gather8Bits(bits, xsimd::load_unaligned(indices + i), bitsLeft);
-      bits::storeBitsToByte<kStep>(flags, resultPtr, i);
+    uint16_t flags =
+        simd::gather8Bits(bits, xsimd::load_unaligned(indices + i), bitsLeft);
+    bits::storeBitsToByte<kStep>(flags, resultPtr, i);
   }
 }
 
