@@ -97,10 +97,9 @@ class StringTest : public SparkFunctionBaseTest {
         "sha2(cast(c0 as varbinary), c1)", str, bitLength);
   }
 
-  std::optional<std::string> space(
-      std::optional<int32_t> count) {
+  std::optional<std::string> space(std::optional<int32_t> count) {
     return evaluateOnce<std::string>("space(c0)", count);
-   }
+  }
 
   bool compareFunction(
       const std::string& function,

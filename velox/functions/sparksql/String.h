@@ -227,8 +227,8 @@ struct SpaceFunction {
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
-      const int32_t& count){
-    if(count <= 0) {
+      const int32_t& count) {
+    if (count <= 0) {
       result.setEmpty();
       return;
     }
