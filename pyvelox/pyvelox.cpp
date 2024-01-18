@@ -167,7 +167,7 @@ static VectorPtr pyListToVector(
 }
 
 template <typename NativeType>
-static py::object getItemFromSimpleVector(
+inline py::object getItemFromSimpleVector(
     SimpleVectorPtr<NativeType>& vector,
     vector_size_t idx) {
   checkBounds(vector, idx);
