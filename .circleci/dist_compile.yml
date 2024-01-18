@@ -343,6 +343,16 @@ jobs:
       - store_artifacts:
           path: '/tmp/aggregate_fuzzer_repro'
       - run:
+          name: "Run Join Fuzzer Tests"
+          command: |
+            _build/debug/velox/exec/tests/velox_join_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec 1800 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+            && echo -e "\n\nJoin fuzzer run finished successfully."
+          no_output_timeout: 5m
+      - run:
           name: "Run Example Binaries"
           command: |
             find _build/debug/velox/examples/ -maxdepth 1 -type f -executable -exec "{}" \;
@@ -531,7 +541,7 @@ jobs:
           fuzzer_repro: "/tmp/join_fuzzer_repro"
           fuzzer_name: "Join"
           fuzzer_exe: "_build/debug/velox/exec/tests/velox_join_fuzzer_test"
-          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 --v=1"
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0"
 
   format-check:
     executor: check
@@ -624,7 +634,7 @@ jobs:
       - run:
           name: "Build"
           command: |
-            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+            make debug NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
             ccache -s
           no_output_timeout: 1h
       - run:
@@ -642,7 +652,7 @@ jobs:
             pip install deepdiff
             python ./scripts/signature.py export --presto presto_pr_signatures.json
             python ./scripts/signature.py export --spark spark_pr_signatures.json
-            if python ./scripts/signature.py bias presto_merge_base_signatures.json presto_pr_signatures.json /tmp/presto_bias_functions ; \
+            if python ./scripts/signature.py bias presto_merge_base_signatures.json presto_pr_signatures.json /tmp/presto_bias_functions 2>&1 > /tmp/presto-err-message; \
             then echo "Presto signature check success" ; else echo "Presto signature check failed" > /tmp/presto-signature-error-code ; fi
             if python ./scripts/signature.py bias spark_merge_base_signatures.json spark_pr_signatures.json /tmp/spark_bias_functions ; \
             then echo "Spark signature check success"; else echo "Spark signature check failed" > /tmp/spark-signature-error-code ; fi
@@ -684,7 +694,11 @@ jobs:
       - run:
           name: "Surface only Presto function signature errors if any"
           command: |
-              if [ -f /tmp/presto-signature-error-code ]; then return 1 ; fi
+              if [ -f /tmp/presto-signature-error-code ]; then \
+              echo "Incompatible changes have been made to function signatures:\n"; \
+              cat /tmp/presto-err-message ; \
+              exit 1 ; \
+              fi
 
 
 workflows:
