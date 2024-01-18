@@ -146,6 +146,15 @@ Returns NULL for parsing error or NULL input. Throws exception for invalid forma
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="hour">
+<span class="sig-name descname"><span class="pre">hour</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#hour" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the hour of <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">hour</span><span class="p">(</span><span class="s1">&#39;2009-07-30 12:58:59&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">12</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="last_day">
 <span class="sig-name descname"><span class="pre">last_day</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#last_day" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the last day of the month which the date belongs to.</p>
