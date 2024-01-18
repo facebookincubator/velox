@@ -266,11 +266,13 @@ TEST_F(DateTimeFunctionsTest, dateAdd) {
 
 TEST_F(DateTimeFunctionsTest, dateAddSmallint) {
   const auto dateAdd = [&](std::optional<int32_t> date,
-                           std::optional<int32_t> value) {
-    return evaluateOnce<int32_t, int32_t>(
-        "date_add(c0, cast(c1 as smallint))",
-        {date, value},
-        {DATE(), INTEGER()});
+                           std::optional<int16_t> value) {
+    auto rowVectorPtr = makeRowVector(
+        {makeNullableFlatVector(
+             std::vector<std::optional<int32_t>>{date}, DATE()),
+         makeNullableFlatVector(
+             std::vector<std::optional<int16_t>>{value}, SMALLINT())});
+    return evaluateOnce<int32_t>("date_add(c0, c1)", rowVectorPtr);
   };
 
   // Check null behaviors
@@ -299,11 +301,13 @@ TEST_F(DateTimeFunctionsTest, dateAddSmallint) {
 
 TEST_F(DateTimeFunctionsTest, dateAddTinyint) {
   const auto dateAdd = [&](std::optional<int32_t> date,
-                           std::optional<int32_t> value) {
-    return evaluateOnce<int32_t, int32_t>(
-        "date_add(c0, cast(c1 as tinyint))",
-        {date, value},
-        {DATE(), INTEGER()});
+                           std::optional<int8_t> value) {
+    auto rowVectorPtr = makeRowVector(
+        {makeNullableFlatVector(
+             std::vector<std::optional<int32_t>>{date}, DATE()),
+         makeNullableFlatVector(
+             std::vector<std::optional<int8_t>>{value}, TINYINT())});
+    return evaluateOnce<int32_t>("date_add(c0, c1)", rowVectorPtr);
   };
 
   // Check null behaviors
@@ -353,15 +357,17 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
 
 TEST_F(DateTimeFunctionsTest, dateSubSmallint) {
   const auto dateSubFunc = [&](std::optional<int32_t> date,
-                               std::optional<int32_t> value) {
-    return evaluateOnce<int32_t, int32_t>(
-        "date_sub(c0, cast(c1 as smallint))",
-        {date, value},
-        {DATE(), INTEGER()});
+                               std::optional<int16_t> value) {
+    auto rowVectorPtr = makeRowVector(
+        {makeNullableFlatVector(
+             std::vector<std::optional<int32_t>>{date}, DATE()),
+         makeNullableFlatVector(
+             std::vector<std::optional<int16_t>>{value}, SMALLINT())});
+    return evaluateOnce<int32_t>("date_sub(c0, c1)", rowVectorPtr);
   };
 
   const auto dateSub = [&](const std::string& dateStr,
-                           std::optional<int32_t> value) {
+                           std::optional<int16_t> value) {
     return dateSubFunc(parseDate(dateStr), value);
   };
 
@@ -381,15 +387,17 @@ TEST_F(DateTimeFunctionsTest, dateSubSmallint) {
 
 TEST_F(DateTimeFunctionsTest, dateSubTinyint) {
   const auto dateSubFunc = [&](std::optional<int32_t> date,
-                               std::optional<int32_t> value) {
-    return evaluateOnce<int32_t, int32_t>(
-        "date_sub(c0, cast(c1 as tinyint))",
-        {date, value},
-        {DATE(), INTEGER()});
+                               std::optional<int8_t> value) {
+    auto rowVectorPtr = makeRowVector(
+        {makeNullableFlatVector(
+             std::vector<std::optional<int32_t>>{date}, DATE()),
+         makeNullableFlatVector(
+             std::vector<std::optional<int8_t>>{value}, TINYINT())});
+    return evaluateOnce<int32_t>("date_sub(c0, c1)", rowVectorPtr);
   };
 
   const auto dateSub = [&](const std::string& dateStr,
-                           std::optional<int32_t> value) {
+                           std::optional<int8_t> value) {
     return dateSubFunc(parseDate(dateStr), value);
   };
 
