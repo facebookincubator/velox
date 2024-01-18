@@ -266,6 +266,10 @@ Here is an example of a zero-copy function:
     FOLLY_ALWAYS_INLINE void call(
         out_type<Varchar>& result,
         const arg_type<Varchar>& input) {
+      if (input.size() == 0) {
+        result.setEmpty();
+        return;
+      }
       StringView trimmed = stringImpl::trimUnicodeWhiteSpace(input);
       result.setNoCopy(trimmed);
     }
