@@ -699,12 +699,12 @@ void ParquetRowReader::filterRowGroups() {
         (fileOffset >= options_.getOffset() &&
          fileOffset < options_.getLimit());
 
-    auto inBlacklist =
+    auto isExcluded =
         (i < res.totalCount && bits::isBitSet(res.filterResult.data(), i));
 
     auto isEmpty = rowGroups_[i].num_rows == 0;
     // A skipped row group is one that is in range and is in the excluded list.
-    if (rowGroupInRange && !inBlacklist && !isEmpty) {
+    if (rowGroupInRange && !isExcluded && !isEmpty) {
       rowGroupIds_.push_back(i);
       firstRowOfRowGroup_.push_back(rowNumber);
     }
