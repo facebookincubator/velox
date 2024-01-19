@@ -179,6 +179,21 @@ Supported types are: BIGINT and DOUBLE.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="hex">
+<span class="sig-name descname"><span class="pre">hex</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#hex" title="Permalink to this definition">¶</a></dt>
+<dd><p>Converts <code class="docutils literal notranslate"><span class="pre">x</span></code> to hexadecimal.
+Supported types are: BIGINT, VARBINARY and VARCHAR.
+If the argument is a VARCHAR or VARBINARY, the result is string where each input byte is represented using 2 hex characters.
+If the argument is a positive BIGINT, the result is a hex representation of the number (up to 16 characters),
+if the argument is a negative BIGINT, the result is a hex representation of the number which will be treated as two’s complement.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">hex</span><span class="p">(</span><span class="s2">&quot;Spark SQL&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">537061726</span><span class="n">B2053514C</span>
+<span class="n">SELECT</span> <span class="nb">hex</span><span class="p">(</span><span class="mi">17</span><span class="p">);</span> <span class="o">--</span> <span class="mi">11</span>
+<span class="n">SELECT</span> <span class="nb">hex</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">FFFFFFFFFFFFFFFF</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="hypot">
 <span class="sig-name descname"><span class="pre">hypot</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">a</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">b</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#hypot" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the square root of <cite>a</cite> squared plus <cite>b</cite> squared.</p>
