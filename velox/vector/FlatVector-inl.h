@@ -453,7 +453,10 @@ void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
 
     if constexpr (std::is_same_v<T, bool>) {
       auto rawNewValues = newValues->asMutable<uint64_t>();
-      std::memcpy(rawNewValues, rawValues_, values_->size());
+      std::memcpy(
+          rawNewValues,
+          rawValues_,
+          std::min(values_->size(), newValues->size()));
     } else {
       auto rawNewValues = newValues->asMutable<T>();
       rowsToCopy.applyToSelected(
