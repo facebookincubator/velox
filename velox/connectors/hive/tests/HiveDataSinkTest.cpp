@@ -23,7 +23,9 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/Config.h"
+#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -503,6 +505,42 @@ TEST_F(HiveDataSinkTest, basic) {
 
   createDuckDbTable(vectors);
   verifyWrittenData(outputDirectory->path);
+}
+
+TEST_F(HiveDataSinkTest, parquetBlockSizeAndRows) {
+  std::unordered_map<std::string, std::string> connectorConfig;
+  connectorConfig.emplace("parquet_optimized_writer_max_block_size", "10L");
+  connectorConfig.emplace("parquet_optimized_writer_max_block_rows", "100");
+
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<core::MemConfig>(std::move(connectorConfig)));
+
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto dataSink = createDataSink(
+      rowType_, outputDirectory->path, dwio::common::FileFormat::PARQUET);
+  auto stats = dataSink->stats();
+  ASSERT_TRUE(stats.empty()) << stats.toString();
+  ASSERT_EQ(
+      stats.toString(),
+      "numWrittenBytes 0B numWrittenFiles 0 spillRuns[0] spilledInputBytes[0B] spilledBytes[0B] spilledRows[0] spilledPartitions[0] spilledFiles[0] spillFillTimeUs[0us] spillSortTime[0us] spillSerializationTime[0us] spillDiskWrites[0] spillFlushTime[0us] spillWriteTime[0us] maxSpillExceededLimitCount[0]");
+
+  const int numBatches = 10;
+  const auto vectors = createVectors(500, numBatches);
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+
+  dwio::common::ReaderOptions readerOpts{pool_.get()};
+  const std::vector<std::string> filePaths = listFiles(outputDirectory->path);
+  auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(filePaths[0]),
+      readerOpts.getMemoryPool());
+  auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
+      std::move(bufferedInput), readerOpts);
+  auto parquetReader =
+      dynamic_cast<facebook::velox::parquet::ParquetReader&>(*reader.get());
+  EXPECT_EQ(parquetReader.numberOfRowGroups(), 50);
+  EXPECT_EQ(parquetReader.numberOfRows(), 5000);
 }
 
 TEST_F(HiveDataSinkTest, close) {

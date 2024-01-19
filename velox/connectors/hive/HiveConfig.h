@@ -154,6 +154,11 @@ class HiveConfig {
   static constexpr const char* kOrcWriterMaxDictionaryMemorySession =
       "orc_optimized_writer_max_dictionary_memory";
 
+  static constexpr const char* kParquetWriterMaxBlockSizeSession =
+      "parquet_optimized_writer_max_block_size";
+  static constexpr const char* kParquetWriterMaxBlockRowsSession =
+      "parquet_optimized_writer_max_block_rows";
+
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
   /// The form should be defined by the underlying file system.
@@ -226,6 +231,10 @@ class HiveConfig {
   uint64_t orcWriterMaxStripeSize(const Config* session) const;
 
   uint64_t orcWriterMaxDictionaryMemory(const Config* session) const;
+
+  uint64_t parquetWriterMaxBlockSizeSession(const Config* session) const;
+
+  uint32_t parquetWriterMaxBlockRowsSession(const Config* session) const;
 
   std::string writeFileCreateConfig() const;
 

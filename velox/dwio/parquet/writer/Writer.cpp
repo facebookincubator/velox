@@ -386,6 +386,16 @@ parquet::WriterOptions getParquetOptions(
   if (options.compressionKind.has_value()) {
     parquetOptions.compression = options.compressionKind.value();
   }
+
+  if (options.maxBlockSize.has_value() && options.maxBlockRows.has_value()) {
+    parquetOptions.flushPolicyFactory = [&]() {
+      return std::make_unique<velox::parquet::LambdaFlushPolicy>(
+          options.maxBlockRows.value(), options.maxBlockSize.value(), [&]() {
+            return false;
+          });
+    };
+  }
+
   return parquetOptions;
 }
 

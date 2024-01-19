@@ -204,6 +204,21 @@ uint64_t HiveConfig::orcWriterMaxDictionaryMemory(const Config* session) const {
   return 16L * 1024L * 1024L;
 }
 
+uint64_t HiveConfig::parquetWriterMaxBlockSizeSession(
+    const Config* session) const {
+  if (session->isValueExists(kParquetWriterMaxBlockSizeSession)) {
+    return toCapacity(
+        session->get<std::string>(kParquetWriterMaxBlockSizeSession).value(),
+        core::CapacityUnit::BYTE);
+  }
+  return 128L * 1024L * 1024L;
+}
+
+uint32_t HiveConfig::parquetWriterMaxBlockRowsSession(
+    const Config* session) const {
+  return config_->get<int32_t>(kParquetWriterMaxBlockRowsSession, 1024 * 1024);
+}
+
 std::string HiveConfig::writeFileCreateConfig() const {
   return config_->get<std::string>(kWriteFileCreateConfig, "");
 }
