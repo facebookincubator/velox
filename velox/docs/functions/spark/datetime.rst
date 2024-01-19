@@ -77,11 +77,12 @@ These functions support TIMESTAMP and DATE input types.
     `Valid patterns for date format
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_. Throws exception for
     invalid ``format``. This function will convert input to milliseconds, and integer overflow is
-    allowed in the conversion, which aligns with Spark. For example, from_unixtime(INT64_MAX, 'yyyy')
-    will use overflowed milliseconds to calculate result. ::
+    allowed in the conversion, which aligns with Spark. See the below third example where INT64_MAX
+    is used, -1000 milliseconds are produced by INT64_MAX * 1000 due to integer overflow. ::
 
         SELECT from_unixtime(100, 'yyyy-MM-dd HH:mm:ss'); -- '1970-01-01 00:01:40'
         SELECT from_unixtime(3600, 'yyyy'); -- '1970'
+        SELECT from_unixtime(9223372036854775807, "yyyy-MM-dd HH:mm:ss");  -- '1969-12-31 23:59:59'
 
 .. function:: get_timestamp(string, dateFormat) -> timestamp
 

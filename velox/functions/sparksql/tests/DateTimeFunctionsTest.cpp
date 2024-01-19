@@ -631,6 +631,11 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
       fromUnixTime(getUnixTime("2020-06-30 23:59:59"), "yyyy-MM-dd HH:mm:ss"),
       "2020-06-30 23:59:59");
 
+  // Integer overflow in the internal conversion from seconds to milliseconds.
+  EXPECT_EQ(
+      fromUnixTime(std::numeric_limits<int64_t>::max(), "yyyy-MM-dd HH:mm:ss"),
+      "1969-12-31 23:59:59");
+
   // 8 hours ahead UTC.
   setQueryTimeZone("Asia/Shanghai");
   EXPECT_EQ(fromUnixTime(0, "yyyy-MM-dd HH:mm:ss"), "1970-01-01 08:00:00");
