@@ -152,6 +152,10 @@ class QueryConfig {
   static constexpr const char* kPreferredOutputBatchRows =
       "preferred_output_batch_rows";
 
+  /// Min number of rows to be returned by MergingVectorInput::get.
+  static constexpr const char* kMinMergingVectorInputBatchRows =
+      "min_merging_vector_input_batch_rows";
+
   /// Max number of rows that could be return by operators from
   /// Operator::getOutput. It is used when an estimate of average row size is
   /// known and kPreferredOutputBatchBytes is used to compute the number of
@@ -456,6 +460,10 @@ class QueryConfig {
 
   uint32_t preferredOutputBatchRows() const {
     return get<uint32_t>(kPreferredOutputBatchRows, 1024);
+  }
+
+  uint32_t minMergingVectorInputBatchRows() const {
+    return get<uint32_t>(kMinMergingVectorInputBatchRows, 2);
   }
 
   uint32_t maxOutputBatchRows() const {

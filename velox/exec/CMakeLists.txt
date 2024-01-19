@@ -49,6 +49,7 @@ add_library(
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
+  MergingVectorInput.cpp
   NestedLoopJoinBuild.cpp
   NestedLoopJoinProbe.cpp
   Operator.cpp
