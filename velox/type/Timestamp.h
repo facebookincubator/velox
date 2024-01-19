@@ -117,62 +117,13 @@ struct Timestamp {
     return nanos_;
   }
 
-  int64_t toNanos() const {
-    // int64 can store around 292 years in nanos ~ till 2262-04-12.
-    // When an integer overflow occurs in the calculation,
-    // an exception will be thrown.
-    try {
-      return checkedPlus(
-          checkedMultiply(seconds_, (int64_t)1'000'000'000), (int64_t)nanos_);
-    } catch (const std::exception& e) {
-      VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to nanoseconds, {}",
-          seconds_,
-          nanos_,
-          e.what());
-    }
-  }
+  int64_t toNanos() const;
 
-  int64_t toMillis() const {
-    // We use int128_t to make sure the computation does not overflows since
-    // there are cases such that seconds*1000 does not fit in int64_t,
-    // but seconds*1000 + nanos does, an example is TimeStamp::minMillis().
+  int64_t toMillis() const;
 
-    // If the final result does not fit in int64_tw we throw.
-    __int128_t result =
-        (__int128_t)seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
-    if (result < std::numeric_limits<int64_t>::min() ||
-        result > std::numeric_limits<int64_t>::max()) {
-      VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to milliseconds",
-          seconds_,
-          nanos_);
-    }
-    return result;
-  }
+  int64_t toMillisAllowOverflow() const;
 
-  int64_t toMillisAllowOverflow() const {
-    // Similar to the above toMillis() except that overflowed integer is allowed
-    // as result.
-    auto result = seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
-    return result;
-  }
-
-  int64_t toMicros() const {
-    // When an integer overflow occurs in the calculation,
-    // an exception will be thrown.
-    try {
-      return checkedPlus(
-          checkedMultiply(seconds_, (int64_t)1'000'000),
-          (int64_t)(nanos_ / 1'000));
-    } catch (const std::exception& e) {
-      VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to microseconds, {}",
-          seconds_,
-          nanos_,
-          e.what());
-    }
-  }
+  int64_t toMicros() const;
 
   /// Due to the limit of std::chrono, throws if timestamp is outside of
   /// [-32767-01-01, 32767-12-31] range.
