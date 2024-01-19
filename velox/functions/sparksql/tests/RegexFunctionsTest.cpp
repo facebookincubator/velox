@@ -34,6 +34,10 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
   void SetUp() override {
     SparkFunctionBaseTest::SetUp();
     registerRegexpReplace("");
+    // For parsing literal integers as INTEGER, not BIGINT,
+    // required by regexp_replace because its position argument
+    // is INTEGER.
+    options_.parseIntegerAsBigint = false;
   }
 
   std::optional<bool> rlike(
