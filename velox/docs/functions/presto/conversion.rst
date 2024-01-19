@@ -764,6 +764,7 @@ Valid example
   SELECT cast('9.' as decimal(12, 2)); -- decimal '9.00'
   SELECT cast('.9' as decimal(12, 2)); -- decimal '0.90'
   SELECT cast('3E+2' as decimal(12, 2)); -- decimal '300.00'
+  SELECT cast('3E+00002' as decimal(12, 2)); -- decimal '300.00'
   SELECT cast('3e+2' as decimal(12, 2)); -- decimal '300.00'
   SELECT cast('31.423e+2' as decimal(12, 2)); -- decimal '3142.30'
   SELECT cast('1.2e-2' as decimal(12, 2)); -- decimal '0.01'
@@ -779,3 +780,7 @@ Invalid example
   SELECT cast('0.0446a' as decimal(9, 1)); -- Value is not a number
   SELECT cast('' as decimal(9, 1)); -- Value is not a number
   SELECT cast('23e-5d' as decimal(9, 1)); -- Value is not a number
+  SELECT cast('1.23 ' as decimal(38, 0)); -- Value is not a number
+  SELECT cast(' -3E+2' as decimal(12, 2)); -- Value is not a number
+  SELECT cast('-3E+2.1' as decimal(12, 2)); -- Value is not a number
+  SELECT cast('3E+' as decimal(12, 2)); -- Value is not a number

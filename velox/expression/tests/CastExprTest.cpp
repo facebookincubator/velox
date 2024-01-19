@@ -1692,38 +1692,38 @@ TEST_F(CastExprTest, boolToDecimal) {
           DECIMAL(20, 10)));
 }
 
-// The result is obtained by select cast('31.4e-2' as decimal(12, 2)).
 TEST_F(CastExprTest, varcharToDecimal) {
-  auto input = makeFlatVector<StringView>(
-      {"9999999999.99",
-       "15",
-       "1.5",
-       "-1.5",
-       "1.556",
-       "1.554",
-       ("1.556" + std::string(32, '1')).data(),
-       ("1.556" + std::string(32, '9')).data(),
-       "0000.123",
-       ".12300000000",
-       "+09",
-       "9.",
-       ".9",
-       "3E2",
-       "-3E+2",
-       "3E+2",
-       "3E-2",
-       "3e+2",
-       "3e-2",
-       "3.5E-2",
-       "3.4E-2",
-       "3.5E+2",
-       "3.4E+2",
-       "31.423e+2",
-       "31.423e-2",
-       "31.523e-2"});
   testComplexCast(
       "c0",
-      input,
+      makeFlatVector<StringView>(
+          {"9999999999.99",
+           "15",
+           "1.5",
+           "-1.5",
+           "1.556",
+           "1.554",
+           ("1.556" + std::string(32, '1')).data(),
+           ("1.556" + std::string(32, '9')).data(),
+           "0000.123",
+           ".12300000000",
+           "+09",
+           "9.",
+           ".9",
+           "3E2",
+           "-3E+2",
+           "3E+2",
+           "3E+00002",
+           "3E-2",
+           "3e+2",
+           "3e-2",
+           "3.5E-2",
+           "3.4E-2",
+           "3.5E+2",
+           "3.4E+2",
+           "31.423e+2",
+           "31.423e-2",
+           "31.523e-2",
+           "-3E-00000"}),
       makeFlatVector<int64_t>(
           {999'999'999'999,
            1500,
@@ -1741,6 +1741,7 @@ TEST_F(CastExprTest, varcharToDecimal) {
            30000,
            -30000,
            30000,
+           30000,
            3,
            30000,
            3,
@@ -1750,10 +1751,11 @@ TEST_F(CastExprTest, varcharToDecimal) {
            34000,
            314230,
            31,
-           32},
+           32,
+           -300},
           DECIMAL(12, 2)));
 
-  // Truncate the fractional digits with exponent.
+  // Truncates the fractional digits with exponent.
   testComplexCast(
       "c0",
       makeFlatVector<StringView>(
@@ -1778,8 +1780,8 @@ TEST_F(CastExprTest, varcharToDecimal) {
            12345678912346},
           DECIMAL(20, 4)));
 
-  auto minDecimalStr = '-' + std::string(36, '9') + '.' + "99";
-  auto maxDecimalStr = std::string(36, '9') + '.' + "99";
+  const auto minDecimalStr = '-' + std::string(36, '9') + '.' + "99";
+  const auto maxDecimalStr = std::string(36, '9') + '.' + "99";
   testComplexCast(
       "c0",
       makeFlatVector<StringView>(
@@ -1795,17 +1797,18 @@ TEST_F(CastExprTest, varcharToDecimal) {
           },
           DECIMAL(38, 2)));
 
-  std::string fractionLarge = "1.9" + std::string(67, '9');
-  std::string fractionLargeExp = "1.9" + std::string(67, '9') + "e2";
-  std::string fractionLargeNegExp = "1000.9" + std::string(67, '9') + "e-2";
+  const std::string fractionLarge = "1.9" + std::string(67, '9');
+  const std::string fractionLargeExp = "1.9" + std::string(67, '9') + "e2";
+  const std::string fractionLargeNegExp =
+      "1000.9" + std::string(67, '9') + "e-2";
   testComplexCast(
       "c0",
       makeFlatVector<StringView>(
           {StringView(('-' + std::string(38, '9')).data()),
            StringView(std::string(38, '9').data()),
-           StringView(fractionLarge.data()),
-           StringView(fractionLargeExp.data()),
-           StringView(fractionLargeNegExp.data())}),
+           StringView(fractionLarge),
+           StringView(fractionLargeExp),
+           StringView(fractionLargeNegExp)}),
       makeFlatVector<int128_t>(
           {DecimalUtil::kLongDecimalMin,
            DecimalUtil::kLongDecimalMax,
@@ -1813,107 +1816,132 @@ TEST_F(CastExprTest, varcharToDecimal) {
            200,
            10},
           DECIMAL(38, 0)));
-  std::string fractionRoundDown = "0." + std::string(38, '9') + "2";
-  std::string fractionRoundDownExp = "99." + std::string(36, '9') + "2e-2";
+
+  const std::string fractionRoundDown = "0." + std::string(38, '9') + "2";
+  const std::string fractionRoundDownExp =
+      "99." + std::string(36, '9') + "2e-2";
   testComplexCast(
       "c0",
       makeFlatVector<StringView>(
           {StringView(fractionRoundDown), StringView(fractionRoundDownExp)}),
       makeConstant<int128_t>(DecimalUtil::kLongDecimalMax, 2, DECIMAL(38, 38)));
 
-  // WholeDigits shiftAndAdd overflow.
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>(std::string(280, '9').data(), 1),
-          makeConstant<int128_t>(1, 1, DECIMAL(38, 0))),
+  // Overflows when parsing whole digits.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {std::string(280, '9')},
       fmt::format(
           "Cannot cast VARCHAR '{}' to DECIMAL(38, 0). Value too large.",
-          std::string(280, '9')))
-  // Function shiftAndAdd shift fractionalDigits overflow.
-  std::string shiftFractionOverflow = std::string(36, '9') + '.' + "23456";
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>(shiftFractionOverflow.data(), 1),
-          makeConstant<int128_t>(2, 1, DECIMAL(38, 10))),
+          std::string(280, '9')));
+
+  // Overflows when parsing fractional digits.
+  const std::string fractionOverflow = std::string(36, '9') + '.' + "23456";
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 10),
+      {fractionOverflow},
       fmt::format(
           "Cannot cast VARCHAR '{}' to DECIMAL(38, 10). Value too large.",
-          shiftFractionOverflow))
-  std::string fractionRoundUp = "0." + std::string(38, '9') + "6";
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>(fractionRoundUp.data(), 1),
-          makeConstant<int128_t>(3, 1, DECIMAL(38, 38))),
+          fractionOverflow));
+
+  const std::string fractionRoundUp = "0." + std::string(38, '9') + "6";
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 38),
+      {fractionRoundUp},
       fmt::format(
           "Cannot cast VARCHAR '{}' to DECIMAL(38, 38). Value too large.",
-          fractionRoundUp))
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>("0.0444a", 1),
-          makeConstant<int128_t>(4, 1, DECIMAL(38, 0))),
-      "Cannot cast VARCHAR '0.0444a' to DECIMAL(38, 0). Value is not a number")
+          fractionRoundUp));
 
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>("", 1),
-          makeConstant<int128_t>(5, 1, DECIMAL(38, 0))),
-      "Cannot cast VARCHAR '' to DECIMAL(38, 0). Value is not a number")
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"0.0444a"},
+      "Cannot cast VARCHAR '0.0444a' to DECIMAL(38, 0). Value is not a number. Chars 'a' are invalid.");
 
-  // exponent parsedScale > LongDecimalType::kMaxScale.
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>("1.23e67", 1),
-          makeConstant<int128_t>(6, 1, DECIMAL(38, 0))),
-      "Cannot cast VARCHAR '1.23e67' to DECIMAL(38, 0). Value too large.")
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {""},
+      "Cannot cast VARCHAR '' to DECIMAL(38, 0). Value is not a number. Input is empty.");
 
-  // Out * DecimalUtil::kPowersOfTen[-parsedScale] overflow.
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>("20908.23e35", 1),
-          makeConstant<int128_t>(7, 1, DECIMAL(38, 0))),
-      "Cannot cast VARCHAR '20908.23e35' to DECIMAL(38, 0). Value too large.")
+  // Exponent > LongDecimalType::kMaxPrecision.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"1.23e67"},
+      "Cannot cast VARCHAR '1.23e67' to DECIMAL(38, 0). Value too large.");
 
-  // Rescale overflow.
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>("111111111111111111.23", 1),
-          makeConstant<int128_t>(8, 1, DECIMAL(38, 38))),
-      "Cannot cast VARCHAR '111111111111111111.23' to DECIMAL(38, 38). Value too large.")
+  // Forcing the scale to be zero overflows.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"20908.23e35"},
+      "Cannot cast VARCHAR '20908.23e35' to DECIMAL(38, 0). Value too large.");
 
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>("23e-5d", 1),
-          makeConstant<int128_t>(9, 1, DECIMAL(38, 0))),
-      "Cannot cast VARCHAR '23e-5d' to DECIMAL(38, 0). Value is not a number")
+  // Rescale overflows.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 38),
+      {"111111111111111111.23"},
+      "Cannot cast VARCHAR '111111111111111111.23' to DECIMAL(38, 38). Value too large.");
 
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>("1. 23", 1),
-          makeConstant<int128_t>(10, 1, DECIMAL(38, 0))),
-      "Cannot cast VARCHAR '1. 23' to DECIMAL(38, 0). Value is not a number")
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"23e-5d"},
+      "Cannot cast VARCHAR '23e-5d' to DECIMAL(38, 0). Value is not a number. Non-digit character 'd' is not allowed in the exponent part.");
 
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>("1.23 ", 1),
-          makeConstant<int128_t>(11, 1, DECIMAL(38, 0))),
-      "Cannot cast VARCHAR '1.23 ' to DECIMAL(38, 0). Value is not a number")
+  // Whitespaces.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"1. 23"},
+      "Cannot cast VARCHAR '1. 23' to DECIMAL(38, 0). Value is not a number. Chars ' 23' are invalid.");
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+ 2"},
+      "Cannot cast VARCHAR '-3E+ 2' to DECIMAL(12, 2). Value is not a number. Non-digit character ' ' is not allowed in the exponent part.");
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"1.23 "},
+      "Cannot cast VARCHAR '1.23 ' to DECIMAL(38, 0). Value is not a number. Chars ' ' are invalid.");
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+2 "},
+      "Cannot cast VARCHAR '-3E+2 ' to DECIMAL(12, 2). Value is not a number. Non-digit character ' ' is not allowed in the exponent part.");
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {" 1.23"},
+      "Cannot cast VARCHAR ' 1.23' to DECIMAL(38, 0). Value is not a number. Extracted digits are empty.");
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {" -3E+2"},
+      "Cannot cast VARCHAR ' -3E+2' to DECIMAL(12, 2). Value is not a number. Extracted digits are empty.");
 
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeConstant<StringView>(" 1.23 ", 1),
-          makeConstant<int128_t>(12, 1, DECIMAL(38, 0))),
-      "Cannot cast VARCHAR ' 1.23 ' to DECIMAL(38, 0). Value is not a number")
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+2.1"},
+      "Cannot cast VARCHAR '-3E+2.1' to DECIMAL(12, 2). Value is not a number. Non-digit character '.' is not allowed in the exponent part.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+"},
+      "Cannot cast VARCHAR '-3E+' to DECIMAL(12, 2). Value is not a number. The exponent part only contains sign.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E-"},
+      "Cannot cast VARCHAR '-3E-' to DECIMAL(12, 2). Value is not a number. The exponent part only contains sign.");
 }
 
 TEST_F(CastExprTest, castInTry) {
