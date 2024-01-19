@@ -264,6 +264,11 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<ConvFunction, Varchar, Varchar, int32_t, int32_t>(
       {prefix + "conv"});
 
+  registerFunction<sparksql::DecodeFunction, Varchar, Varbinary, Varchar>(
+      {prefix + "decode"});
+  registerFunction<sparksql::EncodeFunction, Varbinary, Varchar, Varchar>(
+      {prefix + "encode"});
+
   registerFunction<ReplaceFunction, Varchar, Varchar, Varchar>(
       {prefix + "replace"});
   registerFunction<ReplaceFunction, Varchar, Varchar, Varchar, Varchar>(

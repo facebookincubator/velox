@@ -13,10 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "boost/endian.hpp"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Type.h"
 
 #include <stdint.h>
+#include <random>
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
@@ -26,6 +29,286 @@ class StringTest : public SparkFunctionBaseTest {
   // This is a five codepoint sequence that renders as a single emoji.
   static constexpr char kWomanFacepalmingLightSkinTone[] =
       "\xF0\x9F\xA4\xA6\xF0\x9F\x8F\xBB\xE2\x80\x8D\xE2\x99\x80\xEF\xB8\x8F";
+  std::string bom = boost::endian::order::native == boost::endian::order::big
+      ? "FEFF"
+      : "FFFE";
+  std::map<std::string, std::vector<std::pair<std::string, std::string>>>
+      encodeDecodeTestCases = {
+          {"utf-8",
+           {{"48656C6C6F20576F726C64", "Hello World"},
+            {"", ""},
+            {"E298BA", "☺"},
+            {"F09F9881", "😁"}}},
+          {"iso-8859-1",
+           {{"48656C6C6F20576F726C64", "Hello World"},
+            {"A1", "¡"},
+            {"", ""},
+            {"E7F364FD2073E768ECEB7262E8E76B", "çódý sçhìërbèçk"}}},
+          {"us-ascii",
+           {{"48656C6C6F20576F726C64", "Hello World"}, {"7E", "~"}, {"", ""}}},
+          {"utf-16be",
+           {{"00480065006C006C006F00200057006F0072006C0064", "Hello World"},
+            {"004100420043", "ABC"},
+            {"D83DDE02", "😂"},
+            {"266B00A100530069006E00670069006E0067002000690073002000660075006E0021266B",
+             "♫¡Singing is fun!♫"}}},
+          {"utf-16le",
+           {{"480065006C006C006F00200057006F0072006C006400", "Hello World"},
+            {"410042004300", "ABC"},
+            {"", ""},
+            {"3DD802DE", "😂"},
+            {"6B26A100530069006E00670069006E0067002000690073002000660075006E0021006B26",
+             "♫¡Singing is fun!♫"}}},
+          {"utf-16",
+           {{"FEFF00480065006C006C006F00200057006F0072006C0064", "Hello World"},
+            {"FEFFD83DDE02", "😂"},
+            {"", ""},
+            {"FEFF266B00A100530069006E00670069006E0067002000690073002000660075006E0021266B",
+             "♫¡Singing is fun!♫"}}}};
+
+  std::string generateRandomString(size_t length) {
+    const std::string characters =
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    std::random_device random_device;
+    std::mt19937 generator(random_device());
+    std::uniform_int_distribution<> distribution(0, characters.size() - 1);
+
+    std::string random_string;
+    for (size_t i = 0; i < length; ++i) {
+      random_string += characters[distribution(generator)];
+    }
+
+    return random_string;
+  }
+
+  std::optional<std::string> decodeString(
+      std::optional<std::string> binary,
+      std::optional<std::string> encoding) {
+    return evaluateOnce<std::string, std::string>(
+        "decode(c0, c1)", {binary, encoding}, {VARBINARY(), VARCHAR()});
+  }
+
+  std::optional<std::string> encodeString(
+      std::optional<std::string> string,
+      std::optional<std::string> encoding) {
+    return evaluateOnce<std::string, std::string>(
+        "encode(c0, c1)", {string, encoding}, {VARCHAR(), VARCHAR()});
+  }
+  std::optional<std::string> encodeDecode(
+      std::optional<std::string> binary,
+      std::optional<std::string> encoding) {
+    return evaluateOnce<std::string, std::string>(
+        "encode(decode(c0, c1), c1)",
+        {binary, encoding},
+        {VARBINARY(), VARCHAR()});
+  }
+
+  std::optional<std::string> decodeEncode(
+      std::optional<std::string> string,
+      std::optional<std::string> encoding) {
+    return evaluateOnce<std::string, std::string>(
+        "decode(encode(c0, c1), c1)",
+        {string, encoding},
+        {VARCHAR(), VARCHAR()});
+  }
+  std::optional<int32_t> ascii(std::optional<std::string> arg) {
+    return evaluateOnce<int32_t>("ascii(c0)", arg);
+  }
+
+  std::optional<std::string> chr(std::optional<int64_t> arg) {
+    return evaluateOnce<std::string>("chr(c0)", arg);
+  }
+
+  std::optional<int32_t> instr(
+      std::optional<std::string> haystack,
+      std::optional<std::string> needle) {
+    return evaluateOnce<int32_t>("instr(c0, c1)", haystack, needle);
+  }
+
+  std::optional<int32_t> length(std::optional<std::string> arg) {
+    return evaluateOnce<int32_t>("length(c0)", arg);
+  }
+
+  std::optional<int32_t> length_bytes(std::optional<std::string> arg) {
+    return evaluateOnce<int32_t, std::string>(
+        "length(c0)", {arg}, {VARBINARY()});
+  }
+
+  std::optional<std::string> trim(std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("trim(c0)", srcStr);
+  }
+
+  std::optional<std::string> trim(
+      std::optional<std::string> trimStr,
+      std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("trim(c0, c1)", trimStr, srcStr);
+  }
+
+  std::optional<std::string> ltrim(std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("ltrim(c0)", srcStr);
+  }
+
+  std::optional<std::string> ltrim(
+      std::optional<std::string> trimStr,
+      std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("ltrim(c0, c1)", trimStr, srcStr);
+  }
+
+  std::optional<std::string> rtrim(std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("rtrim(c0)", srcStr);
+  }
+
+  std::optional<std::string> rtrim(
+      std::optional<std::string> trimStr,
+      std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("rtrim(c0, c1)", trimStr, srcStr);
+  }
+
+  std::optional<std::string> md5(std::optional<std::string> arg) {
+    return evaluateOnce<std::string, std::string>(
+        "md5(c0)", {arg}, {VARBINARY()});
+  }
+
+  std::optional<std::string> sha1(std::optional<std::string> arg) {
+    return evaluateOnce<std::string, std::string>(
+        "sha1(c0)", {arg}, {VARBINARY()});
+  }
+
+  std::optional<std::string> sha2(
+      std::optional<std::string> str,
+      std::optional<int32_t> bitLength) {
+    return evaluateOnce<std::string, std::string, int32_t>(
+        "sha2(cast(c0 as varbinary), c1)", str, bitLength);
+  }
+
+  bool compareFunction(
+      const std::string& function,
+      const std::optional<std::string>& str,
+      const std::optional<std::string>& pattern) {
+    return evaluateOnce<bool>(function + "(c0, c1)", str, pattern).value();
+  }
+
+  std::optional<bool> startsWith(
+      const std::optional<std::string>& str,
+      const std::optional<std::string>& pattern) {
+    return evaluateOnce<bool>("startsWith(c0, c1)", str, pattern);
+  }
+  std::optional<bool> endsWith(
+      const std::optional<std::string>& str,
+      const std::optional<std::string>& pattern) {
+    return evaluateOnce<bool>("endsWith(c0, c1)", str, pattern);
+  }
+  std::optional<bool> contains(
+      const std::optional<std::string>& str,
+      const std::optional<std::string>& pattern) {
+    return evaluateOnce<bool>("contains(c0, c1)", str, pattern);
+  }
+
+  std::optional<std::string> substring(
+      std::optional<std::string> str,
+      std::optional<int32_t> start) {
+    return evaluateOnce<std::string>("substring(c0, c1)", str, start);
+  }
+
+  std::optional<std::string> substring(
+      std::optional<std::string> str,
+      std::optional<int32_t> start,
+      std::optional<int32_t> length) {
+    return evaluateOnce<std::string>(
+        "substring(c0, c1, c2)", str, start, length);
+  }
+
+  std::optional<std::string> left(
+      std::optional<std::string> str,
+      std::optional<int32_t> length) {
+    return evaluateOnce<std::string>("left(c0, c1)", str, length);
+  }
+
+  std::optional<std::string> substringIndex(
+      const std::string& str,
+      const std::string& delim,
+      int32_t count) {
+    return evaluateOnce<std::string, std::string, std::string, int32_t>(
+        "substring_index(c0, c1, c2)", str, delim, count);
+  }
+
+  std::optional<std::string> overlay(
+      std::optional<std::string> input,
+      std::optional<std::string> replace,
+      std::optional<int32_t> pos,
+      std::optional<int32_t> len) {
+    // overlay is a keyword of DuckDB, use double quote avoid parse error.
+    return evaluateOnce<std::string>(
+        "\"overlay\"(c0, c1, c2, c3)", input, replace, pos, len);
+  }
+
+  std::optional<std::string> overlayVarbinary(
+      std::optional<std::string> input,
+      std::optional<std::string> replace,
+      std::optional<int32_t> pos,
+      std::optional<int32_t> len) {
+    // overlay is a keyword of DuckDB, use double quote avoid parse error.
+    return evaluateOnce<std::string>(
+        "\"overlay\"(cast(c0 as varbinary), cast(c1 as varbinary), c2, c3)",
+        input,
+        replace,
+        pos,
+        len);
+  }
+  std::optional<std::string> rpad(
+      std::optional<std::string> string,
+      std::optional<int32_t> size,
+      std::optional<std::string> padString) {
+    return evaluateOnce<std::string>(
+        "rpad(c0, c1, c2)", string, size, padString);
+  }
+
+  std::optional<std::string> lpad(
+      std::optional<std::string> string,
+      std::optional<int32_t> size,
+      std::optional<std::string> padString) {
+    return evaluateOnce<std::string>(
+        "lpad(c0, c1, c2)", string, size, padString);
+  }
+
+  std::optional<std::string> rpad(
+      std::optional<std::string> string,
+      std::optional<int32_t> size) {
+    return evaluateOnce<std::string>("rpad(c0, c1)", string, size);
+  }
+
+  std::optional<std::string> lpad(
+      std::optional<std::string> string,
+      std::optional<int32_t> size) {
+    return evaluateOnce<std::string>("lpad(c0, c1)", string, size);
+  }
+
+  std::optional<std::string> conv(
+      std::optional<std::string> str,
+      std::optional<int32_t> fromBase,
+      std::optional<int32_t> toBase) {
+    return evaluateOnce<std::string>("conv(c0, c1, c2)", str, fromBase, toBase);
+  }
+
+  std::optional<std::string> replace(
+      std::optional<std::string> str,
+      std::optional<std::string> replaced) {
+    return evaluateOnce<std::string>("replace(c0, c1)", str, replaced);
+  }
+
+  std::optional<std::string> replace(
+      std::optional<std::string> str,
+      std::optional<std::string> replaced,
+      std::optional<std::string> replacement) {
+    return evaluateOnce<std::string>(
+        "replace(c0, c1, c2)", str, replaced, replacement);
+  }
+
+  std::optional<int32_t> findInSet(
+      std::optional<std::string> str,
+      std::optional<std::string> strArray) {
+    return evaluateOnce<int32_t>("find_in_set(c0, c1)", str, strArray);
+  }
 };
 
 TEST_F(StringTest, ascii) {
@@ -862,5 +1145,92 @@ TEST_F(StringTest, trim) {
       trimWithTrimStr("\u6570", "\u6574\u6570 \u6570\u636E!"),
       "\u6574\u6570 \u6570\u636E!");
 }
+TEST_F(StringTest, decodeString) {
+  for (const auto& testCase : encodeDecodeTestCases) {
+    const auto& encoding = testCase.first;
+    const auto& pairs = testCase.second;
+
+    for (const auto& pair : pairs) {
+      std::optional<std::string> encodedString(pair.first);
+      std::optional<std::string> expectedDecodedString(pair.second);
+
+      EXPECT_EQ(decodeString(encodedString, encoding), expectedDecodedString);
+    }
+  }
+}
+
+TEST_F(StringTest, encodeString) {
+  for (const auto& testCase : encodeDecodeTestCases) {
+    const auto& encoding = testCase.first;
+    const auto& pairs = testCase.second;
+
+    for (const auto& pair : pairs) {
+      std::optional<std::string> expectedEncodedString(pair.first);
+      std::optional<std::string> string(pair.second);
+
+      EXPECT_EQ(encodeString(string, encoding), expectedEncodedString);
+    }
+  }
+}
+
+TEST_F(StringTest, encodeDecode) {
+  for (const auto& testCase : encodeDecodeTestCases) {
+    const auto& encoding = testCase.first;
+    const auto& pairs = testCase.second;
+
+    for (const auto& pair : pairs) {
+      EXPECT_EQ(encodeDecode(pair.first, encoding), pair.first);
+    }
+  }
+}
+
+TEST_F(StringTest, decodeEncode) {
+  for (const auto& testCase : encodeDecodeTestCases) {
+    const auto& encoding = testCase.first;
+    const auto& pairs = testCase.second;
+
+    for (const auto& pair : pairs) {
+      EXPECT_EQ(decodeEncode(pair.second, encoding), pair.second);
+    }
+  }
+}
+
+TEST_F(StringTest, randomEncodeDecode) {
+  for (int i = 0; i < 2000; i++) {
+    std::string randomString = generateRandomString(200);
+    EXPECT_EQ(decodeEncode(randomString, "UTF-8"), randomString);
+  }
+}
+
+TEST_F(StringTest, encodeErrors) {
+  std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
+  std::string invalidASCII = "😀";
+  std::string invalidEncoding = "UTF-84";
+
+  VELOX_ASSERT_THROW(
+      encodeString(invalidASCII, "us-ascii"),
+      "Invalid character for US-ASCII encoding.");
+  VELOX_ASSERT_THROW(
+      encodeString(invalidASCII, "iso-8859-1"),
+      "Invalid character for ISO-8859-1 encoding.");
+  VELOX_ASSERT_THROW(
+      encodeString(invalidASCII, invalidEncoding),
+      "Unsupported encoding: UTF-84. Only UTF-8, UTF-16, UTF-16BE, UTF-16LE, ISO-8859-1, and US-ASCII are supported.");
+}
+
+TEST_F(StringTest, decodeErrors) {
+  std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
+  std::string invalidEncoding = "UTF-84";
+  VELOX_ASSERT_THROW(
+      decodeString(invalidString, "us-ascii"),
+      "Invalid character for US-ASCII encoding.");
+  VELOX_ASSERT_THROW(
+      decodeString(invalidString, "iso-8859-1"),
+      "Invalid character for ISO-8859-1 encoding.");
+  VELOX_ASSERT_THROW(
+      decodeString(invalidString, invalidEncoding),
+      "Unsupported encoding: UTF-84. Only UTF-8, UTF-16, UTF-16BE, UTF-16LE, ISO-8859-1, and US-ASCII are supported.");
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
