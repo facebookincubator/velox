@@ -1141,22 +1141,19 @@ struct FindInSetFunction {
     int32_t index = 1;
     int32_t lastComma = -1;
 
-    auto match = std::string_view(str);
-    auto arrayStr = std::string_view(strArray);
-
-    if (match.find(',') != std::string::npos) {
+    if (str.find(',') != std::string::npos) {
       result = 0;
       return;
     }
 
-    auto arrayData = arrayStr.data();
-    size_t arraySize = arrayStr.size();
-    size_t matchSize = match.size();
+    auto arrayData = strArray.data();
+    size_t arraySize = strArray.size();
+    size_t matchSize = str.size();
 
     for (int i = 0; i < arraySize; i++) {
       if (arrayData[i] == ',') {
         if (i - (lastComma + 1) == matchSize &&
-            arrayStr.compare(lastComma + 1, i - (lastComma + 1), match) == 0) {
+            strArray.compare(lastComma + 1, i - (lastComma + 1), str) == 0) {
           result = index;
           return;
         }
@@ -1166,7 +1163,7 @@ struct FindInSetFunction {
     }
 
     if (arraySize - (lastComma + 1) == matchSize) {
-      if (arrayStr.compare(lastComma + 1, arraySize - (lastComma + 1), match) ==
+      if (strArray.compare(lastComma + 1, arraySize - (lastComma + 1), str) ==
           0) {
         result = index;
         return;
