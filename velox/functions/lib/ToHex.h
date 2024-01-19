@@ -17,7 +17,6 @@
 #pragma once
 
 #include "velox/expression/StringWriter.h"
-#include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::functions {
 
