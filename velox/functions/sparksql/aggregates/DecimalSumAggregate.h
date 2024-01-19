@@ -19,16 +19,40 @@
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
+/// This struct stores the sum of input values, overflow during accumulation,
+/// and a bool value isEmpty used to indicate whether all inputs are null. The
+/// initial value of sum is 0. We need to keep sum unchanged if the input is
+/// null, as sum function ignores null input. If the isEmpty is true, then it
+/// means there were no values to begin with or all the values were null, so the
+/// result will be null. If the isEmpty is false, then if sum is null that means
+/// an overflow has happened, it returns null.
 struct DecimalSum {
   int128_t sum{0};
   int64_t overflow{0};
   bool isEmpty{true};
+
+  std::optional<int128_t> computeFinalValue(const TypePtr& sumType) const {
+    auto adjustedSum = DecimalUtil::adjustSumForOverflow(sum, overflow);
+    auto [rPrecision, rScale] = getDecimalPrecisionScale(*sumType);
+    if (adjustedSum.has_value() &&
+        DecimalUtil::valueInPrecisionRange(adjustedSum, rPrecision)) {
+      return adjustedSum;
+    } else {
+      // Find overflow during computing adjusted sum.
+      return std::nullopt;
+    }
+  }
 };
 
 template <typename TInputType, typename TResultType>
 class DecimalSumAggregate : public exec::Aggregate {
  public:
-  explicit DecimalSumAggregate(TypePtr resultType, TypePtr sumType)
+  // resultType refers to the output type of the aggregate function. For partial
+  // aggregation, the resultType is ROW(DECIMAL, BOOLEAN), and for final
+  // aggregation, the resultType is DECIMAL. sumType refers to the type of
+  // DECIMAL in ROW(DECIMAL, BOOLEAN) used to store the accumulated sum in the
+  // output of partial aggregation or the input of final aggregation.
+  DecimalSumAggregate(TypePtr resultType, TypePtr sumType)
       : exec::Aggregate(resultType), sumType_(sumType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
@@ -45,19 +69,6 @@ class DecimalSumAggregate : public exec::Aggregate {
     setAllNulls(groups, indices);
     for (auto i : indices) {
       new (groups[i] + offset_) DecimalSum();
-    }
-  }
-
-  std::optional<int128_t> computeFinalValue(DecimalSum* decimalSum) {
-    auto sum = DecimalUtil::adjustSumForOverflow(
-        decimalSum->sum, decimalSum->overflow);
-    auto [rPrecision, rScale] = getDecimalPrecisionScale(*sumType_);
-    if (sum.has_value() &&
-        DecimalUtil::valueInPrecisionRange(sum, rPrecision)) {
-      return sum;
-    } else {
-      // Find overflow during computing adjusted sum.
-      return std::nullopt;
     }
   }
 
@@ -132,7 +143,7 @@ class DecimalSumAggregate : public exec::Aggregate {
     decodedPartial_.decode(*args[0], rows);
     VELOX_CHECK_EQ(
         decodedPartial_.base()->encoding(), VectorEncoding::Simple::ROW);
-    auto baseRowVector = dynamic_cast<const RowVector*>(decodedPartial_.base());
+    auto baseRowVector = decodedPartial_.base()->as<RowVector>();
     auto sumVector = baseRowVector->childAt(0)->as<SimpleVector<TResultType>>();
     auto isEmptyVector = baseRowVector->childAt(1)->as<SimpleVector<bool>>();
 
@@ -187,7 +198,7 @@ class DecimalSumAggregate : public exec::Aggregate {
     decodedPartial_.decode(*args[0], rows);
     VELOX_CHECK_EQ(
         decodedPartial_.base()->encoding(), VectorEncoding::Simple::ROW);
-    auto baseRowVector = dynamic_cast<const RowVector*>(decodedPartial_.base());
+    auto baseRowVector = decodedPartial_.base()->as<RowVector>();
     auto sumVector = baseRowVector->childAt(0)->as<SimpleVector<TResultType>>();
     auto isEmptyVector = baseRowVector->childAt(1)->as<SimpleVector<bool>>();
     if (decodedPartial_.isConstantMapping()) {
@@ -258,7 +269,7 @@ class DecimalSumAggregate : public exec::Aggregate {
         bits::setBit(rawIsEmpty, i, true);
       } else {
         auto* decimalSum = accumulator(group);
-        auto finalResult = computeFinalValue(decimalSum);
+        auto finalResult = decimalSum->computeFinalValue(sumType_);
         if (!finalResult.has_value()) {
           // Sum should be set to null on overflow, and
           // isEmpty should be set to false.
@@ -292,7 +303,7 @@ class DecimalSumAggregate : public exec::Aggregate {
           // If isEmpty is true, we should set null.
           vector->setNull(i, true);
         } else {
-          auto finalResult = computeFinalValue(decimalSum);
+          auto finalResult = decimalSum->computeFinalValue(sumType_);
           if (!finalResult.has_value()) {
             // Sum should be set to null on overflow.
             vector->setNull(i, true);
