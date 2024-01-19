@@ -42,16 +42,18 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
     return DATE()->toDays(dateStr);
   }
 
-  template <typename ReturnType, typename Arg>
-  std::optional<ReturnType> evaluateDateFuncOnce(
+  template <typename TOutput, typename TValue>
+  std::optional<TOutput> evaluateDateFuncOnce(
       const std::string& expr,
       const std::optional<int32_t>& date,
-      const std::optional<Arg>& value) {
-    auto rowVectorPtr = makeRowVector(
-        {makeNullableFlatVector(
-             std::vector<std::optional<int32_t>>{date}, DATE()),
-         makeNullableFlatVector(std::vector<std::optional<Arg>>{value})});
-    return evaluateOnce<ReturnType>(expr, rowVectorPtr);
+      const std::optional<TValue>& value) {
+    return evaluateOnce<TOutput>(
+        expr,
+        makeRowVector(
+            {makeNullableFlatVector(
+                 std::vector<std::optional<int32_t>>{date}, DATE()),
+             makeNullableFlatVector(
+                 std::vector<std::optional<TValue>>{value})}));
   }
 };
 
