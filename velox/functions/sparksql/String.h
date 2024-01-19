@@ -233,7 +233,7 @@ struct SpaceFunction {
       return;
     }
     result.resize(count);
-    result = generateSpaces(count);
+    std::memcpy(result.data(), generateSpaces(count).data(), count);
   }
 
   std::string generateSpaces(int32_t count) {
