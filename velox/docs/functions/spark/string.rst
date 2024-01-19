@@ -166,7 +166,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
 .. spark:function:: space(count) -> varchar
 
-    Returns a string consisting of `n` spaces. ::
+    Returns a string consisting of `count` spaces. ::
 
         SELECT space(1); -- " "
         SELECT space(5); -- "     "
