@@ -1153,8 +1153,9 @@ struct FindInSetFunction {
     for (int i = 0; i < arraySize; i++) {
       if (arrayData[i] == ',') {
         if (i - (lastComma + 1) == matchSize &&
-            strArray ==
-                StringView(str.data() + (lastComma + 1), i - (lastComma + 1))) {
+            str ==
+                StringView(
+                    strArray.data() + (lastComma + 1), i - (lastComma + 1))) {
           result = index;
           return;
         }
@@ -1164,9 +1165,9 @@ struct FindInSetFunction {
     }
 
     if (arraySize - (lastComma + 1) == matchSize) {
-      if (strArray ==
+      if (str ==
           StringView(
-              str.data() + (lastComma + 1), arraySize - (lastComma + 1))) {
+              strArray.data() + (lastComma + 1), arraySize - (lastComma + 1))) {
         result = index;
         return;
       }
