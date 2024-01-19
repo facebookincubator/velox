@@ -220,7 +220,7 @@ struct Sha2HexStringFunction {
 
 /// space function
 /// space(int) -> string
-/// Returns a string consisting of `n` spaces.
+/// Returns a string consisting of `count` spaces.
 template <typename T>
 struct SpaceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -233,11 +233,7 @@ struct SpaceFunction {
       return;
     }
     result.resize(count);
-    std::memcpy(result.data(), generateSpaces(count).data(), count);
-  }
-
-  std::string generateSpaces(int32_t count) {
-    return std::string(count, ' ');
+    std::memset(result.data(), ' ', count);
   }
 };
 
