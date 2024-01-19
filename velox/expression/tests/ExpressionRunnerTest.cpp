@@ -22,6 +22,7 @@
 #include "velox/expression/tests/ExpressionVerifier.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/sparksql/Register.h"
 #include "velox/vector/VectorSaver.h"
 
 using namespace facebook::velox;
@@ -51,6 +52,12 @@ DEFINE_string(
     "Comma separated SQL expressions to evaluate. This flag and --sql_path "
     "flag are mutually exclusive. If both are specified, --sql is used and "
     "--sql_path is ignored.");
+
+DEFINE_string(
+    engine,
+    "presto",
+    "Engine to use for expression evaluation. Currently supported values are "
+    "presto and spark. Default is presto.");
 
 DEFINE_string(
     result_path,
@@ -181,9 +188,17 @@ int main(int argc, char** argv) {
     sql = restoreStringFromFile(FLAGS_sql_path.c_str());
     VELOX_CHECK(!sql.empty());
   }
+  if (FLAGS_engine == "spark") {
+    functions::sparksql::registerFunctions("");
+  } else if (FLAGS_engine == "presto") {
+    functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
+  } else {
+    std::cout << "Invalid value for --engine: " << FLAGS_engine << ". ";
+    std::cout << "Valid values are: presto, spark." << std::endl;
+    exit(1);
+  }
 
-  functions::prestosql::registerAllScalarFunctions();
-  aggregate::prestosql::registerAllAggregateFunctions();
   test::ExpressionRunner::run(
       FLAGS_input_path,
       sql,
