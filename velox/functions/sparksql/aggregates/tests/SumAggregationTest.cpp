@@ -30,11 +30,11 @@ class SumAggregationTest : public SumTestBase {
  protected:
   void SetUp() override {
     SumTestBase::SetUp();
-    registerAggregateFunctions("spark_");
+    registerAggregateFunctions("spark_", true);
   }
 
  protected:
-  // check global partial agg overflow, and final agg output null
+  // Check global partial agg overflow, and final agg output null.
   void decimalGlobalSumOverflow(
       const std::vector<std::optional<int128_t>>& input,
       const std::vector<std::optional<int128_t>>& output) {
@@ -116,6 +116,48 @@ TEST_F(SumAggregationTest, overflow) {
 
 TEST_F(SumAggregationTest, hookLimits) {
   testHookLimits<int64_t, int64_t, true>();
+}
+
+TEST_F(SumAggregationTest, decimalSumCompanionPartial) {
+  std::vector<int64_t> shortDecimalRawVector;
+  int128_t sum = 0;
+  for (int i = 0; i < 100; ++i) {
+    shortDecimalRawVector.emplace_back(i * 1000);
+    sum += i * 1000;
+  }
+
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(shortDecimalRawVector, DECIMAL(10, 1))});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .singleAggregation({}, {"spark_sum_partial(c0)"})
+                  .planNode();
+  std::vector<int128_t> sumVector = {sum};
+  std::vector<bool> isEmptyVector = {false};
+  auto expected = makeRowVector({makeRowVector(
+      {makeFlatVector<int128_t>(sumVector, DECIMAL(20, 1)),
+       makeFlatVector<bool>(isEmptyVector)})});
+  AssertQueryBuilder assertQueryBuilder(plan);
+  auto result = assertQueryBuilder.copyResults(pool());
+  assertEqualResults({expected}, {result});
+}
+
+TEST_F(SumAggregationTest, decimalSumCompanionMerge) {
+  auto intermediateInput = makeRowVector({makeRowVector(
+      {makeFlatVector<int128_t>(
+           std::vector<int128_t>{1000, 2000, 3000}, DECIMAL(20, 1)),
+       makeFlatVector<bool>(std::vector<bool>{false, false, false})})});
+
+  auto plan = PlanBuilder()
+                  .values({intermediateInput})
+                  .singleAggregation({}, {"spark_sum_merge(c0)"})
+                  .planNode();
+  auto expected = makeRowVector({makeRowVector(
+      {makeFlatVector<int128_t>(std::vector<int128_t>{6000}, DECIMAL(20, 1)),
+       makeFlatVector<bool>(std::vector<bool>{false})})});
+  AssertQueryBuilder assertQueryBuilder(plan);
+  auto result = assertQueryBuilder.copyResults(pool());
+  assertEqualResults({expected}, {result});
 }
 
 TEST_F(SumAggregationTest, decimalSum) {

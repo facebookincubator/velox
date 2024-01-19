@@ -46,7 +46,9 @@ void checkAccumulatorRowType(const TypePtr& type) {
 }
 } // namespace
 
-exec::AggregateRegistrationResult registerSum(const std::string& name) {
+exec::AggregateRegistrationResult registerSum(
+    const std::string& name,
+    bool withCompanionFunctions) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("real")
@@ -100,7 +102,7 @@ exec::AggregateRegistrationResult registerSum(const std::string& name) {
                 BIGINT());
           case TypeKind::BIGINT: {
             if (inputType->isShortDecimal()) {
-              auto sumType = getDecimalSumType(resultType, step);
+              auto const sumType = getDecimalSumType(resultType, step);
               if (sumType->isShortDecimal()) {
                 return std::make_unique<DecimalSumAggregate<int64_t, int64_t>>(
                     resultType, sumType);
@@ -114,9 +116,9 @@ exec::AggregateRegistrationResult registerSum(const std::string& name) {
           }
           case TypeKind::HUGEINT: {
             if (inputType->isLongDecimal()) {
-              auto sumType = getDecimalSumType(resultType, step);
+              auto const sumType = getDecimalSumType(resultType, step);
               // If inputType is long decimal,
-              // its output type always be long decimal.
+              // its output type is always long decimal.
               return std::make_unique<DecimalSumAggregate<int128_t, int128_t>>(
                   resultType, sumType);
             }
@@ -138,7 +140,7 @@ exec::AggregateRegistrationResult registerSum(const std::string& name) {
           case TypeKind::ROW: {
             VELOX_DCHECK(!exec::isRawInput(step));
             checkAccumulatorRowType(inputType);
-            auto sumType = getDecimalSumType(resultType, step);
+            auto const sumType = getDecimalSumType(resultType, step);
             // For intermediate input agg, input intermediate sum type
             // is equal to final result sum type.
             if (inputType->childAt(0)->isShortDecimal()) {
@@ -156,7 +158,8 @@ exec::AggregateRegistrationResult registerSum(const std::string& name) {
                 name,
                 inputType->kindName());
         }
-      });
+      },
+      withCompanionFunctions);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql

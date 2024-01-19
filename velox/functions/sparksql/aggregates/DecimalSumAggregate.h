@@ -48,17 +48,16 @@ class DecimalSumAggregate : public exec::Aggregate {
     }
   }
 
-  int128_t computeFinalValue(DecimalSum* decimalSum, bool& overflow) {
+  std::optional<int128_t> computeFinalValue(DecimalSum* decimalSum) {
     auto sum = DecimalUtil::adjustSumForOverflow(
         decimalSum->sum, decimalSum->overflow);
-    if (!sum.has_value()) {
-      // Find overflow during computing adjusted sum.
-      overflow = true;
-      return 0;
+    auto [rPrecision, rScale] = getDecimalPrecisionScale(*sumType_);
+    if (sum.has_value() &&
+        DecimalUtil::valueInPrecisionRange(sum, rPrecision)) {
+      return sum;
     } else {
-      auto [rPrecision, rScale] = getDecimalPrecisionScale(*sumType_);
-      overflow = !DecimalUtil::valueInPrecisionRange(sum, rPrecision);
-      return sum.value();
+      // Find overflow during computing adjusted sum.
+      return std::nullopt;
     }
   }
 
@@ -259,15 +258,14 @@ class DecimalSumAggregate : public exec::Aggregate {
         bits::setBit(rawIsEmpty, i, true);
       } else {
         auto* decimalSum = accumulator(group);
-        bool overflow = false;
-        auto finalResult = (TResultType)computeFinalValue(decimalSum, overflow);
-        if (overflow) {
+        auto finalResult = computeFinalValue(decimalSum);
+        if (!finalResult.has_value()) {
           // Sum should be set to null on overflow, and
           // isEmpty should be set to false.
           sumVector->setNull(i, true);
           bits::setBit(rawIsEmpty, i, false);
         } else {
-          rawSums[i] = finalResult;
+          rawSums[i] = (TResultType)finalResult.value();
           bits::setBit(rawIsEmpty, i, decimalSum->isEmpty);
         }
       }
@@ -294,14 +292,12 @@ class DecimalSumAggregate : public exec::Aggregate {
           // If isEmpty is true, we should set null.
           vector->setNull(i, true);
         } else {
-          bool overflow = false;
-          auto finalResult =
-              (TResultType)computeFinalValue(decimalSum, overflow);
-          if (overflow) {
+          auto finalResult = computeFinalValue(decimalSum);
+          if (!finalResult.has_value()) {
             // Sum should be set to null on overflow.
             vector->setNull(i, true);
           } else {
-            rawValues[i] = finalResult;
+            rawValues[i] = (TResultType)finalResult.value();
           }
         }
       }
