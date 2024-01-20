@@ -701,9 +701,10 @@ void ParquetRowReader::filterRowGroups() {
 
     auto isExcluded =
         (i < res.totalCount && bits::isBitSet(res.filterResult.data(), i));
-
     auto isEmpty = rowGroups_[i].num_rows == 0;
-    // A skipped row group is one that is in range and is in the excluded list.
+
+    // Add a row group to read if it is within range and not empty and not in
+    // the excluded list.
     if (rowGroupInRange && !isExcluded && !isEmpty) {
       rowGroupIds_.push_back(i);
       firstRowOfRowGroup_.push_back(rowNumber);
