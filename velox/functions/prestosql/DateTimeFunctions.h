@@ -480,10 +480,15 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*ts*/,
-      const arg_type<Varchar>* /*timeZone*/) {
+      const arg_type<Varchar>* timeZone) {
     sessionTimezone = getTimeZoneFromConfig(config);
     sessionTzName =
         (sessionTimezone != NULL ? sessionTimezone->name() : "Africa/Abidjan");
+
+    // below statements causing issue - timeZone is NULL here,
+    // are args not processed in init()?
+    // auto timeZoneStr = std::string_view(timeZone->data(), timeZone->size());
+    // targetTimezoneID = util::getTimeZoneID(timeZoneStr);
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -498,28 +503,31 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
       out_type<TimestampWithTimezone>& result,
       const arg_type<Timestamp>& ts,
       const arg_type<Varchar>& timeZone) {
-    auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
     std::chrono::system_clock::time_point tp{
         std::chrono::seconds{ts.getSeconds()}};
 
     // We are to interpret the input timestamp as being at session timezone;
-    // we must convert it to UTC to derive the UTC millisecond offset
-    // with which we can create the output TimestampWithTimezone type.
-    // "Africa/Abidjan" timezone has offset +00:00; use this timezone to convert
-    // to UTC.
+    // date::make_zoned() returns a zoned_time type that is constructed similarly to 
+    // TimestampWithTimezone, containing a sys_time<duration> to represent a UTC timestamp, as well as
+    // a TimeZonePtr to hold the timezone said timestamp must be resolved to.
+
+    // date::make_zoned() converts the input timestamp, interpreted relative to the input timezone (in this case, session timezone)
+    // to a UTC-relative system time, stored in the returned zoned_time object.
 
     auto starting_timepoint = date::make_zoned(
         sessionTzName,
         date::local_seconds{(std::chrono::seconds)(ts.getSeconds())});
-    auto UTC_timepoint = date::make_zoned("Africa/Abidjan", starting_timepoint);
 
-    auto UTC_time = UTC_timepoint.get_local_time();
+    auto UTC_time = starting_timepoint.get_sys_time();
     auto UTC_seconds = std::chrono::duration_cast<std::chrono::seconds>(
                            UTC_time.time_since_epoch())
                            .count();
 
+    auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
+    targetTimezoneID = util::getTimeZoneID(timeZoneStr);
+
     result.template get_writer_at<0>() = UTC_seconds;
-    result.template get_writer_at<1>() = util::getTimeZoneID(timeZoneStr);
+    result.template get_writer_at<1>() = targetTimezoneID;
   }
 
   FOLLY_ALWAYS_INLINE void call(

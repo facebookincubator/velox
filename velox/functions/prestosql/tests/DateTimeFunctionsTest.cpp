@@ -1019,7 +1019,7 @@ TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampInput) {
           1500101514 + 14400, util::getTimeZoneID("America/Boise")),
       timestampAtTimezone(Timestamp(1500101514, 0), "America/Boise"));
 
-  // New York 2017 = UTC -04:00 = -14400 sec
+   // New York 2017 = UTC -04:00 = -14400 sec
   EXPECT_EQ(
       TimestampWithTimezone(
           1500101514 + 14400, util::getTimeZoneID("Asia/Baghdad")),
@@ -1030,6 +1030,20 @@ TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampInput) {
       TimestampWithTimezone(
           1510728714 + 18000, util::getTimeZoneID("Asia/Baghdad")),
       timestampAtTimezone(Timestamp(1510728714, 0), "Asia/Baghdad"));
+
+      // New York 1892 = UTC -4:56:02 = -(14400 + 3360 + 2) sec
+    EXPECT_EQ(
+      TimestampWithTimezone(
+          -2749482486 + 17762, util::getTimeZoneID("Europe/London")),
+      timestampAtTimezone(Timestamp(-2749482486, 0), "Europe/London"));
+
+    setQueryTimeZone("America/Los_Angeles");
+
+    // Los Angeles 1880 = UTC -7:52:58 = -(25200 + 3180 ) = 28378 sec
+    EXPECT_EQ(
+      TimestampWithTimezone(
+          -2938784886 + 28378, util::getTimeZoneID("Europe/London")),
+      timestampAtTimezone(Timestamp(-2938784886, 0), "Europe/London"));
 
   setQueryTimeZone("Asia/Baghdad");
 
@@ -1046,7 +1060,7 @@ TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampInput) {
 
   setQueryTimeZone("Africa/Bamako");
 
-  // Africa/Bamako = UTC +0:00
+//   // Africa/Bamako = UTC +0:00
   EXPECT_EQ(
       TimestampWithTimezone(
           1500101514, util::getTimeZoneID("Pacific/Galapagos")),
@@ -1056,12 +1070,12 @@ TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampInput) {
 TEST_F(
     DateTimeFunctionsTest,
     timestampAtTimezoneTestTimestampWithTimezoneInput) {
-  //   EXPECT_EQ(
-  //       TimestampWithTimezone(1500101514,
-  //       util::getTimeZoneID("America/Boise")), timestampAtTimezone(
-  //             TimestampWithTimezone(1500101514,
-  //             util::getTimeZoneID("Asia/Kathmandu")),
-  //                                     "America/Boise"));
+    // EXPECT_EQ(
+    //     TimestampWithTimezone(1500101514,
+    //     util::getTimeZoneID("America/Boise")), timestampAtTimezone(
+    //           TimestampWithTimezone(1500101514,
+    //           util::getTimeZoneID("Asia/Kathmandu")),
+    //                                   "America/Boise"));
 
   //   EXPECT_EQ(
   //       1973,
