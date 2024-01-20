@@ -631,10 +631,14 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
       fromUnixTime(getUnixTime("2020-06-30 23:59:59"), "yyyy-MM-dd HH:mm:ss"),
       "2020-06-30 23:59:59");
 
+// In debug mode, Timestamp constructor will throw exception if range check
+// fails.
+#ifdef NDEBUG
   // Integer overflow in the internal conversion from seconds to milliseconds.
   EXPECT_EQ(
       fromUnixTime(std::numeric_limits<int64_t>::max(), "yyyy-MM-dd HH:mm:ss"),
       "1969-12-31 23:59:59");
+#endif
 
   // 8 hours ahead UTC.
   setQueryTimeZone("Asia/Shanghai");
