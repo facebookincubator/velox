@@ -500,7 +500,12 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
     // "Africa/Abidjan" timezone has offset +00:00; use this timezone to convert
     // to UTC.
 
-    auto starting_timepoint = date::make_zoned(sessionTzName, tp);
+    // date::local_seconds{}
+    auto starting_timepoint = date::make_zoned(sessionTzName, date::local_seconds{(std::chrono::seconds)(1500101514)});
+    auto LA_timept = date::make_zoned("America/Los_Angeles", starting_timepoint);
+
+
+
     auto UTC_timepoint = date::make_zoned("Africa/Abidjan", starting_timepoint);
 
     auto UTC_time = UTC_timepoint.get_local_time();
