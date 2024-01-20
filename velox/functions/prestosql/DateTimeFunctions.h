@@ -483,8 +483,7 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Varchar>* /*timeZone*/) {
     sessionTimezone = getTimeZoneFromConfig(config);
     sessionTzName =
-         (sessionTimezone != NULL ? sessionTimezone->name()
-                                           : "Africa/Abidjan");
+        (sessionTimezone != NULL ? sessionTimezone->name() : "Africa/Abidjan");
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -509,7 +508,9 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
     // "Africa/Abidjan" timezone has offset +00:00; use this timezone to convert
     // to UTC.
 
-    auto starting_timepoint = date::make_zoned(sessionTzName, date::local_seconds{(std::chrono::seconds)(ts.getSeconds())});
+    auto starting_timepoint = date::make_zoned(
+        sessionTzName,
+        date::local_seconds{(std::chrono::seconds)(ts.getSeconds())});
     auto UTC_timepoint = date::make_zoned("Africa/Abidjan", starting_timepoint);
 
     auto UTC_time = UTC_timepoint.get_local_time();
