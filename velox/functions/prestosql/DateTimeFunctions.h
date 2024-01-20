@@ -475,15 +475,24 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
 
   std::string sessionTzName = "";
   const date::time_zone* sessionTimezone = nullptr;
+  int64_t targetTimezoneID = -1;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*ts*/,
-      const arg_type<Varchar>* /*timestamp*/) {
+      const arg_type<Varchar>* /*timeZone*/) {
     sessionTimezone = getTimeZoneFromConfig(config);
     sessionTzName =
          (sessionTimezone != NULL ? sessionTimezone->name()
                                            : "Africa/Abidjan");
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<TimestampWithTimezone>* /*tsWithTz*/,
+      const arg_type<Varchar>* timeZone) {
+    auto timeZoneStr = std::string_view(timeZone->data(), timeZone->size());
+    targetTimezoneID = util::getTimeZoneID(timeZoneStr);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -500,12 +509,7 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
     // "Africa/Abidjan" timezone has offset +00:00; use this timezone to convert
     // to UTC.
 
-    // date::local_seconds{}
-    auto starting_timepoint = date::make_zoned(sessionTzName, date::local_seconds{(std::chrono::seconds)(1500101514)});
-    auto LA_timept = date::make_zoned("America/Los_Angeles", starting_timepoint);
-
-
-
+    auto starting_timepoint = date::make_zoned(sessionTzName, date::local_seconds{(std::chrono::seconds)(ts.getSeconds())});
     auto UTC_timepoint = date::make_zoned("Africa/Abidjan", starting_timepoint);
 
     auto UTC_time = UTC_timepoint.get_local_time();
@@ -521,11 +525,7 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
       out_type<TimestampWithTimezone>& result,
       const arg_type<TimestampWithTimezone>& tsWithTz,
       const arg_type<Varchar>& timeZone) {
-    auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
-    auto zone = date::locate_zone(timeZoneStr);
-
     const auto inputMs = *tsWithTz.template at<0>();
-    const auto inputTz = *tsWithTz.template at<1>();
 
     // <0> of a TimestampWithTimezone tuple always represents
     // milliseconds relative to GMT - so the input and output
@@ -533,7 +533,7 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
     // (<0>), rather solely timezone <1> should differ. The millisecond offset
     // is then resolved to the respective timezone at the time of display.
     result.template get_writer_at<0>() = inputMs;
-    result.template get_writer_at<1>() = util::getTimeZoneID(timeZoneStr);
+    result.template get_writer_at<1>() = targetTimezoneID;
   }
 };
 

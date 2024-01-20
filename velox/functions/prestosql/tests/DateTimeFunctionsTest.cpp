@@ -1006,43 +1006,51 @@ TEST_F(DateTimeFunctionsTest, minusTimestamp) {
 }
 
 TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampInput) {
+
+    // Passing a Timestamp along with a timezone string
+    // into at_timezone() should return a 
+    // TimestampWithTimezone type, comprised of seconds (int64) relative to UTC, 
+    // and a timezone ID (int16) corresponding to the input timezone string.
     
     setQueryTimeZone("America/New_York");
-  // New York = GMT -04:00, -14400 sec
-  EXPECT_EQ(
+
+    // New York 2017 = UTC -04:00 = -14400 sec
+    EXPECT_EQ(
       TimestampWithTimezone(
-          1500101514 - 14400, util::getTimeZoneID("America/Boise")),
+          1500101514 + 14400, util::getTimeZoneID("America/Boise")),
       timestampAtTimezone(Timestamp(1500101514, 0), "America/Boise"));
 
-  //   // GMT +03:00, +10800 sec
-  //   EXPECT_EQ(
-  //       TimestampWithTimezone(
-  //           1500101514 + 10800, util::getTimeZoneID("Asia/Baghdad")),
-  //       timestampAtTimezone(Timestamp(1500101514, 0), "Asia/Baghdad"));
+    // New York 2017 = UTC -04:00 = -14400 sec
+    EXPECT_EQ(
+      TimestampWithTimezone(
+          1500101514 + 14400, util::getTimeZoneID("Asia/Baghdad")),
+      timestampAtTimezone(Timestamp(1500101514, 0), "Asia/Baghdad"));
 
-  //   // GMT +0:00
-  //   EXPECT_EQ(
-  //       TimestampWithTimezone(1500101514,
-  //       util::getTimeZoneID("Africa/Bamako")),
-  //       timestampAtTimezone(Timestamp(1500101514, 0), "Africa/Bamako"));
+    // New York 2017 DST = UTC -05:00 = -18000 sec
+    EXPECT_EQ(
+      TimestampWithTimezone(
+          1510728714 + 18000, util::getTimeZoneID("Asia/Baghdad")),
+      timestampAtTimezone(Timestamp(1510728714, 0), "Asia/Baghdad"));
 
-  //   // GMT -07:00, -25200 sec
-  //   EXPECT_EQ(
-  //       TimestampWithTimezone(
-  //           1513299114 - 25200, util::getTimeZoneID("America/Boise")),
-  //       timestampAtTimezone(Timestamp(1513299114, 0), "America/Boise"));
+    setQueryTimeZone("Asia/Baghdad");
 
-  //   // GMT +01:00, +3600 sec
-  //   EXPECT_EQ(
-  //       TimestampWithTimezone(
-  //           507034293 + 3600, util::getTimeZoneID("Europe/Prague")),
-  //       timestampAtTimezone(Timestamp(507034293, 0), "Europe/Prague"));
+    // Asia/Baghdad = UTC +03:00 = +10800 sec
+    EXPECT_EQ(
+        TimestampWithTimezone(
+            1500101514 - 10800, util::getTimeZoneID("Europe/London")),
+        timestampAtTimezone(Timestamp(1500101514, 0), "Europe/London"));
 
-  //   // GMT +05:45, +20700 sec
-  //   EXPECT_EQ(
-  //       TimestampWithTimezone(
-  //           75325423914 + 20700, util::getTimeZoneID("Asia/Kathmandu")),
-  //       timestampAtTimezone(Timestamp(75325423914, 0), "Asia/Kathmandu"));
+    EXPECT_EQ(
+        TimestampWithTimezone(
+            1500321297 - 10800, util::getTimeZoneID("America/New_York")),
+        timestampAtTimezone(Timestamp(1500321297, 0), "America/New_York"));
+
+    setQueryTimeZone("Africa/Bamako");
+
+    // Africa/Bamako = UTC +0:00
+    EXPECT_EQ(
+        TimestampWithTimezone(1500101514, util::getTimeZoneID("Pacific/Galapagos")),
+        timestampAtTimezone(Timestamp(1500101514, 0), "Pacific/Galapagos"));
 }
 
 TEST_F(
