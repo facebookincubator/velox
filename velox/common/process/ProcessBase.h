@@ -18,8 +18,9 @@
 
 #include <pthread.h>
 #include <sys/types.h>
+
+#include <cstdint>
 #include <string>
-#include <vector>
 
 namespace facebook {
 namespace velox {

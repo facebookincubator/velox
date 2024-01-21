@@ -293,6 +293,8 @@ void VeloxIn10MinDemo::run() {
 int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
 
+  memory::MemoryManager::initialize({});
+
   VeloxIn10MinDemo demo;
   demo.run();
 }
