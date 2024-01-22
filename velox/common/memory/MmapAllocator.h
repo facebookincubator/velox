@@ -27,7 +27,6 @@
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MemoryPool.h"
-#include "velox/common/memory/MmapArena.h"
 
 namespace facebook::velox::memory {
 
@@ -52,15 +51,6 @@ class MmapAllocator : public MemoryAllocator {
   struct Options {
     ///  Capacity in bytes, default unlimited.
     uint64_t capacity{kMaxMemory};
-
-    /// If set true, allocations larger than largest size class size will be
-    /// delegated to ManagedMmapArena. Otherwise a system mmap call will be
-    /// issued for each such allocation.
-    bool useMmapArena = false;
-
-    /// Used to determine MmapArena capacity. The ratio represents system memory
-    /// capacity to single MmapArena capacity ratio.
-    int32_t mmapArenaCapacityRatio = 10;
 
     /// If not zero, reserve 'smallAllocationReservePct'% of space from
     /// 'capacity' for ad hoc small allocations. And those allocations are
@@ -375,11 +365,6 @@ class MmapAllocator : public MemoryAllocator {
 
   const Kind kind_;
 
-  // If set true, allocations larger than the largest size class size will be
-  // delegated to ManagedMmapArena. Otherwise, a system mmap call will be
-  // issued for each such allocation.
-  const bool useMmapArena_;
-
   // Serializes moving capacity between size classes
   std::mutex sizeClassBalanceMutex_;
 
@@ -416,11 +401,6 @@ class MmapAllocator : public MemoryAllocator {
   std::atomic<uint64_t> numAllocatedPages_ = 0;
   std::atomic<uint64_t> numAdvisedPages_ = 0;
   std::atomic<uint64_t> numMallocBytes_ = 0;
-
-  // Allocations that are larger than largest size classes will be delegated to
-  // ManagedMmapArenas, to avoid calling mmap on every allocation.
-  std::mutex arenaMutex_;
-  std::unique_ptr<ManagedMmapArenas> managedArenas_;
 
   std::shared_ptr<Cache> cache_;
 };

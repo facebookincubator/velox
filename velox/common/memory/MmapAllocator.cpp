@@ -24,7 +24,6 @@
 namespace facebook::velox::memory {
 MmapAllocator::MmapAllocator(const Options& options)
     : kind_(MemoryAllocator::Kind::kMmap),
-      useMmapArena_(options.useMmapArena),
       maxMallocBytes_(options.maxMallocBytes),
       mallocReservedBytes_(
           maxMallocBytes_ == 0
@@ -35,14 +34,6 @@ MmapAllocator::MmapAllocator(const Options& options)
           64 * sizeClassSizes_.back())) {
   for (const auto& size : sizeClassSizes_) {
     sizeClasses_.push_back(std::make_unique<SizeClass>(capacity_ / size, size));
-  }
-
-  if (useMmapArena_) {
-    const auto arenaSizeBytes = bits::roundUp(
-        AllocationTraits::pageBytes(capacity_) / options.mmapArenaCapacityRatio,
-        AllocationTraits::kPageSize);
-    managedArenas_ = std::make_unique<ManagedMmapArenas>(
-        std::max<uint64_t>(arenaSizeBytes, MmapArena::kMinCapacityBytes));
   }
 }
 
@@ -280,14 +271,9 @@ bool MmapAllocator::allocateContiguousImpl(
   const auto numLargeCollateralPages = allocation.numPages();
   if (numLargeCollateralPages > 0) {
     useHugePages(allocation, false);
-    if (useMmapArena_) {
-      std::lock_guard<std::mutex> l(arenaMutex_);
-      managedArenas_->free(allocation.data(), allocation.maxSize());
-    } else {
-      if (::munmap(allocation.data(), allocation.maxSize()) < 0) {
-        VELOX_MEM_LOG(ERROR) << "munmap got " << folly::errnoStr(errno)
-                             << " for " << allocation.toString();
-      }
+    if (::munmap(allocation.data(), allocation.maxSize()) < 0) {
+      VELOX_MEM_LOG(ERROR) << "munmap got " << folly::errnoStr(errno) << " for "
+                           << allocation.toString();
     }
     allocation.clear();
   }
@@ -384,25 +370,18 @@ bool MmapAllocator::allocateContiguousImpl(
   if (testingHasInjectedFailure(InjectedFailure::kMmap)) {
     data = nullptr;
   } else {
-    if (useMmapArena_) {
-      std::lock_guard<std::mutex> l(arenaMutex_);
-      data = managedArenas_->allocate(AllocationTraits::pageBytes(maxPages));
-    } else {
-      data = ::mmap(
-          nullptr,
-          AllocationTraits::pageBytes(maxPages),
-          PROT_READ | PROT_WRITE,
-          MAP_PRIVATE | MAP_ANONYMOUS,
-          -1,
-          0);
-    }
+    data = ::mmap(
+        nullptr,
+        AllocationTraits::pageBytes(maxPages),
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0);
   }
   // TODO: add handling of MAP_FAILED.
   if (data == nullptr) {
-    const std::string errorMsg = fmt::format(
-        "Mmap failed with {} pages use MmapArena {}",
-        numPages,
-        (useMmapArena_ ? "true" : "false"));
+    const std::string errorMsg =
+        fmt::format("Mmap failed with {} pages", numPages);
     VELOX_MEM_LOG(ERROR) << errorMsg;
     setAllocatorFailureMessage(errorMsg);
     // If the mmap failed, we have unmapped former 'allocation' and the extra to
@@ -428,14 +407,9 @@ void MmapAllocator::freeContiguousImpl(ContiguousAllocation& allocation) {
     return;
   }
   useHugePages(allocation, false);
-  if (useMmapArena_) {
-    std::lock_guard<std::mutex> l(arenaMutex_);
-    managedArenas_->free(allocation.data(), allocation.maxSize());
-  } else {
-    if (::munmap(allocation.data(), allocation.maxSize()) < 0) {
-      VELOX_MEM_LOG(ERROR) << "munmap returned " << folly::errnoStr(errno)
-                           << " for " << allocation.toString();
-    }
+  if (::munmap(allocation.data(), allocation.maxSize()) < 0) {
+    VELOX_MEM_LOG(ERROR) << "munmap returned " << folly::errnoStr(errno)
+                         << " for " << allocation.toString();
   }
   numMapped_ -= allocation.numPages();
   numExternalMapped_ -= allocation.numPages();
