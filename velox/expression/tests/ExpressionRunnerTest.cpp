@@ -54,9 +54,9 @@ DEFINE_string(
     "--sql_path is ignored.");
 
 DEFINE_string(
-    engine,
+    registry,
     "presto",
-    "Engine to use for expression evaluation. Currently supported values are "
+    "Funciton registry to use for expression evaluation. Currently supported values are "
     "presto and spark. Default is presto.");
 
 DEFINE_string(
@@ -99,7 +99,27 @@ static bool validateMode(const char* flagName, const std::string& value) {
   return true;
 }
 
+static bool validateRegistry(const char* flagName, const std::string& value) {
+  static const std::unordered_set<std::string> kRegistries = {
+      "presto", "spark"};
+  if (kRegistries.count(value) != 1) {
+    std::cout << "Invalid value for --" << flagName << ": " << value << ". ";
+    std::cout << "Valid values are: " << folly::join(", ", kRegistries) << "."
+              << std::endl;
+    return false;
+  }
+  if (value == "spark") {
+    functions::sparksql::registerFunctions("");
+  }
+  else if (value == "presto") {
+    functions::prestosql::registerAllScalarFunctions();
+  }
+
+  return true;
+}
+
 DEFINE_validator(mode, &validateMode);
+DEFINE_validator(registry, &validateRegistry);
 
 DEFINE_int32(
     num_rows,
@@ -187,16 +207,6 @@ int main(int argc, char** argv) {
   if (sql.empty()) {
     sql = restoreStringFromFile(FLAGS_sql_path.c_str());
     VELOX_CHECK(!sql.empty());
-  }
-  if (FLAGS_engine == "spark") {
-    functions::sparksql::registerFunctions("");
-  } else if (FLAGS_engine == "presto") {
-    functions::prestosql::registerAllScalarFunctions();
-    aggregate::prestosql::registerAllAggregateFunctions();
-  } else {
-    std::cout << "Invalid value for --engine: " << FLAGS_engine << ". ";
-    std::cout << "Valid values are: presto, spark." << std::endl;
-    exit(1);
   }
 
   test::ExpressionRunner::run(
