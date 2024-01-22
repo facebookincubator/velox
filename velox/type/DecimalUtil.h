@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/Conv.h>
 #include <string>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
@@ -29,11 +28,6 @@ namespace facebook::velox {
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
-  enum class RescalingErrors : unsigned char {
-    kInfiniteFloatingNumber,
-    kOverflowedRescaledValue,
-  };
-
   static constexpr int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1] = {
       1,
       10,
@@ -209,42 +203,42 @@ class DecimalUtil {
     return static_cast<TOutput>(rescaledValue);
   }
 
-  /// Rescale a double value to decimal value.
-  ///
-  /// Use `folly::tryTo` to convert a double value to int128_t or int64_t. It
-  /// returns an error when overflow occurs so that we could determine whether
-  /// an overflow occurs through checking the result.
-  ///
-  /// Normally, return the rescaled value. Otherwise, if the `toValue` overflows
-  /// the TOutput's limits or the `toValue` exceeds the precision's limits, it
-  /// will set an error message in `error` field and return an std::nullopt.
+  /// Rescales a double value to decimal value of given precision and scale. The
+  /// output is rescaled value of int128_t or int64_t type. Returns error status
+  /// if fails.
   template <typename TOutput>
-  inline static folly::Expected<TOutput, RescalingErrors>
-  rescaleDouble(double value, int precision, int scale) {
+  inline static Status
+  rescaleDouble(double value, int precision, int scale, TOutput& output) {
     if (!std::isfinite(value)) {
-      return folly::makeUnexpected<RescalingErrors>(
-          RescalingErrors::kInfiniteFloatingNumber);
+      return Status::UserError("The input value should be finite.");
     }
 
-    auto toValue = value * DecimalUtil::kPowersOfTen[scale];
-
-    TOutput rescaledValue;
-    bool isOverflow = !std::isfinite(toValue);
-    if (!isOverflow) {
-      auto result = folly::tryTo<TOutput>(std::round(toValue));
-      if (result.hasError()) {
-        isOverflow = true;
-      } else {
-        rescaledValue = result.value();
-      }
+    long double rounded;
+    // A double provides 16(±1) decimal digits, so at least 15 digits are
+    // precise.
+    if (scale > 15) {
+      // Convert value to long double type, as double * int128_t returns
+      // int128_t and fractional digits are lost. No need to consider 'toValue'
+      // becoming infinite as DOUBLE_MAX * 10^38 < LONG_DOUBLE_MAX.
+      const auto toValue = (long double)value * DecimalUtil::kPowersOfTen[15];
+      rounded = std::round(toValue) * DecimalUtil::kPowersOfTen[scale - 15];
+    } else {
+      const auto toValue =
+          (long double)value * DecimalUtil::kPowersOfTen[scale];
+      rounded = std::round(toValue);
     }
 
-    if (isOverflow || rescaledValue < -DecimalUtil::kPowersOfTen[precision] ||
-        rescaledValue > DecimalUtil::kPowersOfTen[precision]) {
-      return folly::makeUnexpected<RescalingErrors>(
-          RescalingErrors::kOverflowedRescaledValue);
+    const auto result = folly::tryTo<TOutput>(rounded);
+    if (result.hasError()) {
+      return Status::UserError("Result overflows.");
     }
-    return folly::makeExpected<RescalingErrors>(rescaledValue);
+    const TOutput rescaledValue = result.value();
+    if (!valueInPrecisionRange<TOutput>(rescaledValue, precision)) {
+      return Status::UserError(
+          "Result cannot fit in the given precision {}.", precision);
+    }
+    output = rescaledValue;
+    return Status::OK();
   }
 
   template <typename R, typename A, typename B>
