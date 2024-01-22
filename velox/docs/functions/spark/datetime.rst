@@ -72,8 +72,9 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark::function::from_unixtime(unixTime, format) -> string
 
-    Adjusts ``unixTime``(elapsed seconds since UNIX epoch) to configured session timezone, then
-    converts it to a formatted time string according to ``format``.
+    Adjusts ``unixTime`` (elapsed seconds since UNIX epoch) to configured session timezone, then
+    converts it to a formatted time string according to ``format``. Only allows BIGINT type for
+    ``unixTime``.
     `Valid patterns for date format
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_. Throws exception for
     invalid ``format``. This function will convert input to milliseconds, and integer overflow is
