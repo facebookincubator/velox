@@ -97,10 +97,10 @@ Generic Configuration
      - The maximum size in bytes for the task's buffered output when output is partitioned using hash of partitioning keys. See PartitionedOutputNode::Kind::kPartitioned.
        The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
-   * - max_arbitrary_buffer_size
+   * - max_output_buffer_size
      - integer
      - 32MB
-     - The maximum size in bytes for the task's buffered output when output is distributed randomly among consumers. See PartitionedOutputNode::Kind::kArbitrary.
+     - The maximum size in bytes for the task's buffered output.
        The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
    * - min_table_rows_for_parallel_join_build
@@ -419,7 +419,11 @@ Each query can override the config by setting corresponding query session proper
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
        the input column name and filter is also lower case to achive case-insensitive read.
-       If true, the partition directory will be converted to lowercase when executing a table write operation.
+   * - partition-path-as-lower-case
+     -
+     - bool
+     - true
+     - If true, the partition directory will be converted to lowercase when executing a table write operation.
    * - max-coalesced-bytes
      -
      - integer
