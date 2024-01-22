@@ -51,7 +51,8 @@ HashAggregation::HashAggregation(
           operatorCtx_->pool(),
           driverCtx->queryConfig().preferredOutputBatchBytes(),
           driverCtx->queryConfig().preferredOutputBatchRows(),
-          driverCtx->queryConfig().minMergingVectorInputBatchRows())) {}
+          driverCtx->queryConfig().maxMergingVectorRows(),
+          aggregationNode->preGroupedKeys().size() == 0 ? false : true)) {}
 
 void HashAggregation::initialize() {
   Operator::initialize();
@@ -122,13 +123,17 @@ bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
       100 * numOutput / numInputRows_ >= abandonPartialAggregationMinPct_;
 }
 
+void HashAggregation::processMergedVectors(bool noMoreInput) {
+  auto mergedVector = mergingVectorInput_->getVector(noMoreInput);
+  while (nullptr != mergedVector) {
+    addInputInternal(mergedVector);
+    mergedVector = mergingVectorInput_->getVector(noMoreInput);
+  }
+}
+
 void HashAggregation::addInput(RowVectorPtr input) {
   mergingVectorInput_->addVector(input);
-  auto mergedVector = mergingVectorInput_->getVector(noMoreInput_);
-  while (nullptr != mergedVector) {
-    addInputInternal(input);
-    mergedVector = mergingVectorInput_->getVector(noMoreInput_);
-  }
+  processMergedVectors(noMoreInput_);
 }
 
 void HashAggregation::addInputInternal(RowVectorPtr input) {
@@ -399,10 +404,7 @@ RowVectorPtr HashAggregation::getDistinctOutput() {
 }
 
 void HashAggregation::noMoreInput() {
-  auto mergeVector = mergingVectorInput_->getVector(true);
-  if (nullptr != mergeVector) {
-    addInputInternal(mergeVector);
-  }
+  processMergedVectors(true);
 
   updateEstimatedOutputRowSize();
   groupingSet_->noMoreInput();

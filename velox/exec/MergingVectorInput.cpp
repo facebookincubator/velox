@@ -23,11 +23,13 @@ MergingVectorInput::MergingVectorInput(
     velox::memory::MemoryPool* pool,
     int64_t preferredOutputBatchBytes,
     int32_t preferredOutputBatchRows,
-    int32_t minOutputRows)
+    int32_t maxMergingRows,
+    bool preserveOrder)
     : pool_(pool),
       preferredOutputBatchBytes_(preferredOutputBatchBytes),
       preferredOutputBatchRows_(preferredOutputBatchRows),
-      minOutputRows_(minOutputRows) {}
+      maxMergingRows_(maxMergingRows),
+      preserveOrder_(preserveOrder) {}
 
 RowVectorPtr MergingVectorInput::getVector(bool noMoreInput) {
   if (noMoreInput) {
@@ -52,9 +54,11 @@ void MergingVectorInput::addVector(RowVectorPtr vector) {
   }
 
   // Avoid memory copying for pages that are big enough
-  if (numInput >= minOutputRows_) {
-    // In order to preserve the order of the rows, we need to flush first.
-    flush();
+  if (numInput >= maxMergingRows_) {
+    if (preserveOrder_) {
+      // In order to preserve the order of the rows, we need to flush first.
+      flush();
+    }
     outputQueue_.push(std::move(vector));
     return;
   }

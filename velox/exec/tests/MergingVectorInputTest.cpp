@@ -30,8 +30,8 @@ class MergingVectorInputTest : public testing::Test,
   }
 
   void SetUp() override {
-    mergingVectorInput_ =
-        std::make_shared<MergingVectorInput>(pool(), 10UL << 20, 1024, 16);
+    mergingVectorInput_ = std::make_shared<MergingVectorInput>(
+        pool(), 10UL << 20, 1024, 16, true);
   }
 
   std::shared_ptr<MergingVectorInput> mergingVectorInput_;

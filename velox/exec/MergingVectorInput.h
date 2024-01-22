@@ -27,14 +27,15 @@ class MergingVectorInput {
       velox::memory::MemoryPool* pool,
       int64_t preferredOutputBatchBytes,
       int32_t preferredOutputRows,
-      int32_t minOutputRows);
+      int32_t maxMergingRows,
+      bool preserveOrder);
 
   /// Add input vector. It will be merged into a big vector if smaller than
-  /// minOutputRows.
+  /// maxMergingRows.
   /// @param input input vector.
   void addVector(RowVectorPtr input);
 
-  /// Returns a RowVector after merging, or return nullptr if we haven't
+  /// Returns a RowVector after merged, or return nullptr if we haven't
   /// accumulated enough just yet.
   /// @return RowVector or nullptr.
   /// @param noMoreInput whether more data is expected to be added via
@@ -49,7 +50,7 @@ class MergingVectorInput {
   // If the input vector is small enough, copy it to the buffer vector.
   void buffer(RowVectorPtr input);
 
-  /// Merge the source row vector to dest row vector.
+  // Merge the source row vector to dest row vector.
   void mergeVector(
       RowVectorPtr& dest,
       const RowVectorPtr& src,
@@ -64,15 +65,18 @@ class MergingVectorInput {
   // The preferred output row count of the bufferInputs_.
   const int32_t preferredOutputBatchRows_;
 
-  // If the input vector row count is larger than minOutputRows_, flush
+  // If the input vector row count is larger than maxMergingRows_, flush
   // it to the outputQueue_ directly.
-  const int32_t minOutputRows_;
+  const int32_t maxMergingRows_;
 
   // The RowVectorPtr queue where bufferInputs_ flush to.
   std::queue<RowVectorPtr> outputQueue_;
 
   // The vector buffer the small input vector.
   RowVectorPtr bufferInputs_;
+
+  // Whether the merged vectors order need to preserve with the input order.
+  bool preserveOrder_ = true;
 
   // The buffer row count in bufferInputs_.
   int32_t numBufferRows_ = 0;
