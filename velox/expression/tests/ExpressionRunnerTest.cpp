@@ -110,8 +110,7 @@ static bool validateRegistry(const char* flagName, const std::string& value) {
   }
   if (value == "spark") {
     functions::sparksql::registerFunctions("");
-  }
-  else if (value == "presto") {
+  } else if (value == "presto") {
     functions::prestosql::registerAllScalarFunctions();
   }
 
