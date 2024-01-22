@@ -214,7 +214,7 @@ uint64_t HiveConfig::parquetWriterMaxBlockSizeSession(
   return 128L * 1024L * 1024L;
 }
 
-uint32_t HiveConfig::parquetWriterMaxBlockRowsSession(
+int32_t HiveConfig::parquetWriterMaxBlockRowsSession(
     const Config* session) const {
   return config_->get<int32_t>(kParquetWriterMaxBlockRowsSession, 1024 * 1024);
 }

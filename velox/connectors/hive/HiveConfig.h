@@ -154,6 +154,7 @@ class HiveConfig {
   static constexpr const char* kOrcWriterMaxDictionaryMemorySession =
       "orc_optimized_writer_max_dictionary_memory";
 
+  /// Maximum block size and rows in parquet writer.
   static constexpr const char* kParquetWriterMaxBlockSizeSession =
       "parquet_optimized_writer_max_block_size";
   static constexpr const char* kParquetWriterMaxBlockRowsSession =
@@ -234,7 +235,7 @@ class HiveConfig {
 
   uint64_t parquetWriterMaxBlockSizeSession(const Config* session) const;
 
-  uint32_t parquetWriterMaxBlockRowsSession(const Config* session) const;
+  int32_t parquetWriterMaxBlockRowsSession(const Config* session) const;
 
   std::string writeFileCreateConfig() const;
 

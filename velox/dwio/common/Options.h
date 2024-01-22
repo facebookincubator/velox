@@ -565,7 +565,7 @@ struct WriterOptions {
   std::optional<uint64_t> maxDictionaryMemory{std::nullopt};
   std::map<std::string, std::string> serdeParameters;
   std::optional<uint64_t> maxBlockRows{std::nullopt};
-  std::optional<uint64_t> maxBlockSize{std::nullopt};
+  std::optional<uint32_t> maxBlockSize{std::nullopt};
 };
 
 } // namespace facebook::velox::dwio::common

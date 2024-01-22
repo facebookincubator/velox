@@ -483,6 +483,16 @@ Each query can override the config by setting corresponding query session proper
      - string
      - 16M
      - Maximum dictionary memory that can be used in orc writer.
+   * - parquet_optimized_writer_max_block_size
+     - 
+     - string
+     - 128MB
+     - Maximum block size in parquet writer.
+   * - parquet_optimized_writer_max_block_rows
+     - 
+     - integer
+     - 1024KB
+     - Maximum block rows in parquet writer.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
