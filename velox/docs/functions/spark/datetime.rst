@@ -25,9 +25,13 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: date_add(start_date, num_days) -> date
 
-    Returns the date that is ``num_days`` after ``start_date``.
+    Returns the date that is ``num_days`` after ``start_date``. According to the inputs,
+    the returned date will wrap around between the minimum negative date and
+    maximum positive date. date_add('1969-12-31', 2147483647) get 5881580-07-10,
+    and date_add('2024-01-22', 2147483647) get -5877587-07-12.
+
     If ``num_days`` is a negative value then these amount of days will be
-    deducted from start_date.
+    deducted from ``start_date``.
     Supported types for ``num_days`` are: TINYINT, SMALLINT, INTEGER.
 
 .. spark:function:: datediff(endDate, startDate) -> integer

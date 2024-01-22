@@ -246,90 +246,70 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
 }
 
 TEST_F(DateTimeFunctionsTest, dateAdd) {
-  const auto dateAdd = [&](std::optional<int32_t> date,
+  const auto dateAdd = [&](const std::string& dateStr,
                            std::optional<int32_t> value) {
     return evaluateDateFuncOnce<int32_t, int32_t>(
-        "date_add(c0, c1)", date, value);
+        "date_add(c0, c1)", parseDate(dateStr), value);
   };
 
-  // Check null behaviors
-  EXPECT_EQ(std::nullopt, dateAdd(std::nullopt, 1));
-  EXPECT_EQ(std::nullopt, dateAdd(parseDate("2019-02-28"), std::nullopt));
-  EXPECT_EQ(std::nullopt, dateAdd(std::nullopt, std::nullopt));
-
   // Check simple tests.
-  EXPECT_EQ(parseDate("2019-03-01"), dateAdd(parseDate("2019-03-01"), 0));
-  EXPECT_EQ(parseDate("2019-03-01"), dateAdd(parseDate("2019-02-28"), 1));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-03-01", 0));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-02-28", 1));
 
   // Account for the last day of a year-month
-  EXPECT_EQ(parseDate("2020-02-29"), dateAdd(parseDate("2019-01-30"), 395));
-  EXPECT_EQ(parseDate("2020-02-29"), dateAdd(parseDate("2019-01-30"), 395));
+  EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+  EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
 
   // Check for negative intervals
-  EXPECT_EQ(parseDate("2019-02-28"), dateAdd(parseDate("2020-02-29"), -366));
-  EXPECT_EQ(parseDate("2019-02-28"), dateAdd(parseDate("2020-02-29"), -366));
+  EXPECT_EQ(parseDate("2019-02-28"), dateAdd("2020-02-29", -366));
+  EXPECT_EQ(parseDate("2019-02-28"), dateAdd("2020-02-29", -366));
 
   // Check for minimum and maximum tests.
-  EXPECT_EQ(parseDate("5881580-07-11"), dateAdd(parseDate("1970-01-01"), kMax));
-  EXPECT_EQ(
-      parseDate("1969-12-31"), dateAdd(parseDate("-5877641-06-23"), kMax));
-  EXPECT_EQ(
-      parseDate("-5877641-06-23"), dateAdd(parseDate("1970-01-01"), kMin));
-  EXPECT_EQ(parseDate("1969-12-31"), dateAdd(parseDate("5881580-07-11"), kMin));
+  EXPECT_EQ(parseDate("5881580-07-11"), dateAdd("1970-01-01", kMax));
+  EXPECT_EQ(parseDate("1969-12-31"), dateAdd("-5877641-06-23", kMax));
+  EXPECT_EQ(parseDate("-5877641-06-23"), dateAdd("1970-01-01", kMin));
+  EXPECT_EQ(parseDate("1969-12-31"), dateAdd("5881580-07-11", kMin));
+  EXPECT_EQ(parseDate("5881580-07-10"), dateAdd("1969-12-31", kMax));
+  EXPECT_EQ(parseDate("-5877587-07-12"), dateAdd("2024-01-22", kMax));
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddSmallint) {
-  const auto dateAdd = [&](std::optional<int32_t> date,
+  const auto dateAdd = [&](const std::string& dateStr,
                            std::optional<int16_t> value) {
     return evaluateDateFuncOnce<int32_t, int16_t>(
-        "date_add(c0, c1)", date, value);
+        "date_add(c0, c1)", parseDate(dateStr), value);
   };
 
-  // Check null behaviors
-  EXPECT_EQ(std::nullopt, dateAdd(std::nullopt, 1));
-  EXPECT_EQ(std::nullopt, dateAdd(parseDate("2019-02-28"), std::nullopt));
-  EXPECT_EQ(std::nullopt, dateAdd(std::nullopt, std::nullopt));
-
   // Check simple tests.
-  EXPECT_EQ(parseDate("2019-03-01"), dateAdd(parseDate("2019-03-01"), 0));
-  EXPECT_EQ(parseDate("2019-03-01"), dateAdd(parseDate("2019-02-28"), 1));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-03-01", 0));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-02-28", 1));
 
   // Account for the last day of a year-month
-  EXPECT_EQ(parseDate("2020-02-29"), dateAdd(parseDate("2019-01-30"), 395));
-  EXPECT_EQ(parseDate("2020-02-29"), dateAdd(parseDate("2019-01-30"), 395));
+  EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+  EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
 
   // Check for negative intervals
-  EXPECT_EQ(parseDate("2019-02-28"), dateAdd(parseDate("2020-02-29"), -366));
-  EXPECT_EQ(parseDate("2019-02-28"), dateAdd(parseDate("2020-02-29"), -366));
+  EXPECT_EQ(parseDate("2019-02-28"), dateAdd("2020-02-29", -366));
+  EXPECT_EQ(parseDate("2019-02-28"), dateAdd("2020-02-29", -366));
 
   // Check for minimum and maximum tests.
-  EXPECT_EQ(
-      parseDate("2059-09-17"), dateAdd(parseDate("1969-12-31"), kMaxSmallint));
-  EXPECT_EQ(
-      parseDate("1880-04-13"), dateAdd(parseDate("1969-12-31"), kMinSmallint));
+  EXPECT_EQ(parseDate("2059-09-17"), dateAdd("1969-12-31", kMaxSmallint));
+  EXPECT_EQ(parseDate("1880-04-13"), dateAdd("1969-12-31", kMinSmallint));
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTinyint) {
-  const auto dateAdd = [&](std::optional<int32_t> date,
+  const auto dateAdd = [&](const std::string& dateStr,
                            std::optional<int8_t> value) {
     return evaluateDateFuncOnce<int32_t, int8_t>(
-        "date_add(c0, c1)", date, value);
+        "date_add(c0, c1)", parseDate(dateStr), value);
   };
-
-  // Check null behaviors
-  EXPECT_EQ(std::nullopt, dateAdd(std::nullopt, 1));
-  EXPECT_EQ(std::nullopt, dateAdd(parseDate("2019-02-28"), std::nullopt));
-  EXPECT_EQ(std::nullopt, dateAdd(std::nullopt, std::nullopt));
-
   // Check simple tests.
-  EXPECT_EQ(parseDate("2019-03-01"), dateAdd(parseDate("2019-03-01"), 0));
-  EXPECT_EQ(parseDate("2019-03-01"), dateAdd(parseDate("2019-02-28"), 1));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-03-01", 0));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-02-28", 1));
 
-  EXPECT_EQ(
-      parseDate("1970-05-07"), dateAdd(parseDate("1969-12-31"), kMaxTinyint));
+  EXPECT_EQ(parseDate("1970-05-07"), dateAdd("1969-12-31", kMaxTinyint));
 
-  EXPECT_EQ(
-      parseDate("1969-08-25"), dateAdd(parseDate("1969-12-31"), kMinTinyint));
+  EXPECT_EQ(parseDate("1969-08-25"), dateAdd("1969-12-31", kMinTinyint));
 }
 
 TEST_F(DateTimeFunctionsTest, dateSub) {
@@ -354,6 +334,7 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("5881580-07-11", kMax));
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("-5877641-06-23", kMin));
   EXPECT_EQ(parseDate("5881580-07-11"), dateSub("1969-12-31", kMin));
+  EXPECT_EQ(parseDate("-5877588-12-29"), dateSub("2023-07-10", kMin));
 }
 
 TEST_F(DateTimeFunctionsTest, dateSubSmallint) {
