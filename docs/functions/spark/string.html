@@ -110,6 +110,23 @@ ignored. Only converts valid characters even though <code class="docutils litera
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="find_in_set">
+<span class="sig-name descname"><span class="pre">find_in_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">strArray</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#find_in_set" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns 1-based index of the given string <code class="docutils literal notranslate"><span class="pre">str</span></code> in the comma-delimited list <code class="docutils literal notranslate"><span class="pre">strArray</span></code>.
+Returns 0, if the string was not found or if the given string <code class="docutils literal notranslate"><span class="pre">str</span></code> contains a comma.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">find_in_set</span><span class="p">(</span><span class="s1">&#39;ab&#39;</span><span class="p">,</span> <span class="s1">&#39;abc,b,ab,c,def&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
+<span class="n">SELECT</span> <span class="n">find_in_set</span><span class="p">(</span><span class="s1">&#39;ab,&#39;</span><span class="p">,</span> <span class="s1">&#39;abc,b,ab,c,def&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">find_in_set</span><span class="p">(</span><span class="s1">&#39;dfg&#39;</span><span class="p">,</span> <span class="s1">&#39;abc,b,ab,c,def&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">find_in_set</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">find_in_set</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;123,&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">find_in_set</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;,123&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">find_in_set</span><span class="p">(</span><span class="n">NULL</span><span class="p">,</span> <span class="s1">&#39;,123&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">find_in_set</span><span class="p">(</span><span class="s2">&quot;abc&quot;</span><span class="p">,</span> <span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="instr">
 <span class="sig-name descname"><span class="pre">instr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#instr" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the starting position of the first instance of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in
