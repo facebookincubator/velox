@@ -29,7 +29,9 @@ extern void registerArrayAggAggregate(
 extern void registerAverageAggregate(
     const std::string& prefix,
     bool withCompanionFunctions);
-extern void registerBitwiseXorAggregate(const std::string& prefix, bool onlyPrestoSignatures);
+extern void registerBitwiseXorAggregate(
+    const std::string& prefix,
+    bool onlyPrestoSignatures);
 extern void registerChecksumAggregate(const std::string& prefix);
 extern void registerCountAggregate(const std::string& prefix);
 extern void registerCountIfAggregate(const std::string& prefix);
@@ -49,7 +51,9 @@ extern void registerSetUnionAggregate(const std::string& prefix);
 extern void registerApproxDistinctAggregates(
     const std::string& prefix,
     bool withCompanionFunctions);
-extern void registerBitwiseAggregates(const std::string& prefix, bool onlyPrestoSignatures);
+extern void registerBitwiseAggregates(
+    const std::string& prefix,
+    bool onlyPrestoSignatures);
 extern void registerBoolAggregates(const std::string& prefix);
 extern void registerCentralMomentsAggregates(const std::string& prefix);
 extern void registerCovarianceAggregates(const std::string& prefix);

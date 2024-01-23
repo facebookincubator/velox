@@ -66,13 +66,15 @@ class BitwiseXorAggregate {
 
 } // namespace
 
-void registerBitwiseXorAggregate(const std::string& prefix, bool onlyPrestoSignatures) {
+void registerBitwiseXorAggregate(
+    const std::string& prefix,
+    bool onlyPrestoSignatures) {
   const std::string name = prefix + kBitwiseXor;
 
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> typeList{"tinyint", "smallint", "integer", "bigint"};
   if (onlyPrestoSignatures) {
-    typeList = {"integer"};
+    typeList = {"bigint"};
   }
   for (const auto& inputType : typeList) {
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
