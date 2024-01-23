@@ -873,12 +873,7 @@ bool AggregationFuzzer::verifySortedAggregation(
   auto resultOrError = execute(firstPlan);
   if (resultOrError.exceptionPtr) {
     ++stats_.numFailed;
-  }
 
-  auto referenceResult = computeReferenceResults(firstPlan, input);
-  updateReferenceQueryStats(referenceResult.second);
-  auto expectedResult = referenceResult.first;
-  if(!expectedResult) {
     if (auto aggregation =
             dynamic_cast<const core::AggregationNode*>(firstPlan.get())) {
       for(auto& aggregate: aggregation->aggregates()) {
@@ -886,6 +881,11 @@ bool AggregationFuzzer::verifySortedAggregation(
       }
     }
   }
+
+  auto referenceResult = computeReferenceResults(firstPlan, input);
+  updateReferenceQueryStats(referenceResult.second);
+  auto expectedResult = referenceResult.first;
+
   if (expectedResult && resultOrError.result) {
     ++stats_.numVerified;
     VELOX_CHECK(
@@ -993,6 +993,13 @@ void AggregationFuzzer::verifyAggregation(
   auto resultOrError = execute(plan);
   if (resultOrError.exceptionPtr) {
     ++stats_.numFailed;
+
+    if (auto aggregation =
+            dynamic_cast<const core::AggregationNode*>(plan.get())) {
+      for(auto& aggregate: aggregation->aggregates()) {
+        ++stats_.verificationFailed[aggregate.call->name()];
+      }
+    }
   }
 
   // Get aggregations and determine if order dependent.
@@ -1089,6 +1096,13 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
     auto resultOrError = execute(firstPlan);
     if (resultOrError.exceptionPtr) {
       ++stats_.numFailed;
+
+      if (auto aggregation =
+              dynamic_cast<const core::AggregationNode*>(firstPlan.get())) {
+        for(auto& aggregate: aggregation->aggregates()) {
+          ++stats_.verificationFailed[aggregate.call->name()];
+        }
+      }
     }
 
     // TODO Use ResultVerifier::compare API to compare Velox results with
