@@ -817,19 +817,18 @@ TEST_F(EnsureWritableVectorTest, allNullMap) {
 }
 
 TEST_F(EnsureWritableVectorTest, booleanFlatVector) {
-  auto testEnsureWritableBoolean =
-      [this](VectorPtr& vector, SelectivityVector& rows) {
-        // Make sure vector::values_ buffer is not uniquely referenced so that
-        // the branch in the FlatVector::ensureWritable() that copy old values
-        // to new buffer is executed.
-        auto another = vector->asFlatVector<bool>()->values();
+  auto testEnsureWritable = [this](VectorPtr& vector, SelectivityVector& rows) {
+    // Make sure vector::values_ buffer is not uniquely referenced so that
+    // the branch in the FlatVector::ensureWritable() that copy old values
+    // to new buffer is executed.
+    auto another = vector->asFlatVector<bool>()->values();
 
-        auto vectorPtr = vector.get();
-        ASSERT_NO_THROW(
-            BaseVector::ensureWritable(rows, BOOLEAN(), pool(), vector));
-        ASSERT_EQ(vectorPtr, vector.get());
-        ASSERT_NE(another->as<void>(), vector->valuesAsVoid());
-      };
+    auto vectorPtr = vector.get();
+    ASSERT_NO_THROW(
+        BaseVector::ensureWritable(rows, BOOLEAN(), pool(), vector));
+    ASSERT_EQ(vectorPtr, vector.get());
+    ASSERT_NE(another->as<void>(), vector->valuesAsVoid());
+  };
 
   {
     VectorPtr vector =
@@ -839,7 +838,7 @@ TEST_F(EnsureWritableVectorTest, booleanFlatVector) {
     rows.setValidRange(16, 32, true);
     rows.updateBounds();
 
-    testEnsureWritableBoolean(vector, rows);
+    testEnsureWritable(vector, rows);
   }
 
   {
@@ -857,7 +856,7 @@ TEST_F(EnsureWritableVectorTest, booleanFlatVector) {
     // the newly created vector is also smaller.
     SelectivityVector rows{100, true};
 
-    testEnsureWritableBoolean(vector, rows);
+    testEnsureWritable(vector, rows);
   }
 }
 
