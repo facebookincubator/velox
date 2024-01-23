@@ -321,8 +321,10 @@ struct DateAddFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
-  call(out_type<Date>& result, const arg_type<Date>& date, const TInput value) {
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const TInput& value) {
     __builtin_add_overflow(date, value, &result);
   }
 };
@@ -332,8 +334,10 @@ struct DateSubFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
-  call(out_type<Date>& result, const arg_type<Date>& date, const TInput value) {
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const TInput& value) {
     __builtin_sub_overflow(date, value, &result);
   }
 };
