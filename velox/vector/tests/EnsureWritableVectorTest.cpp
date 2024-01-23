@@ -853,8 +853,6 @@ TEST_F(EnsureWritableVectorTest, booleanFlatVector) {
         std::move(value),
         std::vector<BufferPtr>());
 
-    auto origin = vector->asFlatVector<bool>()->values();
-
     // Create rows with a length smaller than the value buffer to ensure that
     // the newly created vector is also smaller.
     SelectivityVector rows{100, true};
