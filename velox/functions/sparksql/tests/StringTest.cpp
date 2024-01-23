@@ -823,6 +823,7 @@ TEST_F(StringTest, replace) {
 TEST_F(StringTest, findInSet) {
   EXPECT_EQ(findInSet("ab", "abc,b,ab,c,def"), 3);
   EXPECT_EQ(findInSet("abc", "abc,b,ab,c,def"), 1);
+  EXPECT_EQ(findInSet("ab,", "abc,b,ab,c,def"), 0);
   EXPECT_EQ(findInSet("ab", "abc,b,ab,ab,ab"), 3);
   EXPECT_EQ(findInSet("abc", "abc,abc,abc,abc,abc"), 1);
   EXPECT_EQ(findInSet("c", "abc,b,ab,c,def"), 4);

@@ -1138,24 +1138,23 @@ struct FindInSetFunction {
       out_type<int32_t>& result,
       const arg_type<Varchar>& str,
       const arg_type<Varchar>& strArray) {
-    int32_t index = 1;
-    int32_t lastComma = -1;
-
     if (std::string_view(str).find(',') != std::string::npos) {
       result = 0;
       return;
     }
 
+    int32_t index = 1;
+    int32_t lastComma = -1;
     auto arrayData = strArray.data();
+    auto matchData = str.data();
     size_t arraySize = strArray.size();
     size_t matchSize = str.size();
 
     for (int i = 0; i < arraySize; i++) {
       if (arrayData[i] == ',') {
         if (i - (lastComma + 1) == matchSize &&
-            str ==
-                StringView(
-                    strArray.data() + (lastComma + 1), i - (lastComma + 1))) {
+            std::memcmp(arrayData + (lastComma + 1), matchData, matchSize) ==
+                0) {
           result = index;
           return;
         }
@@ -1164,13 +1163,10 @@ struct FindInSetFunction {
       }
     }
 
-    if (arraySize - (lastComma + 1) == matchSize) {
-      if (str ==
-          StringView(
-              strArray.data() + (lastComma + 1), arraySize - (lastComma + 1))) {
-        result = index;
-        return;
-      }
+    if (arraySize - (lastComma + 1) == matchSize &&
+        std::memcmp(arrayData + (lastComma + 1), matchData, matchSize) == 0) {
+      result = index;
+      return;
     }
 
     result = 0;
