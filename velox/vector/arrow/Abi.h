@@ -67,7 +67,7 @@ struct ArrowArray {
   void* private_data;
 };
 
-#endif  // ARROW_C_DATA_INTERFACE
+#endif // ARROW_C_DATA_INTERFACE
 
 // EXPERIMENTAL: C stream interface
 
@@ -112,7 +112,7 @@ struct ArrowArrayStream {
   void* private_data;
 };
 
-#endif  // ARROW_C_STREAM_INTERFACE
+#endif // ARROW_C_STREAM_INTERFACE
 
 #ifdef __cplusplus
 }
