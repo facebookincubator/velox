@@ -811,7 +811,7 @@ class ParquetRowReader::Impl {
 ParquetRowReader::ParquetRowReader(
     const std::shared_ptr<ReaderBase>& readerBase,
     const dwio::common::RowReaderOptions& options) {
-  impl_ = std::make_shared<ParquetRowReader::Impl>(readerBase, options);
+  impl_ = std::make_unique<ParquetRowReader::Impl>(readerBase, options);
 }
 
 void ParquetRowReader::filterRowGroups() {
