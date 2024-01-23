@@ -229,14 +229,14 @@ struct SpaceFunction {
 
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
-      const int32_t& count){
+      const int32_t& count) {
     if (count <= 0) {
-       result.setEmpty();
+      result.setEmpty();
     } else if (count > max_count) {
-       return false;
+      return false;
     } else {
-       result.resize(count);
-       std::memset(result.data(), ' ', count);
+      result.resize(count);
+      std::memset(result.data(), ' ', count);
     }
     return true;
   }

@@ -16,8 +16,8 @@
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Type.h"
 
-#include <climits>
 #include <stdint.h>
+#include <climits>
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
