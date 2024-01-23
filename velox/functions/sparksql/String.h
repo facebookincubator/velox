@@ -218,22 +218,27 @@ struct Sha2HexStringFunction {
   }
 };
 
-/// space function
 /// space(int) -> string
 /// Returns a string consisting of `count` spaces.
 template <typename T>
 struct SpaceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  // 1MB (2^20) limit on the number of spaces.
+  static constexpr int32_t max_count = 1048576;
+
+  FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
-      const int32_t& count) {
+      const int32_t& count){
     if (count <= 0) {
-      result.setEmpty();
-      return;
+       result.setEmpty();
+    } else if (count > max_count) {
+       return false;
+    } else {
+       result.resize(count);
+       std::memset(result.data(), ' ', count);
     }
-    result.resize(count);
-    std::memset(result.data(), ' ', count);
+    return true;
   }
 };
 

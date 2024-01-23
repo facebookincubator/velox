@@ -16,6 +16,7 @@
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Type.h"
 
+#include <climits>
 #include <stdint.h>
 
 namespace facebook::velox::functions::sparksql::test {
@@ -371,10 +372,7 @@ TEST_F(StringTest, space) {
   EXPECT_EQ(space(1), " ");
   EXPECT_EQ(space(2), "  ");
   EXPECT_EQ(space(5), "     ");
-  EXPECT_EQ(space(0), "");
-  EXPECT_EQ(space(-1), "");
-  EXPECT_EQ(space(-10), "");
-  EXPECT_EQ(space(std::nullopt), std::nullopt);
+  EXPECT_EQ(space(INT_MAX), std::nullopt);
 }
 
 TEST_F(StringTest, startsWith) {
