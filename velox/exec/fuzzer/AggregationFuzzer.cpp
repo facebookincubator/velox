@@ -83,10 +83,6 @@ class AggregationFuzzer : public AggregationFuzzerBase {
 
     // Number of iterations using aggregations over distinct inputs.
     size_t numDistinctInputs{0};
-
-    // Number of iterations using streaming aggregations over distinct inputs.
-    size_t numStreamingDistinctInputs{0};
-
     // Number of iterations using window expressions.
     size_t numWindow{0};
 
@@ -457,9 +453,6 @@ void AggregationFuzzer::go() {
           }
         } else if (distinctInputs) {
           ++stats_.numDistinctInputs;
-          if (!groupingKeys.empty()) {
-            ++stats_.numStreamingDistinctInputs;
-          }
           bool failed = verifyDistinctAggregation(
               groupingKeys,
               {call},
@@ -1043,8 +1036,6 @@ void AggregationFuzzer::Stats::print(size_t numIterations) const {
             << printPercentageStat(numDistinct, numIterations);
   LOG(INFO) << "Total aggregations over distinct inputs: "
             << printPercentageStat(numDistinctInputs, numIterations);
-  LOG(INFO) << "Total aggregations over streaming distinct inputs: "
-            << printPercentageStat(numStreamingDistinctInputs, numIterations);
   LOG(INFO) << "Total aggregations over sorted inputs: "
             << printPercentageStat(numSortedInputs, numIterations);
   LOG(INFO) << "Total window expressions: "
