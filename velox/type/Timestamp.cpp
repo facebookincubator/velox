@@ -84,7 +84,7 @@ void Timestamp::toGMT(int16_t tzID) {
   }
 }
 
-int64_t Timestamp::toNanos() const {
+inline int64_t Timestamp::toNanos() const {
   // int64 can store around 292 years in nanos ~ till 2262-04-12.
   // When an integer overflow occurs in the calculation,
   // an exception will be thrown.
@@ -100,7 +100,7 @@ int64_t Timestamp::toNanos() const {
   }
 }
 
-int64_t Timestamp::toMillis() const {
+inline int64_t Timestamp::toMillis() const {
   // We use int128_t to make sure the computation does not overflows since
   // there are cases such that seconds*1000 does not fit in int64_t,
   // but seconds*1000 + nanos does, an example is TimeStamp::minMillis().
@@ -118,14 +118,14 @@ int64_t Timestamp::toMillis() const {
   return result;
 }
 
-int64_t Timestamp::toMillisAllowOverflow() const {
+inline int64_t Timestamp::toMillisAllowOverflow() const {
   // Similar to the above toMillis() except that overflowed integer is allowed
   // as result.
   auto result = seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
   return result;
 }
 
-int64_t Timestamp::toMicros() const {
+inline int64_t Timestamp::toMicros() const {
   // When an integer overflow occurs in the calculation,
   // an exception will be thrown.
   try {
