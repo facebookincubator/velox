@@ -24,7 +24,9 @@ if(VELOX_ENABLE_ARROW)
   else()
     set(THRIFT_SOURCE "BUNDLED")
   endif()
-  set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
+  set(ARROW_PREFIX
+      "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep"
+      CACHE INTERNAL "arrow prefix")
   set(ARROW_CMAKE_ARGS
       -DARROW_PARQUET=OFF
       -DARROW_WITH_THRIFT=ON
@@ -49,7 +51,9 @@ if(VELOX_ENABLE_ARROW)
     set(THRIFT_LIB ${THRIFT_ROOT}/lib/libthrift.a)
 
     file(MAKE_DIRECTORY ${THRIFT_ROOT}/include)
-    set(THRIFT_INCLUDE_DIR ${THRIFT_ROOT}/include)
+    set(THRIFT_INCLUDE_DIR
+        ${THRIFT_ROOT}/include
+        CACHE INTERNAL "thrift include dir")
   endif()
 
   set_property(TARGET thrift PROPERTY INTERFACE_INCLUDE_DIRECTORIES
