@@ -3354,6 +3354,18 @@ std::unique_ptr<VectorSerializer> PrestoVectorSerde::createSerializer(
       prestoOptions.compressionKind);
 }
 
+std::unique_ptr<VectorSerializer> PrestoVectorSerde::createSerializerFromRow(
+    const RowVectorPtr& vector,
+    StreamArena* streamArena,
+    const Options* options) {
+  auto prestoOptions = toPrestoOptions(options);
+  return std::make_unique<PrestoVectorSerializer>(
+      vector,
+      streamArena,
+      prestoOptions.useLosslessTimestamp,
+      prestoOptions.compressionKind);
+}
+
 void PrestoVectorSerde::serializeEncoded(
     const RowVectorPtr& vector,
     StreamArena* streamArena,

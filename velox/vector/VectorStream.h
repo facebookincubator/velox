@@ -125,6 +125,13 @@ class VectorSerde {
       StreamArena* streamArena,
       const Options* options = nullptr) = 0;
 
+  virtual std::unique_ptr<VectorSerializer> createSerializerFromRow(
+      const RowVectorPtr& /* rowVector */,
+      StreamArena* /* streamArena */,
+      const Options* /* options */ = nullptr) {
+    VELOX_UNSUPPORTED();
+  }
+
   virtual void deserialize(
       ByteInputStream* source,
       velox::memory::MemoryPool* pool,

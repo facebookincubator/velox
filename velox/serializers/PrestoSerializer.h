@@ -83,6 +83,11 @@ class PrestoVectorSerde : public VectorSerde {
       StreamArena* streamArena,
       const Options* options) override;
 
+  std::unique_ptr<VectorSerializer> createSerializerFromRow(
+      const RowVectorPtr& vector,
+      StreamArena* streamArena,
+      const Options* options) override;
+
   /// Serializes a single RowVector with possibly encoded children, preserving
   /// their encodings. Encodings are preserved recursively for any RowVector
   /// children, but not for children of other nested vectors such as Array, Map,
