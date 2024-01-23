@@ -21,4 +21,5 @@ target_link_libraries(
   velox_aggregates
   velox_window
   gtest
-  gtest_main)
+  gtest_main
+    gflags::gflags)

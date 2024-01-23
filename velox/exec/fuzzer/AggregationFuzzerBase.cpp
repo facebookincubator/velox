@@ -414,14 +414,12 @@ AggregationFuzzerBase::computeReferenceResults(
               sql.value(), input, plan->outputType()),
           ReferenceQueryErrorCode::kSuccess);
     } catch (std::exception& e) {
-      // ++stats_.numReferenceQueryFailed;
       LOG(WARNING) << "Query failed in the reference DB";
       return std::make_pair(
           std::nullopt, ReferenceQueryErrorCode::kReferenceQueryFail);
     }
   } else {
     LOG(INFO) << "Query not supported by the reference DB";
-    // ++stats_.numVerificationNotSupported;
   }
 
   return std::make_pair(

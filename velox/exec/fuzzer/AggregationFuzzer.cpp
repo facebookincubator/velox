@@ -108,6 +108,9 @@ class AggregationFuzzer : public AggregationFuzzerBase {
     // Number of iterations where aggregation failed.
     size_t numFailed{0};
 
+    std::unordered_map<std::string, size_t> verificationSkipped;
+    std::unordered_map<std::string, size_t> verificationFailed;
+
     void print(size_t numIterations) const;
   };
 
@@ -875,6 +878,14 @@ bool AggregationFuzzer::verifySortedAggregation(
   auto referenceResult = computeReferenceResults(firstPlan, input);
   updateReferenceQueryStats(referenceResult.second);
   auto expectedResult = referenceResult.first;
+  if(!expectedResult) {
+    if (auto aggregation =
+            dynamic_cast<const core::AggregationNode*>(firstPlan.get())) {
+      for(auto& aggregate: aggregation->aggregates()) {
+        ++stats_.verificationFailed[aggregate.call->name()];
+      }
+    }
+  }
   if (expectedResult && resultOrError.result) {
     ++stats_.numVerified;
     VELOX_CHECK(
@@ -1026,6 +1037,10 @@ void AggregationFuzzer::verifyAggregation(
 }
 
 void AggregationFuzzer::Stats::print(size_t numIterations) const {
+  LOG(INFO)<< "Functions tested:";
+  for(auto& fname: functionNames) {
+    LOG(INFO) << fname;
+  }
   LOG(INFO) << "Total functions tested: " << functionNames.size();
   LOG(INFO) << "Total masked aggregations: "
             << printPercentageStat(numMask, numIterations);
@@ -1050,6 +1065,16 @@ void AggregationFuzzer::Stats::print(size_t numIterations) const {
       << " / " << printPercentageStat(numReferenceQueryFailed, numIterations);
   LOG(INFO) << "Total failed aggregations: "
             << printPercentageStat(numFailed, numIterations);
+
+  LOG(INFO) << "Skipped Functions:";
+  for(auto& entry: verificationSkipped) {
+    LOG(INFO)<< entry.first << " - " << entry.second;
+  }
+
+  LOG(INFO) << "Failed Functions:";
+  for(auto& entry: verificationFailed) {
+    LOG(INFO)<< entry.first << " - " << entry.second;
+  }
 }
 
 bool AggregationFuzzer::compareEquivalentPlanResults(
@@ -1076,6 +1101,13 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
         updateReferenceQueryStats(referenceResult.second);
         expectedResult = referenceResult.first;
       } else {
+
+        if (auto aggregation =
+                dynamic_cast<const core::AggregationNode*>(firstPlan.get())) {
+          for(auto& aggregate: aggregation->aggregates()) {
+            ++stats_.verificationSkipped[aggregate.call->name()];
+          }
+        }
         ++stats_.numVerificationSkipped;
 
         for (auto& verifier : customVerifiers) {
