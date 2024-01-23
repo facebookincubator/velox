@@ -270,6 +270,8 @@ TEST_F(DateTimeFunctionsTest, dateAdd) {
   EXPECT_EQ(parseDate("-5877641-06-23"), dateAdd("1970-01-01", kMin));
   EXPECT_EQ(parseDate("1969-12-31"), dateAdd("5881580-07-11", kMin));
   EXPECT_EQ(parseDate("5881580-07-10"), dateAdd("1969-12-31", kMax));
+
+  EXPECT_EQ(parseDate("-5877587-07-11"), dateAdd("2024-01-22", kMax - 1));
   EXPECT_EQ(parseDate("-5877587-07-12"), dateAdd("2024-01-22", kMax));
 }
 
@@ -295,6 +297,8 @@ TEST_F(DateTimeFunctionsTest, dateAddSmallint) {
   // Check for minimum and maximum tests.
   EXPECT_EQ(parseDate("2059-09-17"), dateAdd("1969-12-31", kMaxSmallint));
   EXPECT_EQ(parseDate("1880-04-13"), dateAdd("1969-12-31", kMinSmallint));
+
+  EXPECT_EQ(parseDate("2113-10-09"), dateAdd("2024-01-22", kMaxSmallint));
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTinyint) {
@@ -310,6 +314,8 @@ TEST_F(DateTimeFunctionsTest, dateAddTinyint) {
   EXPECT_EQ(parseDate("1970-05-07"), dateAdd("1969-12-31", kMaxTinyint));
 
   EXPECT_EQ(parseDate("1969-08-25"), dateAdd("1969-12-31", kMinTinyint));
+
+  EXPECT_EQ(parseDate("2024-05-28"), dateAdd("2024-01-22", kMaxTinyint));
 }
 
 TEST_F(DateTimeFunctionsTest, dateSub) {
@@ -334,6 +340,8 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("5881580-07-11", kMax));
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("-5877641-06-23", kMin));
   EXPECT_EQ(parseDate("5881580-07-11"), dateSub("1969-12-31", kMin));
+
+  EXPECT_EQ(parseDate("-5877588-12-28"), dateSub("2023-07-10", kMin + 1));
   EXPECT_EQ(parseDate("-5877588-12-29"), dateSub("2023-07-10", kMin));
 }
 
@@ -356,6 +364,8 @@ TEST_F(DateTimeFunctionsTest, dateSubSmallint) {
 
   EXPECT_EQ(parseDate("1880-04-15"), dateSub("1970-01-01", kMaxSmallint));
   EXPECT_EQ(parseDate("2059-09-19"), dateSub("1970-01-01", kMinSmallint));
+
+  EXPECT_EQ(parseDate("2113-03-28"), dateSub("2023-07-10", kMinSmallint));
 }
 
 TEST_F(DateTimeFunctionsTest, dateSubTinyint) {
@@ -371,6 +381,8 @@ TEST_F(DateTimeFunctionsTest, dateSubTinyint) {
 
   EXPECT_EQ(parseDate("1969-08-27"), dateSub("1970-01-01", kMaxTinyint));
   EXPECT_EQ(parseDate("1970-05-09"), dateSub("1970-01-01", kMinTinyint));
+
+  EXPECT_EQ(parseDate("2023-11-15"), dateSub("2023-07-10", kMinTinyint));
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfYear) {
