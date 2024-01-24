@@ -523,12 +523,8 @@ StopReason Driver::runInternal(
 
         if (FOLLY_UNLIKELY(shouldYield())) {
           recordYieldCount();
-          stop = StopReason::kYield;
-          future = ContinueFuture{folly::Unit{}};
-          blockingState = std::make_shared<BlockingState>(
-              self, std::move(future), op, blockingReason_);
           guard.notThrown();
-          return stop;
+          return StopReason::kYield;
         }
 
         // In case we are blocked, this index will point to the operator, whose
@@ -797,7 +793,7 @@ void Driver::run(std::shared_ptr<Driver> self) {
     case StopReason::kAtEnd:
       return;
     default:
-      VELOX_CHECK(false, "Unhandled stop reason");
+      VELOX_FAIL("Unhandled stop reason");
   }
 }
 
@@ -978,9 +974,9 @@ std::string Driver::toJsonString() const {
   folly::dynamic operatorsObj = folly::dynamic::object;
   int index = 0;
   for (auto& op : operators_) {
-    operatorsObj[std::to_string(index++)] = op->toString();
+    operatorsObj[std::to_string(index++)] = op->toJsonString();
   }
-  obj["operatorsObj"] = operatorsObj;
+  obj["operators"] = operatorsObj;
 
   return folly::toPrettyJson(obj);
 }

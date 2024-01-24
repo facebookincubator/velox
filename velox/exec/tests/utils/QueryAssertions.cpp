@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <chrono>
 
+#include "duckdb/common/types.hpp" // @manual
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -37,6 +38,30 @@ template <TypeKind kind>
 ::duckdb::Value duckValueAt(const VectorPtr& vector, vector_size_t index) {
   using T = typename KindToFlatVector<kind>::WrapperType;
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
+}
+
+template <>
+::duckdb::Value duckValueAt<TypeKind::TINYINT>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  return ::duckdb::Value::TINYINT(
+      vector->as<SimpleVector<int8_t>>()->valueAt(index));
+}
+
+template <>
+::duckdb::Value duckValueAt<TypeKind::SMALLINT>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  return ::duckdb::Value::SMALLINT(
+      vector->as<SimpleVector<int16_t>>()->valueAt(index));
+}
+
+template <>
+::duckdb::Value duckValueAt<TypeKind::BOOLEAN>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  return ::duckdb::Value::BOOLEAN(
+      vector->as<SimpleVector<bool>>()->valueAt(index));
 }
 
 template <>
@@ -1295,7 +1320,7 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
     std::function<void(exec::Task*)> addSplits,
     uint64_t maxWaitMicros) {
-  auto cursor = std::make_unique<TaskCursor>(params);
+  auto cursor = TaskCursor::create(params);
   // 'result' borrows memory from cursor so the life cycle must be shorter.
   std::vector<RowVectorPtr> result;
   auto* task = cursor->task().get();
@@ -1490,3 +1515,10 @@ void printResults(const RowVectorPtr& result, std::ostream& out) {
 }
 
 } // namespace facebook::velox::exec::test
+
+template <>
+struct fmt::formatter<::duckdb::LogicalTypeId> : formatter<int> {
+  auto format(::duckdb::LogicalTypeId s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

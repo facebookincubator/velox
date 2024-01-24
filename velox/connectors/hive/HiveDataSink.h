@@ -435,6 +435,8 @@ class HiveDataSink : public DataSink {
 
  private:
   enum class State { kRunning = 0, kAborted = 1, kClosed = 2 };
+  friend struct fmt::formatter<
+      facebook::velox::connector::hive::HiveDataSink::State>;
 
   static std::string stateString(State state);
 
@@ -548,6 +550,7 @@ class HiveDataSink : public DataSink {
   const uint32_t maxOpenWriters_;
   const std::vector<column_index_t> partitionChannels_;
   const std::unique_ptr<PartitionIdGenerator> partitionIdGenerator_;
+  const std::vector<column_index_t> dataChannels_;
   const int32_t bucketCount_{0};
   const std::unique_ptr<core::PartitionFunction> bucketFunction_;
   const std::shared_ptr<dwio::common::WriterFactory> writerFactory_;
@@ -584,3 +587,24 @@ class HiveDataSink : public DataSink {
 };
 
 } // namespace facebook::velox::connector::hive
+
+template <>
+struct fmt::formatter<facebook::velox::connector::hive::HiveDataSink::State>
+    : formatter<int> {
+  auto format(
+      facebook::velox::connector::hive::HiveDataSink::State s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<
+    facebook::velox::connector::hive::LocationHandle::TableType>
+    : formatter<int> {
+  auto format(
+      facebook::velox::connector::hive::LocationHandle::TableType s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

@@ -179,7 +179,6 @@ static std::
             {"NOV", {"EMBER", 11}},
             {"DEC", {"EMBER", 12}},
         };
-constexpr int monthsFullLength[] = {7, 8, 5, 5, 3, 4, 4, 6, 9, 7, 8, 8};
 
 // Pads the content with desired padding characters. E.g. if we need to pad 999
 // with three 0s in front, the result will be '000999'.
@@ -1015,12 +1014,13 @@ int32_t DateTimeFormatter::format(
     const Timestamp& timestamp,
     const date::time_zone* timezone,
     const uint32_t maxResultSize,
-    char* result) const {
+    char* result,
+    bool allowOverflow) const {
   Timestamp t = timestamp;
   if (timezone != nullptr) {
     t.toTimezone(*timezone);
   }
-  const auto timePoint = t.toTimePoint();
+  const auto timePoint = t.toTimePoint(allowOverflow);
   const auto daysTimePoint = date::floor<date::days>(timePoint);
 
   const auto durationInTheDay = date::make_time(timePoint - daysTimePoint);

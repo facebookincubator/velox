@@ -528,7 +528,10 @@ RowVectorPtr Task::next(ContinueFuture* future) {
     }
   }
 
-  VELOX_CHECK_EQ(state_, kRunning, "Task has already finished processing.");
+  VELOX_CHECK_EQ(
+      static_cast<int>(state_),
+      static_cast<int>(kRunning),
+      "Task has already finished processing.");
 
   // On first call, create the drivers.
   if (driverFactories_.empty()) {
@@ -1981,6 +1984,28 @@ TaskStats Task::taskStats() const {
   taskStats.outputBufferOverutilized = bufferManager->isOverutilized(taskId_);
   taskStats.outputBufferStats = bufferManager->stats(taskId_);
   return taskStats;
+}
+
+void Task::getLongRunningOpCalls(
+    size_t thresholdDurationMs,
+    std::vector<OpCallInfo>& out) const {
+  std::lock_guard<std::mutex> l(mutex_);
+  for (const auto& driver : drivers_) {
+    if (driver) {
+      const auto opCallStatus = driver->opCallStatus();
+      if (!opCallStatus.empty()) {
+        auto callDurationMs = opCallStatus.callDuration();
+        if (callDurationMs > thresholdDurationMs) {
+          out.push_back({
+              .durationMs = callDurationMs,
+              .tid = driver->state().tid,
+              .opId = opCallStatus.opId,
+              .taskId = taskId_,
+          });
+        }
+      }
+    }
+  }
 }
 
 uint64_t Task::timeSinceStartMs() const {

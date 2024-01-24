@@ -146,6 +146,51 @@ struct ArrayMinMaxFunction {
     assign(out, currentValue);
     return true;
   }
+
+  bool compare(
+      exec::GenericView currentValue,
+      exec::GenericView candidateValue) {
+    static constexpr CompareFlags kFlags = {
+        .nullHandlingMode =
+            CompareFlags::NullHandlingMode::kNullAsIndeterminate};
+
+    // We'll either get a result or throw.
+    auto compareResult = candidateValue.compare(currentValue, kFlags).value();
+    if constexpr (isMax) {
+      return compareResult > 0;
+    } else {
+      return compareResult < 0;
+    }
+  }
+
+  bool call(
+      out_type<Orderable<T1>>& out,
+      const arg_type<Array<Orderable<T1>>>& array) {
+    // Result is null if array is empty.
+    if (array.size() == 0) {
+      return false;
+    }
+
+    // Result is null if any element is null.
+    if (!array[0].has_value()) {
+      return false;
+    }
+
+    int currentIndex = 0;
+    for (auto i = 1; i < array.size(); i++) {
+      if (!array[i].has_value()) {
+        return false;
+      }
+
+      auto currentValue = array[currentIndex].value();
+      auto candidateValue = array[i].value();
+      if (compare(currentValue, candidateValue)) {
+        currentIndex = i;
+      }
+    }
+    out.copy_from(array[currentIndex].value());
+    return true;
+  }
 };
 
 template <typename TExecCtx>
@@ -161,7 +206,8 @@ struct ArrayJoinFunction {
   template <typename C>
   void writeValue(out_type<velox::Varchar>& result, const C& value) {
     result +=
-        util::Converter<TypeKind::VARCHAR, void, false, false>::cast(value);
+        util::Converter<TypeKind::VARCHAR, void, util::DefaultCastPolicy>::cast(
+            value);
   }
 
   template <typename C>
@@ -700,6 +746,94 @@ struct ArrayRemoveNullFunctionString {
       if (inputArray[i].has_value()) {
         auto& newItem = out.add_item();
         newItem.setNoCopy(inputArray[i].value());
+      }
+    }
+  }
+};
+
+template <typename T>
+struct ArrayNGramsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T)
+
+  // Fast path for primitives.
+  template <typename Out, typename In>
+  void call(Out& out, const In& input, int64_t n) {
+    VELOX_USER_CHECK_GT(n, 0, "N must be greater than zero.");
+
+    if (n > input.size()) {
+      auto& newItem = out.add_item();
+      newItem.copy_from(input);
+      return;
+    }
+
+    for (auto i = 0; i <= input.size() - n; ++i) {
+      auto& newItem = out.add_item();
+      for (auto j = 0; j < n; ++j) {
+        if (input[i + j].has_value()) {
+          auto& newGranularItem = newItem.add_item();
+          newGranularItem = input[i + j].value();
+        } else {
+          newItem.add_null();
+        }
+      }
+    }
+  }
+
+  // Generic implementation.
+  void call(
+      out_type<Array<Array<Generic<T1>>>>& out,
+      const arg_type<Array<Generic<T1>>>& input,
+      int64_t n) {
+    VELOX_USER_CHECK_GT(n, 0, "N must be greater than zero.");
+
+    if (n > input.size()) {
+      auto& newItem = out.add_item();
+      newItem.copy_from(input);
+      return;
+    }
+
+    for (auto i = 0; i <= input.size() - n; ++i) {
+      auto& newItem = out.add_item();
+      for (auto j = 0; j < n; ++j) {
+        if (input[i + j].has_value()) {
+          auto& newGranularItem = newItem.add_item();
+          newGranularItem.copy_from(input[i + j].value());
+        } else {
+          newItem.add_null();
+        }
+      }
+    }
+  }
+};
+
+template <typename T>
+struct ArrayNGramsFunctionFunctionString {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // String version that avoids copy of strings.
+  void call(
+      out_type<Array<Array<Varchar>>>& out,
+      const arg_type<Array<Varchar>>& input,
+      int64_t n) {
+    VELOX_USER_CHECK_GT(n, 0, "N must be greater than zero.");
+
+    if (n > input.size()) {
+      auto& newItem = out.add_item();
+      newItem.copy_from(input);
+      return;
+    }
+
+    for (auto i = 0; i <= input.size() - n; ++i) {
+      auto& newItem = out.add_item();
+      for (auto j = 0; j < n; ++j) {
+        if (input[i + j].has_value()) {
+          auto& newGranularItem = newItem.add_item();
+          newGranularItem.setNoCopy(input[i + j].value());
+        } else {
+          newItem.add_null();
+        }
       }
     }
   }
