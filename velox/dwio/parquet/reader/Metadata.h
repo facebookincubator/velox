@@ -22,12 +22,12 @@
 
 namespace facebook::velox::parquet {
 
-/// ColumnChunkMetaData is a proxy around thrift::ColumnChunk.
-class ColumnChunkMetaData {
+/// ColumnChunkMetaDataPtr is a proxy around pointer to thrift::ColumnChunk.
+class ColumnChunkMetaDataPtr {
  public:
-  ColumnChunkMetaData(const void* metadata);
+  ColumnChunkMetaDataPtr(const void* metadata);
 
-  ~ColumnChunkMetaData();
+  ~ColumnChunkMetaDataPtr();
 
   int64_t numValues() const;
 
@@ -37,23 +37,19 @@ class ColumnChunkMetaData {
   const void* ptr_;
 };
 
-/// RowGroupMetaData is a proxy around thrift::RowGroup.
-class RowGroupMetaData {
+/// RowGroupMetaDataPtr is a proxy around pointer to thrift::RowGroup.
+class RowGroupMetaDataPtr {
  public:
-  RowGroupMetaData(const void* metadata);
+  RowGroupMetaDataPtr(const void* metadata);
 
-  ~RowGroupMetaData();
+  ~RowGroupMetaDataPtr();
 
   /// The number of columns in this row group. The order must match the
   /// parent's column ordering.
   int numColumns() const;
 
-  /// Return the ColumnChunkMetaData of the corresponding column ordinal.
-  /// The returned object references memory location in it's parent
-  /// (RowGroupMetaData) object. Hence, the parent must outlive the returned
-  /// object.
-  ///
-  std::unique_ptr<ColumnChunkMetaData> columnChunk(int index) const;
+  /// Return the ColumnChunkMetaData pointer of the corresponding column index.
+  ColumnChunkMetaDataPtr columnChunk(int index) const;
 
   /// Number of rows in this row group.
   int64_t numRows() const;
@@ -71,12 +67,12 @@ class RowGroupMetaData {
   const void* ptr_;
 };
 
-/// FileMetaData is a proxy around thrift::FileMetaData.
-class FileMetaData {
+/// FileMetaData is a proxy around pointer to thrift::FileMetaData.
+class FileMetaDataPtr {
  public:
-  FileMetaData(const void* metadata);
+  FileMetaDataPtr(const void* metadata);
 
-  ~FileMetaData();
+  ~FileMetaDataPtr();
 
   /// The total number of rows.
   int64_t numRows() const;
@@ -84,10 +80,8 @@ class FileMetaData {
   /// The number of row groups in the file.
   int numRowGroups() const;
 
-  /// Return the RowGroupMetaData of the corresponding row group ordinal.
-  /// WARNING, the returned object references memory location in it's parent
-  /// (FileMetaData) object. Hence, the parent must outlive the returned object.
-  std::unique_ptr<RowGroupMetaData> rowGroup(int index) const;
+  /// Return the RowGroupMetaData pointer of the corresponding row group index.
+  RowGroupMetaDataPtr rowGroup(int index) const;
 
  private:
   const void* ptr_;

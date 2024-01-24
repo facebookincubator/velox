@@ -25,76 +25,76 @@
 
 namespace facebook::velox::parquet {
 
-ColumnChunkMetaData::ColumnChunkMetaData(const void* metadata)
+ColumnChunkMetaDataPtr::ColumnChunkMetaDataPtr(const void* metadata)
     : ptr_(metadata) {}
 
-ColumnChunkMetaData::~ColumnChunkMetaData() = default;
+ColumnChunkMetaDataPtr::~ColumnChunkMetaDataPtr() = default;
 
-FOLLY_ALWAYS_INLINE const thrift::ColumnChunk* thriftColumnMetaData(
+FOLLY_ALWAYS_INLINE const thrift::ColumnChunk* thriftColumnChunkPtr(
     const void* metadata) {
   return reinterpret_cast<const thrift::ColumnChunk*>(metadata);
 }
 
-int64_t ColumnChunkMetaData::numValues() const {
-  return thriftColumnMetaData(ptr_)->meta_data.num_values;
+int64_t ColumnChunkMetaDataPtr::numValues() const {
+  return thriftColumnChunkPtr(ptr_)->meta_data.num_values;
 }
 
-common::CompressionKind ColumnChunkMetaData::compression() const {
+common::CompressionKind ColumnChunkMetaDataPtr::compression() const {
   return thriftCodecToCompressionKind(
-      thriftColumnMetaData(ptr_)->meta_data.codec);
+      thriftColumnChunkPtr(ptr_)->meta_data.codec);
 }
 
-FOLLY_ALWAYS_INLINE const thrift::RowGroup* thriftRGMetaData(
+FOLLY_ALWAYS_INLINE const thrift::RowGroup* thriftRowGroupPtr(
     const void* metadata) {
   return reinterpret_cast<const thrift::RowGroup*>(metadata);
 }
 
-RowGroupMetaData::RowGroupMetaData(const void* metadata) : ptr_(metadata) {}
+RowGroupMetaDataPtr::RowGroupMetaDataPtr(const void* metadata)
+    : ptr_(metadata) {}
 
-RowGroupMetaData::~RowGroupMetaData() = default;
+RowGroupMetaDataPtr::~RowGroupMetaDataPtr() = default;
 
-int RowGroupMetaData::numColumns() const {
-  return thriftRGMetaData(ptr_)->columns.size();
+int RowGroupMetaDataPtr::numColumns() const {
+  return thriftRowGroupPtr(ptr_)->columns.size();
 }
 
-int64_t RowGroupMetaData::numRows() const {
-  return thriftRGMetaData(ptr_)->num_rows;
+int64_t RowGroupMetaDataPtr::numRows() const {
+  return thriftRowGroupPtr(ptr_)->num_rows;
 }
 
-int64_t RowGroupMetaData::totalByteSize() const {
-  return thriftRGMetaData(ptr_)->total_byte_size;
+int64_t RowGroupMetaDataPtr::totalByteSize() const {
+  return thriftRowGroupPtr(ptr_)->total_byte_size;
 }
 
-int64_t RowGroupMetaData::totalCompressedSize() const {
-  return thriftRGMetaData(ptr_)->total_compressed_size;
+int64_t RowGroupMetaDataPtr::totalCompressedSize() const {
+  return thriftRowGroupPtr(ptr_)->total_compressed_size;
 }
 
-std::unique_ptr<ColumnChunkMetaData> RowGroupMetaData::columnChunk(
-    int i) const {
-  return std::make_unique<ColumnChunkMetaData>(
-      reinterpret_cast<const void*>(&thriftRGMetaData(ptr_)->columns[i]));
+ColumnChunkMetaDataPtr RowGroupMetaDataPtr::columnChunk(int i) const {
+  return ColumnChunkMetaDataPtr(
+      reinterpret_cast<const void*>(&thriftRowGroupPtr(ptr_)->columns[i]));
 }
 
-FOLLY_ALWAYS_INLINE const thrift::FileMetaData* thriftFileMetaData(
+FOLLY_ALWAYS_INLINE const thrift::FileMetaData* thriftFileMetaDataPtr(
     const void* metadata) {
   return reinterpret_cast<const thrift::FileMetaData*>(metadata);
 }
 
-FileMetaData::FileMetaData(const void* metadata) : ptr_(metadata) {}
+FileMetaDataPtr::FileMetaDataPtr(const void* metadata) : ptr_(metadata) {}
 
-FileMetaData::~FileMetaData() = default;
+FileMetaDataPtr::~FileMetaDataPtr() = default;
 
-std::unique_ptr<RowGroupMetaData> FileMetaData::rowGroup(int i) const {
-  return std::make_unique<RowGroupMetaData>(
-      reinterpret_cast<const void*>(&thriftFileMetaData(ptr_)->row_groups[i]));
+RowGroupMetaDataPtr FileMetaDataPtr::rowGroup(int i) const {
+  return RowGroupMetaDataPtr(reinterpret_cast<const void*>(
+      &thriftFileMetaDataPtr(ptr_)->row_groups[i]));
 }
 
-int64_t FileMetaData::numRows() const {
-  return thriftFileMetaData(ptr_)->num_rows;
+int64_t FileMetaDataPtr::numRows() const {
+  return thriftFileMetaDataPtr(ptr_)->num_rows;
 }
 
-int FileMetaData::numRowGroups() const {
-  return thriftFileMetaData(ptr_)->row_groups.size();
+int FileMetaDataPtr::numRowGroups() const {
+  return thriftFileMetaDataPtr(ptr_)->row_groups.size();
 }
 
 } // namespace facebook::velox::parquet
