@@ -575,6 +575,13 @@ simdjson::error_code appendMapKey<TypeKind::TIMESTAMP>(
   return simdjson::INCORRECT_TYPE;
 }
 
+template <>
+simdjson::error_code appendMapKey<TypeKind::UNKNOWN>(
+    const std::string_view& /*value*/,
+    exec::GenericWriter& /*writer*/) {
+  return simdjson::INCORRECT_TYPE;
+}
+
 template <typename Input>
 struct CastFromJsonTypedImpl {
   template <TypeKind kind>
