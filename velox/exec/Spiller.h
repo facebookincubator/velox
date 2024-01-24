@@ -110,7 +110,10 @@ class Spiller {
   ///
   /// NOTE: the spilling operator should first mark 'partition' as spilling and
   /// spill any data buffered in row container before call this.
-  void spill(uint32_t partition, const RowVectorPtr& spillVector);
+  void spill(
+      uint32_t partition,
+      const RowVectorPtr& spillVector,
+      memory::MemoryPool* pool);
 
   /// Extracts up to 'maxRows' or 'maxBytes' from 'rows' into 'spillVector'. The
   /// extract starts at nextBatchIndex and updates nextBatchIndex to be the

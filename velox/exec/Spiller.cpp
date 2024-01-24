@@ -183,7 +183,6 @@ Spiller::Spiller(
           targetFileSize,
           writeBufferSize,
           compressionKind,
-          memory::spillMemoryPool(),
           &stats_,
           fileCreateConfig) {
   TestValue::adjust(
@@ -368,7 +367,8 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
     while (written < run.rows.size()) {
       extractSpillVector(
           run.rows, kTargetBatchRows, kTargetBatchBytes, spillVector, written);
-      totalBytes += state_.appendToPartition(partition, spillVector);
+      totalBytes += state_.appendToPartition(
+          partition, spillVector, memory::spillMemoryPool());
       if (totalBytes > state_.targetFileSize()) {
         VELOX_CHECK(!needSort());
         state_.finishFile(partition);
@@ -516,7 +516,10 @@ void Spiller::markAllPartitionsSpilled() {
   }
 }
 
-void Spiller::spill(uint32_t partition, const RowVectorPtr& spillVector) {
+void Spiller::spill(
+    uint32_t partition,
+    const RowVectorPtr& spillVector,
+    memory::MemoryPool* pool) {
   CHECK_NOT_FINALIZED();
   VELOX_CHECK(
       type_ == Type::kHashJoinProbe || type_ == Type::kHashJoinBuild,
@@ -534,7 +537,7 @@ void Spiller::spill(uint32_t partition, const RowVectorPtr& spillVector) {
     return;
   }
 
-  state_.appendToPartition(partition, spillVector);
+  state_.appendToPartition(partition, spillVector, pool);
 }
 
 void Spiller::finishSpill(SpillPartitionSet& partitionSet) {

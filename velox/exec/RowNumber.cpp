@@ -485,7 +485,7 @@ void RowNumber::spillInput(
     }
 
     inputSpiller_->spill(
-        partition, wrap(numInputs, partitionIndices[partition], input));
+        partition, wrap(numInputs, partitionIndices[partition], input), pool);
   }
 }
 

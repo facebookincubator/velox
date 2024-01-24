@@ -329,7 +329,6 @@ class SpillState {
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats,
       const std::string& fileCreateConfig = {});
 
@@ -372,7 +371,10 @@ class SpillState {
   /// for a sorted spill and must hash to 'partition'. It is safe to call this
   /// on multiple threads if all threads specify a different partition. Returns
   /// the size to append to partition.
-  uint64_t appendToPartition(uint32_t partition, const RowVectorPtr& rows);
+  uint64_t appendToPartition(
+      uint32_t partition,
+      const RowVectorPtr& rows,
+      memory::MemoryPool* pool);
 
   /// Finishes a sorted run for 'partition'. If write is called for 'partition'
   /// again, the data does not have to be sorted relative to the data written so
@@ -420,7 +422,6 @@ class SpillState {
   const uint64_t writeBufferSize_;
   const common::CompressionKind compressionKind_;
   const std::string fileCreateConfig_;
-  memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
 
   // A set of spilled partition numbers.

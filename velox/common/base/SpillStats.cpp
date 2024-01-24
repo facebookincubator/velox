@@ -243,16 +243,13 @@ void updateGlobalSpillSortTime(uint64_t timeUs) {
 
 void updateGlobalSpillWriteStats(
     uint64_t spilledBytes,
-    uint64_t flushTimeUs,
     uint64_t writeTimeUs) {
   RECORD_METRIC_VALUE(kMetricSpillDiskWritesCount);
   RECORD_METRIC_VALUE(kMetricSpilledBytes, spilledBytes);
-  RECORD_HISTOGRAM_METRIC_VALUE(kMetricSpillFlushTimeMs, flushTimeUs / 1'000);
   RECORD_HISTOGRAM_METRIC_VALUE(kMetricSpillWriteTimeMs, writeTimeUs / 1'000);
   auto statsLocked = localSpillStats().wlock();
   ++statsLocked->spillDiskWrites;
   statsLocked->spilledBytes += spilledBytes;
-  statsLocked->spillFlushTimeUs += flushTimeUs;
   statsLocked->spillWriteTimeUs += writeTimeUs;
 }
 

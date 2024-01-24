@@ -169,10 +169,7 @@ class SpillWriter {
   void updateAppendStats(uint64_t numRows, uint64_t serializationTimeUs);
 
   // Invoked to update the disk write stats.
-  void updateWriteStats(
-      uint64_t spilledBytes,
-      uint64_t flushTimeUs,
-      uint64_t writeTimeUs);
+  void updateWriteStats(uint64_t spilledBytes, uint64_t writeTimeUs);
 
   const RowTypePtr type_;
   const uint32_t numSortKeys_;
@@ -191,8 +188,9 @@ class SpillWriter {
 
   bool finished_{false};
   uint32_t nextFileId_{0};
-  std::unique_ptr<VectorStreamGroup> batch_;
   std::unique_ptr<SpillWriteFile> currentFile_;
+  uint64_t bufferBytes_{0};
+  std::unique_ptr<folly::IOBuf> buffers_;
   SpillFiles finishedFiles_;
 };
 

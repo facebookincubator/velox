@@ -624,11 +624,12 @@ void HashBuild::spillPartition(
   VELOX_DCHECK(spillEnabled());
 
   if (isInputFromSpill()) {
-    spiller_->spill(partition, wrap(size, indices, input));
+    spiller_->spill(partition, wrap(size, indices, input), pool());
   } else {
     spiller_->spill(
         partition,
-        wrap(size, indices, tableType_, spillChildVectors_, input->pool()));
+        wrap(size, indices, tableType_, spillChildVectors_, input->pool()),
+        pool());
   }
 }
 

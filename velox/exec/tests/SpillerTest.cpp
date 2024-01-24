@@ -227,7 +227,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     ASSERT_TRUE(spiller_->isAnySpilled());
     ASSERT_TRUE(spiller_->isAllSpilled());
     ASSERT_FALSE(spiller_->finalized());
-    VELOX_ASSERT_THROW(spiller_->spill(0, nullptr), "Unexpected spiller type");
+    VELOX_ASSERT_THROW(
+        spiller_->spill(0, nullptr, pool()), "Unexpected spiller type");
     VELOX_ASSERT_THROW(
         spiller_->setPartitionsSpilled({}), "Unexpected spiller type");
     auto spillPartition = spiller_->finishSpill();
@@ -241,7 +242,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     // finalized.
     VELOX_ASSERT_THROW(spiller_->spill(), "Spiller has been finalize");
     VELOX_ASSERT_THROW(
-        spiller_->spill(0, nullptr), "Spiller has been finalize");
+        spiller_->spill(0, nullptr, pool()), "Spiller has been finalize");
     VELOX_ASSERT_THROW(spiller_->spill(RowContainerIterator{}), "");
 
     verifySortedSpillData(&spillPartition, outputBatchSize);
@@ -717,7 +718,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           {});
       setupSpiller(targetFileSize, 0, false, maxSpillRunRows);
       // Can't append without marking a partition as spilling.
-      VELOX_ASSERT_THROW(spiller_->spill(0, rowVector_), "");
+      VELOX_ASSERT_THROW(spiller_->spill(0, rowVector_, pool()), "");
 
       splitByPartition(rowVector_, spillHashFunction, inputsByPartition);
       if (type_ == Spiller::Type::kHashJoinProbe) {
@@ -738,7 +739,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         RowVectorPtr batch = makeDataset(rowType_, numBatchRows, nullptr);
         splitByPartition(batch, spillHashFunction, inputsByPartition);
         for (const auto& partition : spillPartitionNumSet) {
-          spiller_->spill(partition, inputsByPartition[partition].back());
+          spiller_->spill(
+              partition, inputsByPartition[partition].back(), pool());
         }
       }
       // Assert that hash probe type of spiller type doesn't support incremental
@@ -837,7 +839,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     for (auto& spiller : spillers) {
       spiller->finishSpill(spillPartitionSet);
       VELOX_ASSERT_THROW(
-          spiller->spill(0, nullptr), "Spiller has been finalized");
+          spiller->spill(0, nullptr, pool()), "Spiller has been finalized");
       VELOX_ASSERT_THROW(spiller->spill(), "Spiller has been finalized");
     }
     ASSERT_EQ(spillPartitionSet.size(), spillPartitionNumSet.size());
@@ -909,7 +911,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     SpillPartitionSet spillPartitionSet;
     spiller_->finishSpill(spillPartitionSet);
     VELOX_ASSERT_THROW(
-        spiller_->spill(0, nullptr), "Spiller has been finalized");
+        spiller_->spill(0, nullptr, pool()), "Spiller has been finalized");
     VELOX_ASSERT_THROW(spiller_->spill(), "Spiller has been finalized");
     VELOX_ASSERT_THROW(spiller_->spill(RowContainerIterator{}), "");
     ASSERT_EQ(spillPartitionSet.size(), spillPartitionNumSet.size());
@@ -1045,7 +1047,7 @@ TEST_P(AllTypes, nonSortedSpillFunctions) {
       {
         RowVectorPtr dummyVector;
         VELOX_ASSERT_THROW(
-            spiller_->spill(0, dummyVector), "Unexpected spiller type");
+            spiller_->spill(0, dummyVector, pool()), "Unexpected spiller type");
       }
 
       if (type_ == Spiller::Type::kOrderByOutput) {
@@ -1193,7 +1195,7 @@ TEST_P(HashJoinBuildOnly, writeBufferSize) {
       for (int partition = 0; partition < numPartitions_; ++partition) {
         const auto& splitVector = splitVectors[partition];
         if (!splitVector.empty()) {
-          spiller_->spill(partition, splitVector.back());
+          spiller_->spill(partition, splitVector.back(), pool());
           ++spillInputVectorCount;
         }
       }
@@ -1284,7 +1286,7 @@ TEST_P(AggregationOutputOnly, basic) {
     {
       RowVectorPtr dummy;
       VELOX_ASSERT_THROW(
-          spiller_->spill(0, dummy),
+          spiller_->spill(0, dummy, pool()),
           "Unexpected spiller type: AGGREGATE_OUTPUT");
     }
     spiller_->spill(rowIter);
@@ -1365,7 +1367,7 @@ TEST_P(OrderByOutputOnly, basic) {
     {
       RowVectorPtr dummy;
       VELOX_ASSERT_THROW(
-          spiller_->spill(0, dummy),
+          spiller_->spill(0, dummy, pool()),
           "Unexpected spiller type: ORDER_BY_OUTPUT");
     }
     {

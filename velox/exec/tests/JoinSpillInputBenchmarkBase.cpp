@@ -56,7 +56,7 @@ void JoinSpillInputBenchmarkBase::setUp() {
 void JoinSpillInputBenchmarkBase::run() {
   MicrosecondTimer timer(&executionTimeUs_);
   for (auto i = 0; i < numInputVectors_; ++i) {
-    spiller_->spill(0, rowVectors_[i % numSampleVectors]);
+    spiller_->spill(0, rowVectors_[i % numSampleVectors], pool_.get());
   }
 }
 

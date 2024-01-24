@@ -26,6 +26,14 @@ namespace {
 // nanosecond precision, we use this serde option to ensure the serializer
 // preserves precision.
 static const bool kDefaultUseLosslessTimestamp = true;
+
+static int64_t chainBytes(folly::IOBuf& iobuf) {
+  int64_t size = 0;
+  for (auto& range : iobuf) {
+    size += range.size();
+  }
+  return size;
+}
 } // namespace
 
 void SpillInputStream::next(bool /*throwIfPastEnd*/) {
@@ -138,30 +146,24 @@ void SpillWriter::closeFile() {
 }
 
 uint64_t SpillWriter::flush() {
-  if (batch_ == nullptr) {
+  if (buffers_ == nullptr) {
+    VELOX_CHECK_EQ(bufferBytes_, 0);
     return 0;
   }
 
   auto* file = ensureFile();
   VELOX_CHECK_NOT_NULL(file);
 
-  IOBufOutputStream out(
-      *pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
-  uint64_t flushTimeUs{0};
-  {
-    MicrosecondTimer timer(&flushTimeUs);
-    batch_->flush(&out);
-  }
-  batch_.reset();
-
   uint64_t writeTimeUs{0};
   uint64_t writtenBytes{0};
-  auto iobuf = out.getIOBuf();
   {
     MicrosecondTimer timer(&writeTimeUs);
-    writtenBytes = file->write(std::move(iobuf));
+    writtenBytes = file->write(std::move(buffers_));
+    VELOX_CHECK_EQ(bufferBytes_, writtenBytes);
+    buffers_ = nullptr;
+    bufferBytes_ = 0;
   }
-  updateWriteStats(writtenBytes, flushTimeUs, writeTimeUs);
+  updateWriteStats(writtenBytes, writeTimeUs);
   updateAndCheckSpillLimitCb_(writtenBytes);
   return writtenBytes;
 }
@@ -174,19 +176,27 @@ uint64_t SpillWriter::write(
   uint64_t timeUs{0};
   {
     MicrosecondTimer timer(&timeUs);
-    if (batch_ == nullptr) {
-      serializer::presto::PrestoVectorSerde::PrestoOptions options = {
-          kDefaultUseLosslessTimestamp, compressionKind_};
-      batch_ = std::make_unique<VectorStreamGroup>(pool_);
-      batch_->createStreamTree(
-          std::static_pointer_cast<const RowType>(rows->type()),
-          1'000,
-          &options);
+    VectorStreamGroup batch(pool_);
+    serializer::presto::PrestoVectorSerde::PrestoOptions options = {
+        kDefaultUseLosslessTimestamp, compressionKind_};
+    // std::unique_ptr<VectorStreamGroup> batch_;
+    batch.createStreamTree(
+        std::static_pointer_cast<const RowType>(rows->type()), 1'000, &options);
+    batch.append(rows, indices);
+
+    IOBufOutputStream out(
+        *pool_, nullptr, std::max<int64_t>(64 * 1024, batch.size()));
+    batch.flush(&out);
+    auto iobuf = out.getIOBuf();
+    bufferBytes_ += chainBytes(*iobuf);
+    if (buffers_ == nullptr) {
+      buffers_ = std::move(iobuf);
+    } else {
+      buffers_->insertAfterThisOne(std::move(iobuf));
     }
-    batch_->append(rows, indices);
   }
   updateAppendStats(rows->size(), timeUs);
-  if (batch_->size() < writeBufferSize_) {
+  if (bufferBytes_ < writeBufferSize_) {
     return 0;
   }
   return flush();
@@ -203,15 +213,12 @@ void SpillWriter::updateAppendStats(
 
 void SpillWriter::updateWriteStats(
     uint64_t spilledBytes,
-    uint64_t flushTimeUs,
     uint64_t fileWriteTimeUs) {
   auto statsLocked = stats_->wlock();
   statsLocked->spilledBytes += spilledBytes;
-  statsLocked->spillFlushTimeUs += flushTimeUs;
   statsLocked->spillWriteTimeUs += fileWriteTimeUs;
   ++statsLocked->spillDiskWrites;
-  common::updateGlobalSpillWriteStats(
-      spilledBytes, flushTimeUs, fileWriteTimeUs);
+  common::updateGlobalSpillWriteStats(spilledBytes, fileWriteTimeUs);
 }
 
 void SpillWriter::updateSpilledFileStats(uint64_t fileSize) {

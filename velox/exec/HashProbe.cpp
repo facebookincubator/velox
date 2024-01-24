@@ -422,7 +422,8 @@ void HashProbe::spillInput(RowVectorPtr& input) {
     VELOX_CHECK(spiller_->isSpilled(partition));
     spiller_->spill(
         partition,
-        wrap(numSpillInputs, spillInputIndicesBuffers_[partition], input));
+        wrap(numSpillInputs, spillInputIndicesBuffers_[partition], input),
+        pool());
   }
 
   if (numNonSpillingInput == 0) {
