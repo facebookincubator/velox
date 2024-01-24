@@ -244,7 +244,6 @@ static char* gen_terminator(char* dest, seed_t* seed) {
 }
 
 static char* gen_sentence(char* dest, seed_t* seed) {
-  const char* cptr;
   int i;
 
   DSS_HUGE j;
@@ -254,7 +253,6 @@ static char* gen_sentence(char* dest, seed_t* seed) {
   index += grammar.list[1].weight < j;
   index += grammar.list[2].weight < j;
   index += grammar.list[3].weight < j;
-  cptr = grammar.list[index].text;
 
   if (index == 0) {
     dest = gen_np(dest, seed);
