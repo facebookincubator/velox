@@ -73,13 +73,8 @@ uint64_t SpillWriteFile::size() const {
 }
 
 uint64_t SpillWriteFile::write(std::unique_ptr<folly::IOBuf> iobuf) {
-  uint64_t writtenBytes{0};
-  // TODO: extend velox file system to support write with a chained io buffers.
-  for (auto& range : *iobuf) {
-    writtenBytes += range.size();
-    file_->append(std::string_view(
-        reinterpret_cast<const char*>(range.data()), range.size()));
-  }
+  auto writtenBytes = iobuf->computeChainDataLength();
+  file_->append(std::move(iobuf));
   return writtenBytes;
 }
 
@@ -181,7 +176,7 @@ uint64_t SpillWriter::write(
     MicrosecondTimer timer(&timeUs);
     if (batch_ == nullptr) {
       serializer::presto::PrestoVectorSerde::PrestoOptions options = {
-          kDefaultUseLosslessTimestamp, compressionKind_, true};
+          kDefaultUseLosslessTimestamp, compressionKind_};
       batch_ = std::make_unique<VectorStreamGroup>(pool_);
       batch_->createStreamTree(
           std::static_pointer_cast<const RowType>(rows->type()),
@@ -297,7 +292,7 @@ SpillReadFile::SpillReadFile(
       numSortKeys_(numSortKeys),
       sortCompareFlags_(sortCompareFlags),
       compressionKind_(compressionKind),
-      readOptions_{kDefaultUseLosslessTimestamp, compressionKind_, true},
+      readOptions_{kDefaultUseLosslessTimestamp, compressionKind_},
       pool_(pool) {
   constexpr uint64_t kMaxReadBufferSize =
       (1 << 20) - AlignedBuffer::kPaddedSize; // 1MB - padding.

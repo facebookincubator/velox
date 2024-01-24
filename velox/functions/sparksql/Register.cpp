@@ -248,6 +248,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<ReplaceFunction, Varchar, Varchar, Varchar, Varchar>(
       {prefix + "replace"});
 
+  registerFunction<FindInSetFunction, int32_t, Varchar, Varchar>(
+      {prefix + "find_in_set"});
+
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
       prefix + "array_sort", arraySortSignatures(), makeArraySort);
@@ -269,6 +272,8 @@ void registerFunctions(const std::string& prefix) {
       int64_t,
       Varchar,
       Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<FromUnixtimeFunction, Varchar, int64_t, Varchar>(
+      {prefix + "from_unixtime"});
   registerFunction<MakeDateFunction, Date, int32_t, int32_t, int32_t>(
       {prefix + "make_date"});
   registerFunction<DateDiffFunction, int32_t, Date, Date>(
@@ -277,7 +282,12 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<AddMonthsFunction, Date, Date, int32_t>(
       {prefix + "add_months"});
 
+  registerFunction<DateAddFunction, Date, Date, int8_t>({prefix + "date_add"});
+  registerFunction<DateAddFunction, Date, Date, int16_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
+
+  registerFunction<DateSubFunction, Date, Date, int8_t>({prefix + "date_sub"});
+  registerFunction<DateSubFunction, Date, Date, int16_t>({prefix + "date_sub"});
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
 
   registerFunction<DayFunction, int32_t, Date>(
