@@ -177,6 +177,23 @@ Casting from invalid input values throws.</p>
 </div>
 </section>
 </section>
+<section id="cast-to-decimal">
+<h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Permalink to this heading">¶</a></h2>
+<section id="from-varchar">
+<h3>From varchar<a class="headerlink" href="#from-varchar" title="Permalink to this heading">¶</a></h3>
+<p>Casting varchar to a decimal of given precision and scale is allowed.
+The behavior is similar with Presto except Spark allows leading and trailing white-spaces in input varchars.</p>
+<p>Valid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39; 1.23&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">0</span><span class="p">));</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.23 &#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">0</span><span class="p">));</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;  1.23  &#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">0</span><span class="p">));</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39; -3E+2&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="o">-</span><span class="mf">300.00</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-3E+2 &#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="o">-</span><span class="mf">300.00</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;  -3E+2  &#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="o">-</span><span class="mf">300.00</span>
+</pre></div>
+</div>
+</section>
+</section>
 </section>
 
 
@@ -203,6 +220,10 @@ Casting from invalid input values throws.</p>
 </li>
 <li><a class="reference internal" href="#cast-to-date">Cast to Date</a><ul>
 <li><a class="reference internal" href="#id1">From strings</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
+<li><a class="reference internal" href="#from-varchar">From varchar</a></li>
 </ul>
 </li>
 </ul>
