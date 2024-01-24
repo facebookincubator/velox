@@ -32,7 +32,7 @@ using namespace facebook::velox;
 namespace facebook::velox::test {
 namespace {
 template <typename TExecParams>
-struct ErrorOnOddFunction {
+struct ErrorOnOddFunctionElseUnknown {
   VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
 
   FOLLY_ALWAYS_INLINE void call(
@@ -40,7 +40,7 @@ struct ErrorOnOddFunction {
       const int32_t input) {
     // Function will always throw an error on odd input.
     if (input % 2 != 0) {
-      VELOX_USER_FAIL("ErrorOnOdd Function: {}", input);
+      VELOX_USER_FAIL("ErrorOnOddElseUnknown Function: {}", input);
     }
   }
 };
@@ -52,8 +52,9 @@ class CastExprTest : public functions::test::CastBaseTest {
         "testing_dictionary",
         TestingDictionaryFunction::signatures(),
         std::make_unique<TestingDictionaryFunction>());
-    registerFunction<ErrorOnOddFunction, UnknownValue, int32_t>(
-        {"error_on_odd"});
+
+    registerFunction<ErrorOnOddFunctionElseUnknown, UnknownValue, int32_t>(
+        {"error_on_odd_else_unknown"});
   }
 
   void setLegacyCast(bool value) {
@@ -2312,31 +2313,33 @@ TEST_F(CastExprTest, identicalTypes) {
 }
 
 TEST_F(CastExprTest, skipCastEvaluation) {
-  // Inputs to error_on_odd are even, odd.
+  // Inputs to error_on_odd_else_unknown are even, odd.
   // Input to cast is an UNKNOWN vector which is not supported.
+  // Verify that input rows marked as errors are skipped.
   {
     auto data = makeRowVector({
         makeFlatVector<int>(10, [&](auto row) { return row; }),
     });
 
     VELOX_ASSERT_THROW(
-        evaluate("try(cast(error_on_odd(c0) as INTEGER))", data),
+        evaluate("try(cast(error_on_odd_else_unknown(c0) as INTEGER))", data),
         "not a scalar type! kind: UNKNOWN");
   }
 
-  // All inputs to error_on_odd are odd.
+  // All inputs to error_on_odd_else_unknown are odd.
   // All inputs to cast are errors, we skip evaluation.
   {
     auto data = makeRowVector({
         makeFlatVector<int>(10, [&](auto row) { return row * 2 + 1; }),
     });
 
-    auto result = evaluate("try(cast(error_on_odd(c0) as INTEGER))", data);
+    auto result =
+        evaluate("try(cast(error_on_odd_else_unknown(c0) as INTEGER))", data);
     ASSERT_EQ(BaseVector::countNulls(result->nulls(), result->size()), 10);
   }
 
-  // The result vector can shrink since we remove the error rows.
-  // Check input to cast when the last row is an error.
+  // Ensure trailing rows that are marked as error are handled correctly as they
+  // can result in intermediate result vectors of smaller size.
   {
     auto data = makeRowVector({
         makeFlatVector<int64_t>({1, 2, 3, 0}),

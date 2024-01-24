@@ -743,8 +743,8 @@ void CastExpr::apply(
     const TypePtr& fromType,
     const TypePtr& toType,
     VectorPtr& result) {
-  LocalSelectivityVector remainingRows(*context.execCtx(), rows.end());
-  *remainingRows = rows;
+  LocalSelectivityVector remainingRows(context, rows);
+
   context.deselectErrors(*remainingRows);
 
   LocalDecodedVector decoded(context, *input, *remainingRows);
@@ -795,7 +795,8 @@ void CastExpr::apply(
   context.moveOrCopyResult(localResult, *remainingRows, result);
   context.releaseVector(localResult);
 
-  // If there are nulls in input, add nulls to the result at the same rows.
+  // If there are nulls or rows that encountered errors in the input, add nulls
+  // to the result at the same rows.
   VELOX_CHECK_NOT_NULL(result);
   if (rawNulls || context.errors()) {
     EvalCtx::addNulls(
