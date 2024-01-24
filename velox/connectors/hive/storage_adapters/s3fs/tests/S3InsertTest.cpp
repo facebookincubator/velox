@@ -119,6 +119,6 @@ TEST_F(S3InsertTest, s3InsertTest) {
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::Init{&argc, &argv, false};
+  folly::init(&argc, &argv, false);
   return RUN_ALL_TESTS();
 }

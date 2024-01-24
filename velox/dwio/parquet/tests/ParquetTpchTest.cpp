@@ -248,6 +248,6 @@ TEST_F(ParquetTpchTest, Q22) {
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::Init{&argc, &argv, false};
+  folly::init(&argc, &argv, false);
   return RUN_ALL_TESTS();
 }

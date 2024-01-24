@@ -200,7 +200,7 @@ BENCHMARK(second) {
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::Init{&argc, &argv};
+  folly::init(&argc, &argv);
 
   folly::runBenchmarks();
   return 0;

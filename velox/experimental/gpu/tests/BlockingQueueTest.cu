@@ -281,7 +281,7 @@ void runKernelLaunches() {
 
 int main(int argc, char** argv) {
   using namespace facebook::velox::gpu;
-  folly::Init{&argc, &argv};
+  folly::init(&argc, &argv);
   checkDeviceProperties();
   runCpuGpuPingPong();
   printf("\n");

@@ -67,7 +67,7 @@ VELOX_UDF_END();
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::Init{&argc, &argv};
+  folly::init(&argc, &argv);
   functions::prestosql::registerArrayFunctions();
 
   registerFunction<

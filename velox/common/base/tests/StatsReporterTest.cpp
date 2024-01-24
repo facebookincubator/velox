@@ -134,7 +134,7 @@ folly::Singleton<BaseStatsReporter> reporter([]() {
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::Init{&argc, &argv, false};
+  folly::init(&argc, &argv, false);
   facebook::velox::BaseStatsReporter::registered = true;
   return RUN_ALL_TESTS();
 }
