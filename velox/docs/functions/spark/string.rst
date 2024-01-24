@@ -167,7 +167,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 .. spark:function:: space(count) -> varchar
 
     Returns a string consisting of ``count`` spaces. ``count`` supports up to 1MB (2^20),
-    If the limit is exceeded, NULL is returned.  ::
+    If the limit is exceeded, NULL is returned. ::
 
         SELECT space(1); -- " "
         SELECT space(5); -- "     "
