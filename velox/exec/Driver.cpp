@@ -978,7 +978,7 @@ std::string Driver::toJsonString() const {
   }
   obj["operators"] = operatorsObj;
 
-  return folly::toPrettyJson(obj);
+  return folly::toJson(obj);
 }
 
 SuspendedSection::SuspendedSection(Driver* driver) : driver_(driver) {

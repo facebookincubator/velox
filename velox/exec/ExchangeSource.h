@@ -127,7 +127,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
     obj["sequence"] = sequence_;
     obj["requestPending"] = requestPending_.load();
     obj["atEnd"] = atEnd_;
-    return folly::toPrettyJson(obj);
+    return folly::toJson(obj);
   }
 
   using Factory = std::function<std::shared_ptr<ExchangeSource>(

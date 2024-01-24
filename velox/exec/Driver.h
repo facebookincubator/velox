@@ -150,7 +150,7 @@ struct ThreadState {
     obj["hasBlockingFuture"] = hasBlockingFuture;
     obj["isSuspended"] = isSuspended;
     obj["startExecTime"] = startExecTimeMs;
-    return folly::toPrettyJson(obj);
+    return folly::toJson(obj);
   }
 };
 

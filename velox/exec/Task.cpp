@@ -2124,7 +2124,7 @@ std::string Task::toShortJsonString() const {
   obj["numThreads"] = numThreads_;
   obj["terminateRequested_"] = std::to_string(terminateRequested_);
   obj["pauseRequested_"] = std::to_string(pauseRequested_);
-  return folly::toPrettyJson(obj);
+  return folly::toJson(obj);
 }
 
 std::string Task::toJsonString() const {
@@ -2153,7 +2153,7 @@ std::string Task::toJsonString() const {
   }
 
   if (planFragment_.planNode) {
-    obj["plan"] = planFragment_.planNode->toString();
+    obj["plan"] = planFragment_.planNode->toString(true, true);
   }
 
   folly::dynamic driverObj = folly::dynamic::object;
@@ -2176,7 +2176,7 @@ std::string Task::toJsonString() const {
   }
   obj["exchangeClientByPlanNode"] = exchangeClients;
 
-  return folly::toPrettyJson(obj);
+  return folly::toJson(obj);
 }
 
 std::shared_ptr<MergeSource> Task::addLocalMergeSource(

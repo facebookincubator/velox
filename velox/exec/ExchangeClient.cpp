@@ -261,7 +261,7 @@ std::string ExchangeClient::toJsonString() const {
   for (auto& source : sources_) {
     clientsObj[std::to_string(index++)] = source->toJsonString();
   }
-  return folly::toPrettyJson(obj);
+  return folly::toJson(obj);
 }
 
 } // namespace facebook::velox::exec
