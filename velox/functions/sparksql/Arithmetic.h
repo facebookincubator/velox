@@ -387,7 +387,8 @@ struct FromHexFunction {
       if (v == -1) {
         return false;
       }
-      // Padding with '0' to align with Spark.
+      // std::string resize does not guarantee all chars initialized with 0,
+      // filling last char with 0 to align with Spark.
       resultBuffer[resultSize - 1] = 0;
       resultBuffer[0] = v;
       i += 1;

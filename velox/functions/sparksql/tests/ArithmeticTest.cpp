@@ -275,6 +275,8 @@ TEST_F(ArithmeticTest, unhex) {
 
   EXPECT_EQ(unhex("737472696E67"), "string");
   EXPECT_EQ(unhex(""), "");
+  std::string b("#\0", 2);
+  EXPECT_EQ(unhex("123"), b);
   EXPECT_EQ(unhex("F"), "\x0F");
   EXPECT_EQ(unhex("ff"), "\xFF");
   EXPECT_EQ(unhex("GG"), std::nullopt);

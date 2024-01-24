@@ -236,4 +236,4 @@ Mathematical Functions
 
 .. spark:function:: unhex(x) -> varbinary
 
-    Converts hexadecimal ``x`` to binary.
+    Converts hexadecimal ``x`` to varbinary.
