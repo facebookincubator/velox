@@ -120,6 +120,17 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
     return out.str();
   }
 
+  virtual folly::dynamic toJson() {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["taskId"] = taskId_;
+    obj["destination"] = destination_;
+    obj["sequence"] = sequence_;
+    obj["requestPending"] = requestPending_.load();
+    obj["atEnd"] = atEnd_;
+    return obj;
+  }
+
+  // TODO(jtan6): Remove after presto native toJson implementation
   virtual std::string toJsonString() {
     folly::dynamic obj = folly::dynamic::object;
     obj["taskId"] = taskId_;
@@ -127,7 +138,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
     obj["sequence"] = sequence_;
     obj["requestPending"] = requestPending_.load();
     obj["atEnd"] = atEnd_;
-    return folly::toJson(obj);
+    return folly::toPrettyJson(obj);
   }
 
   using Factory = std::function<std::shared_ptr<ExchangeSource>(
