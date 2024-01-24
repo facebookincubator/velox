@@ -601,13 +601,13 @@ TEST_F(DateTimeFunctionsTest, hour) {
 }
 
 TEST_F(DateTimeFunctionsTest, fromUnixtime) {
-  const auto getUnixTime = [&](const StringView str) {
+  const auto getUnixTime = [&](const StringView& str) {
     Timestamp t = util::fromTimestampString(str);
     return t.getSeconds();
   };
 
-  const auto fromUnixTime = [&](const std::optional<int64_t> unixTime,
-                                const std::optional<std::string> timeFormat) {
+  const auto fromUnixTime = [&](const std::optional<int64_t>& unixTime,
+                                const std::optional<std::string>& timeFormat) {
     return evaluateOnce<std::string>(
         "from_unixtime(c0, c1)", unixTime, timeFormat);
   };

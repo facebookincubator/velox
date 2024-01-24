@@ -239,7 +239,7 @@ struct FromUnixtimeFunction {
   }
 
  private:
-  FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar> format) {
+  FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>& format) {
     formatter_ = buildJodaDateTimeFormatter(
         std::string_view(format.data(), format.size()));
     maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
