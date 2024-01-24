@@ -577,7 +577,7 @@ VectorPtr CastExpr::applyDecimal(
           rows, input, context, toType, castResult);
       break;
     case TypeKind::DOUBLE:
-      applyDoubleToDecimal<toDecimalType>(
+      applyDoubleToDecimalCastKernel<toDecimalType>(
           rows, input, context, toType, castResult);
       break;
     case TypeKind::BIGINT: {

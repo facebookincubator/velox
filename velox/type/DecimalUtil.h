@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/Conv.h>
 #include <string>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"

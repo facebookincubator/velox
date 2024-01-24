@@ -460,19 +460,15 @@ void CastExpr::applyDoubleToDecimalCastKernel(
     exec::EvalCtx& context,
     const TypePtr& toType,
     VectorPtr& result) {
-  const auto sourceVector = input.as<SimpleVector<double>>();
+  const auto doubleInput = input.as<SimpleVector<double>>();
   auto rawResults =
       result->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
   const auto toPrecisionScale = getDecimalPrecisionScale(*toType);
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    if (sourceVector->isNullAt(row)) {
-      result->setNull(row, true);
-      return;
-    }
     TOutput output;
     const auto status = DecimalUtil::rescaleDouble<TOutput>(
-        sourceVector->valueAt(row),
+        doubleInput->valueAt(row),
         toPrecisionScale.first,
         toPrecisionScale.second,
         output);
