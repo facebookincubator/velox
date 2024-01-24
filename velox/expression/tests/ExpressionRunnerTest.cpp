@@ -90,8 +90,8 @@ static bool validateMode(const char* flagName, const std::string& value) {
   static const std::unordered_set<std::string> kModes = {
       "common", "simplified", "verify", "query"};
   if (kModes.count(value) != 1) {
-    std::cout << "Invalid value for --" << flagName << ": " << value << ". ";
-    std::cout << "Valid values are: " << folly::join(", ", kModes) << "."
+    std::cerr << "Invalid value for --" << flagName << ": " << value << ". ";
+    std::cerr << "Valid values are: " << folly::join(", ", kModes) << "."
               << std::endl;
     return false;
   }
@@ -103,8 +103,8 @@ static bool validateRegistry(const char* flagName, const std::string& value) {
   static const std::unordered_set<std::string> kRegistries = {
       "presto", "spark"};
   if (kRegistries.count(value) != 1) {
-    std::cout << "Invalid value for --" << flagName << ": " << value << ". ";
-    std::cout << "Valid values are: " << folly::join(", ", kRegistries) << "."
+    std::cerr << "Invalid value for --" << flagName << ": " << value << ". ";
+    std::cerr << "Valid values are: " << folly::join(", ", kRegistries) << "."
               << std::endl;
     return false;
   }
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
   }
 
   if (FLAGS_sql.empty() && FLAGS_sql_path.empty()) {
-    std::cout << "One of --sql or --sql_path flags must be set." << std::endl;
+    std::cerr << "One of --sql or --sql_path flags must be set." << std::endl;
     exit(1);
   }
 
