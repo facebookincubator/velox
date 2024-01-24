@@ -47,7 +47,7 @@ const ThreadDebugInfo* GetThreadDebugInfo();
 
 // Install a signal handler to dump thread local debug information. This should
 // be called before calling folly::symbolizer::installFatalSignalCallbacks()
-// which is usually called at startup via folly::Init(). This is just a default
+// which is usually called at startup via folly::Init{}. This is just a default
 // implementation but you can install your own signal handler. Make sure to
 // install one at the start of your program.
 void addDefaultFatalSignalHandler();
