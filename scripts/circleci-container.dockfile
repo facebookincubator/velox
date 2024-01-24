@@ -15,6 +15,7 @@
 #
 FROM quay.io/centos/centos:stream8
 ARG cpu_target
+COPY scripts/setup-centos8.sh /
 COPY scripts/setup-circleci.sh /
 COPY scripts/setup-helper-functions.sh /
 RUN mkdir build && ( cd build && CPU_TARGET="$cpu_target" bash /setup-circleci.sh ) && rm -rf build
