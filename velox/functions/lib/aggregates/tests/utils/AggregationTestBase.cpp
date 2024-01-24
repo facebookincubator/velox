@@ -799,7 +799,9 @@ void AggregationTestBase::testAggregationsImpl(
     }
 
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
-    queryBuilder.configs(config);
+    auto config2(config);
+    config2[core::QueryConfig::kMaxMergingBatchRows] = "0";
+    queryBuilder.configs(config2);
     enableAbandonPartialAggregation(queryBuilder);
 
     auto task = assertResults(queryBuilder);

@@ -16,7 +16,7 @@
 #pragma once
 
 #include "velox/exec/GroupingSet.h"
-#include "velox/exec/MergingVectorInput.h"
+#include "velox/exec/MergingVector.h"
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::exec {
@@ -107,7 +107,7 @@ class HashAggregation : public Operator {
   // 'groupingSet_->estimateRowSize()' across all accumulated data set.
   std::optional<int64_t> estimatedOutputRowSize_;
 
-  std::shared_ptr<MergingVectorInput> mergingVectorInput_;
+  std::unique_ptr<MergingVector> mergingVectorInput_;
 
   bool partialFull_ = false;
   bool newDistincts_ = false;

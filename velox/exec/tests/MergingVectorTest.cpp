@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/MergingVectorInput.h"
+#include "velox/exec/MergingVector.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 
 using namespace facebook::velox;
@@ -22,22 +22,22 @@ using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::exec::test {
 
-class MergingVectorInputTest : public testing::Test,
-                               public velox::test::VectorTestBase {
+class MergingVectorTest : public testing::Test,
+                          public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
   }
 
   void SetUp() override {
-    mergingVectorInput_ = std::make_shared<MergingVectorInput>(
-        pool(), 10UL << 20, 1024, 16, true);
+    mergingVector_ = std::make_shared<MergingVector>(
+        1024, 10UL << 20, 16, 10UL << 14, true, true, pool());
   }
 
-  std::shared_ptr<MergingVectorInput> mergingVectorInput_;
+  std::shared_ptr<MergingVector> mergingVector_;
 };
 
-TEST_F(MergingVectorInputTest, bufferSmallVector) {
+TEST_F(MergingVectorTest, bufferSmallVector) {
   auto count = 0;
   std::vector<RowVectorPtr> vectors;
   vector_size_t batchSize;
@@ -62,21 +62,24 @@ TEST_F(MergingVectorInputTest, bufferSmallVector) {
     vectors.push_back(makeRowVector({c0, c1Dict, c2, c3}));
   }
 
-  EXPECT_EQ(mergingVectorInput_->getVector(false), nullptr);
+  EXPECT_EQ(mergingVector_->getOutput(false), nullptr);
 
   for (auto i = 0; i < vectors.size(); i++) {
-    mergingVectorInput_->addVector(vectors[i]);
+    mergingVector_->addInput(vectors[i]);
   }
 
-  auto actualCount = mergingVectorInput_->getVector(false)->size();
-  EXPECT_EQ(mergingVectorInput_->getVector(false), nullptr);
+  auto firstMergedVector = mergingVector_->getOutput(false);
+  EXPECT_EQ(mergingVector_->getOutput(false), nullptr);
+  auto firstMergedVectorSie = firstMergedVector->size();
+  mergingVector_->reuseIfNeed(firstMergedVector);
+  EXPECT_EQ(firstMergedVector, nullptr);
 
-  actualCount += mergingVectorInput_->getVector(true)->size();
-  EXPECT_EQ(actualCount, count);
-  EXPECT_EQ(mergingVectorInput_->getVector(true), nullptr);
+  auto secondMergedVector = mergingVector_->getOutput(true);
+  EXPECT_EQ(firstMergedVectorSie + secondMergedVector->size(), count);
+  EXPECT_EQ(mergingVector_->getOutput(true), nullptr);
 }
 
-TEST_F(MergingVectorInputTest, bufferLargeVector) {
+TEST_F(MergingVectorTest, bufferLargeVector) {
   vector_size_t batchSize = 20;
   RowVectorPtr vector;
   auto c0 = makeFlatVector<int64_t>(
@@ -91,11 +94,13 @@ TEST_F(MergingVectorInputTest, bufferLargeVector) {
     return StringView::makeInline(std::to_string(row));
   });
 
-  EXPECT_EQ(mergingVectorInput_->getVector(false), nullptr);
+  EXPECT_EQ(mergingVector_->getOutput(false), nullptr);
 
-  mergingVectorInput_->addVector(makeRowVector({c0, c1, c2, c3}));
+  RowVectorPtr vector1 = makeRowVector({c0, c1, c2, c3});
+  mergingVector_->addInput(vector1);
 
-  EXPECT_EQ(mergingVectorInput_->getVector(false)->size(), batchSize);
-  EXPECT_EQ(mergingVectorInput_->getVector(true), nullptr);
+  auto mergedVector = mergingVector_->getOutput(false);
+  EXPECT_EQ(mergedVector->size(), batchSize);
+  EXPECT_EQ(mergingVector_->getOutput(true), nullptr);
 }
 } // namespace facebook::velox::exec::test
