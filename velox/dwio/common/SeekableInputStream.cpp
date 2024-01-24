@@ -167,8 +167,8 @@ google::protobuf::int64 SeekableArrayInputStream::ByteCount() const {
   return static_cast<google::protobuf::int64>(position);
 }
 
-void SeekableArrayInputStream::seekToPosition(PositionProvider& position) {
-  this->position = position.next();
+void SeekableArrayInputStream::seekToPosition(PositionProvider& position_2) {
+  this->position = position_2.next();
 }
 
 std::string SeekableArrayInputStream::getName() const {
