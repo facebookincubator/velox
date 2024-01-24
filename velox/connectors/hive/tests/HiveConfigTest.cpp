@@ -60,6 +60,7 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(hiveConfig->sortWriterMaxOutputRows(emptySession.get()), 1024);
   ASSERT_EQ(
       hiveConfig->sortWriterMaxOutputBytes(emptySession.get()), 10UL << 20);
+  ASSERT_EQ(hiveConfig->isPartitionPathAsLowerCase(emptySession.get()), true);
 }
 
 TEST(HiveConfigTest, overrideConfig) {
