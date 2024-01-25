@@ -37,6 +37,9 @@ int main(int argc, char** argv) {
 
   ExpressionBenchmarkBuilder benchmarkBuilder;
   const vector_size_t vectorSize = 1000;
+  // Relaxed_substring with long string takes a long time, with a low
+  // iteration count to lower the total time.
+  const size_t iterationCount = 100;
   auto vectorMaker = benchmarkBuilder.vectorMaker();
 
   auto makeInput = [&](vector_size_t vectorSize,
@@ -82,7 +85,8 @@ int main(int argc, char** argv) {
       .addBenchmarkSet(
           "substring", vectorMaker.rowVector({"col0"}, {substringInput}))
       .addExpression("substring", R"(like(col0, '%a\_b\_c%', '\'))")
-      .addExpression("strpos", R"(strpos(col0, 'a_b_c') > 0)");
+      .addExpression("strpos", R"(strpos(col0, 'a_b_c') > 0)")
+      .withIterations(iterationCount);
 
   benchmarkBuilder
       .addBenchmarkSet(
@@ -96,7 +100,8 @@ int main(int argc, char** argv) {
           "relaxed_prefix_unicode_1", R"(like(col1, '你\__\_啊%', '\'))")
       .addExpression(
           "relaxed_prefix_unicode_2", R"(like(col1, '_\__\_啊%', '\'))")
-      .addExpression("starts_with", R"(starts_with(col0, 'a_b_c'))");
+      .addExpression("starts_with", R"(starts_with(col0, 'a_b_c'))")
+      .withIterations(iterationCount);
 
   benchmarkBuilder
       .addBenchmarkSet(
@@ -110,12 +115,38 @@ int main(int argc, char** argv) {
           "relaxed_suffix_unicode_1", R"(like(col1, '%你\__\_啊', '\'))")
       .addExpression(
           "relaxed_suffix_unicode_2", R"(like(col1, '%_\__\_啊', '\'))")
-      .addExpression("ends_with", R"(ends_with(col0, 'a_b_c'))");
+      .addExpression("ends_with", R"(ends_with(col0, 'a_b_c'))")
+      .withIterations(iterationCount);
+
+  auto substringEdgeInput0 = makeInput(vectorSize, true, true, "a_b_c", "xxx");
+  auto substringEdgeInput1 = makeInput(vectorSize, true, true, "a_b_c", "a_b");
+  // Padding: aaa_bbb__ccc is similar to the pattern: aaa_bbb_ccc, it will be
+  // hard for kRelaxedSubstring matching.
+  auto substringEdgeInput2 =
+      makeInput(vectorSize, true, true, "aaa_bbb_ccc", "aaa_bbb__ccc");
+  auto substringEdgeInput3 =
+      makeInput(vectorSize, true, true, "你好_世界_Velox", "你好_世界__Velox");
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "relaxed_substring",
+          vectorMaker.rowVector(
+              {"col0", "col1", "col2", "col3"},
+              {substringEdgeInput0,
+               substringEdgeInput1,
+               substringEdgeInput2,
+               substringEdgeInput3}))
+      .addExpression("easy", R"(like(col0, '%a_b_c%'))")
+      .addExpression("normal", R"(like(col1, '%a_b_c%'))")
+      .addExpression("hard_ascii", R"(like(col2, '%aaa_bbb_ccc%'))")
+      .addExpression("hard_unicode", R"(like(col3, '%你好_世界_Velox%'))")
+      .withIterations(iterationCount);
 
   benchmarkBuilder
       .addBenchmarkSet(
           "generic", vectorMaker.rowVector({"col0"}, {substringInput}))
-      .addExpression("generic", R"(like(col0, '%a%b%c'))");
+      .addExpression("generic", R"(like(col0, '%a%b%c'))")
+      .withIterations(iterationCount);
 
   benchmarkBuilder.registerBenchmarks();
   benchmarkBuilder.testBenchmarks();

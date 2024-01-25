@@ -545,6 +545,14 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
   testPatternString(
       "%helloPrestoWorld%%%", PatternKind::kSubstring, "helloPrestoWorld");
 
+  testPatternString(
+      "%_pr_es_to_%", PatternKind::kRelaxedSubstring, "_pr_es_to_");
+  testPatternString("%_presto%%", PatternKind::kRelaxedSubstring, "_presto");
+  testPatternString("%%presto_%%", PatternKind::kRelaxedSubstring, "presto_");
+  testPatternString("%_a%", PatternKind::kRelaxedSubstring, "_a");
+  testPatternString("%%a_%", PatternKind::kRelaxedSubstring, "a_");
+  testPatternString("%_a_%%", PatternKind::kRelaxedSubstring, "_a_");
+
   testPattern("_b%%__", PatternKind::kGeneric, 0);
   testPattern("%_%p", PatternKind::kGeneric, 0);
   testPattern("aBcD%%e%", PatternKind::kGeneric, 0);
@@ -613,6 +621,9 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKindWithEscapeChar) {
   testPattern(R"(%\_%%)", PatternKind::kSubstring, "_");
   testPattern(R"(%\_\%%%)", PatternKind::kSubstring, "_%");
   testPattern(R"(%\_ab\%%%)", PatternKind::kSubstring, "_ab%");
+
+  testPattern(R"(%_\_a_b_\%%%)", PatternKind::kRelaxedSubstring, "__a_b_%");
+  testPattern(R"(%_\_b_c%)", PatternKind::kRelaxedSubstring, "__b_c");
 }
 
 TEST_F(Re2FunctionsTest, likePatternWildcard) {
@@ -916,6 +927,72 @@ TEST_F(Re2FunctionsTest, likeSubstringPattern) {
       generateString(kAnyWildcardCharacter) + input +
           generateString(kAnyWildcardCharacter),
       true);
+}
+
+TEST_F(Re2FunctionsTest, likeRelaxedSubstringPattern) {
+  testLike("abcde", "%_bcd_%%", true);
+  testLike("abcde", "%%b_de%", true);
+  testLike("ABCDE", "%%C_%%%", true);
+  testLike("ABCDE", "%%_C%%%", true);
+  testLike("ABCDE", "%%_C_%%%", true);
+  testLike("FGH_ABCDE", "%_ABCDE%", true);
+  testLike("ABCDE", "%_ABCDE%", false);
+  testLike("_ABCDE", "%_ABCDE%", true);
+
+  testLike("abcde", "%cc_%", false);
+  testLike("ABCDE", "%_BD_%%", false);
+  testLike("abcde", "%%_ccd_%%%", false);
+  testLike("ABCDE", "%%_BDE%", false);
+  testLike("abcde", "%%_be_%", false);
+  testLike("ABCDE", "%_de%%", false);
+  testLike("abcde", "%_cb%%", false);
+  testLike("ABCDE", "%%Ab_%", false);
+  testLike("a_a_b_ca_b", "%a_b_c%", true);
+
+  testLike("你好啊世界", "%_好啊_%%", true);
+  testLike("你好啊世界", "%%好_世界%", true);
+  testLike("你好你好哈哈世界", "%%你好__世界%", true);
+  testLike("世界_你好", "%_你好%", true);
+  testLike("你_你_好_啊你_好", "%你_好_啊%", true);
+  testLike("你好", "%_你好%", false);
+  testLike("_你好", "%_你好%", true);
+  testLike("你好啊世界", "%_好好_%%", false);
+  testLike("你好啊世界", "%%_好世_%", false);
+
+  testLike("\nabc\nde\n", "%\n_e%%", true);
+  testLike("\nabcde\n", "%%_de%", true);
+  testLike("\nabc\tde\b", "%%%_d%%", true);
+  testLike("\nabcde\t", "%%_e\t%%", true);
+  testLike("\nabcde\n", "%%_d\n%", false);
+
+  testLike("aaaaaaaaaaaaaaaaaaaaaaabcdef", "%a_c%", true);
+  testLike("aaaaaaaaaaaaaaaaaaaaaaabcdef", "%a_c_e%", true);
+
+  testLike("abababababababaaaaaaaaaaaaaaaabcdef", "%ab_d%", true);
+
+  // There are a lot 'noise': a_b which is similar to our pattern: a_b_c, it
+  // is hard for kRelaxedSubstring.
+  testLike(
+      "a_ba_ba_ba_ba_ba_ba_ba_ba_ba_ba_ba_ba_ba_ba_ba_ba_b_cdef",
+      "%a_b_c%",
+      true);
+
+  // There are a lot 'noise': a_b__c which is similar to our pattern: a_b_c, it
+  // is hard for kRelaxedSubstring.
+  testLike(
+      "a_b__ca_b__ca_b__ca_b__ca_b__ca_b__ca_b__ca_b__ca_b_cdef",
+      "%a_b_c%",
+      true);
+
+  testLike(
+      "a_b__ca_b__ca_b__ca_b__ca_b__ca_b__ca_b__ca_b__ca_b__cdef",
+      "%a_b_c%",
+      false);
+
+  // Test literal '_' & '%' in pattern.
+  testLike("cd_be", R"(%_\_b%)", '\\', true);
+  testLike("xxa_b_cxx", R"(%_\_b_c%)", '\\', true);
+  testLike("efgabc_dhi", R"(%a_c\_d%)", '\\', true);
 }
 
 TEST_F(Re2FunctionsTest, nullConstantPatternOrEscape) {

@@ -50,6 +50,9 @@ enum class PatternKind {
   kRelaxedSuffix,
   /// Patterns matching '%{c0}%', such as '%foo%%', '%%%hello%'.
   kSubstring,
+  /// Patterns matching '%<kRelaxedFixed>%', such as '%_pr_es_to_%%',
+  /// '%%%_pr_es_to_%'.
+  kRelaxedSubstring,
   /// Patterns which do not fit any of the above types, such as 'hello_world',
   /// '_presto%'.
   kGeneric,
@@ -101,12 +104,34 @@ class PatternMetadata {
 
   static PatternMetadata substring(const std::string& fixedPattern);
 
-  PatternKind patternKind() const {
+  static PatternMetadata relaxedSubstring(
+      const std::string& fixedPattern,
+      const std::vector<SubPatternMetadata>& subPatterns);
+
+  const PatternKind patternKind() const {
     return patternKind_;
   }
 
   size_t length() const {
     return length_;
+  }
+
+  /// Length of the specified sub-pattern ranges.
+  const size_t lengthOf(size_t startIndexInclusive, size_t endIndexInclusive)
+      const {
+    if (startIndexInclusive == 0 && endIndexInclusive == numSubPatterns() - 1) {
+      return length_;
+    }
+
+    size_t length = 0;
+    for (auto i = startIndexInclusive; i <= endIndexInclusive; ++i) {
+      length += subPatterns_[i].length;
+    }
+    return length;
+  }
+
+  const size_t numSubPatterns() const {
+    return subPatterns_.size();
   }
 
   const std::vector<SubPatternMetadata>& subPatterns() const {
