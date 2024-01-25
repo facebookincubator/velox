@@ -185,11 +185,16 @@ class DateTimeFormatter {
 
   /// Result buffer is pre-allocated according to maxResultSize.
   /// Returns actual size.
+  ///
+  /// The timestamp will be firstly converted to millisecond then to
+  /// std::chrono::time_point. If allowOverflow is true, integer overflow is
+  /// allowed in converting to milliseconds.
   int32_t format(
       const Timestamp& timestamp,
       const date::time_zone* timezone,
       const uint32_t maxResultSize,
-      char* result) const;
+      char* result,
+      bool allowOverflow = false) const;
 
  private:
   std::unique_ptr<char[]> literalBuf_;
@@ -205,3 +210,23 @@ std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
     const std::string_view& format);
 
 } // namespace facebook::velox::functions
+
+template <>
+struct fmt::formatter<facebook::velox::functions::DateTimeFormatterType>
+    : formatter<int> {
+  auto format(
+      facebook::velox::functions::DateTimeFormatterType s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::velox::functions::DateTimeFormatSpecifier>
+    : formatter<int> {
+  auto format(
+      facebook::velox::functions::DateTimeFormatSpecifier s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
