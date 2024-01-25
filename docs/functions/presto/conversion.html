@@ -201,7 +201,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
-<td></td>
+<td><p>Y</p></td>
 </tr>
 <tr class="row-odd"><td><p>varchar</p></td>
 <td><p>Y</p></td>
@@ -695,6 +695,26 @@ invalid input values throws.</p>
 </pre></div>
 </div>
 </section>
+<section id="from-double-type">
+<h3>From double type<a class="headerlink" href="#from-double-type" title="Permalink to this heading">¶</a></h3>
+<p>Casting a double number to a decimal of given precision and scale is allowed
+if the input value can be represented by the precision and scale. When the
+given scale is less than the number of decimal places, the double value is
+rounded. The conversion precision is up to 15 as double provides 16(±1)
+significant decimal digits precision. Casting from invalid input values throws.</p>
+<p>Valid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.12</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.1200&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.12</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.1&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.19</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.2&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.123456789123123</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">18</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.123456789123123000&#39;</span>
+</pre></div>
+</div>
+<p>Invalid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">123.12</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">99999.99</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+</pre></div>
+</div>
+</section>
 <section id="id11">
 <h3>From decimal<a class="headerlink" href="#id11" title="Permalink to this heading">¶</a></h3>
 <p>Casting one decimal to another is allowed if the input value can be represented
@@ -803,6 +823,7 @@ a larger scale to a smaller one, the fraction part is rounded. Casting from inva
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
 <li><a class="reference internal" href="#from-boolean-type">From boolean type</a></li>
 <li><a class="reference internal" href="#id10">From integral types</a></li>
+<li><a class="reference internal" href="#from-double-type">From double type</a></li>
 <li><a class="reference internal" href="#id11">From decimal</a></li>
 <li><a class="reference internal" href="#from-varchar">From varchar</a></li>
 </ul>
