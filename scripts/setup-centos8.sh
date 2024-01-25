@@ -23,7 +23,8 @@ NPROC=$(getconf _NPROCESSORS_ONLN)
 export CFLAGS=$(get_cxx_flags $CPU_TARGET)  # Used by LZO.
 export CXXFLAGS=$CFLAGS  # Used by boost.
 export CPPFLAGS=$CFLAGS  # Used by LZO.
-CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
+CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
+BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 
 function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
@@ -112,5 +113,25 @@ cmake_install wangle/wangle -DBUILD_TESTS=OFF
 cmake_install mvfst -DBUILD_TESTS=OFF
 cmake_install fbthrift -Denable_tests=OFF
 # cmake_install ranges-v3
+
+if $BUILD_DUCKDB ; then
+  echo 'Building DuckDB'
+  mkdir ~/duckdb-install && cd ~/duckdb-install
+  wget https://github.com/duckdb/duckdb/archive/refs/tags/v0.8.1.tar.gz
+  tar -xf v0.8.1.tar.gz
+  cd duckdb-0.8.1
+  mkdir build && cd build
+  CMAKE_FLAGS=(
+    "-DBUILD_UNITTESTS=OFF"
+    "-DENABLE_SANITIZER=OFF"
+    "-DENABLE_UBSAN=OFF"
+    "-DBUILD_SHELL=OFF"
+    "-DEXPORT_DLL_SYMBOLS=OFF"
+    "-DCMAKE_BUILD_TYPE=Release"
+  )
+  cmake ${CMAKE_FLAGS[*]}  ..
+  make install -j 16
+  rm -rf ~/duckdb-install
+fi
 
 dnf clean all
