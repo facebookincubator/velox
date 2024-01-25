@@ -184,7 +184,8 @@ class AggregationFuzzerBase {
   std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
   computeReferenceResults(
       const core::PlanNodePtr& plan,
-      const std::vector<RowVectorPtr>& input);
+      const std::vector<RowVectorPtr>& input,
+      std::unordered_set<std::string>& failedQueries);
 
   velox::test::ResultOrError execute(
       const core::PlanNodePtr& plan,

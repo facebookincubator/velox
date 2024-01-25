@@ -406,7 +406,8 @@ std::pair<
     AggregationFuzzerBase::ReferenceQueryErrorCode>
 AggregationFuzzerBase::computeReferenceResults(
     const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& input) {
+    const std::vector<RowVectorPtr>& input,
+    std::unordered_set<std::string>& failedQueries) {
   if (auto sql = referenceQueryRunner_->toSql(plan)) {
     try {
       return std::make_pair(
@@ -415,6 +416,7 @@ AggregationFuzzerBase::computeReferenceResults(
           ReferenceQueryErrorCode::kSuccess);
     } catch (std::exception& e) {
       LOG(WARNING) << "Query failed in the reference DB";
+      failedQueries.insert(sql.value());
       return std::make_pair(
           std::nullopt, ReferenceQueryErrorCode::kReferenceQueryFail);
     }

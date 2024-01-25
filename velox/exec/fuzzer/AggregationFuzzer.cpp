@@ -110,6 +110,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
 
     std::unordered_map<std::string, size_t> verificationSkipped;
     std::unordered_map<std::string, size_t> verificationFailed;
+    std::unordered_set<std::string> failedQueries;
 
     void print(size_t numIterations) const;
   };
@@ -714,7 +715,7 @@ bool AggregationFuzzer::verifyWindow(
 
     if (!customVerification && enableWindowVerification) {
       if (resultOrError.result) {
-        auto referenceResult = computeReferenceResults(plan, input);
+        auto referenceResult = computeReferenceResults(plan, input, stats_.failedQueries);
         updateReferenceQueryStats(referenceResult.second);
         if (auto expectedResult = referenceResult.first) {
           ++stats_.numVerified;
@@ -873,7 +874,13 @@ bool AggregationFuzzer::verifySortedAggregation(
   auto resultOrError = execute(firstPlan);
   if (resultOrError.exceptionPtr) {
     ++stats_.numFailed;
+  }
 
+  auto referenceResult = computeReferenceResults(firstPlan, input, stats_.failedQueries);
+  updateReferenceQueryStats(referenceResult.second);
+  auto expectedResult = referenceResult.first;
+
+  if (!expectedResult) {
     if (auto aggregation =
             dynamic_cast<const core::AggregationNode*>(firstPlan.get())) {
       for(auto& aggregate: aggregation->aggregates()) {
@@ -881,10 +888,6 @@ bool AggregationFuzzer::verifySortedAggregation(
       }
     }
   }
-
-  auto referenceResult = computeReferenceResults(firstPlan, input);
-  updateReferenceQueryStats(referenceResult.second);
-  auto expectedResult = referenceResult.first;
 
   if (expectedResult && resultOrError.result) {
     ++stats_.numVerified;
@@ -1025,7 +1028,7 @@ void AggregationFuzzer::verifyAggregation(
 
   std::optional<MaterializedRowMultiset> expectedResult;
   if (!customVerification) {
-    auto referenceResult = computeReferenceResults(plan, input);
+    auto referenceResult = computeReferenceResults(plan, input, stats_.failedQueries);
     updateReferenceQueryStats(referenceResult.second);
     expectedResult = referenceResult.first;
   }
@@ -1082,6 +1085,11 @@ void AggregationFuzzer::Stats::print(size_t numIterations) const {
   for(auto& entry: verificationFailed) {
     LOG(INFO)<< entry.first << " - " << entry.second;
   }
+
+  LOG(INFO) << "Failed Queries:";
+  for(auto& entry: failedQueries) {
+    LOG(INFO)<< entry;
+  }
 }
 
 bool AggregationFuzzer::compareEquivalentPlanResults(
@@ -1096,13 +1104,6 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
     auto resultOrError = execute(firstPlan);
     if (resultOrError.exceptionPtr) {
       ++stats_.numFailed;
-
-      if (auto aggregation =
-              dynamic_cast<const core::AggregationNode*>(firstPlan.get())) {
-        for(auto& aggregate: aggregation->aggregates()) {
-          ++stats_.verificationFailed[aggregate.call->name()];
-        }
-      }
     }
 
     // TODO Use ResultVerifier::compare API to compare Velox results with
@@ -1111,9 +1112,18 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
     std::optional<MaterializedRowMultiset> expectedResult;
     if (resultOrError.result != nullptr) {
       if (!customVerification) {
-        auto referenceResult = computeReferenceResults(firstPlan, input);
+        auto referenceResult = computeReferenceResults(firstPlan, input, stats_.failedQueries);
         updateReferenceQueryStats(referenceResult.second);
         expectedResult = referenceResult.first;
+
+        if (!expectedResult) {
+          if (auto aggregation =
+                  dynamic_cast<const core::AggregationNode*>(firstPlan.get())) {
+            for(auto& aggregate: aggregation->aggregates()) {
+              ++stats_.verificationFailed[aggregate.call->name()];
+            }
+          }
+        }
       } else {
 
         if (auto aggregation =
