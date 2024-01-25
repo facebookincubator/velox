@@ -25,7 +25,7 @@ namespace facebook::velox::parquet {
 /// ColumnChunkMetaDataPtr is a proxy around pointer to thrift::ColumnChunk.
 class ColumnChunkMetaDataPtr {
  public:
-  ColumnChunkMetaDataPtr(const void* metadata);
+  explicit ColumnChunkMetaDataPtr(const void* metadata);
 
   ~ColumnChunkMetaDataPtr();
 
@@ -40,7 +40,7 @@ class ColumnChunkMetaDataPtr {
 /// RowGroupMetaDataPtr is a proxy around pointer to thrift::RowGroup.
 class RowGroupMetaDataPtr {
  public:
-  RowGroupMetaDataPtr(const void* metadata);
+  explicit RowGroupMetaDataPtr(const void* metadata);
 
   ~RowGroupMetaDataPtr();
 
@@ -70,7 +70,7 @@ class RowGroupMetaDataPtr {
 /// FileMetaData is a proxy around pointer to thrift::FileMetaData.
 class FileMetaDataPtr {
  public:
-  FileMetaDataPtr(const void* metadata);
+  explicit FileMetaDataPtr(const void* metadata);
 
   ~FileMetaDataPtr();
 

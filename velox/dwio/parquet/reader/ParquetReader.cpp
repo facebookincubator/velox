@@ -51,7 +51,7 @@ class ReaderBase {
     return *fileMetaData_;
   }
 
-  const FileMetaDataPtr fileMetaData() const {
+  FileMetaDataPtr fileMetaData() const {
     return FileMetaDataPtr(reinterpret_cast<const void*>(fileMetaData_.get()));
   }
 
@@ -872,7 +872,7 @@ std::unique_ptr<dwio::common::RowReader> ParquetReader::createRowReader(
   return std::make_unique<ParquetRowReader>(readerBase_, options);
 }
 
-FileMetaDataPtr ParquetReader::fileMetaData() {
+FileMetaDataPtr ParquetReader::fileMetaData() const {
   return readerBase_->fileMetaData();
 }
 
