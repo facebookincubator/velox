@@ -15,8 +15,11 @@
 #
 FROM quay.io/centos/centos:stream8
 ARG cpu_target
+ENV CPU_TARGET=$cpu_target
+
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-centos8.sh /
 COPY scripts/setup-adapters.sh /
-RUN mkdir build && ( cd build && CPU_TARGET="$cpu_target" bash /setup-centos8.sh ) && rm -rf build
-RUN mkdir build && ( cd build && CPU_TARGET="$cpu_target" bash /setup-adapters.sh ) && rm -rf build
+RUN mkdir build && ( cd build &&  bash /setup-centos8.sh ) && rm -rf build
+RUN mkdir build && ( cd build &&  source /opt/rh/gcc-toolset-9/enable && \
+    bash /setup-adapters.sh ) && rm -rf build
