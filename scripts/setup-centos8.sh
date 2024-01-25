@@ -55,19 +55,6 @@ function cmake_install {
   ninja -C "$1-build" install
 }
 
-function wget_and_untar {
-  local URL=$1
-  local DIR=$2
-  mkdir -p "${DIR}"
-  pushd "${DIR}"
-  curl -L "${URL}" > $2.tar.gz
-  tar -xz --strip-components=1 -f $2.tar.gz
-  popd
-}
-
-# untar cmake binary release directly to /usr.
-wget_and_untar https://github.com/Kitware/CMake/releases/download/v3.17.5/cmake-3.17.5-Linux-x86_64.tar.gz /usr &
-
 # Fetch sources.
 wget_and_untar https://github.com/gflags/gflags/archive/v2.2.2.tar.gz gflags
 wget_and_untar https://github.com/google/glog/archive/v0.4.0.tar.gz glog
