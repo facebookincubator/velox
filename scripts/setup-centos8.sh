@@ -64,7 +64,6 @@ wget_and_untar https://boostorg.jfrog.io/artifactory/main/release/1.72.0/source/
 wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy
 wget_and_untar https://github.com/fmtlib/fmt/archive/10.1.1.tar.gz fmt
 
-#  wget_and_untar https://github.com/ericniebler/range-v3/archive/0.11.0.tar.gz ranges-v3
 wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protobuf-all-21.4.tar.gz protobuf
 
 FB_OS_VERSION="v2023.12.04.00"
@@ -112,7 +111,6 @@ cmake_install fizz/fizz -DBUILD_TESTS=OFF
 cmake_install wangle/wangle -DBUILD_TESTS=OFF
 cmake_install mvfst -DBUILD_TESTS=OFF
 cmake_install fbthrift -Denable_tests=OFF
-# cmake_install ranges-v3
 
 if $BUILD_DUCKDB ; then
   echo 'Building DuckDB'

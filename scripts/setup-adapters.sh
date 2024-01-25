@@ -23,6 +23,7 @@ SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
+MACHINE=$(uname -m)
 
 function install_aws_deps {
   local AWS_REPO_NAME="aws/aws-sdk-cpp"
@@ -31,12 +32,25 @@ function install_aws_deps {
   github_checkout $AWS_REPO_NAME $AWS_SDK_VERSION --depth 1 --recurse-submodules
   cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
   # Dependencies for S3 testing
+  # We need this specific version of Minio for testing.
   if [[ "$OSTYPE" == linux-gnu* ]]; then
     wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio-20220526054841.0.0.x86_64.rpm
-    rpm -i minio-20220526054841.0.0.x86_64.rpm
+    rpm -i --force minio-20220526054841.0.0.x86_64.rpm
     rm minio-20220526054841.0.0.x86_64.rpm
   fi
- 
+  # minio will have to approved under the Privacy & Security on MacOS on first use.
+  if [[ "$OSTYPE" == darwin* ]]; then
+    if [ "$MACHINE" = "x86_64" ]; then
+      wget https://dl.min.io/server/minio/release/darwin-arm64/archive/minio.RELEASE.2022-05-26T05-48-41Z -O minio
+      chmod +x ./minio
+      sudo mv ./minio /usr/local/bin/
+    fi
+    if [ "$MACHINE" = "arm64" ]; then
+      wget https://dl.min.io/server/minio/release/darwin-arm64/archive/minio.RELEASE.2022-05-26T05-48-41Z -O minio
+      chmod +x ./minio
+      sudo mv ./minio /usr/local/bin/
+    fi
+  fi
 }
 
 function install_gcs-sdk-cpp {
