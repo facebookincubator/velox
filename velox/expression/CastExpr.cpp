@@ -22,6 +22,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/PeeledEncoding.h"
+#include "velox/expression/PrestoCastHooks.h"
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -31,6 +32,117 @@
 #include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox::exec {
+
+std::string_view
+detail::extractDigits(const char* s, size_t start, size_t size) {
+  size_t pos = start;
+  for (; pos < size; ++pos) {
+    if (!std::isdigit(s[pos])) {
+      break;
+    }
+  }
+  return std::string_view(s + start, pos - start);
+}
+
+Status detail::parseDecimalComponents(
+    const char* s,
+    size_t size,
+    detail::DecimalComponents& out) {
+  if (size == 0) {
+    return Status::UserError("Input is empty.");
+  }
+
+  size_t pos = 0;
+
+  // Sign of the number.
+  if (s[pos] == '-') {
+    out.sign = -1;
+    ++pos;
+  } else if (s[pos] == '+') {
+    out.sign = 1;
+    ++pos;
+  }
+
+  // Extract the whole digits.
+  out.wholeDigits = detail::extractDigits(s, pos, size);
+  pos += out.wholeDigits.size();
+  if (pos == size) {
+    return out.wholeDigits.empty()
+        ? Status::UserError("Extracted digits are empty.")
+        : Status::OK();
+  }
+
+  // Optional dot (if given in fractional form).
+  if (s[pos] == '.') {
+    // Extract the fractional digits.
+    ++pos;
+    out.fractionalDigits = detail::extractDigits(s, pos, size);
+    pos += out.fractionalDigits.size();
+  }
+
+  if (out.wholeDigits.empty() && out.fractionalDigits.empty()) {
+    return Status::UserError("Extracted digits are empty.");
+  }
+  if (pos == size) {
+    return Status::OK();
+  }
+  // Optional exponent.
+  if (s[pos] == 'e' || s[pos] == 'E') {
+    ++pos;
+    bool withSign = pos < size && (s[pos] == '+' || s[pos] == '-');
+    if (withSign && pos == size - 1) {
+      return Status::UserError("The exponent part only contains sign.");
+    }
+    // Make sure all chars after sign are digits, as as folly::tryTo allows
+    // leading and trailing whitespaces.
+    for (auto i = (size_t)withSign; i < size - pos; ++i) {
+      if (!std::isdigit(s[pos + i])) {
+        return Status::UserError(
+            "Non-digit character '{}' is not allowed in the exponent part.",
+            s[pos + i]);
+      }
+    }
+    out.exponent = folly::to<int32_t>(folly::StringPiece(s + pos, size - pos));
+    return Status::OK();
+  }
+  return pos == size
+      ? Status::OK()
+      : Status::UserError(
+            "Chars '{}' are invalid.", std::string(s + pos, size - pos));
+}
+
+Status detail::parseHugeInt(
+    const DecimalComponents& decimalComponents,
+    int128_t& out) {
+  // Parse the whole digits.
+  if (decimalComponents.wholeDigits.size() > 0) {
+    const auto tryValue = folly::tryTo<int128_t>(folly::StringPiece(
+        decimalComponents.wholeDigits.data(),
+        decimalComponents.wholeDigits.size()));
+    if (tryValue.hasError()) {
+      return Status::UserError("Value too large.");
+    }
+    out = tryValue.value();
+  }
+
+  // Parse the fractional digits.
+  if (decimalComponents.fractionalDigits.size() > 0) {
+    const auto length = decimalComponents.fractionalDigits.size();
+    bool overflow =
+        __builtin_mul_overflow(out, DecimalUtil::kPowersOfTen[length], &out);
+    if (overflow) {
+      return Status::UserError("Value too large.");
+    }
+    const auto tryValue = folly::tryTo<int128_t>(
+        folly::StringPiece(decimalComponents.fractionalDigits.data(), length));
+    if (tryValue.hasError()) {
+      return Status::UserError("Value too large.");
+    }
+    overflow = __builtin_add_overflow(out, tryValue.value(), &out);
+    VELOX_DCHECK(!overflow);
+  }
+  return Status::OK();
+}
 
 VectorPtr CastExpr::castFromDate(
     const SelectivityVector& rows,
@@ -103,13 +215,10 @@ VectorPtr CastExpr::castToDate(
   switch (fromType->kind()) {
     case TypeKind::VARCHAR: {
       auto* inputVector = input.as<SimpleVector<StringView>>();
-      const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
-      auto isIso8601 = queryConfig.isIso8601();
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         try {
-          auto inputString = inputVector->valueAt(row);
           resultFlatVector->set(
-              row, util::castFromDateString(inputString, isIso8601));
+              row, hooks_->castStringToDate(inputVector->valueAt(row)));
         } catch (const VeloxUserError& ue) {
           VELOX_USER_FAIL(
               makeErrorMessage(input, row, DATE()) + " " + ue.message());
@@ -485,6 +594,10 @@ VectorPtr CastExpr::applyDecimal(
       }
       [[fallthrough]];
     }
+    case TypeKind::VARCHAR:
+      applyVarcharToDecimalCastKernel<toDecimalType>(
+          rows, input, context, toType, castResult);
+      break;
     default:
       VELOX_UNSUPPORTED(
           "Cast from {} to {} is not supported",
@@ -552,7 +665,6 @@ void CastExpr::applyPeeled(
     } else {
       applyCustomCast();
     }
-
   } else if (fromType->isDate()) {
     result = castFromDate(rows, input, context, toType);
   } else if (toType->isDate()) {
@@ -751,14 +863,18 @@ ExprPtr CastCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& config) {
   VELOX_CHECK_EQ(
       compiledChildren.size(),
       1,
-      "CAST statements expect exactly 1 argument, received {}",
+      "CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
   return std::make_shared<CastExpr>(
-      type, std::move(compiledChildren[0]), trackCpuUsage, false);
+      type,
+      std::move(compiledChildren[0]),
+      trackCpuUsage,
+      false,
+      std::make_shared<PrestoCastHooks>(config));
 }
 
 TypePtr TryCastCallToSpecialForm::resolveType(
@@ -770,13 +886,17 @@ ExprPtr TryCastCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& config) {
   VELOX_CHECK_EQ(
       compiledChildren.size(),
       1,
-      "TRY CAST statements expect exactly 1 argument, received {}",
+      "TRY CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
   return std::make_shared<CastExpr>(
-      type, std::move(compiledChildren[0]), trackCpuUsage, true);
+      type,
+      std::move(compiledChildren[0]),
+      trackCpuUsage,
+      true,
+      std::make_shared<PrestoCastHooks>(config));
 }
 } // namespace facebook::velox::exec

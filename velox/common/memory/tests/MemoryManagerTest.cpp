@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
+#include <vector>
 
+#include <gmock/gmock-matchers.h>
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MallocAllocator.h"
@@ -280,6 +283,20 @@ TEST_F(MemoryManagerTest, defaultMemoryManager) {
   ASSERT_EQ(
       managerB.toString(),
       "Memory Manager[capacity UNLIMITED alignment 64B usedBytes 0B number of pools 1\nList of root pools:\n\t__sys_root__\nMemory Allocator[MALLOC capacity UNLIMITED allocated bytes 0 allocated pages 0 mapped pages 0]\nARBIRTATOR[NOOP CAPACITY[UNLIMITED]]]");
+  const std::string detailedManagerStr = managerA.toString(true);
+  ASSERT_THAT(
+      detailedManagerStr,
+      testing::HasSubstr(
+          "Memory Manager[capacity UNLIMITED alignment 64B usedBytes 0B number of pools 1\nList of root pools:\n__sys_root__ usage 0B reserved 0B peak 0B\n"));
+  ASSERT_THAT(
+      detailedManagerStr,
+      testing::HasSubstr("__sys_spilling__ usage 0B reserved 0B peak 0B\n"));
+  for (int i = 0; i < 32; ++i) {
+    ASSERT_THAT(
+        managerA.toString(true),
+        testing::HasSubstr(fmt::format(
+            "default_shared_leaf_pool_{} usage 0B reserved 0B peak 0B\n", i)));
+  }
 }
 
 // TODO: remove this test when remove deprecatedAddDefaultLeafMemoryPool.
@@ -552,8 +569,8 @@ TEST_F(MemoryManagerTest, quotaEnforcement) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    std::vector<bool> contiguousAllocations = {false, true};
-    for (const auto& contiguousAlloc : contiguousAllocations) {
+    const std::vector<bool> contiguousAllocations = {false, true};
+    for (const auto contiguousAlloc : contiguousAllocations) {
       SCOPED_TRACE(fmt::format("contiguousAlloc {}", contiguousAlloc));
       const int alignment = 32;
       MemoryManagerOptions options;

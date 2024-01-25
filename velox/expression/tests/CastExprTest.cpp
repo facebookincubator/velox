@@ -29,20 +29,6 @@
 using namespace facebook::velox;
 namespace facebook::velox::test {
 namespace {
-
-constexpr float kInf = std::numeric_limits<float>::infinity();
-constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
-
-namespace {
-auto createCopy(const VectorPtr& input) {
-  VectorPtr result;
-  SelectivityVector rows(input->size());
-  BaseVector::ensureWritable(rows, input->type(), input->pool(), result);
-  result->copy(input.get(), rows, nullptr);
-  return result;
-}
-} // namespace
-
 class CastExprTest : public functions::test::CastBaseTest {
  protected:
   CastExprTest() {
@@ -55,12 +41,6 @@ class CastExprTest : public functions::test::CastBaseTest {
   void setLegacyCast(bool value) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kLegacyCast, std::to_string(value)},
-    });
-  }
-
-  void setCastIntByTruncate(bool value) {
-    queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kCastToIntByTruncate, std::to_string(value)},
     });
   }
 
@@ -77,89 +57,9 @@ class CastExprTest : public functions::test::CastBaseTest {
     });
   }
 
-  void setCastStringToDateIsIso8601(bool value) {
-    queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kCastStringToDateIsIso8601, std::to_string(value)},
-    });
-  }
-
   std::shared_ptr<core::ConstantTypedExpr> makeConstantNullExpr(TypeKind kind) {
     return std::make_shared<core::ConstantTypedExpr>(
         createType(kind, {}), variant(kind));
-  }
-
-  std::shared_ptr<core::CastTypedExpr> makeCastExpr(
-      const core::TypedExprPtr& input,
-      const TypePtr& toType,
-      bool nullOnFailure) {
-    std::vector<core::TypedExprPtr> inputs = {input};
-    return std::make_shared<core::CastTypedExpr>(toType, inputs, nullOnFailure);
-  }
-
-  void testComplexCast(
-      const std::string& fromExpression,
-      const VectorPtr& data,
-      const VectorPtr& expected,
-      bool nullOnFailure = false) {
-    auto rowVector = makeRowVector({data});
-    auto rowType = asRowType(rowVector->type());
-    auto castExpr = makeCastExpr(
-        makeTypedExpr(fromExpression, rowType),
-        expected->type(),
-        nullOnFailure);
-    exec::ExprSet exprSet({castExpr}, &execCtx_);
-    auto copy = createCopy(data);
-    const auto size = data->size();
-    SelectivityVector rows(size);
-    std::vector<VectorPtr> result(1);
-    {
-      exec::EvalCtx evalCtx(&execCtx_, &exprSet, rowVector.get());
-      exprSet.eval(rows, evalCtx, result);
-
-      assertEqualVectors(expected, result[0]);
-
-      // Make sure the input vector does not change.
-      assertEqualVectors(data, copy);
-    }
-
-    // Test constant input.
-    {
-      // Use last element for constant.
-      const auto index = size - 1;
-      auto constantData = BaseVector::wrapInConstant(size, index, data);
-      auto constantRow = makeRowVector({constantData});
-      auto localCopy = createCopy(constantRow);
-      exec::EvalCtx evalCtx(&execCtx_, &exprSet, constantRow.get());
-      exprSet.eval(rows, evalCtx, result);
-
-      // Make sure the input vector does not change.
-      assertEqualVectors(constantRow, localCopy);
-      assertEqualVectors(data, copy);
-
-      assertEqualVectors(
-          BaseVector::wrapInConstant(size, index, expected), result[0]);
-    }
-
-    // Test dictionary input. It is not sufficient to wrap input in a dictionary
-    // as it will be peeled off before calling "cast". Apply
-    // testing_dictionary function to input to ensure that "cast" receives
-    // dictionary input.
-    {
-      auto dictionaryCastExpr = makeCastExpr(
-          makeTypedExpr(
-              fmt::format("testing_dictionary({})", fromExpression), rowType),
-          expected->type(),
-          nullOnFailure);
-      exec::ExprSet dictionaryExprSet({dictionaryCastExpr}, &execCtx_);
-      exec::EvalCtx evalCtx(&execCtx_, &dictionaryExprSet, rowVector.get());
-      dictionaryExprSet.eval(rows, evalCtx, result);
-
-      // Make sure the input vector does not change.
-      assertEqualVectors(data, copy);
-
-      auto indices = functions::test::makeIndicesInReverse(size, pool());
-      assertEqualVectors(wrapInDictionary(indices, size, expected), result[0]);
-    }
   }
 
   template <typename T>
@@ -280,7 +180,6 @@ class CastExprTest : public functions::test::CastBaseTest {
 
   template <typename T>
   void testDecimalToIntegralCasts() {
-    setCastIntByTruncate(false);
     auto shortFlat = makeNullableFlatVector<int64_t>(
         {-300,
          -260,
@@ -338,41 +237,6 @@ class CastExprTest : public functions::test::CastBaseTest {
              55,
              55 /* 55.49 rounds to 55*/,
              56 /* 55.99 rounds to 56*/,
-             69,
-             72,
-             std::nullopt}));
-
-    setCastIntByTruncate(true);
-    testComplexCast(
-        "c0",
-        shortFlat,
-        makeNullableFlatVector<T>(
-            {-3,
-             -2 /*-2.6 truncated to -2*/,
-             -2 /*-2.3 truncated to -2*/,
-             -2,
-             -1,
-             0,
-             55,
-             57 /*57.49 truncated to 57*/,
-             57 /*57.55 truncated to 57*/,
-             69,
-             72,
-             std::nullopt}));
-
-    testComplexCast(
-        "c0",
-        longFlat,
-        makeNullableFlatVector<T>(
-            {-3,
-             -2 /*-2.55 truncated to -2*/,
-             -2 /*-2.45 truncated to -2*/,
-             -2,
-             -1,
-             0,
-             55,
-             55 /* 55.49 truncated to 55*/,
-             55 /* 55.99 truncated to 55*/,
              69,
              72,
              std::nullopt}));
@@ -695,9 +559,6 @@ TEST_F(CastExprTest, stringToTimestamp) {
       std::nullopt,
   };
   testCast<std::string, Timestamp>("timestamp", input, expected);
-
-  setCastIntByTruncate(true);
-  testCast<std::string, Timestamp>("timestamp", input, expected);
 }
 
 TEST_F(CastExprTest, timestampToString) {
@@ -873,115 +734,89 @@ TEST_F(CastExprTest, timestampAdjustToTimezoneInvalid) {
 }
 
 TEST_F(CastExprTest, date) {
-  for (bool isIso8601 : {true, false}) {
-    setCastStringToDateIsIso8601(isIso8601);
-    testCast<std::string, int32_t>(
-        "date",
-        {"1970-01-01",
-         "2020-01-01",
-         "2135-11-09",
-         "1969-12-27",
-         "1812-04-15",
-         "1920-01-02",
-         "12345-12-18",
-         "1970-1-2",
-         "1970-01-2",
-         "1970-1-02",
-         "+1970-01-02",
-         "-1-1-1",
-         " 1970-01-01",
-         std::nullopt},
-        {0,
-         18262,
-         60577,
-         -5,
-         -57604,
-         -18262,
-         3789742,
-         1,
-         1,
-         1,
-         1,
-         -719893,
-         0,
-         std::nullopt},
-        VARCHAR(),
-        DATE());
-  }
-
-  setCastStringToDateIsIso8601(false);
   testCast<std::string, int32_t>(
       "date",
-      {"12345",
-       "2015",
-       "2015-03",
-       "2015-03-18T",
-       "2015-03-18T123123",
-       "2015-03-18 123142",
-       "2015-03-18 (BC)"},
-      {3789391, 16436, 16495, 16512, 16512, 16512, 16512},
+      {"1970-01-01",
+       "2020-01-01",
+       "2135-11-09",
+       "1969-12-27",
+       "1812-04-15",
+       "1920-01-02",
+       "12345-12-18",
+       "1970-1-2",
+       "1970-01-2",
+       "1970-1-02",
+       "+1970-01-02",
+       "-1-1-1",
+       " 1970-01-01",
+       std::nullopt},
+      {0,
+       18262,
+       60577,
+       -5,
+       -57604,
+       -18262,
+       3789742,
+       1,
+       1,
+       1,
+       1,
+       -719893,
+       0,
+       std::nullopt},
       VARCHAR(),
       DATE());
 }
 
 TEST_F(CastExprTest, invalidDate) {
-  for (bool isIso8601 : {true, false}) {
-    setCastStringToDateIsIso8601(isIso8601);
+  testInvalidCast<int8_t>(
+      "date", {12}, "Cast from TINYINT to DATE is not supported", TINYINT());
+  testInvalidCast<int16_t>(
+      "date",
+      {1234},
+      "Cast from SMALLINT to DATE is not supported",
+      SMALLINT());
+  testInvalidCast<int32_t>(
+      "date", {1234}, "Cast from INTEGER to DATE is not supported", INTEGER());
+  testInvalidCast<int64_t>(
+      "date", {1234}, "Cast from BIGINT to DATE is not supported", BIGINT());
 
-    testInvalidCast<int8_t>(
-        "date", {12}, "Cast from TINYINT to DATE is not supported", TINYINT());
-    testInvalidCast<int16_t>(
-        "date",
-        {1234},
-        "Cast from SMALLINT to DATE is not supported",
-        SMALLINT());
-    testInvalidCast<int32_t>(
-        "date",
-        {1234},
-        "Cast from INTEGER to DATE is not supported",
-        INTEGER());
-    testInvalidCast<int64_t>(
-        "date", {1234}, "Cast from BIGINT to DATE is not supported", BIGINT());
+  testInvalidCast<float>(
+      "date", {12.99}, "Cast from REAL to DATE is not supported", REAL());
+  testInvalidCast<double>(
+      "date", {12.99}, "Cast from DOUBLE to DATE is not supported", DOUBLE());
 
-    testInvalidCast<float>(
-        "date", {12.99}, "Cast from REAL to DATE is not supported", REAL());
-    testInvalidCast<double>(
-        "date", {12.99}, "Cast from DOUBLE to DATE is not supported", DOUBLE());
-
-    // Parsing ill-formated dates.
-    testInvalidCast<std::string>(
-        "date",
-        {"2012-Oct-23"},
-        "Unable to parse date value: \"2012-Oct-23\"",
-        VARCHAR());
-    testInvalidCast<std::string>(
-        "date",
-        {"2015-03-18X"},
-        "Unable to parse date value: \"2015-03-18X\"",
-        VARCHAR());
-    testInvalidCast<std::string>(
-        "date",
-        {"2015/03/18"},
-        "Unable to parse date value: \"2015/03/18\"",
-        VARCHAR());
-    testInvalidCast<std::string>(
-        "date",
-        {"2015.03.18"},
-        "Unable to parse date value: \"2015.03.18\"",
-        VARCHAR());
-    testInvalidCast<std::string>(
-        "date",
-        {"20150318"},
-        "Unable to parse date value: \"20150318\"",
-        VARCHAR());
-    testInvalidCast<std::string>(
-        "date",
-        {"2015-031-8"},
-        "Unable to parse date value: \"2015-031-8\"",
-        VARCHAR());
-  }
-
-  setCastStringToDateIsIso8601(true);
+  // Parsing ill-formated dates.
+  testInvalidCast<std::string>(
+      "date",
+      {"2012-Oct-23"},
+      "Unable to parse date value: \"2012-Oct-23\"",
+      VARCHAR());
+  testInvalidCast<std::string>(
+      "date",
+      {"2015-03-18X"},
+      "Unable to parse date value: \"2015-03-18X\"",
+      VARCHAR());
+  testInvalidCast<std::string>(
+      "date",
+      {"2015/03/18"},
+      "Unable to parse date value: \"2015/03/18\"",
+      VARCHAR());
+  testInvalidCast<std::string>(
+      "date",
+      {"2015.03.18"},
+      "Unable to parse date value: \"2015.03.18\"",
+      VARCHAR());
+  testInvalidCast<std::string>(
+      "date",
+      {"20150318"},
+      "Unable to parse date value: \"20150318\"",
+      VARCHAR());
+  testInvalidCast<std::string>(
+      "date",
+      {"2015-031-8"},
+      "Unable to parse date value: \"2015-031-8\"",
+      VARCHAR());
   testInvalidCast<std::string>(
       "date", {"12345"}, "Unable to parse date value: \"12345\"", VARCHAR());
   testInvalidCast<std::string>(
@@ -1022,7 +857,6 @@ TEST_F(CastExprTest, invalidDate) {
 }
 
 TEST_F(CastExprTest, primitiveInvalidCornerCases) {
-  setCastIntByTruncate(false);
   // To integer.
   {
     // Overflow.
@@ -1132,67 +966,9 @@ TEST_F(CastExprTest, primitiveInvalidCornerCases) {
         {"tru"},
         "Non-whitespace character found after end of conversion");
   }
-
-  setCastIntByTruncate(true);
-  // To integer.
-  {
-    // Invalid strings.
-    testInvalidCast<std::string>(
-        "tinyint", {"1234567"}, "Value is too large for type");
-    testInvalidCast<std::string>(
-        "tinyint", {"1a"}, "Encountered a non-digit character");
-    testInvalidCast<std::string>("tinyint", {""}, "Empty string");
-    testInvalidCast<std::string>(
-        "integer", {"1'234'567"}, "Encountered a non-digit character");
-    testInvalidCast<std::string>(
-        "integer", {"1,234,567"}, "Encountered a non-digit character");
-    testInvalidCast<std::string>(
-        "bigint", {"infinity"}, "Encountered a non-digit character");
-    testInvalidCast<std::string>(
-        "bigint", {"nan"}, "Encountered a non-digit character");
-  }
-
-  // To floating-point.
-  {
-    // Invalid strings.
-    testInvalidCast<std::string>(
-        "real",
-        {"1.2a"},
-        "Non-whitespace character found after end of conversion");
-    testInvalidCast<std::string>(
-        "real",
-        {"1.2.3"},
-        "Non-whitespace character found after end of conversion");
-  }
-
-  // To boolean.
-  {
-    testInvalidCast<std::string>(
-        "boolean",
-        {"1.7E308"},
-        "Non-whitespace character found after end of conversion");
-    testInvalidCast<std::string>(
-        "boolean",
-        {"nan"},
-        "Non-whitespace character found after end of conversion");
-    testInvalidCast<std::string>(
-        "boolean", {"infinity"}, "Invalid value for bool");
-    testInvalidCast<std::string>(
-        "boolean", {"12"}, "Integer overflow when parsing bool");
-    testInvalidCast<std::string>("boolean", {"-1"}, "Invalid value for bool");
-    testInvalidCast<std::string>(
-        "boolean",
-        {"tr"},
-        "Non-whitespace character found after end of conversion");
-    testInvalidCast<std::string>(
-        "boolean",
-        {"tru"},
-        "Non-whitespace character found after end of conversion");
-  }
 }
 
 TEST_F(CastExprTest, primitiveValidCornerCases) {
-  setCastIntByTruncate(false);
   // To integer.
   {
     testCast<double, int8_t>("tinyint", {127.1}, {127});
@@ -1242,111 +1018,13 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<float, std::string>("varchar", {kInf}, {"Infinity"});
     testCast<float, std::string>("varchar", {kNan}, {"NaN"});
   }
-
-  setCastIntByTruncate(true);
-  // To integer.
-  {
-    // Valid strings.
-    testCast<std::string, int8_t>("tinyint", {"1.2"}, {1});
-    testCast<std::string, int8_t>("tinyint", {"1.23444"}, {1});
-    testCast<std::string, int8_t>("tinyint", {".2355"}, {0});
-    testCast<std::string, int8_t>("tinyint", {"-1.8"}, {-1});
-    testCast<std::string, int8_t>("tinyint", {"+1"}, {1});
-    testCast<std::string, int8_t>("tinyint", {"1."}, {1});
-    testCast<std::string, int8_t>("tinyint", {"-1"}, {-1});
-    testCast<std::string, int8_t>("tinyint", {"-1."}, {-1});
-    testCast<std::string, int8_t>("tinyint", {"0."}, {0});
-    testCast<std::string, int8_t>("tinyint", {"."}, {0});
-    testCast<std::string, int8_t>("tinyint", {"-."}, {0});
-
-    testCast<int32_t, int8_t>("tinyint", {1234567}, {-121});
-    testCast<int32_t, int8_t>("tinyint", {-1234567}, {121});
-    testCast<double, int8_t>("tinyint", {12345.67}, {57});
-    testCast<double, int8_t>("tinyint", {-12345.67}, {-57});
-    testCast<double, int8_t>("tinyint", {127.1}, {127});
-    testCast<float, int64_t>("bigint", {kInf}, {9223372036854775807});
-    testCast<float, int64_t>("bigint", {kNan}, {0});
-    testCast<float, int32_t>("integer", {kNan}, {0});
-    testCast<float, int16_t>("smallint", {kNan}, {0});
-    testCast<float, int8_t>("tinyint", {kNan}, {0});
-
-    testCast<double, int64_t>("bigint", {12345.12}, {12345});
-    testCast<double, int64_t>("bigint", {12345.67}, {12345});
-  }
-
-  // To floating-point.
-  {
-    testCast<double, float>("real", {1.7E308}, {kInf});
-
-    testCast<std::string, float>("real", {"1.7E308"}, {kInf});
-    testCast<std::string, float>("real", {"1."}, {1.0});
-    testCast<std::string, float>("real", {"1"}, {1});
-    testCast<std::string, float>("real", {"infinity"}, {kInf});
-    testCast<std::string, float>("real", {"-infinity"}, {-kInf});
-    testCast<std::string, float>("real", {"nan"}, {kNan});
-    testCast<std::string, float>("real", {"InfiNiTy"}, {kInf});
-    testCast<std::string, float>("real", {"-InfiNiTy"}, {-kInf});
-    testCast<std::string, float>("real", {"nAn"}, {kNan});
-  }
-
-  // To boolean.
-  {
-    testCast<int8_t, bool>("boolean", {1}, {true});
-    testCast<int8_t, bool>("boolean", {0}, {false});
-    testCast<int8_t, bool>("boolean", {12}, {true});
-    testCast<int8_t, bool>("boolean", {-1}, {true});
-    testCast<double, bool>("boolean", {1.0}, {true});
-    testCast<double, bool>("boolean", {1.1}, {true});
-    testCast<double, bool>("boolean", {0.1}, {true});
-    testCast<double, bool>("boolean", {-0.1}, {true});
-    testCast<double, bool>("boolean", {-1.0}, {true});
-    testCast<float, bool>("boolean", {kNan}, {false});
-    testCast<float, bool>("boolean", {kInf}, {true});
-    testCast<double, bool>("boolean", {0.0000000000001}, {true});
-
-    testCast<std::string, bool>("boolean", {"1"}, {true});
-    testCast<std::string, bool>("boolean", {"0"}, {false});
-    testCast<std::string, bool>("boolean", {"t"}, {true});
-    testCast<std::string, bool>("boolean", {"true"}, {true});
-  }
-
-  // To string.
-  {
-    testCast<float, std::string>("varchar", {kInf}, {"Infinity"});
-    testCast<float, std::string>("varchar", {kNan}, {"NaN"});
-  }
 }
 
 TEST_F(CastExprTest, truncateVsRound) {
-  // Testing truncate vs round cast from double to int.
-  setCastIntByTruncate(true);
-  testCast<double, int>(
-      "int", {1.888, 2.5, 3.6, 100.44, -100.101}, {1, 2, 3, 100, -100});
-  testCast<double, int8_t>(
-      "tinyint",
-      {1,
-       256,
-       257,
-       2147483646,
-       2147483647,
-       2147483648,
-       -2147483646,
-       -2147483647,
-       -2147483648,
-       -2147483649},
-      {1, 0, 1, -2, -1, -1, 2, 1, 0, 0});
-
-  setCastIntByTruncate(false);
+  // Testing round cast from double to int.
   testCast<double, int>(
       "int", {1.888, 2.5, 3.6, 100.44, -100.101}, {2, 3, 4, 100, -100});
-
   testCast<int8_t, int32_t>("int", {111, 2, 3, 10, -10}, {111, 2, 3, 10, -10});
-
-  setCastIntByTruncate(true);
-  testCast<int32_t, int8_t>(
-      "tinyint", {1111111, 2, 3, 1000, -100101}, {71, 2, 3, -24, -5});
-
-  setCastIntByTruncate(false);
   testCast<int32_t, int8_t>("tinyint", {2, 3}, {2, 3});
   testInvalidCast<int32_t>(
       "tinyint",
@@ -1376,51 +1054,6 @@ TEST_F(CastExprTest, errorHandling) {
       "tinyint",
       {"1abc", "2", "3", "100", std::nullopt},
       {std::nullopt, 2, 3, 100, std::nullopt});
-
-  setCastIntByTruncate(true);
-  testTryCast<std::string, int8_t>(
-      "tinyint",
-      {"-",
-       "-0",
-       " @w 123",
-       "123 ",
-       "  122",
-       "",
-       "-12-3",
-       "1234",
-       "-129",
-       "1.1.1",
-       "1..",
-       "1.abc",
-       "..",
-       "-..",
-       "125.5",
-       "127",
-       "-128"},
-      {std::nullopt,
-       0,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       125,
-       127,
-       -128});
-
-  testTryCast<double, int>(
-      "integer",
-      {1e12, 2.5, 3.6, 100.44, -100.101},
-      {std::numeric_limits<int32_t>::max(), 2, 3, 100, -100});
-
-  setCastIntByTruncate(false);
   testCast<double, int>(
       "int", {1.888, 2.5, 3.6, 100.44, -100.101}, {2, 3, 4, 100, -100});
 
@@ -2057,6 +1690,258 @@ TEST_F(CastExprTest, boolToDecimal) {
            10'000'000'000,
            0},
           DECIMAL(20, 10)));
+}
+
+TEST_F(CastExprTest, varcharToDecimal) {
+  testComplexCast(
+      "c0",
+      makeFlatVector<StringView>(
+          {"9999999999.99",
+           "15",
+           "1.5",
+           "-1.5",
+           "1.556",
+           "1.554",
+           ("1.556" + std::string(32, '1')).data(),
+           ("1.556" + std::string(32, '9')).data(),
+           "0000.123",
+           ".12300000000",
+           "+09",
+           "9.",
+           ".9",
+           "3E2",
+           "-3E+2",
+           "3E+2",
+           "3E+00002",
+           "3E-2",
+           "3e+2",
+           "3e-2",
+           "3.5E-2",
+           "3.4E-2",
+           "3.5E+2",
+           "3.4E+2",
+           "31.423e+2",
+           "31.423e-2",
+           "31.523e-2",
+           "-3E-00000"}),
+      makeFlatVector<int64_t>(
+          {999'999'999'999,
+           1500,
+           150,
+           -150,
+           156,
+           155,
+           156,
+           156,
+           12,
+           12,
+           900,
+           900,
+           90,
+           30000,
+           -30000,
+           30000,
+           30000,
+           3,
+           30000,
+           3,
+           4,
+           3,
+           35000,
+           34000,
+           314230,
+           31,
+           32,
+           -300},
+          DECIMAL(12, 2)));
+
+  // Truncates the fractional digits with exponent.
+  testComplexCast(
+      "c0",
+      makeFlatVector<StringView>(
+          {"112345612.23e-6",
+           "112345662.23e-6",
+           "1.23e-6",
+           "1.23e-3",
+           "1.26e-3",
+           "1.23456781e3",
+           "1.23456789e3",
+           "1.23456789123451789123456789e9",
+           "1.23456789123456789123456789e9"}),
+      makeFlatVector<int128_t>(
+          {1123456,
+           1123457,
+           0,
+           12,
+           13,
+           12345678,
+           12345679,
+           12345678912345,
+           12345678912346},
+          DECIMAL(20, 4)));
+
+  const auto minDecimalStr = '-' + std::string(36, '9') + '.' + "99";
+  const auto maxDecimalStr = std::string(36, '9') + '.' + "99";
+  testComplexCast(
+      "c0",
+      makeFlatVector<StringView>(
+          {StringView(minDecimalStr),
+           StringView(maxDecimalStr),
+           "123456789012345678901234.567"}),
+      makeFlatVector<int128_t>(
+          {
+              DecimalUtil::kLongDecimalMin,
+              DecimalUtil::kLongDecimalMax,
+              HugeInt::build(
+                  669260, 10962463713375599297U), // 12345678901234567890123457
+          },
+          DECIMAL(38, 2)));
+
+  const std::string fractionLarge = "1.9" + std::string(67, '9');
+  const std::string fractionLargeExp = "1.9" + std::string(67, '9') + "e2";
+  const std::string fractionLargeNegExp =
+      "1000.9" + std::string(67, '9') + "e-2";
+  testComplexCast(
+      "c0",
+      makeFlatVector<StringView>(
+          {StringView(('-' + std::string(38, '9')).data()),
+           StringView(std::string(38, '9').data()),
+           StringView(fractionLarge),
+           StringView(fractionLargeExp),
+           StringView(fractionLargeNegExp)}),
+      makeFlatVector<int128_t>(
+          {DecimalUtil::kLongDecimalMin,
+           DecimalUtil::kLongDecimalMax,
+           2,
+           200,
+           10},
+          DECIMAL(38, 0)));
+
+  const std::string fractionRoundDown = "0." + std::string(38, '9') + "2";
+  const std::string fractionRoundDownExp =
+      "99." + std::string(36, '9') + "2e-2";
+  testComplexCast(
+      "c0",
+      makeFlatVector<StringView>(
+          {StringView(fractionRoundDown), StringView(fractionRoundDownExp)}),
+      makeConstant<int128_t>(DecimalUtil::kLongDecimalMax, 2, DECIMAL(38, 38)));
+
+  // Overflows when parsing whole digits.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {std::string(280, '9')},
+      fmt::format(
+          "Cannot cast VARCHAR '{}' to DECIMAL(38, 0). Value too large.",
+          std::string(280, '9')));
+
+  // Overflows when parsing fractional digits.
+  const std::string fractionOverflow = std::string(36, '9') + '.' + "23456";
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 10),
+      {fractionOverflow},
+      fmt::format(
+          "Cannot cast VARCHAR '{}' to DECIMAL(38, 10). Value too large.",
+          fractionOverflow));
+
+  const std::string fractionRoundUp = "0." + std::string(38, '9') + "6";
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 38),
+      {fractionRoundUp},
+      fmt::format(
+          "Cannot cast VARCHAR '{}' to DECIMAL(38, 38). Value too large.",
+          fractionRoundUp));
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"0.0444a"},
+      "Cannot cast VARCHAR '0.0444a' to DECIMAL(38, 0). Value is not a number. Chars 'a' are invalid.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {""},
+      "Cannot cast VARCHAR '' to DECIMAL(38, 0). Value is not a number. Input is empty.");
+
+  // Exponent > LongDecimalType::kMaxPrecision.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"1.23e67"},
+      "Cannot cast VARCHAR '1.23e67' to DECIMAL(38, 0). Value too large.");
+
+  // Forcing the scale to be zero overflows.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"20908.23e35"},
+      "Cannot cast VARCHAR '20908.23e35' to DECIMAL(38, 0). Value too large.");
+
+  // Rescale overflows.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 38),
+      {"111111111111111111.23"},
+      "Cannot cast VARCHAR '111111111111111111.23' to DECIMAL(38, 38). Value too large.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"23e-5d"},
+      "Cannot cast VARCHAR '23e-5d' to DECIMAL(38, 0). Value is not a number. Non-digit character 'd' is not allowed in the exponent part.");
+
+  // Whitespaces.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"1. 23"},
+      "Cannot cast VARCHAR '1. 23' to DECIMAL(38, 0). Value is not a number. Chars ' 23' are invalid.");
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+ 2"},
+      "Cannot cast VARCHAR '-3E+ 2' to DECIMAL(12, 2). Value is not a number. Non-digit character ' ' is not allowed in the exponent part.");
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"1.23 "},
+      "Cannot cast VARCHAR '1.23 ' to DECIMAL(38, 0). Value is not a number. Chars ' ' are invalid.");
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+2 "},
+      "Cannot cast VARCHAR '-3E+2 ' to DECIMAL(12, 2). Value is not a number. Non-digit character ' ' is not allowed in the exponent part.");
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {" 1.23"},
+      "Cannot cast VARCHAR ' 1.23' to DECIMAL(38, 0). Value is not a number. Extracted digits are empty.");
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {" -3E+2"},
+      "Cannot cast VARCHAR ' -3E+2' to DECIMAL(12, 2). Value is not a number. Extracted digits are empty.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+2.1"},
+      "Cannot cast VARCHAR '-3E+2.1' to DECIMAL(12, 2). Value is not a number. Non-digit character '.' is not allowed in the exponent part.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+"},
+      "Cannot cast VARCHAR '-3E+' to DECIMAL(12, 2). Value is not a number. The exponent part only contains sign.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E-"},
+      "Cannot cast VARCHAR '-3E-' to DECIMAL(12, 2). Value is not a number. The exponent part only contains sign.");
 }
 
 TEST_F(CastExprTest, castInTry) {

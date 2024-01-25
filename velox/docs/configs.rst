@@ -97,10 +97,10 @@ Generic Configuration
      - The maximum size in bytes for the task's buffered output when output is partitioned using hash of partitioning keys. See PartitionedOutputNode::Kind::kPartitioned.
        The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
-   * - max_arbitrary_buffer_size
+   * - max_output_buffer_size
      - integer
      - 32MB
-     - The maximum size in bytes for the task's buffered output when output is distributed randomly among consumers. See PartitionedOutputNode::Kind::kArbitrary.
+     - The maximum size in bytes for the task's buffered output.
        The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
    * - min_table_rows_for_parallel_join_build
@@ -160,25 +160,6 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
-   * - cast_to_int_by_truncate
-     - bool
-     - false
-     - This flags forces the cast from float/double/decimal/string to integer to be performed by truncating the decimal part instead of rounding.
-   * - cast_string_to_date_is_iso_8601
-     - bool
-     - true
-     - If set, cast from string to date allows only ISO 8601 formatted strings: ``[+-](YYYY-MM-DD)``.
-       Otherwise, allows all patterns supported by Spark:
-         * ``[+-]yyyy*``
-         * ``[+-]yyyy*-[m]m``
-         * ``[+-]yyyy*-[m]m-[d]d``
-         * ``[+-]yyyy*-[m]m-[d]d *``
-         * ``[+-]yyyy*-[m]m-[d]dT*``
-       The asterisk ``*`` in ``yyyy*`` stands for any numbers.
-       For the last two patterns, the trailing ``*`` can represent none or any sequence of characters, e.g:
-         * "1970-01-01 123"
-         * "1970-01-01 (BC)"
-       Regardless of this setting's value, leading spaces will be trimmed.
 
 Memory Management
 -----------------
@@ -438,6 +419,11 @@ Each query can override the config by setting corresponding query session proper
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
        the input column name and filter is also lower case to achive case-insensitive read.
+   * - partition-path-as-lower-case
+     -
+     - bool
+     - true
+     - If true, the partition directory will be converted to lowercase when executing a table write operation.
    * - max-coalesced-bytes
      -
      - integer
@@ -510,7 +496,7 @@ Each query can override the config by setting corresponding query session proper
      - Description
    * - hive.s3.use-instance-credentials
      - bool
-     - true
+     - false
      - Use the EC2 metadata service to retrieve API credentials. This works with IAM roles in EC2.
    * - hive.s3.aws-access-key
      - string

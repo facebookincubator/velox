@@ -108,9 +108,10 @@ void validateTimePoint(const std::chrono::time_point<
 } // namespace
 
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
-Timestamp::toTimePoint() const {
+Timestamp::toTimePoint(bool allowOverflow) const {
   using namespace std::chrono;
-  auto tp = time_point<system_clock, milliseconds>(milliseconds(toMillis()));
+  auto tp = time_point<system_clock, milliseconds>(
+      milliseconds(allowOverflow ? toMillisAllowOverflow() : toMillis()));
   validateTimePoint(tp);
   return tp;
 }
@@ -131,6 +132,20 @@ void Timestamp::toTimezone(int16_t tzID) {
     // Other ids go this path.
     toTimezone(*date::locate_zone(util::getTimeZoneName(tzID)));
   }
+}
+
+const date::time_zone& Timestamp::defaultTimezone() {
+  static const date::time_zone* kDefault = ({
+    // TODO: We are hard-coding PST/PDT here to be aligned with the current
+    // behavior in DWRF reader/writer.  Once they are fixed, we can use
+    // date::current_zone() here.
+    //
+    // See https://github.com/facebookincubator/velox/issues/8127
+    auto* tz = date::locate_zone("America/Los_Angeles");
+    VELOX_CHECK_NOT_NULL(tz);
+    tz;
+  });
+  return *kDefault;
 }
 
 namespace {

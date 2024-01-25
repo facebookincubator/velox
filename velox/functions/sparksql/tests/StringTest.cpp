@@ -219,6 +219,12 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<std::string>(
         "replace(c0, c1, c2)", str, replaced, replacement);
   }
+
+  std::optional<int32_t> findInSet(
+      std::optional<std::string> str,
+      std::optional<std::string> strArray) {
+    return evaluateOnce<int32_t>("find_in_set(c0, c1)", str, strArray);
+  }
 };
 
 TEST_F(StringTest, Ascii) {
@@ -753,6 +759,18 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv("-10", 16, -10), "-16");
 
   // Overflow case.
+  EXPECT_EQ(
+      conv("-9223372036854775809", 10, -2),
+      "-111111111111111111111111111111111111111111111111111111111111111");
+  EXPECT_EQ(
+      conv("-9223372036854775808", 10, -2),
+      "-1000000000000000000000000000000000000000000000000000000000000000");
+  EXPECT_EQ(
+      conv("9223372036854775808", 10, -2),
+      "-1000000000000000000000000000000000000000000000000000000000000000");
+  EXPECT_EQ(
+      conv("8000000000000000", 16, -2),
+      "-1000000000000000000000000000000000000000000000000000000000000000");
   EXPECT_EQ(conv("-1", 10, 16), "FFFFFFFFFFFFFFFF");
   EXPECT_EQ(conv("FFFFFFFFFFFFFFFF", 16, -10), "-1");
   EXPECT_EQ(conv("-FFFFFFFFFFFFFFFF", 16, -10), "-1");
@@ -800,6 +818,37 @@ TEST_F(StringTest, replace) {
   EXPECT_EQ(
       replace("123\u6570\u6570\u636E", "\u6570\u636E", "data"),
       "123\u6570data");
+}
+
+TEST_F(StringTest, findInSet) {
+  EXPECT_EQ(findInSet("ab", "abc,b,ab,c,def"), 3);
+  EXPECT_EQ(findInSet("abc", "abc,b,ab,c,def"), 1);
+  EXPECT_EQ(findInSet("ab,", "abc,b,ab,c,def"), 0);
+  EXPECT_EQ(findInSet("ab", "abc,b,ab,ab,ab"), 3);
+  EXPECT_EQ(findInSet("abc", "abc,abc,abc,abc,abc"), 1);
+  EXPECT_EQ(findInSet("c", "abc,b,ab,c,def"), 4);
+  EXPECT_EQ(findInSet("dfg", "abc,b,ab,c,def"), 0);
+  EXPECT_EQ(findInSet("dfg", "dfgdsiaq"), 0);
+  EXPECT_EQ(findInSet("dfg", "dfgdsiaq, dshadad"), 0);
+  EXPECT_EQ(findInSet("", ""), 1);
+  EXPECT_EQ(findInSet("", "123"), 0);
+  EXPECT_EQ(findInSet("123", ""), 0);
+  EXPECT_EQ(findInSet("", "123,"), 2);
+  EXPECT_EQ(findInSet("", ",123"), 1);
+  EXPECT_EQ(findInSet("dfg", std::nullopt), std::nullopt);
+  EXPECT_EQ(findInSet(std::nullopt, "abc"), std::nullopt);
+  EXPECT_EQ(findInSet(std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(findInSet("\u0061\u0062", "abc,b,ab,c,def"), 3);
+  EXPECT_EQ(findInSet("\u0063", "abc,b,ab,c,def"), 4);
+  EXPECT_EQ(findInSet("", "\u002c\u0031\u0032\u0033"), 1);
+  EXPECT_EQ(findInSet("123", "\u002c\u0031\u0032\u0033"), 2);
+  EXPECT_EQ(findInSet("😊", "🌍,😊"), 2);
+  EXPECT_EQ(findInSet("😊", "😊,123"), 1);
+  EXPECT_EQ(findInSet("abåæçè", ",abåæçè"), 2);
+  EXPECT_EQ(findInSet("abåæçè", "abåæçè,"), 1);
+  EXPECT_EQ(findInSet("\u0061\u0062\u00e5\u00e6\u00e7\u00e8", ",abåæçè"), 2);
+  EXPECT_EQ(
+      findInSet("abåæçè", "\u002c\u0061\u0062\u00e5\u00e6\u00e7\u00e8"), 2);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

@@ -458,6 +458,11 @@ class Operator : public BaseRuntimeStatWriter {
 
   virtual std::string toString() const;
 
+  /// Used in debug ednpoints.
+  virtual std::string toJsonString() const {
+    return toString();
+  }
+
   velox::memory::MemoryPool* pool() const {
     return operatorCtx_->pool();
   }
@@ -761,3 +766,12 @@ class SourceOperator : public Operator {
   }
 };
 } // namespace facebook::velox::exec
+
+template <>
+struct fmt::formatter<std::thread::id> : formatter<std::string> {
+  auto format(std::thread::id s, format_context& ctx) {
+    std::ostringstream oss;
+    oss << s;
+    return formatter<std::string>::format(oss.str(), ctx);
+  }
+};

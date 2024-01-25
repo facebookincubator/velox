@@ -53,17 +53,28 @@ TableScan::TableScan(
   connector_ = connector::getConnector(tableHandle_->connectorId());
 }
 
+std::string TableScan::toJsonString() const {
+  auto ret = SourceOperator::toJsonString();
+  ret += ", status: ";
+  ret += curStatus_;
+  return ret;
+}
+
 RowVectorPtr TableScan::getOutput() {
+  auto exitCurStatusGuard = folly::makeGuard([this]() { curStatus_ = ""; });
+
   if (noMoreSplits_) {
     return nullptr;
   }
 
+  curStatus_ = "getOutput: enter";
   const auto startTimeMs = getCurrentTimeMs();
   for (;;) {
     if (needNewSplit_) {
       // Check if our Task needs us to yield or we've been running for too long
       // w/o producing a result. In this case we return with the Yield blocking
       // reason and an already fulfilled future.
+      curStatus_ = "getOutput: task->shouldStop";
       if (this->driverCtx_->task->shouldStop() != StopReason::kNone or
           (getOutputTimeLimitMs_ != 0 and
            (getCurrentTimeMs() - startTimeMs) >= getOutputTimeLimitMs_)) {
@@ -79,6 +90,7 @@ RowVectorPtr TableScan::getOutput() {
       TestValue::adjust("facebook::velox::exec::TableScan::getOutput", this);
 
       exec::Split split;
+      curStatus_ = "getOutput: task->getSplitOrFuture";
       blockingReason_ = driverCtx_->task->getSplitOrFuture(
           driverCtx_->splitGroupId,
           planNodeId(),
@@ -92,7 +104,9 @@ RowVectorPtr TableScan::getOutput() {
 
       if (!split.hasConnectorSplit()) {
         noMoreSplits_ = true;
+        pendingDynamicFilters_.clear();
         if (dataSource_) {
+          curStatus_ = "getOutput: noMoreSplits_=1, updating stats_";
           auto connectorStats = dataSource_->runtimeStats();
           auto lockedStats = stats_.wlock();
           for (const auto& [name, counter] : connectorStats) {
@@ -122,6 +136,7 @@ RowVectorPtr TableScan::getOutput() {
           "Got splits with different connector IDs");
 
       if (!dataSource_) {
+        curStatus_ = "getOutput: creating dataSource_";
         connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
             connectorSplit->connectorId, planNodeId(), connectorPool_);
         dataSource_ = connector_->createDataSource(
@@ -132,7 +147,6 @@ RowVectorPtr TableScan::getOutput() {
         for (const auto& entry : pendingDynamicFilters_) {
           dataSource_->addDynamicFilter(entry.first, entry.second);
         }
-        pendingDynamicFilters_.clear();
       }
 
       debugString_ = fmt::format(
@@ -147,6 +161,7 @@ RowVectorPtr TableScan::getOutput() {
            &debugString_});
 
       if (connectorSplit->dataSource) {
+        curStatus_ = "getOutput: preloaded split";
         ++numPreloadedSplits_;
         // The AsyncSource returns a unique_ptr to a shared_ptr. The
         // unique_ptr will be nullptr if there was a cancellation.
@@ -161,10 +176,13 @@ RowVectorPtr TableScan::getOutput() {
         }
         dataSource_->setFromDataSource(std::move(preparedDataSource));
       } else {
+        curStatus_ = "getOutput: adding split";
         dataSource_->addSplit(connectorSplit);
       }
+      curStatus_ = "getOutput: updating stats_.numSplits";
       ++stats_.wlock()->numSplits;
 
+      curStatus_ = "getOutput: dataSource_->estimatedRowSize";
       auto estimatedRowSize = dataSource_->estimatedRowSize();
       readBatchSize_ =
           estimatedRowSize == connector::DataSource::kUnknownRowSize
@@ -175,6 +193,7 @@ RowVectorPtr TableScan::getOutput() {
     const auto ioTimeStartMicros = getCurrentTimeMicro();
     // Check for  cancellation since scans that filter everything out will not
     // hit the check in Driver.
+    curStatus_ = "getOutput: task->isCancelled";
     if (operatorCtx_->task()->isCancelled()) {
       return nullptr;
     }
@@ -190,10 +209,13 @@ RowVectorPtr TableScan::getOutput() {
           maxReadBatchSize_,
           static_cast<int>(readBatchSize / maxFilteringRatio_));
     }
+    curStatus_ = "getOutput: dataSource_->next";
     auto dataOptional = dataSource_->next(readBatchSize, blockingFuture_);
+    curStatus_ = "getOutput: checkPreload";
     checkPreload();
 
     {
+      curStatus_ = "getOutput: updating stats_.dataSourceWallNanos";
       auto lockedStats = stats_.wlock();
       lockedStats->addRuntimeStat(
           "dataSourceWallNanos",
@@ -206,6 +228,7 @@ RowVectorPtr TableScan::getOutput() {
         return nullptr;
       }
 
+      curStatus_ = "getOutput: updating stats_.rawInput";
       lockedStats->rawInputPositions = dataSource_->getCompletedRows();
       lockedStats->rawInputBytes = dataSource_->getCompletedBytes();
       auto data = dataOptional.value();
@@ -224,6 +247,7 @@ RowVectorPtr TableScan::getOutput() {
     }
 
     {
+      curStatus_ = "getOutput: updating stats_.preloadedSplits";
       auto lockedStats = stats_.wlock();
       if (numPreloadedSplits_ > 0) {
         lockedStats->addRuntimeStat(
@@ -237,6 +261,7 @@ RowVectorPtr TableScan::getOutput() {
       }
     }
 
+    curStatus_ = "getOutput: task->splitFinished";
     driverCtx_->task->splitFinished();
     needNewSplit_ = true;
   }
@@ -256,6 +281,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
        ctx = operatorCtx_->createConnectorQueryCtx(
            split->connectorId, planNodeId(), connectorPool_),
        task = operatorCtx_->task(),
+       pendingDynamicFilters = pendingDynamicFilters_,
        split]() -> std::unique_ptr<connector::DataSource> {
         if (task->isCancelled()) {
           return nullptr;
@@ -271,6 +297,9 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
         auto ptr = connector->createDataSource(type, table, columns, ctx.get());
         if (task->isCancelled()) {
           return nullptr;
+        }
+        for (const auto& entry : pendingDynamicFilters) {
+          ptr->addDynamicFilter(entry.first, entry.second);
         }
         ptr->addSplit(split);
         return ptr;
@@ -309,9 +338,8 @@ void TableScan::addDynamicFilter(
     const std::shared_ptr<common::Filter>& filter) {
   if (dataSource_) {
     dataSource_->addDynamicFilter(outputChannel, filter);
-  } else {
-    pendingDynamicFilters_.emplace(outputChannel, filter);
   }
+  pendingDynamicFilters_.emplace(outputChannel, filter);
 }
 
 } // namespace facebook::velox::exec

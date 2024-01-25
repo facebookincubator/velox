@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -137,7 +138,7 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
   MemoryReclaimer::Stats stats_;
 };
 
-TEST_P(MemoryPoolTest, Ctor) {
+TEST_P(MemoryPoolTest, ctor) {
   constexpr uint16_t kAlignment = 64;
   setupMemory({.alignment = 64, .allocatorCapacity = kDefaultCapacity});
   MemoryManager& manager = *getMemoryManager();
@@ -203,7 +204,7 @@ TEST_P(MemoryPoolTest, Ctor) {
       "Memory pool rootWithZeroMaxCapacity max capacity can't be zero");
 }
 
-TEST_P(MemoryPoolTest, AddChild) {
+TEST_P(MemoryPoolTest, addChild) {
   MemoryManager& manager = *getMemoryManager();
   auto root = manager.addRootPool("root");
   ASSERT_EQ(root->parent(), nullptr);
@@ -227,6 +228,18 @@ TEST_P(MemoryPoolTest, AddChild) {
   ASSERT_EQ(root->getChildCount(), 1);
   childOne = root->addLeafChild("child_one", isLeafThreadSafe_);
   ASSERT_EQ(root->getChildCount(), 2);
+  ASSERT_EQ(root->treeMemoryUsage(), "root usage 0B reserved 0B peak 0B\n");
+  ASSERT_EQ(root->treeMemoryUsage(true), "root usage 0B reserved 0B peak 0B\n");
+  const std::string treeUsageWithEmptyPool = root->treeMemoryUsage(false);
+  ASSERT_THAT(
+      treeUsageWithEmptyPool,
+      testing::HasSubstr("root usage 0B reserved 0B peak 0B\n"));
+  ASSERT_THAT(
+      treeUsageWithEmptyPool,
+      testing::HasSubstr("child_one usage 0B reserved 0B peak 0B\n"));
+  ASSERT_THAT(
+      treeUsageWithEmptyPool,
+      testing::HasSubstr("child_two usage 0B reserved 0B peak 0B\n"));
 }
 
 TEST_P(MemoryPoolTest, dropChild) {
@@ -1114,8 +1127,8 @@ TEST_P(MemoryPoolTest, persistentNonContiguousAllocateFailure) {
     std::string debugString() const {
       return fmt::format(
           "numOldPages:{}, numNewPages:{}, injectedFailure:{}",
-          numOldPages,
-          numNewPages,
+          static_cast<uint64_t>(numOldPages),
+          static_cast<uint64_t>(numNewPages),
           injectedFailure);
     }
   } testSettings[] = {// Cap failure injection.
