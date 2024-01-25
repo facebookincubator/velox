@@ -508,12 +508,14 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
         std::chrono::seconds{ts.getSeconds()}};
 
     // We are to interpret the input timestamp as being at session timezone;
-    // date::make_zoned() returns a zoned_time type that is constructed similarly to 
-    // TimestampWithTimezone, containing a sys_time<duration> to represent a UTC timestamp, as well as
-    // a TimeZonePtr to hold the timezone said timestamp must be resolved to.
+    // date::make_zoned() returns a zoned_time type that is constructed
+    // similarly to TimestampWithTimezone, containing a sys_time<duration> to
+    // represent a UTC timestamp, as well as a TimeZonePtr to hold the timezone
+    // said timestamp must be resolved to.
 
-    // date::make_zoned() converts the input timestamp, interpreted relative to the input timezone (in this case, session timezone)
-    // to a UTC-relative system time, stored in the returned zoned_time object.
+    // date::make_zoned() converts the input timestamp, interpreted relative to
+    // the input timezone (in this case, session timezone) to a UTC-relative
+    // system time, stored in the returned zoned_time object.
 
     auto starting_timepoint = date::make_zoned(
         sessionTzName,
