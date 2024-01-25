@@ -94,7 +94,7 @@ function install_azure-storage-sdk-cpp {
   cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
 }
 
-function install_libhdfs3 {
+function install_hdfs_deps {
   github_checkout apache/hawq master
   cd $DEPENDENCY_DIR/hawq/depends/libhdfs3
   if [[ "$OSTYPE" == darwin* ]]; then
@@ -105,6 +105,9 @@ function install_libhdfs3 {
   if [[ "$OSTYPE" == linux-gnu* ]]; then
     sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" ./CMakeLists.txt
     sed -i "s/dumpversion/dumpfullversion/" ./CMake/Platform.cmake
+    # Dependencies for Hadoop testing
+    wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-2.10.1/hadoop-2.10.1.tar.gz hadoop
+    cp -a hadoop /usr/local/
   fi
   cmake_install
 }
@@ -181,7 +184,7 @@ if [ $install_aws -eq 1 ]; then
   install_aws-sdk-cpp
 fi
 if [ $install_hdfs -eq 1 ]; then
-  install_libhdfs3
+  install_hdfs_deps
 fi
 if [ $install_abfs -eq 1 ]; then
   install_azure-storage-sdk-cpp
