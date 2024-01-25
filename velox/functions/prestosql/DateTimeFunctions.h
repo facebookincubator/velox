@@ -487,6 +487,7 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
 
     // below statements causing issue - timeZone is NULL here,
     // are args not processed in init()?
+
     // auto timeZoneStr = std::string_view(timeZone->data(), timeZone->size());
     // targetTimezoneID = util::getTimeZoneID(timeZoneStr);
   }
@@ -495,8 +496,8 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
       const core::QueryConfig& config,
       const arg_type<TimestampWithTimezone>* /*tsWithTz*/,
       const arg_type<Varchar>* timeZone) {
-    auto timeZoneStr = std::string_view(timeZone->data(), timeZone->size());
-    targetTimezoneID = util::getTimeZoneID(timeZoneStr);
+    // auto timeZoneStr = std::string_view(timeZone->data(), timeZone->size());
+    // targetTimezoneID = util::getTimeZoneID(timeZoneStr);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -535,6 +536,9 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<TimestampWithTimezone>& tsWithTz,
       const arg_type<Varchar>& timeZone) {
     const auto inputMs = *tsWithTz.template at<0>();
+
+    auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
+    targetTimezoneID = util::getTimeZoneID(timeZoneStr);
 
     // <0> of a TimestampWithTimezone tuple always represents
     // milliseconds relative to GMT - so the input and output

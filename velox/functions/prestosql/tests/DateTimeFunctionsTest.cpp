@@ -1070,17 +1070,6 @@ TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTestTimestampInput) {
 TEST_F(
     DateTimeFunctionsTest,
     timestampAtTimezoneTestTimestampWithTimezoneInput) {
-    // EXPECT_EQ(
-    //     TimestampWithTimezone(1500101514,
-    //     util::getTimeZoneID("America/Boise")), timestampAtTimezone(
-    //           TimestampWithTimezone(1500101514,
-    //           util::getTimeZoneID("Asia/Kathmandu")),
-    //                                   "America/Boise"));
-
-  //   EXPECT_EQ(
-  //       1973,
-  //       evaluateWithTimestampWithTimezone<int64_t>(
-  //           "year(c0)", 123456789000, "+14:00"));
 
   EXPECT_EQ(
       TimestampWithTimezone(1500101514, util::getTimeZoneID("America/Boise")),
@@ -1090,13 +1079,17 @@ TEST_F(
   EXPECT_EQ(
       TimestampWithTimezone(1500101514, util::getTimeZoneID("Europe/London")),
       timestampWithTimezoneAtTimezone(
-          1500101514, "Asia/Kathmandu", "Europe/London"));
+          1500101514, "America/Boise", "Europe/London"));
 
-  // should fail
   EXPECT_EQ(
-      TimestampWithTimezone(1500101514, util::getTimeZoneID("Europe/London")),
+      TimestampWithTimezone(1500321297, util::getTimeZoneID("Australia/Melbourne")),
       timestampWithTimezoneAtTimezone(
-          1500101513, "Asia/Kathmandu", "Europe/London"));
+          1500321297, "Canada/Yukon", "Australia/Melbourne"));
+
+  EXPECT_EQ(
+      TimestampWithTimezone(-2749482486, util::getTimeZoneID("Pacific/Fiji")),
+      timestampWithTimezoneAtTimezone(
+          -2749482486, "Atlantic/Bermuda", "Pacific/Fiji"));
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfMonthTimestampWithTimezone) {
