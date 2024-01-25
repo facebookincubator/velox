@@ -23,12 +23,19 @@ SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 
-function install_aws-sdk-cpp {
+function install_aws-sdk_deps {
   local AWS_REPO_NAME="aws/aws-sdk-cpp"
   local AWS_SDK_VERSION="1.11.169"
 
   github_checkout $AWS_REPO_NAME $AWS_SDK_VERSION --depth 1 --recurse-submodules
   cmake_install -DCMAKE_BUILD_TYPE=Debug -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
+  # Dependencies for S3 testing
+  if [[ "$OSTYPE" == linux-gnu* ]]; then
+    wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio-20220526054841.0.0.x86_64.rpm
+    rpm -i minio-20220526054841.0.0.x86_64.rpm
+    rm minio-20220526054841.0.0.x86_64.rpm
+  fi
+ 
 }
 
 function install_gcs-sdk-cpp {
@@ -181,7 +188,7 @@ if [ $install_gcs -eq 1 ]; then
   install_gcs-sdk-cpp
 fi
 if [ $install_aws -eq 1 ]; then
-  install_aws-sdk-cpp
+  install_aws-sdk_deps
 fi
 if [ $install_hdfs -eq 1 ]; then
   install_hdfs_deps
