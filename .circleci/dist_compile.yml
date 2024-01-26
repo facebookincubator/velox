@@ -683,8 +683,6 @@ workflows:
           matrix:
             parameters:
               os: [macos-intel]
-      - format-check
-      - header-check
       - doc-gen-job:
           filters:
             branches:
@@ -710,8 +708,6 @@ workflows:
           matrix:
             parameters:
               os: [ macos-intel ]
-      - format-check
-      - header-check
       - doc-gen-job:
           filters:
             branches:
