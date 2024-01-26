@@ -120,6 +120,27 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         rowVector->children()[1]->as<SimpleVector<int16_t>>()->valueAt(0)};
   }
 
+  std::optional<TimestampWithTimezone> timestampAtTimezone(
+      const std::optional<Timestamp> timestamp,
+      const std::optional<std::string>& timeZoneName) {
+    auto resultVector = evaluate(
+        "at_timezone(c0, c1)",
+        makeRowVector(
+            {makeNullableFlatVector<Timestamp>({timestamp}),
+             makeNullableFlatVector<std::string>({timeZoneName})}));
+
+    EXPECT_EQ(1, resultVector->size());
+
+    if (resultVector->isNullAt(0)) {
+      return std::nullopt;
+    }
+
+    auto rowVector = resultVector->as<RowVector>();
+    return TimestampWithTimezone{
+        rowVector->children()[0]->as<SimpleVector<int64_t>>()->valueAt(0),
+        rowVector->children()[1]->as<SimpleVector<int16_t>>()->valueAt(0)};
+  }
+
   std::optional<Timestamp> dateParse(
       const std::optional<std::string>& input,
       const std::optional<std::string>& format) {
@@ -3835,4 +3856,66 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeDouble) {
       "2021-06-15 09:11:45.000",
   });
   assertEqualVectors(expected, actual);
+}
+
+TEST_F(DateTimeFunctionsTest, timestampAtTimezoneTest) {
+  // Passing a Timestamp along with a timezone string
+  // into at_timezone() should return a
+  // TimestampWithTimezone type, comprised of seconds (int64) relative to UTC,
+  // and a timezone ID (int16) corresponding to the input timezone string.
+
+  setQueryTimeZone("America/New_York");
+
+  // New York 2017 = UTC -04:00 = -14400 sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          1500101514 + 14400, util::getTimeZoneID("America/Boise")),
+      timestampAtTimezone(Timestamp(1500101514, 0), "America/Boise"));
+
+  // New York 2017 = UTC -04:00 = -14400 sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          1500101514 + 14400, util::getTimeZoneID("Asia/Baghdad")),
+      timestampAtTimezone(Timestamp(1500101514, 0), "Asia/Baghdad"));
+
+  // New York 2017 DST = UTC -05:00 = -18000 sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          1510728714 + 18000, util::getTimeZoneID("Asia/Baghdad")),
+      timestampAtTimezone(Timestamp(1510728714, 0), "Asia/Baghdad"));
+
+  // New York 1892 = UTC -4:56:02 = -(14400 + 3360 + 2) sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          -2749482486 + 17762, util::getTimeZoneID("Europe/London")),
+      timestampAtTimezone(Timestamp(-2749482486, 0), "Europe/London"));
+
+  setQueryTimeZone("America/Los_Angeles");
+
+  // Los Angeles 1880 = UTC -7:52:58 = -(25200 + 3180 ) = 28378 sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          -2938784886 + 28378, util::getTimeZoneID("Europe/London")),
+      timestampAtTimezone(Timestamp(-2938784886, 0), "Europe/London"));
+
+  setQueryTimeZone("Asia/Baghdad");
+
+  // Asia/Baghdad = UTC +03:00 = +10800 sec
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          1500101514 - 10800, util::getTimeZoneID("Europe/London")),
+      timestampAtTimezone(Timestamp(1500101514, 0), "Europe/London"));
+
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          1500321297 - 10800, util::getTimeZoneID("America/New_York")),
+      timestampAtTimezone(Timestamp(1500321297, 0), "America/New_York"));
+
+  setQueryTimeZone("Africa/Bamako");
+
+  // Africa/Bamako = UTC +0:00
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          1500101514, util::getTimeZoneID("Pacific/Galapagos")),
+      timestampAtTimezone(Timestamp(1500101514, 0), "Pacific/Galapagos"));
 }
