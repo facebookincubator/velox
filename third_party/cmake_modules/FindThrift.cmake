@@ -99,9 +99,7 @@ else()
   find_package(PkgConfig QUIET)
   pkg_check_modules(THRIFT_PC thrift)
   if(THRIFT_PC_FOUND)
-    set(THRIFT_INCLUDE_DIR
-        "${THRIFT_PC_INCLUDEDIR}"
-        CACHE INTERNAL "thrift include dir")
+    set(THRIFT_INCLUDE_DIR "${THRIFT_PC_INCLUDEDIR}")
 
     list(APPEND THRIFT_PC_LIBRARY_DIRS "${THRIFT_PC_LIBDIR}")
 

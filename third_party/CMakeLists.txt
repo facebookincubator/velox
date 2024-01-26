@@ -51,9 +51,7 @@ if(VELOX_ENABLE_ARROW)
     set(THRIFT_LIB ${THRIFT_ROOT}/lib/libthrift.a)
 
     file(MAKE_DIRECTORY ${THRIFT_ROOT}/include)
-    set(THRIFT_INCLUDE_DIR
-        ${THRIFT_ROOT}/include
-        CACHE INTERNAL "thrift include dir")
+    set(THRIFT_INCLUDE_DIR ${THRIFT_ROOT}/include)
   endif()
 
   set_property(TARGET thrift PROPERTY INTERFACE_INCLUDE_DIRECTORIES
