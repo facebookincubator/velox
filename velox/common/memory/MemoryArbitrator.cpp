@@ -284,6 +284,10 @@ bool MemoryReclaimer::Stats::operator!=(
   return !(*this == other);
 }
 
+std::string format_as(MemoryArbitrator::Stats s) {
+  return s.toString();
+}
+
 MemoryArbitrator::Stats::Stats(
     uint64_t _numRequests,
     uint64_t _numSucceeded,

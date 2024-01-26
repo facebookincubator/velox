@@ -243,6 +243,8 @@ class MemoryArbitrator {
   const bool checkUsageLeak_;
 };
 
+std::string format_as(MemoryArbitrator::Stats s);
+
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
     std::ostream& o,
     const MemoryArbitrator::Stats& stats) {

@@ -95,6 +95,10 @@ struct SpillStats {
   std::string toString() const;
 };
 
+auto format_as(SpillStats stats) {
+  return stats.toString();
+}
+
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
     std::ostream& o,
     const common::SpillStats& stats) {
