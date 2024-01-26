@@ -27,7 +27,6 @@
 namespace facebook::velox::serializer::presto {
 namespace {
 constexpr int8_t kCompressedBitMask = 1;
-constexpr int8_t kEncryptedBitMask = 2;
 constexpr int8_t kCheckSumBitMask = 4;
 static inline const std::string_view kRLE{"RLE"};
 static inline const std::string_view kDictionary{"DICTIONARY"};
