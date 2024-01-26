@@ -1497,7 +1497,7 @@ std::optional<std::string> parsePattern(
   // Iterate through the pattern string to collect the stats for the simple
   // patterns that we can optimize.
   std::ostringstream os;
-  SubPatternKind previousKind;
+  std::optional<SubPatternKind> previousKind;
   size_t currentSubPatternStart = 0;
   size_t cursor = 0;
 
@@ -1512,18 +1512,24 @@ std::optional<std::string> parsePattern(
       currentKind = SubPatternKind::kLiteralString;
     }
 
+    // Set the 'previousKind' to currentKind if it has not been set yet, which
+    // only occur once(the first char) during parsing.
+    if (FOLLY_UNLIKELY(!previousKind.has_value())) {
+      previousKind = currentKind;
+    }
+
     // New sub pattern occurs.
-    if (currentKind != previousKind && cursor > 0) {
-      subPatternKinds.push_back(previousKind);
+    if (currentKind != previousKind) {
+      subPatternKinds.push_back(previousKind.value());
       subPatternRanges.push_back(
           {currentSubPatternStart, cursor - currentSubPatternStart});
       currentSubPatternStart = cursor;
+      previousKind = currentKind;
     }
 
     // Advance the cursor.
     std::string_view currentChar = iterator.current();
     cursor += currentChar.size();
-    previousKind = currentKind;
 
     // We only need to collect the unescaped chars if user specified escape
     // char.
@@ -1533,7 +1539,7 @@ std::optional<std::string> parsePattern(
   }
 
   // Handle the last sub-pattern.
-  subPatternKinds.push_back(previousKind);
+  subPatternKinds.push_back(previousKind.value());
   subPatternRanges.push_back(
       {currentSubPatternStart, cursor - currentSubPatternStart});
 
