@@ -53,7 +53,7 @@ jobs:
 
             echo "> [!IMPORTANT]" >> $GITHUB_STEP_SUMMARY
             echo "${{ matrix.config.message }}" >> $GITHUB_STEP_SUMMARY
-            echo "> Please add them by using:"  >> $GITHUB_STEP_SUMMARY
+            echo "> Please apply fix using:"  >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`sh" >> $GITHUB_STEP_SUMMARY
             echo "patch -p1 <<EOF" >> $GITHUB_STEP_SUMMARY
             echo "$diff" >> $GITHUB_STEP_SUMMARY
