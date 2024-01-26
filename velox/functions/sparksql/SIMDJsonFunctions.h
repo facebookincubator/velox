@@ -23,11 +23,48 @@ namespace facebook::velox::functions::sparksql {
 template <typename T>
 struct SIMDGetJsonObjectFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-  std::optional<std::string> formattedJsonPath_;
 
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*json*/,
+      const arg_type<Varchar>* jsonPath) {
+    if (jsonPath != nullptr) {
+      formattedJsonPath_ = getFormattedJsonPath(*jsonPath);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& json,
+      const arg_type<Varchar>& jsonPath) {
+    ParserContext ctx(json.data(), json.size());
+    try {
+      ctx.parseDocument();
+      simdjson_result<ondemand::value> rawResult =
+          formattedJsonPath_.has_value()
+          ? ctx.jsonDoc.at_pointer(formattedJsonPath_.value().data())
+          : ctx.jsonDoc.at_pointer(getFormattedJsonPath(jsonPath).data());
+      // Field not found.
+      if (rawResult.error() == NO_SUCH_FIELD) {
+        return false;
+      }
+      auto error = extractStringResult(rawResult, result);
+      if (error) {
+        return false;
+      }
+    } catch (simdjson_error& e) {
+      return false;
+    }
+
+    const char* currentPos;
+    ctx.jsonDoc.current_location().get(currentPos);
+    return isValidEndingCharacter(currentPos);
+  }
+
+ private:
   // Makes a conversion from spark's json path, e.g., converts
   // "$.a.b" to "/a/b".
   FOLLY_ALWAYS_INLINE std::string getFormattedJsonPath(
@@ -48,15 +85,6 @@ struct SIMDGetJsonObjectFunction {
     }
     formattedJsonPath[j] = '\0';
     return std::string(formattedJsonPath, j + 1);
-  }
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const core::QueryConfig& config,
-      const arg_type<Varchar>* /*json*/,
-      const arg_type<Varchar>* jsonPath) {
-    if (jsonPath != nullptr) {
-      formattedJsonPath_ = getFormattedJsonPath(*jsonPath);
-    }
   }
 
   FOLLY_ALWAYS_INLINE simdjson::error_code extractStringResult(
@@ -150,33 +178,7 @@ struct SIMDGetJsonObjectFunction {
     return false;
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<Varchar>& result,
-      const arg_type<Varchar>& json,
-      const arg_type<Varchar>& jsonPath) {
-    ParserContext ctx(json.data(), json.size());
-    try {
-      ctx.parseDocument();
-      simdjson_result<ondemand::value> rawResult =
-          formattedJsonPath_.has_value()
-          ? ctx.jsonDoc.at_pointer(formattedJsonPath_.value().data())
-          : ctx.jsonDoc.at_pointer(getFormattedJsonPath(jsonPath).data());
-      // Field not found.
-      if (rawResult.error() == NO_SUCH_FIELD) {
-        return false;
-      }
-      auto error = extractStringResult(rawResult, result);
-      if (error) {
-        return false;
-      }
-    } catch (simdjson_error& e) {
-      return false;
-    }
-
-    const char* currentPos;
-    ctx.jsonDoc.current_location().get(currentPos);
-    return isValidEndingCharacter(currentPos);
-  }
+  std::optional<std::string> formattedJsonPath_;
 };
 
 } // namespace facebook::velox::functions::sparksql
