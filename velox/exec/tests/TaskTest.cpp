@@ -524,11 +524,11 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   ASSERT_EQ(
       task->toString(), "{Task task-1 (task-1)Plan: -- Project\n\n drivers:\n");
   ASSERT_EQ(
-      task->toJsonString(),
-      "{\n  \"concurrentSplitGroups\": 1,\n  \"drivers\": {},\n  \"exchangeClientByPlanNode\": {},\n  \"groupedPartitionedOutput\": false,\n  \"id\": \"task-1\",\n  \"noMoreOutputBuffers\": false,\n  \"numDriversPerSplitGroup\": 0,\n  \"numDriversUngrouped\": 0,\n  \"numFinishedDrivers\": 0,\n  \"numRunningDrivers\": 0,\n  \"numRunningSplitGroups\": 0,\n  \"numThreads\": 0,\n  \"numTotalDrivers_\": 0,\n  \"onThreadSince\": \"0\",\n  \"partitionedOutputConsumed\": false,\n  \"plan\": \"-- Project\\n\",\n  \"shortId\": \"task-1\",\n  \"state\": \"Running\",\n  \"terminateRequested_\": \"0\"\n}");
+      folly::toPrettyJson(task->toJson()),
+      "{\n  \"concurrentSplitGroups\": 1,\n  \"drivers\": [],\n  \"exchangeClientByPlanNode\": {},\n  \"groupedPartitionedOutput\": false,\n  \"id\": \"task-1\",\n  \"noMoreOutputBuffers\": false,\n  \"numDriversPerSplitGroup\": 0,\n  \"numDriversUngrouped\": 0,\n  \"numFinishedDrivers\": 0,\n  \"numRunningDrivers\": 0,\n  \"numRunningSplitGroups\": 0,\n  \"numThreads\": 0,\n  \"numTotalDrivers\": 0,\n  \"onThreadSince\": \"0\",\n  \"partitionedOutputConsumed\": false,\n  \"pauseRequested\": false,\n  \"plan\": \"-- Project[expressions: (p0:INTEGER, multiply(ROW[\\\"a\\\"],ROW[\\\"a\\\"])), (p1:DOUBLE, plus(ROW[\\\"b\\\"],ROW[\\\"b\\\"]))] -> p0:INTEGER, p1:DOUBLE\\n  -- TableScan[table: hive_table] -> a:INTEGER, b:DOUBLE\\n\",\n  \"shortId\": \"task-1\",\n  \"state\": \"Running\",\n  \"terminateRequested\": false\n}");
   ASSERT_EQ(
-      task->toShortJsonString(),
-      "{\n  \"id\": \"task-1\",\n  \"numFinishedDrivers\": 0,\n  \"numRunningDrivers\": 0,\n  \"numThreads\": 0,\n  \"numTotalDrivers_\": 0,\n  \"pauseRequested_\": \"0\",\n  \"shortId\": \"task-1\",\n  \"state\": \"Running\",\n  \"terminateRequested_\": \"0\"\n}");
+      folly::toPrettyJson(task->toShortJson()),
+      "{\n  \"id\": \"task-1\",\n  \"numFinishedDrivers\": 0,\n  \"numRunningDrivers\": 0,\n  \"numThreads\": 0,\n  \"numTotalDrivers\": 0,\n  \"pauseRequested\": false,\n  \"shortId\": \"task-1\",\n  \"state\": \"Running\",\n  \"terminateRequested\": false\n}");
 
   // Add split for the source node.
   task->addSplit("0", exec::Split(folly::copy(connectorSplit)));
@@ -1485,6 +1485,52 @@ DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
   // Resume the task and expect all drivers to close.
   Task::resume(task);
   ASSERT_TRUE(waitForTaskCompletion(task.get()));
+  task.reset();
+  waitForAllTasksToBeDeleted();
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatVector<int64_t>(50, folly::identity),
+  });
+  const auto plan =
+      PlanBuilder()
+          .values({data})
+          .partitionedOutput({}, 1, std::vector<std::string>{"c0"})
+          .planFragment();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::requestPauseLocked",
+      std::function<void(Task*)>(([&](Task* /*unused*/) {
+        // Inject some delay for task memory reclaim stats verification.
+        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // NOLINT
+      })));
+
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "taskReclaimStats", 1UL << 30, exec::MemoryReclaimer::create());
+  auto queryCtx = std::make_shared<core::QueryCtx>(
+      driverExecutor_.get(),
+      core::QueryConfig{{}},
+      std::unordered_map<std::string, std::shared_ptr<Config>>{},
+      nullptr,
+      std::move(queryPool),
+      nullptr);
+  auto task = Task::create("task", std::move(plan), 0, std::move(queryCtx));
+  task->start(4, 1);
+
+  const int numReclaims{10};
+  for (int i = 0; i < numReclaims; ++i) {
+    MemoryReclaimer::Stats stats;
+    task->pool()->reclaim(1000, 1UL << 30, stats);
+  }
+  const auto taskStats = task->taskStats();
+  ASSERT_EQ(taskStats.memoryReclaimCount, numReclaims);
+  ASSERT_GT(taskStats.memoryReclaimMs, 0);
+
+  // Fail the task to finish test.
+  task->requestAbort();
+  ASSERT_TRUE(waitForTaskAborted(task.get()));
   task.reset();
   waitForAllTasksToBeDeleted();
 }

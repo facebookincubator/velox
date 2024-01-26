@@ -18,7 +18,7 @@
 
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
+#include "velox/dwio/parquet/reader/Metadata.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -59,10 +59,6 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   std::optional<size_t> estimatedRowSize() const override;
 
-  const dwio::common::RowReaderOptions& getOptions() {
-    return options_;
-  }
-
   bool allPrefetchIssued() const override {
     //  Allow opening the next split while this is reading.
     return true;
@@ -78,30 +74,9 @@ class ParquetRowReader : public dwio::common::RowReader {
   // ReaderBase and determines the set of row groups to scan.
   void filterRowGroups();
 
-  // Positions the reader tre at the start of the next row group, as determined
-  // by filterRowGroups().
-  bool advanceToNextRowGroup();
-
-  memory::MemoryPool& pool_;
-  const std::shared_ptr<ReaderBase> readerBase_;
-  const dwio::common::RowReaderOptions options_;
-
-  // All row groups from file metadata.
-  const std::vector<thrift::RowGroup>& rowGroups_;
-
-  // Indices of row groups where stats match filters.
-  std::vector<uint32_t> rowGroupIds_;
-  std::vector<uint64_t> firstRowOfRowGroup_;
-  uint32_t nextRowGroupIdsIdx_;
-  const thrift::RowGroup* FOLLY_NULLABLE currentRowGroupPtr_{nullptr};
-  uint64_t rowsInCurrentRowGroup_;
-  uint64_t currentRowInGroup_;
-
-  std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
-
-  RowTypePtr requestedType_;
-
-  dwio::common::ColumnReaderStatistics columnReaderStats_;
+ protected:
+  class Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 /// Implements the reader interface for Parquet.
@@ -125,10 +100,10 @@ class ParquetReader : public dwio::common::Reader {
   const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
       const override;
 
-  size_t numberOfRowGroups() const;
-
   std::unique_ptr<dwio::common::RowReader> createRowReader(
       const dwio::common::RowReaderOptions& options = {}) const override;
+
+  FileMetaDataPtr fileMetaData() const;
 
  private:
   std::shared_ptr<ReaderBase> readerBase_;
