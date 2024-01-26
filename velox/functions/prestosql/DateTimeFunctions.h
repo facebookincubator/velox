@@ -1423,11 +1423,11 @@ struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
   }
 
   FOLLY_ALWAYS_INLINE void call(
-    out_type<TimestampWithTimezone>& result,
-    const arg_type<Timestamp>& ts,
-    const arg_type<Varchar>& timeZone) {
-      std::chrono::system_clock::time_point tp{
-      std::chrono::seconds{ts.getSeconds()}};
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<Timestamp>& ts,
+      const arg_type<Varchar>& timeZone) {
+    std::chrono::system_clock::time_point tp{
+        std::chrono::seconds{ts.getSeconds()}};
 
     // We are to interpret the input timestamp as being at session timezone;
     // date::make_zoned() returns a zoned_time type that is constructed
