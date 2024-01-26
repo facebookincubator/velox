@@ -3799,6 +3799,7 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestDate) {
   EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(DATE()->toDays("1919-11-28")));
   EXPECT_EQ("4653-07-01T00:00:00.000", toISO8601(DATE()->toDays("4653-07-01")));
   EXPECT_EQ("1844-10-14T00:00:00.000", toISO8601(DATE()->toDays("1844-10-14")));
+  EXPECT_EQ("9999-12-31T00:00:00.000", toISO8601(DATE()->toDays("9999-12-31")));
 }
 
 TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
@@ -3822,21 +3823,11 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
       "1970-01-01T03:19:58.000",
       toISO8601(getTimestamp("1970-01-01 03:19:58")));
   EXPECT_EQ(
-      "1970-01-01T23:59:59.000",
-      toISO8601(getTimestamp("1970-01-01 23:59:59")));
+      "1862-10-05T13:08:42.731",
+      toISO8601(getTimestamp("1862-10-05 13:08:42.731")));
   EXPECT_EQ(
-      "1970-01-01T23:59:59.999",
-      toISO8601(getTimestamp("1970-01-01 23:59:59.999")));
-
-  EXPECT_EQ(
-      "2020-02-05T00:00:00.000",
-      toISO8601(getTimestamp("2020-02-05 00:00:00")));
-  EXPECT_EQ(
-      "2020-02-05T14:27:39.000",
-      toISO8601(getTimestamp("2020-02-05 14:27:39")));
-  EXPECT_EQ(
-      "2020-02-05T23:59:59.000",
-      toISO8601(getTimestamp("2020-02-05 23:59:59")));
+      "4569-07-19T02:36:04.520",
+      toISO8601(getTimestamp("4569-07-19 02:36:04.520")));
   EXPECT_EQ(
       "2020-02-05T23:59:59.999",
       toISO8601(getTimestamp("2020-02-05 23:59:59.999")));
@@ -3848,8 +3839,11 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
       "1919-11-28T23:59:59.000",
       toISO8601(getTimestamp("1919-11-28 23:59:59")));
   EXPECT_EQ(
-      "1919-11-28T23:59:59.999",
-      toISO8601(getTimestamp("1919-11-28 23:59:59.999")));
+      "0000-01-01T00:00:00.000",
+      toISO8601(getTimestamp("0000-01-01 00:00:00.000")));
+  EXPECT_EQ(
+      "9999-12-31T23:59:59.999",
+      toISO8601(getTimestamp("9999-12-31 23:59:59.999")));
 }
 
 TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
