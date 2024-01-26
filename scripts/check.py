@@ -35,6 +35,9 @@ def get_diff(file, formatted):
     status, stdout, stderr = util.run(
         f"diff -u {file} --label {file} --label {file} -", input=formatted
     )
+
+
+
     if stdout != "":
         stdout = f"diff a/{file} b/{file}\n" + stdout
 
