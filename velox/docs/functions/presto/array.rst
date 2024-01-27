@@ -145,6 +145,7 @@ Array Functions
         SELECT array_remove(ARRAY [2, 1, NULL], 1); -- [2, NULL]
 
 .. function:: array_sort(array(E)) -> array(E)
+    :noindex:
 
     Returns an array which has the sorted order of the input array x. E must be
     an orderable type. Null elements will be placed at the end of the returned array.
