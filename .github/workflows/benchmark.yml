@@ -16,12 +16,6 @@ name: "Ubuntu Benchmark"
 
 on:
   pull_request:
-    paths:
-      - 'velox/**'
-      - '!velox/docs/**'
-      - 'third_party/**'
-      - 'pyvelox/**'
-      - '.github/workflows/benchmark.yml'
   push:
     branches: [main]
 
@@ -38,7 +32,6 @@ defaults:
 #TODO  concurrency groups?
 jobs:
   benchmark:
-    if: github.repository == 'facebookincubator/velox'
     runs-on: 8-core
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
