@@ -23,25 +23,29 @@ namespace facebook::velox {
 
 namespace {
 
-template <typename T>
-void assertRescaleDouble(double value, const TypePtr& type, T expectedValue) {
+template <typename TInput, typename TOutput>
+void assertRescaleFloatingPoint(
+    TInput value,
+    const TypePtr& type,
+    TOutput expectedValue) {
   const auto [precision, scale] = getDecimalPrecisionScale(*type);
-  T actualValue;
-  const auto status =
-      DecimalUtil::rescaleDouble<T>(value, precision, scale, actualValue);
+  TOutput actualValue;
+  const auto status = DecimalUtil::rescaleFloatingPoint<TInput, TOutput>(
+      value, precision, scale, actualValue);
   ASSERT_TRUE(status.ok());
   ASSERT_EQ(actualValue, expectedValue);
 }
 
-template <typename T>
-void assertRescaleDoubleFail(
-    double value,
+template <typename TInput, typename TOutput>
+void assertRescaleFloatingPointFail(
+    TInput value,
     const TypePtr& type,
     const std::string& expectedErrorMessage) {
   const auto [precision, scale] = getDecimalPrecisionScale(*type);
-  T actualValue;
+  TOutput actualValue;
   VELOX_ASSERT_ERROR_STATUS(
-      DecimalUtil::rescaleDouble<T>(value, precision, scale, actualValue),
+      (DecimalUtil::rescaleFloatingPoint<TInput, TOutput>(
+          value, precision, scale, actualValue)),
       StatusCode::kUserError,
       expectedErrorMessage);
 }
@@ -287,84 +291,198 @@ TEST(DecimalAggregateTest, adjustSumForOverflow) {
 }
 
 TEST(DecimalTest, rescaleDouble) {
-  assertRescaleDouble<int64_t>(-3333.03, DECIMAL(10, 4), -33'330'300);
-  assertRescaleDouble<int128_t>(-3333.03, DECIMAL(20, 1), -33'330);
-  assertRescaleDouble<int128_t>(-3333.03, DECIMAL(20, 10), -33'330'300'000'000);
+  assertRescaleFloatingPoint<double, int64_t>(
+      -3333.03, DECIMAL(10, 4), -33'330'300);
+  assertRescaleFloatingPoint<double, int128_t>(
+      -3333.03, DECIMAL(20, 1), -33'330);
+  assertRescaleFloatingPoint<double, int128_t>(
+      -3333.03,
+      DECIMAL(38, 18),
+      HugeInt::build(0xFFFFFFFFFFFFFF4B, 0x50EABA2657C90000));
 
-  assertRescaleDouble<int64_t>(-2222.02, DECIMAL(10, 4), -22'220'200);
-  assertRescaleDouble<int128_t>(-2222.02, DECIMAL(20, 1), -22'220);
-  assertRescaleDouble<int128_t>(-2222.02, DECIMAL(20, 10), -22'220'200'000'000);
+  assertRescaleFloatingPoint<double, int64_t>(
+      -2222.02, DECIMAL(10, 4), -22'220'200);
+  assertRescaleFloatingPoint<double, int128_t>(
+      -2222.02, DECIMAL(20, 1), -22'220);
+  assertRescaleFloatingPoint<double, int128_t>(
+      -2222.02,
+      DECIMAL(38, 18),
+      HugeInt::build(0xFFFFFFFFFFFFFF87, 0x8B4726C43A860000));
 
-  assertRescaleDouble<int64_t>(-1.0, DECIMAL(10, 4), -10'000);
-  assertRescaleDouble<int128_t>(-1.0, DECIMAL(20, 1), -10);
-  assertRescaleDouble<int128_t>(-1.0, DECIMAL(20, 10), -10'000'000'000);
+  assertRescaleFloatingPoint<double, int64_t>(-1.0, DECIMAL(10, 4), -10'000);
+  assertRescaleFloatingPoint<double, int128_t>(-1.0, DECIMAL(20, 1), -10);
+  assertRescaleFloatingPoint<double, int128_t>(
+      -1.0, DECIMAL(38, 18), -1'000'000'000'000'000'000);
 
-  assertRescaleDouble<int64_t>(0.00, DECIMAL(10, 4), 0);
-  assertRescaleDouble<int128_t>(0.00, DECIMAL(20, 1), 0);
-  assertRescaleDouble<int128_t>(0.00, DECIMAL(20, 10), 0);
+  assertRescaleFloatingPoint<double, int64_t>(0.00, DECIMAL(10, 4), 0);
+  assertRescaleFloatingPoint<double, int128_t>(0.00, DECIMAL(20, 1), 0);
+  assertRescaleFloatingPoint<double, int128_t>(0.00, DECIMAL(38, 18), 0);
 
-  assertRescaleDouble<int64_t>(100, DECIMAL(10, 4), 1'000'000);
-  assertRescaleDouble<int128_t>(100, DECIMAL(20, 1), 1'000);
-  assertRescaleDouble<int128_t>(100, DECIMAL(20, 10), 1'000'000'000'000);
+  assertRescaleFloatingPoint<double, int64_t>(100, DECIMAL(10, 4), 1'000'000);
+  assertRescaleFloatingPoint<double, int128_t>(100, DECIMAL(20, 1), 1'000);
+  assertRescaleFloatingPoint<double, int128_t>(
+      100, DECIMAL(38, 18), HugeInt::build(0x5, 0x6BC75E2D63100000));
 
-  assertRescaleDouble<int64_t>(99999.99, DECIMAL(10, 4), 999'999'900);
-  assertRescaleDouble<int128_t>(99999.99, DECIMAL(20, 1), 1'000'000);
-  assertRescaleDouble<int128_t>(99999.99, DECIMAL(20, 10), 999'999'900'000'000);
+  assertRescaleFloatingPoint<double, int64_t>(
+      99999.99, DECIMAL(10, 4), 999'999'900);
+  assertRescaleFloatingPoint<double, int128_t>(
+      99999.99, DECIMAL(20, 1), 1'000'000);
+  assertRescaleFloatingPoint<double, int128_t>(
+      99999.99, DECIMAL(38, 18), HugeInt::build(0x152D, 0x02A45A5886BF0000));
 
-  assertRescaleDouble<int128_t>(
+  assertRescaleFloatingPoint<double, int128_t>(0.95, DECIMAL(3, 1), 10);
+  assertRescaleFloatingPoint<double, int128_t>(
+      10.03, DECIMAL(38, 18), HugeInt::build(0, 0x8B31B7DBD92B0000));
+  assertRescaleFloatingPoint<double, int128_t>(
       0.034567890, DECIMAL(38, 18), 34'567'890'000'000'000);
-  assertRescaleDouble<int128_t>(
+  assertRescaleFloatingPoint<double, int128_t>(
       0.999999999999999, DECIMAL(38, 18), 999'999'999'999'999'000);
-  assertRescaleDouble<int128_t>(
+  assertRescaleFloatingPoint<double, int128_t>(
       0.123456789123123, DECIMAL(38, 18), 123'456'789'123'123'000);
-  assertRescaleDouble<int64_t>(21.54551, DECIMAL(12, 3), 21546);
+  assertRescaleFloatingPoint<double, int64_t>(21.54551, DECIMAL(12, 3), 21546);
 
-  assertRescaleDoubleFail<int128_t>(
+  assertRescaleFloatingPointFail<double, int128_t>(
       std::numeric_limits<double>::max(), DECIMAL(38, 38), "Result overflows.");
-  assertRescaleDouble<int128_t>(
+  assertRescaleFloatingPoint<double, int128_t>(
       std::numeric_limits<double>::min(), DECIMAL(38, 2), 0);
-  assertRescaleDoubleFail<int128_t>(
+  assertRescaleFloatingPointFail<double, int128_t>(
       std::numeric_limits<double>::lowest(),
       DECIMAL(38, 2),
       "Result overflows.");
 
-  assertRescaleDoubleFail<int64_t>(
+  assertRescaleFloatingPointFail<double, int64_t>(
       NAN, DECIMAL(10, 2), "The input value should be finite.");
-  assertRescaleDoubleFail<int64_t>(
+  assertRescaleFloatingPointFail<double, int64_t>(
       INFINITY, DECIMAL(10, 2), "The input value should be finite.");
 
-  assertRescaleDoubleFail<int64_t>(
+  assertRescaleFloatingPointFail<double, int64_t>(
       9999999999999999999999.99, DECIMAL(10, 2), "Result overflows.");
-  assertRescaleDoubleFail<int64_t>(
+  assertRescaleFloatingPointFail<double, int64_t>(
       static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1),
       DECIMAL(10, 2),
       "Result overflows.");
-  assertRescaleDoubleFail<int64_t>(
+  assertRescaleFloatingPointFail<double, int64_t>(
       static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1),
       DECIMAL(10, 2),
       "Result overflows.");
-  assertRescaleDoubleFail<int64_t>(
+  assertRescaleFloatingPointFail<double, int64_t>(
       static_cast<double>(DecimalUtil::kShortDecimalMax),
       DECIMAL(10, 2),
       "Result overflows.");
-  assertRescaleDoubleFail<int64_t>(
+  assertRescaleFloatingPointFail<double, int64_t>(
       static_cast<double>(DecimalUtil::kShortDecimalMin),
       DECIMAL(10, 2),
       "Result overflows.");
-  assertRescaleDoubleFail<int128_t>(
+  assertRescaleFloatingPointFail<double, int128_t>(
       static_cast<double>(DecimalUtil::kLongDecimalMax),
       DECIMAL(20, 2),
       "Result overflows.");
-  assertRescaleDoubleFail<int128_t>(
+  assertRescaleFloatingPointFail<double, int128_t>(
       static_cast<double>(DecimalUtil::kLongDecimalMin),
       DECIMAL(20, 2),
       "Result overflows.");
 
-  assertRescaleDoubleFail<int64_t>(
+  assertRescaleFloatingPointFail<double, int64_t>(
       99999.99, DECIMAL(6, 4), "Result cannot fit in the given precision 6.");
 }
 
+TEST(DecimalTest, rescaleReal) {
+  assertRescaleFloatingPoint<float, int64_t>(
+      -3333.03, DECIMAL(10, 4), -33'330'300);
+  assertRescaleFloatingPoint<float, int128_t>(
+      -3333.03, DECIMAL(20, 1), -33'330);
+  assertRescaleFloatingPoint<float, int128_t>(
+      -3333.03,
+      DECIMAL(38, 18),
+      HugeInt::build(0xFFFFFFFFFFFFFF4B, 0x50EABA2657C90000));
+
+  assertRescaleFloatingPoint<float, int64_t>(
+      -2222.02, DECIMAL(10, 4), -22'220'200);
+  assertRescaleFloatingPoint<float, int128_t>(
+      -2222.02, DECIMAL(20, 1), -22'220);
+  assertRescaleFloatingPoint<float, int128_t>(
+      -2222.02,
+      DECIMAL(38, 18),
+      HugeInt::build(0xFFFFFFFFFFFFFF87, 0x8B4726C43A860000));
+
+  assertRescaleFloatingPoint<float, int64_t>(-1.0, DECIMAL(10, 4), -10'000);
+  assertRescaleFloatingPoint<float, int128_t>(-1.0, DECIMAL(20, 1), -10);
+  assertRescaleFloatingPoint<float, int128_t>(
+      -1.0, DECIMAL(38, 18), -1'000'000'000'000'000'000);
+
+  assertRescaleFloatingPoint<float, int64_t>(0.00, DECIMAL(10, 4), 0);
+  assertRescaleFloatingPoint<float, int128_t>(0.00, DECIMAL(20, 1), 0);
+  assertRescaleFloatingPoint<float, int128_t>(0.00, DECIMAL(38, 18), 0);
+
+  assertRescaleFloatingPoint<float, int64_t>(100, DECIMAL(10, 4), 1'000'000);
+  assertRescaleFloatingPoint<float, int128_t>(100, DECIMAL(20, 1), 1'000);
+  assertRescaleFloatingPoint<float, int128_t>(
+      100, DECIMAL(38, 18), HugeInt::build(0x5, 0x6BC75E2D63100000));
+
+  assertRescaleFloatingPoint<float, int64_t>(
+      9999.99, DECIMAL(10, 4), 99'999'900);
+  assertRescaleFloatingPoint<float, int128_t>(9999.99, DECIMAL(20, 1), 100'000);
+  assertRescaleFloatingPoint<float, int128_t>(
+      9999.99, DECIMAL(38, 18), HugeInt::build(0x21E, 0x19BD42C8427F0000));
+
+  assertRescaleFloatingPoint<float, int128_t>(0.95, DECIMAL(3, 1), 10);
+  assertRescaleFloatingPoint<float, int128_t>(
+      10.03, DECIMAL(38, 18), HugeInt::build(0, 0x8B31B7DBD92B0000));
+  assertRescaleFloatingPoint<float, int128_t>(
+      0.034567, DECIMAL(38, 18), 34'567'000'000'000'000);
+  assertRescaleFloatingPoint<float, int128_t>(
+      0.999999999999999, DECIMAL(38, 18), 1'000'000'000'000'000'000);
+  assertRescaleFloatingPoint<float, int128_t>(
+      0.123456, DECIMAL(38, 18), 123'456'000'000'000'000);
+  assertRescaleFloatingPoint<float, int64_t>(21.5455, DECIMAL(12, 3), 21546);
+
+  assertRescaleFloatingPointFail<float, int128_t>(
+      std::numeric_limits<float>::max(), DECIMAL(38, 38), "Result overflows.");
+  assertRescaleFloatingPoint<float, int128_t>(
+      std::numeric_limits<float>::min(), DECIMAL(38, 2), 0);
+  assertRescaleFloatingPointFail<float, int128_t>(
+      std::numeric_limits<float>::lowest(),
+      DECIMAL(38, 2),
+      "Result overflows.");
+
+  assertRescaleFloatingPointFail<float, int64_t>(
+      NAN, DECIMAL(10, 2), "The input value should be finite.");
+  assertRescaleFloatingPointFail<float, int64_t>(
+      INFINITY, DECIMAL(10, 2), "The input value should be finite.");
+
+  assertRescaleFloatingPointFail<float, int64_t>(
+      9999999999999999999999.99, DECIMAL(10, 2), "Result overflows.");
+  assertRescaleFloatingPointFail<float, int64_t>(
+      static_cast<float>(
+          static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1),
+      DECIMAL(10, 2),
+      "Result overflows.");
+  assertRescaleFloatingPointFail<float, int64_t>(
+      static_cast<float>(
+          static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1),
+      DECIMAL(10, 2),
+      "Result overflows.");
+  assertRescaleFloatingPointFail<float, int64_t>(
+      static_cast<float>(DecimalUtil::kShortDecimalMax),
+      DECIMAL(10, 2),
+      "Result overflows.");
+  assertRescaleFloatingPointFail<float, int64_t>(
+      static_cast<float>(DecimalUtil::kShortDecimalMin),
+      DECIMAL(10, 2),
+      "Result overflows.");
+  assertRescaleFloatingPointFail<float, int128_t>(
+      static_cast<float>(DecimalUtil::kLongDecimalMax),
+      DECIMAL(20, 2),
+      "Result overflows.");
+  assertRescaleFloatingPointFail<float, int128_t>(
+      static_cast<float>(DecimalUtil::kLongDecimalMin),
+      DECIMAL(20, 2),
+      "Result overflows.");
+
+  assertRescaleFloatingPointFail<float, int64_t>(
+      99999.99, DECIMAL(6, 4), "Result cannot fit in the given precision 6.");
+}
 } // namespace
 } // namespace facebook::velox
