@@ -6,7 +6,7 @@ If you have suggestions on the API or use cases you'd like to be covered, please
 GitHub issue. We'd love to hear thoughts and feedback.**
 
 
-## Prerequisites
+## Prerequisites 
 
 You will need Python 3.7 or later. Also, we highly recommend installing an [Miniconda](https://docs.conda.io/en/latest/miniconda.html#latest-miniconda-installer-links) environment.
 
