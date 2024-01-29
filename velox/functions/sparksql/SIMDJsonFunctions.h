@@ -41,21 +41,15 @@ struct SIMDGetJsonObjectFunction {
       const arg_type<Varchar>& json,
       const arg_type<Varchar>& jsonPath) {
     ParserContext ctx(json.data(), json.size());
-    try {
-      ctx.parseDocument();
-      simdjson_result<ondemand::value> rawResult =
-          formattedJsonPath_.has_value()
-          ? ctx.jsonDoc.at_pointer(formattedJsonPath_.value().data())
-          : ctx.jsonDoc.at_pointer(getFormattedJsonPath(jsonPath).data());
-      // Field not found.
-      if (rawResult.error() == NO_SUCH_FIELD) {
-        return false;
-      }
-      auto error = extractStringResult(rawResult, result);
-      if (error) {
-        return false;
-      }
-    } catch (simdjson_error& e) {
+    ctx.parseDocument();
+    auto rawResult = formattedJsonPath_.has_value()
+        ? ctx.jsonDoc.at_pointer(formattedJsonPath_.value().data())
+        : ctx.jsonDoc.at_pointer(getFormattedJsonPath(jsonPath).data());
+    if (rawResult.error()) {
+      return false;
+    }
+    auto error = extractStringResult(rawResult, result);
+    if (error) {
       return false;
     }
 
