@@ -36,6 +36,8 @@ NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 MACOS_DEPS="ninja flex bison cmake ccache protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
 
+FB_OS_VERSION="v2023.12.04.00"
+
 function run_and_time {
   time "$@" || (echo "Failed to run $* ." ; exit 1 )
   { echo "+ Finished running $*"; } 2> /dev/null
@@ -93,9 +95,34 @@ function install_fmt {
 }
 
 function install_folly {
-  github_checkout facebook/folly "v2023.12.04.00"
+  github_checkout facebook/folly "${FB_OS_VERSION}"
   OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
   cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+}
+
+function install_fizz {
+  github_checkout facebookincubator/fizz "${FB_OS_VERSION}"
+  OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+    cmake_install -DBUILD_TESTS=OFF -S fizz
+}
+
+function install_wangle {
+  github_checkout facebook/wangle "${FB_OS_VERSION}"
+  OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+    cmake_install -DBUILD_TESTS=OFF -S wangle
+}
+
+function install_mvfst {
+    github_checkout facebook/mvfst "${FB_OS_VERSION}"
+    OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+        cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+}
+
+
+function install_fbthrift {
+  github_checkout facebook/fbthrift "${FB_OS_VERSION}"
+  OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+    cmake_install -DBUILD_TESTS=OFF
 }
 
 function install_double_conversion {
