@@ -46,15 +46,8 @@ static const std::string fullFilePath =
 class MockBlobStorageFileClient : public IBlobStorageFileClient {
  public:
   MockBlobStorageFileClient() {
-    char tempFileName[] = "/tmp/velox_abfs_test_XXXXXX";
-    int fd = mkstemp(tempFileName);
-    if (fd == -1) {
-      throw std::logic_error(
-          "[MockBlobStorageFileClient] Failed to create a temporary file");
-    }
-    filePath_ = tempFileName;
-    std::fclose(fdopen(fd, "w"));
-    std::remove(tempFileName);
+    auto tempFile = ::exec::test::TempFilePath::create();
+    filePath_ = tempFile->path;
   }
 
   void create() override {
