@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 #include <azure/storage/files/datalake.hpp>
 
@@ -72,7 +71,6 @@ class AbfsWriteFile::Impl {
     blobStorageFileClient_->create();
   }
 
-  /// mainly for test purpose.
   void setFileClient(
       std::shared_ptr<IBlobStorageFileClient> blobStorageManager) {
     blobStorageFileClient_ = std::move(blobStorageManager);
@@ -114,15 +112,13 @@ class AbfsWriteFile::Impl {
   }
 
   uint64_t size() const {
-    auto properties = blobStorageFileClient_->getProperties();
-    return properties.FileSize;
+    return blobStorageFileClient_->getProperties().FileSize;
   }
 
   void append(const char* buffer, size_t size) {
-    auto offset = position_;
-    position_ += size;
     blobStorageFileClient_->append(
-        reinterpret_cast<const uint8_t*>(buffer), size, offset);
+        reinterpret_cast<const uint8_t*>(buffer), size, position_);
+    position_ += size;
   }
 
  private:
@@ -133,7 +129,7 @@ class AbfsWriteFile::Impl {
   std::shared_ptr<IBlobStorageFileClient> blobStorageFileClient_;
 
   uint64_t position_ = -1;
-  std::atomic<bool> closed_{false};
+  bool closed_ = false;
 };
 
 AbfsWriteFile::AbfsWriteFile(
@@ -162,7 +158,7 @@ uint64_t AbfsWriteFile::size() const {
   return impl_->size();
 }
 
-void AbfsWriteFile::setFileClient(
+void AbfsWriteFile::testingSetFileClient(
     std::shared_ptr<IBlobStorageFileClient> fileClient) {
   impl_->setFileClient(std::move(fileClient));
 }

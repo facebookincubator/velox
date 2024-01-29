@@ -135,7 +135,7 @@ class AbfsFileSystemTest : public testing::Test {
     auto abfsfile =
         std::make_unique<facebook::velox::filesystems::abfs::AbfsWriteFile>(
             std::string(path), azuriteServer->connectionStr());
-    abfsfile->setFileClient(client);
+    abfsfile->testingSetFileClient(client);
     abfsfile->initialize();
     return abfsfile;
   }
