@@ -211,11 +211,21 @@ uint64_t HiveConfig::parquetWriterMaxBlockSizeSession(
         session->get<std::string>(kParquetWriterMaxBlockSizeSession).value(),
         core::CapacityUnit::BYTE);
   }
+  if (config_->isValueExists(kParquetWriterMaxBlockSizeSession)) {
+    return toCapacity(
+        config_->get<std::string>(kParquetWriterMaxBlockSizeSession).value(),
+        core::CapacityUnit::BYTE);
+  }
   return 128L * 1024L * 1024L;
 }
 
 int32_t HiveConfig::parquetWriterMaxBlockRowsSession(
     const Config* session) const {
+  if (session->isValueExists(kParquetWriterMaxBlockRowsSession)) {
+    return session->get<int32_t>(
+        kParquetWriterMaxBlockRowsSession, 1024 * 1024);
+  }
+
   return config_->get<int32_t>(kParquetWriterMaxBlockRowsSession, 1024 * 1024);
 }
 

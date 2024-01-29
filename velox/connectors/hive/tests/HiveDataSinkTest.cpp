@@ -510,9 +510,43 @@ TEST_F(HiveDataSinkTest, basic) {
   verifyWrittenData(outputDirectory->path);
 }
 
-TEST_F(HiveDataSinkTest, parquetBlockSizeAndRows) {
+TEST_F(HiveDataSinkTest, parquetBlockSize) {
+#ifdef VELOX_ENABLE_PARQUET
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("parquet_optimized_writer_max_block_size", "10L");
+  connectorConfig.emplace("parquet_optimized_writer_max_block_size", "0MB");
+
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<core::MemConfig>(std::move(connectorConfig)));
+
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto dataSink = createDataSink(
+      rowType_, outputDirectory->path, dwio::common::FileFormat::PARQUET);
+
+  const int numBatches = 10;
+  const auto vectors = createVectors(500, numBatches);
+  for (const auto& vector : vectors) {
+    // The parquet write will flush every call appendData.
+    dataSink->appendData(vector);
+  }
+  dataSink->close();
+
+  dwio::common::ReaderOptions readerOpts{pool_.get()};
+  const std::vector<std::string> filePaths = listFiles(outputDirectory->path);
+  auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(filePaths[0]),
+      readerOpts.getMemoryPool());
+
+  auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
+      std::move(bufferedInput), readerOpts);
+  auto fileMeta = reader->fileMetaData();
+  EXPECT_EQ(fileMeta.numRowGroups(), 10);
+  EXPECT_EQ(fileMeta.rowGroup(0).numRows(), 500);
+#endif
+}
+
+TEST_F(HiveDataSinkTest, parquetBlockRows) {
+#ifdef VELOX_ENABLE_PARQUET
+  std::unordered_map<std::string, std::string> connectorConfig;
   connectorConfig.emplace("parquet_optimized_writer_max_block_rows", "100");
 
   connectorConfig_ = std::make_shared<HiveConfig>(
@@ -535,11 +569,11 @@ TEST_F(HiveDataSinkTest, parquetBlockSizeAndRows) {
       std::make_shared<LocalReadFile>(filePaths[0]),
       readerOpts.getMemoryPool());
 
-#ifdef VELOX_ENABLE_PARQUET
   auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
       std::move(bufferedInput), readerOpts);
-  EXPECT_EQ(reader->numberOfRowGroups(), 50);
-  EXPECT_EQ(reader->numberOfRows(), 5000);
+  auto fileMeta = reader->fileMetaData();
+  EXPECT_EQ(fileMeta.numRowGroups(), 50);
+  EXPECT_EQ(fileMeta.rowGroup(0).numRows(), 100);
 #endif
 }
 
