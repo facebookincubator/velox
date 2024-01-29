@@ -115,7 +115,7 @@ function install_wangle {
 function install_mvfst {
     github_checkout facebook/mvfst "${FB_OS_VERSION}"
     OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
-        cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+        cmake_install -DBUILD_TESTS=OFF
 }
 
 
