@@ -63,8 +63,11 @@ class HashProbe : public Operator {
   /// spilling in hash probe is used to coordinate with the disk spilling
   /// triggered by the hash build operator.
   bool canReclaim() const override {
-    return false;
+    return true;
   }
+
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
 
   void abort() override;
 
@@ -73,6 +76,9 @@ class HashProbe : public Operator {
  private:
   void setState(ProbeOperatorState state);
   void checkStateTransition(ProbeOperatorState state);
+
+  void ensureInputFits(RowVectorPtr& input);
+  bool nonReclaimableState() const;
 
   void setRunning();
   void checkRunning() const;

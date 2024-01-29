@@ -119,7 +119,6 @@ class SpillWriter {
       uint64_t writeBufferSize,
       const std::string& fileCreateConfig,
       common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
-      memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats);
 
   /// Adds 'rows' for the positions in 'indices' into 'this'. The indices
@@ -129,16 +128,21 @@ class SpillWriter {
   /// Returns the size to write.
   uint64_t write(
       const RowVectorPtr& rows,
-      const folly::Range<IndexRange*>& indices);
+      const folly::Range<IndexRange*>& indices,
+      memory::MemoryPool* pool);
+
+  /// Writes data from 'batch_' to the current output file. Returns the actual
+  /// written size.
+  uint64_t flush(bool force, memory::MemoryPool* pool);
 
   /// Closes the current output file if any. Subsequent calls to write will
   /// start a new one.
-  void finishFile();
+  void finishFile(memory::MemoryPool* pool);
 
   /// Finishes this file writer and returns the written spill files info.
   ///
   /// NOTE: we don't allow write to a spill writer after t
-  SpillFiles finish();
+  SpillFiles finish(memory::MemoryPool* pool);
 
   std::vector<std::string> testingSpilledFilePaths() const;
 
@@ -158,10 +162,6 @@ class SpillWriter {
   // Closes the current open spill file pointed by 'currentFile_'.
   void closeFile();
 
-  // Writes data from 'batch_' to the current output file. Returns the actual
-  // written size.
-  uint64_t flush();
-
   // Invoked to increment the number of spilled files and the file size.
   void updateSpilledFileStats(uint64_t fileSize);
 
@@ -169,10 +169,7 @@ class SpillWriter {
   void updateAppendStats(uint64_t numRows, uint64_t serializationTimeUs);
 
   // Invoked to update the disk write stats.
-  void updateWriteStats(
-      uint64_t spilledBytes,
-      uint64_t flushTimeUs,
-      uint64_t writeTimeUs);
+  void updateWriteStats(uint64_t spilledBytes, uint64_t writeTimeUs);
 
   const RowTypePtr type_;
   const uint32_t numSortKeys_;
@@ -186,13 +183,14 @@ class SpillWriter {
   // Updates the aggregated spill bytes of this query, and throws if exceeds
   // the max spill bytes limit.
   common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb_;
-  memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
 
   bool finished_{false};
   uint32_t nextFileId_{0};
   std::unique_ptr<VectorStreamGroup> batch_;
   std::unique_ptr<SpillWriteFile> currentFile_;
+  uint64_t bufferBytes_{0};
+  std::unique_ptr<folly::IOBuf> buffers_;
   SpillFiles finishedFiles_;
 };
 

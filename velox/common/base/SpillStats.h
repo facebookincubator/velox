@@ -49,8 +49,7 @@ struct SpillStats {
   uint64_t spillWrites{0};
   // TODO(jtan6): Remove after presto native lands
   uint64_t spillDiskWrites{0};
-  /// The time spent on copy out serialized rows for disk write. If compression
-  /// is enabled, this includes the compression time.
+  /// Deprecated. Do not use.
   uint64_t spillFlushTimeUs{0};
   /// The time spent on writing spilled rows to disk.
   uint64_t spillWriteTimeUs{0};
@@ -121,11 +120,9 @@ void updateGlobalSpillFillTime(uint64_t timeUs);
 void updateGlobalSpillSortTime(uint64_t timeUs);
 
 /// Updates the stats for disk write including the number of disk writes,
-/// the written bytes, the time spent on copying out (compression) for disk
-/// writes, the time spent on disk writes.
+/// the written bytes, the time spent on disk writes.
 void updateGlobalSpillWriteStats(
     uint64_t spilledBytes,
-    uint64_t flushTimeUs,
     uint64_t writeTimeUs);
 
 /// Increment the spill memory bytes.

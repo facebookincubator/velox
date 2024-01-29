@@ -422,7 +422,8 @@ void HashProbe::spillInput(RowVectorPtr& input) {
     VELOX_CHECK(spiller_->isSpilled(partition));
     spiller_->spill(
         partition,
-        wrap(numSpillInputs, spillInputIndicesBuffers_[partition], input));
+        wrap(numSpillInputs, spillInputIndicesBuffers_[partition], input),
+        pool());
   }
 
   if (numNonSpillingInput == 0) {
@@ -540,8 +541,9 @@ void HashProbe::addInput(RowVectorPtr input) {
   }
 
   bool hasDecoded = false;
-
   if (needSpillInput()) {
+    ensureInputFits(input_);
+
     if (isRightSemiProjectJoin(joinType_) && !probeSideHasNullKeys_) {
       decodeAndDetectNonNullKeys();
       hasDecoded = true;
@@ -611,6 +613,45 @@ void HashProbe::addInput(RowVectorPtr input) {
     table_->joinProbe(*lookup_);
   }
   results_.reset(*lookup_);
+}
+
+void HashProbe::reclaim(
+    uint64_t /*unused*/,
+    memory::MemoryReclaimer::Stats& stats) {
+  VELOX_CHECK(canReclaim());
+  auto* driver = operatorCtx_->driver();
+  VELOX_CHECK_NOT_NULL(driver);
+  VELOX_CHECK(!nonReclaimableSection_);
+
+  const auto cleanup = folly::makeGuard([&]() { pool()->release(); });
+
+  if (spiller_ == nullptr) {
+    LOG(ERROR) << "quit";
+    // NOTE: we might have reached to the max spill limit.
+    return;
+  }
+
+  // NOTE: a hash build operator is reclaimable if it is in the middle of table
+  // build processing and is not under non-reclaimable execution section.
+  if (nonReclaimableState()) {
+    // TODO: reduce the log frequency if it is too verbose.
+    ++stats.numNonReclaimableAttempts;
+    LOG(WARNING) << "Can't reclaim from hash build operator, state_["
+                 << static_cast<int>(state_) << "], nonReclaimableSection_["
+                 << nonReclaimableSection_ << "], spiller_["
+                 << (spiller_->finalized() ? "finalized" : "non-finalized")
+                 << "] " << pool()->name()
+                 << ", usage: " << succinctBytes(pool()->currentBytes());
+    return;
+  }
+
+  spiller_->spill();
+  //pool()->release();
+}
+
+bool HashProbe::nonReclaimableState() const {
+  return (state_ != ProbeOperatorState::kRunning) || nonReclaimableSection_ ||
+      spiller_->finalized();
 }
 
 void HashProbe::prepareOutput(vector_size_t size) {
@@ -849,6 +890,7 @@ RowVectorPtr HashProbe::getOutput() {
           return output;
         }
       }
+      pool()->release();
       if (hasMoreSpillData()) {
         prepareForSpillRestore();
         asyncWaitForHashTable();
@@ -1358,7 +1400,7 @@ void HashProbe::noMoreInputInternal() {
   if (!spillInputPartitionIds_.empty()) {
     VELOX_CHECK_EQ(
         spillInputPartitionIds_.size(), spiller_->spilledPartitionSet().size());
-    spiller_->finishSpill(spillPartitionSet_);
+    spiller_->finishSpill(spillPartitionSet_, pool());
     recordSpillStats();
   }
 
@@ -1392,6 +1434,46 @@ void HashProbe::noMoreInputInternal() {
   VELOX_CHECK(promises.empty());
   VELOX_CHECK(hasSpillData || peers.empty());
   lastProber_ = true;
+}
+
+void HashProbe::ensureInputFits(RowVectorPtr& input) {
+  if (spiller_ == nullptr) {
+    return;
+  }
+
+  const auto currentUsage = pool()->currentBytes();
+  const auto minReservationBytes =
+      currentUsage * spillConfig_->minSpillableReservationPct / 100;
+  const auto availableReservationBytes = pool()->availableReservation();
+  const int64_t incrementBytes = input->estimateFlatSize();
+
+  // First to check if we have sufficient minimal memory reservation.
+  if (availableReservationBytes >= minReservationBytes) {
+    // If there is variable length data we take the flat size of the
+    // input as a cap on the new variable length data needed. There must be at
+    // least 2x the increments in reservation.
+    if (pool()->availableReservation() > 2 * incrementBytes) {
+      return;
+    }
+  }
+
+  // Check if we can increase reservation. The increment is the larger of
+  // twice the maximum increment from this input and
+  // 'spillableReservationGrowthPct_' of the current reservation.
+  const auto targetIncrementBytes = std::max<int64_t>(
+      incrementBytes * 2,
+      currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
+
+  {
+    Operator::ReclaimableSectionGuard guard(this);
+    if (pool()->maybeReserve(targetIncrementBytes)) {
+      return;
+    }
+  }
+  LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
+               << " for memory pool " << pool()->name()
+               << ", usage: " << succinctBytes(pool()->currentBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes());
 }
 
 void HashProbe::recordSpillStats() {
