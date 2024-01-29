@@ -109,7 +109,7 @@ Spiller::Spiller(
           spillConfig->updateAndCheckSpillLimitCb,
           spillConfig->fileNamePrefix,
           targetFileSize,
-          spillConfig->writeBufferSize,
+          0,
           spillConfig->compressionKind,
           spillConfig->executor,
           0,
@@ -139,7 +139,7 @@ Spiller::Spiller(
           spillConfig->updateAndCheckSpillLimitCb,
           spillConfig->fileNamePrefix,
           targetFileSize,
-          spillConfig->writeBufferSize,
+          0,
           spillConfig->compressionKind,
           spillConfig->executor,
           spillConfig->maxSpillRunRows,
@@ -183,7 +183,6 @@ Spiller::Spiller(
           targetFileSize,
           writeBufferSize,
           compressionKind,
-          memory::spillMemoryPool(),
           &stats_,
           fileCreateConfig) {
   TestValue::adjust(
@@ -368,10 +367,11 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
     while (written < run.rows.size()) {
       extractSpillVector(
           run.rows, kTargetBatchRows, kTargetBatchBytes, spillVector, written);
-      totalBytes += state_.appendToPartition(partition, spillVector);
+      totalBytes += state_.appendToPartition(
+          partition, spillVector, memory::spillMemoryPool());
       if (totalBytes > state_.targetFileSize()) {
         VELOX_CHECK(!needSort());
-        state_.finishFile(partition);
+        state_.finishFile(partition, memory::spillMemoryPool());
       }
     }
     return std::make_unique<SpillStatus>(partition, written, nullptr);
@@ -430,7 +430,7 @@ void Spiller::runSpill(bool lastRun) {
     run.clear();
     // When a sorted run ends, we start with a new file next time.
     if (needSort()) {
-      state_.finishFile(partition);
+      state_.finishFile(partition, memory::spillMemoryPool());
     }
   }
 
@@ -438,9 +438,14 @@ void Spiller::runSpill(bool lastRun) {
   // call to spill all the rows starting from the specified row offset.
   if (lastRun &&
       (type_ == Spiller::Type::kAggregateOutput ||
-       type_ == Spiller::Type::kOrderByOutput)) {
+       type_ == Spiller::Type::kOrderByOutput ||
+       type_ == Spiller::Type::kHashJoinBuild)) {
     for (auto partition = 0; partition < spillRuns_.size(); ++partition) {
-      state_.finishFile(partition);
+      if (type_ == Spiller::Type::kHashJoinBuild) {
+        state_.flush(partition, memory::spillMemoryPool());
+      } else {
+        state_.finishFile(partition, memory::spillMemoryPool());
+      }
     }
   }
 }
@@ -471,8 +476,29 @@ void Spiller::spill(const RowContainerIterator& startRowIter) {
 
 void Spiller::spill(const RowContainerIterator* startRowIter) {
   CHECK_NOT_FINALIZED();
-  VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
+  // VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
   VELOX_CHECK_NE(type_, Type::kOrderByOutput);
+
+  if (type_ == Type::kHashJoinProbe) {
+    if (!isAnySpilled()) {
+      return;
+    }
+    ++stats_.wlock()->spillRuns;
+    LOG(ERROR) << "spill probe";
+    for (auto partition = 0; partition < spillRuns_.size(); ++partition) {
+      state_.flush(partition, memory::spillMemoryPool());
+    }
+    return;
+  }
+
+  if (isAllSpilled() && type_ == Type::kHashJoinBuild) {
+    ++stats_.wlock()->spillRuns;
+    LOG(ERROR) << "spill build post";
+    for (auto partition = 0; partition < spillRuns_.size(); ++partition) {
+      state_.flush(partition, memory::spillMemoryPool());
+    }
+    return;
+  }
 
   markAllPartitionsSpilled();
 
@@ -516,7 +542,10 @@ void Spiller::markAllPartitionsSpilled() {
   }
 }
 
-void Spiller::spill(uint32_t partition, const RowVectorPtr& spillVector) {
+void Spiller::spill(
+    uint32_t partition,
+    const RowVectorPtr& spillVector,
+    memory::MemoryPool* pool) {
   CHECK_NOT_FINALIZED();
   VELOX_CHECK(
       type_ == Type::kHashJoinProbe || type_ == Type::kHashJoinBuild,
@@ -534,10 +563,12 @@ void Spiller::spill(uint32_t partition, const RowVectorPtr& spillVector) {
     return;
   }
 
-  state_.appendToPartition(partition, spillVector);
+  state_.appendToPartition(partition, spillVector, pool);
 }
 
-void Spiller::finishSpill(SpillPartitionSet& partitionSet) {
+void Spiller::finishSpill(
+    SpillPartitionSet& partitionSet,
+    memory::MemoryPool* pool) {
   finalizeSpill();
 
   for (auto& partition : state_.spilledPartitionSet()) {
@@ -546,19 +577,20 @@ void Spiller::finishSpill(SpillPartitionSet& partitionSet) {
       partitionSet.emplace(
           partitionId,
           std::make_unique<SpillPartition>(
-              partitionId, state_.finish(partition)));
+              partitionId, state_.finish(partition, pool)));
     } else {
-      partitionSet[partitionId]->addFiles(state_.finish(partition));
+      partitionSet[partitionId]->addFiles(state_.finish(partition, pool));
     }
   }
 }
 
-SpillPartition Spiller::finishSpill() {
+SpillPartition Spiller::finishSpill(memory::MemoryPool* pool) {
   VELOX_CHECK_EQ(state_.maxPartitions(), 1);
   VELOX_CHECK(state_.isPartitionSpilled(0));
 
   finalizeSpill();
-  return SpillPartition(SpillPartitionId{bits_.begin(), 0}, state_.finish(0));
+  return SpillPartition(
+      SpillPartitionId{bits_.begin(), 0}, state_.finish(0, pool));
 }
 
 void Spiller::finalizeSpill() {

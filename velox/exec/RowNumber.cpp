@@ -108,7 +108,7 @@ void RowNumber::noMoreInput() {
   Operator::noMoreInput();
 
   if (inputSpiller_ != nullptr) {
-    inputSpiller_->finishSpill(spillInputPartitionSet_);
+    inputSpiller_->finishSpill(spillInputPartitionSet_, pool());
 
     recordSpillStats(hashTableSpiller_->stats());
     recordSpillStats(inputSpiller_->stats());
@@ -432,7 +432,7 @@ void RowNumber::spill() {
   setupInputSpiller();
 
   hashTableSpiller_->spill();
-  hashTableSpiller_->finishSpill(spillHashTablePartitionSet_);
+  hashTableSpiller_->finishSpill(spillHashTablePartitionSet_, pool());
 
   table_->clear();
   pool()->release();
@@ -485,7 +485,7 @@ void RowNumber::spillInput(
     }
 
     inputSpiller_->spill(
-        partition, wrap(numInputs, partitionIndices[partition], input));
+        partition, wrap(numInputs, partitionIndices[partition], input), pool);
   }
 }
 

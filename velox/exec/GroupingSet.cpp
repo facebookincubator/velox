@@ -1012,7 +1012,7 @@ bool GroupingSet::getOutputWithSpill(
     VELOX_CHECK_EQ(table_->rows()->numRows(), 0);
 
     VELOX_CHECK_NULL(merge_);
-    auto spillPartition = spiller_->finishSpill();
+    auto spillPartition = spiller_->finishSpill(&pool_);
     merge_ = spillPartition.createOrderedReader(&pool_);
   }
   VELOX_CHECK_EQ(spiller_->state().maxPartitions(), 1);

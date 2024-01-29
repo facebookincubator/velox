@@ -388,7 +388,7 @@ void SortBuffer::getOutputWithSpill() {
 
 void SortBuffer::finishSpill() {
   VELOX_CHECK_NULL(spillMerger_);
-  auto spillPartition = spiller_->finishSpill();
+  auto spillPartition = spiller_->finishSpill(pool());
   spillMerger_ = spillPartition.createOrderedReader(pool());
 }
 

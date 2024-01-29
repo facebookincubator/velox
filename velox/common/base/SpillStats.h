@@ -49,14 +49,17 @@ struct SpillStats {
   uint64_t spillWrites{0};
   // TODO(jtan6): Remove after presto native lands
   uint64_t spillDiskWrites{0};
-  /// The time spent on copy out serialized rows for disk write. If compression
-  /// is enabled, this includes the compression time.
+  /// Deprecated. Do not use.
   uint64_t spillFlushTimeUs{0};
   /// The time spent on writing spilled rows to disk.
   uint64_t spillWriteTimeUs{0};
   /// The number of times that an hash build operator exceeds the max spill
   /// limit.
   uint64_t spillMaxLevelExceededCount{0};
+  uint64_t spillBatchReads{0};
+  uint64_t spillBatchReadTimeUs{0};
+  uint64_t spillFileReads{0};
+  uint64_t spillFileReadTimeUs{0};
 
   SpillStats(
       uint64_t _spillRuns,
@@ -71,6 +74,10 @@ struct SpillStats {
       uint64_t _spillWrites,
       uint64_t _spillFlushTimeUs,
       uint64_t _spillWriteTimeUs,
+      uint64_t _spillBatchReads,
+      uint64_t _spillBatchReadTimeUs,
+      uint64_t _spillFileReads,
+      uint64_t _spillFileReadTimeUs,
       uint64_t _spillMaxLevelExceededCount);
 
   SpillStats() = default;
@@ -121,11 +128,9 @@ void updateGlobalSpillFillTime(uint64_t timeUs);
 void updateGlobalSpillSortTime(uint64_t timeUs);
 
 /// Updates the stats for disk write including the number of disk writes,
-/// the written bytes, the time spent on copying out (compression) for disk
-/// writes, the time spent on disk writes.
+/// the written bytes, the time spent on disk writes.
 void updateGlobalSpillWriteStats(
     uint64_t spilledBytes,
-    uint64_t flushTimeUs,
     uint64_t writeTimeUs);
 
 /// Increment the spill memory bytes.

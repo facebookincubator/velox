@@ -415,7 +415,7 @@ void HashBuild::addInput(RowVectorPtr input) {
 bool HashBuild::ensureInputFits(RowVectorPtr& input) {
   // NOTE: we don't need memory reservation if all the partitions are spilling
   // as we spill all the input rows to disk directly.
-  if (!spillEnabled() || spiller_ == nullptr || spiller_->isAllSpilled()) {
+  if (!spillEnabled() || spiller_ == nullptr) {
     return true;
   }
 
@@ -442,84 +442,121 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
   numSpillRows_ = 0;
   numSpillBytes_ = 0;
 
-  auto* rows = table_->rows();
-  const auto numRows = rows->numRows();
+  if (!spiller_->isAllSpilled()) {
+    auto* rows = table_->rows();
+    const auto numRows = rows->numRows();
 
-  auto [freeRows, outOfLineFreeBytes] = rows->freeSpace();
-  const auto outOfLineBytes =
-      rows->stringAllocator().retainedSize() - outOfLineFreeBytes;
-  const auto outOfLineBytesPerRow =
-      std::max<uint64_t>(1, numRows == 0 ? 0 : outOfLineBytes / numRows);
-  const auto currentUsage = pool()->currentBytes();
+    auto [freeRows, outOfLineFreeBytes] = rows->freeSpace();
+    const auto outOfLineBytes =
+        rows->stringAllocator().retainedSize() - outOfLineFreeBytes;
+    const auto outOfLineBytesPerRow =
+        std::max<uint64_t>(1, numRows == 0 ? 0 : outOfLineBytes / numRows);
+    const auto currentUsage = pool()->currentBytes();
 
-  if (numRows != 0) {
-    // Test-only spill path.
-    if (testingTriggerSpill()) {
-      numSpillRows_ = std::max<int64_t>(1, numRows / 10);
-      numSpillBytes_ = numSpillRows_ * outOfLineBytesPerRow;
-      return false;
+    if (numRows != 0) {
+      // Test-only spill path.
+      if (testingTriggerSpill()) {
+        numSpillRows_ = std::max<int64_t>(1, numRows / 10);
+        numSpillBytes_ = numSpillRows_ * outOfLineBytesPerRow;
+        return false;
+      }
+
+      // We check usage from the parent pool to take peers' allocations into
+      // account.
+      const auto nodeUsage = pool()->parent()->currentBytes();
+      if (spillMemoryThreshold_ != 0 && nodeUsage > spillMemoryThreshold_) {
+        const int64_t bytesToSpill =
+            nodeUsage * spillConfig()->spillableReservationGrowthPct / 100;
+        numSpillRows_ = std::max<int64_t>(
+            1, bytesToSpill / (rows->fixedRowSize() + outOfLineBytesPerRow));
+        numSpillBytes_ = numSpillRows_ * outOfLineBytesPerRow;
+        return false;
+      }
     }
 
-    // We check usage from the parent pool to take peers' allocations into
-    // account.
-    const auto nodeUsage = pool()->parent()->currentBytes();
-    if (spillMemoryThreshold_ != 0 && nodeUsage > spillMemoryThreshold_) {
-      const int64_t bytesToSpill =
-          nodeUsage * spillConfig()->spillableReservationGrowthPct / 100;
-      numSpillRows_ = std::max<int64_t>(
-          1, bytesToSpill / (rows->fixedRowSize() + outOfLineBytesPerRow));
-      numSpillBytes_ = numSpillRows_ * outOfLineBytesPerRow;
-      return false;
+    const auto minReservationBytes =
+        currentUsage * spillConfig_->minSpillableReservationPct / 100;
+    const auto availableReservationBytes = pool()->availableReservation();
+    const auto tableIncrementBytes =
+        table_->hashTableSizeIncrease(input->size());
+    const int64_t flatBytes = input->estimateFlatSize();
+    const auto rowContainerIncrementBytes = numRows == 0
+        ? flatBytes * 2
+        : rows->sizeIncrement(
+              input->size(), outOfLineBytes > 0 ? flatBytes * 2 : 0);
+    const auto incrementBytes =
+        rowContainerIncrementBytes + tableIncrementBytes;
+
+    // First to check if we have sufficient minimal memory reservation.
+    if (availableReservationBytes >= minReservationBytes) {
+      if (freeRows > input->size() &&
+          (outOfLineBytes == 0 || outOfLineFreeBytes >= flatBytes)) {
+        // Enough free rows for input rows and enough variable length free
+        // space for the flat size of the whole vector. If outOfLineBytes
+        // is 0 there is no need for variable length space.
+        return true;
+      }
+
+      // If there is variable length data we take the flat size of the
+      // input as a cap on the new variable length data needed. There must be at
+      // least 2x the increments in reservation.
+      if (pool()->availableReservation() > 2 * incrementBytes) {
+        return true;
+      }
     }
+
+    // Check if we can increase reservation. The increment is the larger of
+    // twice the maximum increment from this input and
+    // 'spillableReservationGrowthPct_' of the current reservation.
+    const auto targetIncrementBytes = std::max<int64_t>(
+        incrementBytes * 2,
+        currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
+
+    {
+      Operator::ReclaimableSectionGuard guard(this);
+      if (pool()->maybeReserve(targetIncrementBytes)) {
+        return true;
+      }
+    }
+    LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
+                 << " for memory pool " << pool()->name()
+                 << ", usage: " << succinctBytes(pool()->currentBytes())
+                 << ", reservation: " << succinctBytes(pool()->reservedBytes());
+  } else {
+    const auto currentUsage = pool()->currentBytes();
+    const auto minReservationBytes =
+        currentUsage * spillConfig_->minSpillableReservationPct / 100;
+    const auto availableReservationBytes = pool()->availableReservation();
+    const int64_t incrementBytes = input->estimateFlatSize();
+
+    // First to check if we have sufficient minimal memory reservation.
+    if (availableReservationBytes >= minReservationBytes) {
+      // If there is variable length data we take the flat size of the
+      // input as a cap on the new variable length data needed. There must be at
+      // least 2x the increments in reservation.
+      if (pool()->availableReservation() > 2 * incrementBytes) {
+        return true;
+      }
+    }
+
+    // Check if we can increase reservation. The increment is the larger of
+    // twice the maximum increment from this input and
+    // 'spillableReservationGrowthPct_' of the current reservation.
+    const auto targetIncrementBytes = std::max<int64_t>(
+        incrementBytes * 2,
+        currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
+
+    {
+      Operator::ReclaimableSectionGuard guard(this);
+      if (pool()->maybeReserve(targetIncrementBytes)) {
+        return true;
+      }
+    }
+    LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
+                 << " for memory pool " << pool()->name()
+                 << ", usage: " << succinctBytes(pool()->currentBytes())
+                 << ", reservation: " << succinctBytes(pool()->reservedBytes());
   }
-
-  const auto minReservationBytes =
-      currentUsage * spillConfig_->minSpillableReservationPct / 100;
-  const auto availableReservationBytes = pool()->availableReservation();
-  const auto tableIncrementBytes = table_->hashTableSizeIncrease(input->size());
-  const int64_t flatBytes = input->estimateFlatSize();
-  const auto rowContainerIncrementBytes = numRows == 0
-      ? flatBytes * 2
-      : rows->sizeIncrement(
-            input->size(), outOfLineBytes > 0 ? flatBytes * 2 : 0);
-  const auto incrementBytes = rowContainerIncrementBytes + tableIncrementBytes;
-
-  // First to check if we have sufficient minimal memory reservation.
-  if (availableReservationBytes >= minReservationBytes) {
-    if (freeRows > input->size() &&
-        (outOfLineBytes == 0 || outOfLineFreeBytes >= flatBytes)) {
-      // Enough free rows for input rows and enough variable length free
-      // space for the flat size of the whole vector. If outOfLineBytes
-      // is 0 there is no need for variable length space.
-      return true;
-    }
-
-    // If there is variable length data we take the flat size of the
-    // input as a cap on the new variable length data needed. There must be at
-    // least 2x the increments in reservation.
-    if (pool()->availableReservation() > 2 * incrementBytes) {
-      return true;
-    }
-  }
-
-  // Check if we can increase reservation. The increment is the larger of
-  // twice the maximum increment from this input and
-  // 'spillableReservationGrowthPct_' of the current reservation.
-  const auto targetIncrementBytes = std::max<int64_t>(
-      incrementBytes * 2,
-      currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
-
-  {
-    Operator::ReclaimableSectionGuard guard(this);
-    if (pool()->maybeReserve(targetIncrementBytes)) {
-      return true;
-    }
-  }
-
-  LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
-               << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->currentBytes())
-               << ", reservation: " << succinctBytes(pool()->reservedBytes());
   return true;
 }
 
@@ -624,11 +661,12 @@ void HashBuild::spillPartition(
   VELOX_DCHECK(spillEnabled());
 
   if (isInputFromSpill()) {
-    spiller_->spill(partition, wrap(size, indices, input));
+    spiller_->spill(partition, wrap(size, indices, input), pool());
   } else {
     spiller_->spill(
         partition,
-        wrap(size, indices, tableType_, spillChildVectors_, input->pool()));
+        wrap(size, indices, tableType_, spillChildVectors_, input->pool()),
+        pool());
   }
 }
 
@@ -722,6 +760,8 @@ void HashBuild::noMoreInputInternal() {
 bool HashBuild::finishHashBuild() {
   checkRunning();
 
+  LOG(ERROR) << "finish processing " << pool()->name();
+
   // Release the unused memory reservation before building the merged join
   // table.
   pool()->release();
@@ -738,6 +778,7 @@ bool HashBuild::finishHashBuild() {
     setState(State::kWaitForBuild);
     return false;
   }
+  LOG(ERROR) << "finish processing after peer done " << pool()->name();
 
   TestValue::adjust("facebook::velox::exec::HashBuild::finishHashBuild", this);
 
@@ -783,13 +824,15 @@ bool HashBuild::finishHashBuild() {
     VELOX_CHECK_NOT_NULL(build->table_);
     otherTables.push_back(std::move(build->table_));
     if (build->spiller_ != nullptr) {
-      build->spiller_->finishSpill(spillPartitions);
+      LOG(ERROR) << "finish " << build->pool()->name();
+      build->spiller_->finishSpill(spillPartitions, pool());
     }
     build->recordSpillStats();
   }
 
   if (spiller_ != nullptr) {
-    spiller_->finishSpill(spillPartitions);
+    LOG(ERROR) << "finish " << pool()->name();
+    spiller_->finishSpill(spillPartitions, pool());
 
     // Remove the spilled partitions which are empty so as we don't need to
     // trigger unnecessary spilling at hash probe side.
@@ -1143,6 +1186,8 @@ void HashBuild::reclaim(
     spillTasks.push_back(
         std::make_shared<AsyncSource<SpillResult>>([buildOp]() {
           try {
+            LOG(ERROR) << "spill " << buildOp->pool()->name() << " "
+                       << succinctBytes(buildOp->pool()->currentBytes());
             buildOp->spiller_->spill();
             buildOp->table_->clear();
             // Release the minimum reserved memory.

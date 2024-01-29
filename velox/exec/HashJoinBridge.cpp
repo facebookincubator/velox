@@ -176,16 +176,22 @@ uint64_t HashJoinMemoryReclaimer::reclaim(
     uint64_t maxWaitMs,
     memory::MemoryReclaimer::Stats& stats) {
   uint64_t reclaimedBytes{0};
+  bool buildSpilled{false};
   pool->visitChildren([&](memory::MemoryPool* child) {
     VELOX_CHECK_EQ(child->kind(), memory::MemoryPool::Kind::kLeaf);
     // The hash probe operator do not support memory reclaim.
-    if (!isHashBuildMemoryPool(*child)) {
-      return true;
+    if (isHashBuildMemoryPool(*child)) {
+      if (buildSpilled) {
+        return true;
+      }
+      // We only need to reclaim from any one of the hash build operators
+      // which will reclaim from all the peer hash build operators.
+      reclaimedBytes += child->reclaim(targetBytes, maxWaitMs, stats);
+      buildSpilled = true;
+    } else {
+      reclaimedBytes += child->reclaim(targetBytes, maxWaitMs, stats);
     }
-    // We only need to reclaim from any one of the hash build operators
-    // which will reclaim from all the peer hash build operators.
-    reclaimedBytes = child->reclaim(targetBytes, maxWaitMs, stats);
-    return false;
+    return reclaimedBytes < targetBytes;
   });
   return reclaimedBytes;
 }

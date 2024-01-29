@@ -48,6 +48,10 @@ SpillStats::SpillStats(
     uint64_t _spillWrites,
     uint64_t _spillFlushTimeUs,
     uint64_t _spillWriteTimeUs,
+    uint64_t _spillBatchReads,
+    uint64_t _spillBatchReadTimeUs,
+    uint64_t _spillFileReads,
+    uint64_t _spillFileReadTimeUs,
     uint64_t _spillMaxLevelExceededCount)
     : spillRuns(_spillRuns),
       spilledInputBytes(_spilledInputBytes),
@@ -61,6 +65,10 @@ SpillStats::SpillStats(
       spillWrites(_spillWrites),
       spillFlushTimeUs(_spillFlushTimeUs),
       spillWriteTimeUs(_spillWriteTimeUs),
+      spillBatchReads(_spillBatchReads),
+      spillBatchReadTimeUs(_spillBatchReadTimeUs),
+      spillFileReads(_spillFileReads),
+      spillFileReadTimeUs(_spillFileReadTimeUs),
       spillMaxLevelExceededCount(_spillMaxLevelExceededCount) {}
 
 SpillStats& SpillStats::operator+=(const SpillStats& other) {
@@ -243,16 +251,13 @@ void updateGlobalSpillSortTime(uint64_t timeUs) {
 
 void updateGlobalSpillWriteStats(
     uint64_t spilledBytes,
-    uint64_t flushTimeUs,
     uint64_t writeTimeUs) {
   RECORD_METRIC_VALUE(kMetricSpillWritesCount);
   RECORD_METRIC_VALUE(kMetricSpilledBytes, spilledBytes);
-  RECORD_HISTOGRAM_METRIC_VALUE(kMetricSpillFlushTimeMs, flushTimeUs / 1'000);
   RECORD_HISTOGRAM_METRIC_VALUE(kMetricSpillWriteTimeMs, writeTimeUs / 1'000);
   auto statsLocked = localSpillStats().wlock();
   ++statsLocked->spillWrites;
   statsLocked->spilledBytes += spilledBytes;
-  statsLocked->spillFlushTimeUs += flushTimeUs;
   statsLocked->spillWriteTimeUs += writeTimeUs;
 }
 

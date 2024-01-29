@@ -223,6 +223,7 @@ bool SharedArbitrator::growCapacity(
     VELOX_MEM_POOL_ABORTED("The requestor has already been aborted");
   }
 
+  LOG(ERROR) << "ensure start";
   if (FOLLY_UNLIKELY(!ensureCapacity(requestor, targetBytes))) {
     RECORD_METRIC_VALUE(kMetricArbitratorFailuresCount);
     ++numFailures_;
@@ -440,7 +441,11 @@ uint64_t SharedArbitrator::reclaim(
   uint64_t reclaimDurationUs{0};
   uint64_t reclaimedBytes{0};
   uint64_t freedBytes{0};
+  LOG(ERROR) << "start reclaim";
   MemoryReclaimer::Stats reclaimerStats;
+  if (targetBytes > 1UL << 30) {
+    LOG(ERROR) << process::StackTrace().toString();
+  }
   {
     MicrosecondTimer reclaimTimer(&reclaimDurationUs);
     const uint64_t oldCapacity = pool->capacity();
@@ -466,11 +471,13 @@ uint64_t SharedArbitrator::reclaim(
   numShrunkBytes_ += freedBytes;
   reclaimTimeUs_ += reclaimDurationUs;
   numNonReclaimableAttempts_ += reclaimerStats.numNonReclaimableAttempts;
-  VELOX_MEM_LOG_EVERY_MS(INFO, 1000)
-      << "Reclaimed from memory pool " << pool->name() << " with target of "
-      << succinctBytes(targetBytes) << ", actually reclaimed "
-      << succinctBytes(freedBytes) << " free memory and "
-      << succinctBytes(reclaimedBytes - freedBytes) << " used memory";
+  VELOX_MEM_LOG(INFO) << "Reclaimed from memory pool " << pool->name()
+                      << " with target of " << succinctBytes(targetBytes)
+                      << ", actually reclaimed " << succinctBytes(freedBytes)
+                      << " free memory and "
+                      << succinctBytes(reclaimedBytes - freedBytes)
+                      << " used memory, spent "
+                      << succinctMicros(reclaimDurationUs);
   return reclaimedBytes;
 }
 

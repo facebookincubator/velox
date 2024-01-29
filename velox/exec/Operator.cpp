@@ -368,6 +368,37 @@ void Operator::recordSpillStats(const common::SpillStats& spillStats) {
     common::updateGlobalMaxSpillLevelExceededCount(
         spillStats.spillMaxLevelExceededCount);
   }
+
+  if (spillStats.spillBatchReads != 0) {
+    lockedStats->addRuntimeStat(
+        "spillBatchReads",
+        RuntimeCounter{
+            static_cast<int64_t>(spillStats.spillBatchReads)});
+  }
+  if (spillStats.spillBatchReadTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillBatchReadTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillBatchReadTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (spillStats.spillFileReads != 0) {
+    lockedStats->addRuntimeStat(
+        "spillFileReads",
+        RuntimeCounter{
+            static_cast<int64_t>(spillStats.spillFileReads)});
+  }
+  if (spillStats.spillFileReadTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillFileReadTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillFileReadTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
 }
 
 std::string Operator::toString() const {
