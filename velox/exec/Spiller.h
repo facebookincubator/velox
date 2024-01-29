@@ -47,63 +47,41 @@ class Spiller {
 
   using SpillRows = std::vector<char*, memory::StlAllocator<char*>>;
 
-  // The constructor without specifying hash bits which will only use one
-  // partition by default.
+  /// The constructor without specifying hash bits which will only use one
+  /// partition by default.
+
+  /// type == Type::kOrderByInput || type == Type::kAggregateInput
   Spiller(
       Type type,
       RowContainer* container,
       RowTypePtr rowType,
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
-      common::GetSpillDirectoryPathCB getSpillDirPathCb,
-      const std::string& fileNamePrefix,
-      uint64_t writeBufferSize,
-      common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
-      folly::Executor* executor,
-      uint64_t maxSpillRunRows,
-      const std::string& fileCreateConfig = {});
+      const common::SpillConfig* spillConfig);
 
+  /// type == Type::kAggregateOutput || type == Type::kOrderByOutput
   Spiller(
       Type type,
       RowContainer* container,
       RowTypePtr rowType,
-      common::GetSpillDirectoryPathCB getSpillDirPathCb,
-      const std::string& fileNamePrefix,
-      uint64_t writeBufferSize,
-      common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
-      folly::Executor* executor,
-      uint64_t maxSpillRunRows,
-      const std::string& fileCreateConfig = {});
+      const common::SpillConfig* spillConfig);
 
+  /// type == Type::kHashJoinProbe
   Spiller(
       Type type,
       RowTypePtr rowType,
       HashBitRange bits,
-      common::GetSpillDirectoryPathCB getSpillDirPathCb,
-      const std::string& fileNamePrefix,
-      uint64_t targetFileSize,
-      uint64_t writeBufferSize,
-      common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
-      folly::Executor* executor,
-      const std::string& fileCreateConfig = {});
+      const common::SpillConfig* spillConfig,
+      uint64_t targetFileSize);
 
+  /// type == Type::kHashJoinBuild
   Spiller(
       Type type,
       RowContainer* container,
       RowTypePtr rowType,
       HashBitRange bits,
-      common::GetSpillDirectoryPathCB getSpillDirPathCb,
-      const std::string& fileNamePrefix,
-      uint64_t targetFileSize,
-      uint64_t writeBufferSize,
-      common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
-      folly::Executor* executor,
-      uint64_t maxSpillRunRows,
-      const std::string& fileCreateConfig = {});
+      const common::SpillConfig* spillConfig,
+      uint64_t targetFileSize);
 
   Type type() const {
     return type_;
@@ -208,12 +186,12 @@ class Spiller {
       HashBitRange bits,
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
-      common::GetSpillDirectoryPathCB getSpillDirPathCb,
+      const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
+      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       const std::string& fileNamePrefix,
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
-      memory::MemoryPool* pool,
       folly::Executor* executor,
       uint64_t maxSpillRunRows,
       const std::string& fileCreateConfig);
@@ -323,7 +301,6 @@ class Spiller {
   // the spiller.
   RowContainer* const container_{nullptr};
   folly::Executor* const executor_;
-  memory::MemoryPool* const pool_;
   const HashBitRange bits_;
   const RowTypePtr rowType_;
   const uint64_t maxSpillRunRows_;
@@ -341,3 +318,10 @@ class Spiller {
   std::vector<SpillRun> spillRuns_;
 };
 } // namespace facebook::velox::exec
+
+template <>
+struct fmt::formatter<facebook::velox::exec::Spiller::Type> : formatter<int> {
+  auto format(facebook::velox::exec::Spiller::Type s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

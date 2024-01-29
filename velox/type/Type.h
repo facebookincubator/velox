@@ -969,7 +969,6 @@ class RowType : public TypeBase<TypeKind::ROW> {
   const std::vector<std::string> names_;
   const std::vector<std::shared_ptr<const Type>> children_;
   const std::vector<TypeParameter> parameters_;
-  const folly::F14FastMap<std::string, uint32_t> childrenIndices_;
 };
 
 using RowTypePtr = std::shared_ptr<const RowType>;
@@ -1899,6 +1898,21 @@ template <typename... TArgs>
 struct ConstantChecker {
   static constexpr bool isConstant[sizeof...(TArgs)] = {
       isConstantType<TArgs>::value...};
+};
+
+template <TypeKind kind>
+struct KindToSimpleType {
+  using type = typename TypeTraits<kind>::NativeType;
+};
+
+template <>
+struct KindToSimpleType<TypeKind::VARCHAR> {
+  using type = Varchar;
+};
+
+template <>
+struct KindToSimpleType<TypeKind::VARBINARY> {
+  using type = Varbinary;
 };
 
 template <typename T>

@@ -148,12 +148,24 @@ bool HiveConfig::isFileColumnNamesReadAsLowerCase(const Config* session) const {
   return config_->get<bool>(kFileColumnNamesReadAsLowerCase, false);
 }
 
+bool HiveConfig::isPartitionPathAsLowerCase(const Config* session) const {
+  return config_->get<bool>(kPartitionPathAsLowerCaseSession, true);
+}
+
 int64_t HiveConfig::maxCoalescedBytes() const {
   return config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20);
 }
 
 int32_t HiveConfig::maxCoalescedDistanceBytes() const {
   return config_->get<int32_t>(kMaxCoalescedDistanceBytes, 512 << 10);
+}
+
+int32_t HiveConfig::prefetchRowGroups() const {
+  return config_->get<int32_t>(kPrefetchRowGroups, 1);
+}
+
+int32_t HiveConfig::loadQuantum() const {
+  return config_->get<int32_t>(kLoadQuantum, 8 << 20);
 }
 
 int32_t HiveConfig::numCacheFileHandles() const {
@@ -217,11 +229,12 @@ uint64_t HiveConfig::sortWriterMaxOutputBytes(const Config* session) const {
   return 10UL << 20;
 }
 
-std::string HiveConfig::fileCreateConfig(const Config* session) const {
-  if (session->isValueExists(kFileCreateConfig)) {
-    return session->get<std::string>(kFileCreateConfig).value();
-  }
-  return config_->get<std::string>(kFileCreateConfig, "");
+uint64_t HiveConfig::footerEstimatedSize() const {
+  return config_->get<uint64_t>(kFooterEstimatedSize, 1UL << 20);
+}
+
+uint64_t HiveConfig::filePreloadThreshold() const {
+  return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
 }
 
 } // namespace facebook::velox::connector::hive

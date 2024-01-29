@@ -320,7 +320,8 @@ class SpillState {
   /// target size of a single file.  'pool' owns the memory for state and
   /// results.
   SpillState(
-      common::GetSpillDirectoryPathCB getSpillDirectoryPath,
+      const common::GetSpillDirectoryPathCB& getSpillDirectoryPath,
+      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       const std::string& fileNamePrefix,
       int32_t maxPartitions,
       int32_t numSortKeys,
@@ -406,6 +407,10 @@ class SpillState {
   // can use it to ensure the path exists before returning.
   common::GetSpillDirectoryPathCB getSpillDirPathCb_;
 
+  // Updates the aggregated spill bytes of this query, and throws if exceeds
+  // the max spill bytes limit.
+  common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb_;
+
   /// Prefix for spill files.
   const std::string fileNamePrefix_;
   const int32_t maxPartitions_;
@@ -442,3 +447,11 @@ struct hash<::facebook::velox::exec::SpillPartitionId> {
   }
 };
 } // namespace std
+
+template <>
+struct fmt::formatter<facebook::velox::exec::SpillPartitionId>
+    : formatter<std::string> {
+  auto format(facebook::velox::exec::SpillPartitionId s, format_context& ctx) {
+    return formatter<std::string>::format(s.toString(), ctx);
+  }
+};

@@ -24,21 +24,35 @@
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/type/StringView.h"
 
+namespace facebook::velox {
+
 namespace date {
 class time_zone;
 }
 
-namespace facebook::velox {
-
 struct TimestampToStringOptions {
   enum class Precision : int8_t {
-    kMilliseconds = 3,
-    kNanoseconds = 9,
+    kMilliseconds = 3, // 10^3 milliseconds are equal to one second.
+    kMicroseconds = 6, // 10^6 microseconds are equal to one second.
+    kNanoseconds = 9, // 10^9 nanoseconds are equal to one second.
   };
 
   Precision precision = Precision::kNanoseconds;
 
+  // Whether to add a leading '+' when year is greater than 9999.
+  bool leadingPositiveSign = false;
+
+  /// Whether to skip trailing zeros of fractional part. E.g. when true,
+  /// '2000-01-01 12:21:56.129000' becomes '2000-01-01 12:21:56.129'.
+  bool skipTrailingZeros = false;
+
+  /// Whether padding zeros are added when the digits of year is less than 4.
+  /// E.g. when true, '1-01-01 05:17:32.000' becomes '0001-01-01 05:17:32.000',
+  /// '-03-24 13:20:00.000' becomes '0000-03-24 13:20:00.000', and '-1-11-29
+  /// 19:33:20.000' becomes '-0001-11-29 19:33:20.000'.
   bool zeroPaddingYear = false;
+
+  // The separator of date and time.
   char dateTimeSeparator = 'T';
 
   enum class Mode : int8_t {
@@ -103,6 +117,7 @@ struct Timestamp {
     return nanos_;
   }
 
+  // Keep it in header for getting inlined.
   int64_t toNanos() const {
     // int64 can store around 292 years in nanos ~ till 2262-04-12.
     // When an integer overflow occurs in the calculation,
@@ -119,6 +134,7 @@ struct Timestamp {
     }
   }
 
+  // Keep it in header for getting inlined.
   int64_t toMillis() const {
     // We use int128_t to make sure the computation does not overflows since
     // there are cases such that seconds*1000 does not fit in int64_t,
@@ -137,6 +153,15 @@ struct Timestamp {
     return result;
   }
 
+  // Keep it in header for getting inlined.
+  int64_t toMillisAllowOverflow() const {
+    // Similar to the above toMillis() except that overflowed integer is allowed
+    // as result.
+    auto result = seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
+    return result;
+  }
+
+  // Keep it in header for getting inlined.
   int64_t toMicros() const {
     // When an integer overflow occurs in the calculation,
     // an exception will be thrown.
@@ -155,8 +180,10 @@ struct Timestamp {
 
   /// Due to the limit of std::chrono, throws if timestamp is outside of
   /// [-32767-01-01, 32767-12-31] range.
+  /// If allowOverflow is true, integer overflow is allowed in converting
+  /// timestmap to milliseconds.
   std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
-  toTimePoint() const;
+  toTimePoint(bool allowOverflow = false) const;
 
   static Timestamp fromMillis(int64_t millis) {
     if (millis >= 0 || millis % 1'000 == 0) {
@@ -260,6 +287,9 @@ struct Timestamp {
 
   // Same as above, but accepts PrestoDB time zone ID.
   void toTimezone(int16_t tzID);
+
+  /// A default time zone that is same across the process.
+  static const date::time_zone& defaultTimezone();
 
   bool operator==(const Timestamp& b) const {
     return seconds_ == b.seconds_ && nanos_ == b.nanos_;
@@ -394,3 +424,24 @@ struct hasher<::facebook::velox::Timestamp> {
 };
 
 } // namespace folly
+
+namespace fmt {
+template <>
+struct formatter<facebook::velox::TimestampToStringOptions::Precision>
+    : formatter<int> {
+  auto format(
+      facebook::velox::TimestampToStringOptions::Precision s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+template <>
+struct formatter<facebook::velox::TimestampToStringOptions::Mode>
+    : formatter<int> {
+  auto format(
+      facebook::velox::TimestampToStringOptions::Mode s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+} // namespace fmt

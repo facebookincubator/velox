@@ -30,13 +30,20 @@ Allocation::~Allocation() {
   }
 }
 
-void Allocation::append(uint8_t* address, int32_t numPages) {
-  numPages_ += numPages;
+void Allocation::append(uint8_t* address, MachinePageCount numPages) {
   VELOX_CHECK(
       runs_.empty() || address != runs_.back().data(),
       "Appending a duplicate address into a PageRun");
+  if (FOLLY_UNLIKELY(numPages > Allocation::PageRun::kMaxPagesInRun)) {
+    VELOX_MEM_ALLOC_ERROR(fmt::format(
+        "The number of pages to append {} exceeds the PageRun limit {}",
+        numPages,
+        Allocation::PageRun::kMaxPagesInRun));
+  }
+  numPages_ += numPages;
   runs_.emplace_back(address, numPages);
 }
+
 void Allocation::appendMove(Allocation& other) {
   for (auto& run : other.runs_) {
     numPages_ += run.numPages();

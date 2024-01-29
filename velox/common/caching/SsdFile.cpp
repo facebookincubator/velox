@@ -363,11 +363,9 @@ void SsdFile::write(std::vector<CachePin>& pins) {
   // Sorts the pins by their file/offset. In this way what is adjacent in
   // storage is likely adjacent on SSD.
   std::sort(pins.begin(), pins.end());
-  uint64_t total = 0;
   for (const auto& pin : pins) {
     auto* entry = pin.checkedEntry();
     VELOX_CHECK_NULL(entry->ssdFile());
-    total += entry->size();
   }
 
   int32_t storeIndex = 0;
@@ -476,7 +474,7 @@ void SsdFile::verifyWrite(AsyncDataCacheEntry& entry, SsdRun ssdRun) {
 
 void SsdFile::updateStats(SsdCacheStats& stats) const {
   // Lock only in tsan build. Incrementing the counters has no synchronized
-  // emantics.
+  // semantics.
   std::shared_lock<std::shared_mutex> l(mutex_);
   stats.entriesWritten += stats_.entriesWritten;
   stats.bytesWritten += stats_.bytesWritten;
@@ -658,6 +656,12 @@ void SsdFile::checkpoint(bool force) {
     return;
   }
 
+  VELOX_SSD_CACHE_LOG(INFO)
+      << "Checkpointing shard " << shardId_ << ", force: " << force
+      << " bytesAfterCheckpoint: " << succinctBytes(bytesAfterCheckpoint_)
+      << " checkpointIntervalBytes: "
+      << succinctBytes(checkpointIntervalBytes_);
+
   checkpointDeleted_ = false;
   bytesAfterCheckpoint_ = 0;
   try {
@@ -750,7 +754,7 @@ void SsdFile::checkpoint(bool force) {
   } catch (const std::exception& e) {
     try {
       checkpointError(-1, e.what());
-    } catch (const std::exception& inner) {
+    } catch (const std::exception&) {
     }
     // Ignore nested exception.
   }
@@ -792,7 +796,7 @@ void SsdFile::initializeCheckpoint() {
                                  << e.what() << ": Starting without checkpoint";
       entries_.clear();
       deleteCheckpoint(true);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
     }
   }
 }

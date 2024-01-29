@@ -16,7 +16,6 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
-#include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -120,16 +119,14 @@ struct UnixTimestampParseFunction {
   FOLLY_ALWAYS_INLINE bool call(
       int64_t& result,
       const arg_type<Varchar>& input) {
-    DateTimeResult dateTimeResult;
-    try {
-      dateTimeResult =
-          format_->parse(std::string_view(input.data(), input.size()));
-    } catch (const VeloxUserError&) {
-      // Return null if could not parse.
+    auto dateTimeResult =
+        format_->parse(std::string_view(input.data(), input.size()));
+    // Return null if could not parse.
+    if (!dateTimeResult.has_value()) {
       return false;
     }
-    dateTimeResult.timestamp.toGMT(getTimezoneId(dateTimeResult));
-    result = dateTimeResult.timestamp.getSeconds();
+    (*dateTimeResult).timestamp.toGMT(getTimezoneId(*dateTimeResult));
+    result = (*dateTimeResult).timestamp.getSeconds();
     return true;
   }
 
@@ -185,26 +182,125 @@ struct UnixTimestampParseWithFormatFunction
       return false;
     }
 
-    // Format or parsing error returns null.
+    // Format error returns null.
     try {
       if (!isConstFormat_) {
         this->format_ = buildJodaDateTimeFormatter(
             std::string_view(format.data(), format.size()));
       }
-
-      auto dateTimeResult =
-          this->format_->parse(std::string_view(input.data(), input.size()));
-      dateTimeResult.timestamp.toGMT(this->getTimezoneId(dateTimeResult));
-      result = dateTimeResult.timestamp.getSeconds();
     } catch (const VeloxUserError&) {
       return false;
     }
+    auto dateTimeResult =
+        this->format_->parse(std::string_view(input.data(), input.size()));
+    // parsing error returns null
+    if (!dateTimeResult.has_value()) {
+      return false;
+    }
+    (*dateTimeResult).timestamp.toGMT(this->getTimezoneId(*dateTimeResult));
+    result = (*dateTimeResult).timestamp.getSeconds();
     return true;
   }
 
  private:
   bool isConstFormat_{false};
   bool invalidFormat_{false};
+};
+
+// Parses unix time in seconds to a formatted string.
+template <typename T>
+struct FromUnixtimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<int64_t>* /*unixtime*/,
+      const arg_type<Varchar>* format) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    if (format != nullptr) {
+      setFormatter(*format);
+      isConstantTimeFormat_ = true;
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<int64_t>& second,
+      const arg_type<Varchar>& format) {
+    if (!isConstantTimeFormat_) {
+      setFormatter(format);
+    }
+    const Timestamp timestamp{second, 0};
+    result.reserve(maxResultSize_);
+    int32_t resultSize;
+    resultSize = formatter_->format(
+        timestamp, sessionTimeZone_, maxResultSize_, result.data(), true);
+    result.resize(resultSize);
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>& format) {
+    formatter_ = buildJodaDateTimeFormatter(
+        std::string_view(format.data(), format.size()));
+    maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
+  }
+
+  const date::time_zone* sessionTimeZone_{nullptr};
+  std::shared_ptr<DateTimeFormatter> formatter_;
+  uint32_t maxResultSize_;
+  bool isConstantTimeFormat_{false};
+};
+
+/// Converts date string to Timestmap type.
+template <typename T>
+struct GetTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*input*/,
+      const arg_type<Varchar>* format) {
+    auto sessionTimezoneName = config.sessionTimezone();
+    if (!sessionTimezoneName.empty()) {
+      sessionTimezoneId_ = util::getTimeZoneID(sessionTimezoneName);
+    }
+    if (format != nullptr) {
+      formatter_ = buildJodaDateTimeFormatter(
+          std::string_view(format->data(), format->size()));
+      isConstantTimeFormat_ = true;
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Timestamp>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& format) {
+    if (!isConstantTimeFormat_) {
+      formatter_ = buildJodaDateTimeFormatter(
+          std::string_view(format.data(), format.size()));
+    }
+    auto dateTimeResult =
+        formatter_->parse(std::string_view(input.data(), input.size()));
+    // Null as result for parsing error.
+    if (!dateTimeResult.has_value()) {
+      return false;
+    }
+    (*dateTimeResult).timestamp.toGMT(getTimezoneId(*dateTimeResult));
+    result = (*dateTimeResult).timestamp;
+    return true;
+  }
+
+ private:
+  int16_t getTimezoneId(const DateTimeResult& result) const {
+    // If timezone was not parsed, fallback to the session timezone. If there's
+    // no session timezone, fallback to 0 (GMT).
+    return result.timezoneId != -1 ? result.timezoneId
+                                   : sessionTimezoneId_.value_or(0);
+  }
+
+  std::shared_ptr<DateTimeFormatter> formatter_{nullptr};
+  bool isConstantTimeFormat_{false};
+  std::optional<int64_t> sessionTimezoneId_;
 };
 
 template <typename T>
@@ -268,11 +364,12 @@ template <typename T>
 struct DateAddFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date,
-      const int32_t value) {
-    result = addToDate(date, DateTimeUnit::kDay, value);
+      const TInput& value) {
+    __builtin_add_overflow(date, value, &result);
   }
 };
 
@@ -280,27 +377,17 @@ template <typename T>
 struct DateSubFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date,
-      const int32_t value) {
-    constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
-    if (value > kMin) {
-      int32_t subValue = 0 - value;
-      result = addToDate(date, DateTimeUnit::kDay, subValue);
-    } else {
-      // If input values is kMin,  0 - value overflows.
-      // Subtract kMin in 2 steps to avoid overflow: -(-(kMin+1)), then -1.
-      int32_t subValue = 0 - (kMin + 1);
-      result = addToDate(date, DateTimeUnit::kDay, subValue);
-      result = addToDate(result, DateTimeUnit::kDay, 1);
-    }
+      const TInput& value) {
+    __builtin_sub_overflow(date, value, &result);
   }
 };
 
 template <typename T>
-struct DayOfWeekFunction : public InitSessionTimezone<T>,
-                           public TimestampWithTimezoneSupport<T> {
+struct DayOfWeekFunction : public InitSessionTimezone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // 1 = Sunday, 2 = Monday, ..., 7 = Saturday
@@ -466,4 +553,14 @@ struct NextDayFunction {
   bool invalidFormat_{false};
 };
 
+template <typename T>
+struct HourFunction : public InitSessionTimezone<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getDateTime(timestamp, this->timeZone_).tm_hour;
+  }
+};
 } // namespace facebook::velox::functions::sparksql

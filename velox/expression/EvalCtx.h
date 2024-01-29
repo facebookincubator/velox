@@ -109,7 +109,7 @@ class EvalCtx {
         }
         // Avoid double throwing.
         setVeloxExceptionError(row, std::current_exception());
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
         setError(row, std::current_exception());
       }
     });
@@ -327,11 +327,18 @@ class EvalCtx {
     return cacheEnabled_;
   }
 
+  /// Returns the maximum number of distinct inputs to cache results for in a
+  /// given shared subexpression.
+  uint32_t maxSharedSubexprResultsCached() const {
+    return maxSharedSubexprResultsCached_;
+  }
+
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
   ExprSet* FOLLY_NULLABLE const exprSet_;
   const RowVector* FOLLY_NULLABLE row_;
   const bool cacheEnabled_;
+  const uint32_t maxSharedSubexprResultsCached_;
   bool inputFlatNoNulls_;
 
   // Corresponds 1:1 to children of 'row_'. Set to an inner vector

@@ -169,9 +169,9 @@ std::pair<bool, Value> CachedFactory<Key, Value, Generator>::generate(
     // TODO: consider using folly/ScopeGuard here.
     try {
       generatedValue = (*generator_)(key);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       {
-        std::lock_guard<std::mutex> pending_lock(pendingMu_);
+        std::lock_guard<std::mutex> pending_lock_2(pendingMu_);
         pending_.erase(key);
       }
       pendingCv_.notify_all();
@@ -185,7 +185,7 @@ std::pair<bool, Value> CachedFactory<Key, Value, Generator>::generate(
     // inconsistent state. Eventually this code should move to
     // folly:synchronized and rewritten with better primitives.
     {
-      std::lock_guard<std::mutex> pending_lock(pendingMu_);
+      std::lock_guard<std::mutex> pending_lock_2(pendingMu_);
       pending_.erase(key);
     }
     pendingCv_.notify_all();

@@ -212,7 +212,7 @@ applyAppendersRecursive(TOutStr& output, Func appenderFunc, Funcs... funcs) {
 /**
  * Return the length in chars of a utf8 string stored in the input buffer
  * @param inputBuffer input buffer that hold the string
- * @param numBytes size of input buffer
+ * @param bufferLength size of input buffer
  * @return the number of characters represented by the input utf8 string
  */
 FOLLY_ALWAYS_INLINE int64_t
@@ -230,11 +230,45 @@ lengthUnicode(const char* inputBuffer, size_t bufferLength) {
   return size;
 }
 
+/**
+ * Return an capped length(controlled by maxChars) of a unicode string. The
+ * returned length is not greater than maxChars.
+ *
+ * This method is used to tell whether a string is longer or the same length of
+ * another string, in these scenarios we don't need accurate length, by
+ * providing maxChars we can get better performance by avoid calculating whole
+ * length of a string which might be very long.
+ *
+ * @param input input buffer that hold the string
+ * @param size size of input buffer
+ * @param maxChars stop counting characters if the string is longer
+ * than this value
+ * @return the number of characters represented by the input utf8 string
+ */
+FOLLY_ALWAYS_INLINE int64_t
+cappedLengthUnicode(const char* input, size_t size, size_t maxChars) {
+  // First address after the last byte in the input
+  auto end = input + size;
+  auto currentChar = input;
+  int64_t numChars = 0;
+
+  // Use maxChars to early stop to avoid calculating the whole
+  // length of long string.
+  while (currentChar < end && numChars < maxChars) {
+    auto charSize = utf8proc_char_length(currentChar);
+    // Skip bad byte if we get utf length < 0.
+    currentChar += UNLIKELY(charSize < 0) ? 1 : charSize;
+    numChars++;
+  }
+
+  return numChars;
+}
+
 /// Returns the start byte index of the Nth instance of subString in
 /// string. Search starts from startPosition. Positions start with 0. If not
 /// found, -1 is returned. To facilitate finding overlapping strings, the
 /// nextStartPosition is incremented by 1
-static int64_t findNthInstanceByteIndexFromStart(
+static inline int64_t findNthInstanceByteIndexFromStart(
     const std::string_view& string,
     const std::string_view subString,
     const size_t instance = 1,
@@ -293,10 +327,14 @@ inline int64_t findNthInstanceByteIndexFromEnd(
 
 /// Replace replaced with replacement in inputString and write results in
 /// outputString. If inPlace=true inputString and outputString are assumed to
-/// tbe the same. When replaced is empty, replacement is added before and after
-/// each charecter. When inputString is empty results is empty.
+/// tbe the same. When replaced is empty and ignoreEmptyReplaced is false,
+/// replacement is added before and after each charecter. When replaced is
+/// empty and ignoreEmptyReplaced is true, the result is the inputString value.
+/// When inputString is empty results is empty.
 /// replace("", "", "x") = ""
-/// replace("aa", "", "x") = "xaxax"
+/// replace("aa", "", "x") = "xaxax" -- when ignoreEmptyReplaced is false
+/// replace("aa", "", "x") = "aa" -- when ignoreEmptyReplaced is true
+template <bool ignoreEmptyReplaced = false>
 inline static size_t replace(
     char* outputString,
     const std::string_view& inputString,
@@ -305,6 +343,15 @@ inline static size_t replace(
     bool inPlace = false) {
   if (inputString.size() == 0) {
     return 0;
+  }
+
+  if constexpr (ignoreEmptyReplaced) {
+    if (replaced.size() == 0) {
+      if (!inPlace) {
+        std::memcpy(outputString, inputString.data(), inputString.size());
+      }
+      return inputString.size();
+    }
   }
 
   size_t readPosition = 0;

@@ -18,7 +18,9 @@
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/StatsReporter.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 
@@ -148,7 +150,19 @@ SharedArbitrator::findCandidateWithLargestCapacity(
 }
 
 SharedArbitrator::~SharedArbitrator() {
-  VELOX_CHECK_EQ(freeCapacity_, capacity_, "{}", toString());
+  if (freeCapacity_ != capacity_) {
+    const std::string errMsg = fmt::format(
+        "\"There is unexpected free capacity not given back to arbitrator "
+        "on destruction: freeCapacity_ != capacity_ ({} vs {})\\n{}\"",
+        freeCapacity_,
+        capacity_,
+        toString());
+    if (checkUsageLeak_) {
+      VELOX_FAIL(errMsg);
+    } else {
+      LOG(ERROR) << errMsg;
+    }
+  }
 }
 
 uint64_t SharedArbitrator::growCapacity(
@@ -186,10 +200,13 @@ std::vector<SharedArbitrator::Candidate> SharedArbitrator::getCandidateStats(
   std::vector<SharedArbitrator::Candidate> candidates;
   candidates.reserve(pools.size());
   for (const auto& pool : pools) {
-    uint64_t reclaimableBytes;
-    const bool reclaimable = pool->reclaimableBytes(reclaimableBytes);
+    auto reclaimableBytesOpt = pool->reclaimableBytes();
+    const uint64_t reclaimableBytes = reclaimableBytesOpt.value_or(0);
     candidates.push_back(
-        {reclaimable, reclaimableBytes, pool->freeBytes(), pool.get()});
+        {reclaimableBytesOpt.has_value(),
+         reclaimableBytes,
+         pool->freeBytes(),
+         pool.get()});
   }
   return candidates;
 }
@@ -300,7 +317,7 @@ bool SharedArbitrator::handleOOM(
       VELOX_MEM_POOL_ABORTED(
           memoryPoolAbortMessage(victim, requestor, targetBytes));
     }
-  } catch (VeloxRuntimeError& e) {
+  } catch (VeloxRuntimeError&) {
     abort(victim, std::current_exception());
   }
   // Free up all the unused capacity from the aborted memory pool and gives back
@@ -449,12 +466,11 @@ uint64_t SharedArbitrator::reclaim(
   numShrunkBytes_ += freedBytes;
   reclaimTimeUs_ += reclaimDurationUs;
   numNonReclaimableAttempts_ += reclaimerStats.numNonReclaimableAttempts;
-  VELOX_MEM_LOG(INFO) << "Reclaimed from memory pool " << pool->name()
-                      << " with target of " << succinctBytes(targetBytes)
-                      << ", actually reclaimed " << succinctBytes(freedBytes)
-                      << " free memory and "
-                      << succinctBytes(reclaimedBytes - freedBytes)
-                      << " used memory";
+  VELOX_MEM_LOG_EVERY_MS(INFO, 1000)
+      << "Reclaimed from memory pool " << pool->name() << " with target of "
+      << succinctBytes(targetBytes) << ", actually reclaimed "
+      << succinctBytes(freedBytes) << " free memory and "
+      << succinctBytes(reclaimedBytes - freedBytes) << " used memory";
   return reclaimedBytes;
 }
 
@@ -536,9 +552,11 @@ std::string SharedArbitrator::toString() const {
 
 std::string SharedArbitrator::toStringLocked() const {
   return fmt::format(
-      "ARBITRATOR[{} CAPACITY[{}] {}]",
+      "ARBITRATOR[{} CAPACITY[{}] RUNNING[{}] QUEUING[{}] {}]",
       kind_,
       succinctBytes(capacity_),
+      running_ ? "true" : "false",
+      waitPromises_.size(),
       statsLocked().toString());
 }
 
@@ -558,12 +576,16 @@ SharedArbitrator::ScopedArbitration::ScopedArbitration(
 
 SharedArbitrator::ScopedArbitration::~ScopedArbitration() {
   requestor_->leaveArbitration();
-  const auto arbitrationTime =
+  const auto arbitrationTimeUs =
       std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::steady_clock::now() - startTime_);
+          std::chrono::steady_clock::now() - startTime_)
+          .count();
   RECORD_HISTOGRAM_METRIC_VALUE(
-      kMetricArbitratorArbitrationTimeMs, arbitrationTime.count() / 1'000);
-  arbitrator_->arbitrationTimeUs_ += arbitrationTime.count();
+      kMetricArbitratorArbitrationTimeMs, arbitrationTimeUs / 1'000);
+  addThreadLocalRuntimeStat(
+      "memoryArbitrationWallNanos",
+      RuntimeCounter(arbitrationTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
+  arbitrator_->arbitrationTimeUs_ += arbitrationTimeUs;
   arbitrator_->finishArbitration();
 }
 

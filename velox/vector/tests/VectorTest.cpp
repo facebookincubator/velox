@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -3273,7 +3274,10 @@ TEST_F(VectorTest, primitiveTypeNullEqual) {
 
   auto equalStopAtNull = [&](vector_size_t i, vector_size_t j) {
     return base->equalValueAt(
-        other.get(), i, j, CompareFlags::NullHandlingMode::kStopAtNull);
+        other.get(),
+        i,
+        j,
+        CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   };
 
   // No null compare.
@@ -3303,7 +3307,10 @@ TEST_F(VectorTest, complexTypeNullEqual) {
 
   auto equalStopAtNull = [&](vector_size_t i, vector_size_t j) {
     return base->equalValueAt(
-        other.get(), i, j, CompareFlags::NullHandlingMode::kStopAtNull);
+        other.get(),
+        i,
+        j,
+        CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   };
 
   // No null compare, [0, 1] vs [0, 1].
@@ -3344,7 +3351,10 @@ TEST_F(VectorTest, dictionaryNullEqual) {
 
   auto equalStopAtNull = [&](vector_size_t i, vector_size_t j) {
     return dictVector->equalValueAt(
-        other.get(), i, j, CompareFlags::NullHandlingMode::kStopAtNull);
+        other.get(),
+        i,
+        j,
+        CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   };
 
   for (vector_size_t i = 0; i < 2; ++i) {
@@ -3384,7 +3394,10 @@ TEST_F(VectorTest, constantNullEqual) {
 
   auto equalStopAtNull = [&](vector_size_t i, vector_size_t j) {
     return constantVector->equalValueAt(
-        other.get(), i, j, CompareFlags::NullHandlingMode::kStopAtNull);
+        other.get(),
+        i,
+        j,
+        CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   };
 
   // No null compare, [2, null] vs [0, 1], [2, null] vs [1, 2].
@@ -3625,6 +3638,13 @@ TEST_F(VectorTest, setType) {
                ROW({"ee", "ff"}, {VARCHAR(), BIGINT()})),
            BIGINT()});
   test(type, newType, invalidNewType);
+}
+
+TEST_F(VectorTest, getLargeStringBuffer) {
+  auto vector = makeFlatVector<StringView>({});
+  size_t size = size_t(std::numeric_limits<int32_t>::max()) + 1;
+  auto* buffer = vector->getBufferWithSpace(size);
+  EXPECT_GE(buffer->capacity(), size);
 }
 
 } // namespace

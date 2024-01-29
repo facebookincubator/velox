@@ -21,7 +21,9 @@
 #include <system_error>
 #include <type_traits>
 
+#include "velox/common/base/Doubles.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/ToHex.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -122,11 +124,8 @@ inline int64_t safeDoubleToInt64(const double& arg) {
   }
   static const int64_t kMax = std::numeric_limits<int64_t>::max();
   static const int64_t kMin = std::numeric_limits<int64_t>::min();
-  // On some compilers if we cast 'kMax' to a double, we can get a number larger
-  // than 'kMax'. This will allow 'arg' values > 'kMax'. The workaround
-  // here is to use uint64_t to represent ('kMax' + 1), which can be represented
-  // exactly as double. We then check if the difference with 'arg' <= 1.
-  if ((static_cast<uint64_t>(kMax) + 1) - arg <= 1) {
+
+  if (arg >= kMinDoubleAboveInt64Max) {
     return kMax;
   }
   if (arg < kMin) {
@@ -299,6 +298,56 @@ struct Log10Function {
     }
     result = std::log10(a);
     return true;
+  }
+};
+
+template <typename T>
+struct IsNanFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(bool& result, TInput a) {
+    result = std::isnan(a);
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void callNullable(bool& result, const TInput* a) {
+    if (a) {
+      call(result, *a);
+    } else {
+      result = false;
+    }
+  }
+};
+
+template <typename T>
+struct ToHexVarbinaryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varbinary>& input) {
+    ToHexUtil::toHex(input, result);
+  }
+};
+
+template <typename T>
+struct ToHexVarcharFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    ToHexUtil::toHex(input, result);
+  }
+};
+
+template <typename T>
+struct ToHexBigintFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<int64_t>& input) {
+    ToHexUtil::toHex(input, result);
   }
 };
 } // namespace facebook::velox::functions::sparksql

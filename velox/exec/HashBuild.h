@@ -42,17 +42,20 @@ class HashBuild final : public Operator {
   enum class State {
     /// The running state.
     kRunning = 1,
+    /// The yield state that voluntarily yield cpu after running too long when
+    /// processing input from spilled file.
+    kYield = 2,
     /// The state that waits for the pending group spill to finish. This state
     /// only applies if disk spilling is enabled.
-    kWaitForSpill = 2,
+    kWaitForSpill = 3,
     /// The state that waits for the hash tables to be merged together.
-    kWaitForBuild = 3,
+    kWaitForBuild = 4,
     /// The state that waits for the hash probe to finish before start to build
     /// the hash table for one of previously spilled partition. This state only
     /// applies if disk spilling is enabled.
-    kWaitForProbe = 4,
+    kWaitForProbe = 5,
     /// The finishing state.
-    kFinish = 5,
+    kFinish = 6,
   };
   static std::string stateName(State state);
 
@@ -333,3 +336,12 @@ inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
   return os;
 }
 } // namespace facebook::velox::exec
+
+template <>
+struct fmt::formatter<facebook::velox::exec::HashBuild::State>
+    : formatter<std::string> {
+  auto format(facebook::velox::exec::HashBuild::State s, format_context& ctx) {
+    return formatter<std::string>::format(
+        facebook::velox::exec::HashBuild::stateName(s), ctx);
+  }
+};

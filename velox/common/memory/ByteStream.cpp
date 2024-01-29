@@ -97,7 +97,10 @@ void ByteInputStream::seekp(std::streampos position) {
     }
     toSkip -= range.size;
   }
-  VELOX_FAIL("Seeking past end of ByteInputStream: {}", position);
+  static_assert(sizeof(std::streamsize) <= sizeof(long long));
+  VELOX_FAIL(
+      "Seeking past end of ByteInputStream: {}",
+      static_cast<long long>(position));
 }
 
 void ByteInputStream::next(bool throwIfPastEnd) {
@@ -179,6 +182,8 @@ size_t ByteOutputStream::size() const {
 }
 
 void ByteOutputStream::appendBool(bool value, int32_t count) {
+  VELOX_DCHECK(isBits_);
+
   if (count == 1 && current_->size > current_->position) {
     bits::setBit(
         reinterpret_cast<uint64_t*>(current_->buffer),
@@ -187,10 +192,10 @@ void ByteOutputStream::appendBool(bool value, int32_t count) {
     ++current_->position;
     return;
   }
-  int32_t offset = 0;
-  VELOX_DCHECK(isBits_);
+
+  int32_t offset{0};
   for (;;) {
-    int32_t bitsFit =
+    const int32_t bitsFit =
         std::min(count - offset, current_->size - current_->position);
     bits::fillBits(
         reinterpret_cast<uint64_t*>(current_->buffer),
@@ -211,10 +216,11 @@ void ByteOutputStream::appendBits(
     int32_t begin,
     int32_t end) {
   VELOX_DCHECK(isBits_);
-  int32_t count = end - begin;
+
+  const int32_t count = end - begin;
   int32_t offset = 0;
   for (;;) {
-    int32_t bitsFit =
+    const int32_t bitsFit =
         std::min(count - offset, current_->size - current_->position);
     bits::copyBits(
         bits,
@@ -283,7 +289,10 @@ void ByteOutputStream::seekp(std::streampos position) {
     }
     toSkip -= range.size;
   }
-  VELOX_FAIL("Seeking past end of ByteOutputStream: {}", position);
+  static_assert(sizeof(std::streamsize) <= sizeof(long long));
+  VELOX_FAIL(
+      "Seeking past end of ByteOutputStream: {}",
+      static_cast<long long>(position));
 }
 
 void ByteOutputStream::flush(OutputStream* out) {
@@ -321,6 +330,7 @@ void ByteOutputStream::extend(int32_t bytes) {
     current_->position = 0;
     return;
   }
+
   ranges_.emplace_back();
   current_ = &ranges_.back();
   lastRangeEnd_ = 0;
@@ -348,6 +358,21 @@ int32_t ByteOutputStream::newRangeSize(int32_t bytes) const {
     return bits::roundUp(bytes, 512);
   }
   return bits::roundUp(bytes, memory::AllocationTraits::kPageSize);
+}
+
+void ByteOutputStream::ensureSpace(int32_t bytes) {
+  const auto available = current_->size - current_->position;
+  int64_t toExtend = bytes - available;
+  const auto originalRangeIdx = current_ - ranges_.data();
+  const auto originalPosition = current_->position;
+  while (toExtend > 0) {
+    current_->position = current_->size;
+    extend(toExtend);
+    toExtend -= current_->size;
+  }
+  // Restore original position.
+  current_ = &ranges_[originalRangeIdx];
+  current_->position = originalPosition;
 }
 
 ByteInputStream ByteOutputStream::inputStream() const {

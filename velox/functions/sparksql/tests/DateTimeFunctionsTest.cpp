@@ -25,6 +25,10 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
  public:
   static constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
   static constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
+  static constexpr int16_t kMinSmallint = std::numeric_limits<int16_t>::min();
+  static constexpr int16_t kMaxSmallint = std::numeric_limits<int16_t>::max();
+  static constexpr int8_t kMinTinyint = std::numeric_limits<int8_t>::min();
+  static constexpr int8_t kMaxTinyint = std::numeric_limits<int8_t>::max();
 
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
@@ -36,6 +40,20 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
 
   int32_t parseDate(const std::string& dateStr) {
     return DATE()->toDays(dateStr);
+  }
+
+  template <typename TOutput, typename TValue>
+  std::optional<TOutput> evaluateDateFuncOnce(
+      const std::string& expr,
+      const std::optional<int32_t>& date,
+      const std::optional<TValue>& value) {
+    return evaluateOnce<TOutput>(
+        expr,
+        makeRowVector(
+            {makeNullableFlatVector(
+                 std::vector<std::optional<int32_t>>{date}, DATE()),
+             makeNullableFlatVector(
+                 std::vector<std::optional<TValue>>{value})}));
   }
 };
 
@@ -228,48 +246,83 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
 }
 
 TEST_F(DateTimeFunctionsTest, dateAdd) {
-  const auto dateAdd = [&](std::optional<int32_t> date,
+  const auto dateAdd = [&](const std::string& dateStr,
                            std::optional<int32_t> value) {
-    return evaluateOnce<int32_t, int32_t>(
-        "date_add(c0, c1)", {date, value}, {DATE(), INTEGER()});
+    return evaluateDateFuncOnce<int32_t, int32_t>(
+        "date_add(c0, c1)", parseDate(dateStr), value);
   };
 
-  // Check null behaviors
-  EXPECT_EQ(std::nullopt, dateAdd(std::nullopt, 1));
-  EXPECT_EQ(std::nullopt, dateAdd(parseDate("2019-02-28"), std::nullopt));
-  EXPECT_EQ(std::nullopt, dateAdd(std::nullopt, std::nullopt));
-
   // Check simple tests.
-  EXPECT_EQ(parseDate("2019-03-01"), dateAdd(parseDate("2019-03-01"), 0));
-  EXPECT_EQ(parseDate("2019-03-01"), dateAdd(parseDate("2019-02-28"), 1));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-03-01", 0));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-02-28", 1));
 
   // Account for the last day of a year-month
-  EXPECT_EQ(parseDate("2020-02-29"), dateAdd(parseDate("2019-01-30"), 395));
-  EXPECT_EQ(parseDate("2020-02-29"), dateAdd(parseDate("2019-01-30"), 395));
+  EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+  EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
 
   // Check for negative intervals
-  EXPECT_EQ(parseDate("2019-02-28"), dateAdd(parseDate("2020-02-29"), -366));
-  EXPECT_EQ(parseDate("2019-02-28"), dateAdd(parseDate("2020-02-29"), -366));
+  EXPECT_EQ(parseDate("2019-02-28"), dateAdd("2020-02-29", -366));
+  EXPECT_EQ(parseDate("2019-02-28"), dateAdd("2020-02-29", -366));
 
   // Check for minimum and maximum tests.
-  EXPECT_EQ(parseDate("5881580-07-11"), dateAdd(parseDate("1970-01-01"), kMax));
-  EXPECT_EQ(
-      parseDate("1969-12-31"), dateAdd(parseDate("-5877641-06-23"), kMax));
-  EXPECT_EQ(
-      parseDate("-5877641-06-23"), dateAdd(parseDate("1970-01-01"), kMin));
-  EXPECT_EQ(parseDate("1969-12-31"), dateAdd(parseDate("5881580-07-11"), kMin));
+  EXPECT_EQ(parseDate("5881580-07-11"), dateAdd("1970-01-01", kMax));
+  EXPECT_EQ(parseDate("1969-12-31"), dateAdd("-5877641-06-23", kMax));
+  EXPECT_EQ(parseDate("-5877641-06-23"), dateAdd("1970-01-01", kMin));
+  EXPECT_EQ(parseDate("1969-12-31"), dateAdd("5881580-07-11", kMin));
+  EXPECT_EQ(parseDate("5881580-07-10"), dateAdd("1969-12-31", kMax));
+
+  EXPECT_EQ(parseDate("-5877587-07-11"), dateAdd("2024-01-22", kMax - 1));
+  EXPECT_EQ(parseDate("-5877587-07-12"), dateAdd("2024-01-22", kMax));
+}
+
+TEST_F(DateTimeFunctionsTest, dateAddSmallint) {
+  const auto dateAdd = [&](const std::string& dateStr,
+                           std::optional<int16_t> value) {
+    return evaluateDateFuncOnce<int32_t, int16_t>(
+        "date_add(c0, c1)", parseDate(dateStr), value);
+  };
+
+  // Check simple tests.
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-03-01", 0));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-02-28", 1));
+
+  // Account for the last day of a year-month
+  EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+  EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+
+  // Check for negative intervals
+  EXPECT_EQ(parseDate("2019-02-28"), dateAdd("2020-02-29", -366));
+  EXPECT_EQ(parseDate("2019-02-28"), dateAdd("2020-02-29", -366));
+
+  // Check for minimum and maximum tests.
+  EXPECT_EQ(parseDate("2059-09-17"), dateAdd("1969-12-31", kMaxSmallint));
+  EXPECT_EQ(parseDate("1880-04-13"), dateAdd("1969-12-31", kMinSmallint));
+
+  EXPECT_EQ(parseDate("2113-10-09"), dateAdd("2024-01-22", kMaxSmallint));
+}
+
+TEST_F(DateTimeFunctionsTest, dateAddTinyint) {
+  const auto dateAdd = [&](const std::string& dateStr,
+                           std::optional<int8_t> value) {
+    return evaluateDateFuncOnce<int32_t, int8_t>(
+        "date_add(c0, c1)", parseDate(dateStr), value);
+  };
+  // Check simple tests.
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-03-01", 0));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-02-28", 1));
+
+  EXPECT_EQ(parseDate("1970-05-07"), dateAdd("1969-12-31", kMaxTinyint));
+
+  EXPECT_EQ(parseDate("1969-08-25"), dateAdd("1969-12-31", kMinTinyint));
+
+  EXPECT_EQ(parseDate("2024-05-28"), dateAdd("2024-01-22", kMaxTinyint));
 }
 
 TEST_F(DateTimeFunctionsTest, dateSub) {
-  const auto dateSubFunc = [&](std::optional<int32_t> date,
-                               std::optional<int32_t> value) {
-    return evaluateOnce<int32_t, int32_t>(
-        "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
-  };
-
   const auto dateSub = [&](const std::string& dateStr,
                            std::optional<int32_t> value) {
-    return dateSubFunc(parseDate(dateStr), value);
+    return evaluateDateFuncOnce<int32_t, int32_t>(
+        "date_sub(c0, c1)", parseDate(dateStr), value);
   };
 
   // Check simple tests.
@@ -287,6 +340,49 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("5881580-07-11", kMax));
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("-5877641-06-23", kMin));
   EXPECT_EQ(parseDate("5881580-07-11"), dateSub("1969-12-31", kMin));
+
+  EXPECT_EQ(parseDate("-5877588-12-28"), dateSub("2023-07-10", kMin + 1));
+  EXPECT_EQ(parseDate("-5877588-12-29"), dateSub("2023-07-10", kMin));
+}
+
+TEST_F(DateTimeFunctionsTest, dateSubSmallint) {
+  const auto dateSub = [&](const std::string& dateStr,
+                           std::optional<int16_t> value) {
+    return evaluateDateFuncOnce<int32_t, int16_t>(
+        "date_sub(c0, c1)", parseDate(dateStr), value);
+  };
+
+  // Check simple tests.
+  EXPECT_EQ(parseDate("2019-03-01"), dateSub("2019-03-01", 0));
+  EXPECT_EQ(parseDate("2019-02-28"), dateSub("2019-03-01", 1));
+
+  // Account for the last day of a year-month.
+  EXPECT_EQ(parseDate("2019-01-30"), dateSub("2020-02-29", 395));
+
+  // Check for negative intervals.
+  EXPECT_EQ(parseDate("2020-02-29"), dateSub("2019-02-28", -366));
+
+  EXPECT_EQ(parseDate("1880-04-15"), dateSub("1970-01-01", kMaxSmallint));
+  EXPECT_EQ(parseDate("2059-09-19"), dateSub("1970-01-01", kMinSmallint));
+
+  EXPECT_EQ(parseDate("2113-03-28"), dateSub("2023-07-10", kMinSmallint));
+}
+
+TEST_F(DateTimeFunctionsTest, dateSubTinyint) {
+  const auto dateSub = [&](const std::string& dateStr,
+                           std::optional<int8_t> value) {
+    return evaluateDateFuncOnce<int32_t, int8_t>(
+        "date_sub(c0, c1)", parseDate(dateStr), value);
+  };
+
+  // Check simple tests.
+  EXPECT_EQ(parseDate("2019-03-01"), dateSub("2019-03-01", 0));
+  EXPECT_EQ(parseDate("2019-02-28"), dateSub("2019-03-01", 1));
+
+  EXPECT_EQ(parseDate("1969-08-27"), dateSub("1970-01-01", kMaxTinyint));
+  EXPECT_EQ(parseDate("1970-05-09"), dateSub("1970-01-01", kMinTinyint));
+
+  EXPECT_EQ(parseDate("2023-11-15"), dateSub("2023-07-10", kMinTinyint));
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfYear) {
@@ -501,6 +597,164 @@ TEST_F(DateTimeFunctionsTest, nextDay) {
   EXPECT_EQ(nextDay("2015-07-23", "xx"), std::nullopt);
   EXPECT_EQ(nextDay("2015-07-23", "\"quote"), std::nullopt);
   EXPECT_EQ(nextDay("2015-07-23", ""), std::nullopt);
+}
+
+TEST_F(DateTimeFunctionsTest, getTimestamp) {
+  const auto getTimestamp = [&](const std::optional<StringView>& dateString,
+                                const std::string& format) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("get_timestamp(c0, '{}')", format), dateString);
+  };
+
+  const auto getTimestampString =
+      [&](const std::optional<StringView>& dateString,
+          const std::string& format) {
+        return getTimestamp(dateString, format).value().toString();
+      };
+
+  EXPECT_EQ(getTimestamp("1970-01-01", "yyyy-MM-dd"), Timestamp(0, 0));
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 00:00:00.010", "yyyy-MM-dd HH:mm:ss.SSS"),
+      Timestamp::fromMillis(10));
+  auto milliSeconds = (6 * 60 * 60 + 10 * 60 + 59) * 1000 + 19;
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 06:10:59.019", "yyyy-MM-dd HH:mm:ss.SSS"),
+      Timestamp::fromMillis(milliSeconds));
+
+  EXPECT_EQ(
+      getTimestampString("1970-01-01", "yyyy-MM-dd"),
+      "1970-01-01T00:00:00.000000000");
+  EXPECT_EQ(
+      getTimestampString("1970/01/01", "yyyy/MM/dd"),
+      "1970-01-01T00:00:00.000000000");
+  EXPECT_EQ(
+      getTimestampString("08/27/2017", "MM/dd/yyy"),
+      "2017-08-27T00:00:00.000000000");
+  EXPECT_EQ(
+      getTimestampString("1970/01/01 12:08:59", "yyyy/MM/dd HH:mm:ss"),
+      "1970-01-01T12:08:59.000000000");
+  EXPECT_EQ(
+      getTimestampString("2023/12/08 08:20:19", "yyyy/MM/dd HH:mm:ss"),
+      "2023-12-08T08:20:19.000000000");
+
+  // 8 hours ahead UTC.
+  setQueryTimeZone("Asia/Shanghai");
+  EXPECT_EQ(
+      getTimestampString("1970-01-01", "yyyy-MM-dd"),
+      "1969-12-31T16:00:00.000000000");
+  EXPECT_EQ(
+      getTimestampString("1970/01/01", "yyyy/MM/dd"),
+      "1969-12-31T16:00:00.000000000");
+  EXPECT_EQ(
+      getTimestampString("2023/12/08 08:20:19", "yyyy/MM/dd HH:mm:ss"),
+      "2023-12-08T00:20:19.000000000");
+
+  // 8 hours behind UTC.
+  setQueryTimeZone("America/Los_Angeles");
+  EXPECT_EQ(
+      getTimestampString("1970/01/01", "yyyy/MM/dd"),
+      "1970-01-01T08:00:00.000000000");
+  EXPECT_EQ(
+      getTimestampString("2023/12/08 08:20:19", "yyyy/MM/dd HH:mm:ss"),
+      "2023-12-08T16:20:19.000000000");
+
+  // Parsing error.
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 06:10:59.019", "HH:mm:ss.SSS"), std::nullopt);
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 06:10:59.019", "yyyy/MM/dd HH:mm:ss.SSS"),
+      std::nullopt);
+
+  // Invalid date format.
+  VELOX_ASSERT_THROW(
+      getTimestamp("2020/01/24", "AA/MM/dd"), "Specifier A is not supported");
+  VELOX_ASSERT_THROW(
+      getTimestamp("2023-07-13 21:34", "yyyy-MM-dd HH:II"),
+      "Specifier I is not supported");
+}
+
+TEST_F(DateTimeFunctionsTest, hour) {
+  const auto hour = [&](const StringView timestampStr) {
+    const auto timeStamp =
+        std::make_optional(util::fromTimestampString(timestampStr));
+    return evaluateOnce<int32_t>("hour(c0)", timeStamp);
+  };
+
+  EXPECT_EQ(0, hour("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(0, hour("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(1, hour("2024-01-08 01:23:00.001"));
+  EXPECT_EQ(13, hour("2024-01-20 13:23:00.001"));
+  EXPECT_EQ(13, hour("1969-01-01 13:23:00.001"));
+
+  // Set time zone to Pacific/Apia (13 hours ahead of UTC).
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(13, hour("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(13, hour("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(14, hour("2024-01-08 01:23:00.001"));
+  EXPECT_EQ(2, hour("2024-01-20 13:23:00.001"));
+  EXPECT_EQ(2, hour("1969-01-01 13:23:00.001"));
+}
+
+TEST_F(DateTimeFunctionsTest, fromUnixtime) {
+  const auto getUnixTime = [&](const StringView& str) {
+    Timestamp t = util::fromTimestampString(str);
+    return t.getSeconds();
+  };
+
+  const auto fromUnixTime = [&](const std::optional<int64_t>& unixTime,
+                                const std::optional<std::string>& timeFormat) {
+    return evaluateOnce<std::string>(
+        "from_unixtime(c0, c1)", unixTime, timeFormat);
+  };
+
+  EXPECT_EQ(fromUnixTime(0, "yyyy-MM-dd HH:mm:ss"), "1970-01-01 00:00:00");
+  EXPECT_EQ(fromUnixTime(100, "yyyy-MM-dd"), "1970-01-01");
+  EXPECT_EQ(fromUnixTime(120, "yyyy-MM-dd HH:mm"), "1970-01-01 00:02");
+  EXPECT_EQ(fromUnixTime(100, "yyyy-MM-dd HH:mm:ss"), "1970-01-01 00:01:40");
+  EXPECT_EQ(fromUnixTime(-59, "yyyy-MM-dd HH:mm:ss"), "1969-12-31 23:59:01");
+  EXPECT_EQ(fromUnixTime(3600, "yyyy"), "1970");
+  EXPECT_EQ(
+      fromUnixTime(getUnixTime("2020-06-30 11:29:59"), "yyyy-MM-dd HH:mm:ss"),
+      "2020-06-30 11:29:59");
+  EXPECT_EQ(
+      fromUnixTime(getUnixTime("2020-06-30 11:29:59"), "yyyy-MM-dd"),
+      "2020-06-30");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2020-06-30 11:29:59"), "MM-dd"), "06-30");
+  EXPECT_EQ(
+      fromUnixTime(getUnixTime("2020-06-30 11:29:59"), "HH:mm:ss"), "11:29:59");
+  EXPECT_EQ(
+      fromUnixTime(getUnixTime("2020-06-30 23:59:59"), "yyyy-MM-dd HH:mm:ss"),
+      "2020-06-30 23:59:59");
+
+// In debug mode, Timestamp constructor will throw exception if range check
+// fails.
+#ifdef NDEBUG
+  // Integer overflow in the internal conversion from seconds to milliseconds.
+  EXPECT_EQ(
+      fromUnixTime(std::numeric_limits<int64_t>::max(), "yyyy-MM-dd HH:mm:ss"),
+      "1969-12-31 23:59:59");
+#endif
+
+  // 8 hours ahead UTC.
+  setQueryTimeZone("Asia/Shanghai");
+  EXPECT_EQ(fromUnixTime(0, "yyyy-MM-dd HH:mm:ss"), "1970-01-01 08:00:00");
+  EXPECT_EQ(fromUnixTime(120, "yyyy-MM-dd HH:mm"), "1970-01-01 08:02");
+  EXPECT_EQ(fromUnixTime(-59, "yyyy-MM-dd HH:mm:ss"), "1970-01-01 07:59:01");
+  EXPECT_EQ(
+      fromUnixTime(getUnixTime("2014-07-21 16:00:00"), "yyyy-MM-dd"),
+      "2014-07-22");
+  EXPECT_EQ(
+      fromUnixTime(getUnixTime("2020-06-30 23:59:59"), "yyyy-MM-dd HH:mm:ss"),
+      "2020-07-01 07:59:59");
+
+  // Invalid format.
+  VELOX_ASSERT_THROW(
+      fromUnixTime(0, "yyyy-AA"), "Specifier A is not supported.");
+  VELOX_ASSERT_THROW(
+      fromUnixTime(0, "FF/MM/dd"), "Specifier F is not supported");
+  VELOX_ASSERT_THROW(
+      fromUnixTime(0, "yyyy-MM-dd HH:II"), "Specifier I is not supported");
 }
 
 } // namespace

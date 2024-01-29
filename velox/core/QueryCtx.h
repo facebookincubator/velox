@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/Executor.h>
@@ -77,12 +78,15 @@ class QueryCtx {
   }
 
   folly::Executor* executor() const {
+    VELOX_CHECK(isExecutorSupplied(), "Executor was not supplied.");
     if (executor_ != nullptr) {
       return executor_;
     }
-    auto executor = executorKeepalive_.get();
-    VELOX_CHECK(executor, "Executor was not supplied.");
-    return executor;
+    return executorKeepalive_.get();
+  }
+
+  bool isExecutorSupplied() const {
+    return executor_ != nullptr || executorKeepalive_.get() != nullptr;
   }
 
   const QueryConfig& queryConfig() const {
@@ -125,6 +129,10 @@ class QueryCtx {
     pool_ = std::move(pool);
   }
 
+  /// Updates the aggregated spill bytes of this query, and and throws if
+  /// exceeds the max spill bytes limit.
+  void updateSpilledBytesAndCheckLimit(uint64_t bytes);
+
  private:
   static Config* getEmptyConfig() {
     static const std::unique_ptr<Config> kEmptyConfig =
@@ -149,6 +157,7 @@ class QueryCtx {
   std::shared_ptr<memory::MemoryPool> pool_;
   folly::Executor::KeepAlive<> executorKeepalive_;
   QueryConfig queryConfig_;
+  std::atomic<uint64_t> numSpilledBytes_{0};
 };
 
 // Represents the state of one thread of query execution.

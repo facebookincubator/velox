@@ -111,6 +111,17 @@ FOLLY_ALWAYS_INLINE int64_t length(const T& input) {
   }
 }
 
+/// Return a capped length(controlled by maxLength) of a string.
+/// The returned length is not greater than maxLength.
+template <bool isAscii, typename T>
+FOLLY_ALWAYS_INLINE int64_t cappedLength(const T& input, size_t maxLength) {
+  if constexpr (isAscii) {
+    return input.size() > maxLength ? maxLength : input.size();
+  } else {
+    return cappedLengthUnicode(input.data(), input.size(), maxLength);
+  }
+}
+
 /// Write the Unicode codePoint as string to the output string. The function
 /// behavior is undefined when code point it invalid. Implements the logic of
 /// presto chr function.
@@ -482,8 +493,15 @@ template <
 FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
     TOutString& output,
     const TInString& input) {
+  auto emptyOutput = [&]() {
+    if constexpr (std::is_same_v<TOutString, StringView>) {
+      output = StringView("");
+    } else {
+      output.setEmpty();
+    }
+  };
   if (input.empty()) {
-    output.setEmpty();
+    emptyOutput();
     return;
   }
 
@@ -502,7 +520,7 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
     }
 
     if (curStartPos >= input.size()) {
-      output.setEmpty();
+      emptyOutput();
       return;
     }
   }
@@ -524,12 +542,17 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
     }
 
     if (endIndex < startIndex) {
-      output.setEmpty();
+      emptyOutput();
       return;
     }
   }
 
-  output.setNoCopy(StringView(stringStart, endIndex - startIndex + 1));
+  auto view = StringView(stringStart, endIndex - startIndex + 1);
+  if constexpr (std::is_same_v<TOutString, StringView>) {
+    output = view;
+  } else {
+    output.setNoCopy(view);
+  }
 }
 
 template <bool ascii, typename TOutString, typename TInString>

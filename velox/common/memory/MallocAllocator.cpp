@@ -58,7 +58,7 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
     bytesToAllocate = AllocationTraits::pageBytes(mix.totalPages) - freedBytes;
     try {
       reservationCB(bytesToAllocate, true);
-    } catch (std::exception& e) {
+    } catch (std::exception&) {
       VELOX_MEM_LOG(WARNING)
           << "Failed to reserve " << succinctBytes(bytesToAllocate)
           << " for non-contiguous allocation of " << numPages
@@ -72,8 +72,8 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
     }
   }
 
-  std::vector<void*> pages;
-  pages.reserve(mix.numSizes);
+  std::vector<void*> buffers;
+  buffers.reserve(mix.numSizes);
   for (int32_t i = 0; i < mix.numSizes; ++i) {
     MachinePageCount numSizeClassPages =
         mix.sizeCounts[i] * sizeClassSizes_[mix.sizeIndices[i]];
@@ -99,15 +99,15 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
       setAllocatorFailureMessage(errorMsg);
       break;
     }
-    pages.emplace_back(ptr);
+    buffers.push_back(ptr);
     out.append(reinterpret_cast<uint8_t*>(ptr), numSizeClassPages); // NOLINT
   }
 
-  if (pages.size() != mix.numSizes) {
+  if (buffers.size() != mix.numSizes) {
     // Failed to allocate memory using malloc. Free any malloced pages and
     // return false.
-    for (auto ptr : pages) {
-      ::free(ptr);
+    for (auto* buffer : buffers) {
+      ::free(buffer);
     }
     out.clear();
     if (reservationCB != nullptr) {
@@ -120,11 +120,6 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
     }
     decrementUsage(totalBytes);
     return false;
-  }
-
-  {
-    std::lock_guard<std::mutex> l(mallocsMutex_);
-    mallocs_.insert(pages.begin(), pages.end());
   }
 
   // Successfully allocated all pages.
@@ -204,7 +199,7 @@ bool MallocAllocator::allocateContiguousImpl(
   if (reservationCB != nullptr) {
     try {
       reservationCB(AllocationTraits::pageBytes(numNeededPages), true);
-    } catch (std::exception& e) {
+    } catch (std::exception&) {
       // If the new memory reservation fails, we need to release the memory
       // reservation of the freed contiguous and non-contiguous memory.
       VELOX_MEM_LOG(WARNING)
@@ -239,28 +234,20 @@ int64_t MallocAllocator::freeNonContiguous(Allocation& allocation) {
   if (allocation.empty()) {
     return 0;
   }
-  MachinePageCount numFreed = 0;
+  MachinePageCount freedPages{0};
   for (int32_t i = 0; i < allocation.numRuns(); ++i) {
     Allocation::PageRun run = allocation.runAt(i);
-    numFreed += run.numPages();
     void* ptr = run.data();
-    {
-      std::lock_guard<std::mutex> l(mallocsMutex_);
-      const auto ret = mallocs_.erase(ptr);
-      VELOX_CHECK_EQ(ret, 1, "Bad free page pointer: {}", ptr);
-    }
-    stats_.recordFree(
-        std::min<int64_t>(
-            AllocationTraits::pageBytes(sizeClassSizes_.back()),
-            AllocationTraits::pageBytes(run.numPages())),
-        [&]() {
-          ::free(ptr); // NOLINT
-        });
+    const int64_t numPages = run.numPages();
+    freedPages += numPages;
+    stats_.recordFree(AllocationTraits::pageBytes(numPages), [&]() {
+      ::free(ptr); // NOLINT
+    });
   }
 
-  const auto freedBytes = AllocationTraits::pageBytes(numFreed);
+  const auto freedBytes = AllocationTraits::pageBytes(freedPages);
   decrementUsage(freedBytes);
-  numAllocated_.fetch_sub(numFreed);
+  numAllocated_.fetch_sub(freedPages);
   allocation.clear();
   return freedBytes;
 }

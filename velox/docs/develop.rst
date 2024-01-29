@@ -16,6 +16,7 @@ This guide is intended for Velox contributors and developers of Velox-based appl
     develop/expression-evaluation
     develop/dictionary-encoding
     develop/arena
+    develop/hash-table
     develop/aggregations
     develop/connectors
     develop/joins
@@ -23,6 +24,7 @@ This guide is intended for Velox contributors and developers of Velox-based appl
     develop/operators
     develop/task
     develop/simd
+    develop/memory
     develop/spilling
     develop/serde
     develop/testing

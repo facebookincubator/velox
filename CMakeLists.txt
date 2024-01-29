@@ -132,23 +132,27 @@ if(${VELOX_BUILD_TESTING})
   # Enable all components to build testing binaries
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
   set(VELOX_ENABLE_EXPRESSION ON)
-  set(VELOX_ENABLE_PARSE ON)
   set(VELOX_ENABLE_EXEC ON)
   set(VELOX_ENABLE_AGGREGATES ON)
   set(VELOX_ENABLE_HIVE_CONNECTOR ON)
   set(VELOX_ENABLE_TPCH_CONNECTOR ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
   set(VELOX_ENABLE_EXAMPLES ON)
-else()
-  set(VELOX_ENABLE_PARSE OFF)
+endif()
+
+if(${VELOX_ENABLE_BENCHMARKS})
+  set(VELOX_ENABLE_BENCHMARKS_BASIC ON)
+endif()
+
+if(VELOX_ENABLE_BENCHMARKS_BASIC)
+  set(VELOX_BUILD_TEST_UTILS ON)
 endif()
 
 if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
   set(cpr_SOURCE BUNDLED)
   resolve_dependency(cpr)
   set(VELOX_ENABLE_DUCKDB ON)
-else()
-  set(VELOX_ENABLE_DUCKDB OFF)
+  set(VELOX_ENABLE_PARSE ON)
 endif()
 
 if(${VELOX_ENABLE_EXAMPLES})
@@ -173,6 +177,7 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(VELOX_ENABLE_SUBSTRAIT OFF)
   set(VELOX_CODEGEN_SUPPORT OFF)
   set(VELOX_ENABLE_BENCHMARKS_BASIC OFF)
+  set(VELOX_ENABLE_BENCHMARKS OFF)
 endif()
 
 if(VELOX_ENABLE_CCACHE
@@ -245,14 +250,6 @@ if(VELOX_ENABLE_PARQUET)
   # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
   # are included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
-endif()
-
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
-  # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
-  # requires clients to explicitly install fizz and wangle.
-  find_package(fizz CONFIG REQUIRED)
-  find_package(wangle CONFIG REQUIRED)
-  find_package(FBThrift CONFIG REQUIRED)
 endif()
 
 # define processor variable for conditional compilation
@@ -445,12 +442,20 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
 endif()
 
 set_source(simdjson)
-resolve_dependency(simdjson 3.1.5)
+resolve_dependency(simdjson)
 
 # Locate or build folly.
 add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
 resolve_dependency(folly)
+
+if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+  # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
+  # requires clients to explicitly install fizz and wangle.
+  find_package(fizz CONFIG REQUIRED)
+  find_package(wangle CONFIG REQUIRED)
+  find_package(FBThrift CONFIG REQUIRED)
+endif()
 
 if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
   set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})
@@ -469,10 +474,10 @@ endif()
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   set(FILESYSTEM "stdc++fs")
 
-  # Ensure we have gcc at least 8+.
-  if(CMAKE_CXX_COMPILER_VERSION LESS 8.0)
+  # Ensure we have gcc at least 9+.
+  if(CMAKE_CXX_COMPILER_VERSION LESS 9.0)
     message(
-      FATAL_ERROR "VELOX requires gcc > 8. Found ${CMAKE_CXX_COMPILER_VERSION}")
+      FATAL_ERROR "VELOX requires gcc > 9. Found ${CMAKE_CXX_COMPILER_VERSION}")
   endif()
 
   # Find Threads library

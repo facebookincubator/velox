@@ -189,9 +189,9 @@ bool MemoryReclaimer::reclaimableBytes(
   }
   bool reclaimable{false};
   pool.visitChildren([&](MemoryPool* pool) {
-    uint64_t poolReclaimableBytes{0};
-    reclaimable |= pool->reclaimableBytes(poolReclaimableBytes);
-    reclaimableBytes += poolReclaimableBytes;
+    auto reclaimableBytesOpt = pool->reclaimableBytes();
+    reclaimable |= reclaimableBytesOpt.has_value();
+    reclaimableBytes += reclaimableBytesOpt.value_or(0);
     return true;
   });
   VELOX_CHECK(reclaimable || reclaimableBytes == 0);
@@ -395,7 +395,6 @@ bool MemoryArbitrator::Stats::operator!=(const Stats& other) const {
 }
 
 bool MemoryArbitrator::Stats::operator<(const Stats& other) const {
-  uint32_t eqCount{0};
   uint32_t gtCount{0};
   uint32_t ltCount{0};
 #define UPDATE_COUNTER(counter)           \
@@ -404,8 +403,6 @@ bool MemoryArbitrator::Stats::operator<(const Stats& other) const {
       ++ltCount;                          \
     } else if (counter > other.counter) { \
       ++gtCount;                          \
-    } else {                              \
-      ++eqCount;                          \
     }                                     \
   } while (0);
 

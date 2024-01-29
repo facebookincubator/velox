@@ -101,25 +101,6 @@ class QueryConfig {
   static constexpr const char* kCastMatchStructByName =
       "cast_match_struct_by_name";
 
-  /// If set, cast from float/double/decimal/string to integer truncates the
-  /// decimal part, otherwise rounds.
-  static constexpr const char* kCastToIntByTruncate = "cast_to_int_by_truncate";
-
-  /// If set, cast from string to date allows only ISO 8601 formatted strings:
-  /// [+-](YYYY-MM-DD). Otherwise, allows all patterns supported by Spark:
-  /// `[+-]yyyy*`
-  /// `[+-]yyyy*-[m]m`
-  /// `[+-]yyyy*-[m]m-[d]d`
-  /// `[+-]yyyy*-[m]m-[d]d *`
-  /// `[+-]yyyy*-[m]m-[d]dT*`
-  /// The asterisk `*` in `yyyy*` stands for any numbers.
-  /// For the last two patterns, the trailing `*` can represent none or any
-  /// sequence of characters, e.g:
-  ///   "1970-01-01 123"
-  ///   "1970-01-01 (BC)"
-  static constexpr const char* kCastStringToDateIsIso8601 =
-      "cast_string_to_date_is_iso_8601";
-
   /// Used for backpressure to block local exchange producers when the local
   /// exchange buffer reaches or exceeds this size.
   static constexpr const char* kMaxLocalExchangeBufferSize =
@@ -156,8 +137,11 @@ class QueryConfig {
   static constexpr const char* kMaxPartitionedOutputBufferSize =
       "max_page_partitioning_buffer_size";
 
+  /// Deprecated. Use kMaxOutputBufferSize instead.
   static constexpr const char* kMaxArbitraryBufferSize =
       "max_arbitrary_buffer_size";
+
+  static constexpr const char* kMaxOutputBufferSize = "max_output_buffer_size";
 
   /// Preferred size of batches in bytes to be returned by operators from
   /// Operator::getOutput. It is used when an estimate of average row size is
@@ -243,6 +227,12 @@ class QueryConfig {
   /// Based on offline test results, the default value is set to 12 million rows
   /// which uses ~128MB memory when to fill a spill run.
   static constexpr const char* kMaxSpillRunRows = "max_spill_run_rows";
+
+  /// The max spill bytes limit set for each query. This is used to cap the
+  /// storage used for spilling. If it is zero, then there is no limit and
+  /// spilling might exhaust the storage or takes too long to run. The default
+  /// value is set to 100 GB.
+  static constexpr const char* kMaxSpillBytes = "max_spill_bytes";
 
   static constexpr const char* kTestingSpillPct = "testing.spill_pct";
 
@@ -354,6 +344,13 @@ class QueryConfig {
   static constexpr const char* kEnableExpressionEvaluationCache =
       "enable_expression_evaluation_cache";
 
+  // For a given shared subexpression, the maximum distinct sets of inputs we
+  // cache results for. Lambdas can call the same expression with different
+  // inputs many times, causing the results we cache to explode in size. Putting
+  // a limit contains the memory usage.
+  static constexpr const char* kMaxSharedSubexprResultsCached =
+      "max_shared_subexpr_results_cached";
+
   /// Maximum number of splits to preload. Set to 0 to disable preloading.
   static constexpr const char* kMaxSplitPreloadPerDriver =
       "max_split_preload_per_driver";
@@ -411,25 +408,36 @@ class QueryConfig {
   }
 
   uint64_t maxSpillRunRows() const {
-    static constexpr uint64_t kDefault = 12 * 1024 * 1024;
+    static constexpr uint64_t kDefault = 12UL << 20;
     return get<uint64_t>(kMaxSpillRunRows, kDefault);
   }
 
-  /// Returns the maximum size in bytes for the task's buffered output when
-  /// output is partitioned using hash of partitioning keys. See
-  /// PartitionedOutputNode::Kind::kPartitioned.
+  uint64_t maxSpillBytes() const {
+    static constexpr uint64_t kDefault = 100UL << 30;
+    return get<uint64_t>(kMaxSpillBytes, kDefault);
+  }
+
+  /// Returns the maximum number of bytes to buffer in PartitionedOutput
+  /// operator to avoid creating tiny SerializedPages.
   ///
-  /// The producer Drivers are blocked when the buffered size exceeds
-  /// this. The Drivers are resumed when the buffered size goes below
-  /// OutputBufferManager::kContinuePct % of this.
+  /// For PartitionedOutputNode::Kind::kPartitioned, PartitionedOutput operator
+  /// would buffer up to that number of bytes / number of destinations for each
+  /// destination before producing a SerializedPage.
   uint64_t maxPartitionedOutputBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxPartitionedOutputBufferSize, kDefault);
   }
 
-  /// Returns the maximum size in bytes for the task's buffered output when
-  /// output is distributed randomly among consumers. See
-  /// PartitionedOutputNode::Kind::kArbitrary.
+  /// Returns the maximum size in bytes for the task's buffered output.
+  ///
+  /// The producer Drivers are blocked when the buffered size exceeds
+  /// this. The Drivers are resumed when the buffered size goes below
+  /// OutputBufferManager::kContinuePct % of this.
+  uint64_t maxOutputBufferSize() const {
+    return get<uint64_t>(kMaxOutputBufferSize, maxArbitraryBufferSize());
+  }
+
+  /// Deprecated. Use maxBufferSize() instead.
   uint64_t maxArbitraryBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxArbitraryBufferSize, kDefault);
@@ -491,14 +499,6 @@ class QueryConfig {
 
   bool isMatchStructByName() const {
     return get<bool>(kCastMatchStructByName, false);
-  }
-
-  bool isCastToIntByTruncate() const {
-    return get<bool>(kCastToIntByTruncate, false);
-  }
-
-  bool isIso8601() const {
-    return get<bool>(kCastStringToDateIsIso8601, true);
   }
 
   bool codegenEnabled() const {
@@ -714,6 +714,22 @@ class QueryConfig {
 
   bool isExpressionEvaluationCacheEnabled() const {
     return get<bool>(kEnableExpressionEvaluationCache, true);
+  }
+
+  uint32_t maxSharedSubexprResultsCached() const {
+    // 10 was chosen as a default as there are cases where a shared
+    // subexpression can be called in 2 different places and a particular
+    // argument may be peeled in one and not peeled in another. 10 is large
+    // enough to handle this happening for a few arguments in different
+    // combinations.
+    //
+    // For example, when the UDF at the root of a shared subexpression does not
+    // have default null behavior and takes an input that is dictionary encoded
+    // with nulls set in the DictionaryVector. That dictionary
+    // encoding may be peeled depending on whether or not there is a UDF above
+    // it in the expression tree that has default null behavior and takes the
+    // same input as an argument.
+    return get<uint32_t>(kMaxSharedSubexprResultsCached, 10);
   }
 
   int32_t maxSplitPreloadPerDriver() const {
