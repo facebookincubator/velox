@@ -43,6 +43,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/SingleThreadedExecutionUtil.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -232,7 +233,7 @@ class FakeMemoryOperatorFactory : public Operator::PlanNodeTranslator {
   uint32_t maxDrivers_{1};
 };
 
-class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
+class SharedArbitrationTestBase : public exec::test::HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
     exec::test::HiveConnectorTestBase::SetUpTestCase();
@@ -259,7 +260,6 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     fuzzerOpts_.allowLazyVector = false;
     VectorFuzzer fuzzer(fuzzerOpts_, pool());
     vector_ = newVector();
-    executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(32);
     numAddedPools_ = 0;
   }
 
@@ -317,11 +317,53 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
   RowTypePtr rowType_;
   VectorFuzzer::Options fuzzerOpts_;
   RowVectorPtr vector_;
-  std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
+  std::unique_ptr<folly::Executor> executor_;
   std::atomic_uint64_t numAddedPools_{0};
 };
 
-DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
+namespace {
+std::unique_ptr<folly::Executor> newMultiThreadedExecutor() {
+  return std::make_unique<folly::CPUThreadPoolExecutor>(32);
+}
+} // namespace
+
+/// A test fixture that runs cases within multi-threaded execution mode.
+class SharedArbitrationTest : public SharedArbitrationTestBase {
+ protected:
+  void SetUp() override {
+    SharedArbitrationTestBase::SetUp();
+    executor_ = newMultiThreadedExecutor();
+  }
+};
+
+struct TestParam {
+  bool isSingleThreaded{false};
+};
+/// A test fixture that runs cases within both single-threaded and
+/// multi-threaded execution modes.
+class SharedArbitrationTestWithThreadingModes
+    : public testing::WithParamInterface<TestParam>,
+      public SharedArbitrationTestBase {
+ public:
+  static std::vector<TestParam> getTestParams() {
+    return std::vector<TestParam>({{false}, {true}});
+  }
+
+ protected:
+  void SetUp() override {
+    SharedArbitrationTestBase::SetUp();
+    isSingleThreaded_ = GetParam().isSingleThreaded;
+    if (isSingleThreaded_) {
+      executor_ = newSingleThreadedExecutor();
+    } else {
+      executor_ = newMultiThreadedExecutor();
+    }
+  }
+
+  bool isSingleThreaded_{false};
+};
+
+DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -382,6 +424,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(orderByQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .orderBy({"c0 ASC NULLS LAST"}, false)
@@ -393,6 +436,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
@@ -1220,3 +1264,9 @@ TEST_F(SharedArbitrationTest, reserveReleaseCounters) {
   }
 }
 } // namespace facebook::velox::exec::test
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    SharedArbitrationTestWithThreadingModes,
+    SharedArbitrationTestWithThreadingModes,
+    testing::ValuesIn(
+        SharedArbitrationTestWithThreadingModes::getTestParams()));

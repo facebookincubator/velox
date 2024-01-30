@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/SingleThreadedExecutionUtil.h"
 
 namespace facebook::velox::exec::test {
 
@@ -63,7 +64,13 @@ AssertQueryBuilder& AssertQueryBuilder::destination(int32_t destination) {
 }
 
 AssertQueryBuilder& AssertQueryBuilder::singleThreaded(bool singleThreaded) {
-  params_.singleThreaded = singleThreaded;
+  if (singleThreaded) {
+    params_.singleThreaded = true;
+    executor_ = newSingleThreadedExecutor();
+    return *this;
+  }
+  params_.singleThreaded = false;
+  executor_ = newExecutor();
   return *this;
 }
 

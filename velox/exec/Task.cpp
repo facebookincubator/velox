@@ -862,9 +862,13 @@ void Task::resume(std::shared_ptr<Task> self) {
             continue;
           }
           VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
-          if (!driver->state().hasBlockingFuture) {
+          if (!driver->state().hasBlockingFuture &&
+              driver->task()->queryCtx()->isExecutorSupplied()) {
             // Do not continue a Driver that is blocked on external
             // event. The Driver gets enqueued by the promise realization.
+            //
+            // Do not continue the driver if no executor is supplied,
+            // This usually happens in single-threaded execution.
             Driver::enqueue(driver);
           }
         }

@@ -16,6 +16,7 @@
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/tests/utils/SingleThreadedExecutionUtil.h"
 
 #include <filesystem>
 
@@ -296,7 +297,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 class SingleThreadedTaskCursor : public TaskCursorBase {
  public:
   explicit SingleThreadedTaskCursor(const CursorParameters& params)
-      : TaskCursorBase(params, nullptr) {
+      : TaskCursorBase(params, newSingleThreadedExecutor()) {
     VELOX_CHECK(params.singleThreaded)
     VELOX_CHECK(
         !queryCtx_->isExecutorSupplied(),
