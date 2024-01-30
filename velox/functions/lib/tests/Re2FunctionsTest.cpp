@@ -664,7 +664,7 @@ TEST_F(Re2FunctionsTest, likePatternEscapingEscapeChar) {
 }
 
 TEST_F(Re2FunctionsTest, likePatternFixed) {
-  /*testLike("", "", true);
+  testLike("", "", true);
   testLike("abcde", "abcde", true);
   testLike("ABCDE", "ABCDE", true);
   testLike("abcde", "uvwxy", false);
@@ -686,16 +686,16 @@ TEST_F(Re2FunctionsTest, likePatternFixed) {
   testLike("\nab\tcd\b", "\nabcd\b", false);
 
   // Test literal '_' & '%' in pattern.
-  testLike("a", R"(\_)", '\\', false);*/
+  testLike("a", R"(\_)", '\\', false);
   testLike("_b", R"(\_b)", '\\', true);
-  /*testLike("abc_d", R"(abc\_d)", '\\', true);
+  testLike("abc_d", R"(abc\_d)", '\\', true);
 
   testLike("a", R"(\%)", '\\', false);
   testLike("abc%d", R"(abc\%d)", '\\', true);
   testLike("abc%d", R"(a\%d)", '\\', false);
 
   std::string input = generateString(kLikePatternCharacterSet, 66);
-  testLike(input, input, true);*/
+  testLike(input, input, true);
 }
 
 TEST_F(Re2FunctionsTest, likePatternRelaxedFixed) {
@@ -707,6 +707,14 @@ TEST_F(Re2FunctionsTest, likePatternRelaxedFixed) {
   testLike("ABCDEy", "ABCDE_", true);
   testLike("ABCDCy", "ABCDE_", false);
   testLike("abcdey", "ABCDE_", false);
+
+  testLike("fblearner_global", "fblearner_", false);
+  testLike("fblearner", "fblearner_", false);
+  testLike("fblearner_", "fblearner_", true);
+
+  testLike("你好_世界", "你好_", false);
+  testLike("你好", "你好_", false);
+  testLike("你好_", "你好_", true);
 
   // Test literal '_' & '%' in pattern.
   testLike("_x", R"(\__)", '\\', true);
@@ -770,6 +778,14 @@ TEST_F(Re2FunctionsTest, likePatternRelaxedPrefix) {
   testLike("ABCDE", "__C_%", true);
   testLike("ABCDE", "BBC_%", false);
   testLike("abcde", "__C_%", false);
+
+  testLike("fblearner_global", "fblearner_%", true);
+  testLike("fblearner", "fblearner_%", false);
+  testLike("fblearner_", "fblearner_%", true);
+
+  testLike("你好_世界", "你好_%", true);
+  testLike("你好", "你好_%", false);
+  testLike("你好_", "你好_%", true);
 
   // Test literal '_' & '%' in pattern.
   testLike("a_b", R"(_\_%)", '\\', true);
@@ -844,6 +860,14 @@ TEST_F(Re2FunctionsTest, likeRelaxedSuffixPattern) {
   testLike("\nabcde\n", "%d_\b", false);
   testLike("\nabcde\n", "%_d\n", false);
   testLike("\nabcde\n", "%e_\n", false);
+
+  testLike("global_fblearner", "%_fblearner", true);
+  testLike("fblearner", "%_fblearner", false);
+  testLike("_fblearner", "%_fblearner", true);
+
+  testLike("世界_你好", "%_你好", true);
+  testLike("你好", "%_你好", false);
+  testLike("_你好", "%_你好", true);
 
   // Test literal '_' & '%' in pattern.
   testLike("a_b", R"(%\__)", '\\', true);

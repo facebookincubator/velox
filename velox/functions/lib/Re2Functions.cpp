@@ -473,13 +473,12 @@ bool matchExactPattern(
   return input.size() == 0;
 }
 
-bool matchRelaxedFixedForwardAscii(
+std::pair<bool, int32_t> matchRelaxedFixedForwardAscii(
     StringView input,
     const PatternMetadata& patternMetadata,
     size_t start) {
-  // Compare the length first.
   if (input.size() - start < patternMetadata.length()) {
-    return false;
+    return std::make_pair(false, -1);
   }
 
   for (const auto& subPattern : patternMetadata.subPatterns()) {
@@ -488,20 +487,20 @@ bool matchRelaxedFixedForwardAscii(
             input.data() + start + subPattern.start,
             patternMetadata.fixedPattern().data() + subPattern.start,
             subPattern.length) != 0) {
-      return false;
+      return std::make_pair(false, -1);
     }
   }
 
-  return true;
+  return std::make_pair(true, start + patternMetadata.length());
 }
 
-bool matchRelaxedFixedForwardUnicode(
+std::pair<bool, int32_t> matchRelaxedFixedForwardUnicode(
     StringView input,
     const PatternMetadata& patternMetadata,
     size_t start) {
   // Compare the length first.
   if (input.size() - start < patternMetadata.length()) {
-    return false;
+    return std::make_pair(false, -1);
   }
 
   auto cursor = start;
@@ -510,7 +509,7 @@ bool matchRelaxedFixedForwardUnicode(
       // Match every single char wildcard.
       for (auto i = 0; i < subPattern.length; i++) {
         if (cursor >= input.size()) {
-          return false;
+          return std::make_pair(false, -1);
         }
 
         auto numBytes = unicodeCharLength(input.data() + cursor);
@@ -523,19 +522,23 @@ bool matchRelaxedFixedForwardUnicode(
               input.data() + cursor,
               patternMetadata.fixedPattern().data() + subPattern.start,
               currentLength) != 0) {
-        return false;
+        return std::make_pair(false, -1);
       }
 
       cursor += currentLength;
     }
   }
 
-  return true;
+  return std::make_pair(true, cursor);
 }
 
 // Match the input(from the position of start) with relaxed pattern forward.
+// Returns a pair:
+// - first: a bool indicates whether matches the pattern.
+// - second: an integer indicates where is cursor in the input when we finished
+// matching if 'first' is true, -1 otherwise.
 template <bool isAscii>
-bool matchRelaxedFixedForward(
+std::pair<bool, int32_t> matchRelaxedFixedForward(
     StringView input,
     const PatternMetadata& patternMetadata,
     size_t start) {
@@ -659,19 +662,28 @@ class OptimizedLike final : public VectorFunction {
         case PatternKind::kFixed:
           return matchExactPattern(
               input, patternMetadata.fixedPattern(), patternMetadata.length());
-        case PatternKind::kRelaxedFixed:
-          return matchRelaxedFixedForward<true>(input, patternMetadata, 0);
+        case PatternKind::kRelaxedFixed: {
+          auto pair = matchRelaxedFixedForward<true>(input, patternMetadata, 0);
+          return pair.first && pair.second == input.size();
+        }
         case PatternKind::kPrefix:
           return matchPrefixPattern(
               input, patternMetadata.fixedPattern(), patternMetadata.length());
         case PatternKind::kRelaxedPrefix:
-          return matchRelaxedFixedForward<true>(input, patternMetadata, 0);
+          return matchRelaxedFixedForward<true>(input, patternMetadata, 0)
+              .first;
         case PatternKind::kSuffix:
           return matchSuffixPattern(
               input, patternMetadata.fixedPattern(), patternMetadata.length());
         case PatternKind::kRelaxedSuffix:
+          if (input.size() < patternMetadata.length()) {
+            return false;
+          }
           return matchRelaxedFixedForward<true>(
-              input, patternMetadata, input.size() - patternMetadata.length());
+                     input,
+                     patternMetadata,
+                     input.size() - patternMetadata.length())
+              .first;
         case PatternKind::kSubstring:
           return matchSubstringPattern(input, patternMetadata.fixedPattern());
       }
@@ -688,13 +700,18 @@ class OptimizedLike final : public VectorFunction {
         case PatternKind::kFixed:
           return matchExactPattern(
               input, patternMetadata.fixedPattern(), patternMetadata.length());
-        case PatternKind::kRelaxedFixed:
-          return matchRelaxedFixedForward<false>(input, patternMetadata, 0);
+        case PatternKind::kRelaxedFixed: {
+          auto pair =
+              matchRelaxedFixedForward<false>(input, patternMetadata, 0);
+          return pair.first && pair.second == input.size();
+        }
         case PatternKind::kPrefix:
           return matchPrefixPattern(
               input, patternMetadata.fixedPattern(), patternMetadata.length());
-        case PatternKind::kRelaxedPrefix:
-          return matchRelaxedFixedForward<false>(input, patternMetadata, 0);
+        case PatternKind::kRelaxedPrefix: {
+          return matchRelaxedFixedForward<false>(input, patternMetadata, 0)
+              .first;
+        }
         case PatternKind::kSuffix:
           return matchSuffixPattern(
               input, patternMetadata.fixedPattern(), patternMetadata.length());
