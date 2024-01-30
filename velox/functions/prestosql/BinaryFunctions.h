@@ -19,10 +19,7 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include "folly/ssl/OpenSSLHash.h"
-#pragma GCC diagnostic pop
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
@@ -396,6 +393,20 @@ struct ToIEEE754Bits64 {
     auto value = folly::Endian::big(input);
     result.setNoCopy(
         StringView(reinterpret_cast<const char*>(&value), kTypeLength));
+  }
+};
+
+template <typename T>
+struct FromIEEE754Bits64 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Varbinary>& input) {
+    static constexpr auto kTypeLength = sizeof(int64_t);
+    VELOX_USER_CHECK_EQ(input.size(), kTypeLength, "Expected 8-byte input");
+    memcpy(&result, input.data(), kTypeLength);
+    result = folly::Endian::big(result);
   }
 };
 
