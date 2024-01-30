@@ -378,3 +378,14 @@ MemoryArbitrationContext* memoryArbitrationContext();
 /// Returns true if the running thread is under memory arbitration or not.
 bool underMemoryArbitration();
 } // namespace facebook::velox::memory
+
+template <>
+struct fmt::formatter<facebook::velox::memory::MemoryArbitrator::Stats>
+    : fmt::formatter<std::string> {
+  auto format(
+      const facebook::velox::memory::MemoryArbitrator::Stats& s,
+      format_context& ctx) {
+    return formatter<std::string>::format(s.toString(), ctx);
+  }
+};
+
