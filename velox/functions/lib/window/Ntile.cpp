@@ -19,21 +19,23 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::window::prestosql {
+namespace facebook::velox::functions::window {
 
 namespace {
 
+template <typename TResult>
 class NtileFunction : public exec::WindowFunction {
  public:
   explicit NtileFunction(
       const std::vector<exec::WindowFunctionArg>& args,
+      const TypePtr& resultType,
       velox::memory::MemoryPool* pool)
-      : WindowFunction(BIGINT(), pool, nullptr) {
+      : WindowFunction(resultType, pool, nullptr) {
     if (args[0].constantValue) {
       auto argBuckets = args[0].constantValue;
       if (!argBuckets->isNullAt(0)) {
         numFixedBuckets_ =
-            argBuckets->as<ConstantVector<int64_t>>()->valueAt(0);
+            argBuckets->as<ConstantVector<TResult>>()->valueAt(0);
         VELOX_USER_CHECK_GE(
             numFixedBuckets_.value(), 1, "{}", kBucketErrorString);
       }
@@ -41,8 +43,8 @@ class NtileFunction : public exec::WindowFunction {
     }
 
     bucketColumn_ = args[0].index;
-    bucketVector_ = BaseVector::create(BIGINT(), 0, pool);
-    bucketFlatVector_ = bucketVector_->asFlatVector<int64_t>();
+    bucketVector_ = BaseVector::create(resultType_, 0, pool);
+    bucketFlatVector_ = bucketVector_->asFlatVector<TResult>();
   }
 
   void resetPartition(const exec::WindowPartition* partition) override {
@@ -115,7 +117,7 @@ class NtileFunction : public exec::WindowFunction {
         vector_size_t numRows,
         int64_t partitionOffset,
         vector_size_t resultOffset,
-        int64_t* rawResultValues) {
+        TResult* rawResultValues) {
       int64_t i = 0;
       // This loop terminates if it reaches extraBucketBoundary or numRows
       // in the result vector are filled.
@@ -145,7 +147,7 @@ class NtileFunction : public exec::WindowFunction {
     partition_->extractColumn(
         bucketColumn_.value(), partitionOffset_, numRows, 0, bucketVector_);
 
-    auto* resultFlatVector = result->asFlatVector<int64_t>();
+    auto* resultFlatVector = result->asFlatVector<TResult>();
     auto* rawValues = resultFlatVector->mutableRawValues();
     for (auto i = 0; i < numRows; i++) {
       if (bucketFlatVector_->isNullAt(i)) {
@@ -170,7 +172,7 @@ class NtileFunction : public exec::WindowFunction {
       vector_size_t resultOffset,
       const VectorPtr& result) {
     if (numFixedBuckets_.has_value()) {
-      auto rawValues = result->asFlatVector<int64_t>()->mutableRawValues();
+      auto rawValues = result->asFlatVector<TResult>()->mutableRawValues();
       if (fixedBucketsMoreThanPartition_) {
         std::iota(
             rawValues + resultOffset,
@@ -183,7 +185,7 @@ class NtileFunction : public exec::WindowFunction {
     } else {
       // This is a function call with a constant null value. Set all result
       // rows to null.
-      auto* resultVector = result->asFlatVector<int64_t>();
+      auto* resultVector = result->asFlatVector<TResult>();
       auto mutableRawNulls = resultVector->mutableRawNulls();
       bits::fillBits(
           mutableRawNulls, resultOffset, resultOffset + numRows, bits::kNull);
@@ -216,22 +218,23 @@ class NtileFunction : public exec::WindowFunction {
 
   // Vector used to read the bucket column values.
   VectorPtr bucketVector_;
-  FlatVector<int64_t>* bucketFlatVector_;
+  FlatVector<TResult>* bucketFlatVector_;
 
   static const std::string kBucketErrorString;
 };
 
-const std::string NtileFunction::kBucketErrorString =
+template <typename TResult>
+const std::string NtileFunction<TResult>::kBucketErrorString =
     "Buckets must be greater than 0";
 
 } // namespace
 
-void registerNtile(const std::string& name) {
-  // ntile(bigint) -> bigint.
+template <typename TResult>
+void registerNtile(const std::string& name, const std::string& type) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
-          .returnType("bigint")
-          .argumentType("bigint")
+          .returnType(type)
+          .argumentType(type)
           .build(),
   };
 
@@ -240,13 +243,21 @@ void registerNtile(const std::string& name) {
       std::move(signatures),
       [name](
           const std::vector<exec::WindowFunctionArg>& args,
-          const TypePtr& /*resultType*/,
+          const TypePtr& resultType,
           bool /*ignoreNulls*/,
           velox::memory::MemoryPool* pool,
           HashStringAllocator* /*stringAllocator*/,
           const core::QueryConfig& /*queryConfig*/)
           -> std::unique_ptr<exec::WindowFunction> {
-        return std::make_unique<NtileFunction>(args, pool);
+        return std::make_unique<NtileFunction<TResult>>(args, resultType, pool);
       });
 }
-} // namespace facebook::velox::window::prestosql
+
+void registerNtileBigint(const std::string& name) {
+  registerNtile<int64_t>(name, "bigint");
+}
+void registerNtileInteger(const std::string& name) {
+  registerNtile<int32_t>(name, "integer");
+}
+
+} // namespace facebook::velox::functions::window
