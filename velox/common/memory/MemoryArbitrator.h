@@ -244,8 +244,8 @@ class MemoryArbitrator {
 };
 
 /// Formatter for fmt.
-auto format_as(MemoryArbitrator::Stats f) {
-  return f.toString();
+std::string format_as(MemoryArbitrator::Stats stats) {
+  return stats.toString();
 }
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(

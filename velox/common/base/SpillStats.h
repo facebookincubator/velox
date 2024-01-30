@@ -142,7 +142,7 @@ void updateGlobalMaxSpillLevelExceededCount(
 SpillStats globalSpillStats();
 
 /// Formatter for fmt.
-auto format_as(SpillStats f) {
-  return f.toString();
+std::string format_as(SpillStats stats) {
+  return stats.toString();
 }
 } // namespace facebook::velox::common
