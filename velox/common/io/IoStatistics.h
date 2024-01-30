@@ -88,6 +88,8 @@ class IoCounter {
 
 class IoStatistics {
  public:
+  virtual ~IoStatistics() = default;
+
   uint64_t rawBytesRead() const;
   uint64_t rawOverreadBytes() const;
   uint64_t rawBytesWritten() const;
