@@ -20,10 +20,14 @@ such as ``[1,2,3]``. More detailed grammar can be found in
 JSON Functions
 --------------
 
-.. spark:function:: get_json_object(json, path) -> varchar
+.. spark:function:: get_json_object(jsonString, path) -> varchar
 
-    Extracts a json object from ``path``. Returns NULL if it finds json string
-    is malformed. ::
+    Returns a json object, represented by VARCHAR, from ``jsonString`` by searching ``path``.
+    Valid ``path`` should contain "[index]", "[field]" or ".field" to define a JSON path.
+    Here are some examples: "$.a" "$.a.b", "$[0][a].b". Returns NULL if it finds json string
+    is malformed or ``path`` doesn't exist. ::
 
         SELECT get_json_object('{"a":"b"}', '$.a'); -- 'b'
         SELECT get_json_object('{"a":{"b":"c"}}', '$.a'); -- '{"b":"c"}'
+        SELECT get_json_object('{"a": "3"}', '$.b'; -- NULL (not found field)
+        SELECT get_json_object('{"a"-3}'', $.a); -- NULL (malformed JSON string)
