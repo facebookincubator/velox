@@ -1,0 +1,69 @@
+name: Velox Unit Tests Suite
+
+on:
+  pull_request
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+
+  velox-test:
+    runs-on: self-hosted
+    container: ubuntu:22.04
+    steps:
+      - uses: actions/checkout@v2
+      - run: apt-get update && apt-get install ca-certificates -y && update-ca-certificates
+      - run: sed -i 's/http\:\/\/archive.ubuntu.com/https\:\/\/mirrors.ustc.edu.cn/g' /etc/apt/sources.list
+      - run: apt-get update
+      - run: apt-get install -y cmake ccache build-essential ninja-build sudo
+      - run: apt-get install -y libboost-all-dev libcurl4-openssl-dev
+      - run: apt-get install -y libssl-dev flex libfl-dev git openjdk-8-jdk axel *thrift* libkrb5-dev libgsasl7-dev libuuid1 uuid-dev
+      - run: apt-get install -y libz-dev
+      - run: |
+          axel https://github.com/protocolbuffers/protobuf/releases/download/v21.4//protobuf-all-21.4.tar.gz
+          tar xf protobuf-all-21.4.tar.gz
+          cd protobuf-21.4/cmake
+          CFLAGS=-fPIC CXXFLAGS=-fPIC cmake .. && make -j && make install
+      - run: |
+          axel https://dl.min.io/server/minio/release/linux-amd64/archive/minio_20220526054841.0.0_amd64.deb
+          dpkg -i minio_20220526054841.0.0_amd64.deb
+          rm minio_20220526054841.0.0_amd64.deb
+      - run: |
+          axel https://archive.apache.org/dist/hadoop/core/hadoop-2.10.1/hadoop-2.10.1.tar.gz
+          tar xf hadoop-2.10.1.tar.gz -C /usr/local/
+      - name: Compile C++ unit tests
+        run: |
+          git submodule sync --recursive && git submodule update --init --recursive
+          sed -i 's/sudo apt/apt/g' ./scripts/setup-ubuntu.sh
+          sed -i 's/sudo --preserve-env apt/apt/g' ./scripts/setup-ubuntu.sh
+          TZ=Asia/Shanghai ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && ./scripts/setup-ubuntu.sh 
+          mkdir -p ~/adapter-deps/install
+          DEPENDENCY_DIR=~/adapter-deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-adapters.sh gcs aws hdfs
+          #make debug EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_PARQUET=ON -DVELOX_BUILD_TESTING=ON -DVELOX_BUILD_TEST_UTILS=ON -DVELOX_ENABLE_HDFS=ON -DVELOX_ENABLE_S3=ON -DVELOX_ENABLE_GCS=ON" AWSSDK_ROOT_DIR=~/adapter-deps/install
+          #make debug EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_PARQUET=ON -DVELOX_BUILD_TESTING=ON -DVELOX_BUILD_TEST_UTILS=ON" 
+          make EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_PARQUET=ON -DVELOX_BUILD_TESTING=ON -DVELOX_BUILD_TEST_UTILS=ON"
+          export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk-amd64/
+          export HADOOP_ROOT_LOGGER="WARN,DRFA"
+          export LIBHDFS3_CONF=$(pwd)/.circleci/hdfs-client.xml
+          export HADOOP_HOME='/usr/local/hadoop-2.10.1'
+          export PATH=~/adapter-deps/install/bin:/usr/local/hadoop-2.10.1/bin:${PATH}
+          cd _build/release && ctest -j32 -VV --output-on-failure
+
+  formatting-check:
+    name: Formatting Check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        path:
+          - check: 'velox'
+            exclude: 'external'
+    steps:
+      - uses: actions/checkout@v2
+      - name: Run clang-format style check for C/C++ programs.
+        uses: jidicula/clang-format-action@v3.5.1
+        with:
+          clang-format-version: '12'
+          check-path: ${{ matrix.path['check'] }}
+          exclude-regex: ${{ matrix.path['exclude'] }}
