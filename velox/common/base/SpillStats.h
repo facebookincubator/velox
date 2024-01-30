@@ -95,6 +95,11 @@ struct SpillStats {
   std::string toString() const;
 };
 
+/// Formatter for fmt.
+FOLLY_ALWAYS_INLINE std::string format_as(SpillStats stats) {
+  return stats.toString();
+}
+
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
     std::ostream& o,
     const common::SpillStats& stats) {
@@ -140,9 +145,4 @@ void updateGlobalMaxSpillLevelExceededCount(
 
 /// Gets the cumulative global spill stats.
 SpillStats globalSpillStats();
-
-/// Formatter for fmt.
-std::string format_as(SpillStats stats) {
-  return stats.toString();
-}
 } // namespace facebook::velox::common

@@ -244,7 +244,7 @@ class MemoryArbitrator {
 };
 
 /// Formatter for fmt.
-std::string format_as(MemoryArbitrator::Stats stats) {
+FOLLY_ALWAYS_INLINE std::string format_as(MemoryArbitrator::Stats stats) {
   return stats.toString();
 }
 
