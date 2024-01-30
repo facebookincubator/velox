@@ -162,8 +162,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_mergeArrayNegative) {
   auto subfields = makeSubfields({"c0[1].c0c0", "c0[-1].c0c2"});
   auto groupedSubfields = groupSubfields(subfields);
   VELOX_ASSERT_USER_THROW(
-      makeScanSpec(
-          rowType, groupedSubfields, {}, nullptr, {}, {}, pool_.get()),
+      makeScanSpec(rowType, groupedSubfields, {}, nullptr, {}, {}, pool_.get()),
       "Non-positive array subscript cannot be push down");
 }
 
