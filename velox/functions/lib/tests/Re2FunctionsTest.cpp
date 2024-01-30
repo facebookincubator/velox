@@ -708,9 +708,9 @@ TEST_F(Re2FunctionsTest, likePatternRelaxedFixed) {
   testLike("ABCDCy", "ABCDE_", false);
   testLike("abcdey", "ABCDE_", false);
 
-  testLike("fblearner_global", "fblearner_", false);
-  testLike("fblearner", "fblearner_", false);
-  testLike("fblearner_", "fblearner_", true);
+  testLike("ABCDE_FGH", "ABCDE_", false);
+  testLike("ABCDE", "ABCDE_", false);
+  testLike("ABCDE_", "ABCDE_", true);
 
   testLike("你好_世界", "你好_", false);
   testLike("你好", "你好_", false);
@@ -779,9 +779,9 @@ TEST_F(Re2FunctionsTest, likePatternRelaxedPrefix) {
   testLike("ABCDE", "BBC_%", false);
   testLike("abcde", "__C_%", false);
 
-  testLike("fblearner_global", "fblearner_%", true);
-  testLike("fblearner", "fblearner_%", false);
-  testLike("fblearner_", "fblearner_%", true);
+  testLike("ABCDE_FGH", "ABCDE_%", true);
+  testLike("ABCDE", "ABCDE_%", false);
+  testLike("ABCDE_", "ABCDE_%", true);
 
   testLike("你好_世界", "你好_%", true);
   testLike("你好", "你好_%", false);
@@ -861,9 +861,9 @@ TEST_F(Re2FunctionsTest, likeRelaxedSuffixPattern) {
   testLike("\nabcde\n", "%_d\n", false);
   testLike("\nabcde\n", "%e_\n", false);
 
-  testLike("global_fblearner", "%_fblearner", true);
-  testLike("fblearner", "%_fblearner", false);
-  testLike("_fblearner", "%_fblearner", true);
+  testLike("FGH_ABCDE", "%_ABCDE", true);
+  testLike("ABCDE", "%_ABCDE", false);
+  testLike("_ABCDE", "%_ABCDE", true);
 
   testLike("世界_你好", "%_你好", true);
   testLike("你好", "%_你好", false);
