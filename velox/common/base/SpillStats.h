@@ -140,14 +140,9 @@ void updateGlobalMaxSpillLevelExceededCount(
 
 /// Gets the cumulative global spill stats.
 SpillStats globalSpillStats();
-} // namespace facebook::velox::common
 
-template <>
-struct fmt::formatter<facebook::velox::common::SpillStats>
-    : fmt::formatter<std::string> {
-  auto format(
-      const facebook::velox::common::SpillStats& s,
-      format_context& ctx) {
-    return formatter<std::string>::format(s.toString(), ctx);
-  }
-};
+/// Formatter for fmt.
+auto format_as(SpillStats f) {
+  return f.toString();
+}
+} // namespace facebook::velox::common
