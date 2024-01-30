@@ -120,14 +120,14 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
     return out.str();
   }
 
-  virtual std::string toJsonString() {
+  virtual folly::dynamic toJson() {
     folly::dynamic obj = folly::dynamic::object;
     obj["taskId"] = taskId_;
     obj["destination"] = destination_;
     obj["sequence"] = sequence_;
     obj["requestPending"] = requestPending_.load();
     obj["atEnd"] = atEnd_;
-    return folly::toPrettyJson(obj);
+    return obj;
   }
 
   using Factory = std::function<std::shared_ptr<ExchangeSource>(
