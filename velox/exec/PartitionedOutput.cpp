@@ -30,6 +30,9 @@ BlockingReason Destination::advance(
     bool* atEnd,
     ContinueFuture* future,
     Scratch& scratch) {
+  if (!type_) {
+    type_ = output->type();
+  }
   if (rowIdx_ >= rows_.size()) {
     *atEnd = true;
     return BlockingReason::kNotBlocked;
@@ -87,19 +90,20 @@ BlockingReason Destination::flush(
   const int64_t flushedRows = rowsInCurrent_;
 
   current_->flush(&stream);
-  current_.reset();
+  // current_ = nullptr;
+  current_->clear();
 
   const int64_t flushedBytes = stream.tellp();
 
   bytesInCurrent_ = 0;
   rowsInCurrent_ = 0;
   setTargetSizePct();
-
+  auto iobuf = stream.getIOBuf(bufferReleaseFn);
+  check(iobuf);
   bool blocked = bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(
-          stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
+      std::make_unique<SerializedPage>(std::move(iobuf), nullptr, flushedRows),
       future);
 
   recordEnqueued_(flushedBytes, flushedRows);
@@ -107,6 +111,21 @@ BlockingReason Destination::flush(
   return blocked ? BlockingReason::kWaitForConsumer
                  : BlockingReason::kNotBlocked;
 }
+
+void Destination::check(std::unique_ptr<folly::IOBuf>& iobuf) {
+  std::vector<ByteRange> ranges;
+  for (auto& range : *iobuf) {
+    ranges.push_back(ByteRange{
+        reinterpret_cast<uint8_t*>(const_cast<uint8_t*>(range.data())),
+        static_cast<int32_t>(range.size()),
+        0});
+  }
+  ByteInputStream in(std::move(ranges));
+  RowVectorPtr result;
+  getVectorSerde()->deserialize(
+      &in, pool_, std::static_pointer_cast<const RowType>(type_), &result, 0);
+}
+
 } // namespace detail
 
 PartitionedOutput::PartitionedOutput(
@@ -175,6 +194,95 @@ void PartitionedOutput::initializeInput(RowVectorPtr input) {
         input_->size(),
         outputColumns);
   }
+  if (output_->size() > 1 /* && !encodingCandidates_.empty()*/) {
+    rows_.resize(output_->size());
+    rows_.setAll();
+    for (auto i = 0; i < output_->childrenSize(); ++i) {
+      maybeEncode(i);
+    }
+  }
+}
+
+template <TypeKind Kind>
+bool isAllSameFlat(const BaseVector& vector, vector_size_t size) {
+  using T = typename KindToFlatVector<Kind>::WrapperType;
+  auto flat = vector.asUnchecked<FlatVector<T>>();
+  auto rawValues = flat->rawValues();
+  T first = rawValues[0];
+  for (auto i = 1; i < size; ++i) {
+    if (first != rawValues[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void PartitionedOutput::maybeEncode(column_index_t i) {
+  auto& column = BaseVector::loadedVectorShared(output_->childAt(i));
+  if (column->typeKind() == TypeKind::BOOLEAN) {
+    return;
+  }
+  if (column->encoding() == VectorEncoding::Simple::CONSTANT) {
+    return;
+  }
+  // If there is a null, values will either not all be the same or all be null,
+  // which can just as well be serialized as flat.
+  if (column->isNullAt(0)) {
+    return;
+  }
+  // Quick return if first and last are different.
+  if (!column->equalValueAt(column.get(), 0, rows_.end() - 1)) {
+    return;
+  }
+
+  tempDecoded_.decode(*column, rows_);
+  if (!tempDecoded_.isIdentityMapping()) {
+    auto indices = tempDecoded_.indices();
+    auto first = indices[0];
+    for (auto i = 1; i < rows_.end(); ++i) {
+      if (indices[i] != first) {
+        if (tempDecoded_.isNullAt(i)) {
+          return;
+        }
+        if (!tempDecoded_.base()->equalValueAt(
+                tempDecoded_.base(), first, indices[i])) {
+          return;
+        }
+      }
+    }
+    replaceOutputColumn(i, BaseVector::wrapInConstant(rows_.end(), 0, column));
+    return;
+  }
+  if (column->mayHaveNulls()) {
+    return;
+  }
+  if (column->encoding() == VectorEncoding::Simple::FLAT) {
+    if (!VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+            isAllSameFlat, column->typeKind(), *column, rows_.end() - 1)) {
+      return;
+    }
+  } else {
+    for (auto i = 1; i < rows_.end() - 1; ++i) {
+      if (!column->equalValueAt(column.get(), 0, i)) {
+        return;
+      }
+    }
+  }
+
+  replaceOutputColumn(i, BaseVector::wrapInConstant(rows_.end(), 0, column));
+}
+
+void PartitionedOutput::replaceOutputColumn(int32_t i, VectorPtr column) {
+  if (input_ == output_) {
+    auto children = input_->children();
+    output_ = std::make_shared<RowVector>(
+        input_->pool(),
+        outputType_,
+        nullptr /*nulls*/,
+        input_->size(),
+        children);
+  }
+  output_->childAt(i) = column;
 }
 
 void PartitionedOutput::initializeDestinations() {

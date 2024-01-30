@@ -184,6 +184,8 @@ DEFINE_int32(
 
 DEFINE_int32(split_preload_per_driver, 2, "Prefetch split metadata");
 
+DEFINE_int32(batch_bytes, 10 < 20, "Preferred Operator batch size bytes");
+
 struct RunStats {
   std::map<std::string, std::string> flags;
   int64_t micros{0};
@@ -287,6 +289,9 @@ class TpchBenchmark {
         params.planNode = tpchPlan.plan;
         params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
             std::to_string(FLAGS_split_preload_per_driver);
+        params.queryConfigs[core::QueryConfig::kPreferredOutputBatchBytes] =
+            std::to_string(FLAGS_batch_bytes);
+
         const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
         bool noMoreSplits = false;

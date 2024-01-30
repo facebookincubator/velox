@@ -56,6 +56,17 @@ class VectorSerializer {
       Scratch& scratch) {
     VELOX_UNSUPPORTED();
   }
+  virtual void incrementRows(int32_t numRows) {
+    VELOX_UNSUPPORTED();
+  }
+
+  virtual void appendColumn(
+      const RowVectorPtr& vector,
+      int32_t column,
+      const folly::Range<const vector_size_t*>& rows,
+      Scratch& scratch) {
+    VELOX_UNSUPPORTED();
+  }
 
   /// Serialize all rows in a vector.
   void append(const RowVectorPtr& vector);
@@ -76,10 +87,19 @@ class VectorSerializer {
   /// size_t size = maxSerializedSize();
   /// OutputStream* stream = allocateBuffer(size);
   /// flush(stream);
+  /// clear();
+  /// append again after clear() if clear is supported.
   virtual size_t maxSerializedSize() const = 0;
 
   /// Write serialized data to 'stream'.
   virtual void flush(OutputStream* stream) = 0;
+
+  /// Resets 'this' to post construction state. Reserves space in
+  /// constituent streams to match previous utilization if
+  /// 'reservePreviousSize' is true.
+  virtual void clear(bool reservePreviousSize = true) {
+    VELOX_UNSUPPORTED("clear");
+  }
 };
 
 class VectorSerde {
@@ -235,6 +255,16 @@ class VectorStreamGroup : public StreamArena {
       const folly::Range<const vector_size_t*>& rows,
       Scratch& scratch);
 
+  void incrementRows(int32_t numRows) {
+    serializer_->incrementRows(numRows);
+  }
+
+  void appendColumn(
+      const RowVectorPtr& vector,
+      int32_t column,
+      const folly::Range<const vector_size_t*>& rows,
+      Scratch& scratch);
+
   void append(const RowVectorPtr& vector);
 
   // Writes the contents to 'stream' in wire format.
@@ -247,6 +277,11 @@ class VectorStreamGroup : public StreamArena {
       RowTypePtr type,
       RowVectorPtr* result,
       const VectorSerde::Options* options = nullptr);
+
+  void clear(bool reservePreviousSize = true) {
+    StreamArena::clear();
+    serializer_->clear(reservePreviousSize);
+  }
 
  private:
   std::unique_ptr<VectorSerializer> serializer_;

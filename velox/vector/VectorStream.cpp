@@ -116,6 +116,14 @@ void VectorStreamGroup::append(
   serializer_->append(vector, rows, scratch);
 }
 
+void VectorStreamGroup::appendColumn(
+    const RowVectorPtr& vector,
+    int32_t column,
+    const folly::Range<const vector_size_t*>& rows,
+    Scratch& scratch) {
+  serializer_->append(vector, rows, scratch);
+}
+
 void VectorStreamGroup::append(const RowVectorPtr& vector) {
   serializer_->append(vector);
 }
