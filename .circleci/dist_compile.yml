@@ -220,8 +220,6 @@ jobs:
             mkdir -p .ccache
             export CCACHE_DIR=$(pwd)/.ccache
             ccache -sz -M 5Gi
-            # Temporary until the CI image is updated.
-            brew install libsodium
             cmake \
                 -B _build/debug \
                 -GNinja \
