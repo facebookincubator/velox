@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <iomanip>
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/vector/BaseVector.h"
@@ -159,6 +160,8 @@ class ConstantTypedExpr : public ITypedExpr {
   const variant value_;
   const VectorPtr valueVector_;
 };
+
+using ConstantTypedExprPtr = std::shared_ptr<const ConstantTypedExpr>;
 
 /// Evaluates a scalar function or a special form.
 ///
@@ -317,12 +320,15 @@ class FieldAccessTypedExpr : public ITypedExpr {
   }
 
   std::string toString() const override {
+    std::stringstream ss;
+    ss << std::quoted(name(), '"', '"');
     if (inputs().empty()) {
-      return fmt::format("{}", std::quoted(name(), '"', '"'));
+      return fmt::format("{}", ss.str());
+      ;
     }
 
-    return fmt::format(
-        "{}[{}]", inputs()[0]->toString(), std::quoted(name(), '"', '"'));
+    return fmt::format("{}[{}]", inputs()[0]->toString(), ss.str());
+    ;
   }
 
   size_t localHash() const override {
@@ -399,8 +405,7 @@ class DereferenceTypedExpr : public ITypedExpr {
   }
 
   std::string toString() const override {
-    return fmt::format(
-        "{}[{}]", inputs()[0]->toString(), std::quoted(name(), '"', '"'));
+    return fmt::format("{}[{}]", inputs()[0]->toString(), name());
   }
 
   size_t localHash() const override {
@@ -645,4 +650,40 @@ class CastTypedExpr : public ITypedExpr {
 };
 
 using CastTypedExprPtr = std::shared_ptr<const CastTypedExpr>;
+
+/// A collection of convenince methods for working with expressions.
+class TypedExprs {
+ public:
+  /// Returns true if 'expr' is a field access expression.
+  static bool isFieldAccess(const TypedExprPtr& expr) {
+    return dynamic_cast<const FieldAccessTypedExpr*>(expr.get()) != nullptr;
+  }
+
+  /// Returns 'expr' as FieldAccessTypedExprPtr or null if not field access
+  /// expression.
+  static FieldAccessTypedExprPtr asFieldAccess(const TypedExprPtr& expr) {
+    return std::dynamic_pointer_cast<const FieldAccessTypedExpr>(expr);
+  }
+
+  /// Returns true if 'expr' is a constant expression.
+  static bool isConstant(const TypedExprPtr& expr) {
+    return dynamic_cast<const ConstantTypedExpr*>(expr.get()) != nullptr;
+  }
+
+  /// Returns 'expr' as ConstantTypedExprPtr or null if not a constant
+  /// expression.
+  static ConstantTypedExprPtr asConstant(const TypedExprPtr& expr) {
+    return std::dynamic_pointer_cast<const ConstantTypedExpr>(expr);
+  }
+
+  /// Returns true if 'expr' is a lambda expression.
+  static bool isLambda(const TypedExprPtr& expr) {
+    return dynamic_cast<const LambdaTypedExpr*>(expr.get()) != nullptr;
+  }
+
+  /// Returns 'expr' as LambdaTypedExprPtr or null if not a lambda expression.
+  static LambdaTypedExprPtr asLambda(const TypedExprPtr& expr) {
+    return std::dynamic_pointer_cast<const LambdaTypedExpr>(expr);
+  }
+};
 } // namespace facebook::velox::core

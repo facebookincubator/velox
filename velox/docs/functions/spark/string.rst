@@ -55,6 +55,20 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT endswith('js SQL', 'js'); -- false
         SELECT endswith('js SQL', NULL); -- NULL
 
+.. spark:function:: find_in_set(str, strArray) -> integer
+
+    Returns 1-based index of the given string ``str`` in the comma-delimited list ``strArray``.
+    Returns 0, if the string was not found or if the given string ``str`` contains a comma. ::
+
+        SELECT find_in_set('ab', 'abc,b,ab,c,def'); -- 3
+        SELECT find_in_set('ab,', 'abc,b,ab,c,def'); -- 0
+        SELECT find_in_set('dfg', 'abc,b,ab,c,def'); -- 0
+        SELECT find_in_set('', ''); -- 1
+        SELECT find_in_set('', '123,'); -- 2
+        SELECT find_in_set('', ',123'); -- 1
+        SELECT find_in_set(NULL, ',123'); -- NULL
+        SELECT find_in_set("abc", NULL); -- NULL
+
 .. spark:function:: instr(string, substring) -> integer
 
     Returns the starting position of the first instance of ``substring`` in
@@ -121,10 +135,21 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
 
-.. spark:function:: replace(string, search, replace) -> string
+.. spark:function:: replace(input, replaced) -> varchar
 
-    Replaces all occurrences of `search` with `replace`. ::
+    Removes all instances of ``replaced`` from ``input``.
+    If ``replaced`` is an empty string, returns the original ``input`` string. ::
 
+        SELECT replace('ABCabc', ''); -- ABCabc
+        SELECT replace('ABCabc', 'bc'); -- ABCc
+
+.. spark:function:: replace(input, replaced, replacement) -> varchar
+
+    Replaces all instances of ``replaced`` with ``replacement`` in ``input``.
+    If ``replaced`` is an empty string, returns the original ``input`` string. ::
+
+        SELECT replace('ABCabc', '', 'DEF'); -- ABCabc
+        SELECT replace('ABCabc', 'abc', ''); -- ABC
         SELECT replace('ABCabc', 'abc', 'DEF'); -- ABCDEF
 
 .. spark:function:: rpad(string, len, pad) -> string
@@ -177,6 +202,20 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT startswith('js SQL', 'js'); -- true
         SELECT startswith('js SQL', 'SQL'); -- false
         SELECT startswith('js SQL', null); -- NULL
+
+.. spark:function:: str_to_map(string, entryDelimiter, keyValueDelimiter) -> map(string, string)
+
+    Returns a map by splitting ``string`` into entries with ``entryDelimiter`` and splitting
+    each entry into key/value with ``keyValueDelimiter``.
+    ``entryDelimiter`` and ``keyValueDelimiter`` must be constant strings with single ascii
+    character. Allows ``keyValueDelimiter`` not found when splitting an entry. Throws exception
+    when duplicate map keys are found for single row's result, consistent with Spark's default
+    behavior. ::
+
+        SELECT str_to_map('a:1,b:2,c:3', ',', ':'); -- {"a":"1","b":"2","c":"3"}
+        SELECT str_to_map('a', ',', ':'); -- {"a":NULL}
+        SELECT str_to_map('', ',', ':'); -- {"":NULL}
+        SELECT str_to_map('a:1,b:2,c:3', ',', ','); -- {"a:1":NULL,"b:2":NULL,"c:3":NULL}
 
 .. spark:function:: substring(string, start) -> varchar
 

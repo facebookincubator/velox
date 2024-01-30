@@ -273,7 +273,7 @@ class WriterEncodingIndexTest2 {
  public:
   WriterEncodingIndexTest2()
       : config_{std::make_shared<Config>()},
-        pool_{facebook::velox::memory::addDefaultLeafMemoryPool()} {}
+        pool_{facebook::velox::memory::memoryManager()->addLeafPool()} {}
 
   virtual ~WriterEncodingIndexTest2() = default;
 
@@ -302,7 +302,7 @@ class WriterEncodingIndexTest2 {
     ASSERT_EQ(recordPositionCount.size(), backfillPositionCount.size());
     WriterContext context{
         config_,
-        velox::memory::defaultMemoryManager().addRootPool(
+        velox::memory::memoryManager()->addRootPool(
             "WriterEncodingIndexTest2")};
     context.initBuffer();
     std::vector<StrictMock<MockIndexBuilder>*> mocks;
@@ -416,6 +416,10 @@ class TimestampWriterIndexTest : public testing::Test,
   TimestampWriterIndexTest() : WriterEncodingIndexTest2<Timestamp>() {}
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
     return prepBatchImpl<Timestamp>(
         size,
@@ -449,6 +453,10 @@ class IntegerColumnWriterDictionaryEncodingIndexTest
   }
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
     return prepBatchImpl<Integer>(
         size, pool, generateSomewhatRandomData<Integer>, someNulls);
@@ -505,6 +513,10 @@ class BoolColumnWriterEncodingIndexTest
       : WriterEncodingIndexTest2<bool>() {}
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
     return prepBatchImpl<bool>(
         size,
@@ -537,6 +549,10 @@ class ByteColumnWriterEncodingIndexTest
       : WriterEncodingIndexTest2<int8_t>() {}
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
     int8_t value = 0;
     return prepBatchImpl<int8_t>(
@@ -572,6 +588,10 @@ class BinaryColumnWriterEncodingIndexTest
   BinaryColumnWriterEncodingIndexTest() = default;
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
     BufferPtr nulls = allocateNulls(size, pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
@@ -631,6 +651,10 @@ class FloatColumnWriterEncodingIndexTest
   FloatColumnWriterEncodingIndexTest() = default;
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
     return prepBatchImpl<FLOAT>(
         size,
@@ -664,7 +688,7 @@ TYPED_TEST(FloatColumnWriterEncodingIndexTest, TestIndex) {
 class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
  public:
   explicit IntegerColumnWriterDirectEncodingIndexTest(bool abandonDict = false)
-      : pool_{memory::addDefaultLeafMemoryPool()},
+      : pool_{memory::memoryManager()->addLeafPool()},
         config_{std::make_shared<Config>()},
         abandonDict_{abandonDict} {
     config_->set(
@@ -673,6 +697,10 @@ class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
   }
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void testForAllTypes(
       size_t pageCount,
       size_t positionCount,
@@ -705,7 +733,7 @@ class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
       std::function<bool(size_t, size_t)> callAbandonDict) {
     WriterContext context{
         config_,
-        velox::memory::defaultMemoryManager().addRootPool(
+        velox::memory::memoryManager()->addRootPool(
             "IntegerColumnWriterDirectEncodingIndexTest")};
     context.initBuffer();
     auto mockIndexBuilder = std::make_unique<StrictMock<MockIndexBuilder>>();
@@ -871,7 +899,7 @@ TEST_F(IntegerColumnWriterAbandonDictionaryIndexTest, AbandonDictionary) {
 class StringColumnWriterDictionaryEncodingIndexTest : public testing::Test {
  public:
   explicit StringColumnWriterDictionaryEncodingIndexTest()
-      : rootPool_{memory::defaultMemoryManager().addRootPool(
+      : rootPool_{memory::memoryManager()->addRootPool(
             "StringColumnWriterDictionaryEncodingIndexTest")},
         leafPool_{rootPool_->addLeafChild(
             "StringColumnWriterDictionaryEncodingIndexTest")},
@@ -883,6 +911,10 @@ class StringColumnWriterDictionaryEncodingIndexTest : public testing::Test {
   }
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(
       size_t size,
       MemoryPool* pool,
@@ -976,7 +1008,7 @@ TEST_F(StringColumnWriterDictionaryEncodingIndexTest, OmitInDictStream) {
 class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
  public:
   explicit StringColumnWriterDirectEncodingIndexTest(bool abandonDict = false)
-      : rootPool_{memory::defaultMemoryManager().addRootPool(
+      : rootPool_{memory::memoryManager()->addRootPool(
             "StringColumnWriterDirectEncodingIndexTest")},
         leafPool_{rootPool_->addLeafChild(
             "StringColumnWriterDirectEncodingIndexTest")},
@@ -989,6 +1021,10 @@ class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
   }
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(
       size_t size,
       std::function<std::string(size_t, size_t)> genData,
@@ -1175,6 +1211,10 @@ class ListColumnWriterEncodingIndexTest
   ListColumnWriterEncodingIndexTest() = default;
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
     auto nulls = allocateNulls(size, pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
@@ -1241,6 +1281,10 @@ class MapColumnWriterEncodingIndexTest
   MapColumnWriterEncodingIndexTest() = default;
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
     auto nulls = allocateNulls(size, pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
@@ -1312,6 +1356,10 @@ class FlatMapColumnWriterEncodingIndexTest
   FlatMapColumnWriterEncodingIndexTest() = default;
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
     auto offsets = allocateOffsets(size, pool);
     auto* offsetsPtr = offsets->asMutable<vector_size_t>();
@@ -1402,6 +1450,10 @@ class StructColumnWriterEncodingIndexTest
   StructColumnWriterEncodingIndexTest() = default;
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
     return prepBatch(size, pool, false);
   }

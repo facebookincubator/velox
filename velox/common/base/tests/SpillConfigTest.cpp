@@ -27,6 +27,7 @@ TEST(SpillConfig, spillLevel) {
   const uint8_t kNumPartitionsBits = 3;
   const SpillConfig config(
       []() { return ""; },
+      [&](uint64_t) {},
       "fakeSpillPath",
       0,
       0,
@@ -36,6 +37,7 @@ TEST(SpillConfig, spillLevel) {
       0,
       kInitialBitOffset,
       kNumPartitionsBits,
+      0,
       0,
       0,
       0,
@@ -76,7 +78,7 @@ TEST(SpillConfig, spillLevelLimit) {
     int32_t numBits;
     uint8_t bitOffset;
     int32_t maxSpillLevel;
-    int32_t expectedExceeds;
+    bool expectedExceeds;
 
     std::string debugString() const {
       return fmt::format(
@@ -112,6 +114,7 @@ TEST(SpillConfig, spillLevelLimit) {
         testData.startBitOffset, testData.startBitOffset + testData.numBits);
     const SpillConfig config(
         []() { return ""; },
+        [&](uint64_t) {},
         "fakeSpillPath",
         0,
         0,
@@ -122,6 +125,7 @@ TEST(SpillConfig, spillLevelLimit) {
         testData.startBitOffset,
         testData.numBits,
         testData.maxSpillLevel,
+        0,
         0,
         0,
         "none");
@@ -158,6 +162,7 @@ TEST(SpillConfig, spillableReservationPercentages) {
     auto createConfigFn = [&]() {
       const SpillConfig config(
           [&]() -> const std::string& { return emptySpillFolder; },
+          [&](uint64_t) {},
           "spillableReservationPercentages",
           0,
           0,
@@ -168,6 +173,7 @@ TEST(SpillConfig, spillableReservationPercentages) {
           0,
           0,
           0,
+          1'000'000,
           0,
           0,
           "none");

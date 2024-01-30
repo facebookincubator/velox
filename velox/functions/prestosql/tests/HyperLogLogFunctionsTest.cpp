@@ -48,7 +48,8 @@ class HyperLogLogFunctionsTest : public functions::test::FunctionBaseTest {
     return serialized;
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
   HashStringAllocator allocator_{pool_.get()};
 };
 
@@ -65,7 +66,7 @@ TEST_F(HyperLogLogFunctionsTest, emptyApproxSetSignatures) {
   auto signatures = getSignatureStrings("empty_approx_set");
   ASSERT_EQ(2, signatures.size());
 
-  ASSERT_EQ(1, signatures.count("(double) -> hyperloglog"));
+  ASSERT_EQ(1, signatures.count("(constant double) -> hyperloglog"));
   ASSERT_EQ(1, signatures.count("() -> hyperloglog"));
 }
 

@@ -39,19 +39,23 @@ void SpillInputStream::next(bool /*throwIfPastEnd*/) {
 std::unique_ptr<SpillWriteFile> SpillWriteFile::create(
     uint32_t id,
     const std::string& pathPrefix,
-    const std::unordered_map<std::string, std::string>& fileOptions) {
+    const std::string& fileCreateConfig) {
   return std::unique_ptr<SpillWriteFile>(
-      new SpillWriteFile(id, pathPrefix, fileOptions));
+      new SpillWriteFile(id, pathPrefix, fileCreateConfig));
 }
 
 SpillWriteFile::SpillWriteFile(
     uint32_t id,
     const std::string& pathPrefix,
-    const std::unordered_map<std::string, std::string>& fileOptions)
+    const std::string& fileCreateConfig)
     : id_(id), path_(fmt::format("{}-{}", pathPrefix, ordinalCounter_++)) {
   auto fs = filesystems::getFileSystem(path_, nullptr);
   file_ = fs->openFileForWrite(
-      path_, filesystems::FileOptions{fileOptions, nullptr});
+      path_,
+      filesystems::FileOptions{
+          {{filesystems::FileOptions::kFileCreateConfig.toString(),
+            fileCreateConfig}},
+          nullptr});
 }
 
 void SpillWriteFile::finish() {
@@ -69,13 +73,8 @@ uint64_t SpillWriteFile::size() const {
 }
 
 uint64_t SpillWriteFile::write(std::unique_ptr<folly::IOBuf> iobuf) {
-  uint64_t writtenBytes{0};
-  // TODO: extend velox file system to support write with a chained io buffers.
-  for (auto& range : *iobuf) {
-    writtenBytes += range.size();
-    file_->append(std::string_view(
-        reinterpret_cast<const char*>(range.data()), range.size()));
-  }
+  auto writtenBytes = iobuf->computeChainDataLength();
+  file_->append(std::move(iobuf));
   return writtenBytes;
 }
 
@@ -87,7 +86,8 @@ SpillWriter::SpillWriter(
     const std::string& pathPrefix,
     uint64_t targetFileSize,
     uint64_t writeBufferSize,
-    const std::unordered_map<std::string, std::string>& fileOptions,
+    const std::string& fileCreateConfig,
+    common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats)
     : type_(type),
@@ -97,7 +97,8 @@ SpillWriter::SpillWriter(
       pathPrefix_(pathPrefix),
       targetFileSize_(targetFileSize),
       writeBufferSize_(writeBufferSize),
-      fileOptions_(fileOptions),
+      fileCreateConfig_(fileCreateConfig),
+      updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
       pool_(pool),
       stats_(stats) {
   // NOTE: if the associated spilling operator has specified the sort
@@ -114,7 +115,7 @@ SpillWriteFile* SpillWriter::ensureFile() {
     currentFile_ = SpillWriteFile::create(
         nextFileId_++,
         fmt::format("{}-{}", pathPrefix_, finishedFiles_.size()),
-        fileOptions_);
+        fileCreateConfig_);
   }
   return currentFile_.get();
 }
@@ -161,6 +162,7 @@ uint64_t SpillWriter::flush() {
     writtenBytes = file->write(std::move(iobuf));
   }
   updateWriteStats(writtenBytes, flushTimeUs, writeTimeUs);
+  updateAndCheckSpillLimitCb_(writtenBytes);
   return writtenBytes;
 }
 
@@ -207,7 +209,7 @@ void SpillWriter::updateWriteStats(
   statsLocked->spilledBytes += spilledBytes;
   statsLocked->spillFlushTimeUs += flushTimeUs;
   statsLocked->spillWriteTimeUs += fileWriteTimeUs;
-  ++statsLocked->spillDiskWrites;
+  ++statsLocked->spillWrites;
   common::updateGlobalSpillWriteStats(
       spilledBytes, flushTimeUs, fileWriteTimeUs);
 }

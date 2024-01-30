@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/OutputBuffer.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -62,10 +63,38 @@ std::string ArbitraryBuffer::toString() const {
       hasNoMoreData());
 }
 
+void DestinationBuffer::Stats::recordEnqueue(const SerializedPage& data) {
+  const auto numRows = data.numRows();
+  VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
+  bytesBuffered += data.size();
+  rowsBuffered += numRows.value();
+  ++pagesBuffered;
+}
+
+void DestinationBuffer::Stats::recordAcknowledge(const SerializedPage& data) {
+  const auto numRows = data.numRows();
+  VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
+  const int64_t size = data.size();
+  bytesBuffered -= size;
+  VELOX_DCHECK_GE(bytesBuffered, 0, "bytesBuffered must be non-negative");
+  rowsBuffered -= numRows.value();
+  VELOX_DCHECK_GE(rowsBuffered, 0, "rowsBuffered must be non-negative");
+  --pagesBuffered;
+  VELOX_DCHECK_GE(pagesBuffered, 0, "pagesBuffered must be non-negative");
+  bytesSent += size;
+  rowsSent += numRows.value();
+  ++pagesSent;
+}
+
+void DestinationBuffer::Stats::recordDelete(const SerializedPage& data) {
+  recordAcknowledge(data);
+}
+
 std::vector<std::unique_ptr<folly::IOBuf>> DestinationBuffer::getData(
     uint64_t maxBytes,
     int64_t sequence,
     DataAvailableCallback notify,
+    DataConsumerActiveCheckCallback activeCheck,
     ArbitraryBuffer* arbitraryBuffer) {
   VELOX_CHECK_GE(
       sequence, sequence_, "Get received for an already acknowledged item");
@@ -78,12 +107,15 @@ std::vector<std::unique_ptr<folly::IOBuf>> DestinationBuffer::getData(
             << sequence_ << " Setting second notify " << notifySequence_
             << " / " << sequence;
     notify_ = std::move(notify);
+    aliveCheck_ = std::move(activeCheck);
     notifySequence_ = std::min(notifySequence_, sequence);
     notifyMaxBytes_ = maxBytes;
     return {};
   }
+
   if (sequence - sequence_ == data_.size()) {
     notify_ = std::move(notify);
+    aliveCheck_ = std::move(activeCheck);
     notifySequence_ = sequence;
     notifyMaxBytes_ = maxBytes;
     return {};
@@ -113,26 +145,46 @@ void DestinationBuffer::enqueue(std::shared_ptr<SerializedPage> data) {
     return;
   }
 
+  if (data != nullptr) {
+    stats_.recordEnqueue(*data);
+  }
   data_.push_back(std::move(data));
 }
 
 DataAvailable DestinationBuffer::getAndClearNotify() {
   if (notify_ == nullptr) {
+    VELOX_CHECK_NULL(aliveCheck_);
     return DataAvailable();
   }
   DataAvailable result;
   result.callback = notify_;
   result.sequence = notifySequence_;
-  result.data = getData(notifyMaxBytes_, notifySequence_, nullptr);
+  result.data = getData(notifyMaxBytes_, notifySequence_, nullptr, nullptr);
+  clearNotify();
+  return result;
+}
+
+void DestinationBuffer::clearNotify() {
   notify_ = nullptr;
+  aliveCheck_ = nullptr;
   notifySequence_ = 0;
   notifyMaxBytes_ = 0;
-  return result;
+}
+
+void DestinationBuffer::finish() {
+  VELOX_CHECK_NULL(notify_, "notify must be cleared before finish");
+  VELOX_CHECK(data_.empty(), "data must be fetched before finish");
+  stats_.finished = true;
 }
 
 void DestinationBuffer::maybeLoadData(ArbitraryBuffer* buffer) {
   VELOX_CHECK(!buffer->empty() || buffer->hasNoMoreData());
   if (notify_ == nullptr) {
+    return;
+  }
+  if (aliveCheck_ != nullptr && !aliveCheck_()) {
+    // Skip load data to an inactive destination buffer.
+    clearNotify();
     return;
   }
   VELOX_CHECK_GT(notifyMaxBytes_, 0);
@@ -175,6 +227,7 @@ std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       break;
     }
+    stats_.recordAcknowledge(*data_[i]);
     freed.push_back(std::move(data_[i]));
   }
   data_.erase(data_.begin(), data_.begin() + numDeleted);
@@ -190,10 +243,15 @@ DestinationBuffer::deleteResults() {
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       break;
     }
+    stats_.recordDelete(*data_[i]);
     freed.push_back(std::move(data_[i]));
   }
   data_.clear();
   return freed;
+}
+
+DestinationBuffer::Stats DestinationBuffer::stats() const {
+  return stats_;
 }
 
 std::string DestinationBuffer::toString() {
@@ -217,6 +275,7 @@ void releaseAfterAcknowledge(
     promise.setValue();
   }
 }
+
 } // namespace
 
 OutputBuffer::OutputBuffer(
@@ -226,8 +285,7 @@ OutputBuffer::OutputBuffer(
     uint32_t numDrivers)
     : task_(std::move(task)),
       kind_(kind),
-      maxSize_(
-          task_->queryCtx()->queryConfig().maxPartitionedOutputBufferSize()),
+      maxSize_(task_->queryCtx()->queryConfig().maxOutputBufferSize()),
       continueSize_((maxSize_ * kContinuePct) / 100),
       arbitraryBuffer_(
           isArbitrary() ? std::make_unique<ArbitraryBuffer>() : nullptr),
@@ -236,6 +294,7 @@ OutputBuffer::OutputBuffer(
   for (int i = 0; i < numDestinations; i++) {
     buffers_.push_back(std::make_unique<DestinationBuffer>());
   }
+  finishedBufferStats_.resize(numDestinations);
 }
 
 void OutputBuffer::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
@@ -295,12 +354,47 @@ void OutputBuffer::addOutputBuffersLocked(int numBuffers) {
       for (const auto& data : dataToBroadcast_) {
         buffer->enqueue(data);
       }
-    }
-    if (atEnd_ && isBroadcast()) {
-      buffer->enqueue(nullptr);
+      if (atEnd_) {
+        buffer->enqueue(nullptr);
+      }
     }
     buffers_.emplace_back(std::move(buffer));
   }
+  finishedBufferStats_.resize(numBuffers);
+}
+
+void OutputBuffer::updateStatsWithEnqueuedPageLocked(
+    int64_t pageBytes,
+    int64_t pageRows) {
+  updateTotalBufferedBytesMsLocked();
+
+  bufferedBytes_ += pageBytes;
+  ++bufferedPages_;
+
+  ++numOutputPages_;
+  numOutputRows_ += pageRows;
+  numOutputBytes_ += pageBytes;
+}
+
+void OutputBuffer::updateStatsWithFreedPagesLocked(
+    int numPages,
+    int64_t pageBytes) {
+  updateTotalBufferedBytesMsLocked();
+
+  bufferedBytes_ -= pageBytes;
+  VELOX_CHECK_GE(bufferedBytes_, 0);
+  bufferedPages_ -= numPages;
+  VELOX_CHECK_GE(bufferedPages_, 0);
+}
+
+void OutputBuffer::updateTotalBufferedBytesMsLocked() {
+  const auto nowMs = getCurrentTimeMs();
+  if (bufferedBytes_ > 0) {
+    const auto deltaMs = nowMs - bufferStartMs_;
+    totalBufferedBytesMs_ += bufferedBytes_ * deltaMs;
+  }
+
+  bufferStartMs_ = nowMs;
 }
 
 bool OutputBuffer::enqueue(
@@ -316,7 +410,8 @@ bool OutputBuffer::enqueue(
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK_LT(destination, buffers_.size());
 
-    totalSize_ += data->size();
+    updateStatsWithEnqueuedPageLocked(data->size(), data->numRows().value());
+
     switch (kind_) {
       case PartitionedOutputNode::Kind::kBroadcast:
         VELOX_CHECK_EQ(destination, 0, "Bad destination {}", destination);
@@ -334,7 +429,7 @@ bool OutputBuffer::enqueue(
         VELOX_UNREACHABLE(PartitionedOutputNode::kindString(kind_));
     }
 
-    if (totalSize_ > maxSize_ && future) {
+    if (bufferedBytes_ > maxSize_ && future) {
       promises_.emplace_back("OutputBuffer::enqueue");
       *future = promises_.back().getSemiFuture();
       blocked = true;
@@ -413,8 +508,7 @@ void OutputBuffer::enqueuePartitionedOutputLocked(
   } else {
     // Some downstream tasks may finish early and delete the corresponding
     // buffers. Further data for these buffers is dropped.
-    totalSize_ -= data->size();
-    VELOX_CHECK_GE(totalSize_, 0);
+    updateStatsWithFreedPagesLocked(1, data->size());
   }
 }
 
@@ -507,25 +601,23 @@ void OutputBuffer::acknowledge(int destination, int64_t sequence) {
 void OutputBuffer::updateAfterAcknowledgeLocked(
     const std::vector<std::shared_ptr<SerializedPage>>& freed,
     std::vector<ContinuePromise>& promises) {
-  uint64_t totalFreed = 0;
+  uint64_t freedBytes{0};
+  int freedPages{0};
   for (const auto& free : freed) {
     if (free.unique()) {
-      totalFreed += free->size();
+      ++freedPages;
+      freedBytes += free->size();
     }
   }
-  if (totalFreed == 0) {
+  if (freedPages == 0) {
+    VELOX_CHECK_EQ(freedBytes, 0);
     return;
   }
+  VELOX_CHECK_GT(freedBytes, 0);
 
-  VELOX_CHECK_LE(
-      totalFreed,
-      totalSize_,
-      "Output buffer size goes negative: released {} over {}",
-      totalFreed,
-      totalSize_);
-  totalSize_ -= totalFreed;
-  VELOX_CHECK_GE(totalSize_, 0);
-  if (totalSize_ < continueSize_) {
+  updateStatsWithFreedPagesLocked(freedPages, freedBytes);
+
+  if (bufferedBytes_ < continueSize_) {
     promises = std::move(promises_);
   }
 }
@@ -545,6 +637,9 @@ bool OutputBuffer::deleteResults(int destination) {
     }
     freed = buffer->deleteResults();
     dataAvailable = buffer->getAndClearNotify();
+    buffer->finish();
+    VELOX_CHECK_LT(destination, finishedBufferStats_.size());
+    finishedBufferStats_[destination] = buffers_[destination]->stats();
     buffers_[destination] = nullptr;
     ++numFinalAcknowledges_;
     isFinished = isFinishedLocked();
@@ -569,7 +664,8 @@ void OutputBuffer::getData(
     int destination,
     uint64_t maxBytes,
     int64_t sequence,
-    DataAvailableCallback notify) {
+    DataAvailableCallback notify,
+    DataConsumerActiveCheckCallback activeCheck) {
   std::vector<std::unique_ptr<folly::IOBuf>> data;
   std::vector<std::shared_ptr<SerializedPage>> freed;
   std::vector<ContinuePromise> promises;
@@ -589,7 +685,8 @@ void OutputBuffer::getData(
         sequence);
     freed = buffer->acknowledge(sequence, true);
     updateAfterAcknowledgeLocked(freed, promises);
-    data = buffer->getData(maxBytes, sequence, notify, arbitraryBuffer_.get());
+    data = buffer->getData(
+        maxBytes, sequence, notify, activeCheck, arbitraryBuffer_.get());
   }
   releaseAfterAcknowledge(freed, promises);
   if (!data.empty()) {
@@ -617,7 +714,7 @@ std::string OutputBuffer::toString() {
 
 std::string OutputBuffer::toStringLocked() const {
   std::stringstream out;
-  out << "[OutputBuffer[" << kind_ << "] totalSize_=" << totalSize_
+  out << "[OutputBuffer[" << kind_ << "] bufferedBytes_=" << bufferedBytes_
       << "b, num producers blocked=" << promises_.size()
       << ", completed=" << numFinished_ << "/" << numDrivers_ << ", "
       << (atEnd_ ? "at end, " : "") << "destinations: " << std::endl;
@@ -633,11 +730,49 @@ std::string OutputBuffer::toStringLocked() const {
 }
 
 double OutputBuffer::getUtilization() const {
-  return totalSize_ / (double)maxSize_;
+  return bufferedBytes_ / (double)maxSize_;
 }
 
 bool OutputBuffer::isOverutilized() const {
-  return (totalSize_ > maxSize_) && !atEnd_;
+  return (bufferedBytes_ > (0.5 * maxSize_)) || atEnd_;
+}
+
+int64_t OutputBuffer::getAverageBufferTimeMsLocked() const {
+  if (numOutputBytes_ > 0) {
+    return totalBufferedBytesMs_ / numOutputBytes_;
+  }
+
+  return 0;
+}
+
+OutputBuffer::Stats OutputBuffer::stats() {
+  std::lock_guard<std::mutex> l(mutex_);
+  std::vector<DestinationBuffer::Stats> bufferStats;
+  VELOX_CHECK_EQ(buffers_.size(), finishedBufferStats_.size());
+  bufferStats.resize(buffers_.size());
+  for (auto i = 0; i < buffers_.size(); ++i) {
+    auto buffer = buffers_[i].get();
+    if (buffer != nullptr) {
+      bufferStats[i] = buffer->stats();
+    } else {
+      bufferStats[i] = finishedBufferStats_[i];
+    }
+  }
+
+  updateTotalBufferedBytesMsLocked();
+
+  return OutputBuffer::Stats(
+      kind_,
+      noMoreBuffers_,
+      atEnd_,
+      isFinishedLocked(),
+      bufferedBytes_,
+      bufferedPages_,
+      numOutputBytes_,
+      numOutputRows_,
+      numOutputPages_,
+      getAverageBufferTimeMsLocked(),
+      bufferStats);
 }
 
 } // namespace facebook::velox::exec

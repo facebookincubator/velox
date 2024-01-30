@@ -52,9 +52,9 @@ TEST_F(RowNumberTest, spill) {
     });
 
     auto task = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kTestingSpillPct, "100")
-                    .config(core::QueryConfig::kSpillEnabled, "true")
-                    .config(core::QueryConfig::kRowNumberSpillEnabled, "true")
+                    .config(core::QueryConfig::kTestingSpillPct, 100)
+                    .config(core::QueryConfig::kSpillEnabled, true)
+                    .config(core::QueryConfig::kRowNumberSpillEnabled, true)
                     .spillDirectory(spillDirectory->path)
                     .assertResults({expected});
 
@@ -216,6 +216,98 @@ TEST_F(RowNumberTest, largeInput) {
   testLimit(100);
   testLimit(2'000);
   testLimit(5'000);
+}
+
+TEST_F(RowNumberTest, maxSpillBytes) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto vectors = createVectors(rowType, 1024, 15 << 20);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .rowNumber({"c0"}, 2, false)
+                  .project({"c0", "c1"})
+                  .planNode();
+  struct {
+    int32_t maxSpilledBytes;
+    bool expectedExceedLimit;
+    std::string debugString() const {
+      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+    }
+  } testSettings[] = {{1 << 30, false}, {16 << 20, true}, {0, false}};
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    try {
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->path)
+          .queryCtx(queryCtx)
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kRowNumberSpillEnabled, true)
+          .config(core::QueryConfig::kTestingSpillPct, 100)
+          .config(core::QueryConfig::kMaxSpillBytes, testData.maxSpilledBytes)
+          .copyResults(pool_.get());
+      ASSERT_FALSE(testData.expectedExceedLimit);
+    } catch (const VeloxRuntimeError& e) {
+      ASSERT_TRUE(testData.expectedExceedLimit);
+      ASSERT_NE(
+          e.message().find(
+              "Query exceeded per-query local spill limit of 16.00MB"),
+          std::string::npos);
+      ASSERT_EQ(
+          e.errorCode(), facebook::velox::error_code::kSpillLimitExceeded);
+    }
+  }
+}
+
+TEST_F(RowNumberTest, memoryUsage) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto vectors = createVectors(rowType, 1024, 100 << 20);
+  core::PlanNodeId rowNumberId;
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .rowNumber({"c0", "c2"})
+                  .capturePlanNodeId(rowNumberId)
+                  .project({"c0", "c1"})
+                  .planNode();
+
+  int64_t peakBytesWithSpilling = 0;
+  int64_t peakBytesWithOutSpilling = 0;
+
+  for (const auto& spillEnable : {false, true}) {
+    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const std::string spillEnableConfig = std::to_string(spillEnable);
+
+    std::shared_ptr<Task> task;
+    AssertQueryBuilder(plan)
+        .spillDirectory(spillDirectory->path)
+        .queryCtx(queryCtx)
+        .config(core::QueryConfig::kSpillEnabled, spillEnableConfig)
+        .config(core::QueryConfig::kRowNumberSpillEnabled, spillEnableConfig)
+        .config(core::QueryConfig::kTestingSpillPct, "100")
+        .spillDirectory(spillDirectory->path)
+        .copyResults(pool_.get(), task);
+
+    if (spillEnable) {
+      peakBytesWithSpilling = queryCtx->pool()->peakBytes();
+      auto taskStats = exec::toPlanStats(task->taskStats());
+      const auto& stats = taskStats.at(rowNumberId);
+
+      ASSERT_GT(stats.spilledBytes, 0);
+      ASSERT_GT(stats.spilledRows, 0);
+      ASSERT_GT(stats.spilledFiles, 0);
+      ASSERT_GT(stats.spilledPartitions, 0);
+    } else {
+      peakBytesWithOutSpilling = queryCtx->pool()->peakBytes();
+    }
+  }
+
+  ASSERT_GE(peakBytesWithOutSpilling / peakBytesWithSpilling, 2);
 }
 
 } // namespace facebook::velox::exec::test

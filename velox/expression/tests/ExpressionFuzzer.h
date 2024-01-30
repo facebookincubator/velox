@@ -73,10 +73,34 @@ class ExpressionFuzzer {
     // Chance of adding a null constant to the plan, or null value in a vector
     // (expressed as double from 0 to 1).
     double nullRatio = 0.1;
+
+    // If specified, Fuzzer will only choose functions from this comma separated
+    // list of function names (e.g: --only \"split\" or --only
+    // \"substr,ltrim\")."
+    std::string useOnlyFunctions = "";
+
+    // Comma-separated list of special forms to use in generated expression.
+    // Supported special forms: and, or, coalesce, if, switch, cast.")
+    std::string specialForms = "and,or,cast,coalesce,if,switch";
+
+    // This list can include a mix of function names and function signatures.
+    // Use function name to exclude all signatures of a given function from
+    // testing. Use function signature to exclude only a specific signature.
+    // ex skipFunctions{
+    //   "width_bucket",
+    //   "array_sort(array(T),constant function(T,T,bigint)) -> array(T)"}
+    std::unordered_set<std::string> skipFunctions;
+
+    // When set, when the input size of the generated expressions reaches
+    // maxInputsThreshold, fuzzing input columns will reuse one of the existing
+    // columns if any is already generated with the same type.
+    // This can be used to control the size of the input of the fuzzer
+    // expression.
+    std::optional<int32_t> maxInputsThreshold = std::nullopt;
   };
 
   ExpressionFuzzer(
-      const FunctionSignatureMap& signatureMap,
+      FunctionSignatureMap signatureMap,
       size_t initialSeed,
       const std::shared_ptr<VectorFuzzer>& vectorFuzzer,
       const std::optional<ExpressionFuzzer::Options>& options = std::nullopt);
@@ -97,6 +121,9 @@ class ExpressionFuzzer {
 
   /// Fuzz a set of expressions.
   FuzzedExpressionData fuzzExpressions(size_t expressionCount);
+
+  /// Fuzz a set of expressions given a output row type.
+  FuzzedExpressionData fuzzExpressions(const RowTypePtr& outType);
 
   // Fuzz a single expression and return it along with the input row type.
   FuzzedExpressionData fuzzExpression();
@@ -159,6 +186,11 @@ class ExpressionFuzzer {
     return supportedFunctions_;
   }
 
+  // Generate a random return type.
+  TypePtr fuzzReturnType();
+
+  RowTypePtr fuzzRowReturnType(size_t size, char prefix = 'p');
+
  private:
   // Either generates a new expression of the required return type or if
   // already generated expressions of the same return type exist then there is
@@ -181,9 +213,6 @@ class ExpressionFuzzer {
       const std::string& funcName);
 
   void appendConjunctSignatures();
-
-  // Generate a random return type.
-  TypePtr fuzzReturnType();
 
   core::TypedExprPtr generateArgConstant(const TypePtr& arg);
 
@@ -317,7 +346,7 @@ class ExpressionFuzzer {
 
   static const inline std::string kTypeParameterName = "T";
 
-  Options options_;
+  const Options options_;
 
   std::vector<CallableSignature> signatures_;
   std::vector<SignatureTemplate> signatureTemplates_;
@@ -396,8 +425,8 @@ class ExpressionFuzzer {
         typeToColumnNames_;
 
     /// The remaining levels of expression nesting. It's initialized by
-    /// FLAGS_max_level_of_nesting and updated in generateExpression(). When its
-    /// value decreases to 0, we don't generate subexpressions anymore.
+    /// FLAGS_max_level_of_nesting and updated in generateExpression(). When
+    /// its value decreases to 0, we don't generate subexpressions anymore.
     int32_t remainingLevelOfNesting_;
 
   } state;

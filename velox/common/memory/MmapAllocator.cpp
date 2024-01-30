@@ -104,7 +104,7 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
   if (reservationCB != nullptr) {
     try {
       reservationCB(AllocationTraits::pageBytes(numNeededPages), true);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       VELOX_MEM_LOG_EVERY_MS(WARNING, 1000)
           << "Exceeded memory reservation limit when reserve " << numNeededPages
           << " new pages when allocate " << mix.totalPages << " pages";
@@ -532,8 +532,7 @@ void* MmapAllocator::allocateBytesWithoutRetry(
   }
 
   ContiguousAllocation allocation;
-  auto numPages = bits::roundUp(bytes, AllocationTraits::kPageSize) /
-      AllocationTraits::kPageSize;
+  auto numPages = AllocationTraits::numPages(bytes);
   if (!allocateContiguousWithoutRetry(numPages, nullptr, allocation)) {
     return nullptr;
   }
@@ -1029,8 +1028,13 @@ bool MmapAllocator::useMalloc(uint64_t bytes) {
 
 std::string MmapAllocator::toString() const {
   std::stringstream out;
-  out << "Memory Allocator[" << kindString(kind_) << " capacity "
-      << ((capacity_ == kMaxMemory) ? "UNLIMITED" : succinctBytes(capacity_))
+  out << "Memory Allocator[" << kindString(kind_) << " total capacity "
+      << ((capacity_ == kMaxMemory) ? "UNLIMITED" : succinctBytes(capacity()))
+      << " free capacity "
+      << ((capacity_ == kMaxMemory)
+              ? "UNLIMITED"
+              : succinctBytes(
+                    capacity() - AllocationTraits::pageBytes(numAllocated())))
       << " allocated pages " << numAllocated_ << " mapped pages " << numMapped_
       << " external mapped pages " << numExternalMapped_ << std::endl;
   for (auto& sizeClass : sizeClasses_) {

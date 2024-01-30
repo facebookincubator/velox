@@ -13,8 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/exec/ContainerRowSerde.h"
+
 #include <gtest/gtest.h>
+
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -26,10 +30,14 @@ namespace {
 class ContainerRowSerdeTest : public testing::Test,
                               public velox::test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   // Writes all rows together and returns a position at the start of this
   // combined write.
   HashStringAllocator::Position serialize(const VectorPtr& data) {
-    ByteStream out(&allocator_);
+    ByteOutputStream out(&allocator_);
     auto position = allocator_.newWrite(out);
     for (auto i = 0; i < data->size(); ++i) {
       ContainerRowSerde::serialize(*data, i, out);
@@ -46,7 +54,7 @@ class ContainerRowSerdeTest : public testing::Test,
     positions.reserve(size);
 
     for (auto i = 0; i < size; ++i) {
-      ByteStream out(&allocator_);
+      ByteOutputStream out(&allocator_);
       auto position = allocator_.newWrite(out);
       ContainerRowSerde::serialize(*data, i, out);
       allocator_.finishWrite(out, 0);
@@ -82,6 +90,9 @@ class ContainerRowSerdeTest : public testing::Test,
     allocator_.clear();
   }
 
+  // If the mode is NullAsIndeterminate with equalsOnly is false, and expected
+  // is kIndeterminate, then the test ensures that an exception is thrown with
+  // the message "Ordering nulls is not supported".
   void testCompareWithNulls(
       const DecodedVector& decodedVector,
       const std::vector<HashStringAllocator::Position>& positions,
@@ -96,13 +107,25 @@ class ContainerRowSerdeTest : public testing::Test,
 
     for (auto i = 0; i < expected.size(); ++i) {
       auto stream = HashStringAllocator::prepareRead(positions.at(i).header);
-      ASSERT_EQ(
-          expected.at(i),
-          ContainerRowSerde::compareWithNulls(
-              stream, decodedVector, i, compareFlags));
+      if (expected.at(i) == kIndeterminate &&
+          mode == CompareFlags::NullHandlingMode::kNullAsIndeterminate &&
+          !equalsOnly) {
+        VELOX_ASSERT_THROW(
+            ContainerRowSerde::compareWithNulls(
+                stream, decodedVector, i, compareFlags),
+            "Ordering nulls is not supported");
+      } else {
+        ASSERT_EQ(
+            expected.at(i),
+            ContainerRowSerde::compareWithNulls(
+                stream, decodedVector, i, compareFlags));
+      }
     }
   }
 
+  // If the mode is NullAsIndeterminate with equalsOnly is false, and expected
+  // is kIndeterminate, then the test ensures that an exception is thrown with
+  // the message "Ordering nulls is not supported".
   void testCompareByteStreamWithNulls(
       const std::vector<HashStringAllocator::Position>& leftPositions,
       const std::vector<HashStringAllocator::Position>& rightPositions,
@@ -121,10 +144,19 @@ class ContainerRowSerdeTest : public testing::Test,
           HashStringAllocator::prepareRead(leftPositions.at(i).header);
       auto rightStream =
           HashStringAllocator::prepareRead(rightPositions.at(i).header);
-      ASSERT_EQ(
-          expected.at(i),
-          ContainerRowSerde::compareWithNulls(
-              leftStream, rightStream, type.get(), compareFlags));
+      if (expected.at(i) == kIndeterminate &&
+          mode == CompareFlags::NullHandlingMode::kNullAsIndeterminate &&
+          !equalsOnly) {
+        VELOX_ASSERT_THROW(
+            ContainerRowSerde::compareWithNulls(
+                leftStream, rightStream, type.get(), compareFlags),
+            "Ordering nulls is not supported");
+      } else {
+        ASSERT_EQ(
+            expected.at(i),
+            ContainerRowSerde::compareWithNulls(
+                leftStream, rightStream, type.get(), compareFlags));
+      }
     }
   }
 
@@ -251,13 +283,13 @@ TEST_F(ContainerRowSerdeTest, compareNullsInArrayVector) {
       positions,
       {{0}, {1}, {-1}, std::nullopt, std::nullopt, std::nullopt},
       false,
-      CompareFlags::NullHandlingMode::kStopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareWithNulls(
       decodedVector,
       positions,
       {{0}, {1}, {1}, {1}, std::nullopt, {1}},
       true,
-      CompareFlags::NullHandlingMode::kStopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareWithNulls(
       decodedVector,
       positions,
@@ -289,13 +321,13 @@ TEST_F(ContainerRowSerdeTest, compareNullsInMapVector) {
       positions,
       {{-1}, {0}, {1}, std::nullopt},
       false,
-      CompareFlags::NullHandlingMode::kStopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareWithNulls(
       decodedVector,
       positions,
       {{1}, {0}, {1}, std::nullopt},
       true,
-      CompareFlags::NullHandlingMode::kStopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareWithNulls(
       decodedVector,
       positions,
@@ -318,7 +350,7 @@ TEST_F(ContainerRowSerdeTest, compareNullsInRowVector) {
       positions,
       {{0}, {-1}, {1}, std::nullopt},
       false,
-      CompareFlags::NullHandlingMode::kStopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareWithNulls(
       decodedVector,
       positions,
@@ -356,14 +388,14 @@ TEST_F(ContainerRowSerdeTest, compareNullsInArrayByteStream) {
       {{0}, {1}, {-1}, std::nullopt, std::nullopt, std::nullopt},
       ARRAY(BIGINT()),
       false,
-      CompareFlags::NullHandlingMode::kStopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareByteStreamWithNulls(
       leftPositions,
       rightPositions,
       {{0}, {1}, {1}, {1}, std::nullopt, {1}},
       ARRAY(BIGINT()),
       true,
-      CompareFlags::NullHandlingMode::kStopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareByteStreamWithNulls(
       leftPositions,
       rightPositions,
@@ -391,7 +423,7 @@ TEST_F(ContainerRowSerdeTest, compareNullsInRowByteStream) {
       {{0}, {-1}, {1}, std::nullopt},
       ROW({INTEGER(), INTEGER()}),
       false,
-      CompareFlags::NullHandlingMode::kStopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareByteStreamWithNulls(
       leftPositions,
       rightPositions,
@@ -426,14 +458,14 @@ TEST_F(ContainerRowSerdeTest, compareNullsInMapByteStream) {
       {{-1}, {0}, {1}, std::nullopt},
       MAP(BIGINT(), BIGINT()),
       false,
-      CompareFlags::NullHandlingMode::kStopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareByteStreamWithNulls(
       leftPositions,
       rightPositions,
       {{1}, {0}, {1}, std::nullopt},
       MAP(BIGINT(), BIGINT()),
       true,
-      CompareFlags::NullHandlingMode::kStopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareByteStreamWithNulls(
       leftPositions,
       rightPositions,

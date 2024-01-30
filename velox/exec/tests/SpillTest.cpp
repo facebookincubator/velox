@@ -59,6 +59,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
   explicit SpillTest()
       : statWriter_(std::make_unique<TestRuntimeStatWriter>(runtimeStats_)) {
     setThreadLocalRunTimeStatWriter(statWriter_.get());
+    updateSpilledBytesCb_ = [&](uint64_t) {};
   }
 
   ~SpillTest() {
@@ -66,8 +67,12 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
   }
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
-    allocator_ = memory::MemoryAllocator::getInstance();
+    allocator_ = memory::memoryManager()->allocator();
     tempDir_ = exec::test::TempDirectoryPath::create();
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
@@ -153,6 +158,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     stats_.wlock()->reset();
     state_ = std::make_unique<SpillState>(
         [&]() -> const std::string& { return tempDir_->path; },
+        updateSpilledBytesCb_,
         fileNamePrefix_,
         numPartitions,
         1,
@@ -276,7 +282,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(stats.spilledPartitions, numPartitions);
     ASSERT_EQ(stats.spilledFiles, expectedNumSpilledFiles);
     ASSERT_GT(stats.spilledBytes, 0);
-    ASSERT_GT(stats.spillDiskWrites, 0);
+    ASSERT_GT(stats.spillWrites, 0);
     ASSERT_GT(stats.spillWriteTimeUs, 0);
     ASSERT_GE(stats.spillFlushTimeUs, 0);
     ASSERT_GT(stats.spilledRows, 0);
@@ -292,8 +298,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(
         prevGStats.spilledBytes + stats.spilledBytes, newGStats.spilledBytes);
     ASSERT_EQ(
-        prevGStats.spillDiskWrites + stats.spillDiskWrites,
-        newGStats.spillDiskWrites);
+        prevGStats.spillWrites + stats.spillWrites, newGStats.spillWrites);
     ASSERT_EQ(
         prevGStats.spillWriteTimeUs + stats.spillWriteTimeUs,
         newGStats.spillWriteTimeUs);
@@ -379,7 +384,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(
         finalStats.toString(),
         fmt::format(
-            "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] spilledRows[{}] spilledPartitions[{}] spilledFiles[{}] spillFillTimeUs[{}] spillSortTime[{}] spillSerializationTime[{}] spillDiskWrites[{}] spillFlushTime[{}] spillWriteTime[{}] maxSpillExceededLimitCount[0]",
+            "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] spilledRows[{}] spilledPartitions[{}] spilledFiles[{}] spillFillTimeUs[{}] spillSortTime[{}] spillSerializationTime[{}] spillWrites[{}] spillFlushTime[{}] spillWriteTime[{}] maxSpillExceededLimitCount[0]",
             finalStats.spillRuns,
             succinctBytes(finalStats.spilledInputBytes),
             succinctBytes(finalStats.spilledBytes),
@@ -389,7 +394,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
             succinctMicros(finalStats.spillFillTimeUs),
             succinctMicros(finalStats.spillSortTimeUs),
             succinctMicros(finalStats.spillSerializationTimeUs),
-            finalStats.spillDiskWrites,
+            finalStats.spillWrites,
             succinctMicros(finalStats.spillFlushTimeUs),
             succinctMicros(finalStats.spillWriteTimeUs)));
 
@@ -412,6 +417,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
   std::unique_ptr<SpillState> state_;
   std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
   std::unique_ptr<TestRuntimeStatWriter> statWriter_;
+  common::UpdateAndCheckSpillLimitCB updateSpilledBytesCb_;
 };
 
 TEST_P(SpillTest, spillState) {
@@ -450,6 +456,7 @@ TEST_P(SpillTest, spillTimestamp) {
 
   SpillState state(
       [&]() -> const std::string& { return tempDirectory->path; },
+      updateSpilledBytesCb_,
       "test",
       1,
       1,

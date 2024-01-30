@@ -191,7 +191,7 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
     ensureInputFits(input);
 
     SelectivityVector rows(numInput);
-    table_->prepareForProbe(*lookup_, input, rows, false);
+    table_->prepareForGroupProbe(*lookup_, input, rows, false);
     table_->groupProbe(*lookup_);
 
     // Initialize new partitions.
@@ -734,19 +734,15 @@ void TopNRowNumber::spill() {
 
 void TopNRowNumber::setupSpiller() {
   VELOX_CHECK_NULL(spiller_);
+  VELOX_CHECK(spillConfig_.has_value());
 
   spiller_ = std::make_unique<Spiller>(
       // TODO Replace Spiller::Type::kOrderBy.
-      Spiller::Type::kOrderBy,
+      Spiller::Type::kOrderByInput,
       data_.get(),
       inputType_,
       spillCompareFlags_.size(),
       spillCompareFlags_,
-      spillConfig_->getSpillDirPathCb,
-      spillConfig_->fileNamePrefix,
-      spillConfig_->writeBufferSize,
-      spillConfig_->compressionKind,
-      memory::spillMemoryPool(),
-      spillConfig_->executor);
+      &spillConfig_.value());
 }
 } // namespace facebook::velox::exec

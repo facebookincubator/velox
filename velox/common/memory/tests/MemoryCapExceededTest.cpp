@@ -69,13 +69,13 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
   // why).
   std::vector<std::string> expectedTexts = {
       "Exceeded memory pool cap of 5.00MB with max 5.00MB when requesting "
-      "2.00MB, memory manager cap is UNLIMITED, requestor "
+      "2.00MB, memory manager cap is 8.00GB, requestor "
       "'op.2.0.0.Aggregation' with current usage 3.70MB"};
   std::vector<std::string> expectedDetailedTexts = {
-      "node.1 usage 1.00MB peak 1.00MB",
-      "op.1.0.0.FilterProject usage 12.00KB peak 12.00KB",
-      "node.2 usage 4.00MB peak 4.00MB",
-      "op.2.0.0.Aggregation usage 3.70MB peak 3.70MB",
+      "node.1 usage 1.00MB reserved 1.00MB peak 1.00MB",
+      "op.1.0.0.FilterProject usage 12.00KB reserved 1.00MB peak 12.00KB",
+      "node.2 usage 4.00MB reserved 4.00MB peak 4.00MB",
+      "op.2.0.0.Aggregation usage 3.70MB reserved 4.00MB peak 3.70MB",
       "Top 2 leaf memory pool usages:"};
 
   std::vector<RowVectorPtr> data;
@@ -97,8 +97,7 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
                   .planNode();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   queryCtx->testingOverrideMemoryPool(
-      memory::defaultMemoryManager().addRootPool(
-          queryCtx->queryId(), kMaxBytes));
+      memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
   CursorParameters params;
   params.planNode = plan;
   params.queryCtx = queryCtx;
@@ -156,8 +155,7 @@ TEST_P(MemoryCapExceededTest, multipleDrivers) {
                   .planNode();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   queryCtx->testingOverrideMemoryPool(
-      memory::defaultMemoryManager().addRootPool(
-          queryCtx->queryId(), kMaxBytes));
+      memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
 
   const int32_t numDrivers = 10;
   CursorParameters params;
@@ -184,29 +182,29 @@ TEST_P(MemoryCapExceededTest, multipleDrivers) {
 TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
   // Executes a plan with no memory pool capacity limit but very small memory
   // manager's limit.
-  std::vector<std::pair<
-      std::shared_ptr<memory::MemoryAllocator>,
-      std::vector<std::string>>>
-      allocatorExpectations;
-  allocatorExpectations.push_back(std::pair{
-      std::make_shared<memory::MallocAllocator>(64LL << 20),
-      std::vector<std::string>{
-          "allocateContiguous failed with .* pages",
-          "max capacity 128.00MB unlimited capacity used .* available .*",
-          ".* reservation .used .*MB, reserved .*MB, min 0B. counters",
-          "allocs .*, frees .*, reserves .*, releases .*, collisions .*"}});
-  const memory::MmapAllocator::Options options = {.capacity = 64LL << 20};
-  allocatorExpectations.push_back(std::pair{
-      std::make_shared<memory::MmapAllocator>(options),
-      std::vector<std::string>{
-          "allocateContiguous failed with .* pages",
-          "max capacity 128.00MB unlimited capacity used .* available .*",
-          ".* reservation .used .*MB, reserved .*MB, min .*B. counters",
-          ".*, frees .*, reserves .*, releases .*, collisions .*"}});
-  for (auto& allocExp : allocatorExpectations) {
+  struct {
+    int64_t allocatorCapacity;
+    bool useMmap;
+    std::vector<std::string> expectedErrorMessages;
+  } testSettings[] = {
+      {64LL << 20,
+       false,
+       std::vector<std::string>{
+           "allocateContiguous failed with .* pages",
+           "max capacity 128.00MB unlimited capacity used .* available .*",
+           ".* reservation .used .*MB, reserved .*MB, min 0B. counters",
+           "allocs .*, frees .*, reserves .*, releases .*, collisions .*"}},
+      {64LL << 20,
+       true,
+       std::vector<std::string>{
+           "allocateContiguous failed with .* pages",
+           "max capacity 128.00MB unlimited capacity used .* available .*",
+           ".* reservation .used .*MB, reserved .*MB, min .*B. counters",
+           ".*, frees .*, reserves .*, releases .*, collisions .*"}}};
+  for (const auto& testData : testSettings) {
     memory::MemoryManager manager(
-        {.capacity = (int64_t)allocExp.first->capacity(),
-         .allocator = allocExp.first.get()});
+        {.allocatorCapacity = (int64_t)testData.allocatorCapacity,
+         .useMmapAllocator = testData.useMmap});
 
     vector_size_t size = 1'024;
     // This limit ensures that only the Aggregation Operator fails.
@@ -241,7 +239,7 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
       FAIL() << "Expected a MEM_CAP_EXCEEDED RuntimeException.";
     } catch (const VeloxException& e) {
       const auto errorMessage = e.message();
-      for (const auto& expectedText : allocExp.second) {
+      for (const auto& expectedText : testData.expectedErrorMessages) {
         ASSERT_TRUE(someLineMatches(errorMessage, expectedText))
             << "Expected error message to contain '" << expectedText
             << "', but received '" << errorMessage << "'.";

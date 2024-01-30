@@ -62,7 +62,7 @@ void Timestamp::toGMT(const date::time_zone& zone) {
       sysTime;
   try {
     sysTime = zone.to_sys(localTime);
-  } catch (const date::ambiguous_local_time& error) {
+  } catch (const date::ambiguous_local_time&) {
     // If the time is ambiguous, pick the earlier possibility to be consistent
     // with Presto.
     sysTime = zone.to_sys(localTime, date::choose::earliest);
@@ -108,9 +108,10 @@ void validateTimePoint(const std::chrono::time_point<
 } // namespace
 
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
-Timestamp::toTimePoint() const {
+Timestamp::toTimePoint(bool allowOverflow) const {
   using namespace std::chrono;
-  auto tp = time_point<system_clock, milliseconds>(milliseconds(toMillis()));
+  auto tp = time_point<system_clock, milliseconds>(
+      milliseconds(allowOverflow ? toMillisAllowOverflow() : toMillis()));
   validateTimePoint(tp);
   return tp;
 }
@@ -131,6 +132,20 @@ void Timestamp::toTimezone(int16_t tzID) {
     // Other ids go this path.
     toTimezone(*date::locate_zone(util::getTimeZoneName(tzID)));
   }
+}
+
+const date::time_zone& Timestamp::defaultTimezone() {
+  static const date::time_zone* kDefault = ({
+    // TODO: We are hard-coding PST/PDT here to be aligned with the current
+    // behavior in DWRF reader/writer.  Once they are fixed, we can use
+    // date::current_zone() here.
+    //
+    // See https://github.com/facebookincubator/velox/issues/8127
+    auto* tz = date::locate_zone("America/Los_Angeles");
+    VELOX_CHECK_NOT_NULL(tz);
+    tz;
+  });
+  return *kDefault;
 }
 
 namespace {
@@ -246,6 +261,7 @@ std::string Timestamp::tmToString(
 
   if (options.mode != TimestampToStringOptions::Mode::kTimeOnly) {
     int n = kTmYearBase + tmValue.tm_year;
+    const bool leadingPositiveSign = options.leadingPositiveSign && n > 9999;
     bool negative = n < 0;
     if (negative) {
       out += '-';
@@ -260,6 +276,9 @@ std::string Timestamp::tmToString(
       while (out.size() < zeroPaddingYearSize) {
         out += '0';
       }
+    }
+    if (leadingPositiveSign) {
+      out += '+';
     }
     std::reverse(out.begin() + negative, out.end());
     out += '-';
@@ -278,16 +297,36 @@ std::string Timestamp::tmToString(
   appendSmallInt(tmValue.tm_min, out);
   out += ':';
   appendSmallInt(tmValue.tm_sec, out);
-  out += '.';
-  int offset = out.size();
   if (options.precision == TimestampToStringOptions::Precision::kMilliseconds) {
     nanos /= 1'000'000;
+  } else if (
+      options.precision == TimestampToStringOptions::Precision::kMicroseconds) {
+    nanos /= 1'000;
   }
-  while (nanos > 0) {
-    out += '0' + nanos % 10;
-    nanos /= 10;
+  if (options.skipTrailingZeros && nanos == 0) {
+    return out;
   }
-  while (out.size() - offset < precisionWidth) {
+  out += '.';
+  const int offset = out.size();
+  int trailingZeros = 0;
+
+  if (options.skipTrailingZeros) {
+    while (nanos > 0) {
+      if (out.size() == offset && nanos % 10 == 0) {
+        trailingZeros += 1;
+      } else {
+        out += '0' + nanos % 10;
+      }
+      nanos /= 10;
+    }
+  } else {
+    while (nanos > 0) {
+      out += '0' + nanos % 10;
+      nanos /= 10;
+    }
+  }
+
+  while (out.size() - offset < precisionWidth - trailingZeros) {
     out += '0';
   }
   std::reverse(out.begin() + offset, out.end());

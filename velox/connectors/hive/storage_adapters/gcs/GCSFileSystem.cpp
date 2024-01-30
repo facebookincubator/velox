@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/gcs/GCSUtil.h"
@@ -247,14 +248,16 @@ auto constexpr kGCSInvalidPath = "File {} is not a valid gcs file";
 
 class GCSFileSystem::Impl {
  public:
-  Impl(const Config* config) : config_(config) {}
+  Impl(const Config* config)
+      : hiveConfig_(std::make_shared<HiveConfig>(
+            std::make_shared<core::MemConfig>(config->values()))) {}
 
   ~Impl() = default;
 
   // Use the input Config parameters and initialize the GCSClient.
   void initializeClient() {
     auto options = gc::Options{};
-    auto scheme = HiveConfig::gcsScheme(config_);
+    auto scheme = hiveConfig_->gcsScheme();
     if (scheme == "https") {
       options.set<gc::UnifiedCredentialsOption>(
           gc::MakeGoogleDefaultCredentials());
@@ -263,12 +266,12 @@ class GCSFileSystem::Impl {
     }
     options.set<gcs::UploadBufferSizeOption>(kUploadBufferSize);
 
-    auto endpointOverride = HiveConfig::gcsEndpoint(config_);
+    auto endpointOverride = hiveConfig_->gcsEndpoint();
     if (!endpointOverride.empty()) {
       options.set<gcs::RestEndpointOption>(scheme + "://" + endpointOverride);
     }
 
-    auto cred = HiveConfig::gcsCredentials(config_);
+    auto cred = hiveConfig_->gcsCredentials();
     if (!cred.empty()) {
       auto credentials = gc::MakeServiceAccountCredentials(cred);
       options.set<gc::UnifiedCredentialsOption>(credentials);
@@ -284,7 +287,7 @@ class GCSFileSystem::Impl {
   }
 
  private:
-  const Config* FOLLY_NONNULL config_;
+  const std::shared_ptr<HiveConfig> hiveConfig_;
   std::shared_ptr<gcs::Client> client_;
 };
 

@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
+
 #include <stdint.h>
 #include <string.h>
 
@@ -22,14 +24,30 @@
 
 namespace facebook::velox::common {
 
+#define VELOX_SPILL_LIMIT_EXCEEDED(errorMessage)                    \
+  _VELOX_THROW(                                                     \
+      ::facebook::velox::VeloxRuntimeError,                         \
+      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
+      ::facebook::velox::error_code::kSpillLimitExceeded.c_str(),   \
+      /* isRetriable */ true,                                       \
+      "{}",                                                         \
+      errorMessage);
+
 /// Defining type for a callback function that returns the spill directory path.
 /// Implementations can use it to ensure the path exists before returning.
 using GetSpillDirectoryPathCB = std::function<const std::string&()>;
 
+/// The callback used to update the aggregated spill bytes of a query. If the
+/// query spill limit is set, the callback throws if the aggregated spilled
+/// bytes exceed the set limit.
+using UpdateAndCheckSpillLimitCB = std::function<void(uint64_t)>;
+
 /// Specifies the config for spilling.
 struct SpillConfig {
+  SpillConfig() = default;
   SpillConfig(
       GetSpillDirectoryPathCB _getSpillDirPathCb,
+      UpdateAndCheckSpillLimitCB _updateAndCheckSpillLimitCb,
       std::string _filePath,
       uint64_t _maxFileSize,
       uint64_t _writeBufferSize,
@@ -40,11 +58,11 @@ struct SpillConfig {
       uint8_t _startPartitionBit,
       uint8_t _joinPartitionBits,
       int32_t _maxSpillLevel,
+      uint64_t _maxSpillRunRows,
       uint64_t _writerFlushThresholdSize,
       int32_t _testSpillPct,
       const std::string& _compressionKind,
-      const std::unordered_map<std::string, std::string>& _writeFileOptions =
-          {});
+      const std::string& _fileCreateConfig = {});
 
   /// Returns the hash join spilling level with given 'startBitOffset'.
   ///
@@ -59,6 +77,11 @@ struct SpillConfig {
   /// A callback function that returns the spill directory path. Implementations
   /// can use it to ensure the path exists before returning.
   GetSpillDirectoryPathCB getSpillDirPathCb;
+
+  /// The callback used to update the aggregated spill bytes of a query. If the
+  /// query spill limit is set, the callback throws if the aggregated spilled
+  /// bytes exceed the set limit.
+  UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb;
 
   /// Prefix for spill files.
   std::string fileNamePrefix;
@@ -105,6 +128,11 @@ struct SpillConfig {
   /// partition bits at the end.
   int32_t maxSpillLevel;
 
+  /// The max row numbers to fill and spill for each spill run. This is used to
+  /// cap the memory used for spilling. If it is zero, then there is no limit
+  /// and spilling might run out of memory.
+  uint64_t maxSpillRunRows;
+
   /// Minimum memory footprint size required to reclaim memory from a file
   /// writer by flushing its buffered data to disk.
   uint64_t writerFlushThresholdSize;
@@ -117,6 +145,6 @@ struct SpillConfig {
   common::CompressionKind compressionKind;
 
   /// Custom options passed to velox::FileSystem to create spill WriteFile.
-  std::unordered_map<std::string, std::string> writeFileOptions;
+  std::string fileCreateConfig;
 };
 } // namespace facebook::velox::common

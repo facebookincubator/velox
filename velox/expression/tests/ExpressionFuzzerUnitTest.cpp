@@ -22,6 +22,10 @@
 namespace facebook::velox::test {
 class ExpressionFuzzerUnitTest : public testing::Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   uint32_t countLevelOfNesting(core::TypedExprPtr expression) {
     if (expression->inputs().empty()) {
       return 0;
@@ -50,12 +54,20 @@ class ExpressionFuzzerUnitTest : public testing::Test {
     auto index = folly::Random::rand32(kSupportedTypes.size(), seed);
     return kSupportedTypes[index];
   }
-  std::shared_ptr<memory::MemoryPool> pool{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{
+      memory::memoryManager()->addLeafPool()};
 
   std::shared_ptr<VectorFuzzer> vectorfuzzer{
       std::make_shared<VectorFuzzer>(VectorFuzzer::Options{}, pool.get())};
 };
 
+namespace {
+auto makeOptionsWithMaxLevelNesting(int32_t value) {
+  ExpressionFuzzer::Options options;
+  options.maxLevelOfNesting = value;
+  return options;
+}
+} // namespace
 TEST_F(ExpressionFuzzerUnitTest, restrictedLevelOfNesting) {
   velox::functions::prestosql::registerAllScalarFunctions();
   std::mt19937 seed{0};
@@ -65,7 +77,7 @@ TEST_F(ExpressionFuzzerUnitTest, restrictedLevelOfNesting) {
         velox::getFunctionSignatures(),
         0,
         vectorfuzzer,
-        {{.maxLevelOfNesting = maxLevelOfNesting}},
+        makeOptionsWithMaxLevelNesting(maxLevelOfNesting),
     };
 
     for (int i = 0; i < 5000; ++i) {
@@ -104,7 +116,7 @@ TEST_F(ExpressionFuzzerUnitTest, reproduceExpressionWithSeed) {
         velox::getFunctionSignatures(),
         1234567,
         vectorfuzzer,
-        {{.maxLevelOfNesting = 5}}};
+        makeOptionsWithMaxLevelNesting(5)};
     for (auto i = 0; i < 10; ++i) {
       firstGeneration.push_back(
           fuzzer.fuzzExpression().expressions[0]->toString());
@@ -130,7 +142,7 @@ TEST_F(ExpressionFuzzerUnitTest, exprBank) {
         velox::getFunctionSignatures(),
         0,
         vectorfuzzer,
-        {{.maxLevelOfNesting = maxLevelOfNesting}}};
+        makeOptionsWithMaxLevelNesting(maxLevelOfNesting)};
     ExpressionFuzzer::ExprBank exprBank(seed, maxLevelOfNesting);
     for (int i = 0; i < 5000; ++i) {
       auto expression = fuzzer.fuzzExpression().expressions[0];
@@ -158,7 +170,7 @@ TEST_F(ExpressionFuzzerUnitTest, exprBank) {
         velox::getFunctionSignatures(),
         0,
         vectorfuzzer,
-        {{.maxLevelOfNesting = maxLevelOfNesting}}};
+        makeOptionsWithMaxLevelNesting(maxLevelOfNesting)};
     ExpressionFuzzer::ExprBank exprBank(seed, maxLevelOfNesting);
     for (int i = 0; i < 1000; ++i) {
       auto expression = fuzzer.fuzzExpression().expressions[0];

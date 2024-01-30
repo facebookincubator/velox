@@ -450,13 +450,10 @@ class CudaTest : public testing::Test {
     }
     inited = true;
     memory::MemoryManagerOptions options;
-    options.capacity = capacity;
-    memory::MmapAllocator::Options opts{(uint64_t)options.capacity};
-    mmapAllocator_ = std::make_shared<memory::MmapAllocator>(opts);
-    memory::MemoryAllocator::setDefaultInstance(mmapAllocator_.get());
-
-    options.allocator = mmapAllocator_.get();
-    manager_ = &memory::MemoryManager::getInstance(options);
+    options.useMmapAllocator = true;
+    options.allocatorCapacity = capacity;
+    memory::MemoryManager::initialize(options);
+    manager_ = memory::memoryManager();
   }
 
   void waitFinish() {
@@ -611,7 +608,7 @@ class CudaTest : public testing::Test {
   void createData(int32_t numBatches, int32_t numColumns, int32_t numRows) {
     batches_.clear();
     if (!batchPool_) {
-      batchPool_ = memory::addDefaultLeafMemoryPool();
+      batchPool_ = memory::memoryManager()->addLeafPool();
     }
     int32_t sequence = 1;
     for (auto i = 0; i < numBatches; ++i) {

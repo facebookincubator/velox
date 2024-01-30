@@ -177,6 +177,20 @@ class BaseVector {
     return type_;
   }
 
+  /// Changes vector type. The new type can have a different
+  /// logical representation while maintaining the same physical type.
+  /// Additionally, note that the caller must ensure that this vector is not
+  /// shared, i.e. singly-referenced.
+  virtual void setType(const TypePtr& type) {
+    VELOX_CHECK_NOT_NULL(type);
+    VELOX_CHECK(
+        type_->kindEquals(type),
+        "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
+        type_,
+        type);
+    type_ = type;
+  }
+
   TypeKind typeKind() const {
     return typeKind_;
   }
@@ -473,7 +487,7 @@ class BaseVector {
     copyRanges(source, folly::Range(&range, 1));
   }
 
-  /// Converts SelectivityVetor into a list of CopyRanges having sourceIndex ==
+  /// Converts SelectivityVector into a list of CopyRanges having sourceIndex ==
   /// targetIndex. Aims to produce as few ranges as possible. If all rows are
   /// selected, returns a single range.
   static std::vector<CopyRange> toCopyRanges(const SelectivityVector& rows);
@@ -794,21 +808,21 @@ class BaseVector {
   compareNulls(bool thisNull, bool otherNull, CompareFlags flags) {
     DCHECK(thisNull || otherNull);
     switch (flags.nullHandlingMode) {
-      case CompareFlags::NullHandlingMode::kStopAtNull:
-        return std::nullopt;
+      case CompareFlags::NullHandlingMode::kNullAsIndeterminate:
+        if (flags.equalsOnly) {
+          return kIndeterminate;
+        } else {
+          VELOX_USER_FAIL("Ordering nulls is not supported");
+        }
       case CompareFlags::NullHandlingMode::kNullAsValue:
-      default:
-        break;
-    }
+        if (thisNull && otherNull) {
+          return 0;
+        }
 
-    if (thisNull) {
-      if (otherNull) {
-        return 0;
-      }
-      return flags.nullsFirst ? -1 : 1;
-    }
-    if (otherNull) {
-      return flags.nullsFirst ? 1 : -1;
+        if (flags.nullsFirst) {
+          return thisNull ? -1 : 1;
+        }
+        return thisNull ? 1 : -1;
     }
 
     VELOX_UNREACHABLE(
@@ -868,7 +882,7 @@ class BaseVector {
     return sliceBuffer(*BOOLEAN(), nulls_, offset, length, pool_);
   }
 
-  const TypePtr type_;
+  TypePtr type_;
   const TypeKind typeKind_;
   const VectorEncoding::Simple encoding_;
   BufferPtr nulls_;

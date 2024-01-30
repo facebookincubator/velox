@@ -26,6 +26,10 @@ namespace facebook::velox::exec::test {
 class PlanBuilderTest : public testing::Test,
                         public velox::test::VectorTestBase {
  public:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   PlanBuilderTest() {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
@@ -214,5 +218,25 @@ TEST_F(PlanBuilderTest, windowFrame) {
                "window1(c) over (partition by a order by b desc rows between b preceding and current row) as d2"})
           .planNode(),
       "do not match ORDER BY clauses.");
+
+  VELOX_ASSERT_THROW(
+      PlanBuilder()
+          .tableScan(ROW(
+              {"a", "b", "c", "d"}, {VARCHAR(), BIGINT(), BIGINT(), BIGINT()}))
+          .window({
+              "window1(c) over (partition by a order by b, c range between d preceding and current row) as d1",
+          })
+          .planNode(),
+      "Window frame of type RANGE PRECEDING or FOLLOWING requires single sorting key in ORDER BY");
+
+  VELOX_ASSERT_THROW(
+      PlanBuilder()
+          .tableScan(ROW(
+              {"a", "b", "c", "d"}, {VARCHAR(), BIGINT(), BIGINT(), BIGINT()}))
+          .window({
+              "window1(c) over (partition by a, c range between d preceding and current row) as d1",
+          })
+          .planNode(),
+      "Window frame of type RANGE PRECEDING or FOLLOWING requires single sorting key in ORDER BY");
 }
 } // namespace facebook::velox::exec::test

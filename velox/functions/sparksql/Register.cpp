@@ -16,6 +16,7 @@
 #include "velox/functions/sparksql/Register.h"
 
 #include "velox/expression/RegisterSpecialForm.h"
+#include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
@@ -36,9 +37,11 @@
 #include "velox/functions/sparksql/RegisterCompare.h"
 #include "velox/functions/sparksql/Size.h"
 #include "velox/functions/sparksql/String.h"
+#include "velox/functions/sparksql/StringToMap.h"
 #include "velox/functions/sparksql/UnscaledValueFunction.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
+#include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
@@ -65,10 +68,11 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_allow_duplicates, prefix + "map_from_arrays");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_concat_row, exec::RowConstructorCallToSpecialForm::kRowConstructor);
   // String functions.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, prefix + "concat");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_lower, prefix + "lower");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "replace");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_upper, prefix + "upper");
   // Logical.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_not, prefix + "not");
@@ -86,6 +90,10 @@ void registerAllSpecialFormGeneralFunctions() {
   exec::registerFunctionCallToSpecialForm(
       DecimalRoundCallToSpecialForm::kRoundDecimal,
       std::make_unique<DecimalRoundCallToSpecialForm>());
+  registerFunctionCallToSpecialForm(
+      "cast", std::make_unique<SparkCastCallToSpecialForm>());
+  registerFunctionCallToSpecialForm(
+      "try_cast", std::make_unique<SparkTryCastCallToSpecialForm>());
 }
 
 namespace {
@@ -153,6 +161,13 @@ void registerFunctions(const std::string& prefix) {
       int32_t,
       int32_t>({prefix + "overlay"});
 
+  registerFunction<
+      sparksql::StringToMapFunction,
+      Map<Varchar, Varchar>,
+      Varchar,
+      Varchar,
+      Varchar>({prefix + "str_to_map"});
+
   registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
       {prefix + "left"});
 
@@ -173,7 +188,6 @@ void registerFunctions(const std::string& prefix) {
       prefix + "regexp_extract", re2ExtractSignatures(), makeRegexExtract);
   exec::registerStatefulVectorFunction(
       prefix + "rlike", re2SearchSignatures(), makeRLike);
-  registerRegexReplace(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_regexp_split, prefix + "split");
 
   exec::registerStatefulVectorFunction(
@@ -229,6 +243,14 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<ConvFunction, Varchar, Varchar, int32_t, int32_t>(
       {prefix + "conv"});
 
+  registerFunction<ReplaceFunction, Varchar, Varchar, Varchar>(
+      {prefix + "replace"});
+  registerFunction<ReplaceFunction, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "replace"});
+
+  registerFunction<FindInSetFunction, int32_t, Varchar, Varchar>(
+      {prefix + "find_in_set"});
+
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
       prefix + "array_sort", arraySortSignatures(), makeArraySort);
@@ -250,6 +272,8 @@ void registerFunctions(const std::string& prefix) {
       int64_t,
       Varchar,
       Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<FromUnixtimeFunction, Varchar, int64_t, Varchar>(
+      {prefix + "from_unixtime"});
   registerFunction<MakeDateFunction, Date, int32_t, int32_t, int32_t>(
       {prefix + "make_date"});
   registerFunction<DateDiffFunction, int32_t, Date, Date>(
@@ -258,7 +282,12 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<AddMonthsFunction, Date, Date, int32_t>(
       {prefix + "add_months"});
 
+  registerFunction<DateAddFunction, Date, Date, int8_t>({prefix + "date_add"});
+  registerFunction<DateAddFunction, Date, Date, int16_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
+
+  registerFunction<DateSubFunction, Date, Date, int8_t>({prefix + "date_sub"});
+  registerFunction<DateSubFunction, Date, Date, int16_t>({prefix + "date_sub"});
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
 
   registerFunction<DayFunction, int32_t, Date>(
@@ -274,6 +303,13 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<QuarterFunction, int32_t, Date>({prefix + "quarter"});
 
   registerFunction<MonthFunction, int32_t, Date>({prefix + "month"});
+
+  registerFunction<NextDayFunction, Date, Date, Varchar>({prefix + "next_day"});
+
+  registerFunction<GetTimestampFunction, Timestamp, Varchar, Varchar>(
+      {prefix + "get_timestamp"});
+
+  registerFunction<HourFunction, int32_t, Timestamp>({prefix + "hour"});
 
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(

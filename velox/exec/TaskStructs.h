@@ -27,13 +27,20 @@ class JoinBridge;
 class LocalExchangeMemoryManager;
 class MergeSource;
 class MergeJoinSource;
-class Split;
+struct Split;
 class SpillOperatorGroup;
 
 /// Corresponds to Presto TaskState, needed for reporting query completion.
 enum TaskState { kRunning, kFinished, kCanceled, kAborted, kFailed };
 
 std::string taskStateString(TaskState state);
+
+FOLLY_ALWAYS_INLINE std::ostream& operator<<(
+    std::ostream& os,
+    TaskState state) {
+  os << taskStateString(state);
+  return os;
+}
 
 struct BarrierState {
   int32_t numRequested;

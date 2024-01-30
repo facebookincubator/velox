@@ -141,8 +141,12 @@ using PopulateBatch =
 
 class ColumnWriterStatsTest : public ::testing::Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
-    rootPool_ = defaultMemoryManager().addRootPool("ColumnWriterStatsTest");
+    rootPool_ = memory::memoryManager()->addRootPool("ColumnWriterStatsTest");
     leafPool_ = rootPool_->addLeafChild("ColumnWriterStatsTest");
   }
 

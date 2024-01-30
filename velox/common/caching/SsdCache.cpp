@@ -16,6 +16,7 @@
 #include "velox/common/caching/SsdCache.h"
 #include <folly/Executor.h>
 #include <folly/portability/SysUio.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
@@ -133,6 +134,29 @@ void SsdCache::write(std::vector<CachePin> pins) {
     });
   }
   writesInProgress_.fetch_sub(numNoStore);
+}
+
+bool SsdCache::removeFileEntries(
+    const folly::F14FastSet<uint64_t>& filesToRemove,
+    folly::F14FastSet<uint64_t>& filesRetained) {
+  if (!startWrite()) {
+    return false;
+  }
+
+  bool success = true;
+  for (auto i = 0; i < numShards_; i++) {
+    try {
+      success &= files_[i]->removeFileEntries(filesToRemove, filesRetained);
+    } catch (const std::exception& e) {
+      VELOX_SSD_CACHE_LOG(ERROR)
+          << "Error removing file entries from SSD shard "
+          << files_[i]->shardId() << ": " << e.what();
+      success = false;
+    }
+    --writesInProgress_;
+  }
+
+  return success;
 }
 
 SsdCacheStats SsdCache::stats() const {

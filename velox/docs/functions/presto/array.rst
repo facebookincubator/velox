@@ -157,7 +157,7 @@ Array Functions
         SELECT array_sort(ARRAY [NULL, 1, NULL]); -- [1, NULL, NULL]
         SELECT array_sort(ARRAY [NULL, 2, 1]); -- [1, 2, NULL]
         SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [2, null]]); -- [[1, 2], [2, null]]
-        SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [1, null]]); -- failed: array_sort contains nested nulls not supported for comparison
+        SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [1, null]]); -- failed: Ordering nulls is not supported
 
 .. function:: array_sort(array(T), function(T,U)) -> array(T)
 
@@ -182,7 +182,7 @@ Array Functions
         SELECT array_sort_desc(ARRAY [NULL, 1, NULL]); -- [1, NULL, NULL]
         SELECT array_sort_desc(ARRAY [NULL, 2, 1]); -- [2, 1, NULL]
         SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [2, null]]); -- [[1, 2], [2, null]]
-        SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [1, null]]); -- failed: array_sort contains nested nulls not supported for comparison
+        SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [1, null]]); -- failed: Ordering nulls is not supported
 
 .. function:: array_sort_desc(array(T), function(T,U)) -> array(T)
 
@@ -283,6 +283,19 @@ Array Functions
 .. function:: flatten(array(array(T))) -> array(T)
 
     Flattens an ``array(array(T))`` to an ``array(T)`` by concatenating the contained arrays.
+
+.. function:: ngrams(array(T), n) -> array(array(T))
+
+    Returns `n-grams <https://en.wikipedia.org/wiki/N-gram>`_  for the array.
+    Throws if n is zero or negative. If n is greater or equal to input array,
+    result array contains input array as the only item. ::
+
+        SELECT ngrams(ARRAY['foo', 'bar', 'baz', 'foo'], 2); -- [['foo', 'bar'], ['bar', 'baz'], ['baz', 'foo']]
+        SELECT ngrams(ARRAY['foo', 'bar', 'baz', 'foo'], 3); -- [['foo', 'bar', 'baz'], ['bar', 'baz', 'foo']]
+        SELECT ngrams(ARRAY['foo', 'bar', 'baz', 'foo'], 4); -- [['foo', 'bar', 'baz', 'foo']]
+        SELECT ngrams(ARRAY['foo', 'bar', 'baz', 'foo'], 5); -- [['foo', 'bar', 'baz', 'foo']]
+        SELECT ngrams(ARRAY[1, 2, 3, 4], 2); -- [[1, 2], [2, 3], [3, 4]]
+        SELECT ngrams(ARRAY["foo", NULL, "bar"], 2); -- [["foo", NULL], [NULL, "bar"]]
 
 .. function:: reduce(array(T), initialState S, inputFunction(S,T,S), outputFunction(S,R)) -> R
 

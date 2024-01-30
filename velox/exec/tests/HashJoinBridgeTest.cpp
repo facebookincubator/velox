@@ -39,6 +39,7 @@ class HashJoinBridgeTest : public testing::Test,
 
  protected:
   static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
     filesystems::registerLocalFileSystem();
   }
 
@@ -132,8 +133,9 @@ class HashJoinBridgeTest : public testing::Test,
   const uint32_t maxNumPartitions_{8};
   const uint32_t numSpillFilesPerPartition_{20};
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
-  memory::MemoryAllocator* allocator_{memory::MemoryAllocator::getInstance()};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
+  memory::MemoryAllocator* allocator_{memory::memoryManager()->allocator()};
   std::shared_ptr<TempDirectoryPath> tempDir_;
 
   std::mutex mutex_;
@@ -481,9 +483,8 @@ TEST_P(HashJoinBridgeTest, multiThreading) {
   }
 }
 
-TEST(HashJoinBridgeTest, isHashBuildMemoryPool) {
-  auto root =
-      memory::defaultMemoryManager().addRootPool("isHashBuildMemoryPool");
+TEST_P(HashJoinBridgeTest, isHashBuildMemoryPool) {
+  auto root = memory::memoryManager()->addRootPool("isHashBuildMemoryPool");
   struct {
     std::string poolName;
     bool expectedHashBuildPool;

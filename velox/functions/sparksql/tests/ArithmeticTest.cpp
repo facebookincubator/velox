@@ -147,6 +147,7 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+  static constexpr double kNanDouble = std::numeric_limits<double>::quiet_NaN();
   static constexpr float kInf = std::numeric_limits<float>::infinity();
 };
 
@@ -350,6 +351,9 @@ TEST_F(BinTest, bin) {
       bin(std::numeric_limits<int64_t>::max()),
       "111111111111111111111111111111111111111111111111111111111111111");
   EXPECT_EQ(bin(0), "0");
+  auto result = evaluateOnce<std::string, int64_t>(
+      "bin(row_constructor(c0).c1)", {13}, {BIGINT()});
+  EXPECT_EQ(result, "1101");
 }
 
 TEST_F(ArithmeticTest, hypot) {
@@ -374,6 +378,73 @@ TEST_F(ArithmeticTest, cot) {
   EXPECT_EQ(cot(1), 1 / std::tan(1));
   EXPECT_EQ(cot(-1), 1 / std::tan(-1));
   EXPECT_EQ(cot(0), 1 / std::tan(0));
+}
+
+TEST_F(ArithmeticTest, atan2) {
+  const auto atan2 = [&](std::optional<double> y, std::optional<double> x) {
+    return evaluateOnce<double>("atan2(c0, c1)", y, x);
+  };
+
+  EXPECT_EQ(atan2(0.0, 0.0), 0.0);
+  EXPECT_EQ(atan2(-0.0, -0.0), 0.0);
+  EXPECT_EQ(atan2(0.0, -0.0), 0.0);
+  EXPECT_EQ(atan2(-0.0, 0.0), 0.0);
+  EXPECT_EQ(atan2(-1.0, 1.0), std::atan2(-1.0, 1.0));
+  EXPECT_EQ(atan2(1.0, 1.0), std::atan2(1.0, 1.0));
+  EXPECT_EQ(atan2(1.0, -1.0), std::atan2(1.0, -1.0));
+  EXPECT_EQ(atan2(-1.0, -1.0), std::atan2(-1.0, -1.0));
+}
+
+TEST_F(ArithmeticTest, isNanFloat) {
+  const auto isNan = [&](std::optional<float> a) {
+    return evaluateOnce<bool>("isnan(c0)", a);
+  };
+
+  EXPECT_EQ(false, isNan(0.0f));
+  EXPECT_EQ(true, isNan(kNan));
+  EXPECT_EQ(true, isNan(0.0f / 0.0f));
+  EXPECT_EQ(false, isNan(std::nullopt));
+}
+
+TEST_F(ArithmeticTest, isNanDouble) {
+  const auto isNan = [&](std::optional<double> a) {
+    return evaluateOnce<bool>("isnan(c0)", a);
+  };
+
+  EXPECT_EQ(false, isNan(0.0));
+  EXPECT_EQ(true, isNan(kNanDouble));
+  EXPECT_EQ(true, isNan(0.0 / 0.0));
+  EXPECT_EQ(false, isNan(std::nullopt));
+}
+
+TEST_F(ArithmeticTest, hexWithBigint) {
+  const auto toHex = [&](std::optional<int64_t> value) {
+    return evaluateOnce<std::string>("hex(c0)", value);
+  };
+  EXPECT_EQ("11", toHex(17));
+  EXPECT_EQ("FFFFFFFFFFFFFFEF", toHex(-17));
+  EXPECT_EQ("0", toHex(0));
+  EXPECT_EQ("FFFFFFFFFFFFFFFF", toHex(-1));
+  EXPECT_EQ("7FFFFFFFFFFFFFFF", toHex(INT64_MAX));
+  EXPECT_EQ("8000000000000000", toHex(INT64_MIN));
+}
+
+TEST_F(ArithmeticTest, hexWithVarbinaryAndVarchar) {
+  const auto toHex = [&](std::optional<std::string> value) {
+    auto varbinaryResult =
+        evaluateOnce<std::string>("hex(cast(c0 as varbinary))", value);
+    auto varcharResult = evaluateOnce<std::string>("hex(c0)", value);
+
+    EXPECT_TRUE(varbinaryResult.has_value());
+    EXPECT_TRUE(varcharResult.has_value());
+    EXPECT_EQ(varbinaryResult.value(), varcharResult.value());
+
+    return varcharResult.value();
+  };
+  ASSERT_EQ(toHex(""), "");
+  ASSERT_EQ(toHex("Spark SQL"), "537061726B2053514C");
+  ASSERT_EQ(toHex("Spark\x65\x21SQL"), "537061726B652153514C");
+  ASSERT_EQ(toHex("Spark\u6570\u636ESQL"), "537061726BE695B0E68DAE53514C");
 }
 
 class LogNTest : public SparkFunctionBaseTest {

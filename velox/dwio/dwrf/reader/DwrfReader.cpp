@@ -37,6 +37,10 @@ DwrfRowReader::DwrfRowReader(
       executor_{options_.getDecodingExecutor()},
       columnSelector_{std::make_shared<ColumnSelector>(
           ColumnSelector::apply(opts.getSelector(), reader->getSchema()))} {
+  if (executor_) {
+    LOG(INFO) << "Using parallel decoding with a parallelism factor of "
+              << options_.getDecodingParallelismFactor();
+  }
   auto& fileFooter = getReader().getFooter();
   uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;
@@ -526,6 +530,7 @@ DwrfRowReader::FetchResult DwrfRowReader::fetch(uint32_t stripeIndex) {
         stripeStreams,
         streamLabels,
         executor_.get(),
+        options_.getDecodingParallelismFactor(),
         flatMapContext);
   }
   DWIO_ENSURE(
@@ -764,7 +769,7 @@ DwrfReader::DwrfReader(
           options.getMemoryPool(),
           std::move(input),
           options.getDecrypterFactory(),
-          options.getDirectorySizeGuess(),
+          options.getFooterEstimatedSize(),
           options.getFilePreloadThreshold(),
           options.getFileFormat() == FileFormat::ORC ? FileFormat::ORC
                                                      : FileFormat::DWRF,
@@ -1050,8 +1055,8 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   auto footerLength = readerBase.getPostScript().footerLength();
-  if (memory < footerLength + readerBase.getDirectorySizeGuess()) {
-    memory = footerLength + readerBase.getDirectorySizeGuess();
+  if (memory < footerLength + readerBase.getFooterEstimatedSize()) {
+    memory = footerLength + readerBase.getFooterEstimatedSize();
   }
 
   // Account for firstRowOfStripe.

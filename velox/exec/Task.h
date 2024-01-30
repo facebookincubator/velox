@@ -79,9 +79,9 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::string toString() const;
 
-  std::string toJsonString() const;
+  folly::dynamic toJson() const;
 
-  std::string toShortJsonString() const;
+  folly::dynamic toShortJson() const;
 
   /// Returns universally unique identifier of the task.
   const std::string& uuid() const {
@@ -221,7 +221,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns current state of execution.
   TaskState state() const {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::timed_mutex> l(mutex_);
     return state_;
   }
 
@@ -242,7 +242,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns task execution error or nullptr if no error occurred.
   std::exception_ptr error() const {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::timed_mutex> l(mutex_);
     return exception_;
   }
 
@@ -253,6 +253,22 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns Task Stats by copy as other threads might be updating the
   /// structure.
   TaskStats taskStats() const;
+
+  /// Information about an operator call that helps debugging stuck calls.
+  struct OpCallInfo {
+    size_t durationMs;
+    int32_t tid;
+    int32_t opId;
+    std::string taskId;
+  };
+
+  /// Collect long running operator calls across all drivers in this task.
+  /// Return false when the lock cannot be taken within the timeout, in that
+  /// case the result is not populated.  Return true if everything works well.
+  bool getLongRunningOpCalls(
+      std::chrono::nanoseconds lockTimeout,
+      size_t thresholdDurationMs,
+      std::vector<OpCallInfo>& out) const;
 
   /// Returns time (ms) since the task execution started or zero, if not
   /// started.
@@ -273,19 +289,19 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns the number of running drivers.
   uint32_t numRunningDrivers() const {
-    std::lock_guard<std::mutex> taskLock(mutex_);
+    std::lock_guard<std::timed_mutex> taskLock(mutex_);
     return numRunningDrivers_;
   }
 
   /// Returns the total number of drivers the task needs to run.
   uint32_t numTotalDrivers() const {
-    std::lock_guard<std::mutex> taskLock(mutex_);
+    std::lock_guard<std::timed_mutex> taskLock(mutex_);
     return numTotalDrivers_;
   }
 
   /// Returns the number of finished drivers so far.
   uint32_t numFinishedDrivers() const {
-    std::lock_guard<std::mutex> taskLock(mutex_);
+    std::lock_guard<std::timed_mutex> taskLock(mutex_);
     return numFinishedDrivers_;
   }
 
@@ -298,6 +314,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// be called from the Operator's constructor.
   velox::memory::MemoryPool* addOperatorPool(
       const core::PlanNodeId& planNodeId,
+      uint32_t splitGroupId,
       int pipelineId,
       uint32_t driverId,
       const std::string& operatorType);
@@ -540,7 +557,7 @@ class Task : public std::enable_shared_from_this<Task> {
   }
 
   void requestYield() {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::timed_mutex> l(mutex_);
     toYield_ = numThreads_;
   }
 
@@ -556,7 +573,7 @@ class Task : public std::enable_shared_from_this<Task> {
     return pauseRequested_;
   }
 
-  std::mutex& mutex() {
+  std::timed_mutex& mutex() {
     return mutex_;
   }
 
@@ -592,6 +609,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Invoked to run provided 'callback' on each alive driver of the task.
   void testingVisitDrivers(const std::function<void(Driver*)>& callback);
+
+  /// Invoked to finish the task for test purpose.
+  void testingFinish() {
+    terminate(TaskState::kFinished).wait();
+  }
 
  private:
   Task(
@@ -636,11 +658,16 @@ class Task : public std::enable_shared_from_this<Task> {
   // Invoked to initialize the memory pool for this task on creation.
   void initTaskPool();
 
-  // Creates new instance of MemoryPool for a plan node, stores it in the task
+  // Creates new instance of memory pool for a plan node, stores it in the task
   // to ensure lifetime and returns a raw pointer.
-  memory::MemoryPool* getOrAddNodePool(
+  memory::MemoryPool* getOrAddNodePool(const core::PlanNodeId& planNodeId);
+
+  // Similar to getOrAddNodePool but creates the memory pool instance for a hash
+  // join plan node. If 'splitGroupId' is not kUngroupedGroupId, it specifies
+  // the split group id under the grouped execution mode.
+  memory::MemoryPool* getOrAddJoinNodePool(
       const core::PlanNodeId& planNodeId,
-      bool isHashJoinNode = false);
+      uint32_t splitGroupId);
 
   // Creates a memory reclaimer instance for a plan node if the task memory
   // pool has set memory reclaimer. If 'isHashJoinNode' is true, it creates a
@@ -676,6 +703,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // occurred. This should only be called inside mutex_ protection.
   std::string errorMessageLocked() const;
 
+  folly::dynamic toShortJsonLocked() const;
+
   class MemoryReclaimer : public exec::MemoryReclaimer {
    public:
     static std::unique_ptr<memory::MemoryReclaimer> create(
@@ -702,6 +731,12 @@ class Task : public std::enable_shared_from_this<Task> {
     std::shared_ptr<Task> ensureTask() const {
       return task_.lock();
     }
+
+    uint64_t reclaimTask(
+        const std::shared_ptr<Task>& task,
+        uint64_t targetBytes,
+        uint64_t maxWaitMs,
+        memory::MemoryReclaimer::Stats& stats);
 
     std::weak_ptr<Task> task_;
   };
@@ -821,7 +856,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // executing for 'this'. 'comment' is used as a debugging label on
   // the promise/future pair.
   ContinueFuture makeFinishFuture(const char* comment) {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::timed_mutex> l(mutex_);
     return makeFinishFutureLocked(comment);
   }
 
@@ -848,7 +883,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // created for 'planNodeId' in 'exchangeClientByPlanNode_'.
   std::shared_ptr<ExchangeClient> getExchangeClient(
       const core::PlanNodeId& planNodeId) const {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::timed_mutex> l(mutex_);
     return getExchangeClientLocked(planNodeId);
   }
 
@@ -904,7 +939,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // pointer.
   //
   // NOTE: 'childPools_' holds the ownerships of node memory pools.
-  std::unordered_map<core::PlanNodeId, memory::MemoryPool*> nodePools_;
+  std::unordered_map<std::string, memory::MemoryPool*> nodePools_;
 
   // Set to true by OutputBufferManager when all output is
   // acknowledged. If this happens before Drivers are at end, the last
@@ -916,7 +951,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // Set if terminated by an error. This is the first error reported
   // by any of the instances.
   std::exception_ptr exception_ = nullptr;
-  mutable std::mutex mutex_;
+  mutable std::timed_mutex mutex_;
 
   // Exchange clients. One per pipeline / source. Null for pipelines, which
   // don't need it.

@@ -28,29 +28,24 @@ class StreamArenaTest : public testing::Test {
  protected:
   void SetUp() override {
     constexpr uint64_t kMaxMappedMemory = 64 << 20;
-    MmapAllocator::Options options;
-    options.capacity = kMaxMappedMemory;
-    mmapAllocator_ = std::make_shared<MmapAllocator>(options);
-    MemoryAllocator::setDefaultInstance(mmapAllocator_.get());
-    memoryManager_ = std::make_unique<MemoryManager>(MemoryManagerOptions{
-        .capacity = kMaxMappedMemory,
-        .allocator = MemoryAllocator::getInstance()});
+    MemoryManagerOptions options;
+    options.allocatorCapacity = kMaxMappedMemory;
+    options.useMmapAllocator = true;
+    memoryManager_ = std::make_unique<MemoryManager>(options);
+    mmapAllocator_ = static_cast<MmapAllocator*>(memoryManager_->allocator());
     pool_ = memoryManager_->addLeafPool("ByteStreamTest");
     rng_.seed(124);
   }
 
-  void TearDown() override {
-    MmapAllocator::testingDestroyInstance();
-    MemoryAllocator::setDefaultInstance(nullptr);
-  }
+  void TearDown() override {}
 
   std::unique_ptr<StreamArena> newArena() {
     return std::make_unique<StreamArena>(pool_.get());
   }
 
   folly::Random::DefaultGenerator rng_;
-  std::shared_ptr<MmapAllocator> mmapAllocator_;
   std::unique_ptr<MemoryManager> memoryManager_;
+  MmapAllocator* mmapAllocator_;
   std::shared_ptr<memory::MemoryPool> pool_;
 };
 
@@ -107,7 +102,7 @@ TEST_F(StreamArenaTest, newRange) {
     auto arena = newArena();
     ByteRange range;
     for (int i = 0; i < testData.requestRangeSizes.size(); ++i) {
-      arena->newRange(testData.requestRangeSizes[i], &range);
+      arena->newRange(testData.requestRangeSizes[i], nullptr, &range);
       ASSERT_EQ(range.size, testData.expectedRangeSizes[i]) << range.toString();
       ASSERT_EQ(range.position, 0);
       ASSERT_TRUE(range.buffer != nullptr);
@@ -135,18 +130,18 @@ TEST_F(StreamArenaTest, randomRange) {
     if (folly::Random::oneIn(4)) {
       const int requestSize =
           1 + folly::Random::rand32() % (2 * AllocationTraits::kPageSize);
-      arena->newTinyRange(requestSize, &range);
+      arena->newTinyRange(requestSize, nullptr, &range);
       ASSERT_EQ(range.size, requestSize);
     } else if (folly::Random::oneIn(3)) {
       const int requestSize =
           AllocationTraits::pageBytes(pool_->largestSizeClass()) +
           (folly::Random::rand32() % (4 << 20));
-      arena->newRange(requestSize, &range);
+      arena->newRange(requestSize, nullptr, &range);
       ASSERT_EQ(AllocationTraits::roundUpPageBytes(requestSize), range.size);
     } else {
       const int requestSize =
           1 + folly::Random::rand32() % pool_->largestSizeClass();
-      arena->newRange(requestSize, &range);
+      arena->newRange(requestSize, nullptr, &range);
       ASSERT_LE(range.size, AllocationTraits::roundUpPageBytes(requestSize));
     }
     ASSERT_EQ(range.position, 0);
@@ -158,8 +153,9 @@ TEST_F(StreamArenaTest, error) {
   auto arena = newArena();
   ByteRange range;
   VELOX_ASSERT_THROW(
-      arena->newTinyRange(0, &range),
+      arena->newTinyRange(0, nullptr, &range),
       "StreamArena::newTinyRange can't be zero length");
   VELOX_ASSERT_THROW(
-      arena->newRange(0, &range), "StreamArena::newRange can't be zero length");
+      arena->newRange(0, nullptr, &range),
+      "StreamArena::newRange can't be zero length");
 }

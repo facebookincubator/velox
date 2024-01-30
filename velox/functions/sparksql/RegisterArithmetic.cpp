@@ -63,8 +63,13 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<SinhFunction, double, double>({prefix + "sinh"});
   registerFunction<CoshFunction, double, double>({prefix + "cosh"});
   registerFunction<CotFunction, double, double>({prefix + "cot"});
+  registerFunction<Atan2Function, double, double, double>({prefix + "atan2"});
   registerFunction<Log1pFunction, double, double>({prefix + "log1p"});
   registerFunction<ToBinaryStringFunction, Varchar, int64_t>({prefix + "bin"});
+  registerFunction<ToHexBigintFunction, Varchar, int64_t>({prefix + "hex"});
+  registerFunction<ToHexVarcharFunction, Varchar, Varchar>({prefix + "hex"});
+  registerFunction<ToHexVarbinaryFunction, Varchar, Varbinary>(
+      {prefix + "hex"});
   registerFunction<ExpFunction, double, double>({prefix + "exp"});
   registerBinaryIntegral<PModIntFunction>({prefix + "pmod"});
   registerBinaryFloatingPoint<PModFloatFunction>({prefix + "pmod"});
@@ -91,8 +96,12 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});
   registerRandFunctions(prefix);
 
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_add, prefix + "add");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_sub, prefix + "subtract");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_mul, prefix + "multiply");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "divide");
+  registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
+  registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
 }
 
 } // namespace facebook::velox::functions::sparksql

@@ -16,11 +16,11 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
+#include <thrift/protocol/TCompactProtocol.h> //@manual
+
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
-
-#include <thrift/protocol/TCompactProtocol.h> //@manual
 
 namespace facebook::velox::parquet {
 
@@ -47,12 +47,12 @@ class ReaderBase {
     return fileLength_;
   }
 
-  uint64_t fileNumRows() const {
-    return fileMetaData_->num_rows;
+  const thrift::FileMetaData& thriftFileMetaData() const {
+    return *fileMetaData_;
   }
 
-  const thrift::FileMetaData& fileMetaData() const {
-    return *fileMetaData_;
+  FileMetaDataPtr fileMetaData() const {
+    return FileMetaDataPtr(reinterpret_cast<const void*>(fileMetaData_.get()));
   }
 
   const std::shared_ptr<const RowType>& schema() const {
@@ -94,6 +94,7 @@ class ReaderBase {
       uint32_t maxSchemaElementIdx,
       uint32_t maxRepeat,
       uint32_t maxDefine,
+      uint32_t parentSchemaIdx,
       uint32_t& schemaIdx,
       uint32_t& columnIdx) const;
 
@@ -105,7 +106,7 @@ class ReaderBase {
       bool fileColumnNamesReadAsLowerCase);
 
   memory::MemoryPool& pool_;
-  const uint64_t directorySizeGuess_;
+  const uint64_t footerEstimatedSize_;
   const uint64_t filePreloadThreshold_;
   // Copy of options. Must be owned by 'this'.
   const dwio::common::ReaderOptions options_;
@@ -126,7 +127,7 @@ ReaderBase::ReaderBase(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options)
     : pool_(options.getMemoryPool()),
-      directorySizeGuess_(options.getDirectorySizeGuess()),
+      footerEstimatedSize_(options.getFooterEstimatedSize()),
       filePreloadThreshold_(options.getFilePreloadThreshold()),
       options_(options),
       input_(std::move(input)) {
@@ -140,8 +141,8 @@ ReaderBase::ReaderBase(
 
 void ReaderBase::loadFileMetaData() {
   bool preloadFile =
-      fileLength_ <= std::max(filePreloadThreshold_, directorySizeGuess_);
-  uint64_t readSize = preloadFile ? fileLength_ : directorySizeGuess_;
+      fileLength_ <= std::max(filePreloadThreshold_, footerEstimatedSize_);
+  uint64_t readSize = preloadFile ? fileLength_ : footerEstimatedSize_;
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (preloadFile) {
@@ -212,8 +213,11 @@ void ReaderBase::initializeSchema() {
   uint32_t schemaIdx = 0;
   uint32_t columnIdx = 0;
   uint32_t maxSchemaElementIdx = fileMetaData_->schema.size() - 1;
+  // Setting the parent schema index of the root("hive_schema") to be 0, which
+  // is the root itself. This is ok because it's never required to check the
+  // parent of the root in getParquetColumnInfo().
   schemaWithId_ = getParquetColumnInfo(
-      maxSchemaElementIdx, maxRepeat, maxDefine, schemaIdx, columnIdx);
+      maxSchemaElementIdx, maxRepeat, maxDefine, 0, schemaIdx, columnIdx);
   schema_ = createRowType(
       schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
 }
@@ -222,6 +226,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     uint32_t maxSchemaElementIdx,
     uint32_t maxRepeat,
     uint32_t maxDefine,
+    uint32_t parentSchemaIdx,
     uint32_t& schemaIdx,
     uint32_t& columnIdx) const {
   VELOX_CHECK(fileMetaData_ != nullptr);
@@ -253,22 +258,60 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
     std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>> children;
 
+    auto curSchemaIdx = schemaIdx;
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
       auto child = getParquetColumnInfo(
-          maxSchemaElementIdx, maxRepeat, maxDefine, ++schemaIdx, columnIdx);
+          maxSchemaElementIdx,
+          maxRepeat,
+          maxDefine,
+          curSchemaIdx,
+          ++schemaIdx,
+          columnIdx);
       children.push_back(child);
     }
     VELOX_CHECK(!children.empty());
 
     if (schemaElement.__isset.converted_type) {
       switch (schemaElement.converted_type) {
+        case thrift::ConvertedType::MAP_KEY_VALUE:
+          // If the MAP_KEY_VALUE annotated group's parent is a MAP, it should
+          // be the repeated key_value group that directly contains the key and
+          // value children.
+          if (schema[parentSchemaIdx].converted_type ==
+              thrift::ConvertedType::MAP) {
+            VELOX_CHECK_EQ(
+                schemaElement.repetition_type,
+                thrift::FieldRepetitionType::REPEATED);
+            VELOX_CHECK_EQ(children.size(), 2);
+
+            auto childrenCopy = children;
+            return std::make_shared<const ParquetTypeWithId>(
+                TypeFactory<TypeKind::MAP>::create(
+                    children[0]->type(), children[1]->type()),
+                std::move(childrenCopy),
+                curSchemaIdx, // TODO: there are holes in the ids
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                maxRepeat,
+                maxDefine);
+          }
+
+          // For backward-compatibility, a group annotated with MAP_KEY_VALUE
+          // that is not contained by a MAP-annotated group should be handled as
+          // a MAP-annotated group.
+          FOLLY_FALLTHROUGH;
+
         case thrift::ConvertedType::LIST:
         case thrift::ConvertedType::MAP: {
-          auto element = children.at(0)->getChildren();
           VELOX_CHECK_EQ(children.size(), 1);
+          const auto& child = children[0];
+          auto grandChildren = child->getChildren();
           return std::make_shared<const ParquetTypeWithId>(
-              children[0]->type(),
-              std::move(element),
+              child->type(),
+              std::move(grandChildren),
               curSchemaIdx, // TODO: there are holes in the ids
               maxSchemaElementIdx,
               ParquetTypeWithId::kNonLeaf, // columnIdx,
@@ -278,30 +321,12 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               maxRepeat + 1,
               maxDefine);
         }
-        case thrift::ConvertedType::MAP_KEY_VALUE: {
-          // child of MAP
-          VELOX_CHECK_EQ(
-              schemaElement.repetition_type,
-              thrift::FieldRepetitionType::REPEATED);
-          assert(children.size() == 2);
-          auto childrenCopy = children;
-          return std::make_shared<const ParquetTypeWithId>(
-              TypeFactory<TypeKind::MAP>::create(
-                  children[0]->type(), children[1]->type()),
-              std::move(childrenCopy),
-              curSchemaIdx, // TODO: there are holes in the ids
-              maxSchemaElementIdx,
-              ParquetTypeWithId::kNonLeaf, // columnIdx,
-              std::move(name),
-              std::nullopt,
-              std::nullopt,
-              maxRepeat,
-              maxDefine);
-        }
+
         default:
-          VELOX_UNSUPPORTED(
-              "Unsupported SchemaElement type: {}",
-              schemaElement.converted_type);
+          VELOX_UNREACHABLE(
+              "Invalid SchemaElement converted_type: {}, name: {}",
+              schemaElement.converted_type,
+              schemaElement.name);
       }
     } else {
       if (schemaElement.repetition_type ==
@@ -602,158 +627,226 @@ bool ReaderBase::isRowGroupBuffered(int32_t rowGroupIndex) const {
   return inputs_.count(rowGroupIndex) != 0;
 }
 
-ParquetRowReader::ParquetRowReader(
-    const std::shared_ptr<ReaderBase>& readerBase,
-    const dwio::common::RowReaderOptions& options)
-    : pool_(readerBase->getMemoryPool()),
-      readerBase_(readerBase),
-      options_(options),
-      rowGroups_(readerBase_->fileMetaData().row_groups),
-      nextRowGroupIdsIdx_(0),
-      currentRowGroupPtr_(nullptr),
-      rowsInCurrentRowGroup_(0),
-      currentRowInGroup_(0) {
-  // Validate the requested type is compatible with what's in the file
-  std::function<std::string()> createExceptionContext = [&]() {
-    std::string exceptionMessageContext = fmt::format(
-        "The schema loaded in the reader does not match the schema in the file footer."
-        "Input Name: {},\n"
-        "File Footer Schema (without partition columns): {},\n"
-        "Input Table Schema (with partition columns): {}\n",
-        readerBase_->bufferedInput().getReadFile()->getName(),
-        readerBase_->schema()->toString(),
-        requestedType_->toString());
-    return exceptionMessageContext;
-  };
-
-  if (rowGroups_.empty()) {
-    return; // TODO
-  }
-  ParquetParams params(pool_, columnReaderStats_, readerBase_->fileMetaData());
-  auto columnSelector = std::make_shared<ColumnSelector>(
-      ColumnSelector::apply(options_.getSelector(), readerBase_->schema()));
-  columnReader_ = ParquetColumnReader::build(
-      columnSelector->getSchemaWithId(),
-      readerBase_->schemaWithId(), // Id is schema id
-      params,
-      *options_.getScanSpec());
-
-  filterRowGroups();
-  if (!rowGroupIds_.empty()) {
-    // schedule prefetch of first row group right after reading the metadata.
-    // This is usually on a split preload thread before the split goes to table
-    // scan.
-    advanceToNextRowGroup();
-  }
-}
-
 namespace {
 struct ParquetStatsContext : dwio::common::StatsContext {};
 } // namespace
 
-void ParquetRowReader::filterRowGroups() {
-  rowGroupIds_.reserve(rowGroups_.size());
-  firstRowOfRowGroup_.reserve(rowGroups_.size());
+class ParquetRowReader::Impl {
+ public:
+  Impl(
+      const std::shared_ptr<ReaderBase>& readerBase,
+      const dwio::common::RowReaderOptions& options)
+      : pool_(readerBase->getMemoryPool()),
+        readerBase_(readerBase),
+        options_(options),
+        rowGroups_(readerBase_->thriftFileMetaData().row_groups),
+        nextRowGroupIdsIdx_(0),
+        currentRowGroupPtr_(nullptr),
+        rowsInCurrentRowGroup_(0),
+        currentRowInGroup_(0) {
+    // Validate the requested type is compatible with what's in the file
+    std::function<std::string()> createExceptionContext = [&]() {
+      std::string exceptionMessageContext = fmt::format(
+          "The schema loaded in the reader does not match the schema in the file footer."
+          "Input Name: {},\n"
+          "File Footer Schema (without partition columns): {},\n"
+          "Input Table Schema (with partition columns): {}\n",
+          readerBase_->bufferedInput().getReadFile()->getName(),
+          readerBase_->schema()->toString(),
+          requestedType_->toString());
+      return exceptionMessageContext;
+    };
 
-  ParquetData::FilterRowGroupsResult res;
-  columnReader_->filterRowGroups(0, ParquetStatsContext(), res);
-  if (auto& metadataFilter = options_.getMetadataFilter()) {
-    metadataFilter->eval(res.metadataFilterResults, res.filterResult);
+    if (rowGroups_.empty()) {
+      return; // TODO
+    }
+    ParquetParams params(
+        pool_, columnReaderStats_, readerBase_->thriftFileMetaData());
+    auto columnSelector = std::make_shared<ColumnSelector>(
+        ColumnSelector::apply(options_.getSelector(), readerBase_->schema()));
+    columnReader_ = ParquetColumnReader::build(
+        columnSelector->getSchemaWithId(),
+        readerBase_->schemaWithId(), // Id is schema id
+        params,
+        *options_.getScanSpec());
+
+    filterRowGroups();
+    if (!rowGroupIds_.empty()) {
+      // schedule prefetch of first row group right after reading the metadata.
+      // This is usually on a split preload thread before the split goes to
+      // table scan.
+      advanceToNextRowGroup();
+    }
   }
 
-  uint64_t rowNumber = 0;
-  for (auto i = 0; i < rowGroups_.size(); i++) {
-    VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
-    auto fileOffset = rowGroups_[i].__isset.file_offset
-        ? rowGroups_[i].file_offset
-        : rowGroups_[i].columns[0].meta_data.__isset.dictionary_page_offset
-        ? rowGroups_[i].columns[0].meta_data.dictionary_page_offset
-        : rowGroups_[i].columns[0].meta_data.data_page_offset;
-    VELOX_CHECK_GT(fileOffset, 0);
-    auto rowGroupInRange =
-        (fileOffset >= options_.getOffset() &&
-         fileOffset < options_.getLimit());
-    // A skipped row group is one that is in range and is in the excluded list.
-    if (rowGroupInRange) {
-      if (i < res.totalCount && bits::isBitSet(res.filterResult.data(), i)) {
-        ++skippedRowGroups_;
-      } else {
+  void filterRowGroups() {
+    rowGroupIds_.reserve(rowGroups_.size());
+    firstRowOfRowGroup_.reserve(rowGroups_.size());
+
+    ParquetData::FilterRowGroupsResult res;
+    columnReader_->filterRowGroups(0, ParquetStatsContext(), res);
+    if (auto& metadataFilter = options_.getMetadataFilter()) {
+      metadataFilter->eval(res.metadataFilterResults, res.filterResult);
+    }
+
+    uint64_t rowNumber = 0;
+    for (auto i = 0; i < rowGroups_.size(); i++) {
+      VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
+      auto fileOffset = rowGroups_[i].__isset.file_offset
+          ? rowGroups_[i].file_offset
+          : rowGroups_[i].columns[0].meta_data.__isset.dictionary_page_offset
+          ? rowGroups_[i].columns[0].meta_data.dictionary_page_offset
+          : rowGroups_[i].columns[0].meta_data.data_page_offset;
+      VELOX_CHECK_GT(fileOffset, 0);
+      auto rowGroupInRange =
+          (fileOffset >= options_.getOffset() &&
+           fileOffset < options_.getLimit());
+
+      auto isExcluded =
+          (i < res.totalCount && bits::isBitSet(res.filterResult.data(), i));
+      auto isEmpty = rowGroups_[i].num_rows == 0;
+
+      // Add a row group to read if it is within range and not empty and not in
+      // the excluded list.
+      if (rowGroupInRange && !isExcluded && !isEmpty) {
         rowGroupIds_.push_back(i);
         firstRowOfRowGroup_.push_back(rowNumber);
       }
+      rowNumber += rowGroups_[i].num_rows;
     }
-    rowNumber += rowGroups_[i].num_rows;
   }
+
+  int64_t nextRowNumber() {
+    if (currentRowInGroup_ >= rowsInCurrentRowGroup_ &&
+        !advanceToNextRowGroup()) {
+      return kAtEnd;
+    }
+    return firstRowOfRowGroup_[nextRowGroupIdsIdx_ - 1] + currentRowInGroup_;
+  }
+
+  int64_t nextReadSize(uint64_t size) {
+    VELOX_CHECK_GT(size, 0);
+    if (nextRowNumber() == kAtEnd) {
+      return kAtEnd;
+    }
+    return std::min(size, rowsInCurrentRowGroup_ - currentRowInGroup_);
+  }
+
+  uint64_t next(
+      uint64_t size,
+      velox::VectorPtr& result,
+      const dwio::common::Mutation* mutation) {
+    VELOX_DCHECK(!options_.getAppendRowNumberColumn());
+    auto rowsToRead = nextReadSize(size);
+    if (rowsToRead == kAtEnd) {
+      return 0;
+    }
+    VELOX_DCHECK_GT(rowsToRead, 0);
+    columnReader_->next(rowsToRead, result, mutation);
+    currentRowInGroup_ += rowsToRead;
+    return rowsToRead;
+  }
+
+  std::optional<size_t> estimatedRowSize() const {
+    auto index =
+        nextRowGroupIdsIdx_ < 1 ? 0 : rowGroupIds_[nextRowGroupIdsIdx_ - 1];
+    return readerBase_->rowGroupUncompressedSize(
+               index, *readerBase_->schemaWithId()) /
+        rowGroups_[index].num_rows;
+  }
+
+  void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
+    stats.skippedStrides += rowGroups_.size() - rowGroupIds_.size();
+  }
+
+  void resetFilterCaches() {
+    columnReader_->resetFilterCaches();
+  }
+
+  bool isRowGroupBuffered(int32_t rowGroupIndex) const {
+    return readerBase_->isRowGroupBuffered(rowGroupIndex);
+  }
+
+ private:
+  bool advanceToNextRowGroup() {
+    if (nextRowGroupIdsIdx_ == rowGroupIds_.size()) {
+      return false;
+    }
+
+    auto nextRowGroupIndex = rowGroupIds_[nextRowGroupIdsIdx_];
+    readerBase_->scheduleRowGroups(
+        rowGroupIds_,
+        nextRowGroupIdsIdx_,
+        static_cast<StructColumnReader&>(*columnReader_));
+    currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[nextRowGroupIdsIdx_]];
+    rowsInCurrentRowGroup_ = currentRowGroupPtr_->num_rows;
+    currentRowInGroup_ = 0;
+    nextRowGroupIdsIdx_++;
+    columnReader_->seekToRowGroup(nextRowGroupIndex);
+    return true;
+  }
+
+  memory::MemoryPool& pool_;
+  const std::shared_ptr<ReaderBase> readerBase_;
+  const dwio::common::RowReaderOptions options_;
+
+  // All row groups from file metadata.
+  const std::vector<thrift::RowGroup>& rowGroups_;
+  // Indices of row groups where stats match filters.
+  std::vector<uint32_t> rowGroupIds_;
+  std::vector<uint64_t> firstRowOfRowGroup_;
+  uint32_t nextRowGroupIdsIdx_;
+  const thrift::RowGroup* FOLLY_NULLABLE currentRowGroupPtr_{nullptr};
+  uint64_t rowsInCurrentRowGroup_;
+  uint64_t currentRowInGroup_;
+
+  std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
+
+  RowTypePtr requestedType_;
+
+  dwio::common::ColumnReaderStatistics columnReaderStats_;
+};
+
+ParquetRowReader::ParquetRowReader(
+    const std::shared_ptr<ReaderBase>& readerBase,
+    const dwio::common::RowReaderOptions& options) {
+  impl_ = std::make_unique<ParquetRowReader::Impl>(readerBase, options);
+}
+
+void ParquetRowReader::filterRowGroups() {
+  impl_->filterRowGroups();
 }
 
 int64_t ParquetRowReader::nextRowNumber() {
-  if (currentRowInGroup_ >= rowsInCurrentRowGroup_ &&
-      !advanceToNextRowGroup()) {
-    return kAtEnd;
-  }
-  return firstRowOfRowGroup_[nextRowGroupIdsIdx_ - 1] + currentRowInGroup_;
+  return impl_->nextRowNumber();
 }
 
 int64_t ParquetRowReader::nextReadSize(uint64_t size) {
-  VELOX_CHECK_GT(size, 0);
-  if (nextRowNumber() == kAtEnd) {
-    return kAtEnd;
-  }
-  return std::min(size, rowsInCurrentRowGroup_ - currentRowInGroup_);
+  return impl_->nextReadSize(size);
 }
 
 uint64_t ParquetRowReader::next(
     uint64_t size,
     velox::VectorPtr& result,
     const dwio::common::Mutation* mutation) {
-  VELOX_DCHECK(!options_.getAppendRowNumberColumn());
-  auto rowsToRead = nextReadSize(size);
-  if (rowsToRead == kAtEnd) {
-    return 0;
-  }
-  VELOX_DCHECK_GT(rowsToRead, 0);
-  columnReader_->next(rowsToRead, result, mutation);
-  currentRowInGroup_ += rowsToRead;
-  return rowsToRead;
-}
-
-bool ParquetRowReader::advanceToNextRowGroup() {
-  if (nextRowGroupIdsIdx_ == rowGroupIds_.size()) {
-    return false;
-  }
-
-  auto nextRowGroupIndex = rowGroupIds_[nextRowGroupIdsIdx_];
-  readerBase_->scheduleRowGroups(
-      rowGroupIds_,
-      nextRowGroupIdsIdx_,
-      static_cast<StructColumnReader&>(*columnReader_));
-  currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[nextRowGroupIdsIdx_]];
-  rowsInCurrentRowGroup_ = currentRowGroupPtr_->num_rows;
-  currentRowInGroup_ = 0;
-  nextRowGroupIdsIdx_++;
-  columnReader_->seekToRowGroup(nextRowGroupIndex);
-  return true;
+  return impl_->next(size, result, mutation);
 }
 
 void ParquetRowReader::updateRuntimeStats(
     dwio::common::RuntimeStatistics& stats) const {
-  stats.skippedStrides += skippedRowGroups_;
+  impl_->updateRuntimeStats(stats);
 }
 
 void ParquetRowReader::resetFilterCaches() {
-  columnReader_->resetFilterCaches();
+  impl_->resetFilterCaches();
 }
 
 bool ParquetRowReader::isRowGroupBuffered(int32_t rowGroupIndex) const {
-  return readerBase_->isRowGroupBuffered(rowGroupIndex);
+  return impl_->isRowGroupBuffered(rowGroupIndex);
 }
 
 std::optional<size_t> ParquetRowReader::estimatedRowSize() const {
-  auto index =
-      nextRowGroupIdsIdx_ < 1 ? 0 : rowGroupIds_[nextRowGroupIdsIdx_ - 1];
-  return readerBase_->rowGroupUncompressedSize(
-             index, *readerBase_->schemaWithId()) /
-      rowGroups_[index].num_rows;
+  return impl_->estimatedRowSize();
 }
 
 ParquetReader::ParquetReader(
@@ -762,7 +855,7 @@ ParquetReader::ParquetReader(
     : readerBase_(std::make_shared<ReaderBase>(std::move(input), options)) {}
 
 std::optional<uint64_t> ParquetReader::numberOfRows() const {
-  return readerBase_->fileNumRows();
+  return readerBase_->thriftFileMetaData().num_rows;
 }
 
 const velox::RowTypePtr& ParquetReader::rowType() const {
@@ -774,12 +867,13 @@ ParquetReader::typeWithId() const {
   return readerBase_->schemaWithId();
 }
 
-size_t ParquetReader::numberOfRowGroups() const {
-  return readerBase_->fileMetaData().row_groups.size();
-}
-
 std::unique_ptr<dwio::common::RowReader> ParquetReader::createRowReader(
     const dwio::common::RowReaderOptions& options) const {
   return std::make_unique<ParquetRowReader>(readerBase_, options);
 }
+
+FileMetaDataPtr ParquetReader::fileMetaData() const {
+  return readerBase_->fileMetaData();
+}
+
 } // namespace facebook::velox::parquet

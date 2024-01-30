@@ -58,7 +58,7 @@ class TypeFactories : public CustomTypeFactories {
   TypePtr type_;
 };
 
-class TestTypeSignature : public ::testing::Test {
+class TypeParserTest : public ::testing::Test {
  private:
   void SetUp() override {
     // Register custom types with and without spaces.
@@ -69,25 +69,25 @@ class TestTypeSignature : public ::testing::Test {
   }
 };
 
-TEST_F(TestTypeSignature, booleanType) {
+TEST_F(TypeParserTest, booleanType) {
   ASSERT_EQ(*parseType("boolean"), *BOOLEAN());
 }
 
-TEST_F(TestTypeSignature, integerType) {
+TEST_F(TypeParserTest, integerType) {
   ASSERT_EQ(*parseType("int"), *INTEGER());
   ASSERT_EQ(*parseType("integer"), *INTEGER());
 }
 
-TEST_F(TestTypeSignature, varcharType) {
+TEST_F(TypeParserTest, varcharType) {
   ASSERT_EQ(*parseType("varchar"), *VARCHAR());
   ASSERT_EQ(*parseType("varchar(4)"), *VARCHAR());
 }
 
-TEST_F(TestTypeSignature, varbinary) {
+TEST_F(TypeParserTest, varbinary) {
   ASSERT_EQ(*parseType("varbinary"), *VARBINARY());
 }
 
-TEST_F(TestTypeSignature, arrayType) {
+TEST_F(TypeParserTest, arrayType) {
   ASSERT_EQ(*parseType("array(bigint)"), *ARRAY(BIGINT()));
 
   ASSERT_EQ(*parseType("array(int)"), *ARRAY(INTEGER()));
@@ -104,7 +104,7 @@ TEST_F(TestTypeSignature, arrayType) {
   ASSERT_EQ(*parseType("array(DECIMAL(10,5))"), *ARRAY(DECIMAL(10, 5)));
 }
 
-TEST_F(TestTypeSignature, mapType) {
+TEST_F(TypeParserTest, mapType) {
   ASSERT_EQ(*parseType("map(bigint,bigint)"), *MAP(BIGINT(), BIGINT()));
 
   ASSERT_EQ(
@@ -133,11 +133,24 @@ TEST_F(TestTypeSignature, mapType) {
   ASSERT_EQ(
       *parseType("maP(DECIMAL(10,5), DECIMAL(20, 4))"),
       *MAP(DECIMAL(10, 5), DECIMAL(20, 4)));
+
+  // Complex types as map keys.
+  ASSERT_EQ(
+      *parseType("map(row(bigint),bigint)"), *MAP(ROW({BIGINT()}), BIGINT()));
+
+  ASSERT_EQ(
+      *parseType("map(array(double),bigint)"), *MAP(ARRAY(DOUBLE()), BIGINT()));
+
+  ASSERT_EQ(
+      *parseType("map(map(tinyint, varchar),bigint)"),
+      *MAP(MAP(TINYINT(), VARCHAR()), BIGINT()));
 }
 
-TEST_F(TestTypeSignature, invalidType) {
+TEST_F(TypeParserTest, invalidType) {
   VELOX_ASSERT_THROW(
-      parseType("blah()"), "Failed to parse type [blah]. Type not registered.");
+      parseType("blah()"),
+      "Failed to parse type [blah()]. "
+      "syntax error, unexpected LPAREN, expecting WORD");
 
   VELOX_ASSERT_THROW(parseType("array()"), "Failed to parse type [array()]");
 
@@ -148,10 +161,16 @@ TEST_F(TestTypeSignature, invalidType) {
   // Ensure this is not treated as a row type.
   VELOX_ASSERT_THROW(
       parseType("rowxxx(a)"),
-      "Failed to parse type [rowxxx]. Type not registered.");
+      "Failed to parse type [rowxxx(a)]. "
+      "syntax error, unexpected LPAREN, expecting WORD");
 }
 
-TEST_F(TestTypeSignature, rowType) {
+TEST_F(TypeParserTest, rowType) {
+  // Unnamed fields.
+  ASSERT_EQ(
+      *parseType("row(bigint,varchar, real, timestamp with time zone)"),
+      *ROW({BIGINT(), VARCHAR(), REAL(), TIMESTAMP_WITH_TIME_ZONE()}));
+
   ASSERT_EQ(
       *parseType("row(a bigint,b varchar,c real)"),
       *ROW({"a", "b", "c"}, {BIGINT(), VARCHAR(), REAL()}));
@@ -170,6 +189,13 @@ TEST_F(TestTypeSignature, rowType) {
   ASSERT_EQ(
       *parseType("row(\"12 tb\" bigint,b bigint,c bigint)"),
       *ROW({"12 tb", "b", "c"}, {BIGINT(), BIGINT(), BIGINT()}));
+
+  ASSERT_EQ(
+      *parseType("row(\"a\" bigint, \"b\" array(varchar), "
+                 "\"c\" timestamp with time zone)"),
+      *ROW(
+          {"a", "b", "c"},
+          {BIGINT(), ARRAY(VARCHAR()), TIMESTAMP_WITH_TIME_ZONE()}));
 
   ASSERT_EQ(
       *parseType("row(a varchar(10),b row(a bigint))"),
@@ -218,13 +244,21 @@ TEST_F(TestTypeSignature, rowType) {
 
   // Field type canonicalization.
   ASSERT_EQ(*parseType("row(col iNt)"), *ROW({"col"}, {INTEGER()}));
+
+  // Can only have names within rows.
+  VELOX_ASSERT_THROW(
+      parseType("asd bigint"),
+      "Failed to parse type [asd bigint]. Type not registered.");
 }
 
-TEST_F(TestTypeSignature, typesWithSpaces) {
+TEST_F(TypeParserTest, typesWithSpaces) {
   // Type is not registered.
   VELOX_ASSERT_THROW(
       parseType("row(time time with time zone)"),
       "Failed to parse type [time with time zone]. Type not registered.");
+
+  ASSERT_EQ(
+      *parseType("timestamp with time zone"), *TIMESTAMP_WITH_TIME_ZONE());
 
   // Type is registered.
   ASSERT_EQ(
@@ -261,7 +295,7 @@ TEST_F(TestTypeSignature, typesWithSpaces) {
       "Failed to parse type [timestamp timestamp with time zone]. Type not registered.");
 }
 
-TEST_F(TestTypeSignature, intervalYearToMonthType) {
+TEST_F(TypeParserTest, intervalYearToMonthType) {
   ASSERT_EQ(
       *parseType("row(interval interval year to month)"),
       *ROW({"interval"}, {INTERVAL_YEAR_MONTH()}));
@@ -270,7 +304,7 @@ TEST_F(TestTypeSignature, intervalYearToMonthType) {
       *parseType("row(interval year to month)"), *ROW({INTERVAL_YEAR_MONTH()}));
 }
 
-TEST_F(TestTypeSignature, functionType) {
+TEST_F(TypeParserTest, functionType) {
   ASSERT_EQ(
       *parseType("function(bigint,bigint,bigint)"),
       *FUNCTION({BIGINT(), BIGINT()}, BIGINT()));
@@ -279,7 +313,7 @@ TEST_F(TestTypeSignature, functionType) {
       *FUNCTION({BIGINT(), ARRAY(VARCHAR())}, VARCHAR()));
 }
 
-TEST_F(TestTypeSignature, decimalType) {
+TEST_F(TypeParserTest, decimalType) {
   ASSERT_EQ(*parseType("decimal(10, 5)"), *DECIMAL(10, 5));
   ASSERT_EQ(*parseType("decimal(20,10)"), *DECIMAL(20, 10));
 
@@ -290,6 +324,33 @@ TEST_F(TestTypeSignature, decimalType) {
       parseType("decimal(20)"), "Failed to parse type [decimal(20)]");
   VELOX_ASSERT_THROW(
       parseType("decimal(, 20)"), "Failed to parse type [decimal(, 20)]");
+}
+
+// Checks that type names can also be field names.
+TEST_F(TypeParserTest, fieldNames) {
+  ASSERT_EQ(
+      *parseType("row(bigint bigint, map bigint, row bigint, array bigint, "
+                 "decimal bigint, function bigint, struct bigint, "
+                 "varchar map(bigint, tinyint), varbinary array(bigint))"),
+      *ROW(
+          {"bigint",
+           "map",
+           "row",
+           "array",
+           "decimal",
+           "function",
+           "struct",
+           "varchar",
+           "varbinary"},
+          {BIGINT(),
+           BIGINT(),
+           BIGINT(),
+           BIGINT(),
+           BIGINT(),
+           BIGINT(),
+           BIGINT(),
+           MAP(BIGINT(), TINYINT()),
+           ARRAY(BIGINT())}));
 }
 
 } // namespace

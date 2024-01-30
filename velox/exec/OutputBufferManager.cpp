@@ -94,9 +94,10 @@ bool OutputBufferManager::getData(
     int destination,
     uint64_t maxBytes,
     int64_t sequence,
-    DataAvailableCallback notify) {
+    DataAvailableCallback notify,
+    DataConsumerActiveCheckCallback activeCheck) {
   if (auto buffer = getBufferIfExists(taskId)) {
-    buffer->getData(destination, maxBytes, sequence, notify);
+    buffer->getData(destination, maxBytes, sequence, notify, activeCheck);
     return true;
   }
   return false;
@@ -132,10 +133,14 @@ bool OutputBufferManager::updateOutputBuffers(
   return false;
 }
 
-void OutputBufferManager::updateNumDrivers(
+bool OutputBufferManager::updateNumDrivers(
     const std::string& taskId,
     uint32_t newNumDrivers) {
-  getBuffer(taskId)->updateNumDrivers(newNumDrivers);
+  if (auto buffer = getBufferIfExists(taskId)) {
+    buffer->updateNumDrivers(newNumDrivers);
+    return true;
+  }
+  return false;
 }
 
 void OutputBufferManager::removeTask(const std::string& taskId) {
@@ -181,6 +186,15 @@ bool OutputBufferManager::isOverutilized(const std::string& taskId) {
     return buffer->isOverutilized();
   }
   return false;
+}
+
+std::optional<OutputBuffer::Stats> OutputBufferManager::stats(
+    const std::string& taskId) {
+  auto buffer = getBufferIfExists(taskId);
+  if (buffer != nullptr) {
+    return buffer->stats();
+  }
+  return std::nullopt;
 }
 
 } // namespace facebook::velox::exec

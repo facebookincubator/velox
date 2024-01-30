@@ -39,17 +39,28 @@ class AssertQueryBuilder {
   /// Default is 0.
   AssertQueryBuilder& destination(int32_t destination);
 
+  /// Use single-threaded execution to execute the Velox plan.
+  /// Default is false.
+  AssertQueryBuilder& singleThreaded(bool singleThreaded);
+
   /// Set configuration property. May be called multiple times to set multiple
   /// properties.
   AssertQueryBuilder& config(const std::string& key, const std::string& value);
+
+  template <typename T>
+  typename std::enable_if<std::is_arithmetic<T>::value, AssertQueryBuilder&>::
+      type
+      config(const std::string& key, const T& value) {
+    return config(key, std::to_string(value));
+  }
 
   /// Set multiple configuration properties.
   AssertQueryBuilder& configs(
       const std::unordered_map<std::string, std::string>& values);
 
-  /// Set connector-specific configuration property. May be called multiple
-  /// times to set multiple properties for one or multiple connectors.
-  AssertQueryBuilder& connectorConfig(
+  /// Set connector-specific configuration session property. May be called
+  /// multiple times to set multiple properties for one or multiple connectors.
+  AssertQueryBuilder& connectorSessionProperty(
       const std::string& connectorId,
       const std::string& key,
       const std::string& value);
@@ -151,7 +162,7 @@ class AssertQueryBuilder {
   CursorParameters params_;
   std::unordered_map<std::string, std::string> configs_;
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
-      connectorConfigs_;
+      connectorSessionProperties_;
   std::unordered_map<core::PlanNodeId, std::vector<Split>> splits_;
 };
 

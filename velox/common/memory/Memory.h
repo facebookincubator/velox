@@ -63,21 +63,6 @@ struct MemoryManagerOptions {
   /// Specifies the default memory allocation alignment.
   uint16_t alignment{MemoryAllocator::kMaxAlignment};
 
-  /// Specifies the max memory capacity in bytes. MemoryManager will not
-  /// enforce capacity. This will be used by MemoryArbitrator
-  int64_t capacity{MemoryAllocator::kDefaultCapacityBytes};
-
-  /// Memory capacity for query/task memory pools. This capacity setting should
-  /// be equal or smaller than 'capacity'. The difference between 'capacity' and
-  /// 'queryMemoryCapacity' is reserved for system usage such as cache and
-  /// spilling.
-  ///
-  /// NOTE:
-  /// - if 'queryMemoryCapacity' is greater than 'capacity', the behavior
-  /// will be equivalent to as if they are equal, meaning no reservation
-  /// capacity for system usage.
-  int64_t queryMemoryCapacity{kMaxMemory};
-
   /// If true, enable memory usage tracking in the default memory pool.
   bool trackDefaultUsage{
       FLAGS_velox_enable_memory_usage_track_in_default_memory_pool};
@@ -96,10 +81,58 @@ struct MemoryManagerOptions {
   /// Terminates the process and generates a core file on an allocation failure
   bool coreOnAllocationFailureEnabled{false};
 
-  /// Specifies the backing memory allocator.
-  MemoryAllocator* allocator{MemoryAllocator::getInstance()};
+  /// ================== 'MemoryAllocator' settings ==================
+  /// Specifies the max memory allocation capacity in bytes enforced by
+  /// MemoryAllocator, default unlimited.
+  int64_t allocatorCapacity{kMaxMemory};
 
-  /// ================== 'MemoryArbitrator' settings ==================
+  /// If true, uses MmapAllocator for memory allocation which manages the
+  /// physical memory allocation on its own through std::mmap techniques. If
+  /// false, use MallocAllocator which delegates the memory allocation to
+  /// std::malloc.
+  bool useMmapAllocator{false};
+
+  /// If true, allocations larger than largest size class size will be delegated
+  /// to ManagedMmapArena. Otherwise a system mmap call will be issued for each
+  /// such allocation.
+  ///
+  /// NOTE: this only applies for MmapAllocator.
+  bool useMmapArena{false};
+
+  /// Used to determine MmapArena capacity. The ratio represents
+  /// 'allocatorCapacity' to single MmapArena capacity ratio.
+  ///
+  /// NOTE: this only applies for MmapAllocator.
+  int32_t mmapArenaCapacityRatio{10};
+
+  /// If not zero, reserve 'smallAllocationReservePct'% of space from
+  /// 'allocatorCapacity' for ad hoc small allocations. And those allocations
+  /// are delegated to std::malloc. If 'maxMallocBytes' is 0, this value will be
+  /// disregarded.
+  ///
+  /// NOTE: this only applies for MmapAllocator.
+  uint32_t smallAllocationReservePct{0};
+
+  /// The allocation threshold less than which an allocation is delegated to
+  /// std::malloc(). If it is zero, then we don't delegate any allocation
+  /// std::malloc, and 'smallAllocationReservePct' will be automatically set to
+  /// 0 disregarding any passed in value.
+  ///
+  /// NOTE: this only applies for MmapAllocator.
+  int32_t maxMallocBytes{3072};
+
+  /// ================== 'MemoryArbitrator' settings =================
+
+  /// Memory capacity available for query/task memory pools. This capacity
+  /// setting should be equal or smaller than 'allocatorCapacity'. The
+  /// difference between 'allocatorCapacity' and 'arbitratorCapacity' is
+  /// reserved for system usage such as cache and spilling.
+  ///
+  /// NOTE:
+  /// - if 'arbitratorCapacity' is greater than 'allocatorCapacity', the
+  /// behavior will be equivalent to as if they are equal, meaning no
+  /// reservation capacity for system usage.
+  int64_t arbitratorCapacity{kMaxMemory};
 
   /// The string kind of memory arbitrator used in the memory manager.
   ///
@@ -116,8 +149,8 @@ struct MemoryManagerOptions {
 
   /// Specifies the max time to wait for memory reclaim by arbitration. The
   /// memory reclaim might fail if the max wait time has exceeded. If it is
-  /// zero, then there is no timeout.
-  uint64_t memoryReclaimWaitMs{0};
+  /// zero, then there is no timeout. The default is 5 mins.
+  uint64_t memoryReclaimWaitMs{300'000};
 
   /// Provided by the query system to validate the state after a memory pool
   /// enters arbitration if not null. For instance, Prestissimo provides
@@ -128,9 +161,8 @@ struct MemoryManagerOptions {
   MemoryArbitrationStateCheckCB arbitrationStateCheckCb{nullptr};
 };
 
-/// 'MemoryManager' is responsible for managing the memory pools. For now, users
-/// wanting multiple different allocators would need to instantiate different
-/// MemoryManager classes and manage them across static boundaries.
+/// 'MemoryManager' is responsible for creating allocator, arbitrator and
+/// managing the memory pools.
 class MemoryManager {
  public:
   explicit MemoryManager(
@@ -138,10 +170,22 @@ class MemoryManager {
 
   ~MemoryManager();
 
-  /// Tries to get the singleton memory manager. If not previously initialized,
-  /// the process singleton manager will be initialized.
-  FOLLY_EXPORT static MemoryManager& getInstance(
+  /// Creates process-wide memory manager using specified options. Throws if
+  /// memory manager has already been created by an easier call.
+  static void initialize(const MemoryManagerOptions& options);
+
+  /// Returns process-wide memory manager. Throws if 'initialize' hasn't been
+  /// called yet.
+  static MemoryManager* getInstance();
+
+  /// Deprecated. Do not use. Remove once existing call sites are updated.
+  /// Returns the process-wide default memory manager instance if exists,
+  /// otherwise creates one based on the specified 'options'.
+  FOLLY_EXPORT static MemoryManager& deprecatedGetInstance(
       const MemoryManagerOptions& options = MemoryManagerOptions{});
+
+  /// Used by test to override the process-wide memory manager.
+  static MemoryManager& testingSetInstance(const MemoryManagerOptions& options);
 
   /// Returns the memory capacity of this memory manager which puts a hard cap
   /// on memory usage, and any allocation that exceeds this capacity throws.
@@ -168,10 +212,6 @@ class MemoryManager {
       const std::string& name = "",
       bool threadSafe = true);
 
-  /// Invoked to grows a memory pool's free capacity with at least
-  /// 'incrementBytes'. The function returns true on success, otherwise false.
-  bool growPool(MemoryPool* pool, uint64_t incrementBytes);
-
   /// Invoked to shrink alive pools to free 'targetBytes' capacity. The function
   /// returns the actual freed memory capacity in bytes.
   uint64_t shrinkPools(uint64_t targetBytes);
@@ -194,12 +234,14 @@ class MemoryManager {
   /// leaf memory pools.
   size_t numPools() const;
 
-  MemoryAllocator& allocator();
+  MemoryAllocator* allocator();
 
   MemoryArbitrator* arbitrator();
 
-  /// Returns debug string of this memory manager.
-  std::string toString() const;
+  /// Returns debug string of this memory manager. If 'detail' is true, it
+  /// returns the detailed tree memory usage from all the top level root memory
+  /// pools.
+  std::string toString(bool detail = false) const;
 
   /// Returns the memory manger's internal default root memory pool for testing
   /// purpose.
@@ -207,23 +249,33 @@ class MemoryManager {
     return *defaultRoot_;
   }
 
+  /// Returns the process wide leaf memory pool used for disk spilling.
+  MemoryPool* spillPool() {
+    return spillPool_.get();
+  }
+
   const std::vector<std::shared_ptr<MemoryPool>>& testingSharedLeafPools() {
     return sharedLeafPools_;
+  }
+
+  bool testingGrowPool(MemoryPool* pool, uint64_t incrementBytes) {
+    return growPool(pool, incrementBytes);
   }
 
  private:
   void dropPool(MemoryPool* pool);
 
+  // Invoked to grow a memory pool's free capacity with at least
+  // 'incrementBytes'. The function returns true on success, otherwise false.
+  bool growPool(MemoryPool* pool, uint64_t incrementBytes);
+
   //  Returns the shared references to all the alive memory pools in 'pools_'.
   std::vector<std::shared_ptr<MemoryPool>> getAlivePools() const;
 
-  // Specifies the total memory capacity. Memory manager itself doesn't enforce
-  // the capacity but relies on memory allocator and memory arbitrator to do the
-  // enforcement. Memory allocator ensures physical memory allocations are
-  // within capacity limit. Memory arbitrator ensures that total allocated
-  // memory pool capacity is within the limit.
-  const int64_t capacity_;
   const std::shared_ptr<MemoryAllocator> allocator_;
+  // Specifies the capacity to allocate from 'arbitrator_' for a newly created
+  // root memory pool.
+  const uint64_t poolInitCapacity_;
   // If not null, used to arbitrate the memory capacity among 'pools_'.
   const std::unique_ptr<MemoryArbitrator> arbitrator_;
   const uint16_t alignment_;
@@ -234,20 +286,39 @@ class MemoryManager {
   // tracked by 'pools_'. It is invoked on the root pool destruction and removes
   // the pool from 'pools_'.
   const MemoryPoolImpl::DestructionCallback poolDestructionCb_;
+  // Callback invoked by the root memory pool to request memory capacity growth.
+  const MemoryPoolImpl::GrowCapacityCallback poolGrowCb_;
 
   const std::shared_ptr<MemoryPool> defaultRoot_;
+  const std::shared_ptr<MemoryPool> spillPool_;
+
   std::vector<std::shared_ptr<MemoryPool>> sharedLeafPools_;
 
   mutable folly::SharedMutex mutex_;
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> pools_;
 };
 
-MemoryManager& defaultMemoryManager();
+/// Initializes the process-wide memory manager based on the specified
+/// 'options'.
+///
+/// NOTE: user should only call this once on query system startup. Otherwise,
+/// the function throws.
+void initializeMemoryManager(const MemoryManagerOptions& options);
 
+/// Returns the process-wide memory manager.
+///
+/// NOTE: user should have already initialized memory manager by calling.
+/// Otherwise, the function throws.
+MemoryManager* memoryManager();
+
+/// Deprecated. Do not use.
+MemoryManager& deprecatedDefaultMemoryManager();
+
+/// Deprecated. Do not use.
 /// Creates a leaf memory pool from the default memory manager for memory
 /// allocation use. If 'threadSafe' is true, then creates a leaf memory pool
 /// with thread-safe memory usage tracking.
-std::shared_ptr<MemoryPool> addDefaultLeafMemoryPool(
+std::shared_ptr<MemoryPool> deprecatedAddDefaultLeafMemoryPool(
     const std::string& name = "",
     bool threadSafe = true);
 

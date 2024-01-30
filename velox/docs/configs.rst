@@ -94,7 +94,14 @@ Generic Configuration
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB
-     - The target size for a Task's buffered output. The producer Drivers are blocked when the buffered size exceeds this.
+     - The maximum size in bytes for the task's buffered output when output is partitioned using hash of partitioning keys. See PartitionedOutputNode::Kind::kPartitioned.
+       The producer Drivers are blocked when the buffered size exceeds this.
+       The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
+   * - max_output_buffer_size
+     - integer
+     - 32MB
+     - The maximum size in bytes for the task's buffered output.
+       The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
    * - min_table_rows_for_parallel_join_build
      - integer
@@ -111,6 +118,17 @@ Generic Configuration
      - true
      - Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
        evalWithMemo are enabled.
+   * - max_shared_subexpr_results_cached
+     - integer
+     - 10
+     - For a given shared subexpression, the maximum distinct sets of inputs we cache results for. Lambdas can call
+       the same expression with different inputs many times, causing the results we cache to explode in size. Putting
+       a limit contains the memory usage.
+   * - driver_cpu_time_slice_limit_ms
+     - integer
+     - 0
+     - If it is not zero, specifies the time limit that a driver can continuously
+       run on a thread before yield. If it is zero, then it no limit.
 
 .. _expression-evaluation-conf:
 
@@ -142,25 +160,6 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
-   * - cast_to_int_by_truncate
-     - bool
-     - false
-     - This flags forces the cast from float/double/decimal/string to integer to be performed by truncating the decimal part instead of rounding.
-   * - cast_string_to_date_is_iso_8601
-     - bool
-     - true
-     - If set, cast from string to date allows only ISO 8601 formatted strings: ``[+-](YYYY-MM-DD)``.
-       Otherwise, allows all patterns supported by Spark:
-         * ``[+-]yyyy*``
-         * ``[+-]yyyy*-[m]m``
-         * ``[+-]yyyy*-[m]m-[d]d``
-         * ``[+-]yyyy*-[m]m-[d]d *``
-         * ``[+-]yyyy*-[m]m-[d]dT*``
-       The asterisk ``*`` in ``yyyy*`` stands for any numbers.
-       For the last two patterns, the trailing ``*`` can represent none or any sequence of characters, e.g:
-         * "1970-01-01 123"
-         * "1970-01-01 (BC)"
-       Regardless of this setting's value, leading spaces will be trimmed.
 
 Memory Management
 -----------------
@@ -271,10 +270,26 @@ Spilling
        spilling which might use recursive spilling when the build table is very large. -1 means unlimited.
        In this case an extremely large query might run out of spilling partition bits. The max spill level
        can be used to prevent a query from using too much io and cpu resources.
+   * - max_spill_run_rows
+     - integer
+     - 12582912
+     - The max number of rows to fill and spill for each spill run. This is used to cap the memory used for spilling.
+       If it is zero, then there is no limit and spilling might run out of memory. Based on offline test results, the
+       default value is set to 12 million rows which uses ~128MB memory when to fill a spill run.
+       Relation between spill rows and memory usage are as follows:
+         * ``12 million rows: 128 MB``
+         * ``30 million rows: 256 MB``
+         * ``60 million rows: 512 MB``
    * - max_spill_file_size
      - integer
      - 0
      - The maximum allowed spill file size. Zero means unlimited.
+   * - max_spill_bytes
+     - integer
+     - 107374182400
+     - The max spill bytes limit set for each query. This is used to cap the storage used for spilling.
+       If it is zero, then there is no limit and spilling might exhaust the storage or takes too long to run.
+       The default value is set to 100 GB.
    * - spill_write_buffer_size
      - integer
      - 4MB
@@ -307,6 +322,21 @@ Spilling
      - integer
      - 0
      - Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.
+
+Table Scan
+------------
+.. list-table::
+   :widths: 20 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - max_split_preload_per_driver
+     - integer
+     - 2
+     - Maximum number of splits to preload per driver. Set to 0 to disable preloading.
 
 Table Writer
 ------------
@@ -352,19 +382,25 @@ Codegen Configuration
 
 Hive Connector
 --------------
+Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
+Each query can override the config by setting corresponding query session properties such as in Prestissimo.
+
 .. list-table::
-   :widths: 20 10 10 70
+   :widths: 20 20 10 10 70
    :header-rows: 1
 
-   * - Property Name
+   * - Configuration Property Name
+     - Session Property Name
      - Type
      - Default Value
      - Description
-   * - max_partitions_per_writers
+   * - hive.max-partitions-per-writers
+     -
      - integer
      - 100
      - Maximum number of (bucketed) partitions per a single table writer instance.
-   * - insert_existing_partitions_behavior
+   * - insert-existing-partitions-behavior
+     - insert_existing_partitions_behavior
      - string
      - ERROR
      - **Allowed values:** ``OVERWRITE``, ``ERROR``. The behavior on insert existing partitions. This property only derives
@@ -372,41 +408,81 @@ Hive Connector
        sets the update mode to indicate overwriting a partition if exists. ``ERROR`` sets the update mode to indicate
        error throwing if writing to an existing partition.
    * - hive.immutable-partitions
+     -
      - bool
      - false
      - True if appending data to an existing unpartitioned table is allowed. Currently this configuration does not
        support appending to existing partitions.
-   * - file_column_names_read_as_lower_case
+   * - file-column-names-read-as-lower-case
+     -
      - bool
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
        the input column name and filter is also lower case to achive case-insensitive read.
+   * - partition-path-as-lower-case
+     -
+     - bool
+     - true
+     - If true, the partition directory will be converted to lowercase when executing a table write operation.
    * - max-coalesced-bytes
-     - integer
-     - 512KB
-     - Maximum size in bytes to coalesce requests to be fetched in a single request.
-   * - max-coalesced-distance-bytes
+     -
      - integer
      - 128MB
+     - Maximum size in bytes to coalesce requests to be fetched in a single request.
+   * - max-coalesced-distance-bytes
+     -
+     - integer
+     - 512KB
      - Maximum distance in bytes between chunks to be fetched that may be coalesced into a single request.
-   * - num_cached_file_handles
+   * - load-quantum
+     -
+     - integer
+     - 8MB
+     - Define the size of each coalesce load request. E.g. in Parquet scan, if it's bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk
+   * - num-cached-file-handles
+     -
      - integer
      - 20000
      - Maximum number of entries in the file handle cache. The value must be non-negative. Zero value
        indicates infinite cache capacity.
-   * - file_handle_cache_enabled
+   * - file-handle-cache-enabled
+     -
      - bool
      - true
      - Enables caching of file handles if true. Disables caching if false. File handle cache should be
        disabled if files are not immutable, i.e. file content may change while file path stays the same.
-   * - sort_writer_max_output_rows
+   * - sort-writer-max-output-rows
+     - sort_writer_max_output_rows
      - integer
      - 1024
      - Maximum number of rows for sort writer in one batch of output. This is to limit the memory usage of sort writer.
-   * - sort_writer_max_output_bytes
-     - integer
+   * - sort-writer-max-output-bytes
+     - sort_writer_max_output_bytes
+     - string
      - 10MB
      - Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.
+   * - file-preload-threshold
+     -
+     - integer
+     - 8MB
+     - Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests. 
+       The parameter controls the threshold when whole file is fetched. 
+   * - footer-estimated-size
+     -
+     - integer
+     - 1MB
+     - Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later. 
+       The parameter controls the size when footer is fetched each time. Bigger value can decrease the IO requests but may fetch more useless meta data.
+   * - hive.orc.writer.stripe-max-size
+     - orc_optimized_writer_max_stripe_size
+     - string
+     - 64M
+     - Maximum stripe size in orc writer.
+   * - hive.orc.writer.dictionary-max-memory
+     - orc_optimized_writer_max_dictionary_memory
+     - string
+     - 16M
+     - Maximum dictionary memory that can be used in orc writer.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -420,7 +496,7 @@ Hive Connector
      - Description
    * - hive.s3.use-instance-credentials
      - bool
-     - true
+     - false
      - Use the EC2 metadata service to retrieve API credentials. This works with IAM roles in EC2.
    * - hive.s3.aws-access-key
      - string

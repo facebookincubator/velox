@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/expression/CastHooks.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
 
@@ -72,14 +73,20 @@ class CastExpr : public SpecialForm {
   /// @param type The target type of the cast expression
   /// @param expr The expression to cast
   /// @param trackCpuUsage Whether to track CPU usage
-  CastExpr(TypePtr type, ExprPtr&& expr, bool trackCpuUsage, bool nullOnFailure)
+  CastExpr(
+      TypePtr type,
+      ExprPtr&& expr,
+      bool trackCpuUsage,
+      bool nullOnFailure,
+      std::shared_ptr<CastHooks> hooks)
       : SpecialForm(
             type,
             std::vector<ExprPtr>({expr}),
             nullOnFailure ? kTryCast.data() : kCast.data(),
             false /* supportsFlatNoNullsFastPath */,
             trackCpuUsage),
-        nullOnFailure_(nullOnFailure) {}
+        nullOnFailure_(nullOnFailure),
+        hooks_(std::move(hooks)) {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
@@ -159,10 +166,11 @@ class CastExpr : public SpecialForm {
   /// The per-row level Kernel
   /// @tparam ToKind The cast target type
   /// @tparam FromKind The expression type
+  /// @tparam TPolicy The policy used by the cast
   /// @param row The index of the current row
   /// @param input The input vector (of type FromKind)
   /// @param result The output vector (of type ToKind)
-  template <TypeKind ToKind, TypeKind FromKind, bool Truncate, bool LegacyCast>
+  template <TypeKind ToKind, TypeKind FromKind, typename TPolicy>
   void applyCastKernel(
       vector_size_t row,
       EvalCtx& context,
@@ -192,6 +200,22 @@ class CastExpr : public SpecialForm {
 
   template <typename TInput, typename TOutput>
   void applyIntToDecimalCastKernel(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      VectorPtr& castResult);
+
+  template <typename TOutput>
+  void applyDoubleToDecimalCastKernel(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      VectorPtr& castResult);
+
+  template <typename T>
+  void applyVarcharToDecimalCastKernel(
       const SelectivityVector& rows,
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -273,6 +297,7 @@ class CastExpr : public SpecialForm {
   folly::F14FastMap<std::string, CastOperatorPtr> castOperators_;
 
   bool nullOnFailure_;
+  std::shared_ptr<CastHooks> hooks_;
 
   bool inTopLevel = false;
 };

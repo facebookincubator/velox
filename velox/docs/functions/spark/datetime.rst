@@ -25,9 +25,24 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: date_add(start_date, num_days) -> date
 
-    Returns the date that is num_days after start_date.
-    If num_days is a negative value then these amount of days will be
-    deducted from start_date.
+    Returns the date that is ``num_days`` after ``start_date``. According to the inputs,
+    the returned date will wrap around between the minimum negative date and
+    maximum positive date. date_add('1969-12-31', 2147483647) get 5881580-07-10,
+    and date_add('2024-01-22', 2147483647) get -5877587-07-12.
+
+    If ``num_days`` is a negative value then these amount of days will be
+    deducted from ``start_date``.
+    Supported types for ``num_days`` are: TINYINT, SMALLINT, INTEGER.
+
+.. spark:function:: date_sub(start_date, num_days) -> date
+
+    Returns the date that is ``num_days`` before ``start_date``. According to the inputs,
+    the returned date will wrap around between the minimum negative date and
+    maximum positive date. date_sub('1969-12-31', -2147483648) get 5881580-07-11,
+    and date_sub('2023-07-10', -2147483648) get -5877588-12-29.
+
+    ``num_days`` can be positive or negative.
+    Supported types for ``num_days`` are: TINYINT, SMALLINT, INTEGER.
 
 .. spark:function:: datediff(endDate, startDate) -> integer
 
@@ -36,15 +51,6 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT datediff('2009-07-31', '2009-07-30'); -- 1
         SELECT datediff('2009-07-30', '2009-07-31'); -- -1
-
-.. spark:function:: date_sub(start_date, num_days) -> date
-
-    Returns the date that is num_days before start_date. According to the inputs,
-    the returned date will wrap around between the minimum negative date and
-    maximum positive date. date_sub('1969-12-31', -2147483648) get 5881580-07-11,
-    and date_sub('2023-07-10', -2147483648) get -5877588-12-29.
-
-    num_days can be positive or negative.
 
 .. spark:function:: dayofmonth(date) -> integer
 
@@ -66,9 +72,43 @@ These functions support TIMESTAMP and DATE input types.
         SELECT dayofweek('2009-07-30'); -- 5
         SELECT dayofweek('2023-08-22 11:23:00.100'); -- 3
 
-.. function:: dow(x) -> integer
+.. spark::function:: dow(x) -> integer
 
     This is an alias for :func:`day_of_week`.
+
+.. spark::function::from_unixtime(unixTime, format) -> string
+
+    Adjusts ``unixTime`` (elapsed seconds since UNIX epoch) to configured session timezone, then
+    converts it to a formatted time string according to ``format``. Only supports BIGINT type for
+    ``unixTime``.
+    `Valid patterns for date format
+    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_. Throws exception for
+    invalid ``format``. This function will convert input to milliseconds, and integer overflow is
+    allowed in the conversion, which aligns with Spark. See the below third example where INT64_MAX
+    is used, -1000 milliseconds are produced by INT64_MAX * 1000 due to integer overflow. ::
+
+        SELECT from_unixtime(100, 'yyyy-MM-dd HH:mm:ss'); -- '1970-01-01 00:01:40'
+        SELECT from_unixtime(3600, 'yyyy'); -- '1970'
+        SELECT from_unixtime(9223372036854775807, "yyyy-MM-dd HH:mm:ss");  -- '1969-12-31 23:59:59'
+
+.. function:: get_timestamp(string, dateFormat) -> timestamp
+
+    Returns timestamp by parsing ``string`` according to the specified ``dateFormat``.
+    The format follows Spark's
+    `Datetime patterns
+    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
+    Returns NULL for parsing error or NULL input. Throws exception for invalid format. ::
+
+        SELECT get_timestamp('1970-01-01', 'yyyy-MM-dd);  -- timestamp `1970-01-01`
+        SELECT get_timestamp('1970-01-01', 'yyyy-MM');  -- NULL (parsing error)
+        SELECT get_timestamp('1970-01-01', null);  -- NULL
+        SELECT get_timestamp('2020-06-10', 'A');  -- (throws exception)
+
+.. spark:function:: hour(timestamp) -> integer
+
+    Returns the hour of ``timestamp``.::
+
+        SELECT hour('2009-07-30 12:58:59'); -- 12
 
 .. spark:function:: last_day(date) -> date
 
@@ -96,7 +136,22 @@ These functions support TIMESTAMP and DATE input types.
     Returns the month of ``date``. ::
 
         SELECT month('2009-07-30'); -- 7
-       
+
+.. spark:function:: next_day(startDate, dayOfWeek) -> date
+
+    Returns the first date which is later than ``startDate`` and named as ``dayOfWeek``.
+    Returns null if ``dayOfWeek`` is invalid.
+    ``dayOfWeek`` is case insensitive and must be one of the following:
+    ``SU``, ``SUN``, ``SUNDAY``, ``MO``, ``MON``, ``MONDAY``, ``TU``, ``TUE``, ``TUESDAY``,
+    ``WE``, ``WED``, ``WEDNESDAY``, ``TH``, ``THU``, ``THURSDAY``, ``FR``, ``FRI``, ``FRIDAY``,
+    ``SA``, ``SAT``, ``SATURDAY``. ::
+
+        SELECT next_day('2015-07-23', "Mon"); -- '2015-07-27'
+        SELECT next_day('2015-07-23', "mo"); -- '2015-07-27'
+        SELECT next_day('2015-07-23', "Tue"); -- '2015-07-28'
+        SELECT next_day('2015-07-23', "tu"); -- '2015-07-28'
+        SELECT next_day('2015-07-23', "we"); -- '2015-07-29'
+
 .. spark:function:: to_unix_timestamp(string) -> integer
 
     Alias for ``unix_timestamp(string) -> integer``.

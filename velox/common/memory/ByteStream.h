@@ -214,24 +214,28 @@ class ByteInputStream {
 /// in hash tables. The stream is seekable and supports overwriting of
 /// previous content, for example, writing a message body and then
 /// seeking back to start to write a length header.
-class ByteStream {
+class ByteOutputStream {
  public:
   /// For output.
-  ByteStream(
+  ByteOutputStream(
       StreamArena* arena,
       bool isBits = false,
       bool isReverseBitOrder = false)
       : arena_(arena), isBits_(isBits), isReverseBitOrder_(isReverseBitOrder) {}
 
-  ByteStream(const ByteStream& other) = delete;
+  ByteOutputStream(const ByteOutputStream& other) = delete;
 
-  void operator=(const ByteStream& other) = delete;
+  void operator=(const ByteOutputStream& other) = delete;
 
-  void setRange(ByteRange range) {
+  /// Sets 'this' to range over 'range'. If this is for purposes of writing,
+  /// lastWrittenPosition specifies the end of any pre-existing content in
+  /// 'range'.
+  void setRange(ByteRange range, int32_t lastWrittenPosition) {
     ranges_.resize(1);
     ranges_[0] = range;
     current_ = ranges_.data();
-    lastRangeEnd_ = ranges_[0].size;
+    VELOX_CHECK_GE(ranges_.back().size, lastWrittenPosition);
+    lastRangeEnd_ = lastWrittenPosition;
   }
 
   const std::vector<ByteRange>& ranges() const {
@@ -256,7 +260,7 @@ class ByteStream {
   /// the last range.
   size_t size() const;
 
-  int32_t lastRangeEnd() {
+  int32_t lastRangeEnd() const {
     updateEnd();
     return lastRangeEnd_;
   }
@@ -269,9 +273,10 @@ class ByteStream {
           values.size() * sizeof(T)));
       return;
     }
-    auto target = reinterpret_cast<T*>(current_->buffer + current_->position);
-    auto end = target + values.size();
-    auto valuePtr = &values[0];
+
+    auto* target = reinterpret_cast<T*>(current_->buffer + current_->position);
+    const auto* end = target + values.size();
+    auto* valuePtr = &values[0];
     while (target != end) {
       *target = *valuePtr;
       ++target;
@@ -326,11 +331,15 @@ class ByteStream {
     return allocatedBytes_;
   }
 
+  /// Returns a ByteInputStream to range over the current content of 'this'. The
+  /// result is valid as long as 'this' is live and not changed.
+  ByteInputStream inputStream() const;
+
   std::string toString() const;
 
  private:
-  /// Returns a range of 'size' items of T. If there is no contiguous space in
-  /// 'this', uses 'scratch' to make a temp block that is appended to 'this' in
+  // Returns a range of 'size' items of T. If there is no contiguous space in
+  // 'this', uses 'scratch' to make a temp block that is appended to 'this' in
   template <typename T>
   T* getAppendWindow(int32_t size, ScratchPtr<T>& scratchPtr) {
     const int32_t bytes = sizeof(T) * size;
@@ -344,15 +353,23 @@ class ByteStream {
           current_->buffer + current_->position - bytes);
     }
     // If the tail is not large enough, make  temp of the right size
-    // in scratch.
+    // in scratch. Extend the stream so that there is guaranteed space to copy
+    // the scratch to the stream. This copy takes place in destruction of
+    // AppendWindow and must not allocate so that it is noexcept.
+    ensureSpace(bytes);
     return scratchPtr.get(size);
   }
 
   void extend(int32_t bytes);
 
+  // Calls extend() enough times to make sure 'bytes' bytes can be
+  // appended without new allocation. Does not change the append
+  // position.
+  void ensureSpace(int32_t bytes);
+
   int32_t newRangeSize(int32_t bytes) const;
 
-  void updateEnd() {
+  void updateEnd() const {
     if (!ranges_.empty() && current_ == &ranges_.back() &&
         current_->position > lastRangeEnd_) {
       lastRangeEnd_ = current_->position;
@@ -381,7 +398,8 @@ class ByteStream {
   // of 'ranges_'. In a write situation, all non-last ranges are full
   // and the last may be partly full. The position in the last range
   // is not necessarily the the end if there has been a seek.
-  int32_t lastRangeEnd_{0};
+  mutable int32_t lastRangeEnd_{0};
+
   template <typename T>
   friend class AppendWindow;
 };
@@ -392,14 +410,20 @@ class ByteStream {
 template <typename T>
 class AppendWindow {
  public:
-  AppendWindow(ByteStream& stream, Scratch& scratch)
+  AppendWindow(ByteOutputStream& stream, Scratch& scratch)
       : stream_(stream), scratchPtr_(scratch) {}
 
-  ~AppendWindow() {
+  ~AppendWindow() noexcept {
     if (scratchPtr_.size()) {
-      stream_.appendStringView(std::string_view(
-          reinterpret_cast<const char*>(scratchPtr_.get()),
-          scratchPtr_.size() * sizeof(T)));
+      try {
+        stream_.appendStringView(std::string_view(
+            reinterpret_cast<const char*>(scratchPtr_.get()),
+            scratchPtr_.size() * sizeof(T)));
+      } catch (const std::exception& e) {
+        // This is impossible because construction ensures there is space for
+        // the bytes in the stream.
+        LOG(FATAL) << "throw from AppendWindo append: " << e.what();
+      }
     }
   }
 
@@ -408,7 +432,7 @@ class AppendWindow {
   }
 
  private:
-  ByteStream& stream_;
+  ByteOutputStream& stream_;
   ScratchPtr<T> scratchPtr_;
 };
 
@@ -434,7 +458,7 @@ class IOBufOutputStream : public OutputStream {
       int32_t initialSize = memory::AllocationTraits::kPageSize)
       : OutputStream(listener),
         arena_(std::make_shared<StreamArena>(&pool)),
-        out_(std::make_unique<ByteStream>(arena_.get())) {
+        out_(std::make_unique<ByteOutputStream>(arena_.get())) {
     out_->startWrite(initialSize);
   }
 
@@ -455,7 +479,7 @@ class IOBufOutputStream : public OutputStream {
 
  private:
   std::shared_ptr<StreamArena> arena_;
-  std::unique_ptr<ByteStream> out_;
+  std::unique_ptr<ByteOutputStream> out_;
 };
 
 } // namespace facebook::velox

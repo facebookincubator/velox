@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #pragma once
-
+#include <fmt/format.h>
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
@@ -1844,8 +1844,8 @@ class LimitNode : public PlanNode {
   // nodes.
   LimitNode(
       const PlanNodeId& id,
-      int32_t offset,
-      int32_t count,
+      int64_t offset,
+      int64_t count,
       bool isPartial,
       const PlanNodePtr& source)
       : PlanNode(id),
@@ -1867,11 +1867,11 @@ class LimitNode : public PlanNode {
     return sources_;
   }
 
-  int32_t offset() const {
+  int64_t offset() const {
     return offset_;
   }
 
-  int32_t count() const {
+  int64_t count() const {
     return count_;
   }
 
@@ -1890,8 +1890,8 @@ class LimitNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const int32_t offset_;
-  const int32_t count_;
+  const int64_t offset_;
+  const int64_t count_;
   const bool isPartial_;
   const std::vector<PlanNodePtr> sources_;
 };
@@ -2029,7 +2029,7 @@ class AssignUniqueIdNode : public PlanNode {
 
   const std::shared_ptr<std::atomic_int64_t>& uniqueIdCounter() const {
     return uniqueIdCounter_;
-  };
+  }
 
   folly::dynamic serialize() const override;
 
@@ -2386,3 +2386,21 @@ class TopNRowNumberNode : public PlanNode {
 };
 
 } // namespace facebook::velox::core
+
+template <>
+struct fmt::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::core::PartitionedOutputNode::Kind s,
+      format_context& ctx) {
+    return formatter<std::string>::format(
+        facebook::velox::core::PartitionedOutputNode::kindString(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::velox::core::JoinType> : formatter<int> {
+  auto format(facebook::velox::core::JoinType s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

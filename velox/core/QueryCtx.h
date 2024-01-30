@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/Executor.h>
@@ -77,21 +78,24 @@ class QueryCtx {
   }
 
   folly::Executor* executor() const {
+    VELOX_CHECK(isExecutorSupplied(), "Executor was not supplied.");
     if (executor_ != nullptr) {
       return executor_;
     }
-    auto executor = executorKeepalive_.get();
-    VELOX_CHECK(executor, "Executor was not supplied.");
-    return executor;
+    return executorKeepalive_.get();
+  }
+
+  bool isExecutorSupplied() const {
+    return executor_ != nullptr || executorKeepalive_.get() != nullptr;
   }
 
   const QueryConfig& queryConfig() const {
     return queryConfig_;
   }
 
-  Config* getConnectorConfig(const std::string& connectorId) const {
-    auto it = connectorConfigs_.find(connectorId);
-    if (it == connectorConfigs_.end()) {
+  Config* connectorSessionProperties(const std::string& connectorId) const {
+    auto it = connectorSessionProperties_.find(connectorId);
+    if (it == connectorSessionProperties_.end()) {
       return getEmptyConfig();
     }
     return it->second.get();
@@ -106,10 +110,10 @@ class QueryCtx {
 
   // Overrides the previous connector-specific configuration. Note that this
   // function is NOT thread-safe and should probably only be used in tests.
-  void setConnectorConfigOverridesUnsafe(
+  void setConnectorSessionOverridesUnsafe(
       const std::string& connectorId,
       std::unordered_map<std::string, std::string>&& configOverrides) {
-    connectorConfigs_[connectorId] =
+    connectorSessionProperties_[connectorId] =
         std::make_shared<MemConfig>(std::move(configOverrides));
   }
 
@@ -125,6 +129,10 @@ class QueryCtx {
     pool_ = std::move(pool);
   }
 
+  /// Updates the aggregated spill bytes of this query, and and throws if
+  /// exceeds the max spill bytes limit.
+  void updateSpilledBytesAndCheckLimit(uint64_t bytes);
+
  private:
   static Config* getEmptyConfig() {
     static const std::unique_ptr<Config> kEmptyConfig =
@@ -134,7 +142,7 @@ class QueryCtx {
 
   void initPool(const std::string& queryId) {
     if (pool_ == nullptr) {
-      pool_ = memory::defaultMemoryManager().addRootPool(
+      pool_ = memory::deprecatedDefaultMemoryManager().addRootPool(
           QueryCtx::generatePoolName(queryId));
     }
   }
@@ -144,10 +152,12 @@ class QueryCtx {
   folly::Executor* const spillExecutor_{nullptr};
   cache::AsyncDataCache* const cache_;
 
-  std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs_;
+  std::unordered_map<std::string, std::shared_ptr<Config>>
+      connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
   folly::Executor::KeepAlive<> executorKeepalive_;
   QueryConfig queryConfig_;
+  std::atomic<uint64_t> numSpilledBytes_{0};
 };
 
 // Represents the state of one thread of query execution.

@@ -13,12 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::common {
 SpillConfig::SpillConfig(
     GetSpillDirectoryPathCB _getSpillDirPathCb,
+    UpdateAndCheckSpillLimitCB _updateAndCheckSpillLimitCb,
     std::string _fileNamePrefix,
     uint64_t _maxFileSize,
     uint64_t _writeBufferSize,
@@ -29,11 +31,13 @@ SpillConfig::SpillConfig(
     uint8_t _startPartitionBit,
     uint8_t _joinPartitionBits,
     int32_t _maxSpillLevel,
+    uint64_t _maxSpillRunRows,
     uint64_t _writerFlushThresholdSize,
     int32_t _testSpillPct,
     const std::string& _compressionKind,
-    const std::unordered_map<std::string, std::string>& _writeFileOptions)
+    const std::string& _fileCreateConfig)
     : getSpillDirPathCb(std::move(_getSpillDirPathCb)),
+      updateAndCheckSpillLimitCb(std::move(_updateAndCheckSpillLimitCb)),
       fileNamePrefix(std::move(_fileNamePrefix)),
       maxFileSize(
           _maxFileSize == 0 ? std::numeric_limits<int64_t>::max()
@@ -46,10 +50,11 @@ SpillConfig::SpillConfig(
       startPartitionBit(_startPartitionBit),
       joinPartitionBits(_joinPartitionBits),
       maxSpillLevel(_maxSpillLevel),
+      maxSpillRunRows(_maxSpillRunRows),
       writerFlushThresholdSize(_writerFlushThresholdSize),
       testSpillPct(_testSpillPct),
       compressionKind(common::stringToCompressionKind(_compressionKind)),
-      writeFileOptions(_writeFileOptions) {
+      fileCreateConfig(_fileCreateConfig) {
   VELOX_USER_CHECK_GE(
       spillableReservationGrowthPct,
       minSpillableReservationPct,

@@ -18,8 +18,6 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 
-DECLARE_int32(split_preload_per_driver);
-
 namespace facebook::velox::exec {
 
 class TableScan : public SourceOperator {
@@ -28,6 +26,8 @@ class TableScan : public SourceOperator {
       int32_t operatorId,
       DriverCtx* driverCtx,
       std::shared_ptr<const core::TableScanNode> tableScanNode);
+
+  folly::dynamic toJson() const override;
 
   RowVectorPtr getOutput() override;
 
@@ -91,6 +91,8 @@ class TableScan : public SourceOperator {
 
   int32_t maxPreloadedSplits_{0};
 
+  const int32_t maxSplitPreloadPerDriver_{0};
+
   // Callback passed to getSplitOrFuture() for triggering async
   // preload. The callback's lifetime is the lifetime of 'this'. This
   // callback can schedule preloads on an executor. These preloads may
@@ -116,6 +118,10 @@ class TableScan : public SourceOperator {
 
   // String shown in ExceptionContext inside DataSource and LazyVector loading.
   std::string debugString_;
+
+  // Holds the current status of the operator. Used when debugging to understand
+  // what operator is doing.
+  std::atomic<const char*> curStatus_{""};
 
   // The last value of the IO wait time of 'this' that has been added to the
   // global static 'ioWaitNanos_'.

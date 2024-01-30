@@ -19,6 +19,7 @@
 #include "velox/common/caching/SsdCache.h"
 
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/caching/FileIds.h"
@@ -279,10 +280,10 @@ bool CoalescedLoad::loadOrFuture(folly::SemiFuture<bool>* wait) {
       entry->setExclusiveToShared();
     }
     setEndState(State::kLoaded);
-  } catch (std::exception& e) {
+  } catch (std::exception&) {
     try {
       setEndState(State::kCancelled);
-    } catch (std::exception& inner) {
+    } catch (std::exception&) {
       // May not throw from inside catch.
     }
     throw;
@@ -511,6 +512,7 @@ void CacheShard::updateStats(CacheStats& stats) {
   stats.numEvict += numEvict_;
   stats.numEvictChecks += numEvictChecks_;
   stats.numWaitExclusive += numWaitExclusive_;
+  stats.numAgedOut += numAgedOut_;
   stats.sumEvictScore += sumEvictScore_;
   stats.allocClocks += allocClocks_;
 }
@@ -536,6 +538,54 @@ void CacheShard::appendSsdSaveable(std::vector<CachePin>& pins) {
       }
     }
   }
+}
+
+bool CacheShard::removeFileEntries(
+    const folly::F14FastSet<uint64_t>& filesToRemove,
+    folly::F14FastSet<uint64_t>& filesRetained) {
+  if (filesToRemove.empty()) {
+    VELOX_CACHE_LOG(INFO) << "Removed 0 AsyncDataCache entry.";
+    return true;
+  }
+
+  int64_t pagesRemoved = 0;
+  std::vector<memory::Allocation> toFree;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    auto entryIndex = -1;
+    for (auto& cacheEntry : entries_) {
+      entryIndex++;
+      if (!cacheEntry || !cacheEntry->key_.fileNum.hasValue()) {
+        continue;
+      }
+      if (filesToRemove.count(cacheEntry->key_.fileNum.id()) == 0) {
+        continue;
+      }
+      if (cacheEntry->isExclusive() || cacheEntry->isShared()) {
+        filesRetained.insert(cacheEntry->key_.fileNum.id());
+        continue;
+      }
+
+      numAgedOut_++;
+      pagesRemoved += (int64_t)cacheEntry->data().numPages();
+
+      toFree.push_back(std::move(cacheEntry->data()));
+      removeEntryLocked(cacheEntry.get());
+      emptySlots_.push_back(entryIndex);
+      tryAddFreeEntry(std::move(cacheEntry));
+      cacheEntry = nullptr;
+    }
+  }
+  VELOX_CACHE_LOG(INFO) << "Removed " << toFree.size()
+                        << " AsyncDataCache entries.";
+
+  // Free the memory allocation out of the cache shard lock.
+  ClockTimer t(allocClocks_);
+  freeAllocations(toFree);
+  cache_->incrementCachedPages(-pagesRemoved);
+
+  return true;
 }
 
 AsyncDataCache::AsyncDataCache(
@@ -793,6 +843,27 @@ void AsyncDataCache::saveToSsd() {
   ssdCache_->write(std::move(pins));
 }
 
+bool AsyncDataCache::removeFileEntries(
+    const folly::F14FastSet<uint64_t>& filesToRemove,
+    folly::F14FastSet<uint64_t>& filesRetained) {
+  bool success = true;
+
+  for (auto& shard : shards_) {
+    try {
+      success &= shard->removeFileEntries(filesToRemove, filesRetained);
+    } catch (const std::exception& e) {
+      VELOX_CACHE_LOG(ERROR)
+          << "Error removing file entries from AsyncDataCache shard.";
+      success = false;
+    }
+  }
+
+  if (ssdCache_) {
+    success &= ssdCache_->removeFileEntries(filesToRemove, filesRetained);
+  }
+  return success;
+}
+
 CacheStats AsyncDataCache::refreshStats() const {
   CacheStats stats;
   for (auto& shard : shards_) {
@@ -847,7 +918,7 @@ std::string CacheStats::toString() const {
       // Cache access stats.
       << "Cache access miss: " << numNew << " hit: " << numHit
       << " hit bytes: " << succinctBytes(hitBytes) << " eviction: " << numEvict
-      << " eviction checks: " << numEvictChecks
+      << " eviction checks: " << numEvictChecks << " aged out: " << numAgedOut
       << "\n"
       // Cache prefetch stats.
       << "Prefetch entries: " << numPrefetch

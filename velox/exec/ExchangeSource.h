@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/ExchangeQueue.h"
 
 namespace facebook::velox::exec {
@@ -43,6 +44,12 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   /// is supported.
   virtual bool supportsFlowControlV2() const {
     VELOX_UNREACHABLE();
+  }
+
+  /// Temporary API to indicate whether 'metrics()' API
+  /// is supported.
+  virtual bool supportsMetrics() const {
+    return false;
   }
 
   /// Returns true if there is no request to the source pending or if
@@ -94,7 +101,17 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   // Returns runtime statistics. ExchangeSource is expected to report
   // background CPU time by including a runtime metric named
   // ExchangeClient::kBackgroundCpuTimeMs.
-  virtual folly::F14FastMap<std::string, int64_t> stats() const = 0;
+  virtual folly::F14FastMap<std::string, int64_t> stats() const {
+    VELOX_UNREACHABLE();
+  }
+
+  /// Returns runtime statistics. ExchangeSource is expected to report
+  /// Specify units of individual counters in ExchangeSource.
+  /// for an example: 'totalBytes ：count: 9, sum: 11.17GB, max: 1.39GB,
+  /// min:  1.16GB'
+  virtual folly::F14FastMap<std::string, RuntimeMetric> metrics() const {
+    VELOX_NYI();
+  }
 
   virtual std::string toString() {
     std::stringstream out;
@@ -103,14 +120,14 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
     return out.str();
   }
 
-  virtual std::string toJsonString() {
+  virtual folly::dynamic toJson() {
     folly::dynamic obj = folly::dynamic::object;
     obj["taskId"] = taskId_;
     obj["destination"] = destination_;
     obj["sequence"] = sequence_;
     obj["requestPending"] = requestPending_.load();
     obj["atEnd"] = atEnd_;
-    return folly::toPrettyJson(obj);
+    return obj;
   }
 
   using Factory = std::function<std::shared_ptr<ExchangeSource>(
@@ -131,11 +148,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   const std::string taskId_;
   // Destination number of 'this' on producer
   const int destination_;
-  int64_t sequence_ = 0;
-  std::shared_ptr<ExchangeQueue> queue_;
-  std::atomic<bool> requestPending_{false};
-  bool atEnd_ = false;
-
+  const std::shared_ptr<ExchangeQueue> queue_;
   // Holds a shared reference on the memory pool as it might be still possible
   // to be accessed by external components after the query task is destroyed.
   // For instance, in Prestissimo, there might be a pending http request issued
@@ -144,6 +157,10 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   // so we need to hold an additional shared reference on the memory pool to
   // keeps it alive.
   const std::shared_ptr<memory::MemoryPool> pool_;
+
+  int64_t sequence_{0};
+  std::atomic<bool> requestPending_{false};
+  bool atEnd_{false};
 };
 
 } // namespace facebook::velox::exec

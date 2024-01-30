@@ -132,7 +132,7 @@ class JoinFuzzer {
   size_t currentSeed_{0};
 
   std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::defaultMemoryManager().addRootPool()};
+      memory::memoryManager()->addRootPool()};
   std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
   VectorFuzzer vectorFuzzer_;
 };
@@ -143,7 +143,7 @@ JoinFuzzer::JoinFuzzer(size_t initialSeed)
   auto hiveConnector =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kHiveConnectorId, nullptr);
+          ->newConnector(kHiveConnectorId, std::make_shared<core::MemConfig>());
   connector::registerConnector(hiveConnector);
 
   seed(initialSeed);
@@ -277,9 +277,22 @@ std::vector<RowVectorPtr> flatten(const std::vector<RowVectorPtr>& vectors) {
   return flatVectors;
 }
 
+bool isNullAwareRightSemiProjectJoin(const core::PlanNodePtr& plan) {
+  if (auto joinNode = dynamic_cast<const core::HashJoinNode*>(plan.get())) {
+    return joinNode->isNullAware() &&
+        joinNode->joinType() == core::JoinType::kRightSemiProject;
+  }
+
+  return false;
+}
+
 RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
   LOG(INFO) << "Executing query plan: " << std::endl
             << plan.plan->toString(true, true);
+
+  // Null-aware right semi project join doesn't support multi-threaded
+  // execution.
+  const int maxDrivers = isNullAwareRightSemiProjectJoin(plan.plan) ? 1 : 2;
 
   AssertQueryBuilder builder(plan.plan);
   for (const auto& [nodeId, nodeSplits] : plan.splits) {
@@ -295,7 +308,7 @@ RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
         .spillDirectory(spillDirectory->path);
   }
 
-  auto result = builder.maxDrivers(2).copyResults(pool_.get());
+  auto result = builder.maxDrivers(maxDrivers).copyResults(pool_.get());
   LOG(INFO) << "Results: " << result->toString();
   if (VLOG_IS_ON(1)) {
     VLOG(1) << std::endl << result->toString(0, result->size());

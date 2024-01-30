@@ -56,7 +56,7 @@ OperatorCtx::createConnectorQueryCtx(
   return std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
       connectorPool,
-      driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
+      driverCtx_->task->queryCtx()->connectorSessionProperties(connectorId),
       spillConfig,
       std::make_unique<SimpleExpressionEvaluator>(
           execCtx()->queryCtx(), execCtx()->pool()),
@@ -339,10 +339,10 @@ void Operator::recordSpillStats(const common::SpillStats& spillStats) {
                 Timestamp::kNanosecondsInMicrosecond),
             RuntimeCounter::Unit::kNanos});
   }
-  if (spillStats.spillDiskWrites != 0) {
+  if (spillStats.spillWrites != 0) {
     lockedStats->addRuntimeStat(
-        "spillDiskWrites",
-        RuntimeCounter{static_cast<int64_t>(spillStats.spillDiskWrites)});
+        "spillWrites",
+        RuntimeCounter{static_cast<int64_t>(spillStats.spillWrites)});
   }
   if (spillStats.spillWriteTimeUs != 0) {
     lockedStats->addRuntimeStat(

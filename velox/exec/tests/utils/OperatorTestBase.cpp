@@ -23,6 +23,7 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/SharedArbitrator.h"
+#include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -49,20 +50,24 @@ void OperatorTestBase::registerVectorSerde() {
 OperatorTestBase::~OperatorTestBase() {
   // Wait for all the tasks to be deleted.
   exec::test::waitForAllTasksToBeDeleted();
-  // Revert to default process-wide MemoryAllocator.
-  memory::MemoryAllocator::setDefaultInstance(nullptr);
 }
 
 void OperatorTestBase::SetUpTestCase() {
   FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
   FLAGS_velox_memory_leak_check_enabled = true;
   exec::SharedArbitrator::registerFactory();
+  memory::MemoryManagerOptions options;
+  options.allocatorCapacity = 8L << 30;
+  memory::MemoryManager::testingSetInstance(options);
+  asyncDataCache_ = cache::AsyncDataCache::create(memoryManager()->allocator());
+  cache::AsyncDataCache::setInstance(asyncDataCache_.get());
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   TestValue::enable();
 }
 
 void OperatorTestBase::TearDownTestCase() {
+  asyncDataCache_->shutdown();
   waitForAllTasksToBeDeleted();
   exec::SharedArbitrator::unregisterFactory();
 }
@@ -73,19 +78,9 @@ void OperatorTestBase::SetUp() {
   }
   driverExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(3);
   ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
-  allocator_ = std::make_shared<memory::MallocAllocator>(8L << 30);
-  if (!asyncDataCache_) {
-    asyncDataCache_ = cache::AsyncDataCache::create(allocator_.get());
-    cache::AsyncDataCache::setInstance(asyncDataCache_.get());
-  }
-  memory::MemoryAllocator::setDefaultInstance(allocator_.get());
 }
 
-void OperatorTestBase::TearDown() {
-  if (asyncDataCache_ != nullptr) {
-    asyncDataCache_->shutdown();
-  }
-}
+void OperatorTestBase::TearDown() {}
 
 std::shared_ptr<Task> OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,

@@ -38,15 +38,6 @@ bool areAllLazyNotLoaded(const std::vector<VectorPtr>& vectors) {
   });
 }
 
-std::vector<std::optional<column_index_t>> maskChannels(
-    const std::vector<AggregateInfo>& aggregates) {
-  std::vector<std::optional<column_index_t>> masks;
-  masks.reserve(aggregates.size());
-  for (const auto& aggregate : aggregates) {
-    masks.push_back(aggregate.mask);
-  }
-  return masks;
-}
 } // namespace
 
 GroupingSet::GroupingSet(
@@ -69,7 +60,7 @@ GroupingSet::GroupingSet(
       isRawInput_(isRawInput),
       queryConfig_(operatorCtx->task()->queryCtx()->queryConfig()),
       aggregates_(std::move(aggregates)),
-      masks_(maskChannels(aggregates_)),
+      masks_(extractMaskChannels(aggregates_)),
       ignoreNullKeys_(ignoreNullKeys),
       spillMemoryThreshold_(operatorCtx->driverCtx()
                                 ->queryConfig()
@@ -99,26 +90,12 @@ GroupingSet::GroupingSet(
         allAreSinglyReferenced(aggregate.inputs, channelUseCount));
   }
 
-  // Setup SortedAggregations.
-  std::vector<AggregateInfo*> sortedAggs;
-  for (auto& aggregate : aggregates_) {
-    if (!aggregate.sortingKeys.empty()) {
-      VELOX_USER_CHECK(
-          !isPartial_,
-          "Partial aggregations over sorted inputs are not supported");
-
-      VELOX_USER_CHECK(
-          !aggregate.distinct,
-          "Aggregations over sorted unique values are not supported yet");
-
-      sortedAggs.push_back(&aggregate);
-      continue;
-    }
-  }
-
-  if (!sortedAggs.empty()) {
-    sortedAggregations_ =
-        std::make_unique<SortedAggregations>(sortedAggs, inputType, &pool_);
+  sortedAggregations_ =
+      SortedAggregations::create(aggregates_, inputType, &pool_);
+  if (isPartial_) {
+    VELOX_USER_CHECK_NULL(
+        sortedAggregations_,
+        "Partial aggregations over sorted inputs are not supported");
   }
 
   for (auto& aggregate : aggregates_) {
@@ -247,7 +224,13 @@ void GroupingSet::addInputForActiveRows(
   TestValue::adjust(
       "facebook::velox::exec::GroupingSet::addInputForActiveRows", this);
 
-  table_->prepareForProbe(*lookup_, input, activeRows_, ignoreNullKeys_);
+  table_->prepareForGroupProbe(*lookup_, input, activeRows_, ignoreNullKeys_);
+  if (lookup_->rows.empty()) {
+    // No rows to probe. Can happen when ignoreNullKeys_ is true and all rows
+    // have null keys.
+    return;
+  }
+
   table_->groupProbe(*lookup_);
   masks_.addInput(input, activeRows_);
 
@@ -931,7 +914,11 @@ void GroupingSet::ensureOutputFits() {
       return;
     }
   }
-  spill(RowContainerIterator{});
+  LOG(WARNING) << "Failed to reserve "
+               << succinctBytes(outputBufferSizeToReserve)
+               << " for memory pool " << pool_.name()
+               << ", usage: " << succinctBytes(pool_.currentBytes())
+               << ", reservation: " << succinctBytes(pool_.reservedBytes());
 }
 
 RowTypePtr GroupingSet::makeSpillType() const {
@@ -967,12 +954,7 @@ void GroupingSet::spill() {
         makeSpillType(),
         rows->keyTypes().size(),
         std::vector<CompareFlags>(),
-        spillConfig_->getSpillDirPathCb,
-        spillConfig_->fileNamePrefix,
-        spillConfig_->writeBufferSize,
-        spillConfig_->compressionKind,
-        memory::spillMemoryPool(),
-        spillConfig_->executor);
+        spillConfig_);
   }
   spiller_->spill();
   if (sortedAggregations_) {
@@ -991,15 +973,7 @@ void GroupingSet::spill(const RowContainerIterator& rowIterator) {
   auto* rows = table_->rows();
   VELOX_CHECK(pool_.trackUsage());
   spiller_ = std::make_unique<Spiller>(
-      Spiller::Type::kAggregateOutput,
-      rows,
-      makeSpillType(),
-      spillConfig_->getSpillDirPathCb,
-      spillConfig_->fileNamePrefix,
-      spillConfig_->writeBufferSize,
-      spillConfig_->compressionKind,
-      memory::spillMemoryPool(),
-      spillConfig_->executor);
+      Spiller::Type::kAggregateOutput, rows, makeSpillType(), spillConfig_);
 
   spiller_->spill(rowIterator);
   table_->clear();

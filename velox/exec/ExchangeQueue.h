@@ -26,13 +26,18 @@ class SerializedPage {
   // Construct from IOBuf chain.
   explicit SerializedPage(
       std::unique_ptr<folly::IOBuf> iobuf,
-      std::function<void(folly::IOBuf&)> onDestructionCb = nullptr);
+      std::function<void(folly::IOBuf&)> onDestructionCb = nullptr,
+      std::optional<int64_t> numRows = std::nullopt);
 
   ~SerializedPage();
 
   // Returns the size of the serialized data in bytes.
   uint64_t size() const {
     return iobufBytes_;
+  }
+
+  std::optional<int64_t> numRows() const {
+    return numRows_;
   }
 
   // Makes 'input' ready for deserializing 'this' with
@@ -61,6 +66,9 @@ class SerializedPage {
   // Number of payload bytes in 'iobuf_'.
   const int64_t iobufBytes_;
 
+  // Number of payload rows, if provided.
+  const std::optional<int64_t> numRows_;
+
   // Callback that will be called on destruction of the SerializedPage,
   // primarily used to free externally allocated memory backing folly::IOBuf
   // from caller. Caller is responsible to pass in proper cleanup logic to
@@ -68,9 +76,9 @@ class SerializedPage {
   std::function<void(folly::IOBuf&)> onDestructionCb_;
 };
 
-// Queue of results retrieved from source. Owned by shared_ptr by
-// Exchange and client threads and registered callbacks waiting
-// for input.
+/// Queue of results retrieved from source. Owned by shared_ptr by
+/// Exchange and client threads and registered callbacks waiting
+/// for input.
 class ExchangeQueue {
  public:
   ~ExchangeQueue() {
@@ -85,13 +93,19 @@ class ExchangeQueue {
     return queue_.empty();
   }
 
+  /// Enqueues 'page' to the queue. One random promise(top of promise queue)
+  /// associated with the future that is waiting for the data from the queue is
+  /// returned in 'promises' if 'page' is not nullptr. When 'page' is nullptr
+  /// and the queue is completed serving data, all left over promises will be
+  /// returned in 'promises'. When 'page' is nullptr and the queue is not
+  /// completed serving data, no 'promises' will be added and returned.
   void enqueueLocked(
       std::unique_ptr<SerializedPage>&& page,
       std::vector<ContinuePromise>& promises);
 
-  // If data is permanently not available, e.g. the source cannot be
-  // contacted, this registers an error message and causes the reading
-  // Exchanges to throw with the message.
+  /// If data is permanently not available, e.g. the source cannot be
+  /// contacted, this registers an error message and causes the reading
+  /// Exchanges to throw with the message.
   void setError(const std::string& error);
 
   /// Returns pages of data.

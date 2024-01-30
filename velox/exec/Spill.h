@@ -320,7 +320,8 @@ class SpillState {
   /// target size of a single file.  'pool' owns the memory for state and
   /// results.
   SpillState(
-      common::GetSpillDirectoryPathCB getSpillDirectoryPath,
+      const common::GetSpillDirectoryPathCB& getSpillDirectoryPath,
+      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       const std::string& fileNamePrefix,
       int32_t maxPartitions,
       int32_t numSortKeys,
@@ -330,8 +331,7 @@ class SpillState {
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats,
-      const std::unordered_map<std::string, std::string>& writeFileOptions =
-          {});
+      const std::string& fileCreateConfig = {});
 
   /// Indicates if a given 'partition' has been spilled or not.
   bool isPartitionSpilled(uint32_t partition) const {
@@ -407,6 +407,10 @@ class SpillState {
   // can use it to ensure the path exists before returning.
   common::GetSpillDirectoryPathCB getSpillDirPathCb_;
 
+  // Updates the aggregated spill bytes of this query, and throws if exceeds
+  // the max spill bytes limit.
+  common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb_;
+
   /// Prefix for spill files.
   const std::string fileNamePrefix_;
   const int32_t maxPartitions_;
@@ -415,7 +419,7 @@ class SpillState {
   const uint64_t targetFileSize_;
   const uint64_t writeBufferSize_;
   const common::CompressionKind compressionKind_;
-  const std::unordered_map<std::string, std::string> writeFileOptions_;
+  const std::string fileCreateConfig_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
 
@@ -443,3 +447,11 @@ struct hash<::facebook::velox::exec::SpillPartitionId> {
   }
 };
 } // namespace std
+
+template <>
+struct fmt::formatter<facebook::velox::exec::SpillPartitionId>
+    : formatter<std::string> {
+  auto format(facebook::velox::exec::SpillPartitionId s, format_context& ctx) {
+    return formatter<std::string>::format(s.toString(), ctx);
+  }
+};

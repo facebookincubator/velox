@@ -36,18 +36,27 @@ TEST_F(LimitTest, basic) {
   }
   createDuckDbTable(vectors);
 
-  auto makePlan = [&](int32_t offset, int32_t limit) {
+  auto makePlan = [&](int64_t offset, int64_t limit) {
     return PlanBuilder().values(vectors).limit(offset, limit, true).planNode();
   };
 
   assertQuery(makePlan(0, 10), "SELECT * FROM tmp LIMIT 10");
-  assertQuery(makePlan(0, 1'000), "SELECT * FROM tmp LIMIT 1000");
+  int64_t limit = (int64_t)(std::numeric_limits<int32_t>::max()) + 1000000;
+  int64_t offset = (int64_t)(std::numeric_limits<int32_t>::max()) + 1000;
+  assertQuery(
+      makePlan(0, limit), fmt::format("SELECT * FROM tmp LIMIT {}", limit));
   assertQuery(makePlan(0, 1'234), "SELECT * FROM tmp LIMIT 1234");
 
   assertQuery(makePlan(17, 10), "SELECT * FROM tmp OFFSET 17 LIMIT 10");
   assertQuery(makePlan(17, 983), "SELECT * FROM tmp OFFSET 17 LIMIT 983");
-  assertQuery(makePlan(17, 1'000), "SELECT * FROM tmp OFFSET 17 LIMIT 1000");
   assertQuery(makePlan(17, 2'000), "SELECT * FROM tmp OFFSET 17 LIMIT 2000");
+  assertQuery(
+      makePlan(offset, limit),
+      fmt::format("SELECT * FROM tmp OFFSET {} LIMIT {}", offset, limit));
+
+  assertQuery(
+      makePlan(offset, 2000),
+      fmt::format("SELECT * FROM tmp OFFSET {} LIMIT 2000", offset));
 
   assertQuery(makePlan(1'000, 145), "SELECT * FROM tmp OFFSET 1000 LIMIT 145");
   assertQuery(
@@ -82,13 +91,13 @@ TEST_F(LimitTest, limitOverLocalExchange) {
                         .limit(0, 20, true)
                         .planNode();
 
-  TaskCursor cursor(params);
-  cursor.task()->addSplit(
+  auto cursor = TaskCursor::create(params);
+  cursor->task()->addSplit(
       scanNodeId, exec::Split(makeHiveConnectorSplit(file->path)));
 
   int32_t numRead = 0;
-  while (cursor.moveNext()) {
-    auto vector = cursor.current();
+  while (cursor->moveNext()) {
+    auto vector = cursor->current();
     numRead += vector->size();
   }
 
@@ -96,7 +105,7 @@ TEST_F(LimitTest, limitOverLocalExchange) {
   // receiving that message.
 
   ASSERT_EQ(20, numRead);
-  ASSERT_TRUE(waitForTaskCompletion(cursor.task().get()));
+  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
 }
 
 TEST_F(LimitTest, partialLimitEagerFlush) {
@@ -110,12 +119,12 @@ TEST_F(LimitTest, partialLimitEagerFlush) {
       builder = builder.project({"c0 + 1 as c0"});
     }
     params.planNode = builder.partitionedOutput({}, 1).planNode();
-    TaskCursor cursor(params);
-    ASSERT_FALSE(cursor.moveNext());
+    auto cursor = TaskCursor::create(params);
+    ASSERT_FALSE(cursor->moveNext());
     auto bufferManager = exec::OutputBufferManager::getInstance().lock();
     auto [numPagesPromise, numPagesFuture] = folly::makePromiseContract<int>();
     ASSERT_TRUE(bufferManager->getData(
-        cursor.task()->taskId(),
+        cursor->task()->taskId(),
         0,
         INT32_MAX,
         0,
@@ -126,7 +135,7 @@ TEST_F(LimitTest, partialLimitEagerFlush) {
           numPagesPromise->setValue(pages.size());
         }));
     ASSERT_GE(std::move(numPagesFuture).get(std::chrono::seconds(1)), 10);
-    cursor.task()->requestCancel();
+    cursor->task()->requestCancel();
   };
   test(true);
   test(false);
