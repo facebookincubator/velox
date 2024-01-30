@@ -142,6 +142,28 @@ void SplitReader::prepareSplit(
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 
+namespace {
+
+template <TypeKind ToKind>
+velox::variant convertFromString(const std::optional<std::string>& value) {
+  if (value.has_value()) {
+    if constexpr (ToKind == TypeKind::VARCHAR) {
+      return velox::variant(value.value());
+    }
+    if constexpr (ToKind == TypeKind::VARBINARY) {
+      return velox::variant::binary((value.value()));
+    }
+    auto result = velox::util::Converter<ToKind>::cast(value.value());
+    if constexpr (ToKind == TypeKind::TIMESTAMP) {
+      result.toGMT(Timestamp::defaultTimezone());
+    }
+    return velox::variant(result);
+  }
+  return velox::variant(ToKind);
+}
+
+} // namespace
+
 std::vector<TypePtr> SplitReader::adaptColumns(
     const RowTypePtr& fileType,
     const std::shared_ptr<const velox::RowType>& tableSchema) {
@@ -255,28 +277,6 @@ void SplitReader::setNullConstantValue(
   spec->setConstantValue(BaseVector::createNullConstant(
       type, 1, connectorQueryCtx_->memoryPool()));
 }
-
-namespace {
-
-template <TypeKind ToKind>
-velox::variant convertFromString(const std::optional<std::string>& value) {
-  if (value.has_value()) {
-    if constexpr (ToKind == TypeKind::VARCHAR) {
-      return velox::variant(value.value());
-    }
-    if constexpr (ToKind == TypeKind::VARBINARY) {
-      return velox::variant::binary((value.value()));
-    }
-    auto result = velox::util::Converter<ToKind>::cast(value.value());
-    if constexpr (ToKind == TypeKind::TIMESTAMP) {
-      result.toGMT(Timestamp::defaultTimezone());
-    }
-    return velox::variant(result);
-  }
-  return velox::variant(ToKind);
-}
-
-} // namespace
 
 void SplitReader::setPartitionValue(
     common::ScanSpec* spec,
