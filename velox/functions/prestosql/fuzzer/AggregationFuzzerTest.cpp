@@ -116,7 +116,8 @@ int main(int argc, char** argv) {
       "bitwise_or_agg",
       "bitwise_xor_agg",
       "max_by",
-      "min_by"
+      "min_by",
+      "avg"
   };
 
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
