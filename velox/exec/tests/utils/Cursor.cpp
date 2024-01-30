@@ -368,7 +368,18 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     if (!task_->isRunning()) {
       return false;
     }
-    next_ = task_->next();
+    while (true) {
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      RowVectorPtr next = task_->next(&future);
+      if (!future.valid()) {
+        // Task is not blocked. Update `next_` with whatever returned by task.
+        next_ = next;
+        break;
+      }
+      // Task is blocked for some reason. Wait and try again.
+      VELOX_CHECK_NULL(next)
+      future.wait();
+    }
     return next_ != nullptr;
   };
 

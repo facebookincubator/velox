@@ -1373,77 +1373,94 @@ DEBUG_ONLY_TEST_F(TaskTest, findPeerOperators) {
   }
 }
 
-DEBUG_ONLY_TEST_F(TaskTest, raceBetweenTaskPauseAndTerminate) {
-  const std::vector<RowVectorPtr> values = {makeRowVector(
-      {"t_c0", "t_c1"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3, 4}),
-          makeFlatVector<int64_t>({10, 20, 30, 40}),
-      })};
+class TaskPauseTest : public TaskTest {
+ public:
+  void testPause() {
+    const std::vector<RowVectorPtr> values = {makeRowVector(
+        {"t_c0", "t_c1"},
+        {
+            makeFlatVector<int64_t>({1, 2, 3, 4}),
+            makeFlatVector<int64_t>({10, 20, 30, 40}),
+        })};
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.planNode =
-      PlanBuilder(planNodeIdGenerator).values(values, true).planNode();
-  params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
-  params.maxDrivers = 1;
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    CursorParameters params;
+    params.planNode =
+        PlanBuilder(planNodeIdGenerator).values(values, true).planNode();
+    params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
+    params.maxDrivers = 1;
 
-  auto cursor = TaskCursor::create(params);
-  auto* task = cursor->task().get();
-  folly::EventCount taskPauseWait;
-  std::atomic<bool> taskPaused{false};
+    cursor_ = TaskCursor::create(params);
+    task_ = cursor_->task().get();
+    folly::EventCount taskPauseWait;
+    std::atomic<bool> taskPaused{false};
 
-  folly::EventCount taskPauseStartWait;
-  std::atomic<bool> taskPauseStarted{false};
+    folly::EventCount taskPauseStartWait;
+    std::atomic<bool> taskPauseStarted{false};
 
-  // Set up a testvalue to trigger task abort when hash build tries to reserve
-  // memory.
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::Driver::runInternal::addInput",
-      std::function<void(Operator*)>([&](Operator* testOp) {
-        if (taskPauseStarted.exchange(true)) {
-          return;
-        }
-        taskPauseStartWait.notifyAll();
-        taskPauseWait.await([&]() { return taskPaused.load(); });
-      }));
+    // Set up a testvalue to trigger task abort when hash build tries to reserve
+    // memory.
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::addInput",
+        std::function<void(Operator*)>([&](Operator* testOp) {
+          if (taskPauseStarted.exchange(true)) {
+            return;
+          }
+          taskPauseStartWait.notifyAll();
+          taskPauseWait.await([&]() { return taskPaused.load(); });
+        }));
 
-  std::thread taskThread([&]() {
-    try {
-      while (cursor->moveNext()) {
-      };
-    } catch (VeloxRuntimeError&) {
-    }
-  });
+    taskThread_ = std::thread([&]() {
+      try {
+        while (cursor_->moveNext()) {
+        };
+      } catch (VeloxRuntimeError&) {
+      }
+    });
 
-  taskPauseStartWait.await([&]() { return taskPauseStarted.load(); });
+    taskPauseStartWait.await([&]() { return taskPauseStarted.load(); });
 
-  ASSERT_EQ(task->numTotalDrivers(), 1);
-  ASSERT_EQ(task->numFinishedDrivers(), 0);
-  ASSERT_EQ(task->numRunningDrivers(), 1);
+    ASSERT_EQ(task_->numTotalDrivers(), 1);
+    ASSERT_EQ(task_->numFinishedDrivers(), 0);
+    ASSERT_EQ(task_->numRunningDrivers(), 1);
 
-  auto pauseFuture = task->requestPause();
-  taskPaused = true;
-  taskPauseWait.notifyAll();
-  pauseFuture.wait();
+    auto pauseFuture = task_->requestPause();
+    taskPaused = true;
+    taskPauseWait.notifyAll();
+    pauseFuture.wait();
 
-  ASSERT_EQ(task->numTotalDrivers(), 1);
-  ASSERT_EQ(task->numFinishedDrivers(), 0);
-  ASSERT_EQ(task->numRunningDrivers(), 1);
+    ASSERT_EQ(task_->numTotalDrivers(), 1);
+    ASSERT_EQ(task_->numFinishedDrivers(), 0);
+    ASSERT_EQ(task_->numRunningDrivers(), 1);
+    ASSERT_TRUE(task_->pauseRequested());
+  }
 
-  task->requestAbort().wait();
+  void TearDown() override {
+    cursor_.reset();
+    HiveConnectorTestBase::TearDown();
+  }
 
-  ASSERT_EQ(task->numTotalDrivers(), 1);
-  ASSERT_EQ(task->numFinishedDrivers(), 0);
-  ASSERT_EQ(task->numRunningDrivers(), 0);
+ protected:
+  Task* task_{nullptr};
+  std::unique_ptr<TaskCursor> cursor_{};
+  std::thread taskThread_{};
+};
 
-  Task::resume(task->shared_from_this());
+DEBUG_ONLY_TEST_F(TaskPauseTest, raceBetweenTaskPauseAndTerminate) {
+  testPause();
+  task_->requestAbort().wait();
 
-  ASSERT_EQ(task->numTotalDrivers(), 1);
-  ASSERT_EQ(task->numFinishedDrivers(), 1);
-  ASSERT_EQ(task->numRunningDrivers(), 0);
+  ASSERT_EQ(task_->numTotalDrivers(), 1);
+  ASSERT_EQ(task_->numFinishedDrivers(), 0);
+  ASSERT_EQ(task_->numRunningDrivers(), 0);
 
-  taskThread.join();
+  Task::resume(task_->shared_from_this());
+
+  ASSERT_EQ(task_->numTotalDrivers(), 1);
+  ASSERT_EQ(task_->numFinishedDrivers(), 1);
+  ASSERT_EQ(task_->numRunningDrivers(), 0);
+
+  taskThread_.join();
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
@@ -1675,6 +1692,69 @@ TEST_F(TaskTest, spillDirNotCreated) {
   // destructor has not removed the directory if it was created earlier.
   auto fs = filesystems::getFileSystem(tmpDirectoryPath, nullptr);
   ASSERT_FALSE(fs->exists(tmpDirectoryPath));
+}
+
+DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
+  // Test for trivial wait on Task::pauseRequested future.
+  testPause();
+  folly::EventCount taskResumeAllowedWait;
+  std::atomic<bool> taskResumeAllowed{false};
+  std::thread observeThread([&]() {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    bool requested = task_->pauseRequested(&future);
+    ASSERT_TRUE(requested);
+    taskResumeAllowed = true;
+    taskResumeAllowedWait.notifyAll();
+    future.wait();
+    ASSERT_TRUE(!task_->pauseRequested());
+  });
+
+  taskResumeAllowedWait.await([&]() { return taskResumeAllowed.load(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  Task::resume(task_->shared_from_this());
+
+  taskThread_.join();
+  observeThread.join();
+
+  ASSERT_EQ(task_->numTotalDrivers(), 1);
+  ASSERT_EQ(task_->numFinishedDrivers(), 1);
+  ASSERT_EQ(task_->numRunningDrivers(), 0);
+}
+
+DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFutureNeverFulfilled) {
+  // Test for Task::pauseRequested future to throw when task is never resumed.
+  testPause();
+  folly::EventCount taskAbortAllowedWait;
+  std::atomic<bool> taskAbortAllowed{false};
+  std::thread observeThread([&]() {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    bool requested = task_->pauseRequested(&future);
+    ASSERT_TRUE(requested);
+    taskAbortAllowed = true;
+    taskAbortAllowedWait.notifyAll();
+    future.wait();
+    ASSERT_TRUE(future.hasException());
+    ASSERT_EQ(
+        std::string(future.result().exception().what()),
+        "folly::BrokenPromise: Broken promise for type name `folly::Unit`");
+  });
+  taskAbortAllowedWait.await([&]() { return taskAbortAllowed.load(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  ASSERT_EQ(task_->numTotalDrivers(), 1);
+  ASSERT_EQ(task_->numFinishedDrivers(), 0);
+  ASSERT_EQ(task_->numRunningDrivers(), 1);
+  std::vector<Driver*> drivers{};
+  task_->testingVisitDrivers(
+      [&](Driver* driver) -> void { drivers.push_back(driver); });
+  for (const auto& driver : drivers) {
+    Task::removeDriver(task_->shared_from_this(), driver);
+  }
+  ASSERT_EQ(task_->numTotalDrivers(), 1);
+  ASSERT_EQ(task_->numFinishedDrivers(), 1);
+  ASSERT_EQ(task_->numRunningDrivers(), 0);
+  cursor_.reset();
+  taskThread_.join();
+  observeThread.join();
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
