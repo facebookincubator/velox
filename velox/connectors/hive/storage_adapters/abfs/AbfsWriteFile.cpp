@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
+
 #include <azure/storage/files/datalake.hpp>
+
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 
 namespace facebook::velox::filesystems::abfs {
 class BlobStorageFileClient final : public IBlobStorageFileClient {

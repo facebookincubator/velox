@@ -13,18 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
-#include "velox/common/file/File.h"
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
-#include "velox/core/Config.h"
 
 #include <azure/storage/blobs/blob_client.hpp>
 #include <fmt/format.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <glog/logging.h>
+
+#include "velox/common/file/File.h"
+#include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
+#include "velox/core/Config.h"
 
 namespace facebook::velox::filesystems::abfs {
 using namespace Azure::Storage::Blobs;
