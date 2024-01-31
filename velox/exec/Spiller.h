@@ -110,7 +110,10 @@ class Spiller {
   ///
   /// NOTE: the spilling operator should first mark 'partition' as spilling and
   /// spill any data buffered in row container before call this.
-  void spill(uint32_t partition, const RowVectorPtr& spillVector);
+  void spill(
+      uint32_t partition,
+      const RowVectorPtr& spillVector,
+      memory::MemoryPool* pool);
 
   /// Extracts up to 'maxRows' or 'maxBytes' from 'rows' into 'spillVector'. The
   /// extract starts at nextBatchIndex and updates nextBatchIndex to be the
@@ -125,10 +128,10 @@ class Spiller {
 
   /// Finishes spilling and accumulate the spilled partition metadata in
   /// 'partitionSet' indexed by spill partition id.
-  void finishSpill(SpillPartitionSet& partitionSet);
+  void finishSpill(SpillPartitionSet& partitionSet, memory::MemoryPool* pool);
 
   /// Finishes spilling and expects single partition.
-  SpillPartition finishSpill();
+  SpillPartition finishSpill(memory::MemoryPool* pool);
 
   const SpillState& state() const {
     return state_;

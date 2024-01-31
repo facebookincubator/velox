@@ -74,7 +74,6 @@ SpillState::SpillState(
     uint64_t targetFileSize,
     uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
-    memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats,
     const std::string& fileCreateConfig)
     : getSpillDirPathCb_(getSpillDirPathCb),
@@ -87,7 +86,6 @@ SpillState::SpillState(
       writeBufferSize_(writeBufferSize),
       compressionKind_(compressionKind),
       fileCreateConfig_(fileCreateConfig),
-      pool_(pool),
       stats_(stats),
       partitionWriters_(maxPartitions_) {}
 
@@ -108,7 +106,8 @@ void SpillState::updateSpilledInputBytes(uint64_t bytes) {
 
 uint64_t SpillState::appendToPartition(
     uint32_t partition,
-    const RowVectorPtr& rows) {
+    const RowVectorPtr& rows,
+    memory::MemoryPool* pool) {
   VELOX_CHECK(
       isPartitionSpilled(partition), "Partition {} is not spilled", partition);
 
@@ -131,7 +130,6 @@ uint64_t SpillState::appendToPartition(
         writeBufferSize_,
         fileCreateConfig_,
         updateAndCheckSpillLimitCb_,
-        pool_,
         stats_);
   }
 
@@ -139,28 +137,39 @@ uint64_t SpillState::appendToPartition(
 
   IndexRange range{0, rows->size()};
   return partitionWriters_[partition]->write(
-      rows, folly::Range<IndexRange*>(&range, 1));
+      rows, folly::Range<IndexRange*>(&range, 1), pool);
 }
 
 SpillWriter* SpillState::partitionWriter(uint32_t partition) const {
+  if (!isPartitionSpilled(partition)) {
+    LOG(ERROR) << "bad";
+  }
   VELOX_DCHECK(isPartitionSpilled(partition));
   return partitionWriters_[partition].get();
 }
 
-void SpillState::finishFile(uint32_t partition) {
+void SpillState::finishFile(uint32_t partition, memory::MemoryPool* pool) {
   auto* writer = partitionWriter(partition);
   if (writer == nullptr) {
     return;
   }
-  writer->finishFile();
+  writer->finishFile(pool);
 }
 
-SpillFiles SpillState::finish(uint32_t partition) {
+void SpillState::flush(uint32_t partition, memory::MemoryPool* pool) {
+  auto* writer = partitionWriter(partition);
+  if (writer == nullptr) {
+    return;
+  }
+  writer->flush(true, pool);
+}
+
+SpillFiles SpillState::finish(uint32_t partition, memory::MemoryPool* pool) {
   auto* writer = partitionWriter(partition);
   if (writer == nullptr) {
     return {};
   }
-  return writer->finish();
+  return writer->finish(pool);
 }
 
 const SpillPartitionNumSet& SpillState::spilledPartitionSet() const {

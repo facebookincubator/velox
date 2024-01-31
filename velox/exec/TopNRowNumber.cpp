@@ -281,7 +281,7 @@ void TopNRowNumber::noMoreInput() {
     spill();
 
     VELOX_CHECK_NULL(merge_);
-    auto spillPartition = spiller_->finishSpill();
+    auto spillPartition = spiller_->finishSpill(pool());
     merge_ = spillPartition.createOrderedReader(pool());
     recordSpillStats(spiller_->stats());
   } else {

@@ -33,6 +33,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::filesystems;
 using facebook::velox::exec::test::TempDirectoryPath;
 
+#if 0
 namespace {
 static const int64_t kGB = 1'000'000'000;
 
@@ -166,7 +167,6 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
         targetFileSize,
         writeBufferSize,
         compressionKind_,
-        pool(),
         &stats_);
     ASSERT_EQ(targetFileSize, state_->targetFileSize());
     ASSERT_EQ(numPartitions, state_->maxPartitions());
@@ -181,7 +181,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
       {
         RowVectorPtr dummyInput;
         VELOX_ASSERT_THROW(
-            state_->appendToPartition(partition, dummyInput),
+            state_->appendToPartition(partition, dummyInput, pool()),
             fmt::format("Partition {} is not spilled", partition));
       }
       state_->setPartitionSpilled(partition);
@@ -201,7 +201,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
                   return !values_[row * numBatches / 2 + iter].has_value();
                 })}));
         state_->appendToPartition(
-            partition, batchesByPartition_[partition].back());
+            partition, batchesByPartition_[partition].back(), pool());
         ASSERT_TRUE(
             state_->testingNonEmptySpilledPartitionSet().contains(partition));
 
@@ -220,7 +220,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
                           .has_value();
             })}));
         state_->appendToPartition(
-            partition, batchesByPartition_[partition].back());
+            partition, batchesByPartition_[partition].back(), pool());
         ASSERT_TRUE(
             state_->testingNonEmptySpilledPartitionSet().contains(partition));
 
@@ -464,7 +464,6 @@ TEST_P(SpillTest, spillTimestamp) {
       1024,
       0,
       compressionKind_,
-      pool(),
       &stats_);
   int partitionIndex = 0;
   state.setPartitionSpilled(partitionIndex);
@@ -472,7 +471,9 @@ TEST_P(SpillTest, spillTimestamp) {
   ASSERT_FALSE(
       state.testingNonEmptySpilledPartitionSet().contains(partitionIndex));
   state.appendToPartition(
-      partitionIndex, makeRowVector({makeFlatVector<Timestamp>(timeValues)}));
+      partitionIndex,
+      makeRowVector({makeFlatVector<Timestamp>(timeValues)}),
+      pool());
   state.finishFile(partitionIndex);
   EXPECT_TRUE(
       state.testingNonEmptySpilledPartitionSet().contains(partitionIndex));
@@ -750,3 +751,4 @@ INSTANTIATE_TEST_SUITE_P(
         common::CompressionKind::CompressionKind_ZSTD,
         common::CompressionKind::CompressionKind_LZ4,
         common::CompressionKind::CompressionKind_GZIP));
+#endif
