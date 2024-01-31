@@ -316,3 +316,18 @@ TEST(LocalFile, rmdir) {
   // deleted, which is not an error.
   EXPECT_NO_THROW(localFs->rmdir(tempFolder->path));
 }
+
+TEST(LocalFile, fileNotFound) {
+  filesystems::registerLocalFileSystem();
+  auto tempFolder = ::exec::test::TempDirectoryPath::create();
+  auto path = fmt::format("{}/file", tempFolder->path);
+  auto localFs = filesystems::getFileSystem(path, nullptr);
+  {
+    try {
+      LocalReadFile readFile(path);
+      ASSERT_FALSE(true) << "Function should throw.";
+    } catch (VeloxRuntimeError& e) {
+      ASSERT_EQ(e.errorCode(), error_code::kFileNotFound);
+    }
+  }
+}

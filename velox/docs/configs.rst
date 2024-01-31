@@ -424,6 +424,11 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - true
      - If true, the partition directory will be converted to lowercase when executing a table write operation.
+   * - ignore_missing_files
+     -
+     - bool
+     - false
+     - If true, the task will continue to run when encountering missing files and the split woule be marked as empty split.
    * - max-coalesced-bytes
      -
      - integer
