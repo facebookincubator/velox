@@ -1230,7 +1230,7 @@ void StringFunctionsTest::testReplaceInPlace(
   };
 
   auto result = evaluate<FlatVector<StringView>>(
-      fmt::format("replace(c0, '{}', '{}')", search, replace),
+      fmt::format("presto_replace(c0, '{}', '{}')", search, replace),
       makeRowVector({makeInput()}));
   testResults(result.get());
 
@@ -1239,8 +1239,8 @@ void StringFunctionsTest::testReplaceInPlace(
   auto applyReplaceFunction = [&](std::vector<VectorPtr>& functionInputs,
                                   VectorPtr& resultPtr) {
     core::QueryConfig config({});
-    auto replaceFunction =
-        exec::getVectorFunction("replace", {VARCHAR(), VARCHAR()}, {}, config);
+    auto replaceFunction = exec::getVectorFunction(
+        "presto_replace", {VARCHAR(), VARCHAR()}, {}, config);
     SelectivityVector rows(tests.size());
     ExprSet exprSet({}, &execCtx_);
     RowVectorPtr inputRows = makeRowVector({});
@@ -1285,11 +1285,11 @@ void StringFunctionsTest::testReplaceFlatVector(
 
   if (withReplaceArgument) {
     result = evaluate<FlatVector<StringView>>(
-        "replace(c0, c1, c2)",
+        "presto_replace(c0, c1, c2)",
         makeRowVector({stringVector, searchVector, replaceVector}));
   } else {
     result = evaluate<FlatVector<StringView>>(
-        "replace(c0, c1)", makeRowVector({stringVector, searchVector}));
+        "presto_replace(c0, c1)", makeRowVector({stringVector, searchVector}));
   }
 
   for (int32_t i = 0; i < tests.size(); ++i) {
@@ -1331,8 +1331,8 @@ TEST_F(StringFunctionsTest, replace) {
 
   // Test constant vectors
   auto rows = makeRowVector(makeRowType({BIGINT()}), 10);
-  auto result =
-      evaluate<SimpleVector<StringView>>("replace('high', 'ig', 'f')", rows);
+  auto result = evaluate<SimpleVector<StringView>>(
+      "presto_replace('high', 'ig', 'f')", rows);
   for (int i = 0; i < 10; ++i) {
     EXPECT_EQ(result->valueAt(i), StringView("hfh"));
   }
@@ -1351,7 +1351,8 @@ TEST_F(StringFunctionsTest, replaceWithReusableInputButNoInplace) {
       [](vector_size_t) { return 2851588633; },
       [](auto row) { return row >= 50; });
   auto result = evaluateSimplified<FlatVector<StringView>>(
-      "substr(replace('bar', rtrim(c0)), c1, c2)", makeRowVector({c0, c1, c2}));
+      "substr(presto_replace('bar', rtrim(c0)), c1, c2)",
+      makeRowVector({c0, c1, c2}));
   ASSERT_EQ(result->size(), 100);
   for (int i = 0; i < 50; ++i) {
     EXPECT_FALSE(result->isNullAt(i));
