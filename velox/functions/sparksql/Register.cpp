@@ -65,6 +65,7 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
       udf_array_intersect, prefix + "array_intersect");
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_repeat, prefix + "array_repeat");
 
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_allow_duplicates, prefix + "map_from_arrays");
