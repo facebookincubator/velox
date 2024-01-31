@@ -11,7 +11,7 @@ by Velox. See details on bundling below.
 | ninja             | default         | No       |
 | ccache            | default         | No       |
 | icu4c             | default         | Yes      |
-| gflags            | default         | yes      |
+| gflags            | default         | Yes      |
 | glog              | default         | Yes      |
 | gtest (testing)   | default         | Yes      |
 | libevent          | default         | No       |
@@ -28,7 +28,7 @@ by Velox. See details on bundling below.
 | cmake             | 3.14            | No       |
 | double-conversion | 3.1.5           | No       |
 | xsimd             | 10.0.0          | Yes      |
-| re2               | 2021-04-01      | No       |
+| re2               | 2021-04-01      | Yes      |
 | fmt               | 10.1.1          | Yes      |
 | folly             | v2023.12.04.00  | Yes      |
 | fizz              | v2023.12.04.00  | No       |
@@ -36,7 +36,7 @@ by Velox. See details on bundling below.
 | mvfst             | v2023.12.04.00  | No       |
 | fbthrift          | v2023.12.04.00  | No       |
 | DuckDB (testing)  | 0.8.1           | Yes      |
-| cpr (testing)     | 1.10.15         | yes      |
+| cpr (testing)     | 1.10.15         | Yes      |
 
 # Bundled Dependency Management
 This module provides a dependency management system that allows us to automatically fetch and build dependencies from source if needed.
