@@ -78,7 +78,7 @@ cd velox
 git submodule sync --recursive
 git submodule update --init --recursive
 ```
-Once Velox is checked out, the first setup is to install the dependencies.
+Once Velox is checked out, the first step is to install the dependencies.
 Details on the dependencies and how Velox manages some of them for you
 [can be found here](CMake/resolve_dependency_modules/README.md).
 

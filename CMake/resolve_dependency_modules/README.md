@@ -35,7 +35,7 @@ by Velox. See details on bundling below.
 | wangle            | v2023.12.04.00  | No       |
 | mvfst             | v2023.12.04.00  | No       |
 | fbthrift          | v2023.12.04.00  | No       |
-| DuckDB (testing)  | 0.8.1           | No       |
+| DuckDB (testing)  | 0.8.1           | Yes      |
 | cpr (testing)     | 1.10.15         | yes      |
 
 # Bundled Dependency Management
