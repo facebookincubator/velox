@@ -150,7 +150,10 @@ void registerStringFunctions(const std::string& prefix) {
   registerSplitToMap(prefix);
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, prefix + "concat");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "replace");
+  // In Gluten, presto 'replace' function is conflict with sparksql, because
+  // presto 'replace' is registered as VectorFunction, and spark 'replace' is
+  // registered as SimpleFunction. Velox respect VectorFunction first.
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "presto_replace");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reverse, prefix + "reverse");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_to_utf8, prefix + "to_utf8");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_from_utf8, prefix + "from_utf8");
