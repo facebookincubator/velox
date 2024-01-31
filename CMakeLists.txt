@@ -545,7 +545,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 endif()
 
 set_source(xsimd)
-resolve_dependency(xsimd)
+resolve_dependency(xsimd 10.0.0)
 
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)
