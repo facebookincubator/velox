@@ -67,26 +67,13 @@ class AbfsWriteFile::Impl {
           BlobStorageFileClient(fileClient));
     }
 
-    VELOX_CHECK(!exist(), "File already exists");
+    VELOX_CHECK(!checkIfFileExists(), "File already exists");
     blobStorageFileClient_->create();
   }
 
   void setFileClient(
       std::shared_ptr<IBlobStorageFileClient> blobStorageManager) {
     blobStorageFileClient_ = std::move(blobStorageManager);
-  }
-
-  bool exist() {
-    try {
-      blobStorageFileClient_->getProperties();
-      return true;
-    } catch (Azure::Storage::StorageException& e) {
-      if (e.StatusCode == Azure::Core::Http::HttpStatusCode::NotFound) {
-        return false;
-      } else {
-        throwStorageExceptionWithOperationDetails("GetProperties", path_, e);
-      }
-    }
   }
 
   void close() {
@@ -122,6 +109,19 @@ class AbfsWriteFile::Impl {
   }
 
  private:
+  bool checkIfFileExists() {
+    try {
+      blobStorageFileClient_->getProperties();
+      return true;
+    } catch (Azure::Storage::StorageException& e) {
+      if (e.StatusCode == Azure::Core::Http::HttpStatusCode::NotFound) {
+        return false;
+      } else {
+        throwStorageExceptionWithOperationDetails("GetProperties", path_, e);
+      }
+    }
+  }
+
   const std::string path_;
   const std::string connectStr_;
   std::string fileSystem_;
