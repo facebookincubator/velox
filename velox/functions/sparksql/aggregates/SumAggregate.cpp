@@ -26,7 +26,10 @@ template <typename TInput, typename TAccumulator, typename ResultType>
 using SumAggregate = SumAggregateBase<TInput, TAccumulator, ResultType, true>;
 }
 
-exec::AggregateRegistrationResult registerSum(const std::string& name) {
+exec::AggregateRegistrationResult registerSum(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("real")
@@ -100,7 +103,9 @@ exec::AggregateRegistrationResult registerSum(const std::string& name) {
                 name,
                 inputType->kindName());
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql

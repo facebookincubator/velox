@@ -465,7 +465,10 @@ void checkSumCountRowType(
 }
 
 template <template <typename TInput> class TClass>
-exec::AggregateRegistrationResult registerVariance(const std::string& name) {
+exec::AggregateRegistrationResult registerVariance(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> inputTypes = {
       "smallint", "integer", "bigint", "real", "double"};
@@ -514,18 +517,29 @@ exec::AggregateRegistrationResult registerVariance(const std::string& name) {
               "(count:bigint, mean:double, m2:double) struct");
           return std::make_unique<TClass<int64_t>>(resultType);
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace
 
-void registerVarianceAggregates(const std::string& prefix) {
-  registerVariance<StdDevSampAggregate>(prefix + kStdDev);
-  registerVariance<StdDevPopAggregate>(prefix + kStdDevPop);
-  registerVariance<StdDevSampAggregate>(prefix + kStdDevSamp);
-  registerVariance<VarSampAggregate>(prefix + kVariance);
-  registerVariance<VarPopAggregate>(prefix + kVarPop);
-  registerVariance<VarSampAggregate>(prefix + kVarSamp);
+void registerVarianceAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  registerVariance<StdDevSampAggregate>(
+      prefix + kStdDev, withCompanionFunctions, overwrite);
+  registerVariance<StdDevPopAggregate>(
+      prefix + kStdDevPop, withCompanionFunctions, overwrite);
+  registerVariance<StdDevSampAggregate>(
+      prefix + kStdDevSamp, withCompanionFunctions, overwrite);
+  registerVariance<VarSampAggregate>(
+      prefix + kVariance, withCompanionFunctions, overwrite);
+  registerVariance<VarPopAggregate>(
+      prefix + kVarPop, withCompanionFunctions, overwrite);
+  registerVariance<VarSampAggregate>(
+      prefix + kVarSamp, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
