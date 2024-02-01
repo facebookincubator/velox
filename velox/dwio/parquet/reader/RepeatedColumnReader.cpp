@@ -214,9 +214,10 @@ void MapColumnReader::read(
 void MapColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
     const dwio::common::StatsContext& context,
-    dwio::common::FormatData::FilterRowGroupsResult& result) const {
-  keyReader_->filterRowGroups(rowGroupSize, context, result);
-  elementReader_->filterRowGroups(rowGroupSize, context, result);
+    dwio::common::FormatData::FilterRowGroupsResult& result,
+    dwio::common::BufferedInput& bufferedInput) const {
+  keyReader_->filterRowGroups(rowGroupSize, context, result, bufferedInput);
+  elementReader_->filterRowGroups(rowGroupSize, context, result, bufferedInput);
 }
 
 ListColumnReader::ListColumnReader(
@@ -317,8 +318,9 @@ void ListColumnReader::read(
 void ListColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
     const dwio::common::StatsContext& context,
-    dwio::common::FormatData::FilterRowGroupsResult& result) const {
-  child_->filterRowGroups(rowGroupSize, context, result);
+    dwio::common::FormatData::FilterRowGroupsResult& result,
+    dwio::common::BufferedInput& bufferedInput) const {
+  child_->filterRowGroups(rowGroupSize, context, result, bufferedInput);
 }
 
 } // namespace facebook::velox::parquet

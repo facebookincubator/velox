@@ -55,8 +55,10 @@ SelectiveColumnReader::SelectiveColumnReader(
 void SelectiveColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
     const dwio::common::StatsContext& context,
-    FormatData::FilterRowGroupsResult& result) const {
-  formatData_->filterRowGroups(*scanSpec_, rowGroupSize, context, result);
+    FormatData::FilterRowGroupsResult& result,
+    dwio::common::BufferedInput& bufferedInput) const {
+  formatData_->filterRowGroups(
+      *scanSpec_, bufferedInput, rowGroupSize, context, result);
 }
 
 const std::vector<SelectiveColumnReader*>& SelectiveColumnReader::children()

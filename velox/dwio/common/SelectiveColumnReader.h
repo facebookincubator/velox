@@ -18,6 +18,7 @@
 #include "velox/common/base/RawVector.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/process/ProcessBase.h"
+#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/FormatData.h"
 #include "velox/dwio/common/IntDecoder.h"
@@ -362,7 +363,8 @@ class SelectiveColumnReader {
   virtual void filterRowGroups(
       uint64_t rowGroupSize,
       const dwio::common::StatsContext& context,
-      FormatData::FilterRowGroupsResult&) const;
+      FormatData::FilterRowGroupsResult&,
+      BufferedInput& bufferedInput) const;
 
   raw_vector<int32_t>& innerNonNullRows() {
     return innerNonNullRows_;

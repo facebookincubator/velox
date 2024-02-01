@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
 
@@ -73,7 +74,8 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   void filterRowGroups(
       uint64_t rowGroupSize,
       const dwio::common::StatsContext&,
-      dwio::common::FormatData::FilterRowGroupsResult&) const override;
+      dwio::common::FormatData::FilterRowGroupsResult&,
+      dwio::common::BufferedInput& bufferedInput) const override;
 
  private:
   dwio::common::SelectiveColumnReader* findBestLeaf();

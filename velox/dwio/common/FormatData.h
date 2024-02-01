@@ -105,6 +105,7 @@ class FormatData {
   /// file.
   virtual void filterRowGroups(
       const velox::common::ScanSpec& scanSpec,
+      dwio::common::BufferedInput& bufferedInput,
       uint64_t rowsPerRowGroup,
       const StatsContext& writerContext,
       FilterRowGroupsResult&) = 0;

@@ -139,6 +139,7 @@ void DwrfData::readNulls(
 
 void DwrfData::filterRowGroups(
     const common::ScanSpec& scanSpec,
+    dwio::common::BufferedInput& bufferedInput,
     uint64_t rowGroupSize,
     const dwio::common::StatsContext& writerContext,
     FilterRowGroupsResult& result) {

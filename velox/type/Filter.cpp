@@ -280,6 +280,35 @@ bool BigintRange::testingEquals(const Filter& other) const {
       (upper_ == otherBigintRange->upper_);
 }
 
+bool BigintRange::testBloomFilter(
+    const AbstractBloomFilter& bloomFilter,
+    const velox::Type& type) const {
+  // Don't test bloom filter for a wider range
+  if ((upper_ - lower_) > 200)
+    return true;
+
+  switch (type.kind()) {
+    case TypeKind::INTEGER:
+      for (int32_t val = lower32_; val <= upper32_; ++val) {
+        if (bloomFilter.mightContain(val)) {
+          return true;
+        }
+      }
+      break;
+    case TypeKind::BIGINT:
+      for (int64_t val = lower_; val <= upper_; ++val) {
+        if (bloomFilter.mightContain(val)) {
+          return true;
+        }
+      }
+      break;
+    default:
+      return true;
+  }
+
+  return false;
+}
+
 folly::dynamic NegatedBigintRange::serialize() const {
   auto obj = Filter::serializeBase("NegatedBigintRange");
   obj["lower"] = nonNegated_->lower();
@@ -1859,6 +1888,7 @@ std::unique_ptr<Filter> BigintRange::mergeWith(const Filter* other) const {
     case FilterKind::kNegatedBigintValuesUsingBitmask:
     case FilterKind::kNegatedBigintValuesUsingHashTable: {
       bool bothNullAllowed = nullAllowed_ && other->testNull();
+      bool unused = false;
       if (!other->testInt64Range(lower_, upper_, false)) {
         return nullOrFalse(bothNullAllowed);
       }

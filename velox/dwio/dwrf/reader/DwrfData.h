@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/FormatData.h"
 #include "velox/dwio/common/TypeWithId.h"
@@ -53,6 +54,7 @@ class DwrfData : public dwio::common::FormatData {
 
   void filterRowGroups(
       const common::ScanSpec& scanSpec,
+      dwio::common::BufferedInput& bufferedInput,
       uint64_t rowsPerRowGroup,
       const dwio::common::StatsContext& writerContext,
       FilterRowGroupsResult&) override;

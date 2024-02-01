@@ -17,6 +17,9 @@
 #pragma once
 
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/common/ScanSpec.h"
+#include "velox/dwio/parquet/common/BloomFilter.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
@@ -35,14 +38,19 @@ class ParquetParams : public dwio::common::FormatParams {
   ParquetParams(
       memory::MemoryPool& pool,
       dwio::common::ColumnReaderStatistics& stats,
-      const thrift::FileMetaData& metaData)
-      : FormatParams(pool, stats), metaData_(metaData) {}
+      const thrift::FileMetaData& metaData,
+      bool isUseParquetBloomFilter,
+      dwio::common::BufferedInput& bufferedInput)
+      : FormatParams(pool, stats),
+        metaData_(metaData),
+        isUseParquetBloomFilter_(isUseParquetBloomFilter) {}
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
 
  private:
   const thrift::FileMetaData& metaData_;
+  bool isUseParquetBloomFilter_;
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
@@ -51,10 +59,12 @@ class ParquetData : public dwio::common::FormatData {
   ParquetData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const std::vector<thrift::RowGroup>& rowGroups,
-      memory::MemoryPool& pool)
+      memory::MemoryPool& pool,
+      bool isParquetBloomFilterEnabled)
       : pool_(pool),
         type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
         rowGroups_(rowGroups),
+        isParquetBloomFilterEnabled_(isParquetBloomFilterEnabled),
         maxDefine_(type_->maxDefine_),
         maxRepeat_(type_->maxRepeat_),
         rowsInRowGroup_(-1) {}
@@ -69,9 +79,14 @@ class ParquetData : public dwio::common::FormatData {
 
   void filterRowGroups(
       const common::ScanSpec& scanSpec,
+      dwio::common::BufferedInput& bufferedInput,
       uint64_t rowsPerRowGroup,
       const dwio::common::StatsContext& writerContext,
       FilterRowGroupsResult&) override;
+
+  std::shared_ptr<BloomFilter> getBloomFilter(
+      dwio::common::BufferedInput& bufferedInput,
+      const uint32_t rowGroupId);
 
   PageReader* FOLLY_NONNULL reader() const {
     return reader_.get();
@@ -189,7 +204,10 @@ class ParquetData : public dwio::common::FormatData {
  private:
   /// True if 'filter' may have hits for the column of 'this' according to the
   /// stats in 'rowGroup'.
-  bool rowGroupMatches(uint32_t rowGroupId, common::Filter* filter);
+  bool rowGroupMatches(
+      uint32_t rowGroupId,
+      common::Filter* filter,
+      dwio::common::BufferedInput& bufferedInput);
 
  protected:
   memory::MemoryPool& pool_;
@@ -198,6 +216,11 @@ class ParquetData : public dwio::common::FormatData {
   // Streams for this column in each of 'rowGroups_'. Will be created on or
   // ahead of first use, not at construction.
   std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
+
+  bool isParquetBloomFilterEnabled_;
+  // RowGroup+Column to BloomFilter map
+  std::unordered_map<uint32_t, std::shared_ptr<BloomFilter>>
+      columnBloomFilterMap_;
 
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
@@ -213,5 +236,4 @@ class ParquetData : public dwio::common::FormatData {
   // Count of leading skipped positions in 'presetNulls_'
   int32_t presetNullsConsumed_{0};
 };
-
 } // namespace facebook::velox::parquet

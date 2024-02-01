@@ -191,9 +191,10 @@ void StructColumnReader::setNullsFromRepDefs(PageReader& pageReader) {
 void StructColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
     const dwio::common::StatsContext& context,
-    dwio::common::FormatData::FilterRowGroupsResult& result) const {
+    dwio::common::FormatData::FilterRowGroupsResult& result,
+    dwio::common::BufferedInput& bufferedInput) const {
   for (const auto& child : children_) {
-    child->filterRowGroups(rowGroupSize, context, result);
+    child->filterRowGroups(rowGroupSize, context, result, bufferedInput);
   }
 }
 

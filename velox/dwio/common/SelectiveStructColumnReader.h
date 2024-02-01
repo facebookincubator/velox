@@ -35,7 +35,8 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   void filterRowGroups(
       uint64_t rowGroupSize,
       const dwio::common::StatsContext& context,
-      FormatData::FilterRowGroupsResult&) const override;
+      FormatData::FilterRowGroupsResult&,
+      dwio::common::BufferedInput& bufferedInput) const override;
 
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
       override;
