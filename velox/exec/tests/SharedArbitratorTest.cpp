@@ -456,7 +456,9 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
   }
 }
 
-DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
+DEBUG_ONLY_TEST_F(
+    SharedArbitrationTestWithThreadingModes,
+    reclaimToAggregation) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -517,6 +519,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(aggregationQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
@@ -529,6 +532,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
@@ -549,7 +553,9 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
   }
 }
 
-DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
+DEBUG_ONLY_TEST_F(
+    SharedArbitrationTestWithThreadingModes,
+    reclaimToJoinBuilder) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -611,6 +617,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(joinQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder(planNodeIdGenerator)
                         .values(vectors)
                         .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
@@ -633,6 +640,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
