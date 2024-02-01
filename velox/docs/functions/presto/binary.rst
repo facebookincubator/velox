@@ -41,6 +41,28 @@ Binary Functions
 
     Decodes ``bigint`` value from a 64-bit 2’s complement big endian ``binary``.
 
+.. function:: from_base32(string) -> varbinary
+
+    Decodes a Base32-encoded ``string`` back into its original binary form.
+    This function can handle both padded and non-padded Base32 encoded strings. Partially padded Base32 strings will result in an error.
+
+    Examples
+    --------
+    Query with padded Base32 string:
+    ::
+        SELECT from_base32('JBSWY3DPEBLW64TMMQ======'); -- [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]
+
+    Query with non-padded Base32 string:
+    ::
+        SELECT from_base32('JBSWY3DPEBLW64TMMQ'); -- [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]
+
+    Query with partially padded Base32 string:
+    ::
+        SELECT from_base32('JBSWY3DPEBLW64TM=='); -- Error: Base32::decode() - invalid input string: length is not a multiple of 8.
+
+    In the examples above, both fully padded and non-padded Base32 strings ('JBSWY3DPEBLW64TMMQ======' and 'JBSWY3DPEBLW64TMMQ') decode to the binary representation of the text 'Hello World'.
+    The partially padded Base32 string 'JBSWY3DPEBLW64TM==' will lead to a decoding error.
+
 .. function:: from_hex(string) -> varbinary
 
     Decodes binary data from the hex encoded ``string``.
