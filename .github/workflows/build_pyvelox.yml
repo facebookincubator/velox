@@ -101,14 +101,12 @@ jobs:
       - name: Install macOS dependencies
         if: matrix.os == 'macos-12'
         run: |
-          ls -la
           bash scripts/setup-macos.sh install_build_prerequisites \
             install_fmt \
             install_re2 \
             install_double_conversion \
             install_folly
-          ccache -s
-
+          brew install duckdb
       - name: "Create sdist"
         if: matrix.os == 'ubuntu-22.04'
         env:
