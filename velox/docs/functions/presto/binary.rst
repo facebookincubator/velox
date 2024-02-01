@@ -115,6 +115,10 @@ Binary Functions
 
      Encodes ``bigint`` in a 64-bit 2’s complement big endian format.
 
+.. function:: to_base32(binary) -> varchar
+
+    Encodes ``binary`` into a base32 string representation.
+
 .. function:: to_hex(binary) -> varchar
 
     Encodes ``binary`` into a hex string representation.
