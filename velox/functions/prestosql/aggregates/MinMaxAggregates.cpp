@@ -37,6 +37,16 @@ class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
   using BaseAggregate = SimpleNumericAggregate<T, T, T>;
 
  public:
+  T getInitialValue(const T initValue) const {
+    if constexpr (std::is_same_v<T, float>) {
+      return MinMaxTrait<float>::quiet_NaN();
+    } else if constexpr (std::is_same_v<T, double>) {
+      return MinMaxTrait<double>::quiet_NaN();
+    } else {
+      return initValue;
+    }
+  }
+
   explicit MinMaxAggregate(TypePtr resultType) : BaseAggregate(resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
@@ -125,7 +135,21 @@ class MaxAggregate : public MinMaxAggregate<T> {
       folly::Range<const vector_size_t*> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
-      *exec::Aggregate::value<T>(groups[i]) = kInitialValue_;
+      *exec::Aggregate::value<T>(groups[i]) =
+          this->getInitialValue(kInitialValue_);
+    }
+  }
+
+  static inline void updateGroup(T& result, T value) {
+    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+      if (std::isnan(result)) {
+        result = value;
+        return;
+      }
+    }
+
+    if (result < value) {
+      result = value;
     }
   }
 
@@ -145,15 +169,7 @@ class MaxAggregate : public MinMaxAggregate<T> {
       return;
     }
     BaseAggregate::template updateGroups<true, T>(
-        groups,
-        rows,
-        args[0],
-        [](T& result, T value) {
-          if (result < value) {
-            result = value;
-          }
-        },
-        mayPushdown);
+        groups, rows, args[0], updateGroup, mayPushdown);
   }
 
   void addIntermediateResults(
@@ -173,14 +189,10 @@ class MaxAggregate : public MinMaxAggregate<T> {
         group,
         rows,
         args[0],
-        [](T& result, T value) {
-          if (result < value) {
-            result = value;
-          }
-        },
+        updateGroup,
         [](T& result, T value, int /* unused */) { result = value; },
         mayPushdown,
-        kInitialValue_);
+        this->getInitialValue(kInitialValue_));
   }
 
   void addSingleGroupIntermediateResults(
@@ -202,6 +214,19 @@ template <typename T>
 class MinAggregate : public MinMaxAggregate<T> {
   using BaseAggregate = SimpleNumericAggregate<T, T, T>;
 
+  static inline void updateGroup(T& result, T value) {
+    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+      if (std::isnan(result)) {
+        result = value;
+        return;
+      }
+    }
+
+    if (result > value) {
+      result = value;
+    }
+  }
+
  public:
   explicit MinAggregate(TypePtr resultType) : MinMaxAggregate<T>(resultType) {}
 
@@ -210,7 +235,8 @@ class MinAggregate : public MinMaxAggregate<T> {
       folly::Range<const vector_size_t*> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
-      *exec::Aggregate::value<T>(groups[i]) = kInitialValue_;
+      *exec::Aggregate::value<T>(groups[i]) =
+          this->getInitialValue(kInitialValue_);
     }
   }
 
@@ -230,15 +256,7 @@ class MinAggregate : public MinMaxAggregate<T> {
       return;
     }
     BaseAggregate::template updateGroups<true, T>(
-        groups,
-        rows,
-        args[0],
-        [](T& result, T value) {
-          if (result > value) {
-            result = value;
-          }
-        },
-        mayPushdown);
+        groups, rows, args[0], updateGroup, mayPushdown);
   }
 
   void addIntermediateResults(
@@ -258,10 +276,10 @@ class MinAggregate : public MinMaxAggregate<T> {
         group,
         rows,
         args[0],
-        [](T& result, T value) { result = result < value ? result : value; },
+        updateGroup,
         [](T& result, T value, int /* unused */) { result = value; },
         mayPushdown,
-        kInitialValue_);
+        this->getInitialValue(kInitialValue_));
   }
 
   void addSingleGroupIntermediateResults(

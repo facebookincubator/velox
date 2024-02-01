@@ -49,11 +49,49 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
     return vectors;
   }
 
+  /// fuzzData here generates a vector of fuzzed RowVectors.
+  /// If the optional argument inputData is passed then every type
+  /// of rowType which matches the type of inputData will use the data
+  /// from inputData. The rest of columns will be fuzzed.
+  /// \param rowType - Type of fuzzed Row to generate
+  /// \param inputData - Vector to be used in place of type in Row.
+  /// \return
+  std::vector<RowVectorPtr> fuzzData(
+      const RowTypePtr& rowType,
+      const std::optional<VectorPtr>& inputData) {
+    if (inputData.has_value()) {
+      VectorFuzzer::Options options;
+      options.vectorSize = inputData.value()->size();
+      options.nullRatio = 0.1;
+      VectorFuzzer fuzzer(options, pool());
+      std::vector<VectorPtr> childVectors(rowType->size());
+      for (int i = 0; i < rowType->size(); i++) {
+        if (rowType->childAt(i) == inputData.value()->type()) {
+          childVectors[i] = inputData.value();
+        } else {
+          childVectors[i] = fuzzer.fuzz(rowType->childAt(i));
+        }
+      }
+
+      return {std::make_shared<RowVector>(
+          pool(),
+          rowType,
+          nullptr,
+          inputData.value()->size(),
+          std::move(childVectors))};
+    }
+
+    return fuzzData(rowType);
+  }
+
   template <typename TAgg>
-  void
-  doTest(TAgg agg, const TypePtr& inputType, bool testWithTableScan = true) {
+  void doTest(
+      TAgg agg,
+      const TypePtr& inputType,
+      bool testWithTableScan = true,
+      const std::optional<VectorPtr>& inputVector = {}) {
     auto rowType = ROW({"c0", "c1", "mask"}, {BIGINT(), inputType, BOOLEAN()});
-    auto vectors = fuzzData(rowType);
+    auto vectors = fuzzData(rowType, inputVector);
     createDuckDbTable(vectors);
 
     static const std::string c0 = "c0";
@@ -485,6 +523,44 @@ TEST_F(MinMaxTest, failOnUnorderableType) {
           builder.singleAggregation({"c1"}, {expr}), kErrorMessage);
     }
   }
+}
+
+TEST_F(MinMaxTest, nans) {
+  auto doubleVector =
+      makeNullableFlatVector<double>({NAN, NAN, NAN, std::nullopt});
+
+  doTest(max, DOUBLE(), true, doubleVector);
+  doTest(min, DOUBLE(), true, doubleVector);
+
+  auto realVector =
+      makeNullableFlatVector<float>({NAN, NAN, NAN, std::nullopt});
+  doTest(max, REAL(), true, realVector);
+  doTest(min, REAL(), true, realVector);
+
+  // Large constant vector.
+  auto doubleConstant = makeConstant(NAN, 1000);
+  doTest(max, DOUBLE(), true, doubleConstant);
+  doTest(min, DOUBLE(), true, doubleConstant);
+  auto realConstant = makeConstant(NAN, 1000, REAL());
+  doTest(max, REAL(), true, realConstant);
+  doTest(min, REAL(), true, realConstant);
+
+  // Mix of NaN and non NaN:
+  // Presto differs from DuckDb as can be seen from queries below.
+  // Presto:
+  // select min(x) from (values 4.0,nan(),null, 1.0 ) T(x);
+  // 1.0
+  // select max(x) from (values 4.0,nan(),null, 1.0 ) T(x);
+  // 4.0
+  // Duckdb:
+  // select min(c) from  (Values (4.0), ('NaN'),  (NULL), (1.0)) t(c);
+  // 1.0
+  // select max(c) from  (Values (4.0), ('NaN'),  (NULL), (1.0)) t(c);
+  // Nan
+  auto row = makeRowVector(
+      {makeNullableFlatVector<double>({NAN, 4.0, NAN, std::nullopt, 1.0})});
+
+  testAggregations({row}, {}, {"min(c0)", "max(c0)"}, "SELECT 1.0, 4.0");
 }
 
 class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
