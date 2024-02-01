@@ -53,6 +53,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "from_base64url"});
   registerFunction<ToBase32Function, Varchar, Varbinary>(
       {prefix + "to_base32"});
+  registerFunction<FromBase32Function, Varbinary, Varchar>(
+      {prefix + "from_base32"});
 
   registerFunction<FromBigEndian32, int32_t, Varbinary>(
       {prefix + "from_big_endian_32"});

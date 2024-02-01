@@ -39,4 +39,40 @@ TEST_F(Base32Test, calculateEncodedSizeProperSize) {
   EXPECT_EQ(24, Base32::calculateEncodedSize(11, true));
 }
 
+TEST_F(Base32Test, calculateDecodedSizeProperSize) {
+  size_t encoded_size{0};
+
+  encoded_size = 8;
+  EXPECT_EQ(1, Base32::calculateDecodedSize("ME======", encoded_size));
+  EXPECT_EQ(2, encoded_size);
+
+  encoded_size = 2;
+  EXPECT_EQ(1, Base32::calculateDecodedSize("ME", encoded_size));
+  EXPECT_EQ(2, encoded_size);
+
+  encoded_size = 9;
+  EXPECT_THROW(
+      Base32::calculateDecodedSize("MFRA====", encoded_size),
+      facebook::velox::encoding::EncoderException);
+
+  encoded_size = 8;
+  EXPECT_EQ(2, Base32::calculateDecodedSize("MFRA====", encoded_size));
+  EXPECT_EQ(4, encoded_size);
+
+  encoded_size = 8;
+  EXPECT_EQ(3, Base32::calculateDecodedSize("MFRGG===", encoded_size));
+  EXPECT_EQ(5, encoded_size);
+
+  encoded_size = 24;
+  EXPECT_EQ(
+      11,
+      Base32::calculateDecodedSize("NBSWY3DPEB3W64TMMQ======", encoded_size));
+  EXPECT_EQ(18, encoded_size);
+
+  encoded_size = 18;
+  EXPECT_EQ(
+      11, Base32::calculateDecodedSize("NBSWY3DPEB3W64TMMQ", encoded_size));
+  EXPECT_EQ(18, encoded_size);
+}
+
 } // namespace facebook::velox::encoding

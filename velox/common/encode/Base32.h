@@ -34,7 +34,26 @@ class Base32 {
   /// returned by the calculateEncodedSize().
   static void encode(const char* data, size_t size, char* output);
 
+  /// Returns decoded size for the specified input. Adjusts the 'size' to
+  /// subtract the length of the padding, if exists.
+  static size_t calculateDecodedSize(const char* data, size_t& size);
+
+  /// Decodes the specified number of characters from the 'src' and writes the
+  /// result to the 'dst'. The destination must have enough space, e.g. as
+  /// returned by the calculateDecodedSize().
+  static size_t
+  decode(const char* src, size_t src_len, char* dst, size_t dst_len);
+
  private:
+  /// Decodes the specified number of base 32 encoded characters from the 'src'
+  /// and writes to 'dst'
+  static size_t decodeImpl(
+      const char* src,
+      size_t src_len,
+      char* dst,
+      size_t dst_len,
+      const ReverseIndex& table);
+
   template <class T>
   static void encodeImpl(
       const T& data,

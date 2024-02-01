@@ -179,4 +179,118 @@ template <class T>
   }
 }
 
+size_t Base32::calculateDecodedSize(const char* data, size_t& size) {
+   if (size == 0) {
+     return 0;
+   }
+
+   // Check if the input data is padded
+   if (isPadded(data, size)) {
+     /// If padded, ensure that the string length is a multiple of the encoded
+     /// block size.
+     if (size % kEncodedBlockSize != 0) {
+       throw EncoderException(
+           "Base32::decode() - invalid input string: "
+           "string length is not a multiple of 8.");
+     }
+
+     auto needed = (size * kBinaryBlockSize) / kEncodedBlockSize;
+     auto padding = countPadding(data, size);
+     size -= padding;
+
+     // Adjust the needed size for padding.
+     return needed -
+         ceil((padding * kBinaryBlockSize) /
+              static_cast<double>(kEncodedBlockSize));
+   } else {
+     // If not padded, calculate extra bytes, if any.
+     auto extra = size % kEncodedBlockSize;
+     auto needed = (size / kEncodedBlockSize) * kBinaryBlockSize;
+
+     // Adjust the needed size for extra bytes, if present.
+     if (extra) {
+       if ((extra == 6) || (extra == 3) || (extra == 1)) {
+         throw EncoderException(
+             "Base32::decode() - invalid input string: "
+             "string length cannot be 6, 3 or 1 more than a multiple of 8.");
+       }
+       needed += (extra * kBinaryBlockSize) / kEncodedBlockSize;
+     }
+
+     return needed;
+   }
+ }
+
+ size_t
+ Base32::decode(const char* src, size_t src_len, char* dst, size_t dst_len) {
+   return decodeImpl(src, src_len, dst, dst_len, kBase32ReverseIndexTable);
+ }
+
+ size_t Base32::decodeImpl(
+     const char* src,
+     size_t src_len,
+     char* dst,
+     size_t dst_len,
+     const ReverseIndex& reverse_lookup) {
+   if (!src_len) {
+     return 0;
+   }
+
+   auto needed = calculateDecodedSize(src, src_len);
+   if (dst_len < needed) {
+     throw EncoderException(
+         "Base32::decode() - invalid output string: "
+         "output string is too small.");
+   }
+
+   // Handle full groups of 8 characters.
+   for (; src_len > 8; src_len -= 8, src += 8, dst += 5) {
+     /// Each character of the 8 bytes encode 5 bits of the original, grab each
+     /// with the appropriate shifts to rebuild the original and then split that
+     /// back into the original 8 bit bytes.
+     uint64_t last =
+         (uint64_t(baseReverseLookup(kBase, src[0], reverse_lookup)) << 35) |
+         (uint64_t(baseReverseLookup(kBase, src[1], reverse_lookup)) << 30) |
+         (baseReverseLookup(kBase, src[2], reverse_lookup) << 25) |
+         (baseReverseLookup(kBase, src[3], reverse_lookup) << 20) |
+         (baseReverseLookup(kBase, src[4], reverse_lookup) << 15) |
+         (baseReverseLookup(kBase, src[5], reverse_lookup) << 10) |
+         (baseReverseLookup(kBase, src[6], reverse_lookup) << 5) |
+         baseReverseLookup(kBase, src[7], reverse_lookup);
+     dst[0] = (last >> 32) & 0xff;
+     dst[1] = (last >> 24) & 0xff;
+     dst[2] = (last >> 16) & 0xff;
+     dst[3] = (last >> 8) & 0xff;
+     dst[4] = last & 0xff;
+   }
+
+   /// Handle the last 2, 4, 5, 7 or 8 characters.  This is similar to the above,
+   /// but the last characters may or may not exist.
+   DCHECK(src_len >= 2);
+   uint64_t last =
+       (uint64_t(baseReverseLookup(kBase, src[0], reverse_lookup)) << 35) |
+       (uint64_t(baseReverseLookup(kBase, src[1], reverse_lookup)) << 30);
+   dst[0] = (last >> 32) & 0xff;
+   if (src_len > 2) {
+     last |= baseReverseLookup(kBase, src[2], reverse_lookup) << 25;
+     last |= baseReverseLookup(kBase, src[3], reverse_lookup) << 20;
+     dst[1] = (last >> 24) & 0xff;
+     if (src_len > 4) {
+       last |= baseReverseLookup(kBase, src[4], reverse_lookup) << 15;
+       dst[2] = (last >> 16) & 0xff;
+       if (src_len > 5) {
+         last |= baseReverseLookup(kBase, src[5], reverse_lookup) << 10;
+         last |= baseReverseLookup(kBase, src[6], reverse_lookup) << 5;
+         dst[3] = (last >> 8) & 0xff;
+         if (src_len > 7) {
+           last |= baseReverseLookup(kBase, src[7], reverse_lookup);
+           dst[4] = last & 0xff;
+         }
+       }
+     }
+   }
+
+   return needed;
+ }
+
 } // namespace facebook::velox::encoding

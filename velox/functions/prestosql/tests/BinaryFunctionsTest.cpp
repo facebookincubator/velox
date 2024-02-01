@@ -489,6 +489,42 @@ TEST_F(BinaryFunctionsTest, toBase32) {
       toBase32("Hello World from Velox!"));
 }
 
+TEST_F(BinaryFunctionsTest, fromBase32) {
+  const auto fromBase32 = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("from_base32(c0)", value);
+  };
+
+  EXPECT_EQ(std::nullopt, fromBase32(std::nullopt));
+  EXPECT_EQ("", fromBase32(""));
+  EXPECT_EQ("a", fromBase32("ME======"));
+  EXPECT_EQ("ab", fromBase32("MFRA===="));
+  EXPECT_EQ("abc", fromBase32("MFRGG==="));
+  EXPECT_EQ("db2", fromBase32("MRRDE==="));
+  EXPECT_EQ("abcd", fromBase32("MFRGGZA="));
+  EXPECT_EQ("hello world", fromBase32("NBSWY3DPEB3W64TMMQ======"));
+  EXPECT_EQ(
+      "Hello World from Velox!",
+      fromBase32("JBSWY3DPEBLW64TMMQQGM4TPNUQFMZLMN54CC==="));
+
+  // Try encoded strings without padding
+  EXPECT_EQ("a", fromBase32("ME"));
+  EXPECT_EQ("ab", fromBase32("MFRA"));
+  EXPECT_EQ("abc", fromBase32("MFRGG"));
+  EXPECT_EQ("db2", fromBase32("MRRDE"));
+  EXPECT_EQ("abcd", fromBase32("MFRGGZA"));
+  EXPECT_EQ("1234", fromBase32("GEZDGNA"));
+  EXPECT_EQ("abcde", fromBase32("MFRGGZDF"));
+  EXPECT_EQ("abcdef", fromBase32("MFRGGZDFMY"));
+
+  // Check with invaild encoded strings
+  EXPECT_THROW(fromBase32("1="), VeloxUserError);
+  EXPECT_THROW(fromBase32("M1======"), VeloxUserError);
+
+  VELOX_ASSERT_THROW(
+      fromBase32("J1======"),
+      "decode() - invalid input string: invalid characters");
+}
+
 TEST_F(BinaryFunctionsTest, fromBigEndian32) {
   const auto fromBigEndian32 = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t, std::string>(

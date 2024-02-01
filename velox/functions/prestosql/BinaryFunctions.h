@@ -338,6 +338,24 @@ struct ToBase32Function {
   }
 };
 
+struct FromBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<Varchar>& input) {
+    try {
+      auto inputSize = input.size();
+      result.resize(
+          encoding::Base32::calculateDecodedSize(input.data(), inputSize));
+      encoding::Base32::decode(
+          input.data(), inputSize, result.data(), result.size());
+    } catch (const encoding::EncoderException& e) {
+      VELOX_USER_FAIL(e.what());
+    }
+  }
+};
+
 template <typename T>
 struct FromBigEndian32 {
   VELOX_DEFINE_FUNCTION_TYPES(T);
