@@ -30,7 +30,7 @@ add_library(
   TpchQueryBuilder.cpp
   VectorTestUtil.cpp
   PortUtil.cpp
-  SingleThreadedExecutionUtil.cpp)
+  SingleThreaded.cpp)
 
 target_link_libraries(
   velox_exec_test_lib

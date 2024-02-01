@@ -16,7 +16,7 @@
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/tests/utils/SingleThreadedExecutionUtil.h"
+#include "velox/exec/tests/utils/SingleThreaded.h"
 
 #include <filesystem>
 

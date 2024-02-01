@@ -15,7 +15,7 @@
  */
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/SingleThreadedExecutionUtil.h"
+#include "velox/exec/tests/utils/SingleThreaded.h"
 
 namespace facebook::velox::exec::test {
 

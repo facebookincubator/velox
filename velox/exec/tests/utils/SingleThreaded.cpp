@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "SingleThreadedExecutionUtil.h"
+#include "SingleThreaded.h"
 
 namespace facebook::velox::exec::test {
 
