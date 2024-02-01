@@ -95,9 +95,24 @@ class PrestoVectorSerde : public VectorSerde {
   /// you can specifiy the encodings using PrestoOptions.encodings
   void serializeEncoded(
       const RowVectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
       StreamArena* streamArena,
       const Options* options,
       OutputStream* out);
+
+  void serializeEncoded(
+      const RowVectorPtr& vector,
+      StreamArena* streamArena,
+      const Options* options,
+      OutputStream* out) {
+    std::vector<IndexRange> ranges{{0, vector->size()}};
+    serializeEncoded(
+        vector,
+        folly::Range(ranges.data(), ranges.size()),
+        streamArena,
+        options,
+        out);
+  }
 
   bool supportsAppendInDeserialize() const override {
     return true;
