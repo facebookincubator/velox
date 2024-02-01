@@ -347,6 +347,8 @@ RowVectorPtr Driver::next(std::shared_ptr<BlockingState>& blockingState) {
     enqueueInternal();
     stop = runInternal(self, blockingState, result);
     if (stop == StopReason::kPause) {
+      VELOX_DCHECK_NULL(blockingState)
+      VELOX_DCHECK_NULL(result)
       continue;
     }
     break;
