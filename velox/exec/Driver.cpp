@@ -331,13 +331,26 @@ void Driver::pushdownFilters(int operatorIndex) {
 }
 
 RowVectorPtr Driver::next(std::shared_ptr<BlockingState>& blockingState) {
-  enqueueInternal();
   auto self = shared_from_this();
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(
       self->driverCtx()->threadDebugInfo);
   ScopedDriverThreadContext scopedDriverThreadContext(*self->driverCtx());
   RowVectorPtr result;
-  auto stop = runInternal(self, blockingState, result);
+
+  StopReason stop;
+
+  // Spin wait when task is paused.
+  while (true) {
+    if (task()->pauseRequested()) {
+      continue;
+    }
+    enqueueInternal();
+    stop = runInternal(self, blockingState, result);
+    if (stop == StopReason::kPause) {
+      continue;
+    }
+    break;
+  }
 
   // We get kBlock if 'result' was produced; kAtEnd if pipeline has finished
   // processing and no more results will be produced; kAlreadyTerminated on
