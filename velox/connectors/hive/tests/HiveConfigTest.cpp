@@ -61,6 +61,12 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(
       hiveConfig->sortWriterMaxOutputBytes(emptySession.get()), 10UL << 20);
   ASSERT_EQ(hiveConfig->isPartitionPathAsLowerCase(emptySession.get()), true);
+  ASSERT_EQ(
+      hiveConfig->parquetWriterMaxBlockSizeSession(emptySession.get()),
+      128L * 1024L * 1024L);
+  ASSERT_EQ(
+      hiveConfig->parquetWriterMaxBlockRowsSession(emptySession.get()),
+      1024 * 1024);
 }
 
 TEST(HiveConfigTest, overrideConfig) {
@@ -137,6 +143,8 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kFileColumnNamesReadAsLowerCaseSession, "true"},
       {HiveConfig::kOrcWriterMaxStripeSizeSession, "22MB"},
       {HiveConfig::kOrcWriterMaxDictionaryMemorySession, "22MB"},
+      {HiveConfig::kParquetWriterMaxBlockRowsSession, "20"},
+      {HiveConfig::kParquetWriterMaxBlockSizeSession, "22MB"},
       {HiveConfig::kSortWriterMaxOutputRowsSession, "20"},
       {HiveConfig::kSortWriterMaxOutputBytesSession, "20MB"},
       {HiveConfig::kPartitionPathAsLowerCaseSession, "false"}};
@@ -174,4 +182,8 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_EQ(hiveConfig->sortWriterMaxOutputRows(session.get()), 20);
   ASSERT_EQ(hiveConfig->sortWriterMaxOutputBytes(session.get()), 20UL << 20);
   ASSERT_EQ(hiveConfig->isPartitionPathAsLowerCase(session.get()), false);
+  ASSERT_EQ(
+      hiveConfig->parquetWriterMaxBlockSizeSession(session.get()),
+      22L * 1024L * 1024L);
+  ASSERT_EQ(hiveConfig->parquetWriterMaxBlockRowsSession(session.get()), 20);
 }

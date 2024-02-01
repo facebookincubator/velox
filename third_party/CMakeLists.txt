@@ -24,7 +24,9 @@ if(VELOX_ENABLE_ARROW)
   else()
     set(THRIFT_SOURCE "BUNDLED")
   endif()
-  set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
+  set(ARROW_PREFIX
+      "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep"
+      CACHE INTERNAL "arrow prefix")
   set(ARROW_CMAKE_ARGS
       -DARROW_PARQUET=OFF
       -DARROW_WITH_THRIFT=ON
