@@ -31,15 +31,17 @@ constexpr static int kBinaryBlockByteSize = 3;
 // Size of an encoded block in bytes (4 bytes = 24 bits)
 constexpr static int kEncodedBlockByteSize = 4;
 
+constexpr static int kBase = 64; // Encoding base
+
 // Character sets for Base64 and Base64 URL encoding
-constexpr const Base64::Charset kBase64Charset = {
+constexpr const Charset kBase64Charset = {
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
     'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
     'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '/'};
 
-constexpr const Base64::Charset kBase64UrlCharset = {
+constexpr const Charset kBase64UrlCharset = {
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
     'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
@@ -47,7 +49,7 @@ constexpr const Base64::Charset kBase64UrlCharset = {
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '_'};
 
 // Reverse lookup tables for decoding
-constexpr const Base64::ReverseIndex kBase64ReverseIndexTable = {
+constexpr const ReverseIndex kBase64ReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62,  255,
@@ -67,7 +69,7 @@ constexpr const Base64::ReverseIndex kBase64ReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255};
 
-constexpr const Base64::ReverseIndex kBase64UrlReverseIndexTable = {
+constexpr const ReverseIndex kBase64UrlReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62,  255,
@@ -90,7 +92,7 @@ constexpr const Base64::ReverseIndex kBase64UrlReverseIndexTable = {
 // Verify that for every entry in kBase64Charset, the corresponding entry
 // in kBase64ReverseIndexTable is correct.
 static_assert(
-    Base64::checkForwardIndex(
+    checkForwardIndex(
         sizeof(kBase64Charset) - 1,
         kBase64Charset,
         kBase64ReverseIndexTable),
@@ -99,30 +101,18 @@ static_assert(
 // Verify that for every entry in kBase64UrlCharset, the corresponding entry
 // in kBase64UrlReverseIndexTable is correct.
 static_assert(
-    Base64::checkForwardIndex(
+    checkForwardIndex(
         sizeof(kBase64UrlCharset) - 1,
         kBase64UrlCharset,
         kBase64UrlReverseIndexTable),
     "kBase64UrlCharset has incorrect entries");
 
-// static
-const bool Base64::findCharacterInCharSet(
-    const Base64::Charset& charset,
-    uint8_t idx,
-    const char c) {
-  for (; idx < charset.size(); ++idx) {
-    if (charset[idx] == c) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // Verify that for every entry in kBase64ReverseIndexTable, the corresponding
 // entry in kBase64Charset is correct.
 static_assert(
-    Base64::checkReverseIndex(
+    checkReverseIndex(
         sizeof(kBase64ReverseIndexTable) - 1,
+        kBase,
         kBase64Charset,
         kBase64ReverseIndexTable),
     "kBase64ReverseIndexTable has incorrect entries.");
@@ -130,8 +120,9 @@ static_assert(
 // Verify that for every entry in kBase64ReverseIndexTable, the corresponding
 // entry in kBase64Charset is correct.
 static_assert(
-    Base64::checkReverseIndex(
+    checkReverseIndex(
         sizeof(kBase64UrlReverseIndexTable) - 1,
+        kBase,
         kBase64UrlCharset,
         kBase64UrlReverseIndexTable),
     "kBase64UrlReverseIndexTable has incorrect entries.");
@@ -175,7 +166,7 @@ void Base64::encodeUrl(const char* data, size_t len, char* output) {
 template <class T>
 /* static */ void Base64::encodeImpl(
     const T& data,
-    const Base64::Charset& charset,
+    const Charset& charset,
     bool include_pad,
     char* out) {
   auto len = data.size();
@@ -306,17 +297,6 @@ void Base64::decode(const char* data, size_t size, char* output) {
 }
 
 // static
-uint8_t Base64::base64ReverseLookup(
-    char p,
-    const Base64::ReverseIndex& reverseIndex) {
-  auto curr = reverseIndex[(uint8_t)p];
-  if (curr >= 0x40) {
-    VELOX_USER_FAIL("decode() - invalid input string: invalid characters");
-  }
-  return curr;
-}
-
-// static
 size_t
 Base64::decode(const char* src, size_t src_len, char* dst, size_t dst_len) {
   return decodeImpl(src, src_len, dst, dst_len, kBase64ReverseIndexTable);
@@ -388,10 +368,10 @@ size_t Base64::decodeImpl(
     // Each character of the 4 encode 6 bits of the original, grab each with
     // the appropriate shifts to rebuild the original and then split that back
     // into the original 8 bit bytes.
-    uint32_t last = (base64ReverseLookup(src[0], reverseIndex) << 18) |
-        (base64ReverseLookup(src[1], reverseIndex) << 12) |
-        (base64ReverseLookup(src[2], reverseIndex) << 6) |
-        base64ReverseLookup(src[3], reverseIndex);
+    uint32_t last = (baseReverseLookup(kBase, src[0], reverseIndex) << 18) |
+        (baseReverseLookup(kBase, src[1], reverseIndex) << 12) |
+        (baseReverseLookup(kBase, src[2], reverseIndex) << 6) |
+        baseReverseLookup(kBase, src[3], reverseIndex);
     dst[0] = (last >> 16) & 0xff;
     dst[1] = (last >> 8) & 0xff;
     dst[2] = last & 0xff;
@@ -400,14 +380,14 @@ size_t Base64::decodeImpl(
   // Handle the last 2-4 characters.  This is similar to the above, but the
   // last 2 characters may or may not exist.
   DCHECK(src_len >= 2);
-  uint32_t last = (base64ReverseLookup(src[0], reverseIndex) << 18) |
-      (base64ReverseLookup(src[1], reverseIndex) << 12);
+  uint32_t last = (baseReverseLookup(kBase, src[0], reverseIndex) << 18) |
+      (baseReverseLookup(kBase, src[1], reverseIndex) << 12);
   dst[0] = (last >> 16) & 0xff;
   if (src_len > 2) {
-    last |= base64ReverseLookup(src[2], reverseIndex) << 6;
+    last |= baseReverseLookup(kBase, src[2], reverseIndex) << 6;
     dst[1] = (last >> 8) & 0xff;
     if (src_len > 3) {
-      last |= base64ReverseLookup(src[3], reverseIndex);
+      last |= baseReverseLookup(kBase, src[3], reverseIndex);
       dst[2] = last & 0xff;
     }
   }

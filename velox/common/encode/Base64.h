@@ -23,6 +23,8 @@
 #include <folly/Range.h>
 #include <folly/io/IOBuf.h>
 
+#include "velox/common/encode/EncoderUtils.h"
+
 namespace facebook::velox::encoding {
 
 class Base64 {
@@ -108,64 +110,6 @@ class Base64 {
   /// encoding and writes the result to the 'dst'.
   static void
   decodeUrl(const char* src, size_t src_len, char* dst, size_t dst_len);
-
-  /// Checks if there is padding in encoded data.
-  static inline bool isPadded(const char* data, size_t len) {
-    return (len > 0 && data[len - 1] == kPadding);
-  }
-
-  /// Counts the number of padding characters in encoded data.
-  static inline size_t numPadding(const char* src, size_t len) {
-    size_t numPadding{0};
-    while (len > 0 && src[len - 1] == kPadding) {
-      numPadding++;
-      len--;
-    }
-    return numPadding;
-  }
-
-  /// Performs a reverse lookup in the reverse index to retrieve the original
-  /// index of a character in the base.
-  static uint8_t base64ReverseLookup(char p, const ReverseIndex& reverseIndex);
-
-  /// Searches for a character within a charset up to a certain index.
-  static const bool
-  findCharacterInCharSet(const Charset& charset, uint8_t idx, const char c);
-
-  // Validate the character in charset with ReverseIndex table
-  static constexpr bool checkForwardIndex(
-      uint8_t idx,
-      const Charset& charset,
-      const ReverseIndex& reverseIndex) {
-    for (uint8_t i = 0; i <= idx; ++i) {
-      if (!(reverseIndex[static_cast<uint8_t>(charset[i])] == i)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /// Checks the consistency of a reverse index mapping for a given character
-  /// set.
-  static constexpr bool checkReverseIndex(
-      uint8_t idx,
-      const Charset& charset,
-      const ReverseIndex& reverseIndex) {
-    for (uint8_t currentIdx = idx; currentIdx != static_cast<uint8_t>(-1);
-         --currentIdx) {
-      if (reverseIndex[currentIdx] == 255) {
-        if (Base64::findCharacterInCharSet(
-                charset, 0, static_cast<char>(currentIdx))) {
-          return false;
-        }
-      } else {
-        if (!(charset[reverseIndex[currentIdx]] == currentIdx)) {
-          return false;
-        }
-      }
-    }
-    return true;
-  }
 
  private:
   /// Encodes the specified data using the provided charset.
