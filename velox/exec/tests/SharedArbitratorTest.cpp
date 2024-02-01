@@ -456,7 +456,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
   }
 }
 
-DEBUG_ONLY_TEST_F(
+DEBUG_ONLY_TEST_P(
     SharedArbitrationTestWithThreadingModes,
     reclaimToAggregation) {
   const int numVectors = 32;
@@ -553,7 +553,7 @@ DEBUG_ONLY_TEST_F(
   }
 }
 
-DEBUG_ONLY_TEST_F(
+DEBUG_ONLY_TEST_P(
     SharedArbitrationTestWithThreadingModes,
     reclaimToJoinBuilder) {
   const int numVectors = 32;
