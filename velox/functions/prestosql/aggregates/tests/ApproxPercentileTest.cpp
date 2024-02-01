@@ -19,6 +19,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
@@ -400,27 +401,63 @@ TEST_F(ApproxPercentileTest, finalAggregateAccuracy) {
   assertQuery(op, "SELECT 5");
 }
 
+class TestingDictionaryPercentilesFunction : public exec::VectorFunction {
+ public:
+  explicit TestingDictionaryPercentilesFunction(memory::MemoryPool* pool)
+      : pool_(pool) {}
+
+  void apply(
+      const SelectivityVector& /*rows*/,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /*outputType*/,
+      exec::EvalCtx& /*context*/,
+      VectorPtr& result) const override {
+    vector_size_t resultSize = args[0]->size();
+    ::facebook::velox::test::VectorMaker vectorMaker(pool_);
+    auto indices =
+        AlignedBuffer::allocate<vector_size_t>(resultSize * 3, pool_);
+    auto rawIndices = indices->asMutable<vector_size_t>();
+    for (int i = 0; i < resultSize * 3; i++) {
+      rawIndices[i] = i % 3;
+    }
+    auto percentiles = std::make_shared<ArrayVector>(
+        pool_,
+        ARRAY(DOUBLE()),
+        nullptr,
+        resultSize,
+        AlignedBuffer::allocate<vector_size_t>(resultSize, pool_, 0),
+        AlignedBuffer::allocate<vector_size_t>(resultSize, pool_, 3),
+        BaseVector::wrapInDictionary(
+            nullptr, indices, 3, vectorMaker.flatVector<double>({0, 0.5, 1})));
+
+    result = percentiles;
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .argumentType("integer")
+                .returnType("array(double)")
+                .build()};
+  }
+
+ private:
+  memory::MemoryPool* pool_;
+};
+
 TEST_F(ApproxPercentileTest, invalidEncoding) {
-  auto indices = AlignedBuffer::allocate<vector_size_t>(3, pool());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  std::iota(rawIndices, rawIndices + indices->size(), 0);
-  auto percentiles = std::make_shared<ArrayVector>(
-      pool(),
-      ARRAY(DOUBLE()),
-      nullptr,
-      1,
-      AlignedBuffer::allocate<vector_size_t>(1, pool(), 0),
-      AlignedBuffer::allocate<vector_size_t>(1, pool(), 3),
-      BaseVector::wrapInDictionary(
-          nullptr, indices, 3, makeFlatVector<double>({0, 0.5, 1})));
+  exec::registerVectorFunction(
+      "testing_dictionary_percentiles",
+      TestingDictionaryPercentilesFunction::signatures(),
+      std::make_unique<TestingDictionaryPercentilesFunction>(pool()));
   auto rows = makeRowVector({
       makeFlatVector<int32_t>(10, folly::identity),
-      BaseVector::wrapInConstant(1, 0, percentiles),
   });
-  auto plan = PlanBuilder()
-                  .values({rows})
-                  .singleAggregation({}, {"approx_percentile(c0, c1)"})
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values({rows})
+          .project({"c0", "testing_dictionary_percentiles(c0) as percentiles"})
+          .singleAggregation({}, {"approx_percentile(c0, percentiles)"})
+          .planNode();
   AssertQueryBuilder assertQuery(plan);
   VELOX_ASSERT_THROW(
       assertQuery.copyResults(pool()),

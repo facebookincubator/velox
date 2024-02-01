@@ -140,14 +140,16 @@ TEST_F(ApproxMostFrequentTestInt, invalidBuckets) {
   static_cast<memory::MemoryPoolImpl*>(pool())->testingSetCapacity(1 << 21);
   auto run = [&](int64_t buckets) {
     auto rows = makeRowVector({
-        makeConstant<int64_t>(buckets, buckets),
         makeFlatVector<int>(buckets, folly::identity),
-        makeConstant<int64_t>(buckets, buckets),
     });
-    auto plan = exec::test::PlanBuilder()
-                    .values({rows})
-                    .singleAggregation({}, {"approx_most_frequent(c0, c1, c2)"})
-                    .planNode();
+    auto plan =
+        exec::test::PlanBuilder()
+            .values({rows})
+            .singleAggregation(
+                {},
+                {fmt::format(
+                    "approx_most_frequent({}, c0, {})", buckets, buckets)})
+            .planNode();
     return exec::test::AssertQueryBuilder(plan).copyResults(pool());
   };
   ASSERT_EQ(run(10)->size(), 1);

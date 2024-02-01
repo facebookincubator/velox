@@ -36,7 +36,10 @@ Values::Values(
   values_.reserve(values->values().size());
   for (auto& vector : values->values()) {
     if (vector->size() > 0) {
-      values_.emplace_back(vector);
+      auto copy = BaseVector::create<RowVector>(
+          vector->type(), vector->size(), vector->pool());
+      copy->copy(vector.get(), 0, 0, vector->size());
+      values_.emplace_back(copy);
     }
   }
 }

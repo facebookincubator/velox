@@ -18,6 +18,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/expression/Expr.h"
 #include "velox/parse/Expressions.h"
 
 using namespace facebook::velox;
@@ -331,7 +332,7 @@ TEST_F(FilterProjectTest, projectAndIdentityOverLazy) {
 // optimizing that code.  We are testing the optimization of potentially more
 // expensive case of FieldReference::evalSpecialForm here.
 TEST_F(FilterProjectTest, nestedFieldReference) {
-  auto vector = makeRowVector({
+  auto input = makeRowVector({
       makeRowVector({
           makeRowVector(
               {
@@ -342,15 +343,38 @@ TEST_F(FilterProjectTest, nestedFieldReference) {
               nullEvery(2)),
       }),
   });
-  CursorParameters params;
-  params.planNode =
-      PlanBuilder().values({vector}).project({"(c0).c0.c0.c0"}).planNode();
-  params.copyResult = false;
-  auto cursor = TaskCursor::create(params);
-  ASSERT_TRUE(cursor->moveNext());
-  auto result = cursor->current();
-  auto* actual = result->as<RowVector>()->childAt(0).get();
-  const BaseVector* expected = vector.get();
+
+  // Equivalent to c0.c0.c0.c0
+  std::vector<core::TypedExprPtr> expr = {std::make_shared<
+      core::FieldAccessTypedExpr>(
+      INTEGER(),
+      std::make_shared<core::FieldAccessTypedExpr>(
+          ROW({{"c0", INTEGER()}}),
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ROW({{"c0", ROW({{"c0", INTEGER()}})}}),
+              std::make_shared<core::FieldAccessTypedExpr>(
+                  ROW({{"c0", ROW({{"c0", ROW({{"c0", INTEGER()}})}})}}),
+                  std::make_shared<core::InputTypedExpr>(ROW(
+                      {{"c0",
+                        ROW(
+                            {{"c0",
+                              ROW({{"c0", ROW({{"c0", INTEGER()}})}})}})}})),
+                  "c0"),
+              "c0"),
+          "c0"),
+      "c0")};
+
+  std::shared_ptr<core::QueryCtx> queryCtx{std::make_shared<core::QueryCtx>()};
+  std::unique_ptr<core::ExecCtx> execCtx{
+      std::make_unique<core::ExecCtx>(pool_.get(), queryCtx.get())};
+  auto exprSet =
+      std::make_unique<exec::ExprSet>(std::move(expr), execCtx.get());
+  exec::EvalCtx context(execCtx.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> result(1);
+  exprSet->eval(SelectivityVector{input->size()}, context, result);
+
+  auto* actual = result[0].get();
+  const BaseVector* expected = input.get();
   for (int i = 0; i < 4; ++i) {
     expected = expected->as<RowVector>()->childAt(0).get();
   }

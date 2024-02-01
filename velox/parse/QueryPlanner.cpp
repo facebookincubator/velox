@@ -108,15 +108,18 @@ PlanNodePtr toVeloxPlan(
     QueryContext& queryContext) {
   std::vector<std::string> names;
   std::vector<TypePtr> types;
+  std::vector<VectorPtr> children;
   for (auto i = 0; i < logicalDummyScan.types.size(); ++i) {
     names.push_back(queryContext.nextColumnName());
     types.push_back(duckdb::toVeloxType(logicalDummyScan.types[i]));
+    children.emplace_back(
+        BaseVector::createNullConstant(types.back(), 1, pool));
   }
 
   auto rowType = ROW(std::move(names), std::move(types));
 
-  std::vector<RowVectorPtr> vectors = {std::make_shared<RowVector>(
-      pool, rowType, nullptr, 1, std::vector<VectorPtr>{})};
+  std::vector<RowVectorPtr> vectors = {
+      std::make_shared<RowVector>(pool, rowType, nullptr, 1, children)};
   return std::make_shared<ValuesNode>(queryContext.nextNodeId(), vectors);
 }
 
