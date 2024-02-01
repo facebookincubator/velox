@@ -1390,24 +1390,22 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
 TEST_F(TableScanTest, fileNotFound) {
   auto split = HiveConnectorSplitBuilder("/path/to/nowhere.orc").build();
   for (bool ignoreMissingFiles : {true, false}) {
-    auto assertQueryForMissingFile = [&](bool ignoreMissingFile) {
-      AssertQueryBuilder(tableScanNode(), duckDbQueryRunner_)
+    auto assertMissingFile = [&](bool ignoreMissingFile) {
+      AssertQueryBuilder(tableScanNode())
           .connectorSessionProperty(
               kHiveConnectorId,
               connector::hive::HiveConfig::kIgnoreMissingFilesSession,
               std::to_string(ignoreMissingFile))
-          .splits({split})
-          .assertResults("");
+          .split(split)
+          .assertEmptyResults();
     };
     if (ignoreMissingFiles) {
-      assertQueryForMissingFile(ignoreMissingFiles);
+      assertMissingFile(ignoreMissingFiles);
     } else {
-      try {
-        assertQueryForMissingFile(ignoreMissingFiles);
-        ASSERT_FALSE(true) << "Function should throw.";
-      } catch (const VeloxRuntimeError& e) {
-        ASSERT_EQ(e.errorCode(), error_code::kFileNotFound);
-      }
+      VELOX_ASSERT_ERROR_CODE(
+          assertMissingFile(ignoreMissingFiles),
+          VeloxRuntimeError,
+          error_code::kFileNotFound);
     }
   }
 }

@@ -16,6 +16,7 @@
 
 #include <fcntl.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -322,12 +323,8 @@ TEST(LocalFile, fileNotFound) {
   auto tempFolder = ::exec::test::TempDirectoryPath::create();
   auto path = fmt::format("{}/file", tempFolder->path);
   auto localFs = filesystems::getFileSystem(path, nullptr);
-  {
-    try {
-      LocalReadFile readFile(path);
-      ASSERT_FALSE(true) << "Function should throw.";
-    } catch (VeloxRuntimeError& e) {
-      ASSERT_EQ(e.errorCode(), error_code::kFileNotFound);
-    }
-  }
+  VELOX_ASSERT_ERROR_CODE(
+      localFs->openFileForRead(path),
+      VeloxRuntimeError,
+      error_code::kFileNotFound);
 }

@@ -105,7 +105,7 @@ LocalReadFile::LocalReadFile(std::string_view path) : path_(path) {
   fd_ = open(path_.c_str(), O_RDONLY);
   if (fd_ < 0) {
     if (errno == ENOENT) {
-      VELOX_FILE_NOT_FOUND_ERROR("file {} does not exist", path);
+      VELOX_FILE_NOT_FOUND_ERROR("file {} does not exist.", path);
     } else {
       VELOX_FAIL(
           "open failure in LocalReadFile constructor, {} {} {}.",

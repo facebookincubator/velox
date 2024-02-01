@@ -63,6 +63,16 @@
       << "Expected error message to contain '" << (_errorMessage)          \
       << "', but received '" << status.message() << "'."
 
+#define VELOX_ASSERT_ERROR_CODE(_expression, _type, _errorCode)               \
+  try {                                                                       \
+    (_expression);                                                            \
+    FAIL() << "Expected an exception";                                        \
+  } catch (const _type& e) {                                                  \
+    ASSERT_TRUE(e.errorCode() == _errorCode)                                  \
+        << "Expected error code to be '" << _errorCode << "', but received '" \
+        << e.errorCode() << "'.";                                             \
+  }
+
 #ifndef NDEBUG
 #define DEBUG_ONLY_TEST(test_fixture, test_name) TEST(test_fixture, test_name)
 #define DEBUG_ONLY_TEST_F(test_fixture, test_name) \

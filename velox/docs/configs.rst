@@ -428,7 +428,7 @@ Each query can override the config by setting corresponding query session proper
      -
      - bool
      - false
-     - If true, the task will continue to run when encountering missing files and the split woule be marked as empty split.
+     - If true, splits that refer to missing files don't generate errors and are processed as empty splits.
    * - max-coalesced-bytes
      -
      - integer

@@ -92,7 +92,7 @@ void SplitReader::prepareSplit(
   VELOX_CHECK_NE(
       baseReaderOpts_.getFileFormat(), dwio::common::FileFormat::UNKNOWN);
 
-  std::shared_ptr<FileHandle> fileHandle = nullptr;
+  std::shared_ptr<FileHandle> fileHandle;
   try {
     fileHandle = fileHandleFactory_->generate(hiveSplit_->filePath).second;
   } catch (VeloxRuntimeError& e) {
