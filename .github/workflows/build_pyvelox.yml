@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-11]
+        os: [ubuntu-22.04, macos-12]
     steps:
       - uses: actions/checkout@v3
         with:
@@ -99,7 +99,7 @@ jobs:
             ccache-wheels-${{ matrix.os }}-
 
       - name: Install macOS dependencies
-        if: matrix.os == 'macos-11'
+        if: matrix.os == 'macos-12
         run: |
           echo "OPENSSL_ROOT_DIR=/usr/local/opt/openssl@1.1/" >> $GITHUB_ENV
           bash scripts/setup-macos.sh &&
@@ -136,7 +136,7 @@ jobs:
           output-dir: wheelhouse
 
       - name: "Move .ccache to workspace"
-        if: matrix.os != 'macos-11'
+        if: matrix.os != 'macos-12'
         run: |
           mkdir -p .ccache
           cp -R ./wheelhouse/.ccache/* .ccache
@@ -149,7 +149,7 @@ jobs:
           key: ccache-wheels-${{ matrix.os }}-${{ github.sha }}
 
       - name: "Rename wheel compatibility tag"
-        if: matrix.os == 'macos-11'
+        if: matrix.os == 'macos-12'
         run: |
           brew install rename
           cd wheelhouse
