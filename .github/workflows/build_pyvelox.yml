@@ -101,7 +101,7 @@ jobs:
       - name: Install macOS dependencies
         if: matrix.os == 'macos-12'
         run: |
-          bash scripts/setup-macos.sh install_build_prerequisites \ 
+          bash scripts/setup-macos.sh install_build_prerequisites \
             install_fmt \
             install_re2 \
             install_double_conversion \
