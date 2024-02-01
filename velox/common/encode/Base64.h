@@ -21,25 +21,12 @@
 
 #include <folly/Range.h>
 #include <folly/io/IOBuf.h>
+#include "velox/common/encode/EncoderUtils.h"
 
 namespace facebook::velox::encoding {
 
-class Base64Exception : public std::exception {
- public:
-  explicit Base64Exception(const char* msg) : msg_(msg) {}
-  const char* what() const noexcept override {
-    return msg_;
-  }
-
- protected:
-  const char* msg_;
-};
-
 class Base64 {
  public:
-  using Charset = std::array<char, 64>;
-  using ReverseIndex = std::array<uint8_t, 256>;
-
   static std::string encode(const char* data, size_t len);
   static std::string encode(folly::StringPiece text);
   static std::string encode(const folly::IOBuf* text);
@@ -91,25 +78,7 @@ class Base64 {
   static void
   decodeUrl(const char* src, size_t src_len, char* dst, size_t dst_len);
 
-  constexpr static char kBase64Pad = '=';
-
  private:
-  static inline bool isPadded(const char* data, size_t len) {
-    return (len > 0 && data[len - 1] == kBase64Pad);
-  }
-
-  static inline size_t countPadding(const char* src, size_t len) {
-    size_t numPadding{0};
-    while (len > 0 && src[len - 1] == kBase64Pad) {
-      numPadding++;
-      len--;
-    }
-
-    return numPadding;
-  }
-
-  static uint8_t Base64ReverseLookup(char p, const ReverseIndex& table);
-
   template <class T>
   static std::string
   encodeImpl(const T& data, const Charset& charset, bool include_pad);
