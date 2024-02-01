@@ -293,7 +293,7 @@ struct FromBase64Function {
           encoding::Base64::calculateDecodedSize(input.data(), inputSize));
       encoding::Base64::decode(
           input.data(), inputSize, result.data(), result.size());
-    } catch (const encoding::Base64Exception& e) {
+    } catch (const encoding::EncoderException& e) {
       VELOX_USER_FAIL(e.what());
     }
   }

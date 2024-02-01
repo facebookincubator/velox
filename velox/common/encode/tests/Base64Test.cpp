@@ -61,7 +61,7 @@ TEST_F(Base64Test, calculateDecodedSizeProperSize) {
   encoded_size = 21;
   EXPECT_THROW(
       Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ==", encoded_size),
-      facebook::velox::encoding::Base64Exception);
+      facebook::velox::encoding::EncoderException);
   
   encoded_size = 32;
   EXPECT_EQ(
