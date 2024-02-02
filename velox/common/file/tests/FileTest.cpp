@@ -323,8 +323,6 @@ TEST(LocalFile, fileNotFound) {
   auto tempFolder = ::exec::test::TempDirectoryPath::create();
   auto path = fmt::format("{}/file", tempFolder->path);
   auto localFs = filesystems::getFileSystem(path, nullptr);
-  VELOX_ASSERT_ERROR_CODE(
-      localFs->openFileForRead(path),
-      VeloxRuntimeError,
-      error_code::kFileNotFound);
+  VELOX_ASSERT_RUNTIME_THROW_CODE(
+      localFs->openFileForRead(path), error_code::kFileNotFound);
 }

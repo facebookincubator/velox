@@ -63,7 +63,7 @@
       << "Expected error message to contain '" << (_errorMessage)          \
       << "', but received '" << status.message() << "'."
 
-#define VELOX_ASSERT_ERROR_CODE(_expression, _type, _errorCode)               \
+#define VELOX_ASSERT_ERROR_CODE_IMPL(_type, _expression, _errorCode)          \
   try {                                                                       \
     (_expression);                                                            \
     FAIL() << "Expected an exception";                                        \
@@ -72,6 +72,18 @@
         << "Expected error code to be '" << _errorCode << "', but received '" \
         << e.errorCode() << "'.";                                             \
   }
+
+#define VELOX_ASSERT_THROW_CODE(_expression, _errorCode) \
+  VELOX_ASSERT_ERROR_CODE_IMPL(                          \
+      facebook::velox::VeloxException, _expression, _errorCode)
+
+#define VELOX_ASSERT_USER_THROW_CODE(_expression, _errorCode) \
+  VELOX_ASSERT_ERROR_CODE_IMPL(                               \
+      facebook::velox::VeloxUserError, _expression, _errorCode)
+
+#define VELOX_ASSERT_RUNTIME_THROW_CODE(_expression, _errorCode) \
+  VELOX_ASSERT_ERROR_CODE_IMPL(                                  \
+      facebook::velox::VeloxRuntimeError, _expression, _errorCode)
 
 #ifndef NDEBUG
 #define DEBUG_ONLY_TEST(test_fixture, test_name) TEST(test_fixture, test_name)
