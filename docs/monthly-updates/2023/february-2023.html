@@ -1,0 +1,229 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>February 2023 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="January 2023 Update" href="january-2023.html" />
+    <link rel="prev" title="March 2023 Update" href="march-2023.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="january-2023.html" title="January 2023 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="march-2023.html" title="March 2023 Update"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" accesskey="U">2023</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">February 2023 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="february-2023-update">
+<h1>February 2023 Update<a class="headerlink" href="#february-2023-update" title="Permalink to this heading">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add documentation for <span class="xref std std-doc">Spark functions</span>.</p></li>
+<li><p>Add documentation for <span class="xref std std-doc">PyVelox</span>.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add support for DECIMAL types in DecodedVector.</p></li>
+<li><p>Add support for k PRECEDING/FOLLOWING window frames in ROWS mode.</p></li>
+<li><p>Enhance BloomFilter so that it can be used in aggregate functions.</p></li>
+<li><p>Replace ArrayBuilder class with ArrayWriter.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/presto/array.html#array_normalize" title="array_normalize"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_normalize()</span></code></a> function.</p></li>
+<li><p>Add support for DECIMAL inputs to <a class="reference internal" href="../../functions/presto/comparison.html#least" title="least"><code class="xref py py-func docutils literal notranslate"><span class="pre">least()</span></code></a> and <a class="reference internal" href="../../functions/presto/comparison.html#greatest" title="greatest"><code class="xref py py-func docutils literal notranslate"><span class="pre">greatest()</span></code></a> functions.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a> and <a class="reference internal" href="../../functions/presto/aggregate.html#avg" title="avg"><code class="xref py py-func docutils literal notranslate"><span class="pre">avg()</span></code></a> functions for DECIMAL inputs.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> for streaming use cases. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/3965">#3965</a></p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/spark/binary.html#sha1" title="sha1"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">sha1()</span></code></a> function.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add support for single-level subfield pruning. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/3949">#3949</a></p></li>
+<li><p>Add support for BOOLEAN and DATE type in native Parquet reader.</p></li>
+<li><p>Add options to open and prepare file splits asynchronously.</p></li>
+<li><p>Fix reading of VARBINARY columns in Parquet reader.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="substrait">
+<h2>Substrait<a class="headerlink" href="#substrait" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Update Substrait to 0.23.0.</p></li>
+<li><p>Add support for <a class="reference external" href="https://substrait.io/tutorial/sql_to_substrait/#column-selection-and-emit">emit</a></p></li>
+<li><p>Add support for DATE type.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="arrow">
+<h2>Arrow<a class="headerlink" href="#arrow" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add <a class="reference internal" href="../../develop/operators.html#arrowstream-operator"><span class="std std-ref">ArrowStreamNode</span></a>.</p></li>
+<li><p>Add support for DATE type.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add concurrent memory allocation benchmark.</p></li>
+<li><p>Add support for CAST and TRY special forms to Fuzzer.</p></li>
+<li><p>Add support to favorably select certain functions.</p></li>
+<li><p>Add support to generate repro files for window fuzzers.</p></li>
+<li><p>Add support for nested expression re-use.</p></li>
+<li><p>Add support for DECIMAL types to VectorFuzzer.</p></li>
+<li><p>Add FuzzerConnector to source randomly generated data. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/4094">#4094</a></p></li>
+<li><p>Add GeneratorSpec to support generating vectors with customized data,  nulls and encoding.</p></li>
+<li><p>Fix bugs in CAST found by Fuzzer.</p></li>
+<li><p>Fix memory leaks in Prestissimo use cases.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="build-system">
+<h2>Build System<a class="headerlink" href="#build-system" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add support to build <a class="reference external" href="https://github.com/facebookincubator/velox/actions/workflows/build_pyvelox.yml">PyVelox wheels for Linux and MacOS</a>.</p></li>
+<li><p>Add support to compare benchmarks during Conbench CI runs.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<p>Aditi Pandit, Bikramjeet Vig, ChenZhang, Chengcheng Jin, Christy Lee-Eusman, Deepak Majeti, Ge Gao, Hazem Ibrahim Nada, Hualong Gervais, Huameng Jiang, Ivan Sadikov, Jacob Wujciak-Jens, Jimmy Lu, Karteek Murthy Samba Murthy, Krishna Pai, Laith Sakka, Manikandan Somasundaram, Mark Shroyer, Masha Basmanova, Michael Shang, Open Source Bot, Orri Erling, Pedro Eugenio Rocha Pedreira, Pramod, Sergey Pershin, Wei He, Weiguo Chen, Xianda Ke, Xuedong Luan, ZJie1, joey.ljy, rui-mo, vibhatha, xiaoxmeng, yangchuan, yoha.zy, zhejiangxiaomai, zky.zhoukeyong, 张政豪</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">February 2023 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#substrait">Substrait</a></li>
+<li><a class="reference internal" href="#arrow">Arrow</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#build-system">Build System</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="march-2023.html"
+                          title="previous chapter">March 2023 Update</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="january-2023.html"
+                          title="next chapter">January 2023 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/monthly-updates/2023/february-2023.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="january-2023.html" title="January 2023 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="march-2023.html" title="March 2023 Update"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" >2023</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">February 2023 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,218 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>March 2023 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="February 2023 Update" href="february-2023.html" />
+    <link rel="prev" title="April 2023 Update" href="april-2023.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="february-2023.html" title="February 2023 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="april-2023.html" title="April 2023 Update"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" accesskey="U">2023</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">March 2023 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="march-2023-update">
+<h1>March 2023 Update<a class="headerlink" href="#march-2023-update" title="Permalink to this heading">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add <span class="xref std std-doc">Chapter 1  of the Programming Guide</span>.</p></li>
+<li><p>Add blog post on <a class="reference external" href="https://velox-lib.io/blog/velox-build-experience">continuous integration and packaging.</a></p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add <cite>printVector</cite> helper function.</p></li>
+<li><p>Add support for <cite>copy_from</cite> in GenericWriter.</p></li>
+<li><p>Add preliminary support for OffProcessExpressionEval operator.</p></li>
+<li><p>Add quota enforcement checks when allocating large chunks of memory.</p></li>
+<li><p>Deprecate <cite>reallocate</cite> Api from memory allocator.</p></li>
+<li><p>Fix aggregate function accumulator’s memory alignment.</p></li>
+<li><p>Optimize null aware anit-join when used with filter.</p></li>
+<li><p>Remove usage of CppToType.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/presto/string.html#from_utf8" title="from_utf8"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_utf8()</span></code></a>, <a class="reference internal" href="../../functions/presto/binary.html#hmac_md5" title="hmac_md5"><code class="xref py py-func docutils literal notranslate"><span class="pre">hmac_md5()</span></code></a> functions.</p></li>
+<li><p>Add <code class="xref py py-func docutils literal notranslate"><span class="pre">any_match()</span></code>, <code class="xref py py-func docutils literal notranslate"><span class="pre">all_match()</span></code> and <code class="xref py py-func docutils literal notranslate"><span class="pre">none_match()</span></code> functions.</p></li>
+<li><p>Add support for DECIMAL types in <a class="reference internal" href="../../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a> and <a class="reference internal" href="../../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> aggregate functions.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/spark/string.html#trim" title="trim"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">trim()</span></code></a>, <a class="reference internal" href="../../functions/spark/string.html#ltrim" title="ltrim"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">ltrim()</span></code></a>, <a class="reference internal" href="../../functions/spark/string.html#rtrim" title="rtrim"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">rtrim()</span></code></a>  function.</p></li>
+<li><p>Add <a class="reference internal" href="../../functions/spark/binary.html#sha2" title="sha2"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">sha2()</span></code></a> function.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add support for multi-level sub field pruning.</p></li>
+<li><p>Add support for estimating parquet page headers using <cite>ThriftStreamingTransport</cite>.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add support for custom types in VectorSaver.</p></li>
+<li><p>Add spark fuzzer runs on pull requests.</p></li>
+<li><p>Add try in presto fuzzer runs on pull requests.</p></li>
+<li><p>Add support for serializing SelectivityVector.</p></li>
+<li><p>Add support for serializing query plans.</p></li>
+<li><p>Fix peeling when constant vector smaller than size of inner rows.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="build-system">
+<h2>Build System<a class="headerlink" href="#build-system" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add support to run builds using Mac M1 machines on a pull request.</p></li>
+<li><p>Move re2, gtest, gmock and xsimd to use the new dependency resolution system.</p></li>
+<li><p>Refactored dependency resolution system into separate modules.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="python-bindings">
+<h2>Python Bindings<a class="headerlink" href="#python-bindings" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><ul class="simple">
+<li><p>Add api’s to get registered functions and signatures in PyVelox.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<blockquote>
+<div><p>Aditi Pandit, Barys Skarabahaty, Benjamin Kietzman, Chandrashekhar Kumar Singh, Chen Zhang, Christian Zentgraf, Daniel Munoz, David Tolnay, David Vu, Deepak Majeti, Denis Yaroshevskiy, Ge Gao, Huameng Jiang, Ivan Sadikov, Jacob Wujciak-Jens, Jake Jung, Jeff Palm, Jialiang Tan, Jialing Zhou, Jimmy Lu, Jonathan Kron, Karteek Murthy Samba Murthy, Krishna Pai, Laith Sakka, Masha Basmanova, Matthew William Edwards, Naveen Kumar Mahadevuni, Oguz Ulgen, Open Source Bot, Orri Erling, Patrick Sullivan, Pedro Eugenio Rocha Pedreira, Pramod, Sergey Pershin, Shengxuan Liu, Siva Muthusamy, Srikrishna Gopu, Wei He, Xiaoxuan Meng, Zac, Zhaolong Zhu, cambyzju, dependabot[bot], lingbin, macduan, wuxiaolong26, xiaoxmeng, yangchuan, yingsu00, zhejiangxiaomai, 张政豪</p>
+</div></blockquote>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">March 2023 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#build-system">Build System</a></li>
+<li><a class="reference internal" href="#python-bindings">Python Bindings</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="april-2023.html"
+                          title="previous chapter">April 2023 Update</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="february-2023.html"
+                          title="next chapter">February 2023 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/monthly-updates/2023/march-2023.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="february-2023.html" title="February 2023 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="april-2023.html" title="April 2023 Update"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" >2023</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">March 2023 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>

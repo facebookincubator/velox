@@ -1,0 +1,231 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>December 2023 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="November 2023 Update" href="november-2023.html" />
+    <link rel="prev" title="2023" href="index.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="november-2023.html" title="November 2023 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="index.html" title="2023"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" accesskey="U">2023</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">December 2023 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="december-2023-update">
+<h1>December 2023 Update<a class="headerlink" href="#december-2023-update" title="Permalink to this heading">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add documentation for <a class="reference internal" href="../../metrics.html"><span class="doc">Runtime Metrics</span></a>.</p></li>
+</ul>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for <code class="docutils literal notranslate"><span class="pre">k</span> <span class="pre">range</span> <span class="pre">frames</span></code> in <code class="docutils literal notranslate"><span class="pre">Window</span></code> operator.</p></li>
+<li><p>Add support for aggregations over sorted inputs to <code class="docutils literal notranslate"><span class="pre">StreamingAggregation</span></code>.</p></li>
+<li><p>Add support for TTL in AsyncDataCache and SsdCache. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6412">#6412</a></p></li>
+<li><p>Add support for TypeSignature Parser using Flex and Bison. This is used to parse function signatures.</p></li>
+<li><p>Add support for spilling during the output processing stage of the <code class="docutils literal notranslate"><span class="pre">OrderBy</span></code> operator.</p></li>
+<li><p>Add support for metrics related to memory arbitration and spilling. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7940">#7940</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8025">#8025</a></p></li>
+<li><p>Add config <code class="docutils literal notranslate"><span class="pre">max_spill_bytes</span></code> to bound the storage used for spilling. The default value is set to 100GB.
+If it is set to zero, then there is no limit.</p></li>
+<li><p>Add <code class="docutils literal notranslate"><span class="pre">Status</span></code> class that can be used to carry the success or error state of an operation.
+This is similar to <a class="reference external" href="https://arrow.apache.org/docs/cpp/api/support.html#_CPPv4N5arrow6StatusE">arrow::Status</a>.</p></li>
+<li><p>Add <a class="reference internal" href="../../develop/operators.html#expandnode"><span class="std std-ref">Expand</span></a> operator.</p></li>
+<li><p>Add config <code class="docutils literal notranslate"><span class="pre">max_arbitrary_buffer_size</span></code> to set the maximum size in bytes for a task’s buffered
+output when the output is distributed randomly among consumers. The producer drivers are blocked
+when the buffer size exceeds this config.</p></li>
+<li><p>Fix reclaiming memory from hash build operators in grouped execution mode. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8178">#8178</a></p></li>
+<li><p>Fix non-termination of hash join in certain conditions. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7925">#7925</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8012">#8012</a>.</p></li>
+<li><p>Fix non-termination of the distinct aggregation in certain conditions. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7968">#7968</a>.</p></li>
+<li><p>Fix <code class="docutils literal notranslate"><span class="pre">LimitNode</span></code> offset and count values from overflowing.</p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for TIMESTAMP WITH TIME ZONE input type to <code class="xref py py-func docutils literal notranslate"><span class="pre">format_datetime()</span></code> function.</p></li>
+<li><p>Add support for UNKNOWN key type to <a class="reference internal" href="../../functions/presto/map.html#map_keys" title="map_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_keys()</span></code></a> and <a class="reference internal" href="../../functions/presto/map.html#map_values" title="map_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_values()</span></code></a> functions.</p></li>
+<li><p>Add support for DECIMAL types to <a class="reference internal" href="../../functions/presto/aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> aggregate function.</p></li>
+<li><p>Add support for <code class="docutils literal notranslate"><span class="pre">cast(double|real</span> <span class="pre">as</span> <span class="pre">varchar)</span></code> to return scientific notation when magnitude
+of the input value is greater than or equal to 10^7, or less than 10^-3.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/array.html#id2" title="find_first"><code class="xref py py-func docutils literal notranslate"><span class="pre">find_first()</span></code></a> to return NULL when the input ArrayVector is NULL but
+has non-zero offsets and sizes.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/array.html#id2" title="find_first"><code class="xref py py-func docutils literal notranslate"><span class="pre">find_first()</span></code></a> to support input ArrayVectors that are only NULL or empty.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/array.html#id2" title="find_first"><code class="xref py py-func docutils literal notranslate"><span class="pre">find_first()</span></code></a> to return NULL for inputs NULL array and 0 index.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/array.html#id2" title="find_first"><code class="xref py py-func docutils literal notranslate"><span class="pre">find_first()</span></code></a> to throw an error for inputs empty array and invalid start index.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/array.html#id0" title="array_sort"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_sort()</span></code></a> to fail gracefully if the specified comparator lambda
+is not supported.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/map.html#transform_keys" title="transform_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">transform_keys()</span></code></a> to check new keys for NULLs.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/aggregate.html#set_union" title="set_union"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_union()</span></code></a>, <a class="reference internal" href="../../functions/presto/aggregate.html#set_agg" title="set_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_agg()</span></code></a> to preserve the order of inputs.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/map.html#map" title="map"><code class="xref py py-func docutils literal notranslate"><span class="pre">map()</span></code></a> to produce the correct output if input arrays have NULL rows but with
+invalid offsets and sizes.</p></li>
+<li><p>Fix accuracy of the DECIMAL type average computation. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7944">#7944</a></p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/spark/string.html#str_to_map" title="str_to_map"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">str_to_map()</span></code></a>, <a class="reference internal" href="../../functions/spark/datetime.html#next_day" title="next_day"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">next_day()</span></code></a>, <a class="reference internal" href="../../functions/spark/math.html#atan2" title="atan2"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">atan2()</span></code></a> functions.</p></li>
+<li><p>Add support for DECIMAL types to <a class="reference internal" href="../../functions/spark/math.html#id0" title="add"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">add()</span></code></a> and <a class="reference internal" href="../../functions/spark/math.html#id7" title="subtract"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">subtract()</span></code></a> functions.</p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for multiple S3 FileSystems. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7388">#7388</a></p></li>
+<li><p>Add support to write dictionary and constant encoded vectors to Parquet by flattening them.</p></li>
+<li><p>Add support to specify a schema when writing Parquet files. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6074">#6074</a></p></li>
+<li><p>Add config <code class="docutils literal notranslate"><span class="pre">max_split_preload_per_driver</span></code> and remove the <code class="docutils literal notranslate"><span class="pre">split_preload_per_driver</span></code> flag.</p></li>
+<li><p>Fix memory leak in HdfsBuilder.</p></li>
+</ul>
+</section>
+<section id="arrow">
+<h2>Arrow<a class="headerlink" href="#arrow" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix exporting an REE array by setting the child name to the canonical name defined in the Arrow spec. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7802">#7802</a></p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for lambda functions to ExpressionFuzzer.</p></li>
+<li><p>Add ExchangeFuzzer.</p></li>
+</ul>
+</section>
+<section id="build">
+<h2>Build<a class="headerlink" href="#build" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for docker image with Presto.</p></li>
+<li><p>Add support for <a class="reference external" href="https://github.com/Azure/azure-sdk-for-cpp/releases/tag/azure-storage-files-datalake_12.8.0">azure-storage-files-datalake</a> version 12.8.0.</p></li>
+<li><p>Allow specifying a custom curl version for the cpr library. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7853">#7853</a></p></li>
+<li><p>Update aws-sdk-cpp version to 1.11.169 (from 1.10.57).</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<p>Aditi Pandit, Amit Dutta, Bikramjeet Vig, Chengcheng Jin, Christian Zentgraf, Daniel Munoz,
+Deepak Majeti, Ge Gao, Harvey Hunt, HolyLow, Hongze Zhang, Jacob Wujciak-Jens, Jia, Jia Ke,
+Jialiang Tan, Jimmy Lu, Jubin Chheda, Karteekmurthys, Ke, Kevin Wilfong, Krishna Pai,
+Krishna-Prasad-P-V, Laith Sakka, Ma-Jian1, Masha Basmanova, Orri Erling, PHILO-HE,
+Patrick Sullivan, Pedro Eugenio Rocha Pedreira, Pedro Pedreira, Pramod,Ravi Rahman,
+Richard Barnes, Sergey Pershin, Srikrishna Gopu, Wei He, Xiaoxuan Meng, Yangyang Gao,
+Yedidya Feldblum, Zac, aditi-pandit, binwei, duanmeng, hengjiang.ly, joey.ljy, rui-mo,
+shangjing.cxw, soumyaduriseti, xiaoxmeng, xiyu.zk, xumingming, yan ma, yangchuan ,yingsu00,
+zhli, zhli1142015, 高阳阳</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">December 2023 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#arrow">Arrow</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#build">Build</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="index.html"
+                          title="previous chapter">2023</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="november-2023.html"
+                          title="next chapter">November 2023 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/monthly-updates/2023/december-2023.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="november-2023.html" title="November 2023 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="index.html" title="2023"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" >2023</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">December 2023 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>

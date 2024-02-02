@@ -129,8 +129,31 @@ We can use <cite>dow</cite> as alias for</p>
 </div>
 </dd></dl>
 
-<dl class="py function">
-<dt class="sig sig-object py" id="get_timestamp">
+<dl class="spark function">
+<dt class="sig sig-object spark" id="dow">
+<span class="sig-name descname"><span class="pre">dow</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dow" title="Permalink to this definition">¶</a></dt>
+<dd><p>This is an alias for <a class="reference internal" href="#dayofweek" title="dayofweek"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">dayofweek()</span></code></a>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="from_unixtime">
+<span class="sig-name descname"><span class="pre">from_unixtime</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unixTime</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#from_unixtime" title="Permalink to this definition">¶</a></dt>
+<dd><p>Adjusts <code class="docutils literal notranslate"><span class="pre">unixTime</span></code> (elapsed seconds since UNIX epoch) to configured session timezone, then
+converts it to a formatted time string according to <code class="docutils literal notranslate"><span class="pre">format</span></code>. Only supports BIGINT type for
+<code class="docutils literal notranslate"><span class="pre">unixTime</span></code>.
+<a class="reference external" href="https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html">Valid patterns for date format</a>. Throws exception for
+invalid <code class="docutils literal notranslate"><span class="pre">format</span></code>. This function will convert input to milliseconds, and integer overflow is
+allowed in the conversion, which aligns with Spark. See the below third example where INT64_MAX
+is used, -1000 milliseconds are produced by INT64_MAX * 1000 due to integer overflow.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">from_unixtime</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="s1">&#39;yyyy-MM-dd HH:mm:ss&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01 00:01:40&#39;</span>
+<span class="n">SELECT</span> <span class="n">from_unixtime</span><span class="p">(</span><span class="mi">3600</span><span class="p">,</span> <span class="s1">&#39;yyyy&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970&#39;</span>
+<span class="n">SELECT</span> <span class="n">from_unixtime</span><span class="p">(</span><span class="mi">9223372036854775807</span><span class="p">,</span> <span class="s2">&quot;yyyy-MM-dd HH:mm:ss&quot;</span><span class="p">);</span>  <span class="o">--</span> <span class="s1">&#39;1969-12-31 23:59:59&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="get_timestamp">
 <span class="sig-name descname"><span class="pre">get_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dateFormat</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#get_timestamp" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns timestamp by parsing <code class="docutils literal notranslate"><span class="pre">string</span></code> according to the specified <code class="docutils literal notranslate"><span class="pre">dateFormat</span></code>.
 The format follows Spark’s
