@@ -43,7 +43,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/SingleThreaded.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -354,7 +353,7 @@ class SharedArbitrationTestWithThreadingModes
     SharedArbitrationTestBase::SetUp();
     isSingleThreaded_ = GetParam().isSingleThreaded;
     if (isSingleThreaded_) {
-      executor_ = newSingleThreadedExecutor();
+      executor_ = nullptr;
     } else {
       executor_ = newMultiThreadedExecutor();
     }
