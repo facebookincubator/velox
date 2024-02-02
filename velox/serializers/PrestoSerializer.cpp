@@ -3173,14 +3173,16 @@ class PrestoVectorSerializer : public VectorSerializer {
     flushInternal(numRows_, out);
   }
 
-  void flushEncoded(const RowVectorPtr& vector, OutputStream* out) {
+  void flushEncoded(
+      const RowVectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      OutputStream* out) {
     VELOX_CHECK_EQ(0, numRows_);
 
-    std::vector<IndexRange> ranges{{0, vector->size()}};
     Scratch scratch;
-    append(vector, folly::Range(ranges.data(), ranges.size()), scratch);
+    append(vector, ranges, scratch);
 
-    flushInternal(vector->size(), out);
+    flushInternal(numRows_, out);
   }
 
  private:
@@ -3356,6 +3358,7 @@ std::unique_ptr<VectorSerializer> PrestoVectorSerde::createSerializer(
 
 void PrestoVectorSerde::serializeEncoded(
     const RowVectorPtr& vector,
+    const folly::Range<const IndexRange*>& ranges,
     StreamArena* streamArena,
     const Options* options,
     OutputStream* out) {
@@ -3365,7 +3368,7 @@ void PrestoVectorSerde::serializeEncoded(
       streamArena,
       prestoOptions.useLosslessTimestamp,
       prestoOptions.compressionKind);
-  serializer->flushEncoded(vector, out);
+  serializer->flushEncoded(vector, ranges, out);
 }
 
 void PrestoVectorSerde::deserialize(
