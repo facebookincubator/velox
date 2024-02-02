@@ -113,17 +113,15 @@ TEST_F(S3FileSystemTest, missingFile) {
   addBucket(bucketName);
   auto hiveConfig = minioServer_->hiveConfig();
   filesystems::S3FileSystem s3fs(hiveConfig);
-  VELOX_ASSERT_THROW(
-      s3fs.openFileForRead(s3File),
-      "Failed to get metadata for S3 object due to: 'Resource not found'. Path:'s3://data1/i-do-not-exist.txt', SDK Error Type:16, HTTP Status Code:404, S3 Service:'MinIO', Message:'No response body.'");
+  VELOX_ASSERT_RUNTIME_THROW_CODE(
+      s3fs.openFileForRead(s3File), error_code::kFileNotFound);
 }
 
 TEST_F(S3FileSystemTest, missingBucket) {
   auto hiveConfig = minioServer_->hiveConfig();
   filesystems::S3FileSystem s3fs(hiveConfig);
-  VELOX_ASSERT_THROW(
-      s3fs.openFileForRead(kDummyPath),
-      "Failed to get metadata for S3 object due to: 'Resource not found'. Path:'s3://dummy/foo.txt', SDK Error Type:16, HTTP Status Code:404, S3 Service:'MinIO', Message:'No response body.'");
+  VELOX_ASSERT_RUNTIME_THROW_CODE(
+      s3fs.openFileForRead(kDummyPath), error_code::kFileNotFound);
 }
 
 TEST_F(S3FileSystemTest, invalidAccessKey) {
