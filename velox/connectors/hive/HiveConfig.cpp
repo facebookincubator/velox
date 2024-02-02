@@ -54,10 +54,9 @@ std::string HiveConfig::insertExistingPartitionsBehaviorString(
 
 HiveConfig::InsertExistingPartitionsBehavior
 HiveConfig::insertExistingPartitionsBehavior(const Config* session) const {
-  return stringToInsertExistingPartitionsBehavior(
-      session->get<std::string>(
-          kInsertExistingPartitionsBehaviorSession,
-          config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR")));
+  return stringToInsertExistingPartitionsBehavior(session->get<std::string>(
+      kInsertExistingPartitionsBehaviorSession,
+      config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR")));
 }
 
 uint32_t HiveConfig::maxPartitionsPerWriters(const Config* session) const {
