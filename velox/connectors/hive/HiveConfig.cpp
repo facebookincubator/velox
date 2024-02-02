@@ -54,10 +54,10 @@ std::string HiveConfig::insertExistingPartitionsBehaviorString(
 
 HiveConfig::InsertExistingPartitionsBehavior
 HiveConfig::insertExistingPartitionsBehavior(const Config* session) const {
-  const auto behavior = session->get<std::string>(
-      kInsertExistingPartitionsBehaviorSession,
-      config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR"));
-  return stringToInsertExistingPartitionsBehavior(behavior);
+  return stringToInsertExistingPartitionsBehavior(
+      session->get<std::string>(
+          kInsertExistingPartitionsBehaviorSession,
+          config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR")));
 }
 
 uint32_t HiveConfig::maxPartitionsPerWriters(const Config* session) const {
@@ -180,7 +180,7 @@ std::string HiveConfig::writeFileCreateConfig() const {
 uint32_t HiveConfig::sortWriterMaxOutputRows(const Config* session) const {
   return session->get<uint32_t>(
       kSortWriterMaxOutputRowsSession,
-      config_->get<int32_t>(kSortWriterMaxOutputRows, 1024));
+      config_->get<uint32_t>(kSortWriterMaxOutputRows, 1024));
 }
 
 uint64_t HiveConfig::sortWriterMaxOutputBytes(const Config* session) const {
