@@ -22,6 +22,10 @@
 
 namespace facebook::velox::encoding {
 
+// Constants defining the size of binary and encoded blocks for Base64 encoding.
+constexpr static int kBinaryBlockSize = 3; // 3 bytes of binary = 24 bits
+constexpr static int kEncodedBlockSize = 4; // 4 bytes of encoded = 24 bits
+
 constexpr const Base64::Charset kBase64Charset = {
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
     'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
@@ -298,10 +302,9 @@ std::string Base64::decode(folly::StringPiece encoded) {
 void Base64::decode(
     const std::pair<const char*, int32_t>& payload,
     std::string& output) {
-  size_t out_len = payload.second / 4 * 3;
-  output.resize(out_len, '\0');
-  out_len = Base64::decode(payload.first, payload.second, &output[0], out_len);
-  output.resize(out_len);
+  size_t inputSize = payload.second;
+  output.resize(calculateDecodedSize(payload.first, inputSize));
+  decode(payload.first, inputSize, output.data(), output.size());
 }
 
 // static
@@ -324,51 +327,49 @@ uint8_t Base64::Base64ReverseLookup(
 
 size_t
 Base64::decode(const char* src, size_t src_len, char* dst, size_t dst_len) {
-  return decodeImpl(src, src_len, dst, dst_len, kBase64ReverseIndexTable, true);
+  return decodeImpl(src, src_len, dst, dst_len, kBase64ReverseIndexTable);
 }
 
 // static
-size_t
-Base64::calculateDecodedSize(const char* data, size_t& size, bool withPadding) {
+size_t Base64::calculateDecodedSize(const char* data, size_t& size) {
   if (size == 0) {
     return 0;
   }
 
-  auto needed = (size / 4) * 3;
-  if (withPadding) {
-    // If the pad characters are included then the source string must be a
-    // multiple of 4 and we can query the end of the string to see how much
-    // padding exists.
-    if (size % 4 != 0) {
+  // Check if the input data is padded
+  if (isPadded(data, size)) {
+    // If padded, ensure that the string length is a multiple of the encoded
+    // block size
+    if (size % kEncodedBlockSize != 0) {
       throw Base64Exception(
           "Base64::decode() - invalid input string: "
-          "string length is not multiple of 4.");
+          "string length is not a multiple of 4.");
     }
 
+    auto needed = (size * kBinaryBlockSize) / kEncodedBlockSize;
     auto padding = countPadding(data, size);
     size -= padding;
-    return needed - padding;
-  }
 
-  // If padding doesn't exist we need to calculate it from the size - if the
-  // size % 4 is 0 then we have an even multiple 3 byte chunks in the result
-  // if it is 2 then we need 1 more byte in the output.  If it is 3 then we
-  // need 2 more bytes in the output.  It should never be 1.
-  auto extra = size % 4;
+    // Adjust the needed size for padding
+    return needed -
+        ceil((padding * kBinaryBlockSize) /
+             static_cast<double>(kEncodedBlockSize));
+  }
+  // If not padded, Calculate extra bytes, if any
+  auto extra = size % kEncodedBlockSize;
+  auto needed = (size / kEncodedBlockSize) * kBinaryBlockSize;
+
+  // Adjust the needed size for extra bytes, if present
   if (extra) {
     if (extra == 1) {
       throw Base64Exception(
           "Base64::decode() - invalid input string: "
           "string length cannot be 1 more than a multiple of 4.");
     }
-    return needed + extra - 1;
+    needed += (extra * kBinaryBlockSize) / kEncodedBlockSize;
   }
 
-  // Just because we don't need the pad, doesn't mean it is not there.  The
-  // URL decoder should be able to handle the original encoding.
-  auto padding = countPadding(data, size);
-  size -= padding;
-  return needed - padding;
+  return needed;
 }
 
 size_t Base64::decodeImpl(
@@ -376,13 +377,12 @@ size_t Base64::decodeImpl(
     size_t src_len,
     char* dst,
     size_t dst_len,
-    const Base64::ReverseIndex& reverse_lookup,
-    bool include_pad) {
+    const ReverseIndex& reverse_lookup) {
   if (!src_len) {
     return 0;
   }
 
-  auto needed = calculateDecodedSize(src, src_len, include_pad);
+  auto needed = calculateDecodedSize(src, src_len);
   if (dst_len < needed) {
     throw Base64Exception(
         "Base64::decode() - invalid output string: "
@@ -437,9 +437,8 @@ void Base64::decodeUrl(
     const char* src,
     size_t src_len,
     char* dst,
-    size_t dst_len,
-    bool hasPad) {
-  decodeImpl(src, src_len, dst, dst_len, kBase64UrlReverseIndexTable, hasPad);
+    size_t dst_len) {
+  decodeImpl(src, src_len, dst, dst_len, kBase64UrlReverseIndexTable);
 }
 
 std::string Base64::decodeUrl(folly::StringPiece encoded) {
@@ -458,8 +457,7 @@ void Base64::decodeUrl(
       payload.second,
       &output[0],
       out_len,
-      kBase64UrlReverseIndexTable,
-      false);
+      kBase64UrlReverseIndexTable);
   output.resize(out_len);
 }
 } // namespace facebook::velox::encoding
