@@ -102,6 +102,8 @@ struct WriterOptions {
   std::shared_ptr<CodecOptions> codecOptions;
   std::unordered_map<std::string, common::CompressionKind>
       columnCompressionsMap;
+  // Workaround because REE encoding for constant vectors cannot be used.
+  bool flattenConstantVector = true;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.

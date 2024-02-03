@@ -158,18 +158,20 @@ class ParquetTestBase : public testing::Test, public test::VectorTestBase {
 
   std::unique_ptr<facebook::velox::parquet::Writer> createWriter(
       std::unique_ptr<dwio::common::FileSink> sink,
-      std::function<
-          std::unique_ptr<facebook::velox::parquet::DefaultFlushPolicy>()>
-          flushPolicy,
-      const RowTypePtr& rowType,
-      facebook::velox::common::CompressionKind compressionKind =
-          facebook::velox::common::CompressionKind_NONE) {
-    facebook::velox::parquet::WriterOptions options;
-    options.memoryPool = rootPool_.get();
-    options.flushPolicyFactory = flushPolicy;
-    options.compression = compressionKind;
+      const parquet::WriterOptions& writerOpts,
+      const RowTypePtr& rowType) {
     return std::make_unique<facebook::velox::parquet::Writer>(
-        std::move(sink), options, rowType);
+        std::move(sink), writerOpts, rowType);
+  }
+
+  parquet::WriterOptions getWriterOpts() {
+    parquet::WriterOptions writerOpts;
+    writerOpts.memoryPool = rootPool_.get();
+    writerOpts.flushPolicyFactory = [&]() {
+      return std::make_unique<LambdaFlushPolicy>(
+          kRowsInRowGroup, kBytesInRowGroup, [&]() { return false; });
+    };
+    return writerOpts;
   }
 
   std::vector<RowVectorPtr> createBatches(
