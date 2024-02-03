@@ -16,12 +16,14 @@
 
 #pragma once
 
-#include "velox/dwio/common/compression/Compression.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include <pybind11/pybind11.h>
 
-namespace facebook::velox::parquet {
+#include "velox/vector/FlatVector.h"
 
-common::CompressionKind thriftCodecToCompressionKind(
-    thrift::CompressionCodec::type codec);
+namespace facebook::velox::py {
 
-} // namespace facebook::velox::parquet
+VectorPtr variantsToVector(
+    const std::vector<variant>& variants,
+    velox::memory::MemoryPool* pool);
+
+}
