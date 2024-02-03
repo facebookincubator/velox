@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
+
 #include <azure/storage/blobs/blob_client.hpp>
 #include <fmt/format.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
@@ -21,9 +23,7 @@
 
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 #include "velox/core/Config.h"
 
@@ -52,14 +52,12 @@ class AbfsReadFile::Impl {
   constexpr static uint64_t kReadConcurrency = 8;
 
  public:
-  explicit Impl(const std::string& path, const std::string& connectStr)
-      : path_(path), connectStr_(connectStr) {
-    auto abfsAccount = AbfsAccount(path_);
-    fileSystem_ = abfsAccount.fileSystem();
+  explicit Impl(const std::string& path, const std::string& connectStr) {
+    auto abfsAccount = AbfsAccount(path);
     fileName_ = abfsAccount.filePath();
     fileClient_ =
         std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
-            connectStr_, fileSystem_, fileName_));
+            connectStr, abfsAccount.fileSystem(), fileName_));
   }
 
   void initialize() {
@@ -156,9 +154,6 @@ class AbfsReadFile::Impl {
         reinterpret_cast<uint8_t*>(position), length);
   }
 
-  const std::string path_;
-  const std::string connectStr_;
-  std::string fileSystem_;
   std::string fileName_;
   std::unique_ptr<BlobClient> fileClient_;
 

@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include <azure/storage/files/datalake.hpp>
-
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
+
+#include <azure/storage/files/datalake.hpp>
 
 namespace facebook::velox::filesystems::abfs {
 class BlobStorageFileClient final : public IBlobStorageFileClient {
@@ -73,7 +73,7 @@ class AbfsWriteFile::Impl {
     blobStorageFileClient_->create();
   }
 
-  void setFileClient(
+  void testingSetFileClient(
       std::shared_ptr<IBlobStorageFileClient> blobStorageManager) {
     blobStorageFileClient_ = std::move(blobStorageManager);
   }
@@ -162,6 +162,6 @@ uint64_t AbfsWriteFile::size() const {
 
 void AbfsWriteFile::testingSetFileClient(
     std::shared_ptr<IBlobStorageFileClient> fileClient) {
-  impl_->setFileClient(std::move(fileClient));
+  impl_->testingSetFileClient(std::move(fileClient));
 }
 } // namespace facebook::velox::filesystems::abfs

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <azure/storage/files/datalake.hpp>
 #include <gtest/gtest.h>
 #include <atomic>
 #include <filesystem>
@@ -29,64 +28,18 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
+#include "velox/connectors/hive/storage_adapters/abfs/tests/MockBlobStorageFileClient.h"
 #include "velox/exec/tests/utils/PortUtil.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::filesystems::abfs;
-using namespace Azure::Storage::Files::DataLake;
 using ::facebook::velox::common::Region;
 
 constexpr int kOneMB = 1 << 20;
 static const std::string filePath = "test_file.txt";
 static const std::string fullFilePath =
     facebook::velox::filesystems::test::AzuriteABFSEndpoint + filePath;
-
-// A mocked blob storage file client backend with local file store.
-class MockBlobStorageFileClient : public IBlobStorageFileClient {
- public:
-  MockBlobStorageFileClient() {
-    auto tempFile = ::exec::test::TempFilePath::create();
-    filePath_ = tempFile->path;
-  }
-
-  void create() override {
-    fileStream_ = std::ofstream(
-        filePath_,
-        std::ios_base::out | std::ios_base::binary | std::ios_base::app);
-  }
-
-  PathProperties getProperties() override {
-    if (!std::filesystem::exists(filePath_)) {
-      Azure::Storage::StorageException exp(filePath_ + "doesn't exists");
-      exp.StatusCode = Azure::Core::Http::HttpStatusCode::NotFound;
-      throw exp;
-    }
-    std::ifstream file(filePath_, std::ios::binary | std::ios::ate);
-    uint64_t size = static_cast<uint64_t>(file.tellg());
-    PathProperties ret;
-    ret.FileSize = size;
-    return ret;
-  }
-
-  void append(const uint8_t* buffer, size_t size, uint64_t offset) override {
-    fileStream_.seekp(offset);
-    fileStream_.write(reinterpret_cast<const char*>(buffer), size);
-  }
-
-  void flush(uint64_t position) override {
-    fileStream_.flush();
-  }
-
-  void close() override {
-    fileStream_.flush();
-    fileStream_.close();
-  }
-
- private:
-  std::string filePath_;
-  std::ofstream fileStream_;
-};
 
 class AbfsFileSystemTest : public testing::Test {
  public:
@@ -124,7 +77,9 @@ class AbfsFileSystemTest : public testing::Test {
 
   std::unique_ptr<WriteFile> openFileForWrite(
       std::string_view path,
-      std::shared_ptr<MockBlobStorageFileClient> client) {
+      std::shared_ptr<
+          facebook::velox::filesystems::test::MockBlobStorageFileClient>
+          client) {
     auto abfsfile =
         std::make_unique<facebook::velox::filesystems::abfs::AbfsWriteFile>(
             std::string(path), azuriteServer->connectionStr());
@@ -276,8 +231,9 @@ TEST_F(AbfsFileSystemTest, missingFile) {
 TEST_F(AbfsFileSystemTest, OpenFileForWriteTest) {
   const std::string abfsFile =
       facebook::velox::filesystems::test::AzuriteABFSEndpoint + "writetest.txt";
-  auto mockClient =
-      std::make_shared<MockBlobStorageFileClient>(MockBlobStorageFileClient());
+  auto mockClient = std::make_shared<
+      facebook::velox::filesystems::test::MockBlobStorageFileClient>(
+      facebook::velox::filesystems::test::MockBlobStorageFileClient());
   auto abfsWriteFile = openFileForWrite(abfsFile, mockClient);
   EXPECT_EQ(abfsWriteFile->size(), 0);
   uint64_t totalSize = 0;

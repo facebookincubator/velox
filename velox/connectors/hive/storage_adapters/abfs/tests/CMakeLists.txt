@@ -13,7 +13,7 @@
 # limitations under the License.
 
 add_executable(velox_abfs_test AbfsFileSystemTest.cpp AbfsUtilTest.cpp
-                               AzuriteServer.cpp)
+                               AzuriteServer.cpp MockBlobStorageFileClient.cpp)
 add_test(velox_abfs_test velox_abfs_test)
 target_link_libraries(
   velox_abfs_test

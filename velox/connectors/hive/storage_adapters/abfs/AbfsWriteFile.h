@@ -15,11 +15,8 @@
  */
 #pragma once
 
-#include <folly/executors/IOThreadPoolExecutor.h>
-#include <iostream>
-#include "AbfsUtil.h"
-#include "folly/io/Cursor.h"
 #include "velox/common/file/File.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
 namespace Azure::Storage::Files::DataLake::Models {
 class PathProperties;
