@@ -981,9 +981,7 @@ class RowWriter {
     (
         [&]() {
           using current_t = std::tuple_element_t<Is, children_types>;
-          if constexpr (
-              !provide_std_interface<current_t> &&
-              !isOpaqueType<current_t>::value) {
+          if constexpr (!provide_std_interface<current_t>) {
             if (UNLIKELY(std::get<Is>(needCommit_))) {
               std::get<Is>(childrenWriters_).finalizeNull();
               std::get<Is>(needCommit_) = false;
