@@ -802,9 +802,32 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
       : targetFileName;
   if (insertTableHandle_->tableStorageFormat() ==
       dwio::common::FileFormat::PARQUET) {
+    std::string compressionSuffix;
+    if (insertTableHandle_->compressionKind().has_value()) {
+      switch (
+          static_cast<int32_t>(insertTableHandle_->compressionKind().value())) {
+        case common::CompressionKind_NONE:
+          compressionSuffix = "";
+          break;
+        case common::CompressionKind_GZIP:
+          compressionSuffix = ".gz";
+          break;
+        case common::CompressionKind_LZ4:
+          compressionSuffix = ".lz4hadoop";
+          break;
+        default:
+          compressionSuffix =
+              "." +
+              common::compressionKindToString(
+                  insertTableHandle_->compressionKind().value());
+          break;
+      }
+    } else {
+      compressionSuffix = "";
+    }
     return {
-        fmt::format("{}{}", targetFileName, ".parquet"),
-        fmt::format("{}{}", writeFileName, ".parquet")};
+        fmt::format("{}{}{}", targetFileName, compressionSuffix, ".parquet"),
+        fmt::format("{}{}{}", writeFileName, compressionSuffix, ".parquet")};
   }
   return {targetFileName, writeFileName};
 }
