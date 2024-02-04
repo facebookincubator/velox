@@ -16,6 +16,8 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/StringEncodingUtils.h"
 #include "velox/functions/lib/string/StringCore.h"
+#include "velox/functions/lib/string/StringImpl.h"
+#include "velox/expression/StringWriter.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -152,5 +154,114 @@ void encodeDigestToBase16(uint8_t* output, int digestSize) {
     output[i * 2 + 1] = kHexCodes[digestChar & 0xf];
   }
 }
+
+class InitCapFunction : public exec::VectorFunction {
+ private:
+  /// String encoding wrappable function
+  template <bool isAscii>
+  struct ApplyInternal {
+    static void apply(
+        const SelectivityVector& rows,
+        const DecodedVector* decodedInput,
+        FlatVector<StringView>* results) {
+      rows.applyToSelected([&](int row) {
+        auto proxy = exec::StringWriter<>(results, row);
+        stringImpl::initCap<isAscii>(
+            proxy, decodedInput->valueAt<StringView>(row));
+        proxy.finalize();
+      });
+    }
+  };
+
+  void applyInternalInPlace(
+      const SelectivityVector& rows,
+      DecodedVector* decodedInput,
+      FlatVector<StringView>* results) const {
+    rows.applyToSelected([&](int row) {
+      auto proxy = exec::StringWriter<true /*reuseInput*/>(
+          results,
+          row,
+          decodedInput->valueAt<StringView>(row) /*reusedInput*/,
+          true /*inPlace*/);
+      stringImpl::initCapAsciiInPlace(proxy);
+      proxy.finalize();
+    });
+  }
+
+ public:
+  bool isDefaultNullBehavior() const override {
+    return true;
+  }
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    VELOX_CHECK(args.size() == 1);
+    VELOX_CHECK(args[0]->typeKind() == TypeKind::VARCHAR);
+
+    // Read content before calling prepare results
+    BaseVector* inputStringsVector = args[0].get();
+    exec::LocalDecodedVector inputHolder(context, *inputStringsVector, rows);
+    auto decodedInput = inputHolder.get();
+
+    auto ascii = isAscii(inputStringsVector, rows);
+
+    bool tryInplace = ascii &&
+        (inputStringsVector->encoding() == VectorEncoding::Simple::FLAT);
+
+    // If tryInplace, then call prepareFlatResultsVector(). If the latter
+    // returns true, note that the input arg was moved to result, so that the
+    // buffer can be reused as output.
+    if (tryInplace &&
+        prepareFlatResultsVector(result, rows, context, args.at(0))) {
+      auto* resultFlatVector = result->as<FlatVector<StringView>>();
+      applyInternalInPlace(rows, decodedInput, resultFlatVector);
+      return;
+    }
+
+    // Not in place path.
+    VectorPtr emptyVectorPtr;
+    prepareFlatResultsVector(result, rows, context, emptyVectorPtr);
+    auto* resultFlatVector = result->as<FlatVector<StringView>>();
+
+    StringEncodingTemplateWrapper<ApplyInternal>::apply(
+        ascii, rows, decodedInput, resultFlatVector);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    // initcap(varchar) -> varchar
+    return {exec::FunctionSignatureBuilder()
+                .returnType("varchar")
+                .argumentType("varchar")
+                .build()};
+  }
+
+  bool ensureStringEncodingSetAtAllInputs() const override {
+    return true;
+  }
+
+  bool propagateStringEncodingFromAllInputs() const override {
+    return true;
+  }
+};
+
+std::vector<std::shared_ptr<exec::FunctionSignature>> initcapSignature() {
+  return {exec::FunctionSignatureBuilder()
+              .returnType("varchar")
+              .argumentType("varchar")
+              .build()};
+}
+
+std::shared_ptr<exec::VectorFunction> makeInitcap(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
+  static const auto kInitcapFunction = std::make_shared<InitCapFunction>();
+  return kInitcapFunction;
+}
+
 
 } // namespace facebook::velox::functions::sparksql

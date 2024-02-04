@@ -640,4 +640,77 @@ FOLLY_ALWAYS_INLINE void pad(
       padPrefixByteLength);
 }
 
+FOLLY_ALWAYS_INLINE static void
+initCapAscii(char* output, const char* input, size_t length) {
+  bool newWord = true;
+  for (size_t i = 0; i < length; ++i) {
+    if (std::isspace(input[i])) {
+      output[i] = input[i];
+      newWord = true;
+    } else {
+      output[i] = newWord ? std::toupper(input[i]) : std::tolower(input[i]);
+      newWord = false;
+    }
+  }
+}
+
+FOLLY_ALWAYS_INLINE size_t initCapUnicode(
+    char* output,
+    size_t outputLength,
+    const char* input,
+    size_t inputLength) {
+  auto inputIdx = 0;
+  auto outputIdx = 0;
+  bool newWord = true;
+
+  while (inputIdx < inputLength) {
+    utf8proc_int32_t nextCodePoint;
+    int size;
+    nextCodePoint = utf8proc_codepoint(&input[inputIdx], input + inputLength, size);
+    if (UNLIKELY(nextCodePoint == -1)) {
+      // invalid input string, copy the remaining of the input string as is to
+      // the output.
+      std::memcpy(&output[outputIdx], &input[inputIdx], inputLength - inputIdx);
+      outputIdx += inputLength - inputIdx;
+      return outputIdx;
+    }
+
+    inputIdx += size;
+    utf8proc_int32_t modifiedCodePoint = newWord ? utf8proc_toupper(nextCodePoint) : utf8proc_tolower(nextCodePoint);
+    newWord = utf8proc_category(nextCodePoint) == UTF8PROC_CATEGORY_ZS; // Check if it's a space character
+
+    assert(
+        (outputIdx + utf8proc_codepoint_length(modifiedCodePoint)) < outputLength &&
+        "access out of bound");
+
+    auto newSize = utf8proc_encode_char(
+        modifiedCodePoint, reinterpret_cast<unsigned char*>(&output[outputIdx]));
+    outputIdx += newSize;
+  }
+  return outputIdx;
+}
+
+
+template <bool ascii, typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool initCap(TOutString& output, const TInString& input) {
+  if constexpr (ascii) {
+    output.resize(input.size());
+    initCapAscii(output.data(), input.data(), input.size());
+  } else {
+    output.resize(input.size() * 4);
+    auto size =
+        initCapUnicode(output.data(), output.size(), input.data(), input.size());
+    output.resize(size);
+  }
+  return true;
+}
+
+/// Inplace ascii initCap
+template <typename T>
+FOLLY_ALWAYS_INLINE bool initCapAsciiInPlace(T& str) {
+  initCapAscii(str.data(), str.data(), str.size());
+  return true;
+}
+
+
 } // namespace facebook::velox::functions::stringImpl
