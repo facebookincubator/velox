@@ -91,9 +91,8 @@ struct PrimitiveWriter {
 };
 
 template <typename V>
-bool constexpr provide_std_interface =
-    SimpleTypeTrait<V>::isPrimitiveType && !std::is_same_v<Varchar, V> &&
-    !std::is_same_v<Varbinary, V> && !std::is_same_v<Any, V>;
+bool constexpr provide_std_interface = SimpleTypeTrait<V>::isPrimitiveType &&
+    !std::is_same_v<Varchar, V> && !std::is_same_v<Varbinary, V>;
 
 // bool is an exception, it requires commit but also provides std::interface.
 template <typename V>
