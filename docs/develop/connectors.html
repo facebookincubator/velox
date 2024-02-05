@@ -131,6 +131,8 @@ sources and each require a different configuration.</p>
 <h3>Storage Adapters<a class="headerlink" href="#storage-adapters" title="Permalink to this heading">¶</a></h3>
 <p>Hive Connector allows reading and writing files from a variety of distributed storage systems.
 The supported storage API are S3, HDFS, GCS, Linux FS.</p>
+<p>If file is not found when reading, <cite>openFileForRead</cite> API throws <cite>VeloxRuntimeError</cite> with <cite>error_code::kFileNotFound</cite>.
+This behavior is necessary to support the <cite>ignore_missing_files</cite> configuration property.</p>
 <p>S3 is supported using the <a class="reference external" href="https://github.com/aws/aws-sdk-cpp">AWS SDK for C++</a> library.
 S3 supported schemes are <cite>s3://</cite> (Amazon S3, Minio), <cite>s3a://</cite> (Hadoop 3.x), <cite>s3n://</cite> (Deprecated in Hadoop 3.x),
 <cite>oss://</cite> (Alibaba cloud storage), and <cite>cos://</cite>, <cite>cosn://</cite> (Tencent cloud storage).</p>
