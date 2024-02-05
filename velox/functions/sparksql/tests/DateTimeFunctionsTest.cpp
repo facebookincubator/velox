@@ -261,7 +261,7 @@ TEST_F(DateTimeFunctionsTest, dateFromUnixDate) {
   EXPECT_EQ(parseDate("1971-01-01"), dateFromUnixDate(365));
 
   // Leap year tests
-  EXPECT_EQ(parseDate("1972-02-29"), dateFromUnixDate(365 + 365 + 30 + 28 + 1));
+  EXPECT_EQ(parseDate("1972-02-29"), dateFromUnixDate(365 + 365 + 30 + 29));
   EXPECT_EQ(parseDate("1971-03-01"), dateFromUnixDate(365 + 30 + 28 + 1));
 
   // Min and max value tests
