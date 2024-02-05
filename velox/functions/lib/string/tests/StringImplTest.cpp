@@ -61,8 +61,8 @@ class StringImplTest : public testing::Test {
          "абвгдежзийклмнопрстуфхцчшщъыьэюя"}};
   }
 
-
-  std::vector<std::tuple<std::string, std::string>> getInitCapUnicodeTestData() {
+  std::vector<std::tuple<std::string, std::string>>
+  getInitCapUnicodeTestData() {
     return {
         {"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ", "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"},
         {"αβγδεζηθικλμνξοπρςστυφχψ", "Αβγδεζηθικλμνξοπρςστυφχψ"},
@@ -71,8 +71,7 @@ class StringImplTest : public testing::Test {
         {"hello world", "Hello World"},
         {"HELLO WORLD", "Hello World"},
         {"1234", "1234"},
-        {"", ""}
-    };
+        {"", ""}};
   }
 
   std::vector<std::tuple<std::string, std::string>> getInitCapAsciiTestData() {
@@ -83,8 +82,7 @@ class StringImplTest : public testing::Test {
         {"hello world", "Hello World"},
         {"HELLO WORLD", "Hello World"},
         {"1234", "1234"},
-        {"", ""}
-    };
+        {"", ""}};
   }
 };
 

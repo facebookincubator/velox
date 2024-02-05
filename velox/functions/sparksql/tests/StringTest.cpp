@@ -226,8 +226,7 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<int32_t>("find_in_set(c0, c1)", str, strArray);
   }
 
-  std::optional<std::string> initcap(
-      std::optional<std::string> str) {
+  std::optional<std::string> initcap(std::optional<std::string> str) {
     return evaluateOnce<std::string>("initcap(c0)", str);
   }
 };

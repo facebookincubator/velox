@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/StringEncodingUtils.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
-#include "velox/expression/StringWriter.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -262,6 +262,5 @@ std::shared_ptr<exec::VectorFunction> makeInitcap(
   static const auto kInitcapFunction = std::make_shared<InitCapFunction>();
   return kInitcapFunction;
 }
-
 
 } // namespace facebook::velox::functions::sparksql

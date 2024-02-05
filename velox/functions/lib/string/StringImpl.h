@@ -666,7 +666,8 @@ FOLLY_ALWAYS_INLINE size_t initCapUnicode(
   while (inputIdx < inputLength) {
     utf8proc_int32_t nextCodePoint;
     int size;
-    nextCodePoint = utf8proc_codepoint(&input[inputIdx], input + inputLength, size);
+    nextCodePoint =
+        utf8proc_codepoint(&input[inputIdx], input + inputLength, size);
     if (UNLIKELY(nextCodePoint == -1)) {
       // invalid input string, copy the remaining of the input string as is to
       // the output.
@@ -676,20 +677,24 @@ FOLLY_ALWAYS_INLINE size_t initCapUnicode(
     }
 
     inputIdx += size;
-    utf8proc_int32_t modifiedCodePoint = newWord ? utf8proc_toupper(nextCodePoint) : utf8proc_tolower(nextCodePoint);
-    newWord = utf8proc_category(nextCodePoint) == UTF8PROC_CATEGORY_ZS; // Check if it's a space character
+    utf8proc_int32_t modifiedCodePoint = newWord
+        ? utf8proc_toupper(nextCodePoint)
+        : utf8proc_tolower(nextCodePoint);
+    newWord = utf8proc_category(nextCodePoint) ==
+        UTF8PROC_CATEGORY_ZS; // Check if it's a space character
 
     assert(
-        (outputIdx + utf8proc_codepoint_length(modifiedCodePoint)) < outputLength &&
+        (outputIdx + utf8proc_codepoint_length(modifiedCodePoint)) <
+            outputLength &&
         "access out of bound");
 
     auto newSize = utf8proc_encode_char(
-        modifiedCodePoint, reinterpret_cast<unsigned char*>(&output[outputIdx]));
+        modifiedCodePoint,
+        reinterpret_cast<unsigned char*>(&output[outputIdx]));
     outputIdx += newSize;
   }
   return outputIdx;
 }
-
 
 template <bool ascii, typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool initCap(TOutString& output, const TInString& input) {
@@ -698,8 +703,8 @@ FOLLY_ALWAYS_INLINE bool initCap(TOutString& output, const TInString& input) {
     initCapAscii(output.data(), input.data(), input.size());
   } else {
     output.resize(input.size() * 4);
-    auto size =
-        initCapUnicode(output.data(), output.size(), input.data(), input.size());
+    auto size = initCapUnicode(
+        output.data(), output.size(), input.data(), input.size());
     output.resize(size);
   }
   return true;
@@ -711,6 +716,5 @@ FOLLY_ALWAYS_INLINE bool initCapAsciiInPlace(T& str) {
   initCapAscii(str.data(), str.data(), str.size());
   return true;
 }
-
 
 } // namespace facebook::velox::functions::stringImpl
