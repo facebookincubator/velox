@@ -150,6 +150,10 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
       continue;
     }
 
+    if (aggregate.distinct) {
+      continue;
+    }
+
     const auto& function = aggregate.function;
     auto& result = output->childAt(numKeys + i);
     if (isPartialOutput(step_)) {
