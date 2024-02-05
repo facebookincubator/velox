@@ -89,21 +89,21 @@ class NtileFunction : public exec::WindowFunction {
   struct BucketMetrics {
     // To compute the bucket number for a row, we find the number of rows in
     // a bucket as the (number of rows in partition) / (number of buckets).
-    int64_t rowsPerBucket;
+    TResult rowsPerBucket;
     // There could be some buckets with rowsPerBucket + 1 number of rows,
     // as the partition rows might not be exactly divisible
     // by the number of buckets. There are
     // (number of rows in partition) % (number of buckets) such buckets.
-    int64_t bucketsWithExtraRow;
+    TResult bucketsWithExtraRow;
     // When assigning bucket numbers, the first 'bucketsWithExtraRow' buckets
     // will have (rowsPerBucket + 1) rows. This row number at this boundary is
     // extraBucketsBoundary = bucketsWithExtraRow * (rowsPerBucket + 1). Beyond
     // this row number in the partition, the buckets will have only
     // rowsPerBucket number of rows. This boundary is useful when computing the
     // bucket value.
-    int64_t extraBucketsBoundary;
+    TResult extraBucketsBoundary;
 
-    int64_t computeBucketValue(vector_size_t rowNumber) const {
+    TResult computeBucketValue(vector_size_t rowNumber) const {
       if (rowNumber < extraBucketsBoundary) {
         return rowNumber / (rowsPerBucket + 1) + 1;
       }
@@ -132,7 +132,7 @@ class NtileFunction : public exec::WindowFunction {
     }
   };
 
-  BucketMetrics computeBucketMetrics(int64_t numBuckets) const {
+  BucketMetrics computeBucketMetrics(TResult numBuckets) const {
     auto rowsPerBucket = numPartitionRows_ / numBuckets;
     auto bucketsWithExtraRow = numPartitionRows_ % numBuckets;
     auto extraBucketsBoundary = (rowsPerBucket + 1) * bucketsWithExtraRow;
@@ -197,7 +197,7 @@ class NtileFunction : public exec::WindowFunction {
 
   // Number of buckets if a constant value. Is optional as the value could
   // be null.
-  std::optional<int64_t> numFixedBuckets_;
+  std::optional<TResult> numFixedBuckets_;
 
   // If number of buckets is greater than the partition rows, then the output
   // bucket number is simply row number + 1. So bucket computation can be
@@ -211,7 +211,7 @@ class NtileFunction : public exec::WindowFunction {
 
   // Current WindowPartition used for accessing rows in the apply method.
   const exec::WindowPartition* partition_;
-  int64_t numPartitionRows_ = 0;
+  TResult numPartitionRows_ = 0;
 
   // Denotes how far along the partition rows are output already.
   int64_t partitionOffset_ = 0;
