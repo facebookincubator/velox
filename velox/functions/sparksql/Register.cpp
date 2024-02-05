@@ -282,8 +282,6 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<AddMonthsFunction, Date, Date, int32_t>(
       {prefix + "add_months"});
 
-  registerFunction<DateFromUnixDateFunction, Date, int8_t>({prefix + "date_from_unix_date"});
-  registerFunction<DateFromUnixDateFunction, Date, int16_t>({prefix + "date_from_unix_date"});
   registerFunction<DateFromUnixDateFunction, Date, int32_t>({prefix + "date_from_unix_date"});
 
   registerFunction<DateAddFunction, Date, Date, int8_t>({prefix + "date_add"});
