@@ -15,6 +15,22 @@
 
 # github_checkout $REPO $VERSION $GIT_CLONE_PARAMS clones or re-uses an existing clone of the
 # specified repo, checking out the requested version.
+
+function prompt {
+  (
+    while true; do
+      local input="${PROMPT_ALWAYS_RESPOND:-}"
+      echo -n "$(tput bold)$* [Y, n]$(tput sgr0) "
+      [[ -z "${input}" ]] && read input
+      if [[ "${input}" == "Y" || "${input}" == "y" || "${input}" == "" ]]; then
+        return 0
+      elif [[ "${input}" == "N" || "${input}" == "n" ]]; then
+        return 1
+      fi
+    done
+  ) 2> /dev/null
+}
+
 function github_checkout {
   local REPO=$1
   shift
@@ -36,6 +52,10 @@ function github_checkout {
   cd "${DIRNAME}"
 }
 
+function run_and_time {
+  time "$@"
+  { echo "+ Finished running $*"; } 2> /dev/null
+}
 
 # get_cxx_flags [$CPU_ARCH]
 # Sets and exports the variable VELOX_CXX_FLAGS with appropriate compiler flags.
