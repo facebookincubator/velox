@@ -224,7 +224,8 @@ TEST_F(HdfsFileSystemTest, missingFileViaFileSystem) {
   VELOX_ASSERT_RUNTIME_THROW_CODE(
       hdfsFileSystem->openFileForRead(
           "hdfs://localhost:7777/path/that/does/not/exist"),
-      error_code::kFileNotFound);
+      error_code::kFileNotFound,
+      "Unable to get file path info for file: /path/that/does/not/exist. got error: FileNotFoundException: Path /path/that/does/not/exist does not exist.");
 }
 
 TEST_F(HdfsFileSystemTest, missingHost) {

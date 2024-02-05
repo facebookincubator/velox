@@ -178,7 +178,7 @@ TEST_F(AbfsFileSystemTest, missingFile) {
       facebook::velox::filesystems::test::AzuriteABFSEndpoint + "test.txt";
   auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
   VELOX_ASSERT_RUNTIME_THROW_CODE(
-      abfs->openFileForRead(abfsFile), error_code::kFileNotFound);
+      abfs->openFileForRead(abfsFile), error_code::kFileNotFound, "404");
 }
 
 TEST_F(AbfsFileSystemTest, openFileForWriteNotImplemented) {

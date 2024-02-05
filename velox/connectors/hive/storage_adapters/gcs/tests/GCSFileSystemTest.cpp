@@ -286,7 +286,9 @@ TEST_F(GCSFileSystemTest, missingFile) {
   filesystems::GCSFileSystem gcfs(testGcsOptions());
   gcfs.initializeClient();
   VELOX_ASSERT_RUNTIME_THROW_CODE(
-      gcfs.openFileForRead(gcsFile), error_code::kFileNotFound);
+      gcfs.openFileForRead(gcsFile),
+      error_code::kFileNotFound,
+      "\\\"message\\\": \\\"Live version of object test1-gcs/newTest.txt does not exist.\\\"");
 }
 
 TEST_F(GCSFileSystemTest, missingBucket) {
@@ -294,7 +296,9 @@ TEST_F(GCSFileSystemTest, missingBucket) {
   gcfs.initializeClient();
   const char* gcsFile = "gs://dummy/foo.txt";
   VELOX_ASSERT_RUNTIME_THROW_CODE(
-      gcfs.openFileForRead(gcsFile), error_code::kFileNotFound);
+      gcfs.openFileForRead(gcsFile),
+      error_code::kFileNotFound,
+      "\\\"message\\\": \\\"Bucket dummy does not exist.\\\"");
 }
 
 TEST_F(GCSFileSystemTest, credentialsConfig) {
