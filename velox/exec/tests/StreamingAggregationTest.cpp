@@ -289,14 +289,12 @@ class StreamingAggregationTest : public OperatorTestBase {
       auto plan =
           PlanBuilder()
               .values(data)
-              .aggregation(
-                  keys[0]->type()->asRow().names(),
+              .streamingAggregation(
                   keys[0]->type()->asRow().names(),
                   {"count(distinct c1)", "array_agg(c1)", "sumnonpod(1)"},
                   {},
-                  core::AggregationNode::Step::kPartial,
+                  core::AggregationNode::Step::kSingle,
                   false)
-              .finalAggregation()
               .planNode();
 
       // Generate a list of grouping keys to use in the query: c0, c1, c2,..
@@ -318,26 +316,17 @@ class StreamingAggregationTest : public OperatorTestBase {
           .assertResults(sql);
 
       EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
-
-      // Force partial aggregation flush after every batch of input.
-      AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(core::QueryConfig::kMaxPartialAggregationMemory, "0")
-          .assertResults(sql);
-
-      EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
     }
 
     {
       auto plan = PlanBuilder()
                       .values(data)
-                      .aggregation(
-                          keys[0]->type()->asRow().names(),
+                      .streamingAggregation(
                           keys[0]->type()->asRow().names(),
                           {},
                           {},
-                          core::AggregationNode::Step::kPartial,
+                          core::AggregationNode::Step::kSingle,
                           false)
-                      .finalAggregation()
                       .planNode();
 
       // Generate a list of grouping keys to use in the query: c0, c1, c2,..
