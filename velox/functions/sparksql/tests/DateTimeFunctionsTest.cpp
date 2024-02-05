@@ -247,8 +247,7 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
 
 TEST_F(DateTimeFunctionsTest, dateFromUnixDate) {
   const auto dateFromUnixDate = [&](std::optional<int32_t> value) {
-    return evaluateOnce<int32_t>(
-        "date_from_unix_date(c0)", value);
+    return evaluateOnce<int32_t>("date_from_unix_date(c0)", value);
   };
 
   // Null test
@@ -262,8 +261,8 @@ TEST_F(DateTimeFunctionsTest, dateFromUnixDate) {
   EXPECT_EQ(parseDate("1971-01-01"), dateFromUnixDate(365));
 
   // Leap year tests
-  EXPECT_EQ(parseDate("1972-02-29"), dateFromUnixDate(365 + 365 + 30 + 29));
-  EXPECT_EQ(parseDate("1971-03-01"), dateFromUnixDate(365 + 30 + 29));
+  EXPECT_EQ(parseDate("1972-02-29"), dateFromUnixDate(365 + 365 + 30 + 28 + 1));
+  EXPECT_EQ(parseDate("1971-03-01"), dateFromUnixDate(365 + 30 + 28 + 1));
 
   // Min and max value tests
   EXPECT_EQ(parseDate("5881580-07-11"), dateFromUnixDate(kMax));

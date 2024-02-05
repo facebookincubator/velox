@@ -34,6 +34,12 @@ These functions support TIMESTAMP and DATE input types.
     deducted from ``start_date``.
     Supported types for ``num_days`` are: TINYINT, SMALLINT, INTEGER.
 
+.. spark:function:: date_from_unix_date(integer) -> date
+
+    Creates date from the number of days since 1970-01-01. Returns null when input is null.
+
+        SELECT date_from_unix_date(1); -- '1970-01-02'
+
 .. spark:function:: date_sub(start_date, num_days) -> date
 
     Returns the date that is ``num_days`` before ``start_date``. According to the inputs,
@@ -75,12 +81,6 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: dow(x) -> integer
 
     This is an alias for :spark:func:`dayofweek`.
-
-.. spark:function:: date_from_unix_date(integer) -> date
-
-    Creates date from the number of days since 1970-01-01. Returns null when input is null.
-
-        SELECT date_from_unix_date(1); -- '1970-01-02'
 
 .. spark:function:: from_unixtime(unixTime, format) -> string
 

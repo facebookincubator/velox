@@ -364,8 +364,7 @@ template <typename T>
 struct DateFromUnixDateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void
-  call(out_type<Date>& result, const int32_t& value) {
+  FOLLY_ALWAYS_INLINE void call(out_type<Date>& result, const int32_t& value) {
     __builtin_add_overflow(0, value, &result);
   }
 };
