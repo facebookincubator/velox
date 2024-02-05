@@ -30,6 +30,8 @@
 #include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
 
+#include <fstream>
+
 DECLARE_int32(velox_memory_pool_mb);
 DECLARE_bool(velox_memory_leak_check_enabled);
 
