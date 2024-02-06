@@ -16,8 +16,8 @@
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 
-#include <iostream>
 #include "velox/exec/tests/utils/TempFilePath.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::filesystems::abfs;
 
