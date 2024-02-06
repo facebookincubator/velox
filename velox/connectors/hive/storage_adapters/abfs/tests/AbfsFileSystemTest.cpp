@@ -39,7 +39,7 @@ using ::facebook::velox::common::Region;
 constexpr int kOneMB = 1 << 20;
 static const std::string filePath = "test_file.txt";
 static const std::string fullFilePath =
-    facebook::velox::filesystems::test::AzuriteABFSEndpoint + filePath;
+    filesystems::test::AzuriteABFSEndpoint + filePath;
 
 class AbfsFileSystemTest : public testing::Test {
  public:
@@ -58,14 +58,11 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
  public:
-  std::shared_ptr<facebook::velox::filesystems::test::AzuriteServer>
-      azuriteServer;
+  std::shared_ptr<filesystems::test::AzuriteServer> azuriteServer;
 
   void SetUp() override {
     auto port = facebook::velox::exec::test::getFreePort();
-    azuriteServer =
-        std::make_shared<facebook::velox::filesystems::test::AzuriteServer>(
-            port);
+    azuriteServer = std::make_shared<filesystems::test::AzuriteServer>(port);
     azuriteServer->start();
     auto tempFile = createFile();
     azuriteServer->addFile(tempFile->path, filePath);
@@ -77,12 +74,9 @@ class AbfsFileSystemTest : public testing::Test {
 
   std::unique_ptr<WriteFile> openFileForWrite(
       std::string_view path,
-      std::shared_ptr<
-          facebook::velox::filesystems::test::MockBlobStorageFileClient>
-          client) {
-    auto abfsfile =
-        std::make_unique<facebook::velox::filesystems::abfs::AbfsWriteFile>(
-            std::string(path), azuriteServer->connectionStr());
+      std::shared_ptr<filesystems::test::MockBlobStorageFileClient> client) {
+    auto abfsfile = std::make_unique<AbfsWriteFile>(
+        std::string(path), azuriteServer->connectionStr());
     abfsfile->testingSetFileClient(client);
     abfsfile->initialize();
     return abfsfile;
@@ -219,7 +213,7 @@ TEST_F(AbfsFileSystemTest, missingFile) {
         {{"fs.azure.account.key.test.dfs.core.windows.net",
           azuriteServer->connectionStr()}});
     const std::string abfsFile =
-        facebook::velox::filesystems::test::AzuriteABFSEndpoint + "test.txt";
+        filesystems::test::AzuriteABFSEndpoint + "test.txt";
     auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
     auto readFile = abfs->openFileForRead(abfsFile);
     FAIL() << "Expected VeloxException";
@@ -230,26 +224,30 @@ TEST_F(AbfsFileSystemTest, missingFile) {
 
 TEST_F(AbfsFileSystemTest, OpenFileForWriteTest) {
   const std::string abfsFile =
-      facebook::velox::filesystems::test::AzuriteABFSEndpoint + "writetest.txt";
-  auto mockClient = std::make_shared<
-      facebook::velox::filesystems::test::MockBlobStorageFileClient>(
-      facebook::velox::filesystems::test::MockBlobStorageFileClient());
+      filesystems::test::AzuriteABFSEndpoint + "writetest.txt";
+  auto mockClient =
+      std::make_shared<filesystems::test::MockBlobStorageFileClient>(
+          filesystems::test::MockBlobStorageFileClient());
   auto abfsWriteFile = openFileForWrite(abfsFile, mockClient);
   EXPECT_EQ(abfsWriteFile->size(), 0);
+  std::string dataContent = "";
   uint64_t totalSize = 0;
   std::string randomData =
       AbfsFileSystemTest::generateRandomData(1 * 1024 * 1024);
   for (int i = 0; i < 8; ++i) {
     abfsWriteFile->append(randomData);
+    dataContent += randomData;
   }
   totalSize = randomData.size() * 8;
   abfsWriteFile->flush();
   EXPECT_EQ(abfsWriteFile->size(), totalSize);
 
   randomData = AbfsFileSystemTest::generateRandomData(9 * 1024 * 1024);
+  dataContent += randomData;
   abfsWriteFile->append(randomData);
   totalSize += randomData.size();
   randomData = AbfsFileSystemTest::generateRandomData(2 * 1024 * 1024);
+  dataContent += randomData;
   totalSize += randomData.size();
   abfsWriteFile->append(randomData);
   abfsWriteFile->flush();
@@ -259,6 +257,9 @@ TEST_F(AbfsFileSystemTest, OpenFileForWriteTest) {
   VELOX_ASSERT_THROW(abfsWriteFile->append("abc"), "File is not open");
   VELOX_ASSERT_THROW(
       openFileForWrite(abfsFile, mockClient), "File already exists");
+  std::string fileContent = mockClient->readContent();
+  ASSERT_EQ(fileContent.size(), dataContent.size());
+  ASSERT_EQ(fileContent, dataContent);
 }
 
 TEST_F(AbfsFileSystemTest, renameNotImplemented) {
@@ -314,9 +315,7 @@ TEST_F(AbfsFileSystemTest, credNotFOund) {
   const std::string abfsFile =
       std::string("abfs://test@test1.dfs.core.windows.net/test");
   auto hiveConfig = AbfsFileSystemTest::hiveConfig({});
-  auto abfs =
-      std::make_shared<facebook::velox::filesystems::abfs::AbfsFileSystem>(
-          hiveConfig);
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
   VELOX_ASSERT_THROW(
       abfs->openFileForRead(abfsFile), "Failed to find storage credentials");
 }

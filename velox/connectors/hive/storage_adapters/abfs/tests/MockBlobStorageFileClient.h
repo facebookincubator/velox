@@ -15,8 +15,9 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
+#include <iostream>
+#include "velox/exec/tests/utils/TempFilePath.h"
 using namespace facebook::velox;
 using namespace facebook::velox::filesystems::abfs;
 
@@ -34,6 +35,19 @@ class MockBlobStorageFileClient : public IBlobStorageFileClient {
   void append(const uint8_t* buffer, size_t size, uint64_t offset) override;
   void flush(uint64_t position) override;
   void close() override;
+
+  // for testing purpose to verify the written content if correct.
+  std::string readContent() {
+    std::ifstream inputFile(filePath_);
+    std::string content;
+    inputFile.seekg(0, std::ios::end);
+    std::streamsize fileSize = inputFile.tellg();
+    inputFile.seekg(0, std::ios::beg);
+    content.resize(fileSize);
+    inputFile.read(&content[0], fileSize);
+    inputFile.close();
+    return content;
+  }
 
  private:
   std::string filePath_;

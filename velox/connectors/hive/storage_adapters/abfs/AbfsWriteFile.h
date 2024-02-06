@@ -78,7 +78,8 @@ class AbfsWriteFile : public WriteFile {
   void close() override;
 
   /// Used by tests to override the FileSystem client.
-  void testingSetFileClient(std::shared_ptr<IBlobStorageFileClient> fileClient);
+  void testingSetFileClient(
+      const std::shared_ptr<IBlobStorageFileClient>& fileClient);
 
  protected:
   class Impl;

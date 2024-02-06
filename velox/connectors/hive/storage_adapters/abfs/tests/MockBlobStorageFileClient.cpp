@@ -16,8 +16,9 @@
 
 #include "velox/connectors/hive/storage_adapters/abfs/tests/MockBlobStorageFileClient.h"
 
-#include <azure/storage/files/datalake.hpp>
 #include <filesystem>
+
+#include <azure/storage/files/datalake.hpp>
 
 using namespace Azure::Storage::Files::DataLake;
 namespace facebook::velox::filesystems::test {
