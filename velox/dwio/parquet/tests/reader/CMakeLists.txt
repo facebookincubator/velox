@@ -12,21 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_custom_target(example_file_dir ALL)
-file(GLOB_RECURSE RESOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../examples/*")
-foreach(RESOURCE_FILE ${RESOURCE_FILES})
-  get_filename_component(FILE_NAME ${RESOURCE_FILE} NAME)
-  get_filename_component(DIR_NAME ${RESOURCE_FILE} DIRECTORY)
-  file(RELATIVE_PATH RELATIVE_PATH ${CMAKE_SOURCE_DIR} ${DIR_NAME})
-  add_custom_command(
-    TARGET example_file_dir
-    PRE_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RESOURCE_FILE}
-            ${CMAKE_BINARY_DIR}/${RELATIVE_PATH}/${FILE_NAME})
-endforeach()
-
 add_executable(velox_dwio_parquet_reader_test ParquetReaderTest.cpp)
-add_dependencies(velox_dwio_parquet_reader_test example_file_dir)
 add_test(
   NAME velox_dwio_parquet_reader_test
   COMMAND velox_dwio_parquet_reader_test
@@ -36,7 +22,6 @@ target_link_libraries(
   velox_link_libs ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_parquet_page_reader_test ParquetPageReaderTest.cpp)
-add_dependencies(velox_dwio_parquet_page_reader_test example_file_dir)
 add_test(
   NAME velox_dwio_parquet_page_reader_test
   COMMAND velox_dwio_parquet_page_reader_test
