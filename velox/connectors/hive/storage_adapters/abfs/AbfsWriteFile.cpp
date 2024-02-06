@@ -21,8 +21,8 @@
 namespace facebook::velox::filesystems::abfs {
 class BlobStorageFileClient final : public IBlobStorageFileClient {
  public:
-  BlobStorageFileClient(const std::shared_ptr<DataLakeFileClient>& client)
-      : client_(client) {}
+  BlobStorageFileClient(std::unique_ptr<DataLakeFileClient> client)
+      : client_(std::move(client)) {}
 
   void create() override {
     client_->Create();
@@ -46,7 +46,7 @@ class BlobStorageFileClient final : public IBlobStorageFileClient {
   }
 
  private:
-  const std::shared_ptr<DataLakeFileClient> client_;
+  const std::unique_ptr<DataLakeFileClient> client_;
 };
 
 class AbfsWriteFile::Impl {
@@ -63,11 +63,12 @@ class AbfsWriteFile::Impl {
   void initialize() {
     if (!blobStorageFileClient_) {
       auto abfsAccount = AbfsAccount(path_);
-      auto fileClient = std::make_shared<DataLakeFileClient>(
-          DataLakeFileClient::CreateFromConnectionString(
-              connectStr_, abfsAccount.fileSystem(), abfsAccount.filePath()));
-      blobStorageFileClient_ =
-          std::make_unique<BlobStorageFileClient>(fileClient);
+      blobStorageFileClient_ = std::make_unique<BlobStorageFileClient>(
+          std::make_unique<DataLakeFileClient>(
+              DataLakeFileClient::CreateFromConnectionString(
+                  connectStr_,
+                  abfsAccount.fileSystem(),
+                  abfsAccount.filePath())));
     }
 
     VELOX_CHECK(!checkIfFileExists(), "File already exists");
