@@ -32,6 +32,7 @@ add_executable(
   InTest.cpp
   LeastGreatestTest.cpp
   MapTest.cpp
+  MapFromEntriesTest.cpp
   MightContainTest.cpp
   MonotonicallyIncreasingIdTest.cpp
   RandTest.cpp
