@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/lib/MapFromEntries.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/sparksql/Size.h"
 
@@ -24,6 +25,7 @@ extern void registerElementAtFunction(
 void registerSparkMapFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_allow_duplicates, prefix + "map_from_arrays");
+  registerMapFromEntriesFunction(prefix + "map_from_entries", false);
   // Spark and Presto map_filter function has the same definition:
   //   function expression corresponds to body, arguments to signature
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
