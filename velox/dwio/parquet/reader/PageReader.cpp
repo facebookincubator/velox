@@ -19,7 +19,6 @@
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/common/TimestampDecoder.h"
-#include "velox/dwio/parquet/reader/ParquetReaderUtil.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/vector/FlatVector.h"
 
