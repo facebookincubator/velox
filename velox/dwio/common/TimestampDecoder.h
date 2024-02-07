@@ -20,12 +20,12 @@
 
 namespace facebook::velox::dwio::common {
 
-enum TIMESTAMP_PRECISION { MILLIS, MICROS };
+enum TimestampPrecision { kMillis, kMicros };
 
 class TimestampDecoder : public DirectDecoder<false> {
  public:
   TimestampDecoder(
-      TIMESTAMP_PRECISION precision,
+      TimestampPrecision precision,
       std::unique_ptr<dwio::common::SeekableInputStream> input,
       bool useVInts,
       uint32_t numBytes,
@@ -62,7 +62,7 @@ class TimestampDecoder : public DirectDecoder<false> {
       }
       if constexpr (std::is_same_v<typename Visitor::DataType, int128_t>) {
         auto units = IntDecoder<false>::template readInt<int64_t>();
-        Timestamp timestamp = precision_ == TIMESTAMP_PRECISION::MILLIS
+        Timestamp timestamp = precision_ == TimestampPrecision::kMillis
             ? util::fromUTCMillis(units)
             : util::fromUTCMicros(units);
 
@@ -85,6 +85,6 @@ class TimestampDecoder : public DirectDecoder<false> {
   }
 
  private:
-  TIMESTAMP_PRECISION precision_;
+  TimestampPrecision precision_;
 };
 } // namespace facebook::velox::dwio::common

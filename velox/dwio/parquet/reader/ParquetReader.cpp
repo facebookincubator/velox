@@ -411,7 +411,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         unit.__set_MILLIS(millis);
       } else {
         VELOX_NYI(
-            "{} Timestamp unit not supported", schemaElement.converted_type);
+            "{} Timestamp unit not supported.", schemaElement.converted_type);
       }
 
       timestamp.__set_unit(unit);

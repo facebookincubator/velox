@@ -336,8 +336,10 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           ? sizeof(float)
           : sizeof(double);
       auto numBytes = dictionary_.numValues * typeSize;
-      if (type_->type()->isShortDecimal() &&
-          parquetType == thrift::Type::INT32) {
+      if ((type_->type()->isShortDecimal() &&
+           parquetType == thrift::Type::INT32) ||
+          (type_->type()->isTimestamp() &&
+           parquetType == thrift::Type::INT64)) {
         auto veloxTypeLength = type_->type()->cppSizeInBytes();
         auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
         dictionary_.values =
@@ -365,13 +367,13 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           values[i] = parquetValues[i];
         }
       } else if (
-          parquetType == thrift::Type::INT64 &&
-          type_->logicalType_.has_value()) {
+          type_->type()->isTimestamp() && parquetType == thrift::Type::INT64) {
+        VELOX_CHECK(type_->logicalType_.has_value());
         auto logicalType = type_->logicalType_.value();
         if (logicalType.__isset.TIMESTAMP) {
           VELOX_CHECK(
               logicalType.TIMESTAMP.isAdjustedToUTC,
-              "Only UTC adjusted Timestamp is supported");
+              "Only UTC adjusted Timestamp is supported.");
           auto values = dictionary_.values->asMutable<Timestamp>();
           auto parquetValues = dictionary_.values->asMutable<char>();
           int64_t units;
@@ -387,7 +389,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
               values[i] = util::fromUTCMillis(units);
             }
           } else {
-            VELOX_NYI("Unsupported timestamp unit");
+            VELOX_NYI("Nano Timestamp unit is not supported.");
           }
         }
       }
@@ -654,39 +656,27 @@ void PageReader::makeDecoder() {
               true);
           break;
         case thrift::Type::INT64:
-          if (type_->logicalType_.has_value()) {
+          if (type_->logicalType_.has_value() &&
+              type_->logicalType_.value().__isset.TIMESTAMP) {
             auto logicalType = type_->logicalType_.value();
-            if (logicalType.__isset.TIMESTAMP) {
-              VELOX_CHECK(
-                  logicalType.TIMESTAMP.isAdjustedToUTC,
-                  "Only UTC adjusted Timestamp is supported");
-              if (logicalType.TIMESTAMP.unit.__isset.MICROS) {
-                timestampDecoder_ = std::make_unique<
-                    dwio::common::TimestampDecoder>(
-                    dwio::common::TIMESTAMP_PRECISION::MICROS,
+
+            VELOX_CHECK(
+                logicalType.TIMESTAMP.isAdjustedToUTC,
+                "Only UTC adjusted Timestamp is supported.");
+            VELOX_CHECK(
+                !logicalType.TIMESTAMP.unit.__isset.NANOS,
+                "Nano Timestamp unit not supported.");
+
+            auto precisionUnit = logicalType.TIMESTAMP.unit.__isset.MICROS
+                ? dwio::common::TimestampPrecision::kMicros
+                : dwio::common::TimestampPrecision::kMillis;
+            timestampDecoder_ =
+                std::make_unique<dwio::common::TimestampDecoder>(
+                    precisionUnit,
                     std::make_unique<dwio::common::SeekableArrayInputStream>(
                         pageData_, encodedDataSize_),
                     false,
                     parquetTypeBytes(type_->parquetType_.value()));
-              } else if (logicalType.TIMESTAMP.unit.__isset.MILLIS) {
-                timestampDecoder_ = std::make_unique<
-                    dwio::common::TimestampDecoder>(
-                    dwio::common::TIMESTAMP_PRECISION::MILLIS,
-                    std::make_unique<dwio::common::SeekableArrayInputStream>(
-                        pageData_, encodedDataSize_),
-                    false,
-                    parquetTypeBytes(type_->parquetType_.value()));
-              } else {
-                VELOX_NYI("Timestamp unit not supported");
-              }
-            } else {
-              directDecoder_ =
-                  std::make_unique<dwio::common::DirectDecoder<true>>(
-                      std::make_unique<dwio::common::SeekableArrayInputStream>(
-                          pageData_, encodedDataSize_),
-                      false,
-                      parquetTypeBytes(type_->parquetType_.value()));
-            }
           } else {
             directDecoder_ =
                 std::make_unique<dwio::common::DirectDecoder<true>>(
