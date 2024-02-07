@@ -288,6 +288,11 @@ void registerArbitraryAggregate(const std::string& prefix) {
             return std::make_unique<ArbitraryAggregate<int32_t>>(inputType);
           case TypeKind::BIGINT:
             return std::make_unique<ArbitraryAggregate<int64_t>>(inputType);
+          case TypeKind::HUGEINT:
+            if (inputType->isLongDecimal()) {
+              return std::make_unique<ArbitraryAggregate<int128_t>>(inputType);
+            }
+            VELOX_NYI();
           case TypeKind::REAL:
             return std::make_unique<ArbitraryAggregate<float>>(inputType);
           case TypeKind::DOUBLE:
