@@ -305,9 +305,9 @@ velox::variant convertFromString(
           StringView(value.value()), true /*isIso8601*/));
     }
     auto result = velox::util::Converter<ToKind>::cast(value.value());
-    if constexpr (ToKind == TypeKind::TIMESTAMP) {
-      result.toGMT(Timestamp::defaultTimezone());
-    }
+    // if constexpr (ToKind == TypeKind::TIMESTAMP) {
+    //   result.toGMT(Timestamp::defaultTimezone());
+    // }
     return velox::variant(result);
   }
   return velox::variant(ToKind);
