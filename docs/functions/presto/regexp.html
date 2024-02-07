@@ -82,18 +82,26 @@ in <code class="docutils literal notranslate"><span class="pre">string</span></c
 <dl class="py function">
 <dt class="sig sig-object py">
 <span class="sig-name descname"><span class="pre">regexp_extract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span></dt>
-<dd><blockquote>
-<div><p>Finds the first occurrence of the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in
+<dd><p>Finds the first occurrence of the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in
 <code class="docutils literal notranslate"><span class="pre">string</span></code> and returns the capturing group number <code class="docutils literal notranslate"><span class="pre">group</span></code>:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([a-z]+)&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;a&#39;</span>
 </pre></div>
 </div>
-</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="regexp_extract_all">
-<span class="sig-name descname"><span class="pre">regexp_extract_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#regexp_extract_all" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">regexp_extract_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array(varchar):</span></span></span><a class="headerlink" href="#regexp_extract_all" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the substring(s) matched by the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code>
+in <code class="docutils literal notranslate"><span class="pre">string</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract_all</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\d+&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">14</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">regexp_extract_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array(varchar):</span></span></span></dt>
 <dd><p>Finds all occurrences of the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in
 <code class="docutils literal notranslate"><span class="pre">string</span></code> and returns the capturing group number <code class="docutils literal notranslate"><span class="pre">group</span></code>:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract_all</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([a-z]+)&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="s1">&#39;m&#39;</span><span class="p">]</span>
@@ -129,8 +137,7 @@ the entire string by anchoring the pattern using <code class="docutils literal n
 <dl class="py function">
 <dt class="sig sig-object py">
 <span class="sig-name descname"><span class="pre">regexp_replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replacement</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span></dt>
-<dd><blockquote>
-<div><p>Replaces every instance of the substring matched by the regular expression
+<dd><p>Replaces every instance of the substring matched by the regular expression
 <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code> with <code class="docutils literal notranslate"><span class="pre">replacement</span></code>. Capturing groups can be referenced in
 <code class="docutils literal notranslate"><span class="pre">replacement</span></code> using <code class="docutils literal notranslate"><span class="pre">$g</span></code> for a numbered group or <code class="docutils literal notranslate"><span class="pre">${name}</span></code> for a named group. A
 dollar sign (<code class="docutils literal notranslate"><span class="pre">$</span></code>) may be included in the replacement by escaping it with a
@@ -138,7 +145,6 @@ backslash (<code class="docutils literal notranslate"><span class="pre">\$</span
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([ab]) &#39;</span><span class="p">,</span> <span class="s1">&#39;3c$2 &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;3ca 3cb 14m&#39;</span>
 </pre></div>
 </div>
-</div></blockquote>
 </dd></dl>
 
 </section>
