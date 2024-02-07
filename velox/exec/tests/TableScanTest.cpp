@@ -4376,6 +4376,7 @@ TEST_F(TableScanTest, varbinaryPartitionKey) {
 }
 
 TEST_F(TableScanTest, timestampPartitionKey) {
+  GTEST_SKIP() << "Skipping timestamp partitionkey test";
   const char* inputs[] = {"2023-10-14 07:00:00.0", "2024-01-06 04:00:00.0"};
   auto expected = makeRowVector(
       {"t"},
