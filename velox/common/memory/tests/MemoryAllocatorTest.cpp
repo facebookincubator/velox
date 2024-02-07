@@ -127,7 +127,25 @@ class MemoryAllocatorTest : public testing::TestWithParam<int> {
   /// Returns the virtual and resident sizes of the process in 4K pages. Only
   /// defined for Linux.
   std::optional<ProcessSize> processSize() {
+#ifdef linux
+    auto pid = getpid();
+    system(
+        fmt::format("ps -eo 'pid,vsize,rss' |grep \"${}\" >/tmp/{}", pid, pid)
+            .c_str());
+    std::ifstream in(fmt::format("/tmp/{}", pid));
+    std::string line;
+    std::getline(in, line);
+    int32_t resultPid;
+    int32_t vsize;
+    int32_t rss;
+    if (sscanf(line.c_str(), "%d %d %d", &resultPid, &vsize, &rss) != 3) {
+      return std::nullopt;
+    }
+    constexpr int64_t kKBInPage = AllocationTraits::kPageSize / 1024;
+    return ProcessSize{vsize / kKBInPage, rss / kKBInPage};
+#else
     return std::nullopt;
+#endif
   }
 
   void checkProcessSize(std::optional<ProcessSize> base, ProcessSize delta) {
