@@ -55,9 +55,9 @@ VectorPtr newConstantFromString(
                     .thenOrThrow(folly::identity, [&](const Status& status) {
                       VELOX_USER_FAIL("{}", status.message());
                     });
-    if constexpr (kind == TypeKind::TIMESTAMP) {
-      copy.toGMT(Timestamp::defaultTimezone());
-    }
+    // if constexpr (kind == TypeKind::TIMESTAMP) {
+    //   copy.toGMT(Timestamp::defaultTimezone());
+    // }
     return std::make_shared<ConstantVector<T>>(
         pool, size, false, type, std::move(copy));
   }
