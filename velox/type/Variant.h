@@ -603,8 +603,9 @@ struct VariantConverter {
         return convert<TypeKind::VARCHAR, ToKind>(value);
       case TypeKind::VARBINARY:
         return convert<TypeKind::VARBINARY, ToKind>(value);
-      case TypeKind::TIMESTAMP:
       case TypeKind::HUGEINT:
+        return convert<TypeKind::HUGEINT, ToKind>(value);
+      case TypeKind::TIMESTAMP:
         // Default date/timestamp conversion is prone to errors and implicit
         // assumptions. Block converting timestamp to integer, double and
         // std::string types. The callers should implement their own conversion

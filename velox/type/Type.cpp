@@ -896,6 +896,8 @@ TypePtr fromKindToScalerType(TypeKind kind) {
       return SMALLINT();
     case TypeKind::BIGINT:
       return BIGINT();
+    case TypeKind::HUGEINT:
+      return HUGEINT();
     case TypeKind::INTEGER:
       return INTEGER();
     case TypeKind::REAL:
