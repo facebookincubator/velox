@@ -44,8 +44,8 @@ jobs:
       - name: Install Dependencies
         run: |
           brew install \
-            bison boost ccache double-conversion fbthrift flex fmt gflags glog \
-            icu4c libevent libsodium lz4 lzo ninja openssl protobuf@21 range-v3 simdjson \
+            bison boost ccache double-conversion flex fmt gflags glog \
+            icu4c libevent libsodium lz4 lzo ninja openssl range-v3 simdjson \
             snappy thrift xz xsimd zstd
           
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
