@@ -345,7 +345,14 @@ void CastExpr::applyCastKernel(
         FromKind == TypeKind::TIMESTAMP &&
         (ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY)) {
       auto writer = exec::StringWriter<>(result, row);
-      hooks_->castTimestampToString(inputRowValue, writer);
+      const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
+      auto sessionTzName = queryConfig.sessionTimezone();
+      if (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty()) {
+        const auto* timeZone = date::locate_zone(sessionTzName);
+        hooks_->castTimestampToString(inputRowValue, writer, timeZone);
+      } else {
+        hooks_->castTimestampToString(inputRowValue, writer);
+      }
       return;
     }
 
@@ -636,14 +643,10 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
   if (StringView::isInline(rowSize)) {
     char inlined[StringView::kInlineSize];
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-      if (simpleInput->isNullAt(row)) {
-        result->setNull(row, true);
-      } else {
-        flatResult->setNoCopy(
-            row,
-            convertToStringView<FromNativeType>(
-                simpleInput->valueAt(row), scale, rowSize, inlined));
-      }
+      flatResult->setNoCopy(
+          row,
+          convertToStringView<FromNativeType>(
+              simpleInput->valueAt(row), scale, rowSize, inlined));
     });
     return result;
   }
@@ -653,17 +656,13 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
   char* rawBuffer = buffer->asMutable<char>() + buffer->size();
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    if (simpleInput->isNullAt(row)) {
-      result->setNull(row, true);
-    } else {
-      auto stringView = convertToStringView<FromNativeType>(
-          simpleInput->valueAt(row), scale, rowSize, rawBuffer);
-      flatResult->setNoCopy(row, stringView);
-      if (!stringView.isInline()) {
-        // If string view is inline, correponding bytes on the raw string buffer
-        // are not needed.
-        rawBuffer += stringView.size();
-      }
+    auto stringView = convertToStringView<FromNativeType>(
+        simpleInput->valueAt(row), scale, rowSize, rawBuffer);
+    flatResult->setNoCopy(row, stringView);
+    if (!stringView.isInline()) {
+      // If string view is inline, corresponding bytes on the raw string buffer
+      // are not needed.
+      rawBuffer += stringView.size();
     }
   });
   // Update the exact buffer size.

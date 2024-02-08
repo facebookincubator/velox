@@ -2000,11 +2000,13 @@ bool Task::getLongRunningOpCalls(
       if (!opCallStatus.empty()) {
         auto callDurationMs = opCallStatus.callDuration();
         if (callDurationMs > thresholdDurationMs) {
+          auto* op = driver->findOperatorNoThrow(opCallStatus.opId);
           out.push_back({
               .durationMs = callDurationMs,
               .tid = driver->state().tid,
               .opId = opCallStatus.opId,
               .taskId = taskId_,
+              .opCall = OpCallStatusRaw::formatCall(op, opCallStatus.method),
           });
         }
       }
@@ -2112,16 +2114,6 @@ std::string Task::toString() const {
   return out.str();
 }
 
-// TODO(jtan6): remove after toJson() is landed on presto native side
-std::string Task::toShortJsonString() const {
-  return folly::toPrettyJson(toShortJson());
-}
-
-// TODO(jtan6): remove after toJson() is landed on presto native side
-std::string Task::toJsonString() const {
-  return folly::toPrettyJson(toJson());
-}
-
 folly::dynamic Task::toShortJsonLocked() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["shortId"] = shortId(taskId_);
@@ -2152,7 +2144,7 @@ folly::dynamic Task::toJson() const {
   obj["numDriversUngrouped"] = numDriversUngrouped_;
   obj["partitionedOutputConsumed"] = partitionedOutputConsumed_;
   obj["noMoreOutputBuffers"] = noMoreOutputBuffers_;
-  obj["onThreadSince"] = onThreadSince_;
+  obj["onThreadSince"] = std::to_string(onThreadSince_);
 
   if (exception_) {
     obj["exception"] = errorMessageLocked();
@@ -2165,7 +2157,9 @@ folly::dynamic Task::toJson() const {
   folly::dynamic driverObj = folly::dynamic::array;
   int index = 0;
   for (auto& driver : drivers_) {
-    driverObj[std::to_string(index++)] = driver ? driver->toJson() : "null";
+    if (driver) {
+      driverObj[index++] = driver->toJson();
+    }
   }
   obj["drivers"] = driverObj;
 
@@ -2610,6 +2604,22 @@ uint64_t Task::MemoryReclaimer::reclaim(
   }
   VELOX_CHECK_EQ(task->pool()->name(), pool->name());
 
+  uint64_t reclaimWaitTimeUs{0};
+  uint64_t reclaimedBytes{0};
+  {
+    MicrosecondTimer timer{&reclaimWaitTimeUs};
+    reclaimedBytes = reclaimTask(task, targetBytes, maxWaitMs, stats);
+  }
+  ++task->taskStats_.memoryReclaimCount;
+  task->taskStats_.memoryReclaimMs += reclaimWaitTimeUs / 1'000;
+  return reclaimedBytes;
+}
+
+uint64_t Task::MemoryReclaimer::reclaimTask(
+    const std::shared_ptr<Task>& task,
+    uint64_t targetBytes,
+    uint64_t maxWaitMs,
+    memory::MemoryReclaimer::Stats& stats) {
   auto resumeGuard = folly::makeGuard([&]() {
     try {
       Task::resume(task);
@@ -2618,6 +2628,7 @@ uint64_t Task::MemoryReclaimer::reclaim(
                    << " after memory reclamation: " << exception.message();
     }
   });
+
   uint64_t reclaimWaitTimeUs{0};
   bool paused{true};
   {
@@ -2648,13 +2659,13 @@ uint64_t Task::MemoryReclaimer::reclaim(
   }
   // Before reclaiming from its operators, first to check if there is any free
   // capacity in the root after stopping this task.
-  const uint64_t shrunkBytes = pool->shrink(targetBytes);
+  const uint64_t shrunkBytes = task->pool()->shrink(targetBytes);
   if (shrunkBytes >= targetBytes) {
     return shrunkBytes;
   }
   return shrunkBytes +
       memory::MemoryReclaimer::reclaim(
-             pool, targetBytes - shrunkBytes, maxWaitMs, stats);
+             task->pool(), targetBytes - shrunkBytes, maxWaitMs, stats);
 }
 
 void Task::MemoryReclaimer::abort(

@@ -79,10 +79,6 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::string toString() const;
 
-  std::string toJsonString() const;
-
-  std::string toShortJsonString() const;
-
   folly::dynamic toJson() const;
 
   folly::dynamic toShortJson() const;
@@ -261,9 +257,12 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Information about an operator call that helps debugging stuck calls.
   struct OpCallInfo {
     size_t durationMs;
+    /// Thread id of where the operator got stuck.
     int32_t tid;
     int32_t opId;
     std::string taskId;
+    /// Call in the format of "<operatorType>.<nodeId>::<operatorMethod>".
+    std::string opCall;
   };
 
   /// Collect long running operator calls across all drivers in this task.
@@ -735,6 +734,12 @@ class Task : public std::enable_shared_from_this<Task> {
     std::shared_ptr<Task> ensureTask() const {
       return task_.lock();
     }
+
+    uint64_t reclaimTask(
+        const std::shared_ptr<Task>& task,
+        uint64_t targetBytes,
+        uint64_t maxWaitMs,
+        memory::MemoryReclaimer::Stats& stats);
 
     std::weak_ptr<Task> task_;
   };

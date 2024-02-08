@@ -334,6 +334,18 @@ void HashBuild::addInput(RowVectorPtr input) {
     hashers[i]->decode(*key, activeRows_);
   }
 
+  // Update statistics for null keys in join operator.
+  // We use activeRows_ to store which rows have some null keys,
+  // and reset it after using it.
+  // Only process when input is not spilled, to avoid overcounting.
+  if (!isInputFromSpill()) {
+    auto lockedStats = stats_.wlock();
+    deselectRowsWithNulls(hashers, activeRows_);
+    lockedStats->numNullKeys +=
+        activeRows_.size() - activeRows_.countSelected();
+    activeRows_.setAll();
+  }
+
   if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
       !isRightSemiProjectJoin(joinType_) &&
       !isLeftNullAwareJoinWithFilter(joinNode_)) {
@@ -986,7 +998,7 @@ BlockingReason HashBuild::isBlocked(ContinueFuture* future) {
       }
       break;
     case State::kWaitForBuild:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kWaitForProbe:
       if (!future_.valid()) {
         setRunning();
@@ -1036,11 +1048,11 @@ void HashBuild::checkStateTransition(State state) {
       }
       break;
     case State::kWaitForBuild:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kWaitForSpill:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kWaitForProbe:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kFinish:
       VELOX_CHECK_EQ(state_, State::kRunning);
       break;
@@ -1122,9 +1134,8 @@ void HashBuild::reclaim(
       ++stats.numNonReclaimableAttempts;
       LOG(WARNING) << "Can't reclaim from hash build operator, state_["
                    << stateName(buildOp->state_) << "], nonReclaimableSection_["
-                   << nonReclaimableSection_ << "], spiller_["
-                   << (spiller_->finalized() ? "finalized" : "non-finalized")
-                   << "], " << buildOp->pool()->name() << ", usage: "
+                   << buildOp->nonReclaimableSection_ << "], "
+                   << buildOp->pool()->name() << ", usage: "
                    << succinctBytes(buildOp->pool()->currentBytes());
       return;
     }

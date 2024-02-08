@@ -47,8 +47,6 @@ struct SpillStats {
   /// The number of spill writer flushes, equivalent to number of write calls to
   /// underlying filesystem.
   uint64_t spillWrites{0};
-  // TODO(jtan6): Remove after presto native lands
-  uint64_t spillDiskWrites{0};
   /// The time spent on copy out serialized rows for disk write. If compression
   /// is enabled, this includes the compression time.
   uint64_t spillFlushTimeUs{0};
@@ -141,3 +139,13 @@ void updateGlobalMaxSpillLevelExceededCount(
 /// Gets the cumulative global spill stats.
 SpillStats globalSpillStats();
 } // namespace facebook::velox::common
+
+template <>
+struct fmt::formatter<facebook::velox::common::SpillStats>
+    : fmt::formatter<std::string> {
+  auto format(
+      const facebook::velox::common::SpillStats& s,
+      format_context& ctx) {
+    return formatter<std::string>::format(s.toString(), ctx);
+  }
+};

@@ -24,10 +24,11 @@ namespace facebook::velox::serializer::presto {
 /// There are two ways to serialize data using PrestoVectorSerde:
 ///
 /// 1. In order to append multiple RowVectors into the same serialized payload,
-/// one can first create a VectorSerializer using createSerializer(), then
-/// append successive RowVectors using VectorSerializer::append(). In this case,
-/// since different RowVector might encode columns differently, data is always
-/// flattened in the serialized payload.
+/// one can first create an IterativeVectorSerializer using
+/// createIterativeSerializer(), then append successive RowVectors using
+/// IterativeVectorSerializer::append(). In this case, since different RowVector
+/// might encode columns differently, data is always flattened in the serialized
+/// payload.
 ///
 /// Note that there are two flavors of append(), one that takes a range of rows,
 /// and one that takes a list of row ids. The former is useful when serializing
@@ -35,10 +36,9 @@ namespace facebook::velox::serializer::presto {
 /// efficient for a selective subset, e.g. when splitting a vector to a large
 /// number of output shuffle destinations.
 ///
-/// 2. To serialize a single RowVector, one can use the serializeEncoded()
-/// method. Since it serializes a single RowVector, it tries to preserve the
-/// encodings of the input data. Check the method documentation below to learn
-/// about the cases in which encodings are preserved.
+/// 2. To serialize a single RowVector, one can use the BatchVectorSerializer
+/// returned by createBatchSerializer(). Since it serializes a single RowVector,
+/// it tries to preserve the encodings of the input data.
 class PrestoVectorSerde : public VectorSerde {
  public:
   // Input options that the serializer recognizes.
@@ -77,10 +77,17 @@ class PrestoVectorSerde : public VectorSerde {
       vector_size_t** sizes,
       Scratch& scratch) override;
 
-  std::unique_ptr<VectorSerializer> createSerializer(
+  std::unique_ptr<IterativeVectorSerializer> createIterativeSerializer(
       RowTypePtr type,
       int32_t numRows,
       StreamArena* streamArena,
+      const Options* options) override;
+
+  /// Note that in addition to the differences highlighted in the VectorSerde
+  /// interface, BatchVectorSerializer returned by this function can maintain
+  /// the encodings of the input vectors recursively.
+  std::unique_ptr<BatchVectorSerializer> createBatchSerializer(
+      memory::MemoryPool* pool,
       const Options* options) override;
 
   /// Serializes a single RowVector with possibly encoded children, preserving
@@ -93,7 +100,10 @@ class PrestoVectorSerde : public VectorSerde {
   ///
   /// In order to override the encodings of top-level columns in the RowVector,
   /// you can specifiy the encodings using PrestoOptions.encodings
-  void serializeEncoded(
+  ///
+  /// DEPRECATED: Use createBatchSerializer and the BatchVectorSerializer's
+  /// serialize function instead.
+  void deprecatedSerializeEncoded(
       const RowVectorPtr& vector,
       StreamArena* streamArena,
       const Options* options,
@@ -119,6 +129,18 @@ class PrestoVectorSerde : public VectorSerde {
       RowVectorPtr* result,
       vector_size_t resultOffset,
       const Options* options) override;
+
+  /// This function is used to deserialize a single column that is serialized in
+  /// PrestoPage format. It is important to note that the PrestoPage format used
+  /// here does not include the Presto page header. Therefore, the 'source'
+  /// should contain uncompressed, serialized binary data, beginning at the
+  /// column header.
+  void deserializeSingleColumn(
+      ByteInputStream* source,
+      velox::memory::MemoryPool* pool,
+      TypePtr type,
+      VectorPtr* result,
+      const Options* options);
 
   static void registerVectorSerde();
 };

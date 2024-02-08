@@ -13,15 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include "velox/dwio/common/compression/Compression.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/exec/prefixsort/PrefixSortEncoder.h"
 
-namespace facebook::velox::parquet {
+namespace facebook::velox::exec::prefixsort::test {
 
-common::CompressionKind thriftCodecToCompressionKind(
-    thrift::CompressionCodec::type codec);
+/// Replace the elements in data with encoded ones(compatible with sorting in
+/// ascending order), assuming that the elements in data are all non-null.
+void encodeInPlace(std::vector<int64_t>& data);
 
-} // namespace facebook::velox::parquet
+/// Replace the elements in data with decoded ones, assuming that the elements
+/// in data are all non-null and encoded(compatible with sorting in ascending
+/// order).
+void decodeInPlace(std::vector<int64_t>& data);
+
+} // namespace facebook::velox::exec::prefixsort::test

@@ -33,9 +33,15 @@ struct IndexRange {
   vector_size_t size;
 };
 
-class VectorSerializer {
+/// Serializer that can iteratively build up a buffer of serialized rows from
+/// one or more RowVectors.
+///
+/// Uses successive calls to `append` to add more rows to the serialization
+/// buffer.  Then call `flush` to write the aggregate serialized data to an
+/// OutputStream.
+class IterativeVectorSerializer {
  public:
-  virtual ~VectorSerializer() = default;
+  virtual ~IterativeVectorSerializer() = default;
 
   /// Serialize a subset of rows in a vector.
   virtual void append(
@@ -82,6 +88,34 @@ class VectorSerializer {
   virtual void flush(OutputStream* stream) = 0;
 };
 
+/// Serializer that writes a subset of rows from a single RowVector to the
+/// OutputStream.
+///
+/// Each serialize() call serializes the specified range(s) of `vector` and
+/// write them to the output stream.
+class BatchVectorSerializer {
+ public:
+  virtual ~BatchVectorSerializer() = default;
+
+  /// Serializes a subset of rows in a vector.
+  virtual void serialize(
+      const RowVectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      Scratch& scratch,
+      OutputStream* stream) = 0;
+
+  virtual void serialize(
+      const RowVectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      OutputStream* stream) {
+    Scratch scratch;
+    serialize(vector, ranges, scratch, stream);
+  }
+
+  /// Serializes all rows in a vector.
+  void serialize(const RowVectorPtr& vector, OutputStream* stream);
+};
+
 class VectorSerde {
  public:
   virtual ~VectorSerde() = default;
@@ -119,11 +153,38 @@ class VectorSerde {
     estimateSerializedSize(vector, ranges, sizes, scratch);
   }
 
-  virtual std::unique_ptr<VectorSerializer> createSerializer(
+  /// Creates a Vector Serializer that iteratively builds up a buffer of
+  /// serialized rows from one or more RowVectors via append, and then writes to
+  /// an OutputSteam via flush.
+  ///
+  /// This is more appropriate if the use case involves many small writes, e.g.
+  /// partitioning a RowVector across multiple destinations.
+  ///
+  /// TODO: Remove createSerializer once Presto is updated to call
+  /// createIterativeSerializer.
+  virtual std::unique_ptr<IterativeVectorSerializer> createSerializer(
+      RowTypePtr type,
+      int32_t numRows,
+      StreamArena* streamArena,
+      const Options* options = nullptr) {
+    return createIterativeSerializer(
+        std::move(type), numRows, streamArena, options);
+  }
+
+  virtual std::unique_ptr<IterativeVectorSerializer> createIterativeSerializer(
       RowTypePtr type,
       int32_t numRows,
       StreamArena* streamArena,
       const Options* options = nullptr) = 0;
+
+  /// Creates a Vector Serializer that writes a subset of rows from a single
+  /// RowVector to the OutputStream via a single serialize API.
+  ///
+  /// This is more appropriate if the use case involves large writes, e.g.
+  /// sending an entire RowVector to a particular destination.
+  virtual std::unique_ptr<BatchVectorSerializer> createBatchSerializer(
+      memory::MemoryPool* pool,
+      const Options* options = nullptr);
 
   virtual void deserialize(
       ByteInputStream* source,
@@ -249,7 +310,7 @@ class VectorStreamGroup : public StreamArena {
       const VectorSerde::Options* options = nullptr);
 
  private:
-  std::unique_ptr<VectorSerializer> serializer_;
+  std::unique_ptr<IterativeVectorSerializer> serializer_;
   VectorSerde* serde_{nullptr};
 };
 

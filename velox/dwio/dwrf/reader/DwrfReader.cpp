@@ -15,6 +15,9 @@
  */
 
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
+
+#include <chrono>
+
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
@@ -35,6 +38,8 @@ DwrfRowReader::DwrfRowReader(
     : StripeReaderBase(reader),
       options_(opts),
       executor_{options_.getDecodingExecutor()},
+      decodingTimeUsCallback_{options_.getDecodingTimeUsCallback()},
+      stripeCountCallback_{options_.getStripeCountCallback()},
       columnSelector_{std::make_shared<ColumnSelector>(
           ColumnSelector::apply(opts.getSelector(), reader->getSchema()))} {
   if (executor_) {
@@ -72,6 +77,9 @@ DwrfRowReader::DwrfRowReader(
   // case, set stripeCeiling_ == firstStripe_ == numberOfStripes
   if (stripeCeiling_ == 0) {
     stripeCeiling_ = firstStripe_;
+  }
+  if (stripeCountCallback_) {
+    stripeCountCallback_(stripeCeiling_ - firstStripe_);
   }
 
   if (currentStripe_ == 0) {
@@ -269,18 +277,23 @@ void DwrfRowReader::readNext(
     const dwio::common::Mutation* mutation,
     VectorPtr& result) {
   if (!selectiveColumnReader_) {
-    const auto startTime = std::chrono::high_resolution_clock::now();
+    std::optional<std::chrono::steady_clock::time_point> startTime;
+    if (decodingTimeUsCallback_) {
+      // We'll use wall time since we have parallel decoding.
+      // If we move to sequential decoding only, we can use CPU time.
+      startTime.emplace(std::chrono::steady_clock::now());
+    }
     // TODO: Move row number appending logic here.  Currently this is done in
     // the wrapper reader.
     VELOX_CHECK(
         mutation == nullptr,
         "Mutation pushdown is only supported in selective reader");
     columnReader_->next(rowsToRead, result);
-    auto reportDecodingTimeMsMetric = options_.getDecodingTimeMsCallback();
-    if (reportDecodingTimeMsMetric) {
-      auto decodingTime = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::high_resolution_clock::now() - startTime);
-      reportDecodingTimeMsMetric(decodingTime.count());
+    if (startTime.has_value()) {
+      decodingTimeUsCallback_(
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - startTime.value())
+              .count());
     }
     return;
   }

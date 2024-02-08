@@ -29,6 +29,19 @@ namespace {
 constexpr int8_t kCompressedBitMask = 1;
 constexpr int8_t kEncryptedBitMask = 2;
 constexpr int8_t kCheckSumBitMask = 4;
+// uncompressed size comes after the number of rows and the codec
+constexpr int32_t kSizeInBytesOffset{4 + 1};
+// There header for a page is:
+// + number of rows (4 bytes)
+// + codec (1 byte)
+// + uncompressed size (4 bytes)
+// + size (4 bytes) (this is the compressed size if the data is compressed,
+//                   otherwise it's uncompressed size again)
+// + checksum (8 bytes)
+//
+// See https://prestodb.io/docs/current/develop/serialized-page.html for a
+// detailed specification of the format.
+constexpr int32_t kHeaderSize{kSizeInBytesOffset + 4 + 4 + 8};
 static inline const std::string_view kRLE{"RLE"};
 static inline const std::string_view kDictionary{"DICTIONARY"};
 
@@ -967,6 +980,50 @@ void checkTypeEncoding(std::string_view encoding, const TypePtr& type) {
       encoding);
 }
 
+// This is used when there's a mismatch between the encoding in the serialized
+// page and the expected output encoding. If the serialized encoding is
+// BYTE_ARRAY, it may represent an all-null vector of the expected output type.
+// We attempt to read the serialized page as an UNKNOWN type, check if all
+// values are null, and set the columnResult accordingly. If all values are
+// null, we return true; otherwise, we return false.
+bool tryReadNullColumn(
+    ByteInputStream* source,
+    velox::memory::MemoryPool* pool,
+    const TypePtr& columnType,
+    VectorPtr& columnResult,
+    vector_size_t resultOffset,
+    bool useLosslessTimestamp) {
+  auto unknownType = UNKNOWN();
+  VectorPtr tempResult = BaseVector::create(unknownType, 0, pool);
+  read<UnknownValue>(
+      source,
+      unknownType,
+      pool,
+      tempResult,
+      0 /*resultOffset*/,
+      useLosslessTimestamp);
+  auto deserializedSize = tempResult->size();
+  // Ensure it contains all null values.
+  auto numNulls = BaseVector::countNulls(tempResult->nulls(), deserializedSize);
+  if (deserializedSize != numNulls) {
+    return false;
+  }
+  if (resultOffset == 0) {
+    columnResult =
+        BaseVector::createNullConstant(columnType, deserializedSize, pool);
+  } else {
+    columnResult->resize(resultOffset + deserializedSize);
+
+    SelectivityVector nullRows(resultOffset + deserializedSize, false);
+    nullRows.setValidRange(resultOffset, resultOffset + deserializedSize, true);
+    nullRows.updateBounds();
+
+    BaseVector::ensureWritable(nullRows, columnType, pool, columnResult);
+    columnResult->addNulls(nullRows);
+  }
+  return true;
+}
+
 void readColumns(
     ByteInputStream* source,
     velox::memory::MemoryPool* pool,
@@ -1024,7 +1081,20 @@ void readColumns(
           resultOffset,
           useLosslessTimestamp);
     } else {
-      checkTypeEncoding(encoding, columnType);
+      auto typeToEncoding = typeToEncodingName(columnType);
+      if (encoding != typeToEncoding) {
+        if (encoding == "BYTE_ARRAY" &&
+            tryReadNullColumn(
+                source,
+                pool,
+                columnType,
+                columnResult,
+                resultOffset,
+                useLosslessTimestamp)) {
+          return;
+        }
+        checkTypeEncoding(encoding, columnType);
+      }
       const auto it = readers.find(columnType->kind());
       VELOX_CHECK(
           it != readers.end(),
@@ -3069,9 +3139,186 @@ void estimateSerializedSizeInt(
   }
 }
 
-class PrestoVectorSerializer : public VectorSerializer {
+void flushUncompressed(
+    const std::vector<std::unique_ptr<VectorStream>>& streams,
+    int32_t numRows,
+    OutputStream* out,
+    PrestoOutputStreamListener* listener) {
+  int32_t offset = out->tellp();
+
+  char codecMask = 0;
+  if (listener) {
+    codecMask = getCodecMarker();
+  }
+  // Pause CRC computation
+  if (listener) {
+    listener->pause();
+  }
+
+  writeInt32(out, numRows);
+  out->write(&codecMask, 1);
+
+  // Make space for uncompressedSizeInBytes & sizeInBytes
+  writeInt32(out, 0);
+  writeInt32(out, 0);
+  // Write zero checksum.
+  writeInt64(out, 0);
+
+  // Number of columns and stream content. Unpause CRC.
+  if (listener) {
+    listener->resume();
+  }
+  writeInt32(out, streams.size());
+
+  for (auto& stream : streams) {
+    stream->flush(out);
+  }
+
+  // Pause CRC computation
+  if (listener) {
+    listener->pause();
+  }
+
+  // Fill in uncompressedSizeInBytes & sizeInBytes
+  int32_t size = (int32_t)out->tellp() - offset;
+  int32_t uncompressedSize = size - kHeaderSize;
+  int64_t crc = 0;
+  if (listener) {
+    crc = computeChecksum(listener, codecMask, numRows, uncompressedSize);
+  }
+
+  out->seekp(offset + kSizeInBytesOffset);
+  writeInt32(out, uncompressedSize);
+  writeInt32(out, uncompressedSize);
+  writeInt64(out, crc);
+  out->seekp(offset + size);
+}
+
+void flushCompressed(
+    const std::vector<std::unique_ptr<VectorStream>>& streams,
+    const StreamArena& arena,
+    folly::io::Codec& codec,
+    int32_t numRows,
+    OutputStream* output,
+    PrestoOutputStreamListener* listener) {
+  char codecMask = kCompressedBitMask;
+  if (listener) {
+    codecMask |= kCheckSumBitMask;
+  }
+
+  // Pause CRC computation
+  if (listener) {
+    listener->pause();
+  }
+
+  writeInt32(output, numRows);
+  output->write(&codecMask, 1);
+
+  IOBufOutputStream out(*(arena.pool()), nullptr, arena.size());
+  writeInt32(&out, streams.size());
+
+  for (auto& stream : streams) {
+    stream->flush(&out);
+  }
+
+  const int32_t uncompressedSize = out.tellp();
+  VELOX_CHECK_LE(
+      uncompressedSize,
+      codec.maxUncompressedLength(),
+      "UncompressedSize exceeds limit");
+  auto compressed = codec.compress(out.getIOBuf().get());
+  const int32_t compressedSize = compressed->length();
+  writeInt32(output, uncompressedSize);
+  writeInt32(output, compressedSize);
+  const int32_t crcOffset = output->tellp();
+  writeInt64(output, 0); // Write zero checksum
+  // Number of columns and stream content. Unpause CRC.
+  if (listener) {
+    listener->resume();
+  }
+  output->write(
+      reinterpret_cast<const char*>(compressed->writableData()),
+      compressed->length());
+  // Pause CRC computation
+  if (listener) {
+    listener->pause();
+  }
+  const int32_t endSize = output->tellp();
+  // Fill in crc
+  int64_t crc = 0;
+  if (listener) {
+    crc = computeChecksum(listener, codecMask, numRows, compressedSize);
+  }
+  output->seekp(crcOffset);
+  writeInt64(output, crc);
+  output->seekp(endSize);
+}
+
+// Writes the contents to 'out' in wire format
+void flushStreams(
+    const std::vector<std::unique_ptr<VectorStream>>& streams,
+    int32_t numRows,
+    const StreamArena& arena,
+    folly::io::Codec& codec,
+    OutputStream* out) {
+  auto listener = dynamic_cast<PrestoOutputStreamListener*>(out->listener());
+  // Reset CRC computation
+  if (listener) {
+    listener->reset();
+  }
+
+  if (!needCompression(codec)) {
+    flushUncompressed(streams, numRows, out, listener);
+  } else {
+    flushCompressed(streams, arena, codec, numRows, out, listener);
+  }
+}
+
+class PrestoBatchVectorSerializer : public BatchVectorSerializer {
  public:
-  PrestoVectorSerializer(
+  PrestoBatchVectorSerializer(
+      memory::MemoryPool* pool,
+      bool useLosslessTimestamp,
+      common::CompressionKind compressionKind)
+      : pool_(pool),
+        useLosslessTimestamp_(useLosslessTimestamp),
+        codec_(common::compressionKindToCodec(compressionKind)) {}
+
+  void serialize(
+      const RowVectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      Scratch& /* scratch */,
+      OutputStream* stream) override {
+    const auto numRows = rangesTotalSize(ranges);
+    const auto rowType = vector->type();
+    const auto numChildren = vector->childrenSize();
+
+    StreamArena arena(pool_);
+    std::vector<std::unique_ptr<VectorStream>> streams(numChildren);
+    for (int i = 0; i < numChildren; i++) {
+      streams[i] = std::make_unique<VectorStream>(
+          rowType->childAt(i),
+          std::nullopt,
+          vector->childAt(i),
+          &arena,
+          numRows,
+          useLosslessTimestamp_);
+
+      serializeColumn(vector->childAt(i).get(), ranges, streams[i].get());
+    }
+
+    flushStreams(streams, numRows, arena, *codec_, stream);
+  }
+
+ private:
+  memory::MemoryPool* pool_;
+  const bool useLosslessTimestamp_;
+  const std::unique_ptr<folly::io::Codec> codec_;
+};
+
+class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
+ public:
+  PrestoIterativeVectorSerializer(
       const RowTypePtr& rowType,
       std::vector<VectorEncoding::Simple> encodings,
       int32_t numRows,
@@ -3102,7 +3349,7 @@ class PrestoVectorSerializer : public VectorSerializer {
   // Constructor that takes a row vector instead of only the types. This is
   // different because then we know exactly how each vector is encoded
   // (recursively).
-  PrestoVectorSerializer(
+  PrestoIterativeVectorSerializer(
       const RowVectorPtr& rowVector,
       StreamArena* streamArena,
       bool useLosslessTimestamp,
@@ -3170,7 +3417,7 @@ class PrestoVectorSerializer : public VectorSerializer {
   // numRows(4) | codec(1) | uncompressedSize(4) | compressedSize(4) |
   // checksum(8) | data
   void flush(OutputStream* out) override {
-    flushInternal(numRows_, out);
+    flushStreams(streams_, numRows_, *streamArena_, *codec_, out);
   }
 
   void flushEncoded(const RowVectorPtr& vector, OutputStream* out) {
@@ -3180,141 +3427,10 @@ class PrestoVectorSerializer : public VectorSerializer {
     Scratch scratch;
     append(vector, folly::Range(ranges.data(), ranges.size()), scratch);
 
-    flushInternal(vector->size(), out);
+    flushStreams(streams_, vector->size(), *streamArena_, *codec_, out);
   }
 
  private:
-  void flushUncompressed(
-      int32_t numRows,
-      OutputStream* out,
-      PrestoOutputStreamListener* listener) {
-    int32_t offset = out->tellp();
-
-    char codec = 0;
-    if (listener) {
-      codec = getCodecMarker();
-    }
-    // Pause CRC computation
-    if (listener) {
-      listener->pause();
-    }
-
-    writeInt32(out, numRows);
-    out->write(&codec, 1);
-
-    // Make space for uncompressedSizeInBytes & sizeInBytes
-    writeInt32(out, 0);
-    writeInt32(out, 0);
-    // Write zero checksum.
-    writeInt64(out, 0);
-
-    // Number of columns and stream content. Unpause CRC.
-    if (listener) {
-      listener->resume();
-    }
-    writeInt32(out, streams_.size());
-
-    for (auto& stream : streams_) {
-      stream->flush(out);
-    }
-
-    // Pause CRC computation
-    if (listener) {
-      listener->pause();
-    }
-
-    // Fill in uncompressedSizeInBytes & sizeInBytes
-    int32_t size = (int32_t)out->tellp() - offset;
-    int32_t uncompressedSize = size - kHeaderSize;
-    int64_t crc = 0;
-    if (listener) {
-      crc = computeChecksum(listener, codec, numRows, uncompressedSize);
-    }
-
-    out->seekp(offset + kSizeInBytesOffset);
-    writeInt32(out, uncompressedSize);
-    writeInt32(out, uncompressedSize);
-    writeInt64(out, crc);
-    out->seekp(offset + size);
-  }
-
-  void flushCompressed(
-      int32_t numRows,
-      OutputStream* output,
-      PrestoOutputStreamListener* listener) {
-    const int32_t offset = output->tellp();
-    char codec = kCompressedBitMask;
-    if (listener) {
-      codec |= kCheckSumBitMask;
-    }
-
-    // Pause CRC computation
-    if (listener) {
-      listener->pause();
-    }
-
-    writeInt32(output, numRows);
-    output->write(&codec, 1);
-
-    IOBufOutputStream out(
-        *(streamArena_->pool()), nullptr, streamArena_->size());
-    writeInt32(&out, streams_.size());
-
-    for (auto& stream : streams_) {
-      stream->flush(&out);
-    }
-
-    const int32_t uncompressedSize = out.tellp();
-    VELOX_CHECK_LE(
-        uncompressedSize,
-        codec_->maxUncompressedLength(),
-        "UncompressedSize exceeds limit");
-    auto compressed = codec_->compress(out.getIOBuf().get());
-    const int32_t compressedSize = compressed->length();
-    writeInt32(output, uncompressedSize);
-    writeInt32(output, compressedSize);
-    const int32_t crcOffset = output->tellp();
-    writeInt64(output, 0); // Write zero checksum
-    // Number of columns and stream content. Unpause CRC.
-    if (listener) {
-      listener->resume();
-    }
-    output->write(
-        reinterpret_cast<const char*>(compressed->writableData()),
-        compressed->length());
-    // Pause CRC computation
-    if (listener) {
-      listener->pause();
-    }
-    const int32_t endSize = output->tellp();
-    // Fill in crc
-    int64_t crc = 0;
-    if (listener) {
-      crc = computeChecksum(listener, codec, numRows, compressedSize);
-    }
-    output->seekp(crcOffset);
-    writeInt64(output, crc);
-    output->seekp(endSize);
-  }
-
-  // Writes the contents to 'stream' in wire format
-  void flushInternal(int32_t numRows, OutputStream* out) {
-    auto listener = dynamic_cast<PrestoOutputStreamListener*>(out->listener());
-    // Reset CRC computation
-    if (listener) {
-      listener->reset();
-    }
-
-    if (!needCompression(*codec_)) {
-      flushUncompressed(numRows, out, listener);
-    } else {
-      flushCompressed(numRows, out, listener);
-    }
-  }
-
-  static const int32_t kSizeInBytesOffset{4 + 1};
-  static const int32_t kHeaderSize{kSizeInBytesOffset + 4 + 4 + 8};
-
   StreamArena* const streamArena_;
   const std::unique_ptr<folly::io::Codec> codec_;
 
@@ -3339,13 +3455,14 @@ void PrestoVectorSerde::estimateSerializedSize(
   estimateSerializedSizeInt(vector->loadedVector(), rows, sizes, scratch);
 }
 
-std::unique_ptr<VectorSerializer> PrestoVectorSerde::createSerializer(
+std::unique_ptr<IterativeVectorSerializer>
+PrestoVectorSerde::createIterativeSerializer(
     RowTypePtr type,
     int32_t numRows,
     StreamArena* streamArena,
     const Options* options) {
   const auto prestoOptions = toPrestoOptions(options);
-  return std::make_unique<PrestoVectorSerializer>(
+  return std::make_unique<PrestoIterativeVectorSerializer>(
       type,
       prestoOptions.encodings,
       numRows,
@@ -3354,13 +3471,21 @@ std::unique_ptr<VectorSerializer> PrestoVectorSerde::createSerializer(
       prestoOptions.compressionKind);
 }
 
-void PrestoVectorSerde::serializeEncoded(
+std::unique_ptr<BatchVectorSerializer> PrestoVectorSerde::createBatchSerializer(
+    memory::MemoryPool* pool,
+    const Options* options) {
+  const auto prestoOptions = toPrestoOptions(options);
+  return std::make_unique<PrestoBatchVectorSerializer>(
+      pool, prestoOptions.useLosslessTimestamp, prestoOptions.compressionKind);
+}
+
+void PrestoVectorSerde::deprecatedSerializeEncoded(
     const RowVectorPtr& vector,
     StreamArena* streamArena,
     const Options* options,
     OutputStream* out) {
   auto prestoOptions = toPrestoOptions(options);
-  auto serializer = std::make_unique<PrestoVectorSerializer>(
+  auto serializer = std::make_unique<PrestoIterativeVectorSerializer>(
       vector,
       streamArena,
       prestoOptions.useLosslessTimestamp,
@@ -3456,6 +3581,43 @@ void PrestoVectorSerde::deserialize(
 
   scatterStructNulls(
       (*result)->size(), 0, nullptr, nullptr, **result, resultOffset);
+}
+
+void PrestoVectorSerde::deserializeSingleColumn(
+    ByteInputStream* source,
+    velox::memory::MemoryPool* pool,
+    TypePtr type,
+    VectorPtr* result,
+    const Options* options) {
+  const auto prestoOptions = toPrestoOptions(options);
+  VELOX_CHECK_EQ(
+      prestoOptions.compressionKind,
+      common::CompressionKind::CompressionKind_NONE);
+  const bool useLosslessTimestamp = prestoOptions.useLosslessTimestamp;
+
+  if (*result && result->unique()) {
+    VELOX_CHECK(
+        *(*result)->type() == *type,
+        "Unexpected type: {} vs. {}",
+        (*result)->type()->toString(),
+        type->toString());
+    (*result)->prepareForReuse();
+  } else {
+    *result = BaseVector::create(type, 0, pool);
+  }
+
+  auto types = {type};
+  std::vector<VectorPtr> resultList = {*result};
+  readColumns(source, pool, types, resultList, 0, useLosslessTimestamp);
+
+  auto rowType = asRowType(ROW(types));
+  RowVectorPtr tempRow = std::make_shared<velox::RowVector>(
+      pool, rowType, nullptr, resultList[0]->size(), resultList);
+  scatterStructNulls(tempRow->size(), 0, nullptr, nullptr, *tempRow, 0);
+  // A copy of the 'result' shared_ptr was passed to scatterStructNulls() via
+  // 'resultList'. Make sure we re-assign 'result' in case the copy was replaced
+  // with a new vector.
+  *result = resultList[0];
 }
 
 void testingScatterStructNulls(

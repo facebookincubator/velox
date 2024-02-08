@@ -11,7 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_exec_prefixsort_test PrefixSortAlgorithmTest.cpp)
+add_subdirectory(utils)
+
+add_executable(velox_exec_prefixsort_test PrefixSortAlgorithmTest.cpp
+                                          PrefixEncoderTest.cpp)
 
 add_test(
   NAME velox_exec_prefixsort_test
@@ -20,4 +23,5 @@ add_test(
 
 set_tests_properties(velox_exec_prefixsort_test PROPERTIES TIMEOUT 3000)
 
-target_link_libraries(velox_exec_prefixsort_test velox_vector_test_lib)
+target_link_libraries(velox_exec_prefixsort_test velox_exec_prefixsort_test_lib
+                      velox_vector_fuzzer velox_vector_test_lib)
