@@ -20,6 +20,7 @@ add_executable(
   KllSketchTest.cpp
   MapConcatTest.cpp
   Re2FunctionsTest.cpp
+  RepeatTest.cpp
   ZetaDistributionTest.cpp
   CheckNestedNullsTest.cpp)
 
@@ -31,6 +32,7 @@ add_test(
 target_link_libraries(
   velox_functions_lib_test
   velox_functions_lib
+  velox_functions_spark
   velox_functions_test_lib
   velox_is_null_functions
   velox_exec_test_lib

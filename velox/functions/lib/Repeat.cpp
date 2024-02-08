@@ -22,7 +22,9 @@ namespace {
 // See documentation at https://prestodb.io/docs/current/functions/array.html
 class RepeatFunction : public exec::VectorFunction {
  public:
-  RepeatFunction() = default;
+  // If allowNegativeCount is true, this function will return empty array for
+  // negative count (like count = 0), which is Spark's behavior. Otherwise,
+  // throws error for negative count, which is Presto's behavior.
   RepeatFunction(bool allowNegativeCount)
       : allowNegativeCount_(allowNegativeCount) {}
 
@@ -46,23 +48,30 @@ class RepeatFunction : public exec::VectorFunction {
         return;
       }
     } else {
-      localResult = applyNonconstant(rows, args, outputType, context);
+      localResult = applyNonConstant(rows, args, outputType, context);
     }
     context.moveOrCopyResult(localResult, rows, result);
   }
 
  private:
-  void checkCount(const int32_t count) const {
-    if (!allowNegativeCount_) {
-      VELOX_USER_CHECK_GE(
+  // Check count to make sure it is in valid range.
+  static int32_t checkCount(
+      const int32_t count,
+      const bool allowNegativeCount) {
+    if (count < 0) {
+      if (allowNegativeCount) {
+        return 0;
+      }
+      VELOX_USER_FAIL(
+          "({} vs. {}) Count argument of repeat function must be greater than or equal to 0",
           count,
-          0,
-          "Count argument of repeat function must be greater than or equal to 0");
+          0);
     }
     VELOX_USER_CHECK_LE(
         count,
         kMaxResultEntries,
         "Count argument of repeat function must be less than or equal to 10000");
+    return count;
   }
 
   VectorPtr applyConstant(
@@ -81,13 +90,10 @@ class RepeatFunction : public exec::VectorFunction {
 
     auto count = constantCount->valueAt(0);
     try {
-      checkCount(count);
+      count = checkCount(count, allowNegativeCount_);
     } catch (const VeloxUserError&) {
       context.setErrors(rows, std::current_exception());
       return nullptr;
-    }
-    if (count < 0) {
-      count = 0;
     }
     const auto totalCount = count * numRows;
 
@@ -117,7 +123,7 @@ class RepeatFunction : public exec::VectorFunction {
         BaseVector::wrapInDictionary(nullptr, indices, totalCount, args[0]));
   }
 
-  VectorPtr applyNonconstant(
+  VectorPtr applyNonConstant(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
@@ -128,10 +134,7 @@ class RepeatFunction : public exec::VectorFunction {
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       auto count =
           countDecoded->isNullAt(row) ? 0 : countDecoded->valueAt<int32_t>(row);
-      checkCount(count);
-      if (count < 0) {
-        count = 0;
-      }
+      count = checkCount(count, allowNegativeCount_);
       totalCount += count;
     });
 
@@ -186,7 +189,7 @@ class RepeatFunction : public exec::VectorFunction {
         BaseVector::wrapInDictionary(nullptr, indices, totalCount, args[0]));
   }
 
-  bool allowNegativeCount_{false};
+  const bool allowNegativeCount_{false};
 };
 
 static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -204,7 +207,7 @@ static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_repeat,
     signatures(),
-    std::make_unique<RepeatFunction>());
+    std::make_unique<RepeatFunction>(false));
 
 // Allows negative count.
 VELOX_DECLARE_VECTOR_FUNCTION(

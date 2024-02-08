@@ -16,6 +16,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/sparksql/Register.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -25,6 +26,11 @@ namespace {
 
 class RepeatTest : public FunctionBaseTest {
  protected:
+  static void SetUpTestCase() {
+    FunctionBaseTest::SetUpTestCase();
+    functions::sparksql::registerFunctions("");
+  }
+
   void testExpression(
       const std::string& expression,
       const std::vector<VectorPtr>& input,
@@ -132,20 +138,13 @@ TEST_F(RepeatTest, repeatAllowNegativeCount) {
   // Test all zero count.
   auto countVector = makeNullableFlatVector<int32_t>({0, 0, 0, 0, 0, 0});
   testExpression(
-      "repeat_allow_negative_count(C0, C1)",
-      {elementVector, countVector},
-      expected);
+      "array_repeat(C0, C1)", {elementVector, countVector}, expected);
 
   // Test negative count.
   countVector = makeNullableFlatVector<int32_t>({-1, -2, -3, -5, 0, -100});
   testExpression(
-      "repeat_allow_negative_count(C0, C1)",
-      {elementVector, countVector},
-      expected);
+      "array_repeat(C0, C1)", {elementVector, countVector}, expected);
 
   // Test using a constant as the count argument.
-  testExpression(
-      "repeat_allow_negative_count(C0, '-5'::INTEGER)",
-      {elementVector},
-      expected);
+  testExpression("array_repeat(C0, '-5'::INTEGER)", {elementVector}, expected);
 }
