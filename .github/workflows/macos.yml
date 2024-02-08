@@ -27,6 +27,7 @@ concurrency:
 
 jobs:
   macos-build:
+    name: "${{ matrix.os }}"
     strategy:
       fail-fast: false
       matrix:
