@@ -365,6 +365,9 @@ struct DateFromUnixDateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(out_type<Date>& result, const int32_t& value) {
+    // If addititon does not overflow the result is valid.
+    // Max and min value of result here is numeric_limits<int32_t>::max() and
+    // numeric_limits<int32_t>::min().
     __builtin_add_overflow(0, value, &result);
   }
 };

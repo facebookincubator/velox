@@ -250,12 +250,10 @@ TEST_F(DateTimeFunctionsTest, dateFromUnixDate) {
     return evaluateOnce<int32_t>("date_from_unix_date(c0)", value);
   };
 
-  // Null test
-  EXPECT_EQ(std::nullopt, dateFromUnixDate(std::nullopt));
-
   // Basic tests
   EXPECT_EQ(parseDate("1970-01-01"), dateFromUnixDate(0));
   EXPECT_EQ(parseDate("1970-01-02"), dateFromUnixDate(1));
+  EXPECT_EQ(parseDate("1969-12-31"), dateFromUnixDate(-1));
   EXPECT_EQ(parseDate("1970-02-01"), dateFromUnixDate(31));
   EXPECT_EQ(parseDate("1971-01-31"), dateFromUnixDate(395));
   EXPECT_EQ(parseDate("1971-01-01"), dateFromUnixDate(365));

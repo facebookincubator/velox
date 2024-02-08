@@ -36,9 +36,10 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: date_from_unix_date(integer) -> date
 
-    Creates date from the number of days since 1970-01-01. Returns null when input is null.
+    Creates date from the number of days since 1970-01-01 in either direction. Returns null when input is null.
 
         SELECT date_from_unix_date(1); -- '1970-01-02'
+        SELECT date_from_unix_date(-1); -- '1969-12-31'
 
 .. spark:function:: date_sub(start_date, num_days) -> date
 
