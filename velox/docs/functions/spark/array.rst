@@ -56,7 +56,7 @@ Array Functions
     Returns an array containing ``element`` ``count`` times. If ``count`` is negative or zero,
     returns empty array. If ``element`` is NULL, returns an array containing ``count`` NULLs.
     If ``count`` is NULL, returns NULL as result. Throws an exception if ``count`` exceeds the
-    max limit, i.e., MAX_INT32 - 15.  ::
+    max limit, i.e., 10'000.  ::
 
         SELECT array_repeat(100, 3); -- [100, 100, 100]
         SELECT array_repeat(NULL, 3); -- [NULL, NULL, NULL]
