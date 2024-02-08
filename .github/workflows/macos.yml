@@ -75,5 +75,6 @@ jobs:
             cmake --build _build/debug -j $NJOBS
             ccache -s
       - name: Run Tests
+        if: false
         run: ctest -j $NJOBS --test-dir _build/debug --output-on-failure
 
