@@ -107,6 +107,8 @@ std::vector<AggregateInfo> toAggregateInfo(
         aggResultType,
         operatorCtx.driverCtx()->queryConfig());
 
+    info.function->initialize(aggResultType, info.constantInputs);
+
     if (!isStreaming) {
       auto lambdas = extractLambdaInputs(aggregate);
       if (!lambdas.empty()) {
