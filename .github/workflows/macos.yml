@@ -26,6 +26,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  benchmark:
+    runs-on: 8-core
+    steps:
+      - name: "Restore ccache"
+        uses: actions/cache/restore@v3
+        id: restore-cache
+        with:
+          path: ".ccache"
+          key: ccache-benchmark-2abff36c5472f3c239d2eae3488357dbf75d488c
+
   macos-build:
     name: "${{ matrix.os }}"
     strategy:
