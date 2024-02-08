@@ -124,3 +124,28 @@ TEST_F(RepeatTest, repeatWithInvalidCount) {
       {elementVector},
       "(10001 vs. 10000) Count argument of repeat function must be less than or equal to 10000");
 }
+
+TEST_F(RepeatTest, repeatAllowNegativeCount) {
+  const auto elementVector = makeNullableFlatVector<float>(
+      {0.0, -2.0, 3.333333, 4.0004, std::nullopt, 5.12345});
+  auto expected = makeArrayVector<float>({{}, {}, {}, {}, {}, {}});
+  // Test all zero count.
+  auto countVector = makeNullableFlatVector<int32_t>({0, 0, 0, 0, 0, 0});
+  testExpression(
+      "repeat_allow_negative_count(C0, C1)",
+      {elementVector, countVector},
+      expected);
+
+  // Test negative count.
+  countVector = makeNullableFlatVector<int32_t>({-1, -2, -3, -5, 0, -100});
+  testExpression(
+      "repeat_allow_negative_count(C0, C1)",
+      {elementVector, countVector},
+      expected);
+
+  // Test using a constant as the count argument.
+  testExpression(
+      "repeat_allow_negative_count(C0, '-5'::INTEGER)",
+      {elementVector},
+      expected);
+}
