@@ -138,14 +138,6 @@ executors:
   check:
     docker:
       - image : ghcr.io/facebookincubator/velox-dev:check-avx
-  macos-intel:
-    macos:
-      xcode: "14.3.0"
-    resource_class: macos.x86.medium.gen2
-  macos-m1:
-    macos:
-      xcode: "14.2.0"
-    resource_class: macos.m1.large.gen1
 
 jobs:
   macos-build:
@@ -681,21 +673,9 @@ workflows:
       - linux-build-options
       - linux-adapters
       - linux-presto-fuzzer-run
-      - macos-build:
-          matrix:
-            parameters:
-              os: [macos-intel]
       - format-check
       - header-check
       - doc-gen-job:
-          filters:
-            branches:
-              only:
-                - main
-      - macos-build:
-          matrix:
-            parameters:
-              os: [ macos-m1 ]
           filters:
             branches:
               only:
@@ -708,21 +688,9 @@ workflows:
       - linux-pr-fuzzer-run
       - linux-build-options
       - linux-adapters
-      - macos-build:
-          matrix:
-            parameters:
-              os: [ macos-intel ]
       - format-check
       - header-check
       - doc-gen-job:
-          filters:
-            branches:
-              only:
-                - main
-      - macos-build:
-          matrix:
-            parameters:
-              os: [ macos-m1 ]
           filters:
             branches:
               only:
