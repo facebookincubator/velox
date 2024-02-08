@@ -114,9 +114,19 @@ function install_fbthrift {
 
 function install_conda {
   mkdir -p conda && cd conda
-  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+  ARCH=$(uname -m)
+  
+  if [ "$ARCH" == "x86_64" ]; then
+    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+  elif [ "$ARCH" == "aarch64" ]; then
+    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh
+  else
+    echo "Unsupported architecture: $ARCH"
+    exit 1
+  fi
+  
   MINICONDA_PATH=/opt/miniconda-for-velox
-  bash Miniconda3-latest-Linux-x86_64.sh -b -p $MINICONDA_PATH
+  bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
 
 function install_velox_deps {
