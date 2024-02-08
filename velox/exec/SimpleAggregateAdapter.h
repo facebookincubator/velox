@@ -172,6 +172,10 @@ class SimpleAggregateAdapter : public Aggregate {
     return sizeof(typename FUNC::AccumulatorType);
   }
 
+  int32_t accumulatorAlignmentSize() const override {
+    return alignof(typename FUNC::AccumulatorType);
+  }
+
   void initializeNewGroups(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {

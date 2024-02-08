@@ -352,6 +352,22 @@ TEST_F(SumAggregationTest, decimalGroupBySumOverflow) {
   decimalGroupBySumOverflow(decimalVector);
 }
 
+TEST_F(SumAggregationTest, decimalAllNullValues) {
+  std::vector<std::optional<int128_t>> allNull(5, std::nullopt);
+  auto input = makeRowVector(
+      {makeNullableFlatVector<int128_t>(allNull, DECIMAL(20, 2))});
+  std::vector<std::optional<int128_t>> result = {std::nullopt};
+  auto expected =
+      makeRowVector({makeNullableFlatVector<int128_t>(result, DECIMAL(30, 2))});
+  testAggregations(
+      {input},
+      {},
+      {"spark_sum(c0)"},
+      {expected},
+      /*config*/ {},
+      /*testWithTableScan*/ false);
+}
+
 // Test if all values in some groups are null, the final sum of this group
 // should be null.
 TEST_F(SumAggregationTest, decimalSomeGroupsAllnullValues) {
@@ -385,6 +401,29 @@ TEST_F(SumAggregationTest, decimalSomeGroupsAllnullValues) {
       DECIMAL(25, 2),
       std::vector<std::optional<int128_t>>{std::nullopt, 25, std::nullopt, 25},
       DECIMAL(35, 2));
+}
+
+TEST_F(SumAggregationTest, decimalRangeOverflow) {
+  // HugeInt::build(542101086242752217, 68739955140067328) =
+  // 10'000'000'000'000'000'000'000'000'000'000'000'000,
+  // one followed by 37 zeros.
+  int128_t largeNumber = HugeInt::build(542101086242752217, 68739955140067328);
+  std::vector<int128_t> firstLargeDecimals(11, largeNumber);
+  std::vector<int128_t> secondLargeDecimals(1, largeNumber);
+  auto firstInput = makeRowVector(
+      {makeFlatVector<int128_t>(firstLargeDecimals, DECIMAL(38, 18))});
+  auto secondInput = makeRowVector(
+      {makeFlatVector<int128_t>(secondLargeDecimals, DECIMAL(38, 18))});
+  std::vector<std::optional<int128_t>> result = {std::nullopt};
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int128_t>(result, DECIMAL(38, 18))});
+  testAggregations(
+      {firstInput, secondInput},
+      {},
+      {"spark_sum(c0)"},
+      {expected},
+      /*config*/ {},
+      /*testWithTableScan*/ false);
 }
 } // namespace
 } // namespace facebook::velox::functions::aggregate::sparksql::test
