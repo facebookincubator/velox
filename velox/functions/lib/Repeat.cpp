@@ -17,15 +17,13 @@
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions {
-namespace {
 
 // See documentation at https://prestodb.io/docs/current/functions/array.html
 class RepeatFunction : public exec::VectorFunction {
  public:
-  // If allowNegativeCount is true, this function will return empty array for
-  // negative count (like count = 0), which is Spark's behavior. Otherwise,
-  // throws error for negative count, which is Presto's behavior.
-  RepeatFunction(bool allowNegativeCount)
+  // @param allowNegativeCount If true, negative 'count' is allowed
+  // and treated the same as zero (Spark's behavior).
+  explicit RepeatFunction(bool allowNegativeCount)
       : allowNegativeCount_(allowNegativeCount) {}
 
   static constexpr int32_t kMaxResultEntries = 10'000;
@@ -43,21 +41,19 @@ class RepeatFunction : public exec::VectorFunction {
       VectorPtr& result) const override {
     VectorPtr localResult;
     if (args[1]->isConstantEncoding()) {
-      localResult = applyConstant(rows, args, outputType, context);
+      localResult = applyConstantCount(rows, args, outputType, context);
       if (localResult == nullptr) {
         return;
       }
     } else {
-      localResult = applyNonConstant(rows, args, outputType, context);
+      localResult = applyNonConstantCount(rows, args, outputType, context);
     }
     context.moveOrCopyResult(localResult, rows, result);
   }
 
  private:
   // Check count to make sure it is in valid range.
-  static int32_t checkCount(
-      const int32_t count,
-      const bool allowNegativeCount) {
+  static int32_t checkCount(int32_t count, bool allowNegativeCount) {
     if (count < 0) {
       if (allowNegativeCount) {
         return 0;
@@ -74,7 +70,7 @@ class RepeatFunction : public exec::VectorFunction {
     return count;
   }
 
-  VectorPtr applyConstant(
+  VectorPtr applyConstantCount(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
@@ -123,7 +119,7 @@ class RepeatFunction : public exec::VectorFunction {
         BaseVector::wrapInDictionary(nullptr, indices, totalCount, args[0]));
   }
 
-  VectorPtr applyNonConstant(
+  VectorPtr applyNonConstantCount(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
@@ -189,10 +185,10 @@ class RepeatFunction : public exec::VectorFunction {
         BaseVector::wrapInDictionary(nullptr, indices, totalCount, args[0]));
   }
 
-  const bool allowNegativeCount_{false};
+  const bool allowNegativeCount_;
 };
 
-static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+std::vector<std::shared_ptr<exec::FunctionSignature>> repeatSignatures() {
   // T, integer -> array(T)
   return {exec::FunctionSignatureBuilder()
               .typeVariable("T")
@@ -201,18 +197,19 @@ static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
               .argumentType("integer")
               .build()};
 }
-} // namespace
 
-// Disallows negative count.
-VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_repeat,
-    signatures(),
-    std::make_unique<RepeatFunction>(false));
+std::shared_ptr<exec::VectorFunction> makeRepeat(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
+  return std::make_unique<RepeatFunction>(false);
+}
 
-// Allows negative count.
-VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_repeat_allow_negative_count,
-    signatures(),
-    std::make_unique<RepeatFunction>(true));
+std::shared_ptr<exec::VectorFunction> makeRepeatAllowNegativeCount(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
+  return std::make_unique<RepeatFunction>(true);
+}
 
 } // namespace facebook::velox::functions

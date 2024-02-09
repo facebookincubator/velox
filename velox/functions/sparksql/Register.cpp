@@ -21,6 +21,7 @@
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/lib/Repeat.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
@@ -65,8 +66,6 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
       udf_array_intersect, prefix + "array_intersect");
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_repeat_allow_negative_count, prefix + "array_repeat")
 
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_allow_duplicates, prefix + "map_from_arrays");
@@ -258,6 +257,11 @@ void registerFunctions(const std::string& prefix) {
       prefix + "array_sort", arraySortSignatures(), makeArraySort);
   exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
+
+  exec::registerStatefulVectorFunction(
+      prefix + "array_repeat",
+      repeatSignatures(),
+      makeRepeatAllowNegativeCount);
 
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
