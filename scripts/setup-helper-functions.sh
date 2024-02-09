@@ -16,6 +16,11 @@
 # github_checkout $REPO $VERSION $GIT_CLONE_PARAMS clones or re-uses an existing clone of the
 # specified repo, checking out the requested version.
 
+function run_and_time {
+  time "$@" || (echo "Failed to run $* ." ; exit 1 )
+  { echo "+ Finished running $*"; } 2> /dev/null
+}
+
 function prompt {
   (
     while true; do
@@ -50,11 +55,6 @@ function github_checkout {
     git clone -q -b $VERSION $GIT_CLONE_PARAMS "https://github.com/${REPO}.git"
   fi
   cd "${DIRNAME}"
-}
-
-function run_and_time {
-  time "$@"
-  { echo "+ Finished running $*"; } 2> /dev/null
 }
 
 # get_cxx_flags [$CPU_ARCH]
