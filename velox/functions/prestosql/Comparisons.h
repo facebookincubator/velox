@@ -30,10 +30,10 @@ struct TimestampWithTimezoneComparisonSupport {
   FOLLY_ALWAYS_INLINE
   int64_t toGMTMillis(
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
-    const int64_t milliseconds = *timestampWithTimezone.template at<0>();
-    const int16_t timezone = *timestampWithTimezone.template at<1>();
-    Timestamp inputTimeStamp = Timestamp::fromMillis(milliseconds);
+    auto inputTimeStamp = unpackTimestampUtc(timestampWithTimezone);
+    const auto timezone = unpackZoneKeyId(timestampWithTimezone);
     inputTimeStamp.toGMT(timezone);
+
     return inputTimeStamp.toMillis();
   }
 };
