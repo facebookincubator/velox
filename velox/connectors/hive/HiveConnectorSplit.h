@@ -31,7 +31,9 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   /// Mapping from partition keys to values. Values are specified as strings
   /// formatted the same way as CAST(x as VARCHAR). Null values are specified as
   /// std::nullopt. Date values must be formatted using ISO 8601 as YYYY-MM-DD.
-  /// All scalar types and date type are supported.
+  /// Decimal values must be formatted using unscaled values, e.g. '123456' for
+  /// '1245.56' of decimal(6, 2) type. All scalar types and date type are
+  /// supported.
   const std::unordered_map<std::string, std::optional<std::string>>
       partitionKeys;
   std::optional<int32_t> tableBucketNumber;
