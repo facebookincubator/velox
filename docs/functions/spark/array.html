@@ -112,6 +112,21 @@ When E is DOUBLE or REAL, NaN value is considered greater than any non-NaN value
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="array_repeat">
+<span class="sig-name descname"><span class="pre">array_repeat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">element</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_repeat" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an array containing <code class="docutils literal notranslate"><span class="pre">element</span></code> <code class="docutils literal notranslate"><span class="pre">count</span></code> times. If <code class="docutils literal notranslate"><span class="pre">count</span></code> is negative or zero,
+returns empty array. If <code class="docutils literal notranslate"><span class="pre">element</span></code> is NULL, returns an array containing <code class="docutils literal notranslate"><span class="pre">count</span></code> NULLs.
+If <code class="docutils literal notranslate"><span class="pre">count</span></code> is NULL, returns NULL as result. Throws an exception if <code class="docutils literal notranslate"><span class="pre">count</span></code> exceeds 10’000.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_repeat</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">100</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">100</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_repeat</span><span class="p">(</span><span class="n">NULL</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_repeat</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">array_repeat</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="p">[]</span>
+<span class="n">SELECT</span> <span class="n">array_repeat</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="array_sort">
 <span class="sig-name descname"><span class="pre">array_sort</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_sort" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns an array which has the sorted order of the input array(E). The elements of array(E) must
