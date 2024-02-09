@@ -56,7 +56,7 @@ DEFINE_string(
 DEFINE_string(
     registry,
     "presto",
-    "Funciton registry to use for expression evaluation. Currently supported values are "
+    "Function registry to use for expression evaluation. Currently supported values are "
     "presto and spark. Default is presto.");
 
 DEFINE_string(
