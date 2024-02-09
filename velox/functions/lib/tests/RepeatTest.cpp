@@ -17,7 +17,6 @@
 #include "velox/functions/lib/Repeat.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/functions/sparksql/Register.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -32,7 +31,7 @@ class RepeatTest : public FunctionBaseTest {
     exec::registerStatefulVectorFunction(
         "repeat", functions::repeatSignatures(), functions::makeRepeat);
     exec::registerStatefulVectorFunction(
-        "array_repeat",
+        "repeat_allow_negative_count",
         functions::repeatSignatures(),
         functions::makeRepeatAllowNegativeCount);
   }
@@ -146,15 +145,22 @@ TEST_F(RepeatTest, repeatAllowNegativeCount) {
   auto countVector =
       makeNullableFlatVector<int32_t>({-1, -2, -3, -5, -10, -100});
   testExpression(
-      "array_repeat(C0, C1)", {elementVector, countVector}, expected);
+      "repeat_allow_negative_count(C0, C1)",
+      {elementVector, countVector},
+      expected);
 
   // Test using a constant as the count argument.
-  testExpression("array_repeat(C0, '-5'::INTEGER)", {elementVector}, expected);
+  testExpression(
+      "repeat_allow_negative_count(C0, '-5'::INTEGER)",
+      {elementVector},
+      expected);
 
   // Test mixed case.
   expected = makeArrayVector<float>(
       {{0.0}, {-2.0, -2.0}, {}, {}, {}, {5.12345, 5.12345, 5.12345}});
   countVector = makeNullableFlatVector<int32_t>({1, 2, -1, 0, -10, 3});
   testExpression(
-      "array_repeat(C0, C1)", {elementVector, countVector}, expected);
+      "repeat_allow_negative_count(C0, C1)",
+      {elementVector, countVector},
+      expected);
 }
