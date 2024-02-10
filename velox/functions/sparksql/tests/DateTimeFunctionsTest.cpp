@@ -474,6 +474,50 @@ TEST_F(DateTimeFunctionsTest, dayofWeekTs) {
   }
 }
 
+TEST_F(DateTimeFunctionsTest, weekdayDate) {
+  const auto weekday = [&](std::optional<int32_t> value) {
+    return evaluateOnce<int32_t, int32_t>("weekday(c0)", {value}, {DATE()});
+  };
+
+  EXPECT_EQ(3, weekday(0));
+  EXPECT_EQ(2, weekday(-1));
+  EXPECT_EQ(5, weekday(-40));
+  EXPECT_EQ(3, weekday(parseDate("2009-07-30")));
+  EXPECT_EQ(6, weekday(parseDate("2023-08-20")));
+  EXPECT_EQ(0, weekday(parseDate("2023-08-21")));
+  EXPECT_EQ(1, weekday(parseDate("2023-08-22")));
+  EXPECT_EQ(2, weekday(parseDate("2023-08-23")));
+  EXPECT_EQ(3, weekday(parseDate("2023-08-24")));
+  EXPECT_EQ(4, weekday(parseDate("2023-08-25")));
+  EXPECT_EQ(5, weekday(parseDate("2023-08-26")));
+  EXPECT_EQ(6, weekday(parseDate("2023-08-27")));
+
+  // Test cases from Spark's DateExpressionSuite.
+  EXPECT_EQ(4, weekday(parseDate("2011-05-06")));
+}
+
+TEST_F(DateTimeFunctionsTest, weekdayTs) {
+  const auto weekday = [&](std::optional<Timestamp> date) {
+    return evaluateOnce<int32_t>("weekday(c0)", date);
+  };
+
+  EXPECT_EQ(3, weekday(Timestamp(0, 0)));
+  EXPECT_EQ(2, weekday(Timestamp(-1, 0)));
+  EXPECT_EQ(6, weekday(util::fromTimestampString("2023-08-20 20:23:00.001")));
+  EXPECT_EQ(0, weekday(util::fromTimestampString("2023-08-21 21:23:00.030")));
+  EXPECT_EQ(1, weekday(util::fromTimestampString("2023-08-22 11:23:00.100")));
+  EXPECT_EQ(2, weekday(util::fromTimestampString("2023-08-23 22:23:00.030")));
+  EXPECT_EQ(3, weekday(util::fromTimestampString("2023-08-24 15:23:00.000")));
+  EXPECT_EQ(4, weekday(util::fromTimestampString("2023-08-25 03:23:04.000")));
+  EXPECT_EQ(5, weekday(util::fromTimestampString("2023-08-26 01:03:00.300")));
+  EXPECT_EQ(6, weekday(util::fromTimestampString("2023-08-27 01:13:00.000")));
+  // Test cases from Spark's DateExpressionSuite.
+  EXPECT_EQ(4, weekday(util::fromTimestampString("2013-11-08 13:10:15")));
+  EXPECT_EQ(2, weekday(util::fromTimestampString("2015-04-08 13:10:15")));
+  EXPECT_EQ(5, weekday(util::fromTimestampString("2017-05-27 13:10:15")));
+  EXPECT_EQ(4, weekday(util::fromTimestampString("1582-10-15 13:10:15")));
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   const auto dateDiff = [&](std::optional<int32_t> endDate,
                             std::optional<int32_t> startDate) {
