@@ -119,7 +119,6 @@ exec::AggregateRegistrationResult registerSum(
           }
           case TypeKind::HUGEINT: {
             if (inputType->isLongDecimal()) {
-              auto const sumType = getDecimalSumType(resultType, step);
               // If inputType is long decimal,
               // its output type is always long decimal.
               return std::make_unique<exec::SimpleAggregateAdapter<

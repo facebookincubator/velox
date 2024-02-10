@@ -78,7 +78,7 @@ class SumAggregationTest : public SumTestBase {
       const std::vector<std::optional<TOut>>& output,
       const TypePtr& outputType) {
     std::vector<RowVectorPtr> vectors;
-    FlatVectorPtr<TIn> inputDecimalVector;
+    VectorPtr inputDecimalVector;
     if constexpr (std::is_same_v<int64_t, TIn>) {
       inputDecimalVector = makeNullableFlatVector<int64_t>(input, inputType);
     } else {
@@ -90,7 +90,7 @@ class SumAggregationTest : public SumTestBase {
            inputDecimalVector}));
     }
 
-    FlatVectorPtr<TOut> outputDecimalVector;
+    VectorPtr outputDecimalVector;
     if constexpr (std::is_same_v<int64_t, TOut>) {
       outputDecimalVector = makeNullableFlatVector<int64_t>(output, outputType);
     } else {
@@ -137,9 +137,7 @@ TEST_F(SumAggregationTest, decimalSumCompanionPartial) {
   auto expected = makeRowVector({makeRowVector(
       {makeFlatVector<int128_t>(sumVector, DECIMAL(20, 1)),
        makeFlatVector<bool>(isEmptyVector)})});
-  AssertQueryBuilder assertQueryBuilder(plan);
-  auto result = assertQueryBuilder.copyResults(pool());
-  assertEqualResults({expected}, {result});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(SumAggregationTest, decimalSumCompanionMerge) {
@@ -155,9 +153,7 @@ TEST_F(SumAggregationTest, decimalSumCompanionMerge) {
   auto expected = makeRowVector({makeRowVector(
       {makeFlatVector<int128_t>(std::vector<int128_t>{6000}, DECIMAL(20, 1)),
        makeFlatVector<bool>(std::vector<bool>{false})})});
-  AssertQueryBuilder assertQueryBuilder(plan);
-  auto result = assertQueryBuilder.copyResults(pool());
-  assertEqualResults({expected}, {result});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(SumAggregationTest, decimalSum) {

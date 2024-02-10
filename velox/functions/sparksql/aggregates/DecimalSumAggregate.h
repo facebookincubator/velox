@@ -20,9 +20,9 @@
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
-/// TInputType refer to the raw input data type. TSumType refer to the type of
-/// sum in the output of partial aggregation or the final output type of final
-/// aggregation.
+/// @tparam TInputType The raw input data type.
+/// @tparam TSumType The type of sum in the output of partial aggregation or the
+/// final output type of final aggregation.
 template <typename TInputType, typename TSumType>
 class DecimalSumAggregate {
  public:
@@ -34,6 +34,12 @@ class DecimalSumAggregate {
 
   using OutputType = TSumType;
 
+  // Spark's decimal sum doesn't have the concept of a null group, each group is
+  // initialized with an initial value, where sum = 0 and isEmpty = true.
+  // Therefore, to maintain consistency, we need to use the parameter
+  // nonNullGroup in writeIntermediateResult to output a null group as sum =
+  // 0, isEmpty = true. nonNullGroup is only available when default-null
+  // behavior is disabled.
   static constexpr bool default_null_behavior_ = false;
 
   static bool toIntermediate(
@@ -54,17 +60,13 @@ class DecimalSumAggregate {
   // the result will be null. If the isEmpty is false, then if sum is nullopt
   // that means an overflow has happened, it returns null.
   struct AccumulatorType {
-    std::optional<int128_t> sum_;
-    int64_t overflow_;
-    bool isEmpty_;
+    std::optional<int128_t> sum_{0};
+    int64_t overflow_{0};
+    bool isEmpty_{true};
 
     AccumulatorType() = delete;
 
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {
-      sum_ = 0;
-      overflow_ = 0;
-      isEmpty_ = true;
-    }
+    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {}
 
     std::optional<int128_t> computeFinalResult() const {
       if (!sum_.has_value()) {
@@ -79,7 +81,7 @@ class DecimalSumAggregate {
           DecimalUtil::valueInPrecisionRange(adjustedSum, maxPrecision)) {
         return adjustedSum;
       } else {
-        // Find overflow during computing adjusted sum.
+        // Found overflow during computing adjusted sum.
         return std::nullopt;
       }
     }
@@ -87,15 +89,15 @@ class DecimalSumAggregate {
     bool addInput(
         HashStringAllocator* /*allocator*/,
         exec::optional_arg_type<TInputType> data) {
-      if (data.has_value()) {
-        int128_t result;
-        overflow_ +=
-            DecimalUtil::addWithOverflow(result, data.value(), sum_.value());
-        sum_ = result;
-        isEmpty_ = false;
-        return true;
+      if (!data.has_value()) {
+        return false;
       }
-      return false;
+      int128_t result;
+      overflow_ +=
+          DecimalUtil::addWithOverflow(result, data.value(), sum_.value());
+      sum_ = result;
+      isEmpty_ = false;
+      return true;
     }
 
     bool combine(
