@@ -34,13 +34,16 @@ class DecimalSumAggregate {
 
   using OutputType = TSumType;
 
-  static constexpr bool default_null_behavior_ = true;
+  static constexpr bool default_null_behavior_ = false;
 
   static bool toIntermediate(
       exec::out_type<Row<TSumType, bool>>& out,
-      exec::arg_type<TInputType> in) {
-    out.copy_from(std::make_tuple(static_cast<TSumType>(in), false));
-    return true;
+      exec::optional_arg_type<TInputType> in) {
+    if (in.has_value()) {
+      out.copy_from(std::make_tuple(static_cast<TSumType>(in.value()), false));
+      return true;
+    }
+    return false;
   }
 
   // This struct stores the sum of input values, overflow during accumulation,
@@ -81,55 +84,72 @@ class DecimalSumAggregate {
       }
     }
 
-    static bool isIntermediateResultOverflow(
-        std::optional<TSumType> sum,
-        std::optional<bool> isEmpty) {
-      return !sum.has_value() && isEmpty.has_value();
+    bool addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::optional_arg_type<TInputType> data) {
+      if (data.has_value()) {
+        int128_t result;
+        overflow_ +=
+            DecimalUtil::addWithOverflow(result, data.value(), sum_.value());
+        sum_ = result;
+        isEmpty_ = false;
+        return true;
+      }
+      return false;
     }
 
-    void addInput(
+    bool combine(
         HashStringAllocator* /*allocator*/,
-        exec::arg_type<TInputType> data) {
-      int128_t result;
-      overflow_ += DecimalUtil::addWithOverflow(result, data, sum_.value());
-      sum_ = result;
-      isEmpty_ = false;
-    }
+        exec::optional_arg_type<Row<TSumType, bool>> other) {
+      if (!other.has_value()) {
+        return false;
+      }
+      auto otherSum = other.value().template at<0>();
+      auto otherIsEmpty = other.value().template at<1>();
 
-    void combine(
-        HashStringAllocator* /*allocator*/,
-        exec::arg_type<Row<TSumType, bool>> other) {
-      auto otherSum = other.template at<0>();
-      auto otherIsEmpty = other.template at<1>();
+      // IsEmpty should always has value.
+      VELOX_CHECK(otherIsEmpty.has_value());
+
       bool bufferOverflow = !isEmpty_ && !sum_.has_value();
-      bool inputOverflow = isIntermediateResultOverflow(otherSum, otherIsEmpty);
+      bool inputOverflow = !otherIsEmpty.value() && !otherSum.has_value();
       if (bufferOverflow || inputOverflow) {
         sum_ = std::nullopt;
+        return false;
       } else {
         int128_t result;
         overflow_ += DecimalUtil::addWithOverflow(
             result, otherSum.value(), sum_.value());
         sum_ = result;
         isEmpty_ &= otherIsEmpty.value();
+        return true;
       }
     }
 
-    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
-      auto finalResult = computeFinalResult();
-      if (finalResult.has_value()) {
-        out = std::make_tuple(
-            static_cast<TSumType>(finalResult.value()), isEmpty_);
+    bool writeIntermediateResult(
+        bool nonNullGroup,
+        exec::out_type<IntermediateType>& out) {
+      if (!nonNullGroup) {
+        // If a group is null, maybe all values in this group are null. In
+        // Spark, this group will be the initial value, where sum is 0 and
+        // isEmpty is true.
+        out = std::make_tuple(static_cast<TSumType>(0), true);
       } else {
-        // Sum should be set to null on overflow, and
-        // isEmpty should be set to false.
-        out.template set_null_at<0>();
-        out.template get_writer_at<1>() = false;
+        auto finalResult = computeFinalResult();
+        if (finalResult.has_value()) {
+          out = std::make_tuple(
+              static_cast<TSumType>(finalResult.value()), isEmpty_);
+        } else {
+          // Sum should be set to null on overflow, and
+          // isEmpty should be set to false.
+          out.template set_null_at<0>();
+          out.template get_writer_at<1>() = false;
+        }
       }
       return true;
     }
 
-    bool writeFinalResult(exec::out_type<OutputType>& out) {
-      if (isEmpty_) {
+    bool writeFinalResult(bool nonNullGroup, exec::out_type<OutputType>& out) {
+      if (!nonNullGroup || isEmpty_) {
         // If isEmpty is true, we should set null.
         return false;
       }
