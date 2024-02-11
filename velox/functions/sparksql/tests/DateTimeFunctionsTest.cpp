@@ -491,8 +491,6 @@ TEST_F(DateTimeFunctionsTest, weekdayDate) {
   EXPECT_EQ(4, weekday(parseDate("2023-08-25")));
   EXPECT_EQ(5, weekday(parseDate("2023-08-26")));
   EXPECT_EQ(6, weekday(parseDate("2023-08-27")));
-
-  // Test cases from Spark's DateExpressionSuite.
   EXPECT_EQ(4, weekday(parseDate("2011-05-06")));
 }
 
@@ -511,7 +509,6 @@ TEST_F(DateTimeFunctionsTest, weekdayTs) {
   EXPECT_EQ(4, weekday(util::fromTimestampString("2023-08-25 03:23:04.000")));
   EXPECT_EQ(5, weekday(util::fromTimestampString("2023-08-26 01:03:00.300")));
   EXPECT_EQ(6, weekday(util::fromTimestampString("2023-08-27 01:13:00.000")));
-  // Test cases from Spark's DateExpressionSuite.
   EXPECT_EQ(4, weekday(util::fromTimestampString("2013-11-08 13:10:15")));
   EXPECT_EQ(2, weekday(util::fromTimestampString("2015-04-08 13:10:15")));
   EXPECT_EQ(5, weekday(util::fromTimestampString("2017-05-27 13:10:15")));
