@@ -248,6 +248,8 @@ const char* exportArrowFormatStr(
       return "u"; // utf-8 string
     case TypeKind::VARBINARY:
       return "z"; // binary
+    case TypeKind::UNKNOWN:
+      return "n"; // NullType
 
     case TypeKind::TIMESTAMP:
       return "ttn"; // time64 [nanoseconds]
@@ -259,8 +261,6 @@ const char* exportArrowFormatStr(
       return "+m"; // map
     case TypeKind::ROW:
       return "+s"; // struct
-    case TypeKind::UNKNOWN:
-      return "n";
 
     default:
       VELOX_NYI("Unable to map type '{}' to ArrowSchema.", type->kind());
