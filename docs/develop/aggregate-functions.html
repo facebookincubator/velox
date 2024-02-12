@@ -339,6 +339,8 @@ This flag is false by default.</p>
 initialize all accumulators.</p>
 <p>The author can also optionally define a <cite>destroy</cite> function that is called when
 <em>this</em> accumulator object is destructed.</p>
+<p>Notice that <cite>writeIntermediateResult</cite> and <cite>writeFinalResult</cite> are expected to not
+modify contents in the accumulator.</p>
 <section id="addinput">
 <h4>addInput<a class="headerlink" href="#addinput" title="Permalink to this heading">¶</a></h4>
 <p>This method adds raw input values to <em>this</em> accumulator. It receives a
@@ -412,6 +414,8 @@ and the <cite>destroy</cite> method are exactly the same as those for default-nu
 behavior.</p>
 <p>On the other hand, the C++ function signatures of <cite>addInput</cite>, <cite>combine</cite>,
 <cite>writeIntermediateResult</cite>, and <cite>writeFinalResult</cite> are different.</p>
+<p>Same as the case for default-null behavior, <cite>writeIntermediateResult</cite> and
+<cite>writeFinalResult</cite> are expected to not modify contents in the accumulator.</p>
 <section id="id1">
 <h4>addInput<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h4>
 <p>This method receives a <cite>HashStringAllocator*</cite> followed by
@@ -667,6 +671,7 @@ table shows which methods are used in which workflows.</p>
 <p>addRawInput() method would use DecodedVector’s to decode the input data. Then, loop over rows to update the accumulators. It is a good practice to define a member variable of type DecodedVector for each input vector. This allows for reusing the memory needed to decode the inputs between batches of input.</p>
 <p>After implementing the addRawInput() method, we proceed to adding logic for extracting intermediate results.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Extracts partial results (used for partial and intermediate aggregations).</span>
+<span class="c1">// This method is expected to not modify contents in accumulators.</span>
 <span class="c1">// @param groups Pointers to the start of the group rows.</span>
 <span class="c1">// @param numGroups Number of groups to extract results from.</span>
 <span class="c1">// @param result The result vector to store the results in.</span>
@@ -683,7 +688,8 @@ table shows which methods are used in which workflows.</p>
 </pre></div>
 </div>
 <p>Next, we implement the extractValues() method that extracts final results from the accumulators.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Extracts final results (used for final and single aggregations).</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Extracts final results (used for final and single aggregations). This method</span>
+<span class="c1">// is expected to not modify contents in accumulators.</span>
 <span class="c1">// @param groups Pointers to the start of the group rows.</span>
 <span class="c1">// @param numGroups Number of groups to extract results from.</span>
 <span class="c1">// @param result The result vector to store the results in.</span>
