@@ -395,12 +395,6 @@ struct DayOfWeekFunction : public InitSessionTimezone<T> {
     return time.tm_wday + 1;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
-      int32_t& result,
-      const arg_type<Timestamp>& timestamp) {
-    result = getDayOfWeek(getDateTime(timestamp, this->timeZone_));
-  }
-
   FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
     result = getDayOfWeek(getDateTime(date));
   }
@@ -503,12 +497,6 @@ struct WeekdayFunction : public InitSessionTimezone<T> {
   // 0 = Monday, 1 = Tuesday, ..., 6 = Sunday
   FOLLY_ALWAYS_INLINE int32_t getWeekday(const std::tm& time) {
     return (time.tm_wday - 1 + 7) % 7;
-  }
-
-  FOLLY_ALWAYS_INLINE void call(
-      int32_t& result,
-      const arg_type<Timestamp>& timestamp) {
-    result = getWeekday(getDateTime(timestamp, this->timeZone_));
   }
 
   FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {

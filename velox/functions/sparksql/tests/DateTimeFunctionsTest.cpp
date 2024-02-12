@@ -425,52 +425,10 @@ TEST_F(DateTimeFunctionsTest, dayOfWeekDate) {
     EXPECT_EQ(6, dayOfWeek(parseDate("2023-08-25"), func));
     EXPECT_EQ(7, dayOfWeek(parseDate("2023-08-26"), func));
     EXPECT_EQ(1, dayOfWeek(parseDate("2023-08-27"), func));
-
-    // test cases from spark's DateExpressionSuite.
     EXPECT_EQ(6, dayOfWeek(util::fromDateString("2011-05-06"), func));
-  }
-}
-
-TEST_F(DateTimeFunctionsTest, dayofWeekTs) {
-  const auto dayOfWeek = [&](std::optional<Timestamp> date,
-                             const std::string& func) {
-    return evaluateOnce<int32_t>(fmt::format("{}(c0)", func), date);
-  };
-
-  for (const auto& func : {"dayofweek", "dow"}) {
-    EXPECT_EQ(5, dayOfWeek(Timestamp(0, 0), func));
-    EXPECT_EQ(4, dayOfWeek(Timestamp(-1, 0), func));
-    EXPECT_EQ(
-        1,
-        dayOfWeek(util::fromTimestampString("2023-08-20 20:23:00.001"), func));
-    EXPECT_EQ(
-        2,
-        dayOfWeek(util::fromTimestampString("2023-08-21 21:23:00.030"), func));
-    EXPECT_EQ(
-        3,
-        dayOfWeek(util::fromTimestampString("2023-08-22 11:23:00.100"), func));
-    EXPECT_EQ(
-        4,
-        dayOfWeek(util::fromTimestampString("2023-08-23 22:23:00.030"), func));
-    EXPECT_EQ(
-        5,
-        dayOfWeek(util::fromTimestampString("2023-08-24 15:23:00.000"), func));
-    EXPECT_EQ(
-        6,
-        dayOfWeek(util::fromTimestampString("2023-08-25 03:23:04.000"), func));
-    EXPECT_EQ(
-        7,
-        dayOfWeek(util::fromTimestampString("2023-08-26 01:03:00.300"), func));
-    EXPECT_EQ(
-        1,
-        dayOfWeek(util::fromTimestampString("2023-08-27 01:13:00.000"), func));
-    // test cases from spark's DateExpressionSuite.
-    EXPECT_EQ(
-        4, dayOfWeek(util::fromTimestampString("2015-04-08 13:10:15"), func));
-    EXPECT_EQ(
-        7, dayOfWeek(util::fromTimestampString("2017-05-27 13:10:15"), func));
-    EXPECT_EQ(
-        6, dayOfWeek(util::fromTimestampString("1582-10-15 13:10:15"), func));
+    EXPECT_EQ(4, dayOfWeek(util::fromDateString("2015-04-08"), func));
+    EXPECT_EQ(7, dayOfWeek(util::fromDateString("2017-05-27"), func));
+    EXPECT_EQ(6, dayOfWeek(util::fromDateString("1582-10-15"), func));
   }
 }
 
@@ -491,28 +449,11 @@ TEST_F(DateTimeFunctionsTest, weekdayDate) {
   EXPECT_EQ(4, weekday(parseDate("2023-08-25")));
   EXPECT_EQ(5, weekday(parseDate("2023-08-26")));
   EXPECT_EQ(6, weekday(parseDate("2023-08-27")));
+  EXPECT_EQ(5, weekday(parseDate("2017-05-27")));
+  EXPECT_EQ(2, weekday(parseDate("2015-04-08")));
+  EXPECT_EQ(4, weekday(parseDate("2013-11-08")));
   EXPECT_EQ(4, weekday(parseDate("2011-05-06")));
-}
-
-TEST_F(DateTimeFunctionsTest, weekdayTs) {
-  const auto weekday = [&](std::optional<Timestamp> date) {
-    return evaluateOnce<int32_t>("weekday(c0)", date);
-  };
-
-  EXPECT_EQ(3, weekday(Timestamp(0, 0)));
-  EXPECT_EQ(2, weekday(Timestamp(-1, 0)));
-  EXPECT_EQ(6, weekday(util::fromTimestampString("2023-08-20 20:23:00.001")));
-  EXPECT_EQ(0, weekday(util::fromTimestampString("2023-08-21 21:23:00.030")));
-  EXPECT_EQ(1, weekday(util::fromTimestampString("2023-08-22 11:23:00.100")));
-  EXPECT_EQ(2, weekday(util::fromTimestampString("2023-08-23 22:23:00.030")));
-  EXPECT_EQ(3, weekday(util::fromTimestampString("2023-08-24 15:23:00.000")));
-  EXPECT_EQ(4, weekday(util::fromTimestampString("2023-08-25 03:23:04.000")));
-  EXPECT_EQ(5, weekday(util::fromTimestampString("2023-08-26 01:03:00.300")));
-  EXPECT_EQ(6, weekday(util::fromTimestampString("2023-08-27 01:13:00.000")));
-  EXPECT_EQ(4, weekday(util::fromTimestampString("2013-11-08 13:10:15")));
-  EXPECT_EQ(2, weekday(util::fromTimestampString("2015-04-08 13:10:15")));
-  EXPECT_EQ(5, weekday(util::fromTimestampString("2017-05-27 13:10:15")));
-  EXPECT_EQ(4, weekday(util::fromTimestampString("1582-10-15 13:10:15")));
+  EXPECT_EQ(4, weekday(parseDate("1582-10-15")));
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
