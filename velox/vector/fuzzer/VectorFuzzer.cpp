@@ -18,6 +18,7 @@
 
 #include <boost/random/uniform_int_distribution.hpp>
 #include <fmt/format.h>
+#include <gflags/gflags.h>
 #include <codecvt>
 #include <locale>
 
@@ -27,6 +28,15 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/NullsBuilder.h"
 #include "velox/vector/VectorTypeUtils.h"
+
+/// Use velox_fuzzer_nan_inf_threshold to turn on generation of (+/-)
+/// NaN's/Inf's.
+DEFINE_double(
+    velox_fuzzer_nan_inf_threshold,
+    0.0,
+    "The value of the threshold at which NaN and Infinity is generated for floating point"
+    "types. By default value is 0.0 and thus disabled. For any value > 0.0 either +NaN,"
+    "-NaN, +Infinity, -Infinity is generated with equal probability.");
 
 namespace facebook::velox {
 
@@ -88,13 +98,49 @@ int64_t rand(FuzzerGenerator& rng) {
   return boost::random::uniform_int_distribution<int64_t>()(rng);
 }
 
+template <typename T>
+typename std::enable_if<std::is_floating_point_v<T>, T>::type
+generateNumericLimits(FuzzerGenerator& rng) {
+  if (coinToss(rng, 0.25)) {
+    return std::numeric_limits<T>::quiet_NaN();
+  }
+
+  if (coinToss(rng, 0.25)) {
+    return -std::numeric_limits<T>::quiet_NaN();
+  }
+
+  if (coinToss(rng, 0.25)) {
+    return std::numeric_limits<T>::infinity();
+  }
+
+  return -std::numeric_limits<T>::infinity();
+}
+
 template <>
 double rand(FuzzerGenerator& rng) {
+  if (coinToss(rng, FLAGS_velox_fuzzer_nan_inf_threshold)) {
+    return generateNumericLimits<double>(rng);
+  }
+
+  // Generate a -tive number with 50% probability.
+  if (coinToss(rng, 0.5)) {
+    return -boost::random::uniform_01<double>()(rng);
+  }
+
   return boost::random::uniform_01<double>()(rng);
 }
 
 template <>
 float rand(FuzzerGenerator& rng) {
+  if (coinToss(rng, FLAGS_velox_fuzzer_nan_inf_threshold)) {
+    return generateNumericLimits<float>(rng);
+  }
+
+  // Generate a -tive number with 50% probability.
+  if (coinToss(rng, 0.5)) {
+    return -boost::random::uniform_01<float>()(rng);
+  }
+
   return boost::random::uniform_01<float>()(rng);
 }
 
