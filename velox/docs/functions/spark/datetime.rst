@@ -161,6 +161,14 @@ These functions support TIMESTAMP and DATE input types.
 
     Alias for ``unix_timestamp(string, format) -> integer``.
 
+.. spark:function:: unix_date(date) -> integer
+
+    Returns the number of days since 1970-01-01.
+    
+        SELECT unix_date('1970-01-01'); -- '0'
+        SELECT unix_date('1970-01-02'); -- '1'
+        SELECT unix_date('1969-12-31'); -- '-1'
+
 .. spark:function:: unix_timestamp() -> integer
 
     Returns the current UNIX timestamp in seconds.
