@@ -387,7 +387,7 @@ struct DateSubFunction {
 };
 
 template <typename T>
-struct DayOfWeekFunction : public InitSessionTimezone<T> {
+struct DayOfWeekFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // 1 = Sunday, 2 = Monday, ..., 7 = Saturday
@@ -491,7 +491,7 @@ struct DayOfYearFunction {
 };
 
 template <typename T>
-struct WeekdayFunction : public InitSessionTimezone<T> {
+struct WeekdayFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // 0 = Monday, 1 = Tuesday, ..., 6 = Sunday
