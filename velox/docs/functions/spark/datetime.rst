@@ -64,13 +64,13 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT dayofyear('2016-04-09'); -- 100
 
-.. spark:function:: dayofweek(date/timestamp) -> integer
+.. spark:function:: dayofweek(date) -> integer
 
-    Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
+    Returns the day of the week for date (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
     We can use `dow` as alias for ::
 
         SELECT dayofweek('2009-07-30'); -- 5
-        SELECT dayofweek('2023-08-22 11:23:00.100'); -- 3
+        SELECT dayofweek('2023-08-22'); -- 3
 
 .. spark:function:: dow(x) -> integer
 
@@ -187,12 +187,12 @@ These functions support TIMESTAMP and DATE input types.
     Returns the `ISO-Week`_ of the year from x. The value ranges from ``1`` to ``53``.
     A week is considered to start on a Monday and week 1 is the first week with >3 days.
 
-.. function:: weekday(date/timestamp) -> integer
+.. function:: weekday(date) -> integer
 
-    Returns the day of the week for date/timestamp (0 = Monday, 1 = Tuesday, …, 6 = Sunday).
+    Returns the day of the week for date (0 = Monday, 1 = Tuesday, …, 6 = Sunday).
 
         SELECT weekday('2015-04-08'); -- 2
-        SELECT weekday('2024-02-10 11:23:00.100'); -- 5
+        SELECT weekday('2024-02-10'); -- 5
 
 .. _ISO-Week: https://en.wikipedia.org/wiki/ISO_week_date
 
