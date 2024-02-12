@@ -23,6 +23,48 @@ namespace {
 
 static const int kMaxCompiledRegexes = 20;
 
+void checkForBadPattern(const RE2& re) {
+  if (UNLIKELY(!re.ok())) {
+    VELOX_USER_FAIL("invalid regular expression:{}", re.error());
+  }
+}
+
+template <typename T>
+re2::StringPiece toStringPiece(const T& s) {
+  return re2::StringPiece(s.data(), s.size());
+}
+
+// A cache of compiled regular expressions (RE2 instances). Allows up to
+// 'kMaxCompiledRegexes' different expressions.
+//
+// Compiling regular expressions is expensive. It can take up to 200 times
+// more CPU time to compile a regex vs. evaluate it.
+class ReCache {
+ public:
+  RE2* findOrCompile(const StringView& pattern) {
+    const std::string key = pattern;
+
+    auto reIt = cache_.find(key);
+    if (reIt != cache_.end()) {
+      return reIt->second.get();
+    }
+
+    VELOX_USER_CHECK_LT(
+        cache_.size(), kMaxCompiledRegexes, "Max number of regex reached");
+
+    auto re = std::make_unique<RE2>(toStringPiece(pattern), RE2::Quiet);
+    checkForBadPattern(*re);
+
+    auto [it, inserted] = cache_.emplace(key, std::move(re));
+    VELOX_CHECK(inserted);
+
+    return it->second.get();
+  }
+
+ private:
+  folly::F14FastMap<std::string, std::unique_ptr<RE2>> cache_;
+};
+
 std::string printTypesCsv(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   std::string result;
@@ -34,11 +76,6 @@ std::string printTypesCsv(
   return result;
 }
 
-template <typename T>
-re2::StringPiece toStringPiece(const T& s) {
-  return re2::StringPiece(s.data(), s.size());
-}
-
 // If v is a non-null constant vector, returns the constant value. Otherwise
 // returns nullopt.
 template <typename T>
@@ -48,12 +85,6 @@ std::optional<T> getIfConstant(const BaseVector& v) {
     return v.as<ConstantVector<T>>()->valueAt(0);
   }
   return std::nullopt;
-}
-
-void checkForBadPattern(const RE2& re) {
-  if (UNLIKELY(!re.ok())) {
-    VELOX_USER_FAIL("invalid regular expression:{}", re.error());
-  }
 }
 
 FlatVector<bool>& ensureWritableBool(
@@ -220,11 +251,13 @@ class Re2Match final : public exec::VectorFunction {
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
     exec::LocalDecodedVector pattern(context, *args[1], rows);
     context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-      RE2 re(toStringPiece(pattern->valueAt<StringView>(row)), RE2::Quiet);
-      checkForBadPattern(re);
+      auto& re = *cache_.findOrCompile(pattern->valueAt<StringView>(row));
       result.set(row, Fn(toSearch->valueAt<StringView>(row), re));
     });
   }
+
+ private:
+  mutable ReCache cache_;
 };
 
 void checkForBadGroupId(int64_t groupId, const RE2& re) {
@@ -348,8 +381,7 @@ class Re2SearchAndExtract final : public exec::VectorFunction {
     if (args.size() == 2) {
       groups.resize(1);
       context.applyToSelectedNoThrow(rows, [&](vector_size_t i) {
-        RE2 re(toStringPiece(pattern->valueAt<StringView>(i)), RE2::Quiet);
-        checkForBadPattern(re);
+        auto& re = *cache_.findOrCompile(pattern->valueAt<StringView>(i));
         mustRefSourceStrings |=
             re2Extract(result, i, re, toSearch, groups, 0, emptyNoMatch_);
       });
@@ -357,8 +389,7 @@ class Re2SearchAndExtract final : public exec::VectorFunction {
       exec::LocalDecodedVector groupIds(context, *args[2], rows);
       context.applyToSelectedNoThrow(rows, [&](vector_size_t i) {
         const auto groupId = groupIds->valueAt<T>(i);
-        RE2 re(toStringPiece(pattern->valueAt<StringView>(i)), RE2::Quiet);
-        checkForBadPattern(re);
+        auto& re = *cache_.findOrCompile(pattern->valueAt<StringView>(i));
         checkForBadGroupId(groupId, re);
         groups.resize(groupId + 1);
         mustRefSourceStrings |=
@@ -372,6 +403,7 @@ class Re2SearchAndExtract final : public exec::VectorFunction {
 
  private:
   const bool emptyNoMatch_;
+  mutable ReCache cache_;
 };
 
 namespace {
@@ -839,8 +871,9 @@ class LikeWithRe2 final : public exec::VectorFunction {
 
 // This function is constructed when pattern or escape are not constants.
 // It allows up to kMaxCompiledRegexes different regular expressions to be
-// compiled throughout the query life per function, note that optimized regular
-// expressions that are not compiled are not counted.
+// compiled throughout the query lifetime per expression and thread of
+// execution, note that optimized regular expressions that are not compiled are
+// not counted.
 class LikeGeneric final : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
@@ -853,25 +886,8 @@ class LikeGeneric final : public exec::VectorFunction {
     auto applyWithRegex = [&](const StringView& input,
                               const StringView& pattern,
                               const std::optional<char>& escapeChar) -> bool {
-      RE2::Options opt{RE2::Quiet};
-      opt.set_dot_nl(true);
-      bool validEscapeUsage;
-      auto regex = likePatternToRe2(pattern, escapeChar, validEscapeUsage);
-      VELOX_USER_CHECK(
-          validEscapeUsage,
-          "Escape character must be followed by '%', '_' or the escape character itself");
-
-      auto key =
-          std::pair<StringView, std::optional<char>>{pattern, escapeChar};
-
-      auto [it, inserted] = compiledRegularExpressions_.emplace(
-          key, std::make_unique<RE2>(toStringPiece(regex), opt));
-      VELOX_USER_CHECK_LE(
-          compiledRegularExpressions_.size(),
-          kMaxCompiledRegexes,
-          "Max number of regex reached");
-      checkForBadPattern(*it->second);
-      return re2FullMatch(input, *it->second);
+      auto* re = findOrCompileRegex(pattern, escapeChar);
+      return re2FullMatch(input, *re);
     };
 
     auto applyRow = [&](const StringView& input,
@@ -963,6 +979,40 @@ class LikeGeneric final : public exec::VectorFunction {
   }
 
  private:
+  RE2* findOrCompileRegex(
+      const StringView& pattern,
+      std::optional<char> escapeChar) const {
+    const auto key =
+        std::pair<std::string, std::optional<char>>{pattern, escapeChar};
+
+    auto reIt = compiledRegularExpressions_.find(key);
+    if (reIt != compiledRegularExpressions_.end()) {
+      return reIt->second.get();
+    }
+
+    VELOX_USER_CHECK_LT(
+        compiledRegularExpressions_.size(),
+        kMaxCompiledRegexes,
+        "Max number of regex reached");
+
+    bool validEscapeUsage;
+    auto regex = likePatternToRe2(pattern, escapeChar, validEscapeUsage);
+    VELOX_USER_CHECK(
+        validEscapeUsage,
+        "Escape character must be followed by '%', '_' or the escape character itself");
+
+    RE2::Options opt{RE2::Quiet};
+    opt.set_dot_nl(true);
+    auto re = std::make_unique<RE2>(toStringPiece(regex), opt);
+    checkForBadPattern(*re);
+
+    auto [it, inserted] =
+        compiledRegularExpressions_.emplace(key, std::move(re));
+    VELOX_CHECK(inserted);
+
+    return it->second.get();
+  }
+
   mutable folly::F14FastMap<
       std::pair<std::string, std::optional<char>>,
       std::unique_ptr<RE2>>
@@ -1108,8 +1158,7 @@ class Re2ExtractAll final : public exec::VectorFunction {
       //
       groups.resize(1);
       context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-        RE2 re(toStringPiece(pattern->valueAt<StringView>(row)), RE2::Quiet);
-        checkForBadPattern(re);
+        auto& re = *cache_.findOrCompile(pattern->valueAt<StringView>(row));
         re2ExtractAll(resultWriter, re, inputStrs, row, groups, 0);
       });
     } else {
@@ -1118,8 +1167,7 @@ class Re2ExtractAll final : public exec::VectorFunction {
       exec::LocalDecodedVector groupIds(context, *args[2], rows);
       context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         const T groupId = groupIds->valueAt<T>(row);
-        RE2 re(toStringPiece(pattern->valueAt<StringView>(row)), RE2::Quiet);
-        checkForBadPattern(re);
+        auto& re = *cache_.findOrCompile(pattern->valueAt<StringView>(row));
         checkForBadGroupId(groupId, re);
         groups.resize(groupId + 1);
         re2ExtractAll(resultWriter, re, inputStrs, row, groups, groupId);
@@ -1132,6 +1180,9 @@ class Re2ExtractAll final : public exec::VectorFunction {
         ->asFlatVector<StringView>()
         ->acquireSharedStringBuffers(inputStrs->base());
   }
+
+ private:
+  mutable ReCache cache_;
 };
 
 template <bool (*Fn)(StringView, const RE2&)>
@@ -1152,9 +1203,8 @@ std::shared_ptr<exec::VectorFunction> makeRe2MatchImpl(
     return std::make_shared<Re2MatchConstantPattern<Fn>>(
         constantPattern->as<ConstantVector<StringView>>()->valueAt(0));
   }
-  static std::shared_ptr<Re2Match<Fn>> kMatchExpr =
-      std::make_shared<Re2Match<Fn>>();
-  return kMatchExpr;
+
+  return std::make_shared<Re2Match<Fn>>();
 }
 
 } // namespace

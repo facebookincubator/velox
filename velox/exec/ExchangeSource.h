@@ -40,12 +40,6 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool);
 
-  /// Temporary API to indicate whether 'request(maxBytes, maxWaitSeconds)' API
-  /// is supported.
-  virtual bool supportsFlowControlV2() const {
-    VELOX_UNREACHABLE();
-  }
-
   /// Temporary API to indicate whether 'metrics()' API
   /// is supported.
   virtual bool supportsMetrics() const {
@@ -63,14 +57,6 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
 
   virtual bool isRequestPendingLocked() const {
     return requestPending_;
-  }
-
-  /// Requests the producer to generate up to 'maxBytes' more data.
-  /// Returns a future that completes when producer responds either with 'data'
-  /// or with a message indicating that all data has been already produced or
-  /// data will take more time to produce.
-  virtual ContinueFuture request(uint32_t /*maxBytes*/) {
-    VELOX_NYI();
   }
 
   struct Response {

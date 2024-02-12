@@ -24,10 +24,11 @@ namespace facebook::velox::serializer::presto {
 /// There are two ways to serialize data using PrestoVectorSerde:
 ///
 /// 1. In order to append multiple RowVectors into the same serialized payload,
-/// one can first create a VectorSerializer using createSerializer(), then
-/// append successive RowVectors using VectorSerializer::append(). In this case,
-/// since different RowVector might encode columns differently, data is always
-/// flattened in the serialized payload.
+/// one can first create an IterativeVectorSerializer using
+/// createIterativeSerializer(), then append successive RowVectors using
+/// IterativeVectorSerializer::append(). In this case, since different RowVector
+/// might encode columns differently, data is always flattened in the serialized
+/// payload.
 ///
 /// Note that there are two flavors of append(), one that takes a range of rows,
 /// and one that takes a list of row ids. The former is useful when serializing
@@ -76,7 +77,7 @@ class PrestoVectorSerde : public VectorSerde {
       vector_size_t** sizes,
       Scratch& scratch) override;
 
-  std::unique_ptr<VectorSerializer> createSerializer(
+  std::unique_ptr<IterativeVectorSerializer> createIterativeSerializer(
       RowTypePtr type,
       int32_t numRows,
       StreamArena* streamArena,
@@ -128,6 +129,18 @@ class PrestoVectorSerde : public VectorSerde {
       RowVectorPtr* result,
       vector_size_t resultOffset,
       const Options* options) override;
+
+  /// This function is used to deserialize a single column that is serialized in
+  /// PrestoPage format. It is important to note that the PrestoPage format used
+  /// here does not include the Presto page header. Therefore, the 'source'
+  /// should contain uncompressed, serialized binary data, beginning at the
+  /// column header.
+  void deserializeSingleColumn(
+      ByteInputStream* source,
+      velox::memory::MemoryPool* pool,
+      TypePtr type,
+      VectorPtr* result,
+      const Options* options);
 
   static void registerVectorSerde();
 };

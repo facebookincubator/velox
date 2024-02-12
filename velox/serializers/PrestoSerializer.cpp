@@ -980,6 +980,50 @@ void checkTypeEncoding(std::string_view encoding, const TypePtr& type) {
       encoding);
 }
 
+// This is used when there's a mismatch between the encoding in the serialized
+// page and the expected output encoding. If the serialized encoding is
+// BYTE_ARRAY, it may represent an all-null vector of the expected output type.
+// We attempt to read the serialized page as an UNKNOWN type, check if all
+// values are null, and set the columnResult accordingly. If all values are
+// null, we return true; otherwise, we return false.
+bool tryReadNullColumn(
+    ByteInputStream* source,
+    velox::memory::MemoryPool* pool,
+    const TypePtr& columnType,
+    VectorPtr& columnResult,
+    vector_size_t resultOffset,
+    bool useLosslessTimestamp) {
+  auto unknownType = UNKNOWN();
+  VectorPtr tempResult = BaseVector::create(unknownType, 0, pool);
+  read<UnknownValue>(
+      source,
+      unknownType,
+      pool,
+      tempResult,
+      0 /*resultOffset*/,
+      useLosslessTimestamp);
+  auto deserializedSize = tempResult->size();
+  // Ensure it contains all null values.
+  auto numNulls = BaseVector::countNulls(tempResult->nulls(), deserializedSize);
+  if (deserializedSize != numNulls) {
+    return false;
+  }
+  if (resultOffset == 0) {
+    columnResult =
+        BaseVector::createNullConstant(columnType, deserializedSize, pool);
+  } else {
+    columnResult->resize(resultOffset + deserializedSize);
+
+    SelectivityVector nullRows(resultOffset + deserializedSize, false);
+    nullRows.setValidRange(resultOffset, resultOffset + deserializedSize, true);
+    nullRows.updateBounds();
+
+    BaseVector::ensureWritable(nullRows, columnType, pool, columnResult);
+    columnResult->addNulls(nullRows);
+  }
+  return true;
+}
+
 void readColumns(
     ByteInputStream* source,
     velox::memory::MemoryPool* pool,
@@ -1037,7 +1081,20 @@ void readColumns(
           resultOffset,
           useLosslessTimestamp);
     } else {
-      checkTypeEncoding(encoding, columnType);
+      auto typeToEncoding = typeToEncodingName(columnType);
+      if (encoding != typeToEncoding) {
+        if (encoding == "BYTE_ARRAY" &&
+            tryReadNullColumn(
+                source,
+                pool,
+                columnType,
+                columnResult,
+                resultOffset,
+                useLosslessTimestamp)) {
+          return;
+        }
+        checkTypeEncoding(encoding, columnType);
+      }
       const auto it = readers.find(columnType->kind());
       VELOX_CHECK(
           it != readers.end(),
@@ -3259,9 +3316,9 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
   const std::unique_ptr<folly::io::Codec> codec_;
 };
 
-class PrestoVectorSerializer : public VectorSerializer {
+class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
  public:
-  PrestoVectorSerializer(
+  PrestoIterativeVectorSerializer(
       const RowTypePtr& rowType,
       std::vector<VectorEncoding::Simple> encodings,
       int32_t numRows,
@@ -3292,7 +3349,7 @@ class PrestoVectorSerializer : public VectorSerializer {
   // Constructor that takes a row vector instead of only the types. This is
   // different because then we know exactly how each vector is encoded
   // (recursively).
-  PrestoVectorSerializer(
+  PrestoIterativeVectorSerializer(
       const RowVectorPtr& rowVector,
       StreamArena* streamArena,
       bool useLosslessTimestamp,
@@ -3398,13 +3455,14 @@ void PrestoVectorSerde::estimateSerializedSize(
   estimateSerializedSizeInt(vector->loadedVector(), rows, sizes, scratch);
 }
 
-std::unique_ptr<VectorSerializer> PrestoVectorSerde::createSerializer(
+std::unique_ptr<IterativeVectorSerializer>
+PrestoVectorSerde::createIterativeSerializer(
     RowTypePtr type,
     int32_t numRows,
     StreamArena* streamArena,
     const Options* options) {
   const auto prestoOptions = toPrestoOptions(options);
-  return std::make_unique<PrestoVectorSerializer>(
+  return std::make_unique<PrestoIterativeVectorSerializer>(
       type,
       prestoOptions.encodings,
       numRows,
@@ -3427,7 +3485,7 @@ void PrestoVectorSerde::deprecatedSerializeEncoded(
     const Options* options,
     OutputStream* out) {
   auto prestoOptions = toPrestoOptions(options);
-  auto serializer = std::make_unique<PrestoVectorSerializer>(
+  auto serializer = std::make_unique<PrestoIterativeVectorSerializer>(
       vector,
       streamArena,
       prestoOptions.useLosslessTimestamp,
@@ -3523,6 +3581,43 @@ void PrestoVectorSerde::deserialize(
 
   scatterStructNulls(
       (*result)->size(), 0, nullptr, nullptr, **result, resultOffset);
+}
+
+void PrestoVectorSerde::deserializeSingleColumn(
+    ByteInputStream* source,
+    velox::memory::MemoryPool* pool,
+    TypePtr type,
+    VectorPtr* result,
+    const Options* options) {
+  const auto prestoOptions = toPrestoOptions(options);
+  VELOX_CHECK_EQ(
+      prestoOptions.compressionKind,
+      common::CompressionKind::CompressionKind_NONE);
+  const bool useLosslessTimestamp = prestoOptions.useLosslessTimestamp;
+
+  if (*result && result->unique()) {
+    VELOX_CHECK(
+        *(*result)->type() == *type,
+        "Unexpected type: {} vs. {}",
+        (*result)->type()->toString(),
+        type->toString());
+    (*result)->prepareForReuse();
+  } else {
+    *result = BaseVector::create(type, 0, pool);
+  }
+
+  auto types = {type};
+  std::vector<VectorPtr> resultList = {*result};
+  readColumns(source, pool, types, resultList, 0, useLosslessTimestamp);
+
+  auto rowType = asRowType(ROW(types));
+  RowVectorPtr tempRow = std::make_shared<velox::RowVector>(
+      pool, rowType, nullptr, resultList[0]->size(), resultList);
+  scatterStructNulls(tempRow->size(), 0, nullptr, nullptr, *tempRow, 0);
+  // A copy of the 'result' shared_ptr was passed to scatterStructNulls() via
+  // 'resultList'. Make sure we re-assign 'result' in case the copy was replaced
+  // with a new vector.
+  *result = resultList[0];
 }
 
 void testingScatterStructNulls(

@@ -36,8 +36,10 @@ class PrestoSerializerTest
     : public ::testing::TestWithParam<common::CompressionKind>,
       public VectorTestBase {
  protected:
-  static void SetUpTestCase() {
-    serializer::presto::PrestoVectorSerde::registerVectorSerde();
+  static void SetUpTestSuite() {
+    if (!isRegisteredVectorSerde()) {
+      serializer::presto::PrestoVectorSerde::registerVectorSerde();
+    }
     memory::MemoryManager::testingSetInstance({});
   }
 
@@ -90,8 +92,8 @@ class PrestoSerializerTest
     auto rowType = asRowType(rowVector->type());
     auto numRows = rowVector->size();
     auto paramOptions = getParamSerdeOptions(serdeOptions);
-    auto serializer =
-        serde_->createSerializer(rowType, numRows, arena.get(), &paramOptions);
+    auto serializer = serde_->createIterativeSerializer(
+        rowType, numRows, arena.get(), &paramOptions);
     vector_size_t sizeEstimate = 0;
 
     Scratch scratch;
@@ -383,6 +385,125 @@ class PrestoSerializerTest
     });
   }
 
+  RowVectorPtr encodingsArrayElementsTestVector() {
+    auto baseNoNulls = makeFlatVector<int64_t>({1, 2, 3, 4});
+    auto baseWithNulls =
+        makeNullableFlatVector<int32_t>({1, std::nullopt, 2, 3});
+    auto baseArray =
+        makeArrayVector<int32_t>({{1, 2, 3}, {}, {4, 5}, {6, 7, 8, 9, 10}});
+    auto elementIndices = makeIndices(16, [](auto row) { return row / 4; });
+    std::vector<vector_size_t> offsets{0, 2, 4, 6, 8, 10, 12, 14, 16};
+
+    return makeRowVector({
+        makeArrayVector(
+            offsets,
+            BaseVector::wrapInDictionary(
+                nullptr, elementIndices, 16, baseNoNulls)),
+        makeArrayVector(
+            offsets,
+            BaseVector::wrapInDictionary(
+                nullptr, elementIndices, 16, baseWithNulls)),
+        makeArrayVector(
+            offsets,
+            BaseVector::wrapInDictionary(
+                nullptr, elementIndices, 16, baseArray)),
+        makeArrayVector(
+            offsets,
+            BaseVector::createConstant(INTEGER(), 123, 16, pool_.get())),
+        makeArrayVector(
+            offsets,
+            BaseVector::createNullConstant(VARCHAR(), 16, pool_.get())),
+        makeArrayVector(offsets, BaseVector::wrapInConstant(16, 1, baseArray)),
+        makeRowVector({
+            makeArrayVector(
+                offsets,
+                BaseVector::wrapInDictionary(
+                    nullptr, elementIndices, 16, baseNoNulls)),
+            makeArrayVector(
+                offsets,
+                BaseVector::wrapInDictionary(
+                    nullptr, elementIndices, 16, baseWithNulls)),
+            makeArrayVector(
+                offsets,
+                BaseVector::wrapInDictionary(
+                    nullptr, elementIndices, 16, baseArray)),
+            makeArrayVector(
+                offsets,
+                BaseVector::createConstant(INTEGER(), 123, 16, pool_.get())),
+            makeArrayVector(
+                offsets,
+                BaseVector::createNullConstant(VARCHAR(), 16, pool_.get())),
+            makeArrayVector(
+                offsets, BaseVector::wrapInConstant(16, 1, baseArray)),
+        }),
+    });
+  }
+
+  RowVectorPtr encodingsMapValuesTestVector() {
+    auto baseNoNulls = makeFlatVector<int64_t>({1, 2, 3, 4});
+    auto baseWithNulls =
+        makeNullableFlatVector<int32_t>({1, std::nullopt, 2, 3});
+    auto baseArray =
+        makeArrayVector<int32_t>({{1, 2, 3}, {}, {4, 5}, {6, 7, 8, 9, 10}});
+    auto valueIndices = makeIndices(16, [](auto row) { return row / 4; });
+    std::vector<vector_size_t> offsets{0, 2, 4, 6, 8, 10, 12, 14, 16};
+    auto mapKeys = makeFlatVector<int32_t>(16, [](auto row) { return row; });
+
+    return makeRowVector({
+        makeMapVector(
+            offsets,
+            mapKeys,
+            BaseVector::wrapInDictionary(
+                nullptr, valueIndices, 16, baseNoNulls)),
+        makeMapVector(
+            offsets,
+            mapKeys,
+            BaseVector::wrapInDictionary(
+                nullptr, valueIndices, 16, baseWithNulls)),
+        makeMapVector(
+            offsets,
+            mapKeys,
+            BaseVector::wrapInDictionary(nullptr, valueIndices, 16, baseArray)),
+        makeMapVector(
+            offsets,
+            mapKeys,
+            BaseVector::createConstant(INTEGER(), 123, 16, pool_.get())),
+        makeMapVector(
+            offsets,
+            mapKeys,
+            BaseVector::createNullConstant(VARCHAR(), 16, pool_.get())),
+        makeMapVector(
+            offsets, mapKeys, BaseVector::wrapInConstant(16, 1, baseArray)),
+        makeRowVector({
+            makeMapVector(
+                offsets,
+                mapKeys,
+                BaseVector::wrapInDictionary(
+                    nullptr, valueIndices, 16, baseNoNulls)),
+            makeMapVector(
+                offsets,
+                mapKeys,
+                BaseVector::wrapInDictionary(
+                    nullptr, valueIndices, 16, baseWithNulls)),
+            makeMapVector(
+                offsets,
+                mapKeys,
+                BaseVector::wrapInDictionary(
+                    nullptr, valueIndices, 16, baseArray)),
+            makeMapVector(
+                offsets,
+                mapKeys,
+                BaseVector::createConstant(INTEGER(), 123, 16, pool_.get())),
+            makeMapVector(
+                offsets,
+                mapKeys,
+                BaseVector::createNullConstant(VARCHAR(), 16, pool_.get())),
+            makeMapVector(
+                offsets, mapKeys, BaseVector::wrapInConstant(16, 1, baseArray)),
+        }),
+    });
+  }
+
   std::unique_ptr<serializer::presto::PrestoVectorSerde> serde_;
 };
 
@@ -486,16 +607,60 @@ TEST_P(PrestoSerializerTest, intervalDayTime) {
 }
 
 TEST_P(PrestoSerializerTest, unknown) {
+  // Verify vectors of UNKNOWN type. Also verifies a special case where a
+  // vector, not of UNKNOWN type and with all nulls is serialized as an UNKNOWN
+  // type having BYTE_ARRAY encoding.
+  auto testAllNullSerializedAsUnknown = [&](VectorPtr vector,
+                                            TypePtr outputType) {
+    auto rowVector = makeRowVector({vector});
+    auto expected = makeRowVector(
+        {BaseVector::createNullConstant(outputType, vector->size(), pool())});
+    std::ostringstream out;
+    serialize(rowVector, &out, nullptr);
+
+    auto rowType = asRowType(expected->type());
+    auto deserialized = deserialize(rowType, out.str(), nullptr);
+    assertEqualVectors(expected, deserialized);
+
+    if (rowVector->size() < 3) {
+      return;
+    }
+
+    // Split input into 3 batches. Serialize each separately. Then, deserialize
+    // all into one vector.
+    auto splits = split(rowVector, 3);
+    std::vector<std::string> serialized;
+    for (const auto& split : splits) {
+      std::ostringstream oss;
+      serialize(split, &oss, nullptr);
+      serialized.push_back(oss.str());
+    }
+
+    auto paramOptions = getParamSerdeOptions(nullptr);
+    RowVectorPtr result;
+    vector_size_t offset = 0;
+    for (auto i = 0; i < serialized.size(); ++i) {
+      auto byteStream = toByteStream(serialized[i]);
+      serde_->deserialize(
+          &byteStream, pool_.get(), rowType, &result, offset, &paramOptions);
+      offset = result->size();
+    }
+
+    assertEqualVectors(expected, result);
+  };
+
   const vector_size_t size = 123;
   auto constantVector =
-      BaseVector::createNullConstant(UNKNOWN(), 123, pool_.get());
+      BaseVector::createNullConstant(UNKNOWN(), size, pool_.get());
   testRoundTrip(constantVector);
+  testAllNullSerializedAsUnknown(constantVector, BIGINT());
 
   auto flatVector = BaseVector::create(UNKNOWN(), size, pool_.get());
   for (auto i = 0; i < size; i++) {
     flatVector->setNull(i, true);
   }
   testRoundTrip(flatVector);
+  testAllNullSerializedAsUnknown(flatVector, BIGINT());
 }
 
 TEST_P(PrestoSerializerTest, multiPage) {
@@ -589,6 +754,28 @@ TEST_P(PrestoSerializerTest, encodings) {
 // preserved by the PrestoBatchVectorSerializer.
 TEST_P(PrestoSerializerTest, encodingsBatchVectorSerializer) {
   testBatchVectorSerializerRoundTrip(encodingsTestVector());
+}
+
+// Test that array elements have their encodings preserved.
+TEST_P(PrestoSerializerTest, encodingsArrayElements) {
+  testEncodedRoundTrip(encodingsArrayElementsTestVector());
+}
+
+// Test that array elements have their encodings preserved by the
+// PrestoBatchVectorSerializer.
+TEST_P(PrestoSerializerTest, encodingsArrayElementsBatchVectorSerializer) {
+  testBatchVectorSerializerRoundTrip(encodingsArrayElementsTestVector());
+}
+
+// Test that map values have their encodings preserved.
+TEST_P(PrestoSerializerTest, encodingsMapValues) {
+  testEncodedRoundTrip(encodingsMapValuesTestVector());
+}
+
+// Test that map values have their encodings preserved by the
+// PrestoBatchVectorSerializer.
+TEST_P(PrestoSerializerTest, encodingsMapValuesBatchVectorSerializer) {
+  testBatchVectorSerializerRoundTrip(encodingsMapValuesTestVector());
 }
 
 TEST_P(PrestoSerializerTest, scatterEncoded) {
@@ -733,3 +920,76 @@ INSTANTIATE_TEST_SUITE_P(
         common::CompressionKind::CompressionKind_ZSTD,
         common::CompressionKind::CompressionKind_LZ4,
         common::CompressionKind::CompressionKind_GZIP));
+
+TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
+  // Verify that deserializeSingleColumn API can handle all supported types.
+  static const size_t kPrestoPageHeaderBytes = 21;
+  static const size_t kNumOfColumnsSerializedBytes = sizeof(int32_t);
+  static const size_t kBytesToTrim =
+      kPrestoPageHeaderBytes + kNumOfColumnsSerializedBytes;
+
+  auto testRoundTripSingleColumn = [&](const VectorPtr& vector) {
+    auto rowVector = makeRowVector({vector});
+    // Serialize to PrestoPage format.
+    std::ostringstream output;
+    auto arena = std::make_unique<StreamArena>(pool_.get());
+    auto rowType = asRowType(rowVector->type());
+    auto numRows = rowVector->size();
+    auto serializer =
+        serde_->createSerializer(rowType, numRows, arena.get(), nullptr);
+    serializer->append(rowVector);
+    facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+    OStreamOutputStream out(&output, &listener);
+    serializer->flush(&out);
+
+    // Remove the PrestoPage header and Number of columns section from the
+    // serialized data.
+    std::string input = output.str().substr(kBytesToTrim);
+
+    auto byteStream = toByteStream(input);
+    VectorPtr deserialized;
+    serde_->deserializeSingleColumn(
+        &byteStream, pool(), vector->type(), &deserialized, nullptr);
+    assertEqualVectors(vector, deserialized);
+  };
+
+  std::vector<TypePtr> typesToTest = {
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      VARCHAR(),
+      TIMESTAMP(),
+      ROW({VARCHAR(), INTEGER()}),
+      ARRAY(INTEGER()),
+      ARRAY(INTEGER()),
+      MAP(VARCHAR(), INTEGER()),
+      MAP(VARCHAR(), ARRAY(INTEGER())),
+  };
+
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 5;
+  opts.nullRatio = 0.1;
+  opts.dictionaryHasNulls = false;
+  opts.stringVariableLength = true;
+  opts.stringLength = 20;
+  opts.containerVariableLength = false;
+  opts.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
+  opts.containerLength = 10;
+
+  auto seed = 0;
+
+  LOG(ERROR) << "Seed: " << seed;
+  SCOPED_TRACE(fmt::format("seed: {}", seed));
+  VectorFuzzer fuzzer(opts, pool_.get(), seed);
+
+  for (const auto& type : typesToTest) {
+    SCOPED_TRACE(fmt::format("Type: {}", type->toString()));
+    auto data = fuzzer.fuzz(type);
+    testRoundTripSingleColumn(data);
+  }
+}

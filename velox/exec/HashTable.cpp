@@ -20,6 +20,7 @@
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/process/ProcessBase.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/vector/VectorTypeUtils.h"
@@ -857,6 +858,7 @@ bool HashTable<ignoreNullKeys>::canApplyParallelJoinBuild() const {
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::parallelJoinBuild() {
+  process::TraceContext trace("HashTable::parallelJoinBuild");
   TestValue::adjust(
       "facebook::velox::exec::HashTable::parallelJoinBuild", rows_->pool());
   VELOX_CHECK_LE(1 + otherTables_.size(), std::numeric_limits<uint8_t>::max());
@@ -1605,7 +1607,8 @@ bool mayUseValueIds(const BaseHashTable& table) {
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::prepareJoinTable(
     std::vector<std::unique_ptr<BaseHashTable>> tables,
-    folly::Executor* executor) {
+    folly::Executor* executor,
+    int8_t spillInputStartPartitionBit) {
   buildExecutor_ = executor;
   otherTables_.reserve(tables.size());
   for (auto& table : tables) {
@@ -1648,6 +1651,7 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
   } else {
     decideHashMode(0);
   }
+  checkHashBitsOverlap(spillInputStartPartitionBit);
 }
 
 template <bool ignoreNullKeys>
@@ -1980,7 +1984,9 @@ void BaseHashTable::prepareForGroupProbe(
     HashLookup& lookup,
     const RowVectorPtr& input,
     SelectivityVector& rows,
-    bool ignoreNullKeys) {
+    bool ignoreNullKeys,
+    int8_t spillInputStartPartitionBit) {
+  checkHashBitsOverlap(spillInputStartPartitionBit);
   auto& hashers = lookup.hashers;
 
   for (auto& hasher : hashers) {
@@ -2013,7 +2019,8 @@ void BaseHashTable::prepareForGroupProbe(
       decideHashMode(input->size());
       // Do not forward 'ignoreNullKeys' to avoid redundant evaluation of
       // deselectRowsWithNulls.
-      prepareForGroupProbe(lookup, input, rows, false);
+      prepareForGroupProbe(
+          lookup, input, rows, false, spillInputStartPartitionBit);
       return;
     }
   }
