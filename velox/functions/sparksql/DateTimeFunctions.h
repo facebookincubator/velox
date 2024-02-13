@@ -388,39 +388,38 @@ struct DateSubFunction {
 
 template <typename T>
 struct DayOfWeekFunction : public InitSessionTimezone<T> {
-  {
-    VELOX_DEFINE_FUNCTION_TYPES(T);
+  VELOX_DEFINE_FUNCTION_TYPES(T);
 
-    // 1 = Sunday, 2 = Monday, ..., 7 = Saturday
-    FOLLY_ALWAYS_INLINE int32_t getDayOfWeek(const std::tm& time) {
-      return time.tm_wday + 1;
-    }
+  // 1 = Sunday, 2 = Monday, ..., 7 = Saturday
+  FOLLY_ALWAYS_INLINE int32_t getDayOfWeek(const std::tm& time) {
+    return time.tm_wday + 1;
+  }
 
-    FOLLY_ALWAYS_INLINE void call(
-        int32_t & result, const arg_type<Timestamp>& timestamp) {
-      result = getDayOfWeek(getDateTime(timestamp, this->timeZone_));
-    }
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getDayOfWeek(getDateTime(timestamp, this->timeZone_));
+  }
 
-    FOLLY_ALWAYS_INLINE void call(
-        int32_t & result, const arg_type<Date>& date) {
-      result = getDayOfWeek(getDateTime(date));
-    }
-  };
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+    result = getDayOfWeek(getDateTime(date));
+  }
+};
 
-  template <typename T>
-  struct DateDiffFunction {
-    VELOX_DEFINE_FUNCTION_TYPES(T);
+template <typename T>
+struct DateDiffFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
 
-    FOLLY_ALWAYS_INLINE void call(
-        int32_t& result,
-        const arg_type<Date>& endDate,
-        const arg_type<Date>& startDate)
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Date>& endDate,
+      const arg_type<Date>& startDate)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
-        __attribute__((__no_sanitize__("signed-integer-overflow")))
+      __attribute__((__no_sanitize__("signed-integer-overflow")))
 #endif
 #endif
-    {
+  {
     result = endDate - startDate;
   }
 };
