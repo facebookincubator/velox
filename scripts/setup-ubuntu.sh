@@ -116,18 +116,17 @@ function install_conda {
   mkdir -p conda && cd conda
   ARCH=$(uname -m)
   
-  if [ "$ARCH" == "x86_64" ]; then
-    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-  elif [ "$ARCH" == "aarch64" ]; then
-    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh
-  else
+  if [ "$ARCH" != "x86_64" ] && [ "$ARCH" != "aarch64" ]; then
     echo "Unsupported architecture: $ARCH"
     exit 1
   fi
   
+  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh
+  
   MINICONDA_PATH=/opt/miniconda-for-velox
   bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
+
 
 function install_velox_deps {
   run_and_time install_folly
