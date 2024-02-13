@@ -65,9 +65,9 @@ class TimestampDecoder : public DirectDecoder<false> {
         Timestamp timestamp = precision_ == TimestampPrecision::kMillis
             ? util::fromUTCMillis(units)
             : util::fromUTCMicros(units);
-
-        toSkip =
-            visitor.process(*reinterpret_cast<int128_t*>(&timestamp), atEnd);
+        int128_t value;
+        memcpy(&value, &timestamp, sizeof(int128_t));
+        toSkip = visitor.process(value, atEnd);
       } else {
         toSkip = visitor.process(
             IntDecoder<false>::template readInt<int64_t>(), atEnd);
