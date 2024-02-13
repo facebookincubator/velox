@@ -411,7 +411,21 @@ void AggregationFuzzer::go() {
           groupingKeys = generateKeys("g", argNames, argTypes);
         }
 
+        // 40% of times test aggregation fuzzer on empty input vectors.
+        bool testEmptyInput = vectorFuzzer_.coinToss(0.4);
+        auto opts = vectorFuzzer_.getOptions();
+        if (testEmptyInput) {
+          opts.vectorSize = 0;
+          vectorFuzzer_.setOptions(opts);
+        }
         auto input = generateInputData(argNames, argTypes, signature);
+
+        // Reset vectorSize to batch_size after empty input vector is generated.
+        if (testEmptyInput) {
+          opts.vectorSize = FLAGS_batch_size;
+          vectorFuzzer_.setOptions(opts);
+        }
+
         std::shared_ptr<ResultVerifier> customVerifier;
         if (customVerification) {
           customVerifier = customVerificationFunctions_.at(signature.name);
