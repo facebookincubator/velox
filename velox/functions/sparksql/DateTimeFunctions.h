@@ -387,33 +387,40 @@ struct DateSubFunction {
 };
 
 template <typename T>
-struct DayOfWeekFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+struct DayOfWeekFunction : public InitSessionTimezone<T> {
+  {
+    VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  // 1 = Sunday, 2 = Monday, ..., 7 = Saturday
-  FOLLY_ALWAYS_INLINE int32_t getDayOfWeek(const std::tm& time) {
-    return time.tm_wday + 1;
-  }
+    // 1 = Sunday, 2 = Monday, ..., 7 = Saturday
+    FOLLY_ALWAYS_INLINE int32_t getDayOfWeek(const std::tm& time) {
+      return time.tm_wday + 1;
+    }
 
-  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
-    result = getDayOfWeek(getDateTime(date));
-  }
-};
+    FOLLY_ALWAYS_INLINE void call(
+        int32_t & result, const arg_type<Timestamp>& timestamp) {
+      result = getDayOfWeek(getDateTime(timestamp, this->timeZone_));
+    }
 
-template <typename T>
-struct DateDiffFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+    FOLLY_ALWAYS_INLINE void call(
+        int32_t & result, const arg_type<Date>& date) {
+      result = getDayOfWeek(getDateTime(date));
+    }
+  };
 
-  FOLLY_ALWAYS_INLINE void call(
-      int32_t& result,
-      const arg_type<Date>& endDate,
-      const arg_type<Date>& startDate)
+  template <typename T>
+  struct DateDiffFunction {
+    VELOX_DEFINE_FUNCTION_TYPES(T);
+
+    FOLLY_ALWAYS_INLINE void call(
+        int32_t& result,
+        const arg_type<Date>& endDate,
+        const arg_type<Date>& startDate)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
-      __attribute__((__no_sanitize__("signed-integer-overflow")))
+        __attribute__((__no_sanitize__("signed-integer-overflow")))
 #endif
 #endif
-  {
+    {
     result = endDate - startDate;
   }
 };
@@ -496,7 +503,7 @@ struct WeekdayFunction {
 
   // 0 = Monday, 1 = Tuesday, ..., 6 = Sunday
   FOLLY_ALWAYS_INLINE int32_t getWeekday(const std::tm& time) {
-    return (time.tm_wday - 1 + 7) % 7;
+    return (time.tm_wday - 6) % 7;
   }
 
   FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
