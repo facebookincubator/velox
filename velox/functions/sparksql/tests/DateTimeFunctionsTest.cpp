@@ -431,26 +431,23 @@ TEST_F(DateTimeFunctionsTest, dayOfWeekDate) {
     return evaluateOnce<int32_t, int32_t>("dayofweek(c0)", {date}, {DATE()});
   };
 
-    EXPECT_EQ(std::nullopt, dayOfWeek(std::nullopt));
-    EXPECT_EQ(5, dayOfWeek(0));
-    EXPECT_EQ(4, dayOfWeek(-1));
-    EXPECT_EQ(7, dayOfWeek(-40));
-    EXPECT_EQ(5, dayOfWeek(parseDate("2009-07-30")));
-    EXPECT_EQ(1, dayOfWeek(parseDate("2023-08-20")));
-    EXPECT_EQ(2, dayOfWeek(parseDate("2023-08-21")));
-    EXPECT_EQ(3, dayOfWeek(parseDate("2023-08-22")));
-    EXPECT_EQ(4, dayOfWeek(parseDate("2023-08-23")));
-    EXPECT_EQ(5, dayOfWeek(parseDate("2023-08-24")));
-    EXPECT_EQ(6, dayOfWeek(parseDate("2023-08-25")));
-    EXPECT_EQ(7, dayOfWeek(parseDate("2023-08-26")));
-    EXPECT_EQ(1, dayOfWeek(parseDate("2023-08-27")));
-    EXPECT_EQ(6, dayOfWeek(util::fromDateString("2011-05-06")));
-    EXPECT_EQ(
-        4, dayOfWeek(util::fromDateString("2015-04-08")));
-    EXPECT_EQ(
-        7, dayOfWeek(util::fromDateString("2017-05-27")));
-    EXPECT_EQ(
-        6, dayOfWeek(util::fromDateString("1582-10-15")));
+  EXPECT_EQ(std::nullopt, dayOfWeek(std::nullopt));
+  EXPECT_EQ(5, dayOfWeek(0));
+  EXPECT_EQ(4, dayOfWeek(-1));
+  EXPECT_EQ(7, dayOfWeek(-40));
+  EXPECT_EQ(5, dayOfWeek(parseDate("2009-07-30")));
+  EXPECT_EQ(1, dayOfWeek(parseDate("2023-08-20")));
+  EXPECT_EQ(2, dayOfWeek(parseDate("2023-08-21")));
+  EXPECT_EQ(3, dayOfWeek(parseDate("2023-08-22")));
+  EXPECT_EQ(4, dayOfWeek(parseDate("2023-08-23")));
+  EXPECT_EQ(5, dayOfWeek(parseDate("2023-08-24")));
+  EXPECT_EQ(6, dayOfWeek(parseDate("2023-08-25")));
+  EXPECT_EQ(7, dayOfWeek(parseDate("2023-08-26")));
+  EXPECT_EQ(1, dayOfWeek(parseDate("2023-08-27")));
+  EXPECT_EQ(6, dayOfWeek(util::fromDateString("2011-05-06")));
+  EXPECT_EQ(4, dayOfWeek(util::fromDateString("2015-04-08")));
+  EXPECT_EQ(7, dayOfWeek(util::fromDateString("2017-05-27")));
+  EXPECT_EQ(6, dayOfWeek(util::fromDateString("1582-10-15")));
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
