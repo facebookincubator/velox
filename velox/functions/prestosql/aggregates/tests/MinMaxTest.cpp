@@ -799,4 +799,39 @@ TEST_F(MinMaxNTest, incrementalWindow) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+TEST_F(MinMaxNTest, nanOrder) {
+  // Test min(_, n)
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
+       makeNullableFlatVector<double>(
+           {std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::infinity(),
+            -std::numeric_limits<double>::infinity(),
+            1.0,
+            -std::numeric_limits<double>::quiet_NaN()})});
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(std::vector<int64_t>{1}),
+       makeArrayVector<double>(
+           {{-std::numeric_limits<double>::infinity(),
+             1.0,
+             std::numeric_limits<double>::infinity(),
+             std::numeric_limits<double>::quiet_NaN(),
+             std::numeric_limits<double>::quiet_NaN()}})});
+
+  testAggregations({data}, {"c0"}, {"min(c1, 5)"}, {expected});
+
+  // Test max(_, n)
+  expected = makeRowVector(
+      {makeFlatVector<int64_t>(std::vector<int64_t>{1}),
+       makeArrayVector<double>(
+           {{std::numeric_limits<double>::quiet_NaN(),
+             std::numeric_limits<double>::quiet_NaN(),
+             std::numeric_limits<double>::infinity(),
+             1.0,
+             -std::numeric_limits<double>::infinity()}})});
+
+  testAggregations({data}, {"c0"}, {"max(c1, 5)"}, {expected});
+}
+
 } // namespace

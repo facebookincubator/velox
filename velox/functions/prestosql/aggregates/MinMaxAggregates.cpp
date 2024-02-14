@@ -886,18 +886,56 @@ class MinMaxNAggregateBase : public exec::Aggregate {
   DecodedVector decodedIntermediates_;
 };
 
+/// We have to use custom comparators to ensure compatibility with Presto Java.
+/// Currently Presto Java treats (+/- Nan) > Infinity, however C++ treats NaN's
+/// as nulls and moves them to end of the list if its +NaN and beginning of list
+/// if its -NaN.
 template <typename T>
-class MinNAggregate : public MinMaxNAggregateBase<T, std::less<T>> {
- public:
-  explicit MinNAggregate(const TypePtr& resultType)
-      : MinMaxNAggregateBase<T, std::less<T>>(resultType) {}
+struct compareLess {
+  bool operator()(const T& lhs, const T& rhs) {
+    if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
+      if (std::isnan(lhs)) {
+        return false;
+      }
+
+      if (std::isnan(rhs)) {
+        return true;
+      }
+    }
+
+    return lhs < rhs;
+  }
 };
 
 template <typename T>
-class MaxNAggregate : public MinMaxNAggregateBase<T, std::greater<T>> {
+struct compareMore {
+  bool operator()(const T& lhs, const T& rhs) {
+    if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
+      if (std::isnan(lhs)) {
+        return true;
+      }
+
+      if (std::isnan(rhs)) {
+        return false;
+      }
+    }
+
+    return lhs > rhs;
+  }
+};
+
+template <typename T>
+class MinNAggregate : public MinMaxNAggregateBase<T, compareLess<T>> {
+ public:
+  explicit MinNAggregate(const TypePtr& resultType)
+      : MinMaxNAggregateBase<T, compareLess<T>>(resultType) {}
+};
+
+template <typename T>
+class MaxNAggregate : public MinMaxNAggregateBase<T, compareMore<T>> {
  public:
   explicit MaxNAggregate(const TypePtr& resultType)
-      : MinMaxNAggregateBase<T, std::greater<T>>(resultType) {}
+      : MinMaxNAggregateBase<T, compareMore<T>>(resultType) {}
 };
 
 template <
