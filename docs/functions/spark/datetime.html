@@ -130,19 +130,12 @@ for input.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="dayofweek">
-<span class="sig-name descname"><span class="pre">dayofweek</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date/timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dayofweek" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, …, 7 = Saturday).
-We can use <cite>dow</cite> as alias for</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">dayofweek</span><span class="p">(</span><span class="s1">&#39;2009-07-30&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">5</span>
-<span class="n">SELECT</span> <span class="n">dayofweek</span><span class="p">(</span><span class="s1">&#39;2023-08-22 11:23:00.100&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="spark function">
-<dt class="sig sig-object spark" id="dow">
-<span class="sig-name descname"><span class="pre">dow</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dow" title="Permalink to this definition">¶</a></dt>
-<dd><p>This is an alias for <a class="reference internal" href="#dayofweek" title="dayofweek"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">dayofweek()</span></code></a>.</p>
+<span class="sig-name descname"><span class="pre">dayofweek</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dayofweek" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the day of the week for date (1 = Sunday, 2 = Monday, …, 7 = Saturday).</p>
+<blockquote>
+<div><p>SELECT dayofweek(‘2009-07-30’); – 5
+SELECT dayofweek(‘2023-08-22’); – 3</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="spark function">
