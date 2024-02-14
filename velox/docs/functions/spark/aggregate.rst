@@ -116,9 +116,9 @@ General Aggregate Functions
     For all other input types, the result type is BIGINT.
 
     Note:
-    When all input values is NULL, for all input types, the result of sum(x) is NULL.
+    When all input values is NULL, for all input types, the result is NULL.
 
-    For DECIMAL type, when an overflow occurs in the accumulation, it returns null. For REAL and DOUBLE type, it
+    For DECIMAL type, when an overflow occurs in the accumulation, it returns NULL. For REAL and DOUBLE type, it
     returns Infinity. For all other input types, when the sum of input values exceeds its limit, it cycles to the
     overflowed value rather than raising an error.
 
