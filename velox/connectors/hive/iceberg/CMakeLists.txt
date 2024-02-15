@@ -12,10 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_codegen Codegen.cpp)
-if(${VELOX_ENABLE_CODEGEN_SUPPORT})
-  target_link_libraries(velox_codegen velox_experimental_codegen)
-else()
-  target_link_libraries(velox_codegen velox_core velox_exec velox_expression
-                        glog::glog)
-endif()
+add_library(
+  velox_hive_iceberg_splitreader IcebergSplitReader.cpp IcebergSplit.cpp
+                                 PositionalDeleteFileReader.cpp)
+
+target_link_libraries(
+  velox_hive_iceberg_splitreader
+  Folly::folly
+  gflags::gflags
+  glog::glog
+  gtest
+  gtest_main
+  xsimd)
+
+add_subdirectory(tests)
