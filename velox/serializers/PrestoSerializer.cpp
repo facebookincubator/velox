@@ -362,6 +362,14 @@ void read(
     vector_size_t resultOffset,
     bool useLosslessTimestamp) {
   const int32_t size = source->read<int32_t>();
+
+  if (!result->isFlatEncoding()) {
+    SelectivityVector rows(resultOffset + size, false);
+    rows.setValidRange(resultOffset, resultOffset + size, true);
+    rows.updateBounds();
+
+    BaseVector::ensureWritable(rows, type, pool, result);
+  }
   result->resize(resultOffset + size);
 
   auto flatResult = result->asFlatVector<T>();
@@ -394,6 +402,13 @@ void read<StringView>(
     bool useLosslessTimestamp) {
   const int32_t size = source->read<int32_t>();
 
+  if (!result->isFlatEncoding()) {
+    SelectivityVector rows(resultOffset + size, false);
+    rows.setValidRange(resultOffset, resultOffset + size, true);
+    rows.updateBounds();
+
+    BaseVector::ensureWritable(rows, type, pool, result);
+  }
   result->resize(resultOffset + size);
 
   auto flatResult = result->as<FlatVector<StringView>>();
@@ -510,6 +525,13 @@ void readArrayVector(
     VectorPtr& result,
     vector_size_t resultOffset,
     bool useLosslessTimestamp) {
+  if (result->encoding() != VectorEncoding::Simple::ARRAY) {
+    SelectivityVector rows(resultOffset + 1, false);
+    rows.setValidRange(resultOffset, resultOffset + 1, true);
+    rows.updateBounds();
+
+    BaseVector::ensureWritable(rows, type, pool, result);
+  }
   ArrayVector* arrayVector = result->as<ArrayVector>();
 
   const auto resultElementsOffset = arrayVector->elements()->size();
@@ -550,6 +572,13 @@ void readMapVector(
     VectorPtr& result,
     vector_size_t resultOffset,
     bool useLosslessTimestamp) {
+  if (result->encoding() != VectorEncoding::Simple::MAP) {
+    SelectivityVector rows(resultOffset + 1, false);
+    rows.setValidRange(resultOffset, resultOffset + 1, true);
+    rows.updateBounds();
+
+    BaseVector::ensureWritable(rows, type, pool, result);
+  }
   MapVector* mapVector = result->as<MapVector>();
   const auto resultElementsOffset = mapVector->mapKeys()->size();
   std::vector<TypePtr> childTypes = {type->childAt(0), type->childAt(1)};
@@ -938,6 +967,13 @@ void readRowVector(
     VectorPtr& result,
     vector_size_t resultOffset,
     bool useLosslessTimestamp) {
+  if (result->encoding() != VectorEncoding::Simple::ROW) {
+    SelectivityVector rows(resultOffset + 1, false);
+    rows.setValidRange(resultOffset, resultOffset + 1, true);
+    rows.updateBounds();
+
+    BaseVector::ensureWritable(rows, type, pool, result);
+  }
   auto* row = result->as<RowVector>();
   if (isTimestampWithTimeZoneType(type)) {
     readTimestampWithTimeZone(source, pool, row, resultOffset);

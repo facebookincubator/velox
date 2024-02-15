@@ -543,6 +543,51 @@ class PrestoSerializerTest
         alphabetSize / factor);
   }
 
+  void testDeserializeFlatColumnIntoDictionaryVector(
+      const VectorPtr& alphabet,
+      const VectorPtr& flatVector) {
+    auto indices = makeIndices(alphabet->size() * 4, [&alphabet](auto row) {
+      return row % alphabet->size();
+    });
+    auto dictionary = BaseVector::wrapInDictionary(
+        nullptr, indices, alphabet->size() * 4, alphabet);
+
+    auto row = makeRowVector({flatVector});
+    std::ostringstream out;
+    serialize(row, &out, nullptr);
+    auto serialized = out.str();
+
+    auto byteStream = toByteStream(serialized);
+    auto result = makeRowVector({BaseVector::copy(*dictionary)});
+    auto paramOptions = getParamSerdeOptions(nullptr);
+    serde_->deserialize(
+        &byteStream,
+        pool_.get(),
+        asRowType(row->type()),
+        &result,
+        result->size(),
+        &paramOptions);
+
+    ASSERT_EQ(result->size(), dictionary->size() + flatVector->size());
+    ASSERT_EQ(result->childrenSize(), 1);
+    auto resultChild = result->childAt(0);
+
+    for (int i = 0; i < result->size(); ++i) {
+      if (i < dictionary->size()) {
+        ASSERT_TRUE(resultChild->equalValueAt(dictionary.get(), i, i))
+            << "Got unequal values at index " << i
+            << " expected: " << dictionary->toString(i) << " got "
+            << resultChild->toString(i);
+      } else {
+        ASSERT_TRUE(resultChild->equalValueAt(
+            flatVector.get(), i, i - dictionary->size()))
+            << "Got unequal values at index " << i
+            << " expected: " << flatVector->toString(i - dictionary->size())
+            << " got " << resultChild->toString(i);
+      }
+    }
+  }
+
   std::unique_ptr<serializer::presto::PrestoVectorSerde> serde_;
 };
 
@@ -1101,6 +1146,56 @@ TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
     auto data = fuzzer.fuzz(type);
     testRoundTripSingleColumn(data);
   }
+}
+
+TEST_P(PrestoSerializerTest, deserializeFlatColumnIntoDictionaryVector) {
+  // Test a scalar.
+  testDeserializeFlatColumnIntoDictionaryVector(
+      makeFlatVector<int16_t>(4, [](vector_size_t row) { return row; }),
+      makeFlatVector<int16_t>(16, [](vector_size_t row) { return 100 + row; }));
+
+  // Test a string.
+  testDeserializeFlatColumnIntoDictionaryVector(
+      makeFlatVector<std::string>(
+          4, [](vector_size_t row) { return fmt::format("{}", row); }),
+      makeFlatVector<std::string>(
+          16, [](vector_size_t row) { return fmt::format("{}", 100 + row); }));
+
+  // Test an array.
+  testDeserializeFlatColumnIntoDictionaryVector(
+      makeArrayVector<int32_t>(
+          4,
+          [](vector_size_t) { return 2; },
+          [](vector_size_t row) { return row; }),
+      makeArrayVector<int32_t>(
+          16,
+          [](vector_size_t) { return 2; },
+          [](vector_size_t row) { return 100 + row; }));
+
+  // Test a map.
+  testDeserializeFlatColumnIntoDictionaryVector(
+      makeMapVector<int64_t, float>(
+          4,
+          [](vector_size_t) { return 2; },
+          [](vector_size_t row) { return row; },
+          [](vector_size_t row) { return 0 - row; }),
+      makeMapVector<int64_t, float>(
+          16,
+          [](vector_size_t) { return 2; },
+          [](vector_size_t row) { return row + 100; },
+          [](vector_size_t row) { return row + 1000; }));
+
+  // Test a row.
+  testDeserializeFlatColumnIntoDictionaryVector(
+      makeRowVector(
+          {makeFlatVector<bool>(
+               4, [](vector_size_t row) { return row % 2 == 0; }),
+           makeFlatVector<double>(4, [](vector_size_t row) { return row; })}),
+      makeRowVector(
+          {makeFlatVector<bool>(
+               16, [](vector_size_t row) { return row % 2 == 1; }),
+           makeFlatVector<double>(
+               16, [](vector_size_t row) { return row + 1000; })}));
 }
 
 class PrestoSerializerBatchEstimateSizeTest : public testing::Test,
