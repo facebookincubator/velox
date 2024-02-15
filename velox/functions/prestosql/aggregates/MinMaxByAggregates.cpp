@@ -515,7 +515,7 @@ struct MinMaxByNComplexTypeAccumulator {
     compares.setNull(index, false);
     compares.set(index, pair.first);
   }
-}; // namespace
+} // namespace
 
 template <typename C, typename Compare>
 struct ComplexTypeExtractor {
