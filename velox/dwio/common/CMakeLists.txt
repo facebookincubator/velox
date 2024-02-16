@@ -76,4 +76,5 @@ target_link_libraries(
   velox_memory
   Boost::regex
   Folly::folly
-  glog::glog)
+  glog::glog
+  ${Protobuf_LIBRARIES})
