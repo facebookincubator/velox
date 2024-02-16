@@ -586,12 +586,19 @@ simdjson::error_code appendMapKey(
     const std::string_view& value,
     exec::GenericWriter& writer) {
   using T = typename TypeTraits<kind>::NativeType;
-  if constexpr (std::is_same_v<T, void>) {
+  if constexpr (std::is_same_v<T, void> || std::is_same_v<T, UnknownValue>) {
     return simdjson::INCORRECT_TYPE;
   } else {
     SIMDJSON_ASSIGN_OR_RAISE(writer.castTo<T>(), fromString<T>(value));
     return simdjson::SUCCESS;
   }
+}
+
+template <>
+simdjson::error_code appendMapKey<TypeKind::UNKNOWN>(
+    const std::string_view& value,
+    exec::GenericWriter& writer) {
+  VELOX_NYI("UNKNOWN type is not supported!");
 }
 
 template <>

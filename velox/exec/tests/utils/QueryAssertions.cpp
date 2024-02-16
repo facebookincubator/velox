@@ -274,6 +274,14 @@ variant variantAt<TypeKind::TIMESTAMP>(
       dataChunk->GetValue(column, row).GetValue<::duckdb::timestamp_t>()));
 }
 
+template <>
+variant variantAt<TypeKind::UNKNOWN>(
+    ::duckdb::DataChunk* dataChunk,
+    int32_t row,
+    int32_t column) {
+  return variant::null(TypeKind::UNKNOWN);
+}
+
 template <TypeKind kind>
 variant variantAt(const ::duckdb::Value& value) {
   if (value.type() == ::duckdb::LogicalType::INTERVAL) {
@@ -286,6 +294,11 @@ variant variantAt(const ::duckdb::Value& value) {
     using T = typename TypeTraits<kind>::DeepCopiedType;
     return variant(value.GetValue<T>());
   }
+}
+
+template <>
+variant variantAt<TypeKind::UNKNOWN>(const ::duckdb::Value& value) {
+  return variant::null(TypeKind::UNKNOWN);
 }
 
 template <>
