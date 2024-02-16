@@ -144,6 +144,28 @@ are <cite>hdfs://</cite>.</p>
 are <cite>gs://</cite>.</p>
 <p>ABS (Azure Blob Storage) is supported using the
 <a class="reference external" href="https://github.com/Azure/azure-sdk-for-cpp">Azure SDK for C++</a> library. ABS supported schemes are <cite>abfs(s)://</cite>.</p>
+<section id="s3-storage-adapter-using-a-proxy">
+<h4>S3 Storage adapter using a proxy<a class="headerlink" href="#s3-storage-adapter-using-a-proxy" title="Permalink to this heading">¶</a></h4>
+<p>By default, the C++ AWS S3 client does not honor the configuration of the
+environment variables http_proxy, https_proxy, and no_proxy.
+The Java AWS S3 client supports this.
+The environment variables can be specified as lower case, upper case or both.
+In order to enable the use of a proxy the hive connector configuration variable
+<cite>hive.s3.use-proxy-from-env</cite> must be set to <cite>true</cite>. By default, the value
+is <cite>false</cite>.</p>
+<p>This is the behavior when the proxy settings are enabled:</p>
+<ol class="arabic simple">
+<li><p>http_proxy/HTTP_PROXY, https_proxy/HTTPS_PROXY and no_proxy/NO_PROXY
+environment variables are read. If lower case and upper case variables are set
+lower case variables take precendence.</p></li>
+<li><p>The no_proxy/NO_PROXY content is scanned for exact and suffix matches.</p></li>
+<li><p>CIDR expressions provided in no_proxy/NO_PROXY are not supported for matching.</p></li>
+<li><p>IP addresses or domains can be specified.</p></li>
+<li><p>The no_proxy/NO_PROXY list is comma separated.</p></li>
+<li><p>Use . or *. to indicate domain suffix matching, e.g. <cite>.foobar.com</cite> will
+match <cite>test.foobar.com</cite> or <cite>foo.foobar.com</cite>.</p></li>
+</ol>
+</section>
 </section>
 </section>
 </section>
@@ -166,7 +188,10 @@ are <cite>gs://</cite>.</p>
 <li><a class="reference internal" href="#hivedatasink">HiveDataSink</a></li>
 <li><a class="reference internal" href="#hiveconnector">HiveConnector</a></li>
 <li><a class="reference internal" href="#hiveconnectorfactory">HiveConnectorFactory</a></li>
-<li><a class="reference internal" href="#storage-adapters">Storage Adapters</a></li>
+<li><a class="reference internal" href="#storage-adapters">Storage Adapters</a><ul>
+<li><a class="reference internal" href="#s3-storage-adapter-using-a-proxy">S3 Storage adapter using a proxy</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
