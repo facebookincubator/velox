@@ -42,6 +42,17 @@ DEFINE_int64(
 DEFINE_int64(exchange_buffer_mb, 32, "task-wide buffer in remote exchange");
 DEFINE_int32(dict_pct, 0, "Percentage of columns wrapped in dictionary");
 
+DEFINE_int32(
+    string_min_cardinality,
+    100,
+    "Minimum cardinality of strings for string10k");
+DEFINE_int32(
+    string_max_cardinality,
+    10000,
+    "Minimum cardinality of strings for string10k");
+DEFINE_int32(small_string_size, 20, "Size of small string in strinh10k");
+DEFINE_int32(large_string_size, 200, "Size of large string in strinh10k");
+
 /// Benchmarks repartition/exchange with different batch sizes,
 /// numbers of destinations and data type mixes.  Generates a plan
 /// that 1. shuffles a constant input in each of n workers, sending
@@ -103,6 +114,39 @@ class ExchangeBenchmark : public VectorTestBase {
       vectors.push_back(vector);
     }
     return vectors;
+  }
+
+  /// Updates 'vectors' to have 'card' values each, picked from 'totalCard'
+  /// values.
+  void makeCardinality(
+      int32_t card,
+      int32_t maxCardinality,
+      std::vector<VectorPtr>& vectors) {
+    auto alphabet =
+        BaseVector::create(vectors[0]->type(), maxCardinality, pool_.get());
+    int32_t vectorIdx = 0;
+    int32_t elementIdx = 0;
+    int32_t filled = 0;
+    while (filled < maxCardinality) {
+      alphabet->copy(vectors[vectorIdx].get(), filled, elementIdx, 1);
+      ++filled;
+      if (++elementIdx >= vectors[vectorIdx]->size()) {
+        if (++vectorIdx >= vectors.size()) {
+          break;
+        }
+        elementIdx = 0;
+      }
+    }
+    // We have taken maxCardinality first values as the alphabet. Now we fill
+    // windows of 'card' elements with random values from the alphabet, so that
+    // each window has values picked  from a window of card * 1.2 values out of
+    // 'distincts'. The window over 'alphabet' shifts by one  for every window
+    // to be filled. Like this, values repeat but there is the odd new value now
+    // and then.
+  }
+
+  void adjustStringCardinality(std::vector<RowVectorPtr>& vectors) {
+    ;
   }
 
   void run(
@@ -348,6 +392,7 @@ std::vector<RowVectorPtr> deep10k;
 std::vector<RowVectorPtr> flat50;
 std::vector<RowVectorPtr> deep50;
 std::vector<RowVectorPtr> struct1k;
+std::vector<RowVectorPtr> string10k;
 
 Counters flat10kCounters;
 Counters deep10kCounters;
@@ -355,6 +400,7 @@ Counters flat50Counters;
 Counters deep50Counters;
 Counters localFlat10kCounters;
 Counters struct1kCounters;
+Counters string10kCounters;
 
 BENCHMARK(exchangeFlat10k) {
   bm->run(flat10k, FLAGS_width, FLAGS_task_width, flat10kCounters);
@@ -379,6 +425,10 @@ BENCHMARK(exchangeStruct1K) {
 BENCHMARK(localFlat10k) {
   bm->runLocal(
       flat10k, FLAGS_width, FLAGS_num_local_tasks, localFlat10kCounters);
+}
+
+BENCHMARK(exchangeString10k) {
+  bm->run(string10k, FLAGS_width, FLAGS_task_width, string10kCounters);
 }
 
 } // namespace
@@ -433,6 +483,18 @@ int main(int argc, char** argv) {
                    {"d5", DOUBLE()},
                    {"b5", BOOLEAN()},
                    {"a5", ARRAY(TINYINT())}})}})}});
+  auto stringType = ROW(
+      {{"c0", BIGINT()},
+       {"s1", VARCHAR()},
+       {"s2", VARCHAR()},
+       {"s3", VARCHAR()},
+       {"s4", VARCHAR()},
+       {"s5", VARCHAR()},
+       {"s6", VARCHAR()},
+       {"s7", VARCHAR()},
+       {"s8", VARCHAR()},
+       {"s9", VARCHAR()},
+       {"s10", VARCHAR()}});
 
   auto deepType = ROW(
       {{"c0", BIGINT()},
@@ -450,13 +512,15 @@ int main(int argc, char** argv) {
   flat50 = bm->makeRows(flatType, 2000, 50, FLAGS_dict_pct);
   deep50 = bm->makeRows(deepType, 2000, 50, FLAGS_dict_pct);
   struct1k = bm->makeRows(structType, 100, 1000, FLAGS_dict_pct);
+  string10k = bm->makeRows(stringType, 100, 10000, FLAGS_dict_pct);
+  bm->adjustStringCardinality(string10k);
 
   folly::runBenchmarks();
   std::cout << "flat10k: " << flat10kCounters.toString() << std::endl
             << "flat50: " << flat50Counters.toString() << std::endl
             << "deep10k: " << deep10kCounters.toString() << std::endl
             << "deep50: " << deep50Counters.toString() << std::endl
-            << "struct1k: " << struct1kCounters.toString() << std::endl;
-  return 0;
+            << "struct1k: " << struct1kCounters.toString() << std::endl
+            << "string10k: " << string10kCounters.toString() << std::endl;
   return 0;
 }

@@ -87,7 +87,7 @@ HashStringAllocator::~HashStringAllocator() {
   clear();
 }
 
-void HashStringAllocator::clear() {
+void HashStringAllocator::clear(bool) {
   numFree_ = 0;
   freeBytes_ = 0;
   std::fill(std::begin(freeNonEmpty_), std::end(freeNonEmpty_), 0);
