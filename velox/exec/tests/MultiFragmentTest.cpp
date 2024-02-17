@@ -404,8 +404,10 @@ TEST_F(MultiFragmentTest, mergeExchange) {
   }
 
   auto finalSortTaskId = makeTaskId("orderby", tasks.size());
+  core::PlanNodeId mergeExchangeId;
   auto finalSortPlan = PlanBuilder()
                            .mergeExchange(outputType, {"c0"})
+                           .capturePlanNodeId(mergeExchangeId)
                            .partitionedOutput({}, 1)
                            .planNode();
 
@@ -421,6 +423,15 @@ TEST_F(MultiFragmentTest, mergeExchange) {
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
   }
+
+  const auto finalSortStats = toPlanStats(task->taskStats());
+  const auto& mergeExchangeStats = finalSortStats.at(mergeExchangeId);
+
+  EXPECT_EQ(20'000, mergeExchangeStats.inputRows);
+  EXPECT_EQ(20'000, mergeExchangeStats.rawInputRows);
+
+  EXPECT_LT(0, mergeExchangeStats.inputBytes);
+  EXPECT_LT(0, mergeExchangeStats.rawInputBytes);
 }
 
 // Test reordering and dropping columns in PartitionedOutput operator.
@@ -1526,7 +1537,8 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
         maxBytes,
         sequence,
         [&](std::vector<std::unique_ptr<folly::IOBuf>> iobufs,
-            int64_t inSequence) {
+            int64_t inSequence,
+            std::vector<int64_t> /*remainingBytes*/) {
           for (auto& iobuf : iobufs) {
             if (iobuf != nullptr) {
               ++inSequence;
@@ -1715,7 +1727,7 @@ class DataFetcher {
         destination_,
         maxBytes_,
         sequence,
-        [&](auto pages, auto sequence) mutable {
+        [&](auto pages, auto sequence, auto /*remainingBytes*/) mutable {
           const auto nextSequence = sequence + pages.size();
           const bool atEnd = processData(std::move(pages), sequence);
           bufferManager_->acknowledge(taskId_, destination_, nextSequence);
