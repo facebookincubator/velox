@@ -415,10 +415,8 @@ class ConstantVector final : public SimpleVector<T> {
       return;
     }
     BaseVector::nulls_ =
-        AlignedBuffer::allocate<uint64_t>(1, BaseVector::pool());
-    BaseVector::nulls_->setSize(1);
+        allocateNulls(BaseVector::size(), BaseVector::pool(), bits::kNull64);
     BaseVector::rawNulls_ = BaseVector::nulls_->as<uint64_t>();
-    *BaseVector::nulls_->asMutable<uint64_t>() = bits::kNull64;
   }
 
   // 'valueVector_' element 'index_' represents a complex constant

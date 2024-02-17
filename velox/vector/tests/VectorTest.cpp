@@ -1934,6 +1934,11 @@ class VectorCreateConstantTest : public VectorTest {
       ASSERT_TRUE(simpleVector->isNullAt(i));
     }
 
+    const auto* rawNulls = simpleVector->rawNulls();
+    for (auto i = 0; i < simpleVector->size(); i++) {
+      ASSERT_TRUE(bits::isBitNull(rawNulls, i));
+    }
+
     auto expectedStr = fmt::format(
         "[CONSTANT {}: {} elements, null]", type->toString(), size_);
     EXPECT_EQ(expectedStr, baseVector->toString());
@@ -1944,7 +1949,7 @@ class VectorCreateConstantTest : public VectorTest {
 
  protected:
   // Theoretical "size" of the constant vector created.
-  const size_t size_{23};
+  const size_t size_{100};
 };
 
 TEST_F(VectorCreateConstantTest, scalar) {
