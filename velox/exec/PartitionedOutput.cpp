@@ -17,6 +17,7 @@
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 namespace facebook::velox::exec {
 
@@ -30,6 +31,9 @@ BlockingReason Destination::advance(
     bool* atEnd,
     ContinueFuture* future,
     Scratch& scratch) {
+  if (!type_) {
+    type_ = output->type();
+  }
   if (rowIdx_ >= rows_.size()) {
     *atEnd = true;
     return BlockingReason::kNotBlocked;
@@ -55,10 +59,13 @@ BlockingReason Destination::advance(
   if (!current_) {
     current_ = std::make_unique<VectorStreamGroup>(pool_);
     auto rowType = asRowType(output->type());
-    current_->createStreamTree(rowType, rowsInCurrent_);
+    serializer::presto::PrestoVectorSerde::PrestoOptions options;
+    options.compressionKind = common::CompressionKind::CompressionKind_LZ4;
+    current_->createStreamTree(rowType, rowsInCurrent_, &options);
   }
   current_->append(
       output, folly::Range(&rows_[firstRow], rowIdx_ - firstRow), scratch);
+  // record(output, firstRow, rowIdx_);
   // Update output state variable.
   if (rowIdx_ == rows_.size()) {
     *atEnd = true;
@@ -73,7 +80,7 @@ BlockingReason Destination::flush(
     OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     ContinueFuture* future) {
-  if (!current_) {
+  if (!current_ || rowsInCurrent_ == 0) {
     return BlockingReason::kNotBlocked;
   }
 
@@ -86,20 +93,24 @@ BlockingReason Destination::flush(
       std::max<int64_t>(kMinMessageSize, current_->size()));
   const int64_t flushedRows = rowsInCurrent_;
 
+  // raw_vector<vector_size_t> empty;
+  // history_.push_back(History{nullptr, std::move(empty)});
+
   current_->flush(&stream);
-  current_.reset();
 
   const int64_t flushedBytes = stream.tellp();
 
   bytesInCurrent_ = 0;
   rowsInCurrent_ = 0;
   setTargetSizePct();
-
+  auto iobuf = stream.getIOBuf(bufferReleaseFn);
+  // check(iobuf);
+  // current_ = nullptr;
+  current_->clear();
   bool blocked = bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(
-          stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
+      std::make_unique<SerializedPage>(std::move(iobuf), nullptr, flushedRows),
       future);
 
   recordEnqueued_(flushedBytes, flushedRows);
@@ -107,6 +118,122 @@ BlockingReason Destination::flush(
   return blocked ? BlockingReason::kWaitForConsumer
                  : BlockingReason::kNotBlocked;
 }
+
+void Destination::updateStats(Operator* op) {
+  if (current_ && current_->serializer()) {
+    auto serializerStats = current_->serializer()->runtimeStats();
+    auto lockedStats = op->stats().wlock();
+    for (auto& pair : serializerStats) {
+      lockedStats->addRuntimeStat(pair.first, pair.second);
+    }
+  }
+}
+
+void Destination::record(
+    const RowVectorPtr& input,
+    int32_t begin,
+    int32_t end) {
+  raw_vector<vector_size_t> temp;
+  for (auto i = begin; i < end; ++i) {
+    temp.push_back(rows_[i]);
+  }
+
+  auto children = input->children();
+  RowVectorPtr copy = std::make_shared<RowVector>(
+      input->pool(), input->type(), nullptr /*nulls*/, input->size(), children);
+  history_.push_back(History{std::move(copy), std::move(temp)});
+}
+
+void Destination::check(std::unique_ptr<folly::IOBuf>& iobuf) {
+  std::vector<ByteRange> ranges;
+  for (auto& range : *iobuf) {
+    ranges.push_back(ByteRange{
+        reinterpret_cast<uint8_t*>(const_cast<uint8_t*>(range.data())),
+        static_cast<int32_t>(range.size()),
+        0});
+  }
+  ByteInputStream in(std::move(ranges));
+  RowVectorPtr result;
+  getVectorSerde()->deserialize(
+      &in, pool_, std::static_pointer_cast<const RowType>(type_), &result, 0);
+  VELOX_CHECK_LT(0, result->size());
+}
+
+void Destination::replay() {
+  Scratch scratch;
+  auto group = std::make_unique<VectorStreamGroup>(pool_);
+  auto rowType = asRowType(type_);
+  serializer::presto::PrestoVectorSerde::PrestoOptions options;
+  options.compressionKind = common::CompressionKind::CompressionKind_LZ4;
+  group->createStreamTree(rowType, 100, &options);
+  for (auto i = 0; i < history_.size(); ++i) {
+    auto& record = history_[i];
+    if (record.rows == nullptr) {
+      IOBufOutputStream stream(
+          *group->pool(), nullptr, std::max<int64_t>(128, group->size()));
+
+      group->flush(&stream);
+      auto iobuf = stream.getIOBuf(nullptr);
+      check(iobuf);
+    } else {
+      group->append(
+          record.rows,
+          folly::Range(record.indices.data(), record.indices.size()),
+          scratch);
+    }
+  }
+}
+
+bool Destination::chooseAdvance(
+    const RowVectorPtr& output,
+    uint64_t maxBytes,
+    const std::vector<vector_size_t>& sizes,
+    raw_vector<detail::Destination*>& needMoreAdvance,
+    raw_vector<detail::Destination*>& toFlush) {
+  if (rowIdx_ >= rows_.size()) {
+    return false;
+  }
+
+  if (!type_) {
+    type_ = output->type();
+  }
+
+  firstRow_ = rowIdx_;
+  const uint32_t adjustedMaxBytes = (maxBytes * targetSizePct_) / 100;
+  if (bytesInCurrent_ >= adjustedMaxBytes) {
+    toFlush.push_back(this);
+    return true;
+  }
+
+  // Collect rows to serialize.
+  bool shouldFlush = false;
+  while (rowIdx_ < rows_.size() && !shouldFlush) {
+    bytesInCurrent_ += sizes[rowIdx_];
+    ++rowIdx_;
+    ++rowsInCurrent_;
+    shouldFlush =
+        bytesInCurrent_ >= adjustedMaxBytes || rowsInCurrent_ >= targetNumRows_;
+  }
+
+  if (!current_) {
+    current_ = std::make_unique<VectorStreamGroup>(pool_);
+    auto rowType = asRowType(output->type());
+    serializer::presto::PrestoVectorSerde::PrestoOptions options;
+    options.compressionKind = common::CompressionKind::CompressionKind_LZ4;
+
+    current_->createStreamTree(rowType, rowsInCurrent_, &options);
+  }
+
+  if (rowIdx_ < rows_.size()) {
+    needMoreAdvance.push_back(this);
+  }
+
+  if (shouldFlush || (eagerFlush_ && rowsInCurrent_ > 0)) {
+    toFlush.push_back(this);
+  }
+  return true;
+}
+
 } // namespace detail
 
 PartitionedOutput::PartitionedOutput(
@@ -175,6 +302,95 @@ void PartitionedOutput::initializeInput(RowVectorPtr input) {
         input_->size(),
         outputColumns);
   }
+  if (output_->size() > 1 /* && !encodingCandidates_.empty()*/) {
+    rows_.resize(output_->size());
+    rows_.setAll();
+    for (auto i = 0; i < output_->childrenSize(); ++i) {
+      maybeEncode(i);
+    }
+  }
+}
+
+template <TypeKind Kind>
+bool isAllSameFlat(const BaseVector& vector, vector_size_t size) {
+  using T = typename KindToFlatVector<Kind>::WrapperType;
+  auto flat = vector.asUnchecked<FlatVector<T>>();
+  auto rawValues = flat->rawValues();
+  T first = rawValues[0];
+  for (auto i = 1; i < size; ++i) {
+    if (first != rawValues[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void PartitionedOutput::maybeEncode(column_index_t i) {
+  auto& column = BaseVector::loadedVectorShared(output_->childAt(i));
+  if (column->typeKind() == TypeKind::BOOLEAN) {
+    return;
+  }
+  if (column->encoding() == VectorEncoding::Simple::CONSTANT) {
+    return;
+  }
+  // If there is a null, values will either not all be the same or all be null,
+  // which can just as well be serialized as flat.
+  if (column->isNullAt(0)) {
+    return;
+  }
+  // Quick return if first and last are different.
+  if (!column->equalValueAt(column.get(), 0, rows_.end() - 1)) {
+    return;
+  }
+
+  tempDecoded_.decode(*column, rows_);
+  if (!tempDecoded_.isIdentityMapping()) {
+    auto indices = tempDecoded_.indices();
+    auto first = indices[0];
+    for (auto i = 1; i < rows_.end(); ++i) {
+      if (indices[i] != first) {
+        if (tempDecoded_.isNullAt(i)) {
+          return;
+        }
+        if (!tempDecoded_.base()->equalValueAt(
+                tempDecoded_.base(), first, indices[i])) {
+          return;
+        }
+      }
+    }
+    replaceOutputColumn(i, BaseVector::wrapInConstant(rows_.end(), 0, column));
+    return;
+  }
+  if (column->mayHaveNulls()) {
+    return;
+  }
+  if (column->encoding() == VectorEncoding::Simple::FLAT) {
+    if (!VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+            isAllSameFlat, column->typeKind(), *column, rows_.end() - 1)) {
+      return;
+    }
+  } else {
+    for (auto i = 1; i < rows_.end() - 1; ++i) {
+      if (!column->equalValueAt(column.get(), 0, i)) {
+        return;
+      }
+    }
+  }
+
+  replaceOutputColumn(i, BaseVector::wrapInConstant(rows_.end(), 0, column));
+}
+
+void PartitionedOutput::replaceOutputColumn(int32_t i, VectorPtr column) {
+  if (input_ == output_) {
+    auto children = input_->children();
+    output_ = std::make_shared<RowVector>(
+        input_->pool(),
+        outputType_,
+        nullptr /*nulls*/,
+        input_->size(),
+        children);
+  }
+  output_->childAt(i) = column;
 }
 
 void PartitionedOutput::initializeDestinations() {
@@ -289,7 +505,7 @@ void PartitionedOutput::collectNullRows() {
     auto& keyVector = input_->childAt(i);
     if (keyVector->mayHaveNulls()) {
       decodedVectors_[i].decode(*keyVector, rows_);
-      if (auto* rawNulls = decodedVectors_[i].nulls()) {
+      if (auto* rawNulls = decodedVectors_[i].nulls(&rows_)) {
         bits::orWithNegatedBits(
             nullRows_.asMutableRange().bits(), rawNulls, 0, size);
       }
@@ -299,6 +515,8 @@ void PartitionedOutput::collectNullRows() {
 }
 
 RowVectorPtr PartitionedOutput::getOutput() {
+  getOutputColumnwise();
+  return nullptr;
   if (finished_) {
     return nullptr;
   }
@@ -366,6 +584,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
       }
       destination->flush(*bufferManager, bufferReleaseFn_, nullptr);
       destination->setFinished();
+      destination->updateStats(this);
     }
 
     bufferManager->noMoreData(operatorCtx_->task()->taskId());
@@ -379,6 +598,105 @@ RowVectorPtr PartitionedOutput::getOutput() {
 
 bool PartitionedOutput::isFinished() {
   return finished_;
+}
+
+void PartitionedOutput::getOutputColumnwise() {
+  if (finished_) {
+    return;
+  }
+
+  blockingReason_ = BlockingReason::kNotBlocked;
+  detail::Destination* blockedDestination = nullptr;
+  auto bufferManager = bufferManager_.lock();
+  VELOX_CHECK_NOT_NULL(
+      bufferManager, "OutputBufferManager was already destructed");
+
+  // Limit serialized pages to 1MB.
+  static const uint64_t kMaxPageSize = 1 << 20;
+  const uint64_t maxPageSize = std::max<uint64_t>(
+      kMinDestinationSize,
+      std::min<uint64_t>(kMaxPageSize, maxBufferedBytes_ / numDestinations_));
+
+  if (!destinations_.empty()) {
+    for (;;) {
+      toFlush_.clear();
+      toAdvance_.clear();
+      nextToAdvance_.clear();
+      for (auto& destination : destinations_) {
+        if (destination->chooseAdvance(
+                output_, maxPageSize, rowSize_, nextToAdvance_, toFlush_)) {
+          toAdvance_.push_back(destination.get());
+        }
+      }
+      for (auto column = 0;
+           !toAdvance_.empty() && column < output_->childrenSize();
+           ++column) {
+        for (auto i = 0; i < toAdvance_.size(); ++i) {
+          auto destination = toAdvance_[i];
+          destination->streamGroup()->serializer()->appendColumn(
+              output_,
+              column,
+              folly::Range(
+                  destination->rows().data() + destination->firstRow(),
+                  destination->rowIdx() - destination->firstRow()),
+              scratch_);
+        }
+      }
+      for (auto i = 0; i < toAdvance_.size(); ++i) {
+        auto destination = toAdvance_[i];
+        destination->streamGroup()->serializer()->incrementRows(
+            destination->rowIdx() - destination->firstRow());
+      }
+      for (auto* destination : toFlush_) {
+        auto reason = destination->flush(
+            *bufferManager,
+            bufferReleaseFn_,
+            blockedDestination ? nullptr : &future_);
+        if (reason != BlockingReason::kNotBlocked &&
+            blockedDestination == nullptr) {
+          blockingReason_ = reason;
+          blockedDestination = destination;
+        }
+      }
+      if (blockedDestination != nullptr || nextToAdvance_.empty()) {
+        break;
+      }
+    }
+
+    if (blockedDestination) {
+      // If we are going off-thread, we may as well make the output in
+      // progress for other destinations available, unless it is too
+      // small to be worth transfer.
+      for (auto& destination : destinations_) {
+        if (destination->serializedBytes() < kMinDestinationSize) {
+          continue;
+        }
+        destination->flush(*bufferManager, bufferReleaseFn_, nullptr);
+      }
+      return;
+    }
+  }
+  // All of 'output_' is written into the destinations. We are finishing, hence
+  // move all the destinations to the output queue. This will not grow memory
+  // and hence does not need blocking.
+  if (noMoreInput_) {
+    for (auto& destination : destinations_) {
+      if (destination->isFinished()) {
+        continue;
+      }
+      destination->flush(*bufferManager, bufferReleaseFn_, nullptr);
+      destination->setFinished();
+      destination->updateStats(this);
+    }
+
+    bufferManager->noMoreData(operatorCtx_->task()->taskId());
+    destinations_.clear();
+    finished_ = true;
+  }
+  // The input is fully processed, drop the reference to allow reuse.
+  input_ = nullptr;
+  output_ = nullptr;
+  return;
 }
 
 } // namespace facebook::velox::exec

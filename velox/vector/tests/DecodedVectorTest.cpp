@@ -44,16 +44,21 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     }
   }
 
-  void assertNoNulls(DecodedVector& decodedVector) {
+  void assertNoNulls(
+      DecodedVector& decodedVector,
+      const SelectivityVector* rows = nullptr) {
     ASSERT_TRUE(decodedVector.nulls() == nullptr);
     for (auto i = 0; i < decodedVector.size(); ++i) {
       ASSERT_FALSE(decodedVector.isNullAt(i));
     }
   }
 
-  void assertNulls(const VectorPtr& vector, DecodedVector& decodedVector) {
+  void assertNulls(
+      const VectorPtr& vector,
+      DecodedVector& decodedVector,
+      const SelectivityVector* rows = nullptr) {
     SCOPED_TRACE(vector->toString(true));
-    ASSERT_TRUE(decodedVector.nulls() != nullptr);
+    ASSERT_TRUE(decodedVector.nulls(rows) != nullptr);
     for (auto i = 0; i < decodedVector.size(); ++i) {
       ASSERT_EQ(decodedVector.isNullAt(i), vector->isNullAt(i));
       ASSERT_EQ(bits::isBitNull(decodedVector.nulls(), i), vector->isNullAt(i));
@@ -1221,7 +1226,7 @@ TEST_F(DecodedVectorTest, dictionaryOverFlatNulls) {
   auto decodeAndCheckNulls = [&](auto& vector) {
     {
       d.decode(*vector, rows);
-      assertNulls(vector, d);
+      assertNulls(vector, d, &rows);
     }
 
     {
@@ -1233,7 +1238,7 @@ TEST_F(DecodedVectorTest, dictionaryOverFlatNulls) {
   auto decodeAndCheckNotNulls = [&](auto& vector) {
     {
       d.decode(*vector, rows);
-      assertNoNulls(d);
+      assertNoNulls(d, &rows);
     }
 
     {
