@@ -724,10 +724,6 @@ void CastExpr::applyPeeled(
             fromType->asRow(),
             toType);
         break;
-      case TypeKind::UNKNOWN:
-        result =
-            BaseVector::createNullConstant(toType, rows.end(), context.pool());
-        break;
       default: {
         // Handle primitive type conversions.
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
