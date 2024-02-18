@@ -74,7 +74,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Translate the first letter of each word to upper case in the sentence.
 
         SELECT initcap('foo bar'); -- Foo Bar
-        SELECT initcap(FOO BAR"); -- FOO Bar
+        SELECT initcap('FOO BAR'); -- Foo Bar
         SELECT initcap(NULL); -- NULL
 
 .. spark:function:: instr(string, substring) -> integer
