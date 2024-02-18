@@ -62,6 +62,17 @@ class StreamArena {
     return pool_;
   }
 
+  ///
+  virtual void clear(bool /*reservePreviousSize*/ = true) {
+    allocations_.clear();
+    pool_->freeNonContiguous(allocation_);
+    currentRun_ = 0;
+    currentOffset_ = 0;
+    largeAllocations_.clear();
+    size_ = 0;
+    tinyRanges_.clear();
+  }
+
  private:
   memory::MemoryPool* const pool_;
   const memory::MachinePageCount allocationQuantum_{2};
