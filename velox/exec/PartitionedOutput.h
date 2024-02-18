@@ -23,6 +23,12 @@
 namespace facebook::velox::exec {
 
 namespace detail {
+
+struct History {
+  RowVectorPtr rows;
+  raw_vector<vector_size_t> indices;
+};
+
 class Destination {
  public:
   /// @param recordEnqueued Should be called to record each call to
@@ -68,6 +74,13 @@ class Destination {
       ContinueFuture* future,
       Scratch& scratch);
 
+  bool chooseAdvance(
+      const RowVectorPtr& output,
+      uint64_t maxBytes,
+      const std::vector<vector_size_t>& sizes,
+      raw_vector<detail::Destination*>& needMoreAdvance,
+      raw_vector<detail::Destination*>& toFlush);
+
   BlockingReason flush(
       OutputBufferManager& bufferManager,
       const std::function<void()>& bufferReleaseFn,
@@ -85,6 +98,24 @@ class Destination {
     return bytesInCurrent_;
   }
 
+  const auto& rows() const {
+    return rows_;
+  }
+
+  int32_t firstRow() const {
+    return firstRow_;
+  }
+
+  int32_t rowIdx() const {
+    return rowIdx_;
+  }
+
+  auto* streamGroup() const {
+    return current_.get();
+  }
+  /// Adds serialization stats to runtime stats of 'op'.
+  void updateStats(Operator* op);
+
  private:
   // Sets the next target size for flushing. This is called at the
   // start of each batch of output for the destination. The effect is
@@ -95,7 +126,7 @@ class Destination {
   // batch size for each converges.
   void setTargetSizePct() {
     // Flush at 70 to 120% of target row or byte count.
-    targetSizePct_ = 70 + (folly::Random::rand32(rng_) % 50);
+    targetSizePct_ = 100; // 70 + (folly::Random::rand32(rng_) % 50);
     targetNumRows_ = (10'000 * targetSizePct_) / 100;
   }
 
@@ -105,11 +136,22 @@ class Destination {
   const bool eagerFlush_;
   const std::function<void(uint64_t bytes, uint64_t rows)> recordEnqueued_;
 
+  void record(const RowVectorPtr& row, int32_t begin, int32_t end);
+
+  void check(std::unique_ptr<folly::IOBuf>& iobuf);
+
+  void replay();
+
+  TypePtr type_;
+
   // Bytes serialized in 'current_'
   uint64_t bytesInCurrent_{0};
   // Number of rows serialized in 'current_'
   vector_size_t rowsInCurrent_{0};
   raw_vector<vector_size_t> rows_;
+
+  //  Start of row range to serialize.
+  vector_size_t firstRow_{0};
 
   // First index of 'rows_' that is not appended to 'current_'.
   vector_size_t rowIdx_{0};
@@ -130,6 +172,8 @@ class Destination {
 
   // Generator for varying target batch size. Randomly seeded at construction.
   folly::Random::DefaultGenerator rng_;
+
+  std::vector<History> history_;
 };
 } // namespace detail
 
@@ -189,10 +233,18 @@ class PartitionedOutput : public Operator {
 
   void initializeSizeBuffers();
 
+  // Considers data in 'output_->childAt(i)' and replaces it with a constant or
+  void maybeEncode(column_index_t i);
+
+  // Sets the ''th output column to 'column'.
+  void replaceOutputColumn(int32_t i, VectorPtr column);
+
   void estimateRowSizes();
 
   /// Collect all rows with null keys into nullRows_.
   void collectNullRows();
+
+  void getOutputColumnwise();
 
   const std::vector<column_index_t> keyChannels_;
   const int numDestinations_;
@@ -220,6 +272,18 @@ class PartitionedOutput : public Operator {
   std::vector<uint32_t> partitions_;
   std::vector<DecodedVector> decodedVectors_;
   Scratch scratch_;
+  // Index of columns in 'output_' that can be checked for encoding.
+  std::vector<column_index_t> encodingCandidates_;
+  DecodedVector tempDecoded_;
+
+  // Destinations that have at least one row from the current input.
+  raw_vector<detail::Destination*> toAdvance_;
+
+  // Destinations that have data not appended to the serialization.
+  raw_vector<detail::Destination*> nextToAdvance_;
+
+  // Destinations that are ready to flush after adding the current input.
+  raw_vector<detail::Destination*> toFlush_;
 };
 
 } // namespace facebook::velox::exec

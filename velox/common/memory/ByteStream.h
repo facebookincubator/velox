@@ -247,6 +247,11 @@ class ByteOutputStream {
   }
 
   void startWrite(int32_t initialSize) {
+    ranges_.clear();
+    isReversed_ = false;
+    allocatedBytes_ = 0;
+    current_ = nullptr;
+    lastRangeEnd_ = 0;
     extend(initialSize);
   }
 
