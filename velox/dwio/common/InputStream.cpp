@@ -75,7 +75,7 @@ void ReadFileInputStream::read(
   std::string_view data_read = readFile_->pread(offset, length, buf);
   if (stats_) {
     stats_->incRawBytesRead(length);
-    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
+    stats_->incTotalScanTime(getCurrentTimeMicro() - readStartMicros);
   }
 
   DWIO_ENSURE_EQ(
@@ -145,7 +145,7 @@ void ReadFileInputStream::vread(
   readFile_->preadv(regions, iobufs);
   if (stats_) {
     stats_->incRawBytesRead(length);
-    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
+    stats_->incTotalScanTime(getCurrentTimeMicro() - readStartMicros);
   }
 }
 

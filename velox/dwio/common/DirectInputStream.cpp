@@ -145,7 +145,6 @@ void DirectInputStream::loadSync() {
 
   process::TraceContext trace("DirectInputStream::loadSync");
 
-  ioStats_->incRawBytesRead(loadedRegion_.length);
   auto ranges = makeRanges(loadedRegion_.length, data_, tinyData_);
   uint64_t usecs = 0;
   {
@@ -153,8 +152,9 @@ void DirectInputStream::loadSync() {
     input_->read(ranges, loadedRegion_.offset, LogType::FILE);
   }
   ioStats_->read().increment(loadedRegion_.length);
+  ioStats_->incRawBytesRead(loadedRegion_.length);
   ioStats_->queryThreadIoLatency().increment(usecs);
-  ioStats_->incTotalScanTime(usecs * 1'000);
+  ioStats_->incTotalScanTime(usecs);
 }
 
 void DirectInputStream::loadPosition() {
@@ -175,6 +175,7 @@ void DirectInputStream::loadPosition() {
         loadedRegion_.length = load->getData(region_.offset, data_, tinyData_);
       }
       ioStats_->queryThreadIoLatency().increment(usecs);
+      ioStats_->incTotalScanTime(usecs);
     } else {
       // Standalone stream, not part of coalesced load.
       loadedRegion_.offset = 0;

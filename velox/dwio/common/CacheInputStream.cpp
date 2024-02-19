@@ -198,6 +198,7 @@ void CacheInputStream::loadSync(Region region) {
         std::move(wait).via(&exec).wait();
       }
       ioStats_->queryThreadIoLatency().increment(usec);
+      ioStats_->incTotalScanTime(usec);
       continue;
     }
     auto entry = pin_.checkedEntry();
@@ -217,7 +218,7 @@ void CacheInputStream::loadSync(Region region) {
       }
       ioStats_->read().increment(region.length);
       ioStats_->queryThreadIoLatency().increment(usec);
-      ioStats_->incTotalScanTime(usec * 1'000);
+      ioStats_->incTotalScanTime(usec);
       entry->setExclusiveToShared();
     } else {
       // Hit memory cache.
@@ -281,6 +282,7 @@ bool CacheInputStream::loadFromSsd(
   pin_ = std::move(pins[0]);
   ioStats_->ssdRead().increment(region.length);
   ioStats_->queryThreadIoLatency().increment(usec);
+  ioStats_->incTotalScanTime(usec);
   entry.setExclusiveToShared();
   return true;
 }
@@ -306,6 +308,7 @@ void CacheInputStream::loadPosition() {
         }
       }
       ioStats_->queryThreadIoLatency().increment(usec);
+      ioStats_->incTotalScanTime(usec);
     }
     auto loadRegion = region_;
     // Quantize position to previous multiple of 'loadQuantum_'.
