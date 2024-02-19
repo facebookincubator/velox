@@ -51,7 +51,7 @@ class SumAggregationTest : public SumTestBase {
         /*testWithTableScan*/ false);
   }
 
-  // check group by partial agg overflow, and final agg output null
+  // Check group by partial agg overflow, and final agg output null.
   void decimalGroupBySumOverflow(
       const std::vector<std::optional<int128_t>>& input) {
     const TypePtr type = DECIMAL(38, 0);
