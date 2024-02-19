@@ -421,6 +421,13 @@ class ConnectorFactory {
 /// FB_ANONYMOUS_VARIABLE.
 bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory);
 
+/// Adds an alias for an existing factory. Throws if factory with the
+/// connectorName is not already present. Throws if the alias for the
+/// connectorName is already present.
+bool registerConnectorFactoryAlias(
+    const std::string& alias,
+    const std::string& connectorName);
+
 /// Returns a factory for creating connectors with the specified name. Throws if
 /// factory doesn't exist.
 std::shared_ptr<ConnectorFactory> getConnectorFactory(
