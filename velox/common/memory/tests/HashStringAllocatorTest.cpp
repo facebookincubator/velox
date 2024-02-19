@@ -26,6 +26,8 @@ namespace facebook::velox {
 namespace {
 
 using HSA = HashStringAllocator;
+using Header = HSA::Header;
+using AllocationCompactor = HashStringAllocator::AllocationCompactor;
 
 struct Multipart {
   HSA::Position start;
@@ -46,14 +48,14 @@ class HashStringAllocatorTest : public testing::Test {
     rng_.seed(1);
   }
 
-  HSA::Header* allocate(int32_t numBytes) {
+  Header* allocate(int32_t numBytes) {
     auto result = allocator_->allocate(numBytes);
     EXPECT_GE(result->size(), numBytes);
     initializeContents(result);
     return result;
   }
 
-  void initializeContents(HSA::Header* header) {
+  void initializeContents(Header* header) {
     auto sequence = ++sequence_;
     int32_t numWords = header->size() / sizeof(void*);
     void** ptr = reinterpret_cast<void**>(header->begin());
@@ -77,8 +79,118 @@ class HashStringAllocatorTest : public testing::Test {
     data.start = HSA::Position::null();
   }
 
+  // Allocates at least 'bytes' memory and initialize contents that have random
+  // size. The header of created blocks in each allocation are stored in
+  // 'contents_' indexed by allocation index. clear() is called before filling
+  // allocation.
+  void fillAllocation(int64_t bytes) {
+    clear();
+
+    std::vector<Header*> headers;
+    int64_t bytesAllocated{0};
+    int32_t patternIndex{0};
+    while (bytesAllocated < bytes) {
+      const auto size = 16 + (rand32() % (128 - 16));
+      auto header = allocator_->allocate(size);
+      headers.push_back(header);
+      bytesAllocated += header->size();
+    }
+
+    auto& pool = allocator_->allocationPool();
+    const auto allocations = pool.numRanges();
+    std::map<char*, int32_t> rangeStartToAllocId;
+    for (int32_t i = 0; i < allocations; ++i) {
+      rangeStartToAllocId[pool.rangeAt(i).data()] = i;
+    }
+
+    contents_.resize(allocations);
+    allocationDataSize_.resize(allocations, 0);
+    for (const auto header : headers) {
+      auto it =
+          rangeStartToAllocId.upper_bound(reinterpret_cast<char*>(header));
+      --it;
+      const auto allocationId{it->second};
+      auto str = randomString(header->size());
+      memcpy(header->begin(), str.data(), header->size());
+      contents_.at(allocationId).emplace_back(header, std::move(str));
+      allocationDataSize_[allocationId] += header->size() + sizeof(Header);
+    }
+  }
+
+  // Verify all the content that's not been freed are still valid. Takes an map
+  // of moved blocks' header, which is the product of HSA::compact.
+  void verifyContent(folly::F14FastMap<Header*, Header*>& movedBlocks) {
+    for (const auto& vec : contents_) {
+      for (const auto& [header, str] : vec) {
+        if (str.empty()) {
+          continue;
+        }
+        auto currentHeader = header;
+        int32_t offset{0};
+        if (movedBlocks.contains(currentHeader)) {
+          currentHeader = movedBlocks[header];
+        }
+        while (true) {
+          EXPECT_FALSE(currentHeader->isFree());
+          const auto sizeToCompare = std::min<int32_t>(
+              currentHeader->usableSize(), str.size() - offset);
+          EXPECT_GT(sizeToCompare, 0);
+          EXPECT_FALSE(memcmp(
+              currentHeader->begin(), str.data() + offset, sizeToCompare));
+          offset += sizeToCompare;
+          if (offset == str.size()) {
+            break;
+          }
+          EXPECT_TRUE(currentHeader->isContinued());
+          currentHeader = currentHeader->nextContinued();
+        }
+      }
+    }
+  }
+
+  int32_t allocations() const {
+    return allocationDataSize_.size();
+  }
+
+  // Free at least 'bytesToFree' bytes of content at allocation 'allocationId'.
+  // If 'bytesToFree' is 0, free all the content. Returns bytes actually freed.
+  int64_t freeDataAtAllocation(int32_t allocationId, int64_t bytesToFree = 0) {
+    VELOX_CHECK_LT(allocationId, allocations());
+
+    bytesToFree = std::min(bytesToFree, dataSizeAt(allocationId));
+    if (bytesToFree == 0) {
+      bytesToFree = dataSizeAt(allocationId);
+    }
+
+    int64_t freedBytes{0};
+    // TODO: Randomly select block to free.
+    for (auto& [header, str] : contents_.at(allocationId)) {
+      if (str.empty()) {
+        continue;
+      }
+      freedBytes += header->size() + sizeof(Header);
+      allocator_->free(header);
+      str.clear();
+      if (freedBytes >= bytesToFree) {
+        break;
+      }
+    }
+    allocationDataSize_.at(allocationId) -= freedBytes;
+    VELOX_CHECK_GE(dataSizeAt(allocationId), 0);
+    return freedBytes;
+  }
+
+  int64_t dataSizeAt(int32_t allocationId) {
+    VELOX_CHECK_LT(allocationId, allocationDataSize_.size());
+    return allocationDataSize_.at(allocationId);
+  }
+
   uint32_t rand32() {
     return folly::Random::rand32(rng_);
+  }
+
+  double randDouble01() {
+    return folly::Random::randDouble01(rng_);
   }
 
   std::string randomString(int32_t size = 0) {
@@ -93,10 +205,20 @@ class HashStringAllocatorTest : public testing::Test {
     return result;
   }
 
+  // Free all the allocated data.
+  void clear() {
+    contents_.clear();
+    allocationDataSize_.clear();
+    allocator_->clear();
+  }
+
   std::shared_ptr<memory::MemoryPool> pool_;
   std::unique_ptr<HashStringAllocator> allocator_;
   int32_t sequence_ = 0;
   folly::Random::DefaultGenerator rng_;
+  // Total size of non-free blocks in allocations(size of Header is included).
+  std::vector<int64_t> allocationDataSize_;
+  std::vector<std::vector<std::pair<Header*, std::string>>> contents_;
 };
 
 TEST_F(HashStringAllocatorTest, headerToString) {
@@ -136,7 +258,7 @@ TEST_F(HashStringAllocatorTest, headerToString) {
 
 TEST_F(HashStringAllocatorTest, allocate) {
   for (auto count = 0; count < 3; ++count) {
-    std::vector<HSA::Header*> headers;
+    std::vector<Header*> headers;
     for (auto i = 0; i < 10'000; ++i) {
       headers.push_back(allocate((i % 10) * 10));
     }
@@ -651,6 +773,143 @@ TEST_F(HashStringAllocatorTest, storeStringFast) {
   ASSERT_NE(sv.data(), s.data());
   ASSERT_EQ(sv, StringView(s));
   allocator_->checkConsistency();
+}
+
+TEST_F(HashStringAllocatorTest, compact) {
+  static const auto kHugePageSize = memory::AllocationTraits::kHugePageSize;
+  static const auto kPageSize = memory::AllocationTraits::kPageSize;
+  static const auto smallAllocation =
+      memory::AllocationPool::kMinPages * kPageSize;
+  static const auto largeAllocation = kHugePageSize * 16;
+
+  allocator_->allowSplittingContiguous();
+
+  // One emtpy allocation should be reclaimable.
+  {
+    fillAllocation(smallAllocation);
+    EXPECT_EQ(allocations(), 2);
+    EXPECT_EQ(allocator_->estimateReclaimableSize(), 0);
+    {
+      auto result = allocator_->compact();
+      EXPECT_EQ(result.first, 0);
+    }
+
+    freeDataAtAllocation(0);
+    auto [freed, movedBlocks] = allocator_->compact();
+    EXPECT_EQ(freed, smallAllocation);
+    verifyContent(movedBlocks);
+  }
+
+  // Two half-full allocations with the same size should have one reclaimable
+  // allocation.
+  {
+    fillAllocation(2 * smallAllocation);
+    EXPECT_EQ(allocations(), 3);
+    EXPECT_EQ(allocator_->estimateReclaimableSize(), 0);
+
+    const auto allocSize{dataSizeAt(0)};
+    freeDataAtAllocation(0, allocSize / 2);
+    EXPECT_EQ(allocator_->estimateReclaimableSize(), 0);
+
+    freeDataAtAllocation(1, allocSize / 2 + 100);
+    EXPECT_EQ(allocator_->estimateReclaimableSize(), smallAllocation);
+    auto [freed, movedBlocks] = allocator_->compact();
+    EXPECT_EQ(freed, smallAllocation);
+    verifyContent(movedBlocks);
+  }
+
+  // One large allocation with four small allocations, and small allocations
+  // have the free space to accommodate large allocation's data.
+  {
+    fillAllocation(4 * smallAllocation + largeAllocation);
+    EXPECT_EQ(allocations(), 6);
+    EXPECT_EQ(allocator_->estimateReclaimableSize(), 0);
+
+    int64_t sum{0};
+    for (auto i = 0; i < 4; ++i) {
+      sum += freeDataAtAllocation(i, dataSizeAt(i) - 1000);
+    }
+    EXPECT_EQ(allocator_->estimateReclaimableSize(), 3 * smallAllocation);
+    // Make data remaining in large allocation can fit into small allocations.
+    freeDataAtAllocation(
+        4, dataSizeAt(4) - sum + 4 * AllocationCompactor::kReservationPerArena);
+    EXPECT_EQ(allocator_->estimateReclaimableSize(), largeAllocation);
+    auto [freed, movedBlocks] = allocator_->compact();
+    EXPECT_EQ(freed, largeAllocation);
+    verifyContent(movedBlocks);
+  }
+
+  // One large allocation with four small allocations, and small allocations
+  // don't have the free space to accommodate large allocation's data.
+  {
+    fillAllocation(4 * smallAllocation + largeAllocation);
+    EXPECT_EQ(allocations(), 6);
+    EXPECT_EQ(allocator_->estimateReclaimableSize(), 0);
+
+    int64_t sum{0};
+    for (auto i = 0; i < 4; ++i) {
+      sum += freeDataAtAllocation(i, dataSizeAt(i) - 1000);
+    }
+    EXPECT_EQ(allocator_->estimateReclaimableSize(), 3 * smallAllocation);
+
+    // Make data remaining in large allocation to be a little bit larger than
+    // free space in small allocations.
+    freeDataAtAllocation(4, dataSizeAt(4) - (sum + 4 * 100));
+    EXPECT_EQ(allocator_->estimateReclaimableSize(), 4 * smallAllocation);
+
+    auto [freed, movedBlocks] = allocator_->compact();
+    EXPECT_EQ(freed, 4 * smallAllocation);
+    verifyContent(movedBlocks);
+  }
+
+  // TODO: move to HSA, rename to reservationPerArena
+  const int64_t reserve{
+      simd::kPadding + AllocationCompactor::kReservationPerArena};
+
+  // Allocate data with 3 allocations of 512MB, randomly remove data from each
+  // allocation and verify the estimated reclaimable size.
+  for (auto round = 0; round < 2; ++round) {
+    fillAllocation(1LL << 31);
+    EXPECT_EQ(allocations(), 12);
+
+    auto& pool = allocator_->allocationPool();
+
+    const auto allocations{pool.numRanges() - 1};
+    std::vector<std::pair<int64_t, int64_t>> sizeAndAvailable;
+    sizeAndAvailable.reserve(allocations);
+
+    int64_t totalAvailable{0};
+    for (auto i = 0; i < allocations; ++i) {
+      const int64_t size = pool.rangeAt(i).size();
+      sizeAndAvailable.emplace_back(
+          size, size - std::max<int64_t>(1, size / kHugePageSize) * reserve);
+      totalAvailable += sizeAndAvailable.back().second;
+    }
+
+    for (auto i = 0; i < allocations; ++i) {
+      freeDataAtAllocation(i, dataSizeAt(i) * randDouble01());
+    }
+
+    int64_t dataSum{0};
+    for (auto i = 0; i < allocations; ++i) {
+      dataSum += dataSizeAt(i);
+    }
+
+    std::sort(sizeAndAvailable.begin(), sizeAndAvailable.end());
+
+    int64_t expectedReclaimable{0};
+    for (int32_t i = allocations - 1; i >= 0; --i) {
+      if (totalAvailable - sizeAndAvailable[i].second >= dataSum) {
+        totalAvailable -= sizeAndAvailable[i].second;
+        expectedReclaimable += sizeAndAvailable[i].first;
+      }
+    }
+
+    EXPECT_EQ(expectedReclaimable, allocator_->estimateReclaimableSize());
+    auto [freed, movedBlocks] = allocator_->compact();
+    EXPECT_EQ(freed, expectedReclaimable);
+    verifyContent(movedBlocks);
+  }
 }
 
 } // namespace
