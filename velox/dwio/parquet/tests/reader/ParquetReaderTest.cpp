@@ -918,3 +918,41 @@ TEST_F(ParquetReaderTest, testEmptyRowGroups) {
 
   assertReadWithReaderAndExpected(fileSchema, *rowReader, expected, *leafPool_);
 }
+
+TEST_F(ParquetReaderTest, structSkipRowGroup) {
+  // single_row_struct.parquet has 2 columns (s.a: INT64 and s.b: INT64).
+  // It has 1 row.
+  // It has one row_group.
+  // Following is the data in the file
+  // +------------------+
+  // | s                |
+  // |------------------|
+  // | {'a': 0, 'b': 1} |
+  // +------------------+
+
+  RuntimeStatistics runtimeStats_ = dwio::common::RuntimeStatistics();
+  const std::string upper(getExampleFilePath("single_row_struct.parquet"));
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  readerOptions.setFileColumnNamesReadAsLowerCase(true);
+  RowReaderOptions rowReaderOpts;
+  auto rowType = ROW({"s.a"}, {BIGINT()});
+
+  // Reader without filter
+  auto readerWithoutFilter = createReader(upper, readerOptions);
+  auto scanSpec = makeScanSpec(rowType);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReaderWithoutFilter = readerWithoutFilter->createRowReader(rowReaderOpts);
+  rowReaderWithoutFilter->updateRuntimeStats(runtimeStats_);
+  EXPECT_EQ(runtimeStats_.skippedStrides, 0);
+
+  // Reader with filter
+  auto readerWithFilter = createReader(upper, readerOptions);
+  auto filter = exec::equal(1);
+  scanSpec->getOrCreateChild(facebook::velox::common::Subfield("s.a"))
+      ->setFilter(std::move(filter));
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReaderWithFilter = readerWithFilter->createRowReader(rowReaderOpts);
+  rowReaderWithFilter->updateRuntimeStats(runtimeStats_);
+  EXPECT_EQ(runtimeStats_.skippedStrides, 1);
+}
