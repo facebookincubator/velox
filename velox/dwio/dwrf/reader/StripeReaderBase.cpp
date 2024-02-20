@@ -20,6 +20,19 @@ namespace facebook::velox::dwrf {
 
 using dwio::common::LogType;
 
+void StripeReaderBase::close() {
+  if (stripeInput_) {
+    stripeInput_->close();
+  }
+  auto it = prefetchedStripes_.rlock()->begin();
+  while (it != prefetchedStripes_.rlock()->end()) {
+    if (it->second) {
+      it->second->stripeInput->close();
+    }
+    it++;
+  }
+}
+
 // preload is not considered or mutated if stripe has already been fetched. e.g.
 // if fetchStripe(0, false) is called, result will be cached and fetchStripe(0,
 // true) will reuse the result without considering the new preload directive

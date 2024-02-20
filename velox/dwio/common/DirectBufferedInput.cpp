@@ -29,6 +29,26 @@ using cache::CoalescedLoad;
 using cache::ScanTracker;
 using cache::TrackingId;
 
+DirectBufferedInput::~DirectBufferedInput() {
+  VELOX_USER_CHECK(
+      coalescedLoads_.empty(), "Coalesced loads should be cleared.");
+}
+
+void DirectBufferedInput::close() {
+  requests_.clear();
+  for (auto& load : coalescedLoads_) {
+    if (load->state() == cache::CoalescedLoad::State::kLoading) {
+      folly::SemiFuture<bool> waitFuture(false);
+      if (!load->loadOrFuture(&waitFuture)) {
+        auto& exec = folly::QueuedImmediateExecutor::instance();
+        std::move(waitFuture).via(&exec).wait();
+      }
+    }
+    load->cancel();
+  }
+  coalescedLoads_.clear();
+}
+
 std::unique_ptr<SeekableInputStream> DirectBufferedInput::enqueue(
     Region region,
     const StreamIdentifier* sid = nullptr) {

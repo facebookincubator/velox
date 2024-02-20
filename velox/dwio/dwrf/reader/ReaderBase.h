@@ -231,6 +231,13 @@ class ReaderBase {
     return postScript_->format();
   }
 
+  void close() {
+    if (input_) {
+      input_->close();
+      input_.reset();
+    }
+  }
+
  private:
   static std::shared_ptr<const Type> convertType(
       const FooterWrapper& footer,

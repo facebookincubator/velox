@@ -40,6 +40,8 @@ class DwrfRowReader : public StrideIndexProvider,
 
   ~DwrfRowReader() override = default;
 
+  void close() override;
+
   // Select the columns from the options object
   const dwio::common::ColumnSelector& getColumnSelector() const {
     return *columnSelector_;
@@ -236,6 +238,8 @@ class DwrfReader : public dwio::common::Reader {
       std::unique_ptr<dwio::common::BufferedInput> input);
 
   ~DwrfReader() override = default;
+
+  void close() override;
 
   common::CompressionKind getCompression() const {
     return readerBase_->getCompressionKind();

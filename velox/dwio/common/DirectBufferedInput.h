@@ -124,11 +124,9 @@ class DirectBufferedInput : public BufferedInput {
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
 
-  ~DirectBufferedInput() override {
-    for (auto& load : coalescedLoads_) {
-      load->cancel();
-    }
-  }
+  ~DirectBufferedInput() override;
+
+  void close() override;
 
   std::unique_ptr<SeekableInputStream> enqueue(
       velox::common::Region region,

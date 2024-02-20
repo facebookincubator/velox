@@ -44,7 +44,7 @@ class StripeReaderBase {
     DWIO_ENSURE(stripeFooter->GetArena());
   }
 
-  virtual ~StripeReaderBase() = default;
+  void close();
 
   // Set state to be ready for next stripe, loading stripe information if not
   // prefetched

@@ -114,6 +114,10 @@ DwrfRowReader::DwrfRowReader(
       std::vector<FetchStatus>(numberOfStripes, FetchStatus::NOT_STARTED));
 }
 
+void DwrfRowReader::close() {
+  StripeReaderBase::close();
+}
+
 uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
   // Empty file
   if (isEmptyFile()) {
@@ -1110,6 +1114,13 @@ std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(
     rowReader->startNextStripe();
   }
   return rowReader;
+}
+
+void DwrfReader::close() {
+  if (readerBase_) {
+    readerBase_->close();
+    readerBase_.reset();
+  }
 }
 
 std::unique_ptr<DwrfReader> DwrfReader::create(

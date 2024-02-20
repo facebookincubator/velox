@@ -37,6 +37,26 @@ using cache::SsdPin;
 using cache::TrackingId;
 using memory::MemoryAllocator;
 
+CachedBufferedInput::~CachedBufferedInput() {
+  VELOX_USER_CHECK(
+      allCoalescedLoads_.empty(), "Coalesced loads should be cleared.");
+}
+
+void CachedBufferedInput::close() {
+  requests_.clear();
+  for (auto& load : allCoalescedLoads_) {
+    if (load->state() == cache::CoalescedLoad::State::kLoading) {
+      folly::SemiFuture<bool> waitFuture(false);
+      if (!load->loadOrFuture(&waitFuture)) {
+        auto& exec = folly::QueuedImmediateExecutor::instance();
+        std::move(waitFuture).via(&exec).wait();
+      }
+    }
+    load->cancel();
+  }
+  allCoalescedLoads_.clear();
+}
+
 std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
     Region region,
     const StreamIdentifier* si = nullptr) {

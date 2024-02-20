@@ -45,6 +45,8 @@ class RowReader {
 
   virtual ~RowReader() = default;
 
+  virtual void close() {}
+
   /**
    * Fetch the next portion of rows.
    * @param size Max number of rows to read
@@ -196,6 +198,9 @@ class Reader {
    */
   virtual std::unique_ptr<RowReader> createRowReader(
       const RowReaderOptions& options = {}) const = 0;
+
+  /// Invoked on finish to clean up the resource held by this reader.
+  virtual void close() = 0;
 };
 
 } // namespace facebook::velox::dwio::common

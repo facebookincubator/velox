@@ -215,6 +215,12 @@ HiveDataSource::HiveDataSource(
   ioStats_ = std::make_shared<io::IoStatistics>();
 }
 
+void HiveDataSource::close() {
+  if (splitReader_) {
+    splitReader_->close();
+  }
+}
+
 std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
   return SplitReader::create(
       split_,
@@ -239,6 +245,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VLOG(1) << "Adding split " << split_->toString();
 
   if (splitReader_) {
+    splitReader_->close();
     splitReader_.reset();
   }
 
@@ -386,15 +393,24 @@ void HiveDataSource::setFromDataSource(
   if (source->splitReader_ && source->splitReader_->emptySplit()) {
     runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
     runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
+    if (sourceUnique) {
+      sourceUnique->close();
+    }
     return;
   }
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
   scanSpec_ = std::move(source->scanSpec_);
+  if (splitReader_) {
+    splitReader_->close();
+  }
   splitReader_ = std::move(source->splitReader_);
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
   source->ioStats_->merge(*ioStats_);
   ioStats_ = std::move(source->ioStats_);
+  if (sourceUnique) {
+    sourceUnique->close();
+  }
 }
 
 int64_t HiveDataSource::estimatedRowSize() {
