@@ -18,6 +18,7 @@ add_library(
   ArraySort.cpp
   Bitwise.cpp
   Comparisons.cpp
+  DateTimeFunctions.cpp
   DecimalArithmetic.cpp
   DecimalCompare.cpp
   Hash.cpp

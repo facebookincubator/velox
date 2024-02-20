@@ -139,6 +139,22 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT quarter('2009-07-30'); -- 3
 
+.. spark:function:: make_timestamp(year, month, day, hour, min, sec[, timezone]) -> timestamp
+
+    Create timestamp from ``year``, ``month``, ``day``, ``hour``, ``min`` and ``sec`` fields.
+    If the ``timezone`` parameter is provided,
+    the function interprets the input time components as being in the specified ``timezone``.
+    Otherwise the function assumes the inputs are in the session's configured time zone.
+    Requires ``session_timezone`` to be set, or an exceptions will be thrown.
+
+    Returns the timestamp adjusted to the GMT time zone. ::
+
+        SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887); -- 2014-12-28 06:30:45.887
+        SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887, 'CET'); -- 2014-12-28 05:30:45.887
+        SELECT make_timestamp(2019, 6, 30, 23, 59, 60); -- 2019-07-01 00:00:00
+        SELECT make_timestamp(2019, 6, 30, 23, 59, 1); -- 2019-06-30 23:59:01
+        SELECT make_timestamp(null, 7, 22, 15, 30, 0); -- NULL
+
 .. spark:function:: month(date) -> integer
 
     Returns the month of ``date``. ::
