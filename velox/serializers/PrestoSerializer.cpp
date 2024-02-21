@@ -1445,8 +1445,8 @@ class VectorStream {
       const SerdeOpts& opts)
       : type_(type),
         encoding_(getEncoding(encoding, vector)),
-        useLosslessTimestamp_(opts.useLosslessTimestamp),
-        nullsFirst_(opts.nullsFirst),
+        opts_(opts),
+        streamArena_(streamArena),
         nulls_(streamArena, true, true),
         lengths_(streamArena),
         values_(streamArena),
@@ -1471,6 +1471,15 @@ class VectorStream {
           return;
         }
         case VectorEncoding::Simple::DICTIONARY: {
+          // For fix width types that are smaller than int32_t (the type for
+          // indexes into the dictionary) dictionary encoding increases the
+          // size, so we should flatten it.
+          if (type->isFixedWidth() &&
+              type->cppSizeInBytes() <= sizeof(int32_t)) {
+            encoding_ = std::nullopt;
+            break;
+          }
+
           initializeHeader(kDictionary, *streamArena);
           values_.startWrite(initialNumRows * 4);
           isDictionaryStream_ = true;
@@ -1488,46 +1497,24 @@ class VectorStream {
       }
     }
 
-    initializeHeader(typeToEncodingName(type), *streamArena);
-    nulls_.startWrite(1 + (initialNumRows / 8));
+    initializeFlatStream(vector, initialNumRows);
+  }
 
-    switch (type_->kind()) {
-      case TypeKind::ROW:
-        if (isTimestampWithTimeZoneType(type_)) {
-          values_.startWrite(initialNumRows * 4);
-          break;
-        }
-        [[fallthrough]];
-      case TypeKind::ARRAY:
-        [[fallthrough]];
-      case TypeKind::MAP:
-        hasLengths_ = true;
-        lengths_.startWrite(initialNumRows * sizeof(vector_size_t));
-        children_.resize(type_->size());
-        for (int32_t i = 0; i < type_->size(); ++i) {
-          children_[i] = std::make_unique<VectorStream>(
-              type_->childAt(i),
-              std::nullopt,
-              getChildAt(vector, i),
-              streamArena,
-              initialNumRows,
-              opts);
-        }
-        // The first element in the offsets in the wire format is always 0 for
-        // nested types.
-        lengths_.appendOne<int32_t>(0);
-        break;
-      case TypeKind::VARCHAR:
-        [[fallthrough]];
-      case TypeKind::VARBINARY:
-        hasLengths_ = true;
-        lengths_.startWrite(initialNumRows * sizeof(vector_size_t));
-        values_.startWrite(initialNumRows * 10);
-        break;
-      default:
-        values_.startWrite(initialNumRows * 4);
-        break;
+  void flattenStream(const VectorPtr& vector, int32_t initialNumRows) {
+    VELOX_CHECK_EQ(nullCount_, 0);
+    VELOX_CHECK_EQ(nonNullCount_, 0);
+    VELOX_CHECK_EQ(totalLength_, 0);
+
+    if (!isConstantStream_ && !isDictionaryStream_) {
+      return;
     }
+
+    encoding_ = std::nullopt;
+    isConstantStream_ = false;
+    isDictionaryStream_ = false;
+    children_.clear();
+
+    initializeFlatStream(vector, initialNumRows);
   }
 
   std::optional<VectorEncoding::Simple> getEncoding(
@@ -1727,7 +1714,7 @@ class VectorStream {
           return;
         }
 
-        if (nullsFirst_) {
+        if (opts_.nullsFirst) {
           writeInt32(out, nullCount_ + nonNullCount_);
           flushNulls(out);
         }
@@ -1735,7 +1722,7 @@ class VectorStream {
         for (auto& child : children_) {
           child->flush(out);
         }
-        if (!nullsFirst_) {
+        if (!opts_.nullsFirst) {
           writeInt32(out, nullCount_ + nonNullCount_);
           lengths_.flush(out);
           flushNulls(out);
@@ -1793,13 +1780,62 @@ class VectorStream {
   }
 
  private:
+  void initializeFlatStream(
+      std::optional<VectorPtr> vector,
+      vector_size_t initialNumRows) {
+    initializeHeader(typeToEncodingName(type_), *streamArena_);
+    nulls_.startWrite(1 + (initialNumRows / 8));
+
+    switch (type_->kind()) {
+      case TypeKind::ROW:
+        if (isTimestampWithTimeZoneType(type_)) {
+          if (values_.ranges().empty()) {
+            values_.startWrite(initialNumRows * 4);
+          }
+          break;
+        }
+        [[fallthrough]];
+      case TypeKind::ARRAY:
+        [[fallthrough]];
+      case TypeKind::MAP:
+        hasLengths_ = true;
+        lengths_.startWrite(initialNumRows * sizeof(vector_size_t));
+        children_.resize(type_->size());
+        for (int32_t i = 0; i < type_->size(); ++i) {
+          children_[i] = std::make_unique<VectorStream>(
+              type_->childAt(i),
+              std::nullopt,
+              getChildAt(vector, i),
+              streamArena_,
+              initialNumRows,
+              opts_);
+        }
+        // The first element in the offsets in the wire format is always 0 for
+        // nested types.
+        lengths_.appendOne<int32_t>(0);
+        break;
+      case TypeKind::VARCHAR:
+        [[fallthrough]];
+      case TypeKind::VARBINARY:
+        hasLengths_ = true;
+        lengths_.startWrite(initialNumRows * sizeof(vector_size_t));
+        if (values_.ranges().empty()) {
+          values_.startWrite(initialNumRows * 10);
+        }
+        break;
+      default:
+        if (values_.ranges().empty()) {
+          values_.startWrite(initialNumRows * 4);
+        }
+        break;
+    }
+  }
+
   const TypePtr type_;
-  const std::optional<VectorEncoding::Simple> encoding_;
-  /// Indicates whether to serialize timestamps with nanosecond precision.
-  /// If false, they are serialized with millisecond precision which is
-  /// compatible with presto.
-  const bool useLosslessTimestamp_;
-  const bool nullsFirst_;
+  std::optional<VectorEncoding::Simple> encoding_;
+  const SerdeOpts opts_;
+
+  StreamArena* streamArena_;
   int32_t nonNullCount_{0};
   int32_t nullCount_{0};
   int32_t totalLength_{0};
@@ -1825,7 +1861,7 @@ inline void VectorStream::append(folly::Range<const StringView*> values) {
 
 template <>
 void VectorStream::append(folly::Range<const Timestamp*> values) {
-  if (useLosslessTimestamp_) {
+  if (opts_.useLosslessTimestamp) {
     for (auto& value : values) {
       appendOne(value.getSeconds());
       appendOne(value.getNanos());
@@ -1869,11 +1905,11 @@ void VectorStream::append(folly::Range<const int128_t*> values) {
 
 template <TypeKind kind>
 void serializeFlatVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream) {
   using T = typename TypeTraits<kind>::NativeType;
-  auto* flatVector = dynamic_cast<const FlatVector<T>*>(vector);
+  auto* flatVector = vector->as<FlatVector<T>>();
   auto* rawValues = flatVector->rawValues();
   if (!flatVector->mayHaveNulls()) {
     for (auto& range : ranges) {
@@ -1918,10 +1954,10 @@ void serializeFlatVector(
 
 template <>
 void serializeFlatVector<TypeKind::BOOLEAN>(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream) {
-  auto flatVector = dynamic_cast<const FlatVector<bool>*>(vector);
+  auto flatVector = vector->as<FlatVector<bool>>();
   if (!vector->mayHaveNulls()) {
     for (int32_t i = 0; i < ranges.size(); ++i) {
       stream->appendNonNull(ranges[i].size);
@@ -1946,25 +1982,25 @@ void serializeFlatVector<TypeKind::BOOLEAN>(
 }
 
 void serializeColumn(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream,
     Scratch& scratch);
 
 void serializeColumn(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch);
 
 void serializeWrapped(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream,
     Scratch& scratch) {
   std::vector<IndexRange> newRanges;
   const bool mayHaveNulls = vector->mayHaveNulls();
-  const BaseVector* wrapped = vector->wrappedVector();
+  const VectorPtr& wrapped = BaseVector::wrappedVectorShared(vector);
   for (int32_t i = 0; i < ranges.size(); ++i) {
     const auto end = ranges[i].begin + ranges[i].size;
     for (int32_t offset = ranges[i].begin; offset < end; ++offset) {
@@ -2006,11 +2042,11 @@ void serializeTimestampWithTimeZone(
 }
 
 void serializeRowVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream,
     Scratch& scratch) {
-  auto rowVector = dynamic_cast<const RowVector*>(vector);
+  auto rowVector = vector->as<RowVector>();
 
   if (isTimestampWithTimeZoneType(vector->type())) {
     serializeTimestampWithTimeZone(rowVector, ranges, stream);
@@ -2033,16 +2069,16 @@ void serializeRowVector(
   }
   for (int32_t i = 0; i < rowVector->childrenSize(); ++i) {
     serializeColumn(
-        rowVector->childAt(i).get(), childRanges, stream->childAt(i), scratch);
+        rowVector->childAt(i), childRanges, stream->childAt(i), scratch);
   }
 }
 
 void serializeArrayVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream,
     Scratch& scratch) {
-  auto arrayVector = dynamic_cast<const ArrayVector*>(vector);
+  auto arrayVector = vector->as<ArrayVector>();
   auto rawSizes = arrayVector->rawSizes();
   auto rawOffsets = arrayVector->rawOffsets();
   std::vector<IndexRange> childRanges;
@@ -2064,15 +2100,15 @@ void serializeArrayVector(
     }
   }
   serializeColumn(
-      arrayVector->elements().get(), childRanges, stream->childAt(0), scratch);
+      arrayVector->elements(), childRanges, stream->childAt(0), scratch);
 }
 
 void serializeMapVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream,
     Scratch& scratch) {
-  auto mapVector = dynamic_cast<const MapVector*>(vector);
+  auto mapVector = vector->as<MapVector>();
   auto rawSizes = mapVector->rawSizes();
   auto rawOffsets = mapVector->rawOffsets();
   std::vector<IndexRange> childRanges;
@@ -2094,9 +2130,9 @@ void serializeMapVector(
     }
   }
   serializeColumn(
-      mapVector->mapKeys().get(), childRanges, stream->childAt(0), scratch);
+      mapVector->mapKeys(), childRanges, stream->childAt(0), scratch);
   serializeColumn(
-      mapVector->mapValues().get(), childRanges, stream->childAt(1), scratch);
+      mapVector->mapValues(), childRanges, stream->childAt(1), scratch);
 }
 
 static inline int32_t rangesTotalSize(
@@ -2110,14 +2146,20 @@ static inline int32_t rangesTotalSize(
 
 template <TypeKind Kind>
 void serializeDictionaryVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream,
     Scratch& scratch) {
-  // Cannot serialize dictionary as PrestoPage dictionary if it has nulls.
-  // Also check if the stream was set up for dictionary (we had to know the
+  // Check if the stream was set up for dictionary (we had to know the
   // encoding type when creating VectorStream for that).
-  if (vector->nulls() || !stream->isDictionaryStream()) {
+  if (!stream->isDictionaryStream()) {
+    serializeWrapped(vector, ranges, stream, scratch);
+    return;
+  }
+
+  // Cannot serialize dictionary as PrestoPage dictionary if it has nulls.
+  if (vector->nulls()) {
+    stream->flattenStream(vector, rangesTotalSize(ranges));
     serializeWrapped(vector, ranges, stream, scratch);
     return;
   }
@@ -2127,10 +2169,9 @@ void serializeDictionaryVector(
 
   // Create a bit set to track which values in the Dictionary are used.
   ScratchPtr<uint64_t, 64> usedIndicesHolder(scratch);
-  auto usedIndicesCapacity =
-      bits::nwords(dictionaryVector->valueVector()->size());
-  auto* usedIndices = usedIndicesHolder.get(usedIndicesCapacity);
-  simd::memset(usedIndices, 0, usedIndicesCapacity * sizeof(uint64_t));
+  auto* usedIndices = usedIndicesHolder.get(
+      bits::nwords(dictionaryVector->valueVector()->size()));
+  simd::memset(usedIndices, 0, usedIndicesHolder.size() * sizeof(uint64_t));
 
   auto* indices = dictionaryVector->indices()->template as<vector_size_t>();
   vector_size_t numRows = 0;
@@ -2146,14 +2187,36 @@ void serializeDictionaryVector(
   auto* mutableSelectedIndices =
       selectedIndicesHolder.get(dictionaryVector->valueVector()->size());
   auto numUsed = simd::indicesOfSetBits(
-      usedIndices,
-      0,
-      dictionaryVector->valueVector()->size(),
-      mutableSelectedIndices);
+      usedIndices, 0, selectedIndicesHolder.size(), mutableSelectedIndices);
+
+  // If the values are fixed width and we aren't getting enough reuse to justify
+  // the dictionary, flatten it.
+  // For variable width types, rather than iterate over them computing their
+  // size, we simply assume we'll get a benefit.
+  if constexpr (TypeTraits<Kind>::isFixedWidth) {
+    // This calculation admittdely ignores some constants, but if they really
+    // make a difference, they're small so there's not much difference either
+    // way.
+    if (numUsed * vector->type()->cppSizeInBytes() +
+            numRows * sizeof(int32_t) >=
+        numRows * vector->type()->cppSizeInBytes()) {
+      stream->flattenStream(vector, numRows);
+      serializeWrapped(vector, ranges, stream, scratch);
+      return;
+    }
+  }
+
+  // If every element is unique the dictionary isn't giving us any benefit,
+  // flatten it.
+  if (numUsed == numRows) {
+    stream->flattenStream(vector, numRows);
+    serializeWrapped(vector, ranges, stream, scratch);
+    return;
+  }
 
   // Serialize the used elements from the Dictionary.
   serializeColumn(
-      dictionaryVector->valueVector().get(),
+      dictionaryVector->valueVector(),
       folly::Range<const vector_size_t*>(mutableSelectedIndices, numUsed),
       stream->childAt(0),
       scratch);
@@ -2179,14 +2242,14 @@ void serializeDictionaryVector(
 
 template <TypeKind kind>
 void serializeConstantVectorImpl(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream,
     Scratch& scratch) {
   using T = typename KindToFlatVector<kind>::WrapperType;
-  auto constVector = dynamic_cast<const ConstantVector<T>*>(vector);
+  auto constVector = vector->as<ConstantVector<T>>();
   if (constVector->valueVector() != nullptr) {
-    serializeWrapped(constVector, ranges, stream, scratch);
+    serializeWrapped(vector, ranges, stream, scratch);
     return;
   }
 
@@ -2207,7 +2270,7 @@ void serializeConstantVectorImpl(
 
 template <TypeKind Kind>
 void serializeConstantVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream,
     Scratch& scratch) {
@@ -2227,10 +2290,10 @@ void serializeConstantVector(
 
 template <typename T>
 void serializeBiasVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream) {
-  auto biasVector = dynamic_cast<const BiasVector<T>*>(vector);
+  auto biasVector = vector->as<BiasVector<T>>();
   if (!vector->mayHaveNulls()) {
     for (int32_t i = 0; i < ranges.size(); ++i) {
       stream->appendNonNull(ranges[i].size);
@@ -2255,7 +2318,7 @@ void serializeBiasVector(
 }
 
 void serializeColumn(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream,
     Scratch& scratch) {
@@ -2309,7 +2372,8 @@ void serializeColumn(
       serializeMapVector(vector, ranges, stream, scratch);
       break;
     case VectorEncoding::Simple::LAZY:
-      serializeColumn(vector->loadedVector(), ranges, stream, scratch);
+      serializeColumn(
+          BaseVector::loadedVectorShared(vector), ranges, stream, scratch);
       break;
     default:
       serializeWrapped(vector, ranges, stream, scratch);
@@ -2541,7 +2605,7 @@ void appendTimestamps(
 
 template <TypeKind kind>
 void serializeFlatVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch) {
@@ -2609,11 +2673,11 @@ uint64_t bitsToBytes(uint8_t byte) {
 
 template <>
 void serializeFlatVector<TypeKind::BOOLEAN>(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch) {
-  auto* flatVector = reinterpret_cast<const FlatVector<bool>*>(vector);
+  auto* flatVector = vector->as<FlatVector<bool>>();
   auto* rawValues = flatVector->rawValues<uint64_t*>();
   ScratchPtr<uint64_t, 4> bitsHolder(scratch);
   uint64_t* valueBits;
@@ -2660,7 +2724,7 @@ void serializeFlatVector<TypeKind::BOOLEAN>(
 }
 
 void serializeWrapped(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch) {
@@ -2668,18 +2732,20 @@ void serializeWrapped(
   const int32_t numRows = rows.size();
   int32_t numInner = 0;
   auto* innerRows = innerRowsHolder.get(numRows);
-  const BaseVector* wrapped;
+  bool mayHaveNulls = vector->mayHaveNulls();
+  VectorPtr wrapped;
   if (vector->encoding() == VectorEncoding::Simple::DICTIONARY &&
-      !vector->rawNulls()) {
+      !mayHaveNulls) {
     // Dictionary with no nulls.
     auto* indices = vector->wrapInfo()->as<vector_size_t>();
-    wrapped = vector->valueVector().get();
+    wrapped = vector->valueVector();
     simd::transpose(indices, rows, innerRows);
     numInner = numRows;
   } else {
-    wrapped = vector->wrappedVector();
+    wrapped = BaseVector::wrappedVectorShared(vector);
     for (int32_t i = 0; i < rows.size(); ++i) {
-      if (vector->isNullAt(rows[i])) {
+      if (mayHaveNulls && vector->isNullAt(rows[i])) {
+        // The wrapper added a null.
         if (numInner > 0) {
           serializeColumn(
               wrapped,
@@ -2694,6 +2760,7 @@ void serializeWrapped(
       innerRows[numInner++] = vector->wrappedIndex(rows[i]);
     }
   }
+
   if (numInner > 0) {
     serializeColumn(
         wrapped,
@@ -2705,7 +2772,7 @@ void serializeWrapped(
 
 template <>
 void serializeFlatVector<TypeKind::UNKNOWN>(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch) {
@@ -2718,7 +2785,7 @@ void serializeFlatVector<TypeKind::UNKNOWN>(
 
 template <>
 void serializeFlatVector<TypeKind::OPAQUE>(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& ranges,
     VectorStream* stream,
     Scratch& scratch) {
@@ -2744,11 +2811,11 @@ void serializeTimestampWithTimeZone(
 }
 
 void serializeRowVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch) {
-  auto rowVector = reinterpret_cast<const RowVector*>(vector);
+  auto rowVector = vector->as<RowVector>();
   vector_size_t* childRows;
   int32_t numChildRows = 0;
   if (isTimestampWithTimeZoneType(vector->type())) {
@@ -2777,7 +2844,7 @@ void serializeRowVector(
   }
   for (int32_t i = 0; i < rowVector->childrenSize(); ++i) {
     serializeColumn(
-        rowVector->childAt(i).get(),
+        rowVector->childAt(i),
         folly::Range<const vector_size_t*>(innerRows, numInnerRows),
         stream->childAt(i),
         scratch);
@@ -2785,11 +2852,11 @@ void serializeRowVector(
 }
 
 void serializeArrayVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch) {
-  auto arrayVector = reinterpret_cast<const ArrayVector*>(vector);
+  auto arrayVector = vector->as<ArrayVector>();
 
   ScratchPtr<IndexRange> rangesHolder(scratch);
   int32_t numRanges = rowsToRanges(
@@ -2806,18 +2873,18 @@ void serializeArrayVector(
     return;
   }
   serializeColumn(
-      arrayVector->elements().get(),
+      arrayVector->elements(),
       folly::Range<const IndexRange*>(rangesHolder.get(), numRanges),
       stream->childAt(0),
       scratch);
 }
 
 void serializeMapVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch) {
-  auto mapVector = reinterpret_cast<const MapVector*>(vector);
+  auto mapVector = vector->as<MapVector>();
 
   ScratchPtr<IndexRange> rangesHolder(scratch);
   int32_t numRanges = rowsToRanges(
@@ -2834,12 +2901,12 @@ void serializeMapVector(
     return;
   }
   serializeColumn(
-      mapVector->mapKeys().get(),
+      mapVector->mapKeys(),
       folly::Range<const IndexRange*>(rangesHolder.get(), numRanges),
       stream->childAt(0),
       scratch);
   serializeColumn(
-      mapVector->mapValues().get(),
+      mapVector->mapValues(),
       folly::Range<const IndexRange*>(rangesHolder.get(), numRanges),
       stream->childAt(1),
       scratch);
@@ -2847,14 +2914,14 @@ void serializeMapVector(
 
 template <TypeKind kind>
 void serializeConstantVector(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch) {
   using T = typename KindToFlatVector<kind>::WrapperType;
-  auto constVector = dynamic_cast<const ConstantVector<T>*>(vector);
+  auto constVector = vector->as<ConstantVector<T>>();
   if (constVector->valueVector()) {
-    serializeWrapped(constVector, rows, stream, scratch);
+    serializeWrapped(vector, rows, stream, scratch);
     return;
   }
   const auto numRows = rows.size();
@@ -2882,7 +2949,7 @@ void serializeBiasVector(
 }
 
 void serializeColumn(
-    const BaseVector* vector,
+    const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch) {
@@ -2917,7 +2984,8 @@ void serializeColumn(
       serializeMapVector(vector, rows, stream, scratch);
       break;
     case VectorEncoding::Simple::LAZY:
-      serializeColumn(vector->loadedVector(), rows, stream, scratch);
+      serializeColumn(
+          BaseVector::loadedVectorShared(vector), rows, stream, scratch);
       break;
     default:
       serializeWrapped(vector, rows, stream, scratch);
@@ -3638,8 +3706,7 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
           numRows,
           opts_);
 
-      serializeColumn(
-          vector->childAt(i).get(), ranges, streams[i].get(), scratch);
+      serializeColumn(vector->childAt(i), ranges, streams[i].get(), scratch);
     }
 
     flushStreams(streams, numRows, arena, *codec_, stream);
@@ -3680,8 +3747,7 @@ class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
     }
     numRows_ += numNewRows;
     for (int32_t i = 0; i < vector->childrenSize(); ++i) {
-      serializeColumn(
-          vector->childAt(i).get(), ranges, streams_[i].get(), scratch);
+      serializeColumn(vector->childAt(i), ranges, streams_[i].get(), scratch);
     }
   }
 
@@ -3695,8 +3761,7 @@ class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
     }
     numRows_ += numNewRows;
     for (int32_t i = 0; i < vector->childrenSize(); ++i) {
-      serializeColumn(
-          vector->childAt(i).get(), rows, streams_[i].get(), scratch);
+      serializeColumn(vector->childAt(i), rows, streams_[i].get(), scratch);
     }
   }
 
