@@ -555,29 +555,45 @@ struct AlignedStlAllocator {
   }
 
   T* FOLLY_NONNULL allocate(std::size_t n) {
-    if (n * sizeof(T) > HashStringAllocator::kMaxAlloc && poolAligned_) {
-      return reinterpret_cast<T*>(allocator_->allocateFromPool(n * sizeof(T)));
+    if (n * sizeof(T) > HashStringAllocator::kMaxAlloc) {
+      if (poolAligned_) {
+        return reinterpret_cast<T*>(
+            allocator_->allocateFromPool(n * sizeof(T)));
+      } else {
+        // Memory layout:
+        // - Header
+        // - padding(length is stored in `delta`)
+        // - delta(4 bytes storing the size of padding)
+        // - the aligned ptr
+        auto paddedSize =
+            checkedPlus<size_t>(Alignment + 4, checkedMultiply(n, sizeof(T)));
+        // Allocate the memory block with a Header.
+        auto header = reinterpret_cast<HashStringAllocator::Header*>(
+            allocator_->allocateFromPool(
+                paddedSize + sizeof(HashStringAllocator::Header)));
+        // Init the header with correct size info.
+        new (header) HashStringAllocator::Header(paddedSize);
+        auto ptr = header->begin();
+
+        return alignPtr((char*)ptr, n, paddedSize);
+      }
     }
+
     // Allocate extra Alignment bytes for alignment and 4 bytes to store the
     // delta between unaligned and aligned pointers.
-    auto size =
+    // Memory layout:
+    // - padding(length is stored in `delta`)
+    // - delta(4 bytes storing the size of padding)
+    // - the aligned ptr
+    auto paddedSize =
         checkedPlus<size_t>(Alignment + 4, checkedMultiply(n, sizeof(T)));
-    auto ptr = reinterpret_cast<T*>(allocator_->allocate(size)->begin());
+    auto ptr = reinterpret_cast<T*>(allocator_->allocate(paddedSize)->begin());
 
-    // Align 'ptr + 4'.
-    void* alignedPtr = (char*)ptr + 4;
-    size -= 4;
-    std::align(Alignment, n * sizeof(T), alignedPtr, size);
-
-    // Write alignment delta just before the aligned pointer.
-    int32_t delta = (char*)alignedPtr - (char*)ptr - 4;
-    *reinterpret_cast<int32_t*>((char*)alignedPtr - 4) = delta;
-
-    return reinterpret_cast<T*>(alignedPtr);
+    return alignPtr((char*)ptr, n, paddedSize);
   }
 
   void deallocate(T* FOLLY_NONNULL p, std::size_t n) noexcept {
-    if (n * sizeof(T) > HashStringAllocator::kMaxAlloc) {
+    if (n * sizeof(T) > HashStringAllocator::kMaxAlloc && poolAligned_) {
       return allocator_->freeToPool(p, n * sizeof(T));
     }
     auto delta = *reinterpret_cast<int32_t*>((char*)p - 4);
@@ -601,6 +617,20 @@ struct AlignedStlAllocator {
   }
 
  private:
+  FOLLY_ALWAYS_INLINE T* FOLLY_NONNULL
+  alignPtr(char* ptr, std::size_t allocateCount, std::size_t& paddedSize) {
+    // Align 'ptr + 4'.
+    void* alignedPtr = ptr + 4;
+    paddedSize -= 4;
+    std::align(Alignment, allocateCount * sizeof(T), alignedPtr, paddedSize);
+
+    // Write alignment delta just before the aligned pointer.
+    int32_t delta = (char*)alignedPtr - ptr - 4;
+    *reinterpret_cast<int32_t*>((char*)alignedPtr - 4) = delta;
+
+    return reinterpret_cast<T*>(alignedPtr);
+  }
+
   HashStringAllocator* FOLLY_NONNULL allocator_;
   const bool poolAligned_;
 };
