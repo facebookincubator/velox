@@ -275,7 +275,6 @@ void run(
     bool disableDictionary) {
   RowTypePtr rowType = ROW({columnName}, {type});
   ParquetReaderBenchmark benchmark(disableDictionary, rowType);
-  BIGINT()->toString();
   benchmark.readSingleColumn(
       columnName, type, 0, filterRateX100, nullsRateX100, nextSize);
 }
@@ -392,14 +391,12 @@ void run(
   PARQUET_BENCHMARKS_FILTERS(_type_, _name_, 100)    \
   BENCHMARK_DRAW_LINE();
 
-PARQUET_BENCHMARKS(DECIMAL(18, 3), ShortDecimalType);
-PARQUET_BENCHMARKS(DECIMAL(38, 3), LongDecimalType);
-PARQUET_BENCHMARKS(VARCHAR(), Varchar);
+#define PARQUET_BENCHMARKS_NO_FILTER_NO_NULLS(_type_, _name_)   \
+  PARQUET_BENCHMARKS_FILTER_NULLS(_type_, _name_, 100, 100)    \
+  BENCHMARK_DRAW_LINE();
 
-PARQUET_BENCHMARKS(BIGINT(), BigInt);
-PARQUET_BENCHMARKS(DOUBLE(), Double);
-PARQUET_BENCHMARKS_NO_FILTER(MAP(BIGINT(), BIGINT()), Map);
-PARQUET_BENCHMARKS_NO_FILTER(ARRAY(BIGINT()), List);
+PARQUET_BENCHMARKS_NO_FILTER_NO_NULLS(MAP(BIGINT(), ARRAY(BIGINT())), MapBigIntListBigInt);
+PARQUET_BENCHMARKS_NO_FILTER_NO_NULLS(ARRAY(ARRAY(BIGINT())), ArrayArrayBigInt);
 
 // TODO: Add all data types
 
