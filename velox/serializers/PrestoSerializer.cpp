@@ -473,6 +473,10 @@ void read(
     VectorPtr& result) {
   const int32_t size = source->read<int32_t>();
   const auto numNewValues = sizeWithIncomingNulls(size, numIncomingNulls);
+
+  if (!result->isFlatEncoding()) {
+    BaseVector::ensureWritable(SelectivityVector::empty(), type, pool, result);
+  }
   result->resize(resultOffset + numNewValues);
 
   auto flatResult = result->asFlatVector<T>();
@@ -524,6 +528,9 @@ void read<StringView>(
   const int32_t size = source->read<int32_t>();
   const int32_t numNewValues = sizeWithIncomingNulls(size, numIncomingNulls);
 
+  if (!result->isFlatEncoding()) {
+    BaseVector::ensureWritable(SelectivityVector::empty(), type, pool, result);
+  }
   result->resize(resultOffset + numNewValues);
 
   auto flatResult = result->as<FlatVector<StringView>>();
@@ -689,6 +696,11 @@ void readArrayVector(
     velox::memory::MemoryPool* pool,
     const SerdeOpts& opts,
     VectorPtr& result) {
+  if (result->encoding() != VectorEncoding::Simple::ARRAY) {
+    SelectivityVector rows(resultOffset, false);
+
+    BaseVector::ensureWritable(rows, type, pool, result);
+  }
   ArrayVector* arrayVector = result->as<ArrayVector>();
 
   const auto resultElementsOffset = arrayVector->elements()->size();
@@ -745,6 +757,10 @@ void readMapVector(
     velox::memory::MemoryPool* pool,
     const SerdeOpts& opts,
     VectorPtr& result) {
+  if (result->encoding() != VectorEncoding::Simple::MAP) {
+    BaseVector::ensureWritable(SelectivityVector::empty(), type, pool, result);
+  }
+
   MapVector* mapVector = result->as<MapVector>();
   const auto resultElementsOffset = mapVector->mapKeys()->size();
   std::vector<TypePtr> childTypes = {type->childAt(0), type->childAt(1)};
@@ -1157,7 +1173,11 @@ void readRowVector(
     velox::memory::MemoryPool* pool,
     const SerdeOpts& opts,
     VectorPtr& result) {
-  auto* row = result->asUnchecked<RowVector>();
+  if (result->encoding() != VectorEncoding::Simple::ROW) {
+    BaseVector::ensureWritable(SelectivityVector::empty(), type, pool, result);
+  }
+  auto* row = result->as<RowVector>();
+
   if (isTimestampWithTimeZoneType(type)) {
     readTimestampWithTimeZone(
         source, pool, row, resultOffset, incomingNulls, numIncomingNulls);
