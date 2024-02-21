@@ -560,42 +560,32 @@ struct AlignedStlAllocator {
         return reinterpret_cast<T*>(
             allocator_->allocateFromPool(n * sizeof(T)));
       } else {
-        // Memory layout:
-        // - Header
-        // - padding(length is stored in `delta`)
-        // - delta(4 bytes storing the size of padding)
-        // - the aligned ptr
-        auto paddedSize =
-            checkedPlus<size_t>(Alignment + 4, checkedMultiply(n, sizeof(T)));
-        // Allocate the memory block with a Header.
-        auto header = reinterpret_cast<HashStringAllocator::Header*>(
-            allocator_->allocateFromPool(
-                paddedSize + sizeof(HashStringAllocator::Header)));
-        // Init the header with correct size info.
-        new (header) HashStringAllocator::Header(paddedSize);
-        auto ptr = header->begin();
+        auto paddedSize = calculatePaddedSize(n);
+        // Allocate the memory from pool directly.
+        auto ptr =
+            reinterpret_cast<T*>(allocator_->allocateFromPool(paddedSize));
 
         return alignPtr((char*)ptr, n, paddedSize);
       }
     }
 
-    // Allocate extra Alignment bytes for alignment and 4 bytes to store the
-    // delta between unaligned and aligned pointers.
-    // Memory layout:
-    // - padding(length is stored in `delta`)
-    // - delta(4 bytes storing the size of padding)
-    // - the aligned ptr
-    auto paddedSize =
-        checkedPlus<size_t>(Alignment + 4, checkedMultiply(n, sizeof(T)));
+    auto paddedSize = calculatePaddedSize(n);
     auto ptr = reinterpret_cast<T*>(allocator_->allocate(paddedSize)->begin());
 
     return alignPtr((char*)ptr, n, paddedSize);
   }
 
   void deallocate(T* FOLLY_NONNULL p, std::size_t n) noexcept {
-    if (n * sizeof(T) > HashStringAllocator::kMaxAlloc && poolAligned_) {
-      return allocator_->freeToPool(p, n * sizeof(T));
+    if (n * sizeof(T) > HashStringAllocator::kMaxAlloc) {
+      if (poolAligned_) {
+        return allocator_->freeToPool(p, n * sizeof(T));
+      } else {
+        auto delta = *reinterpret_cast<int32_t*>((char*)p - 4);
+        return allocator_->freeToPool(
+            (char*)p - 4 - delta, calculatePaddedSize(n));
+      }
     }
+
     auto delta = *reinterpret_cast<int32_t*>((char*)p - 4);
     allocator_->free(HashStringAllocator::headerOf((char*)p - 4 - delta));
   }
@@ -617,6 +607,15 @@ struct AlignedStlAllocator {
   }
 
  private:
+  // Pad the memory user requested by some padding to facilitate memory
+  // alignment later. Memory layout:
+  // - padding(length is stored in `delta`)
+  // - delta(4 bytes storing the size of padding)
+  // - the aligned ptr
+  FOLLY_ALWAYS_INLINE std::size_t calculatePaddedSize(std::size_t n) {
+    return checkedPlus<size_t>(Alignment + 4, checkedMultiply(n, sizeof(T)));
+  }
+
   FOLLY_ALWAYS_INLINE T* FOLLY_NONNULL
   alignPtr(char* ptr, std::size_t allocateCount, std::size_t& paddedSize) {
     // Align 'ptr + 4'.
