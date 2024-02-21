@@ -245,6 +245,28 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
   EXPECT_EQ(lastDayFunc(std::nullopt), std::nullopt);
 }
 
+TEST_F(DateTimeFunctionsTest, dateFromUnixDate) {
+  const auto dateFromUnixDate = [&](std::optional<int32_t> value) {
+    return evaluateOnce<int32_t>("date_from_unix_date(c0)", value);
+  };
+
+  // Basic tests
+  EXPECT_EQ(parseDate("1970-01-01"), dateFromUnixDate(0));
+  EXPECT_EQ(parseDate("1970-01-02"), dateFromUnixDate(1));
+  EXPECT_EQ(parseDate("1969-12-31"), dateFromUnixDate(-1));
+  EXPECT_EQ(parseDate("1970-02-01"), dateFromUnixDate(31));
+  EXPECT_EQ(parseDate("1971-01-31"), dateFromUnixDate(395));
+  EXPECT_EQ(parseDate("1971-01-01"), dateFromUnixDate(365));
+
+  // Leap year tests
+  EXPECT_EQ(parseDate("1972-02-29"), dateFromUnixDate(365 + 365 + 30 + 29));
+  EXPECT_EQ(parseDate("1971-03-01"), dateFromUnixDate(365 + 30 + 28 + 1));
+
+  // Min and max value tests
+  EXPECT_EQ(parseDate("5881580-07-11"), dateFromUnixDate(kMax));
+  EXPECT_EQ(parseDate("-5877641-06-23"), dateFromUnixDate(kMin));
+}
+
 TEST_F(DateTimeFunctionsTest, dateAdd) {
   const auto dateAdd = [&](const std::string& dateStr,
                            std::optional<int32_t> value) {
@@ -405,73 +427,51 @@ TEST_F(DateTimeFunctionsTest, dayOfMonth) {
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfWeekDate) {
-  const auto dayOfWeek = [&](std::optional<int32_t> date,
-                             const std::string& func) {
-    return evaluateOnce<int32_t, int32_t>(
-        fmt::format("{}(c0)", func), {date}, {DATE()});
+  const auto dayOfWeek = [&](std::optional<int32_t> date) {
+    return evaluateOnce<int32_t, int32_t>("dayofweek(c0)", {date}, {DATE()});
   };
 
-  for (const auto& func : {"dayofweek", "dow"}) {
-    EXPECT_EQ(std::nullopt, dayOfWeek(std::nullopt, func));
-    EXPECT_EQ(5, dayOfWeek(0, func));
-    EXPECT_EQ(4, dayOfWeek(-1, func));
-    EXPECT_EQ(7, dayOfWeek(-40, func));
-    EXPECT_EQ(5, dayOfWeek(parseDate("2009-07-30"), func));
-    EXPECT_EQ(1, dayOfWeek(parseDate("2023-08-20"), func));
-    EXPECT_EQ(2, dayOfWeek(parseDate("2023-08-21"), func));
-    EXPECT_EQ(3, dayOfWeek(parseDate("2023-08-22"), func));
-    EXPECT_EQ(4, dayOfWeek(parseDate("2023-08-23"), func));
-    EXPECT_EQ(5, dayOfWeek(parseDate("2023-08-24"), func));
-    EXPECT_EQ(6, dayOfWeek(parseDate("2023-08-25"), func));
-    EXPECT_EQ(7, dayOfWeek(parseDate("2023-08-26"), func));
-    EXPECT_EQ(1, dayOfWeek(parseDate("2023-08-27"), func));
-
-    // test cases from spark's DateExpressionSuite.
-    EXPECT_EQ(6, dayOfWeek(util::fromDateString("2011-05-06"), func));
-  }
+  EXPECT_EQ(std::nullopt, dayOfWeek(std::nullopt));
+  EXPECT_EQ(5, dayOfWeek(0));
+  EXPECT_EQ(4, dayOfWeek(-1));
+  EXPECT_EQ(7, dayOfWeek(-40));
+  EXPECT_EQ(5, dayOfWeek(parseDate("2009-07-30")));
+  EXPECT_EQ(1, dayOfWeek(parseDate("2023-08-20")));
+  EXPECT_EQ(2, dayOfWeek(parseDate("2023-08-21")));
+  EXPECT_EQ(3, dayOfWeek(parseDate("2023-08-22")));
+  EXPECT_EQ(4, dayOfWeek(parseDate("2023-08-23")));
+  EXPECT_EQ(5, dayOfWeek(parseDate("2023-08-24")));
+  EXPECT_EQ(6, dayOfWeek(parseDate("2023-08-25")));
+  EXPECT_EQ(7, dayOfWeek(parseDate("2023-08-26")));
+  EXPECT_EQ(1, dayOfWeek(parseDate("2023-08-27")));
+  EXPECT_EQ(6, dayOfWeek(util::fromDateString("2011-05-06")));
+  EXPECT_EQ(4, dayOfWeek(util::fromDateString("2015-04-08")));
+  EXPECT_EQ(7, dayOfWeek(util::fromDateString("2017-05-27")));
+  EXPECT_EQ(6, dayOfWeek(util::fromDateString("1582-10-15")));
 }
 
-TEST_F(DateTimeFunctionsTest, dayofWeekTs) {
-  const auto dayOfWeek = [&](std::optional<Timestamp> date,
-                             const std::string& func) {
-    return evaluateOnce<int32_t>(fmt::format("{}(c0)", func), date);
+TEST_F(DateTimeFunctionsTest, weekdayDate) {
+  const auto weekday = [&](std::optional<int32_t> value) {
+    return evaluateOnce<int32_t, int32_t>("weekday(c0)", {value}, {DATE()});
   };
 
-  for (const auto& func : {"dayofweek", "dow"}) {
-    EXPECT_EQ(5, dayOfWeek(Timestamp(0, 0), func));
-    EXPECT_EQ(4, dayOfWeek(Timestamp(-1, 0), func));
-    EXPECT_EQ(
-        1,
-        dayOfWeek(util::fromTimestampString("2023-08-20 20:23:00.001"), func));
-    EXPECT_EQ(
-        2,
-        dayOfWeek(util::fromTimestampString("2023-08-21 21:23:00.030"), func));
-    EXPECT_EQ(
-        3,
-        dayOfWeek(util::fromTimestampString("2023-08-22 11:23:00.100"), func));
-    EXPECT_EQ(
-        4,
-        dayOfWeek(util::fromTimestampString("2023-08-23 22:23:00.030"), func));
-    EXPECT_EQ(
-        5,
-        dayOfWeek(util::fromTimestampString("2023-08-24 15:23:00.000"), func));
-    EXPECT_EQ(
-        6,
-        dayOfWeek(util::fromTimestampString("2023-08-25 03:23:04.000"), func));
-    EXPECT_EQ(
-        7,
-        dayOfWeek(util::fromTimestampString("2023-08-26 01:03:00.300"), func));
-    EXPECT_EQ(
-        1,
-        dayOfWeek(util::fromTimestampString("2023-08-27 01:13:00.000"), func));
-    // test cases from spark's DateExpressionSuite.
-    EXPECT_EQ(
-        4, dayOfWeek(util::fromTimestampString("2015-04-08 13:10:15"), func));
-    EXPECT_EQ(
-        7, dayOfWeek(util::fromTimestampString("2017-05-27 13:10:15"), func));
-    EXPECT_EQ(
-        6, dayOfWeek(util::fromTimestampString("1582-10-15 13:10:15"), func));
-  }
+  EXPECT_EQ(3, weekday(0));
+  EXPECT_EQ(2, weekday(-1));
+  EXPECT_EQ(5, weekday(-40));
+  EXPECT_EQ(3, weekday(parseDate("2009-07-30")));
+  EXPECT_EQ(6, weekday(parseDate("2023-08-20")));
+  EXPECT_EQ(0, weekday(parseDate("2023-08-21")));
+  EXPECT_EQ(1, weekday(parseDate("2023-08-22")));
+  EXPECT_EQ(2, weekday(parseDate("2023-08-23")));
+  EXPECT_EQ(3, weekday(parseDate("2023-08-24")));
+  EXPECT_EQ(4, weekday(parseDate("2023-08-25")));
+  EXPECT_EQ(5, weekday(parseDate("2023-08-26")));
+  EXPECT_EQ(6, weekday(parseDate("2023-08-27")));
+  EXPECT_EQ(5, weekday(parseDate("2017-05-27")));
+  EXPECT_EQ(2, weekday(parseDate("2015-04-08")));
+  EXPECT_EQ(4, weekday(parseDate("2013-11-08")));
+  EXPECT_EQ(4, weekday(parseDate("2011-05-06")));
+  EXPECT_EQ(4, weekday(parseDate("1582-10-15")));
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {

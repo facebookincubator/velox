@@ -377,7 +377,8 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
 }
 
 std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
-    const std::unordered_map<std::string, std::string>& serdeParameters) {
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    const std::unordered_map<std::string, std::string>& tableParameters) {
   auto fieldIt = serdeParameters.find(dwio::common::SerDeOptions::kFieldDelim);
   if (fieldIt == serdeParameters.end()) {
     fieldIt = serdeParameters.find("serialization.format");
@@ -393,9 +394,13 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
   auto mapKeyIt =
       serdeParameters.find(dwio::common::SerDeOptions::kMapKeyDelim);
 
+  auto nullStringIt = tableParameters.find(
+      dwio::common::TableParameter::kSerializationNullFormat);
+
   if (fieldIt == serdeParameters.end() &&
       collectionIt == serdeParameters.end() &&
-      mapKeyIt == serdeParameters.end()) {
+      mapKeyIt == serdeParameters.end() &&
+      nullStringIt == tableParameters.end()) {
     return nullptr;
   }
 
@@ -413,6 +418,9 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
   }
   auto serDeOptions = std::make_unique<dwio::common::SerDeOptions>(
       fieldDelim, collectionDelim, mapKeyDelim);
+  if (nullStringIt != tableParameters.end()) {
+    serDeOptions->nullString = nullStringIt->second;
+  }
   return serDeOptions;
 }
 
@@ -420,8 +428,24 @@ void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
     const std::shared_ptr<HiveConfig>& hiveConfig,
     const Config* sessionProperties,
+    const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
+    const std::shared_ptr<HiveConnectorSplit>& hiveSplit) {
+  configureReaderOptions(
+      readerOptions,
+      hiveConfig,
+      sessionProperties,
+      hiveTableHandle->dataColumns(),
+      hiveSplit,
+      hiveTableHandle->tableParameters());
+}
+
+void configureReaderOptions(
+    dwio::common::ReaderOptions& readerOptions,
+    const std::shared_ptr<HiveConfig>& hiveConfig,
+    const Config* sessionProperties,
     const RowTypePtr& fileSchema,
-    std::shared_ptr<HiveConnectorSplit> hiveSplit) {
+    const std::shared_ptr<HiveConnectorSplit>& hiveSplit,
+    const std::unordered_map<std::string, std::string>& tableParameters) {
   readerOptions.setMaxCoalesceBytes(hiveConfig->maxCoalescedBytes());
   readerOptions.setMaxCoalesceDistance(hiveConfig->maxCoalescedDistanceBytes());
   readerOptions.setFileColumnNamesReadAsLowerCase(
@@ -439,7 +463,8 @@ void configureReaderOptions(
         dwio::common::toString(readerOptions.getFileFormat()),
         dwio::common::toString(hiveSplit->fileFormat));
   } else {
-    auto serDeOptions = parseSerdeParameters(hiveSplit->serdeParameters);
+    auto serDeOptions =
+        parseSerdeParameters(hiveSplit->serdeParameters, tableParameters);
     if (serDeOptions) {
       readerOptions.setSerDeOptions(*serDeOptions);
     }

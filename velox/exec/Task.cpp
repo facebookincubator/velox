@@ -687,8 +687,6 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
       queryCtx_->queryConfig(),
       maxDrivers);
 
-  // Keep one exchange client per pipeline (NULL if not used).
-  const uint32_t numPipelines = driverFactories_.size();
   // Calculates total number of drivers and create pipeline stats.
   for (auto& factory : driverFactories_) {
     if (factory->groupedExecution) {
@@ -1897,6 +1895,13 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 void Task::maybeRemoveFromOutputBufferManager() {
   if (hasPartitionedOutput()) {
     if (auto bufferManager = bufferManager_.lock()) {
+      // Capture output buffer stats before deleting the buffer.
+      {
+        std::lock_guard<std::timed_mutex> l(mutex_);
+        if (!taskStats_.outputBufferStats.has_value()) {
+          taskStats_.outputBufferStats = bufferManager->stats(taskId_);
+        }
+      }
       bufferManager->removeTask(taskId_);
     }
   }
@@ -1982,7 +1987,9 @@ TaskStats Task::taskStats() const {
   auto bufferManager = bufferManager_.lock();
   taskStats.outputBufferUtilization = bufferManager->getUtilization(taskId_);
   taskStats.outputBufferOverutilized = bufferManager->isOverutilized(taskId_);
-  taskStats.outputBufferStats = bufferManager->stats(taskId_);
+  if (!taskStats.outputBufferStats.has_value()) {
+    taskStats.outputBufferStats = bufferManager->stats(taskId_);
+  }
   return taskStats;
 }
 
@@ -2154,14 +2161,13 @@ folly::dynamic Task::toJson() const {
     obj["plan"] = planFragment_.planNode->toString(true, true);
   }
 
-  folly::dynamic driverObj = folly::dynamic::array;
-  int index = 0;
-  for (auto& driver : drivers_) {
-    if (driver) {
-      driverObj[index++] = driver->toJson();
+  folly::dynamic drivers = folly::dynamic::object;
+  for (auto i = 0; i < drivers_.size(); ++i) {
+    if (drivers_[i] != nullptr) {
+      drivers[i] = drivers_[i]->toJson();
     }
   }
-  obj["drivers"] = driverObj;
+  obj["drivers"] = drivers;
 
   if (auto buffers = bufferManager_.lock()) {
     if (auto buffer = buffers->getBufferIfExists(taskId_)) {

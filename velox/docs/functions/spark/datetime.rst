@@ -34,6 +34,13 @@ These functions support TIMESTAMP and DATE input types.
     deducted from ``start_date``.
     Supported types for ``num_days`` are: TINYINT, SMALLINT, INTEGER.
 
+.. spark:function:: date_from_unix_date(integer) -> date
+
+    Creates date from the number of days since 1970-01-01 in either direction. Returns null when input is null.
+
+        SELECT date_from_unix_date(1); -- '1970-01-02'
+        SELECT date_from_unix_date(-1); -- '1969-12-31'
+
 .. spark:function:: date_sub(start_date, num_days) -> date
 
     Returns the date that is ``num_days`` before ``start_date``. According to the inputs,
@@ -64,17 +71,12 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT dayofyear('2016-04-09'); -- 100
 
-.. spark:function:: dayofweek(date/timestamp) -> integer
+.. spark:function:: dayofweek(date) -> integer
 
-    Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
-    We can use `dow` as alias for ::
+    Returns the day of the week for date (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
 
         SELECT dayofweek('2009-07-30'); -- 5
-        SELECT dayofweek('2023-08-22 11:23:00.100'); -- 3
-
-.. spark:function:: dow(x) -> integer
-
-    This is an alias for :spark:func:`dayofweek`.
+        SELECT dayofweek('2023-08-22'); -- 3
 
 .. spark:function:: from_unixtime(unixTime, format) -> string
 
@@ -186,6 +188,13 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns the `ISO-Week`_ of the year from x. The value ranges from ``1`` to ``53``.
     A week is considered to start on a Monday and week 1 is the first week with >3 days.
+
+.. function:: weekday(date) -> integer
+
+    Returns the day of the week for date (0 = Monday, 1 = Tuesday, …, 6 = Sunday).
+
+        SELECT weekday('2015-04-08'); -- 2
+        SELECT weekday('2024-02-10'); -- 5
 
 .. _ISO-Week: https://en.wikipedia.org/wiki/ISO_week_date
 

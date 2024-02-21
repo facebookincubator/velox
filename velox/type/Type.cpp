@@ -714,25 +714,21 @@ std::shared_ptr<const RowType> ROW(
 }
 
 std::shared_ptr<const RowType> ROW(std::vector<TypePtr>&& types) {
-  std::vector<std::string> names;
-  names.reserve(types.size());
-  for (auto& p : types) {
-    names.push_back("");
-  }
+  std::vector<std::string> names(types.size(), "");
   return TypeFactory<TypeKind::ROW>::create(std::move(names), std::move(types));
 }
 
 std::shared_ptr<const MapType> MAP(TypePtr keyType, TypePtr valType) {
   return std::make_shared<const MapType>(
       std::move(keyType), std::move(valType));
-};
+}
 
 std::shared_ptr<const FunctionType> FUNCTION(
     std::vector<TypePtr>&& argumentTypes,
     TypePtr returnType) {
   return std::make_shared<const FunctionType>(
       std::move(argumentTypes), std::move(returnType));
-};
+}
 
 #define VELOX_DEFINE_SCALAR_ACCESSOR(KIND)                   \
   std::shared_ptr<const ScalarType<TypeKind::KIND>> KIND() { \
@@ -1041,7 +1037,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"UNKNOWN", UNKNOWN()},
   };
   return kTypes;
-};
+}
 
 class DecimalParametricType {
  public:

@@ -24,8 +24,10 @@ namespace facebook::velox::exec {
 /// sequence is the same as specified in BufferManager::getData call. The
 /// caller is expected to advance sequence by the number of entries in groups
 /// and call BufferManager::acknowledge.
-using DataAvailableCallback = std::function<
-    void(std::vector<std::unique_ptr<folly::IOBuf>> pages, int64_t sequence)>;
+using DataAvailableCallback = std::function<void(
+    std::vector<std::unique_ptr<folly::IOBuf>> pages,
+    int64_t sequence,
+    std::vector<int64_t> remainingBytes)>;
 
 /// Callback provided to indicate if the consumer of a destination buffer is
 /// currently active or not. It is used by arbitrary output buffer to optimize
@@ -41,10 +43,11 @@ struct DataAvailable {
   DataAvailableCallback callback;
   int64_t sequence;
   std::vector<std::unique_ptr<folly::IOBuf>> data;
+  std::vector<int64_t> remainingBytes;
 
   void notify() {
     if (callback) {
-      callback(std::move(data), sequence);
+      callback(std::move(data), sequence, remainingBytes);
     }
   }
 };
@@ -77,6 +80,9 @@ class ArbitraryBuffer {
   /// Returns a number of pages with total bytes no less than 'maxBytes' if
   /// there are sufficient buffered pages.
   std::vector<std::shared_ptr<SerializedPage>> getPages(uint64_t maxBytes);
+
+  /// Append the available page sizes to `out'.
+  void getAvailablePageSizes(std::vector<int64_t>& out) const;
 
   std::string toString() const;
 
@@ -125,13 +131,30 @@ class DestinationBuffer {
   /// arbitrary buffer on demand.
   void loadData(ArbitraryBuffer* buffer, uint64_t maxBytes);
 
+  struct Data {
+    /// The actual data available at this buffer.
+    std::vector<std::unique_ptr<folly::IOBuf>> data;
+
+    /// The byte sizes of pages that can be fetched.
+    std::vector<int64_t> remainingBytes;
+
+    /// Whether the result is returned immediately without invoking the `notify'
+    /// callback.
+    bool immediate;
+  };
+
   /// Returns a shallow copy (folly::IOBuf::clone) of the data starting at
   /// 'sequence', stopping after exceeding 'maxBytes'. If there is no data,
   /// 'notify' is installed so that this gets called when data is added. If not
   /// null, 'activeCheck' is used to check if the consumer of a destination
   /// buffer with 'notify' installed is currently active or not. This only
   /// applies for arbitrary output buffer for now.
-  std::vector<std::unique_ptr<folly::IOBuf>> getData(
+  ///
+  /// When arbitraryBuffer is provided, and this buffer is not at end (no null
+  /// marker received), we append the remaining bytes from arbitraryBuffer in
+  /// the result, even the arbitraryBuffer could be shared among multiple
+  /// DestinationBuffers.
+  Data getData(
       uint64_t maxBytes,
       int64_t sequence,
       DataAvailableCallback notify,
@@ -191,6 +214,7 @@ class OutputBuffer {
         int64_t _totalRowsSent,
         int64_t _totalPagesSent,
         int64_t _averageBufferTimeMs,
+        int32_t _numTopBuffers,
         const std::vector<DestinationBuffer::Stats>& _buffersStats)
         : kind(_kind),
           noMoreBuffers(_noMoreBuffers),
@@ -202,6 +226,7 @@ class OutputBuffer {
           totalRowsSent(_totalRowsSent),
           totalPagesSent(_totalPagesSent),
           averageBufferTimeMs(_averageBufferTimeMs),
+          numTopBuffers(_numTopBuffers),
           buffersStats(_buffersStats) {}
 
     core::PartitionedOutputNode::Kind kind;
@@ -222,6 +247,9 @@ class OutputBuffer {
 
     /// Average time each piece of data has been buffered for in milliseconds.
     int64_t averageBufferTimeMs{0};
+
+    /// The number of largest buffers that handle 80% of the total data.
+    int32_t numTopBuffers{0};
 
     /// Stats of the OutputBuffer's destinations.
     std::vector<DestinationBuffer::Stats> buffersStats;
