@@ -487,6 +487,7 @@ TEST_F(HashStringAllocatorTest, alignedStlAllocatorLargeAllocation) {
   allocator_->checkConsistency();
 
   // Test large allocation + un-aligned pool.
+  ASSERT_LT(allocator_->pool()->alignment(), 128);
   AlignedStlAllocator<int64_t, 128> alignedAlloc128(allocator_.get());
   ptr = alignedAlloc128.allocate(allocateSize);
   alignedAlloc128.deallocate(ptr, allocateSize);
