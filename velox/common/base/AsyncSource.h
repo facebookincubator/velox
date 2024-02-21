@@ -110,6 +110,7 @@ class AsyncSource {
         }
         std::swap(make, make_);
       }
+      resultMoved_ = true;
     }
     // Outside of mutex_.
     if (make) {
@@ -153,7 +154,7 @@ class AsyncSource {
   /// has not been returned to the caller.
   /// Invoke this function only when 'move()' is not called.
   void close() {
-    if (closed_) {
+    if (closed_ || resultMoved_) {
       return;
     }
     ContinueFuture wait;
@@ -188,5 +189,6 @@ class AsyncSource {
   std::exception_ptr exception_;
   CpuWallTiming timing_;
   bool closed_{false};
+  bool resultMoved_{false};
 };
 } // namespace facebook::velox
