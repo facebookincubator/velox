@@ -31,6 +31,10 @@ function install_aws_deps {
 
   github_checkout $AWS_REPO_NAME $AWS_SDK_VERSION --depth 1 --recurse-submodules
   cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf $(basename ${AWS_REPO_NAME})
+  fi
+
   # Dependencies for S3 testing
   # We need this specific version of Minio for testing.
   if [[ "$OSTYPE" == linux-gnu* ]]; then
@@ -62,6 +66,9 @@ function install_gcs-sdk-cpp {
   sed -i 's/^#define ABSL_OPTION_USE_\(.*\) 2/#define ABSL_OPTION_USE_\1 0/' "absl/base/options.h"
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DABSL_BUILD_TESTING=OFF
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf abseil-cpp
+  fi
 
   # crc32
   github_checkout google/crc32c 1.1.2 --depth 1
@@ -69,11 +76,17 @@ function install_gcs-sdk-cpp {
     -DCRC32C_BUILD_TESTS=OFF \
     -DCRC32C_BUILD_BENCHMARKS=OFF \
     -DCRC32C_USE_GLOG=OFF
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf crc32c
+  fi
 
   # nlohmann json
   github_checkout nlohmann/json v3.11.2 --depth 1
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DJSON_BuildTests=OFF
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf json
+  fi
 
   # google-cloud-cpp
   github_checkout googleapis/google-cloud-cpp v2.10.1 --depth 1
@@ -81,6 +94,9 @@ function install_gcs-sdk-cpp {
     -DCMAKE_INSTALL_MESSAGE=NEVER \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf google-cloud-cpp
+  fi
 }
 
 function install_azure-storage-sdk-cpp {
@@ -117,6 +133,10 @@ function install_azure-storage-sdk-cpp {
   # install azure-storage-files-datalake
   cd sdk/storage/azure-storage-files-datalake
   cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf azure-sdk-for-cpp
+  fi
 }
 
 function install_hdfs_deps {
@@ -132,9 +152,13 @@ function install_hdfs_deps {
     sed -i "s/dumpversion/dumpfullversion/" ./CMake/Platform.cmake
     # Dependencies for Hadoop testing
     wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-2.10.1/hadoop-2.10.1.tar.gz hadoop
-    cp -a hadoop /usr/local/
+    mv hadoop /usr/local/
   fi
   cmake_install
+
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf hawq
+  fi
 }
 
 cd "${DEPENDENCY_DIR}" || exit
