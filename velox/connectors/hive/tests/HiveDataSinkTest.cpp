@@ -134,7 +134,9 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF,
       const std::vector<std::string>& partitionedBy = {},
       const std::shared_ptr<connector::hive::HiveBucketProperty>&
-          bucketProperty = nullptr) {
+          bucketProperty = nullptr,
+      const CompressionKind compressionKind =
+          CompressionKind::CompressionKind_ZSTD) {
     return makeHiveInsertTableHandle(
         outputRowType->names(),
         outputRowType->children(),
@@ -145,7 +147,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             std::nullopt,
             connector::hive::LocationHandle::TableType::kNew),
         fileFormat,
-        CompressionKind::CompressionKind_ZSTD);
+        compressionKind);
   }
 
   std::shared_ptr<HiveDataSink> createDataSink(
@@ -154,7 +156,9 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF,
       const std::vector<std::string>& partitionedBy = {},
       const std::shared_ptr<connector::hive::HiveBucketProperty>&
-          bucketProperty = nullptr) {
+          bucketProperty = nullptr,
+      const CompressionKind compressionKind =
+          CompressionKind::CompressionKind_ZSTD) {
     return std::make_shared<HiveDataSink>(
         rowType,
         createHiveInsertTableHandle(
@@ -162,7 +166,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             outputDirectoryPath,
             fileFormat,
             partitionedBy,
-            bucketProperty),
+            bucketProperty,
+            compressionKind),
         connectorQueryCtx_.get(),
         CommitStrategy::kNoCommit,
         connectorConfig_);
@@ -898,6 +903,34 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
 
   VELOX_ASSERT_THROW(dataSink->close(), "inject failure");
 }
+
+#ifdef VELOX_ENABLE_PARQUET
+TEST_F(HiveDataSinkTest, writeParquetFileNames) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto compressionKindAndSuffix = {
+      std::make_pair(CompressionKind::CompressionKind_NONE, ".parquet"),
+      std::make_pair(
+          CompressionKind::CompressionKind_SNAPPY, ".snappy.parquet"),
+      std::make_pair(CompressionKind_ZSTD, ".zstd.parquet"),
+      std::make_pair(CompressionKind_LZ4, ".lz4hadoop.parquet"),
+      std::make_pair(CompressionKind::CompressionKind_GZIP, ".gz.parquet")};
+  for (const auto [compressionKind, expected] : compressionKindAndSuffix) {
+    auto dataSink = createDataSink(
+        rowType_,
+        outputDirectory->path,
+        dwio::common::FileFormat::PARQUET,
+        {},
+        nullptr,
+        compressionKind);
+    auto vectors = createVectors(1, 1);
+    dataSink->appendData(vectors[0]);
+    auto writerInfos = dataSink->close();
+    ASSERT_EQ(writerInfos.size(), 1);
+    ASSERT_TRUE(writerInfos[0].find(expected) != std::string::npos);
+  }
+}
+#endif
+
 } // namespace
 } // namespace facebook::velox::connector::hive
 
