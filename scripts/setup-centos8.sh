@@ -168,6 +168,13 @@ function install_duckdb {
   fi
 }
 
+function install_cuda {
+  # See https://developer.nvidia.com/cuda-downloads
+  wget --progress=dot:giga https://developer.download.nvidia.com/compute/cuda/12.3.1/local_installers/cuda-repo-rhel7-12-3-local-12.3.1_545.23.08-1.x86_64.rpm
+  rpm -i cuda-repo-rhel7-12-3-local-12.3.1_545.23.08-1.x86_64.rpm
+  dnf_install cuda-toolkit-12-3
+}
+
 function install_velox_deps {
   run_and_time install_conda
   run_and_time install_gflags
@@ -183,6 +190,7 @@ function install_velox_deps {
   run_and_time install_mvfst
   run_and_time install_fbthrift
   run_and_time install_duckdb
+  run_and_time install_cuda
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
