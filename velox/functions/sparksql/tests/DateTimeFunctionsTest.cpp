@@ -57,6 +57,15 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   }
 };
 
+
+TEST_F(DateTimeFunctionsTest, toUTCTimestamp) {
+  const auto toUTCTimestamp = [&](std::optional<Timestamp> date, const std::optional<std::string> tz) {
+    return evaluateOnce<Timestamp>("to_utc_timestamp(c0, c1)", date, tz);
+  };
+  
+  EXPECT_EQ("2015-07-24 00:00:00", toUTCTimestamp(util::fromTimestampString("2015-07-24 07:00:00"), "America/Los_Angeles"));
+}
+
 TEST_F(DateTimeFunctionsTest, year) {
   const auto year = [&](std::optional<Timestamp> date) {
     return evaluateOnce<int32_t>("year(c0)", date);

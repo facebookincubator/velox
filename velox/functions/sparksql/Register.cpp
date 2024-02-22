@@ -269,6 +269,8 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<WeekFunction, int32_t, Timestamp>({prefix + "week_of_year"});
   registerFunction<WeekFunction, int32_t, Date>({prefix + "week_of_year"});
 
+  registerFunction<ToUTCTimestampFunction, Timestamp, Timestamp, Varchar>({prefix + "to_utc_timestamp"});
+
   registerFunction<UnixTimestampFunction, int64_t>({prefix + "unix_timestamp"});
 
   registerFunction<UnixTimestampParseFunction, int64_t, Varchar>(
