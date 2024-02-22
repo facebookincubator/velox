@@ -153,6 +153,8 @@ In addition, Aggregation Fuzzer also supports tuning parameters:
 
 * ``--num_batches``: The number of input vectors of size `--batch_size` to generate. Default is 10.
 
+* ``--velox_fuzzer_nan_inf_threshold``: The chance by which a NaN or Infinity is produced in the fuzzed data. Default is 0 (that is turned off).
+
 If running from CLion IDE, add ``--logtostderr=1`` to see the full output.
 
 An example set of arguments to run the fuzzer with all features enabled is as follows:
