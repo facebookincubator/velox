@@ -93,6 +93,48 @@ void castToTimestamp(
   });
 }
 
+void castToVarchar(
+    const RowVector& inputVector,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    FlatVector<StringView>& flatResult) {
+  const auto& config = context.execCtx()->queryCtx()->queryConfig();
+  const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
+  const auto timestampVector =
+      inputVector.childAt(0)->as<SimpleVector<int64_t>>();
+  const auto timezoneVector =
+      inputVector.childAt(1)->as<SimpleVector<int16_t>>();
+
+  context.applyToSelectedNoThrow(rows, [&](int row) {
+    if (inputVector.isNullAt(row)) {
+      flatResult.setNull(row, true);
+    } else {
+      Timestamp ts = Timestamp::fromMillis(timestampVector->valueAt(row));
+      if (!adjustTimestampToTimezone) {
+        // Convert UTC to the given time zone.
+        ts.toTimezone(timezoneVector->valueAt(row));
+      }
+      auto output = ts.toString() + std::to_string(timezoneVector->valueAt(row));
+
+      try {
+        auto writer = exec::StringWriter<>(&flatResult, row);
+        writer.resize(output.size());
+        std::memcpy(writer.data(), output.data(), output.size());
+        writer.finalize();
+      } catch (const VeloxException& ue) {
+        if (!ue.isUserError()) {
+          throw;
+        }
+      //   VELOX_USER_FAIL(
+      //       makeErrorMessage(row) + " " + ue.message());
+      // } catch (const std::exception& e) {
+      //   VELOX_USER_FAIL(
+      //       makeErrorMessage(row) + " " + e.what());
+      }
+    }
+  });
+}
+
 template <TypeKind kind>
 void castFromTimestampWithTimeZone(
     const BaseVector& input,
@@ -104,6 +146,19 @@ void castFromTimestampWithTimeZone(
   const auto inputVector = input.as<RowVector>();
   auto flatResult = result.as<FlatVector<Timestamp>>();
   castToTimestamp(*inputVector, context, rows, *flatResult);
+}
+
+template <TypeKind kind>
+void castFromTimestampWithTimeZoneToVarchar(
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    BaseVector& result) {
+  VELOX_CHECK_EQ(kind, TypeKind::VARCHAR)
+
+  const auto inputVector = input.as<RowVector>();
+  auto flatResult = result.as<FlatVector<StringView>>();
+  castToVarchar(*inputVector, context, rows, *flatResult);
 }
 } // namespace
 
