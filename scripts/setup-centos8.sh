@@ -25,6 +25,7 @@ export CXXFLAGS=$CFLAGS  # Used by boost.
 export CPPFLAGS=$CFLAGS  # Used by LZO.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
+AGGRESSIVE_CLEANUP="${AGGRESSIVE_CLEANUP:-false}"
 
 function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
@@ -59,6 +60,9 @@ function install_gflags {
     cd gflags
     cmake_install -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf gflags
+  fi
 }
 
 function install_glog {
@@ -67,6 +71,9 @@ function install_glog {
     cd glog
     cmake_install -DBUILD_SHARED_LIBS=ON
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf glog
+  fi
 }
 
 function install_lzo {
@@ -77,6 +84,9 @@ function install_lzo {
     make "-j$(nproc)"
     make install
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf lzo
+  fi
 }
 
 function install_boost {
@@ -86,6 +96,9 @@ function install_boost {
    ./bootstrap.sh --prefix=/usr/local
    ./b2 "-j$(nproc)" -d0 install threading=multi
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf boost
+  fi
 }
 
 function install_snappy {
@@ -94,6 +107,9 @@ function install_snappy {
     cd snappy
     cmake_install -DSNAPPY_BUILD_TESTS=OFF
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf snappy
+  fi
 }
 
 function install_fmt {
@@ -102,6 +118,9 @@ function install_fmt {
     cd fmt
     cmake_install -DFMT_TEST=OFF
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf fmt
+  fi
 }
 
 function install_protobuf {
@@ -113,6 +132,9 @@ function install_protobuf {
     make install
     ldconfig
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf protobuf
+  fi
 }
 
 FB_OS_VERSION="v2023.12.04.00"
@@ -123,6 +145,9 @@ function install_fizz {
     cd fizz/fizz
     cmake_install -DBUILD_TESTS=OFF
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf fizz
+  fi
 }
 
 function install_folly {
@@ -131,6 +156,9 @@ function install_folly {
     cd folly
     cmake_install -DFOLLY_HAVE_INT128_T=ON
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf folly
+  fi
 }
 
 function install_wangle {
@@ -139,6 +167,9 @@ function install_wangle {
     cd wangle/wangle
     cmake_install -DBUILD_TESTS=OFF
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf wangle
+  fi
 }
 
 function install_fbthrift {
@@ -147,6 +178,9 @@ function install_fbthrift {
     cd fbthrift
     cmake_install -Denable_tests=OFF
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf fbthrift
+  fi
 }
 
 function install_mvfst {
@@ -155,6 +189,9 @@ function install_mvfst {
    cd mvfst
    cmake_install -DBUILD_TESTS=OFF
   )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf mvfst
+  fi
 }
 
 function install_duckdb {
@@ -165,6 +202,9 @@ function install_duckdb {
       cd duckdb
       cmake_install -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
     )
+    if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+      rm -rf duckdb
+    fi
   fi
 }
 
@@ -172,6 +212,7 @@ function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
   wget --progress=dot:giga https://developer.download.nvidia.com/compute/cuda/12.3.1/local_installers/cuda-repo-rhel7-12-3-local-12.3.1_545.23.08-1.x86_64.rpm
   rpm -i cuda-repo-rhel7-12-3-local-12.3.1_545.23.08-1.x86_64.rpm
+  rm cuda-repo-rhel7-12-3-local-12.3.1_545.23.08-1.x86_64.rpm
   dnf_install cuda-toolkit-12-3
 }
 
