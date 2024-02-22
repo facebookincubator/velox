@@ -19,10 +19,6 @@ add_library(
 target_link_libraries(
   velox_hive_iceberg_splitreader
   Folly::folly
-  gflags::gflags
-  glog::glog
-  gtest
-  gtest_main
   xsimd)
 
 add_subdirectory(tests)
