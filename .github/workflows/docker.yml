@@ -66,6 +66,15 @@ jobs:
             tags: "ghcr.io/facebookincubator/velox-dev:presto-java"
 
     steps:
+      - name: Free up some disk space
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2
         with:
