@@ -50,4 +50,33 @@ PhysicalType fromCpuType(const Type& type) {
   return ans;
 }
 
+std::string PhysicalType::kindString(Kind kind) {
+  switch (kind) {
+    case kInt8:
+      return "Int8";
+    case kInt16:
+      return "Int16";
+    case kInt32:
+      return "Int32";
+    case kInt64:
+      return "Int64";
+    case kInt128:
+      return "Int128";
+    case kFloat32:
+      return "Float32";
+    case kFloat64:
+      return "Float64";
+    case kString:
+      return "String";
+    case kArray:
+      return "Array";
+    case kMap:
+      return "Map";
+    case kRow:
+      return "Row";
+  }
+
+  VELOX_UNREACHABLE();
+}
+
 } // namespace facebook::velox::wave

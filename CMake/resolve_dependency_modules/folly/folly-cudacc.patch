@@ -1,0 +1,68 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Rivos, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+--- a/folly/Conv.h
++++ b/folly/Conv.h
+@@ -286,8 +286,8 @@ namespace detail {
+ template <class... T>
+ using LastElement = type_pack_element_t<sizeof...(T) - 1, T...>;
+ 
+-#ifdef _MSC_VER
+-// MSVC can't quite figure out the LastElementImpl::call() stuff
++#if defined(_MSC_VER) || defined(__CUDACC__)
++// MSVC and NVCC can't quite figure out the LastElementImpl::call() stuff
+ // in the base implementation, so we have to use tuples instead,
+ // which result in significantly more templates being compiled,
+ // though the runtime performance is the same.
+--- a/folly/synchronization/RelaxedAtomic.h
++++ b/folly/synchronization/RelaxedAtomic.h
+@@ -98,7 +98,7 @@ struct relaxed_atomic_base : protected std::atomic<T> {
+ };
+ 
+ template <typename T>
+-struct relaxed_atomic_integral_base : private relaxed_atomic_base<T> {
++struct relaxed_atomic_integral_base : protected relaxed_atomic_base<T> {
+  private:
+   using atomic = std::atomic<T>;
+   using base = relaxed_atomic_base<T>;
+@@ -108,7 +108,9 @@ struct relaxed_atomic_integral_base : private relaxed_atomic_base<T> {
+ 
+   using base::relaxed_atomic_base;
+   using base::operator=;
++#ifndef __CUDACC__
+   using base::operator T;
++#endif
+   using base::compare_exchange_strong;
+   using base::compare_exchange_weak;
+   using base::exchange;
+@@ -206,7 +208,9 @@ struct relaxed_atomic : detail::relaxed_atomic_base<T> {
+ 
+   using base::relaxed_atomic_base;
+   using base::operator=;
++#ifndef __CUDACC__
+   using base::operator T;
++#endif
+ };
+ 
+ template <typename T>
+@@ -220,7 +224,9 @@ struct relaxed_atomic<T*> : detail::relaxed_atomic_base<T*> {
+ 
+   using detail::relaxed_atomic_base<T*>::relaxed_atomic_base;
+   using base::operator=;
++#ifndef __CUDACC__
+   using base::operator T*;
++#endif
+ 
+   T* fetch_add(std::ptrdiff_t arg) noexcept {
+     return atomic::fetch_add(arg, std::memory_order_relaxed);

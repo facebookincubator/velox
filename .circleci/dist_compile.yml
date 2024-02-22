@@ -287,6 +287,11 @@ jobs:
           command: |
             make benchmarks-build NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
           no_output_timeout: 1h
+      - run:
+          name: "Build Velox With GPU support"
+          command: |
+            make gpu NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4 CUDA_ARCHITECTURES=90 CUDA_COMPILER=/usr/local/cuda-12.3/bin/nvcc
+          no_output_timeout: 1h
       - post-steps
 
   linux-adapters:
