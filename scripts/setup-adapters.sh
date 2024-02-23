@@ -24,6 +24,7 @@ source $SCRIPTDIR/setup-helper-functions.sh
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 MACHINE=$(uname -m)
+AGGRESSIVE_CLEANUP="${AGGRESSIVE_CLEANUP:-false}"
 
 function install_aws_deps {
   local AWS_REPO_NAME="aws/aws-sdk-cpp"
