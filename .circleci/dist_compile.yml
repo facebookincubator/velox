@@ -596,6 +596,7 @@ workflows:
       - linux-build
       - linux-pr-fuzzer-run
       - linux-build-options
+      - linux-build-gpu
       - linux-adapters
       - linux-presto-fuzzer-run
       - doc-gen-job:
@@ -610,6 +611,7 @@ workflows:
       - linux-build
       - linux-pr-fuzzer-run
       - linux-build-options
+      - linux-build-gpu
       - linux-adapters
       - doc-gen-job:
           filters:
