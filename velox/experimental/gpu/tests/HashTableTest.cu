@@ -280,26 +280,26 @@ __global__ void probe<true>(
     auto rem = hash % sizeof(uint32_t);
     int64_t j = hash - rem;
     uint32_t cmpMask = 0xffffffff << (rem * 8);
-    ([&](){
-      for (;;) {
-        auto hits = __vcmpeq4(*(uint32_t*)&table->tags[j], tag) & cmpMask;
-        while (hits) {
-          auto jj = j + (__ffs(hits) - 1) / 8;
-          if (table->keys[jj] == keys[i]) {
-            hasValue[i] = true;
-            values[i] = table->values[jj];
-            return;
-          }
-          hits &= hits - 1;
+    for (;;) {
+      auto hits = __vcmpeq4(*(uint32_t*)&table->tags[j], tag) & cmpMask;
+      while (hits) {
+        auto jj = j + (__ffs(hits) - 1) / 8;
+        if (table->keys[jj] == keys[i]) {
+          hasValue[i] = true;
+          values[i] = table->values[jj];
+          goto end;
         }
-        if (__vcmpeq4(*(uint32_t*)&table->tags[j], 0) & cmpMask) {
-          hasValue[i] = false;
-          return;
-        }
-        j = (j + sizeof(uint32_t)) & tableSizeMask;
-        cmpMask = 0xffffffff;
+        hits &= hits - 1;
       }
-    })();
+      if (__vcmpeq4(*(uint32_t*)&table->tags[j], 0) & cmpMask) {
+        hasValue[i] = false;
+        goto end;
+      }
+      j = (j + sizeof(uint32_t)) & tableSizeMask;
+      cmpMask = 0xffffffff;
+    }
+  end:
+    ;
   }
 }
 
@@ -602,34 +602,34 @@ __global__ void probePartitioned<true>(
   uint64_t tableSizeMask = partitionSize - 1;
   for (auto i = threadIdx.x + offsets[blockIdx.x]; i < offsets[blockIdx.x + 1];
        i += blockDim.x) {
-    ([&](){
-      auto hash = hashInt(keys[i]) >> shift;
-      uint32_t tag = hashTag(hash);
-      tag = tag | (tag << 8);
-      tag = tag | (tag << 16);
-      hash &= tableSizeMask;
-      auto rem = hash % sizeof(uint32_t);
-      int64_t j = hash - rem;
-      uint32_t cmpMask = 0xffffffff << (rem * 8);
-      for (;;) {
-        auto hits = __vcmpeq4(*(uint32_t*)&tableTags[j], tag) & cmpMask;
-        while (hits) {
-          auto jj = j + (__ffs(hits) - 1) / 8 + partitionSize * blockIdx.x;
-          if (table->keys[jj] == keys[i]) {
-            hasValue[i] = true;
-            values[i] = table->values[jj];
-            return;
-          }
-          hits &= hits - 1;
+    auto hash = hashInt(keys[i]) >> shift;
+    uint32_t tag = hashTag(hash);
+    tag = tag | (tag << 8);
+    tag = tag | (tag << 16);
+    hash &= tableSizeMask;
+    auto rem = hash % sizeof(uint32_t);
+    int64_t j = hash - rem;
+    uint32_t cmpMask = 0xffffffff << (rem * 8);
+    for (;;) {
+      auto hits = __vcmpeq4(*(uint32_t*)&tableTags[j], tag) & cmpMask;
+      while (hits) {
+        auto jj = j + (__ffs(hits) - 1) / 8 + partitionSize * blockIdx.x;
+        if (table->keys[jj] == keys[i]) {
+          hasValue[i] = true;
+          values[i] = table->values[jj];
+          goto end;
         }
-        if (__vcmpeq4(*(uint32_t*)&tableTags[j], 0) & cmpMask) {
-          hasValue[i] = false;
-          return;
-        }
-        j = (j + sizeof(uint32_t)) & tableSizeMask;
-        cmpMask = 0xffffffff;
+        hits &= hits - 1;
       }
-    })();
+      if (__vcmpeq4(*(uint32_t*)&tableTags[j], 0) & cmpMask) {
+        hasValue[i] = false;
+        goto end;
+      }
+      j = (j + sizeof(uint32_t)) & tableSizeMask;
+      cmpMask = 0xffffffff;
+    }
+  end:
+    ;
   }
 }
 
