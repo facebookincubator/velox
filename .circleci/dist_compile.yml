@@ -138,6 +138,8 @@ executors:
   build-gpu:
     docker:
       - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
+    machine:
+      image: linux-cuda-12:default
     resource_class: gpu.nvidia.medium
     environment:
       CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
