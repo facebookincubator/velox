@@ -121,7 +121,7 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::RelCommon& relCommon,
       const core::PlanNodePtr& noEmitNode);
 
- private:
+ protected:
   /// Returns unique ID to use for plan node. Produces sequential numbers
   /// starting from zero.
   std::string nextPlanNodeId();
