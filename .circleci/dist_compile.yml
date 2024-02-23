@@ -136,8 +136,6 @@ executors:
       VELOX_DEPENDENCY_SOURCE: BUNDLED
       simdjson_SOURCE: BUNDLED
   build-gpu:
-    docker:
-      - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
     machine:
       image: linux-cuda-12:default
     resource_class: gpu.nvidia.medium
@@ -303,6 +301,8 @@ jobs:
   # Build with gpu
   linux-build-gpu:
     executor: build-gpu
+    docker:
+      - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
     steps:
       - pre-steps
       - run:
