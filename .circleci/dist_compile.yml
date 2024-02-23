@@ -135,6 +135,15 @@ executors:
       CXX: /opt/rh/gcc-toolset-9/root/bin/g++
       VELOX_DEPENDENCY_SOURCE: BUNDLED
       simdjson_SOURCE: BUNDLED
+  build-gpu:
+    docker:
+      - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
+    resource_class: gpu.nvidia.medium
+    environment:
+      CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
+      CXX: /opt/rh/gcc-toolset-9/root/bin/g++
+      VELOX_DEPENDENCY_SOURCE: BUNDLED
+      simdjson_SOURCE: BUNDLED
   check:
     docker:
       - image : ghcr.io/facebookincubator/velox-dev:check-avx
@@ -287,11 +296,23 @@ jobs:
           command: |
             make benchmarks-build NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
           no_output_timeout: 1h
+      - post-steps
+
+  # Build with gpu
+  linux-build-gpu:
+    executor: build-gpu
+    steps:
+      - pre-steps
       - run:
           name: "Build Velox With GPU support"
           command: |
-            make gpu NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4 CUDA_ARCHITECTURES=90 CUDA_COMPILER=/usr/local/cuda-12.3/bin/nvcc
+            make gpu NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4 CUDA_ARCHITECTURES=native CUDA_COMPILER=/usr/local/cuda-12.3/bin/nvcc
           no_output_timeout: 1h
+      # - run:
+      #     name: "Run Unit Tests"
+      #     command: |
+      #       cd _build/release && ctest -j 16 -VV --output-on-failure --no-tests=error
+      #     no_output_timeout: 1h
       - post-steps
 
   linux-adapters:
