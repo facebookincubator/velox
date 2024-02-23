@@ -63,7 +63,7 @@ class SubstraitVeloxExprConverter {
       const ::substrait::Expression::IfThen& substraitIfThen,
       const RowTypePtr& inputType);
 
- private:
+ protected:
   /// Convert list literal to ArrayVector.
   ArrayVectorPtr literalsToArrayVector(
       const ::substrait::Expression::Literal& listLiteral);
