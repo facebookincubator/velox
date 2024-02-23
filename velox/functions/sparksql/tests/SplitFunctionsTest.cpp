@@ -28,7 +28,7 @@ class SplitTest : public SparkFunctionBaseTest {
       const std::vector<std::optional<std::string>>& input,
       std::optional<std::string> pattern,
       const std::vector<std::optional<std::vector<std::string>>>& output,
-      int32_t limit = -1);
+      std::optional<int32_t> limit = std::nullopt);
 
   void testSplitEncodings(
       const std::vector<VectorPtr>& inputs,
@@ -57,7 +57,7 @@ void SplitTest::testSplit(
     const std::vector<std::optional<std::string>>& input,
     std::optional<std::string> pattern,
     const std::vector<std::optional<std::vector<std::string>>>& output,
-    int32_t limit) {
+    std::optional<int32_t> limit) {
   auto valueAt = [&input](vector_size_t row) {
     return input[row] ? StringView(*input[row]) : StringView();
   };
@@ -74,8 +74,9 @@ void SplitTest::testSplit(
     std::string patternString = pattern.has_value()
         ? std::string(", '") + pattern.value() + "'"
         : ", ''";
-    const std::string limitString =
-        ", '" + std::to_string(limit) + "'::INTEGER";
+    const std::string limitString = limit.has_value()
+        ? ", '" + std::to_string(limit.value()) + "'::INTEGER"
+        : "";
     std::string expressionString =
         std::string("split(c0") + patternString + limitString + ")";
     return evaluate<ArrayVector>(expressionString, rowVector);
@@ -93,8 +94,11 @@ void SplitTest::testSplitEncodings(
   const auto expected = toArrayVector(output);
   std::vector<core::TypedExprPtr> inputExprs = {
       std::make_shared<core::FieldAccessTypedExpr>(inputs[0]->type(), "c0"),
-      std::make_shared<core::FieldAccessTypedExpr>(inputs[1]->type(), "c1"),
-      std::make_shared<core::FieldAccessTypedExpr>(inputs[2]->type(), "c2")};
+      std::make_shared<core::FieldAccessTypedExpr>(inputs[1]->type(), "c1")};
+  if (inputs.size() > 2) {
+    inputExprs.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(inputs[2]->type(), "c2"));
+  }
   const auto expr = std::make_shared<const core::CallTypedExpr>(
       expected->type(), std::move(inputExprs), "split");
   testEncodings(expr, inputs, expected);
@@ -135,8 +139,6 @@ TEST_F(SplitTest, longStrings) {
 }
 
 TEST_F(SplitTest, zeroLengthPattern) {
-  // Since Spark 3.4, when delimiter is empty, the result does not include an
-  // empty tail string.
   testSplit(
       {"abcdefg", "abc:+%/n?(^)", ""},
       std::nullopt,
@@ -144,9 +146,9 @@ TEST_F(SplitTest, zeroLengthPattern) {
        {{"a", "b", "c", ":", "+", "%", "/", "n", "?", "(", "^", ")"}},
        {{""}}});
   testSplit(
-      {"abcdefg", "abc:+%/n?(^)", ""},
+      {"abcdefg", "ab:c+%/n?(^)", ""},
       std::nullopt,
-      {{{"a", "b", "cdefg"}}, {{"a", "b", "c:+%/n?(^)"}}, {{""}}},
+      {{{"a", "b", "c"}}, {{"a", "b", ":"}}, {{""}}},
       3);
   testSplit(
       {"abcdefg", "abc:+%/n?(^)", ""},
@@ -200,10 +202,11 @@ TEST_F(SplitTest, encodings) {
       }},
       {{"", ""}}};
   testSplitEncodings({strings, patterns, limits}, expected);
+  testSplitEncodings({strings, patterns}, expected);
 
   limits = makeFlatVector<int32_t>({3, 3, 2, 1, 5, 2, 1, 1, 2, 2});
   expected = {
-      {{"a", "b", "cdef"}},
+      {{"a", "b", "c"}},
       {{"one", "two", "threeC"}},
       {{"aa", "bb3cc"}},
       {{"hello"}},
