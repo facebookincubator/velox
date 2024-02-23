@@ -49,6 +49,15 @@ class SumAggregationTest : public SumTestBase {
         {expected},
         /*config*/ {},
         /*testWithTableScan*/ false);
+    testAggregationsWithCompanion(
+        {in},
+        [](auto& /*builder*/) {},
+        {},
+        {"spark_sum(c0)"},
+        {{type}},
+        {},
+        {expected},
+        {});
   }
 
   // Check group by partial agg overflow, and final agg output null.
@@ -69,6 +78,15 @@ class SumAggregationTest : public SumTestBase {
         {expected},
         /*config*/ {},
         /*testWithTableScan*/ false);
+    testAggregationsWithCompanion(
+        {in},
+        [](auto& /*builder*/) {},
+        {"c0"},
+        {"spark_sum(c1)"},
+        {{type}},
+        {"c0", "a0"},
+        {expected},
+        {});
   }
 
   template <typename TIn, typename TOut>
@@ -107,6 +125,15 @@ class SumAggregationTest : public SumTestBase {
         {expected},
         /*config*/ {},
         /*testWithTableScan*/ false);
+    testAggregationsWithCompanion(
+        {vectors},
+        [](auto& /*builder*/) {},
+        {"c0"},
+        {"spark_sum(c1)"},
+        {{inputType}},
+        {"c0", "a0"},
+        {expected},
+        {});
   }
 };
 
@@ -176,6 +203,15 @@ TEST_F(SumAggregationTest, decimalSum) {
       "SELECT sum(c0), sum(c1) FROM tmp",
       /*config*/ {},
       /*testWithTableScan*/ false);
+  testAggregationsWithCompanion(
+      {input},
+      [](auto& /*builder*/) {},
+      {},
+      {"spark_sum(c0)", "spark_sum(c1)"},
+      {{DECIMAL(10, 1)}, {DECIMAL(23, 4)}},
+      {},
+      "SELECT sum(c0), sum(c1) FROM tmp",
+      {});
 
   // Short decimal sum aggregation with multiple groups.
   auto inputShortDecimalRows = {
@@ -222,6 +258,15 @@ TEST_F(SumAggregationTest, decimalSum) {
       expectedShortDecimalResult,
       /*config*/ {},
       /*testWithTableScan*/ false);
+  testAggregationsWithCompanion(
+      {inputShortDecimalRows},
+      [](auto& /*builder*/) {},
+      {"c0"},
+      {"spark_sum(c1)"},
+      {{DECIMAL(5, 2)}},
+      {"c0", "a0"},
+      expectedShortDecimalResult,
+      {});
 
   // Long decimal sum aggregation with multiple groups.
   auto inputLongDecimalRows = {
@@ -276,6 +321,15 @@ TEST_F(SumAggregationTest, decimalSum) {
       expectedLongDecimalResult,
       /*config*/ {},
       /*testWithTableScan*/ false);
+  testAggregationsWithCompanion(
+      {inputShortDecimalRows},
+      [](auto& /*builder*/) {},
+      {"c0"},
+      {"spark_sum(c1)"},
+      {{DECIMAL(20, 2)}},
+      {"c0", "a0"},
+      expectedShortDecimalResult,
+      {});
 }
 
 TEST_F(SumAggregationTest, decimalGlobalSumOverflow) {
@@ -362,6 +416,15 @@ TEST_F(SumAggregationTest, decimalAllNullValues) {
       {expected},
       /*config*/ {},
       /*testWithTableScan*/ false);
+  testAggregationsWithCompanion(
+      {input},
+      [](auto& /*builder*/) {},
+      {},
+      {"spark_sum(c0)"},
+      {{DECIMAL(20, 2)}},
+      {},
+      {expected},
+      {});
 }
 
 // Test if all values in some groups are null, the final sum of this group
@@ -420,6 +483,15 @@ TEST_F(SumAggregationTest, decimalRangeOverflow) {
       {expected},
       /*config*/ {},
       /*testWithTableScan*/ false);
+  testAggregationsWithCompanion(
+      {firstInput, secondInput},
+      [](auto& /*builder*/) {},
+      {},
+      {"spark_sum(c0)"},
+      {{DECIMAL(38, 18)}},
+      {},
+      {expected},
+      {});
 }
 } // namespace
 } // namespace facebook::velox::functions::aggregate::sparksql::test

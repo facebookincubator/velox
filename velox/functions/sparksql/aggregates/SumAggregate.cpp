@@ -142,8 +142,8 @@ exec::AggregateRegistrationResult registerSum(
           case TypeKind::ROW: {
             VELOX_DCHECK(!exec::isRawInput(step));
             checkAccumulatorRowType(inputType);
-            // For intermediate input agg, input intermediate sum type
-            // is equal to final result sum type.
+            // For the intermediate aggregation step, input intermediate sum
+            // type is equal to final result sum type.
             if (inputType->childAt(0)->isShortDecimal()) {
               return std::make_unique<exec::SimpleAggregateAdapter<
                   DecimalSumAggregate<int64_t, int64_t>>>(resultType);

@@ -43,6 +43,8 @@ class DecimalSumAggregate {
   /// default-null behavior is disabled.
   static constexpr bool default_null_behavior_ = false;
 
+  static constexpr bool aligned_accumulator_ = true;
+
   static bool toIntermediate(
       exec::out_type<Row<TSumType, bool>>& out,
       exec::optional_arg_type<TInputType> in) {
@@ -93,6 +95,12 @@ class DecimalSumAggregate {
         exec::optional_arg_type<TInputType> data) {
       if (!data.has_value()) {
         return false;
+      }
+      if (!sum.has_value()) {
+        // sum is initialized to 0. When it is nullopt, it implies that the
+        // input data must not be empty.
+        VELOX_CHECK(!isEmpty)
+        return true;
       }
       int128_t result;
       overflow +=
