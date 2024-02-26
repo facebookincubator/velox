@@ -107,7 +107,7 @@ void concatWsVariableParameters(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args,
     exec::EvalCtx& context,
-    const std::string& connector,
+    const std::string& separator,
     FlatVector<StringView>& flatResult) {
   std::vector<column_index_t> argMapping;
   std::vector<std::string> constantStrings;
@@ -131,7 +131,7 @@ void concatWsVariableParameters(
           break;
         }
 
-        value += connector +
+        value += separator +
             args[j]->as<ConstantVector<StringView>>()->valueAt(0).str();
       }
       constantStrings.push_back(std::string(value.data(), value.size()));
@@ -173,7 +173,7 @@ void concatWsVariableParameters(
         if (isFirst) {
           isFirst = false;
         } else {
-          totalResultBytes += connector.size();
+          totalResultBytes += separator.size();
         }
         totalResultBytes += value.size();
       }
@@ -199,9 +199,9 @@ void concatWsVariableParameters(
         if (isFirst) {
           isFirst = false;
         } else {
-          memcpy(rawBuffer + offset, connector.data(), connector.size());
-          offset += connector.size();
-          combinedSize += connector.size();
+          memcpy(rawBuffer + offset, separator.data(), separator.size());
+          offset += separator.size();
+          combinedSize += separator.size();
         }
         memcpy(rawBuffer + offset, value.data(), size);
         combinedSize += size;
@@ -216,7 +216,7 @@ void concatWsArray(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args,
     exec::EvalCtx& context,
-    const std::string& connector,
+    const std::string& separator,
     FlatVector<StringView>& flatResult) {
   exec::LocalDecodedVector arrayHolder(context, *args[1], rows);
   auto& arrayDecoded = *arrayHolder.get();
@@ -246,7 +246,7 @@ void concatWsArray(
           if (isFirst) {
             isFirst = false;
           } else {
-            totalResultBytes += connector.size();
+            totalResultBytes += separator.size();
           }
           totalResultBytes += element.size();
         }
@@ -272,9 +272,9 @@ void concatWsArray(
             isFirst = false;
           } else {
             memcpy(
-                rawBuffer + bufferOffset, connector.data(), connector.size());
-            bufferOffset += connector.size();
-            combinedSize += connector.size();
+                rawBuffer + bufferOffset, separator.data(), separator.size());
+            bufferOffset += separator.size();
+            combinedSize += separator.size();
           }
           memcpy(rawBuffer + bufferOffset, element.data(), element.size());
           bufferOffset += element.size();
@@ -288,7 +288,7 @@ void concatWsArray(
 
 class ConcatWs : public exec::VectorFunction {
  public:
-  explicit ConcatWs(const std::string& connector) : connector_(connector) {}
+  explicit ConcatWs(const std::string& separator) : separator_(separator) {}
 
   bool isDefaultNullBehavior() const override {
     return false;
@@ -317,15 +317,15 @@ class ConcatWs : public exec::VectorFunction {
 
     auto arrayArgs = args[1]->typeKind() == TypeKind::ARRAY;
     if (arrayArgs) {
-      concatWsArray(selected, args, context, connector_, *flatResult);
+      concatWsArray(selected, args, context, separator_, *flatResult);
     } else {
       concatWsVariableParameters(
-          selected, args, context, connector_, *flatResult);
+          selected, args, context, separator_, *flatResult);
     }
   }
 
  private:
-  const std::string connector_;
+  const std::string separator_;
 };
 
 } // namespace
@@ -400,11 +400,11 @@ std::shared_ptr<exec::VectorFunction> makeConcatWs(
   BaseVector* constantPattern = inputArgs[0].constantValue.get();
   VELOX_USER_CHECK(
       nullptr != constantPattern,
-      "concat_ws requires constant connector arguments.");
+      "concat_ws requires constant separator arguments.");
 
-  auto connector =
+  auto separator =
       constantPattern->as<ConstantVector<StringView>>()->valueAt(0).str();
-  return std::make_shared<ConcatWs>(connector);
+  return std::make_shared<ConcatWs>(separator);
 }
 
 void encodeDigestToBase16(uint8_t* output, int digestSize) {
