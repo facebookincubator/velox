@@ -715,6 +715,14 @@ TEST_F(DateTimeFunctionsTest, minute) {
   EXPECT_EQ(59, minute("2024-01-08 00:59:59.999"));
   EXPECT_EQ(23, minute("2024-01-08 01:23:00.001"));
   EXPECT_EQ(23, minute("1969-01-01 13:23:00.001"));
+
+  // Set time zone to Asia/Kolkata (5.5 hours ahead of UTC).
+  setQueryTimeZone("Asia/Kolkata");
+
+  EXPECT_EQ(53, minute("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(29, minute("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(53, minute("2024-01-08 01:23:00.001"));
+  EXPECT_EQ(31, minute("1969-01-01 13:01:00.001"));
 }
 
 TEST_F(DateTimeFunctionsTest, second) {
