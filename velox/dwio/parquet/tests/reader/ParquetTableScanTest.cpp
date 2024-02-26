@@ -443,6 +443,44 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
       result.second, {makeRowVector({"a"}, {makeFlatVector<int64_t>({0, 1})})});
 }
 
+TEST_F(ParquetTableScanTest, rowIndex) {
+  // case 1: file not have `_tmp_metadata_row_index`, scan generate it for user.
+  loadData(
+      getExampleFilePath("sample.parquet"),
+      ROW({"a", "b", "_tmp_metadata_row_index"},
+          {BIGINT(), DOUBLE(), BIGINT()}),
+      makeRowVector(
+          {"a", "b", "_tmp_metadata_row_index"},
+          {
+              makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+              makeFlatVector<double>(20, [](auto row) { return row + 1; }),
+              makeFlatVector<int64_t>(20, [](auto row) { return row; }),
+          }));
+
+  assertSelect({"a"}, "SELECT a FROM tmp");
+  assertSelect(
+      {"a", "_tmp_metadata_row_index"},
+      "SELECT a, _tmp_metadata_row_index FROM tmp");
+  // case 2: file has `_tmp_metadata_row_index` column, then use user data
+  // insteads of generating it.
+  loadData(
+      getExampleFilePath("sample_with_rowindex.parquet"),
+      ROW({"a", "b", "_tmp_metadata_row_index"},
+          {BIGINT(), DOUBLE(), BIGINT()}),
+      makeRowVector(
+          {"a", "b", "_tmp_metadata_row_index"},
+          {
+              makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+              makeFlatVector<double>(20, [](auto row) { return row + 1; }),
+              makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+          }));
+
+  assertSelect({"a"}, "SELECT a FROM tmp");
+  assertSelect(
+      {"a", "_tmp_metadata_row_index"},
+      "SELECT a, _tmp_metadata_row_index FROM tmp");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};
