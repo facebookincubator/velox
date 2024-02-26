@@ -54,7 +54,11 @@ int main(int argc, char** argv) {
       "chr",
       "replace",
       "might_contain",
-      "unix_timestamp"};
+      "unix_timestamp",
+      // Skip concat_ws as it triggers a test failure due to an incorrect
+      // expression generation from fuzzer:
+      // https://github.com/facebookincubator/velox/issues/6590
+      "concat_ws"};
 
   // Required by spark_partition_id function.
   std::unordered_map<std::string, std::string> queryConfigs = {

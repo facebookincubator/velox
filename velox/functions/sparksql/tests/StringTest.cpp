@@ -26,6 +26,68 @@ class StringTest : public SparkFunctionBaseTest {
   // This is a five codepoint sequence that renders as a single emoji.
   static constexpr char kWomanFacepalmingLightSkinTone[] =
       "\xF0\x9F\xA4\xA6\xF0\x9F\x8F\xBB\xE2\x80\x8D\xE2\x99\x80\xEF\xB8\x8F";
+
+  void testConcatWsFlatVector(
+      const std::vector<std::vector<std::string>>& inputTable,
+      const size_t argsCount,
+      const std::string& separator) {
+    std::vector<VectorPtr> inputVectors;
+
+    for (int i = 0; i < argsCount; i++) {
+      inputVectors.emplace_back(
+          BaseVector::create(VARCHAR(), inputTable.size(), execCtx_.pool()));
+    }
+
+    for (int row = 0; row < inputTable.size(); row++) {
+      for (int col = 0; col < argsCount; col++) {
+        std::static_pointer_cast<FlatVector<StringView>>(inputVectors[col])
+            ->set(row, StringView(inputTable[row][col]));
+      }
+    }
+
+    auto buildConcatQuery = [&]() {
+      std::string output = "concat_ws('" + separator + "'";
+
+      for (int i = 0; i < argsCount; i++) {
+        output += ",c" + std::to_string(i);
+      }
+      output += ")";
+      return output;
+    };
+
+    // Evaluate 'concat_ws' expression and verify no excessive memory
+    // allocation. We expect 2 allocations: one for the values buffer and
+    // another for the strings buffer. I.e. FlatVector<StringView>::values and
+    // FlatVector<StringView>::stringBuffers.
+    auto numAllocsBefore = pool()->stats().numAllocs;
+
+    auto result = evaluate<FlatVector<StringView>>(
+        buildConcatQuery(), makeRowVector(inputVectors));
+
+    auto numAllocsAfter = pool()->stats().numAllocs;
+    ASSERT_EQ(numAllocsAfter - numAllocsBefore, 2);
+
+    auto concatStd = [&](const std::vector<std::string>& inputs) {
+      auto isFirst = true;
+      std::string output;
+      for (int i = 0; i < inputs.size(); i++) {
+        auto value = inputs[i];
+        if (!value.empty()) {
+          if (isFirst) {
+            isFirst = false;
+          } else {
+            output += separator;
+          }
+          output += value;
+        }
+      }
+      return output;
+    };
+
+    for (int i = 0; i < inputTable.size(); ++i) {
+      EXPECT_EQ(result->valueAt(i), concatStd(inputTable[i])) << "at " << i;
+    }
+  }
 };
 
 TEST_F(StringTest, ascii) {
@@ -861,6 +923,133 @@ TEST_F(StringTest, trim) {
   EXPECT_EQ(
       trimWithTrimStr("\u6570", "\u6574\u6570 \u6570\u636E!"),
       "\u6574\u6570 \u6570\u636E!");
+}
+
+// Test concat_ws vector function
+TEST_F(StringTest, concat_ws) {
+  // test concat_ws variable arguments
+  size_t maxArgsCount = 10; // cols
+  size_t rowCount = 100;
+  size_t maxStringLength = 100;
+
+  std::vector<std::vector<std::string>> inputTable;
+  for (int argsCount = 1; argsCount <= maxArgsCount; argsCount++) {
+    inputTable.clear();
+
+    // Create table with argsCount columns
+    inputTable.resize(rowCount, std::vector<std::string>(argsCount));
+
+    // Fill the table
+    for (int row = 0; row < rowCount; row++) {
+      for (int col = 0; col < argsCount; col++) {
+        inputTable[row][col] =
+            generateRandomString(folly::Random::rand32() % maxStringLength);
+      }
+    }
+
+    SCOPED_TRACE(fmt::format("Number of arguments: {}", argsCount));
+    testConcatWsFlatVector(inputTable, argsCount, "--testSep--");
+  }
+
+  // Test constant input vector with 2 args
+  {
+    auto rows = makeRowVector(makeRowType({VARCHAR(), VARCHAR()}), 10);
+    auto c0 = generateRandomString(20);
+    auto c1 = generateRandomString(20);
+    auto result = evaluate<SimpleVector<StringView>>(
+        fmt::format("concat_ws('-', '{}', '{}')", c0, c1), rows);
+    for (int i = 0; i < 10; ++i) {
+      EXPECT_EQ(result->valueAt(i), c0 + "-" + c1);
+    }
+  }
+
+  // Multiple consecutive constant inputs.
+  {
+    std::string value;
+    auto data = makeRowVector({
+        makeFlatVector<StringView>(
+            1'000,
+            [&](auto /* row */) {
+              value = generateRandomString(
+                  folly::Random::rand32() % maxStringLength);
+              return StringView(value);
+            }),
+        makeFlatVector<StringView>(
+            1'000,
+            [&](auto /* row */) {
+              value = generateRandomString(
+                  folly::Random::rand32() % maxStringLength);
+              return StringView(value);
+            }),
+    });
+
+    auto c0 = data->childAt(0)->as<FlatVector<StringView>>()->rawValues();
+    auto c1 = data->childAt(1)->as<FlatVector<StringView>>()->rawValues();
+
+    auto result = evaluate<SimpleVector<StringView>>(
+        "concat_ws('--', c0, c1, 'foo', 'bar')", data);
+
+    auto expected = makeFlatVector<StringView>(1'000, [&](auto row) {
+      value = "";
+      const std::string& s0 = c0[row].str();
+      const std::string& s1 = c1[row].str();
+
+      if (s0.empty() && s1.empty()) {
+        value = "foo--bar";
+      } else if (!s0.empty() && !s1.empty()) {
+        value = s0 + "--" + s1 + "--foo--bar";
+      } else {
+        value = s0 + s1 + "--foo--bar";
+      }
+      return StringView(value);
+    });
+
+    velox::test::assertEqualVectors(expected, result);
+
+    result = evaluate<SimpleVector<StringView>>(
+        "concat_ws('$*@', 'aaa', '测试', c0, 'eee', 'ddd', c1, '\u82f9\u679c', 'fff')",
+        data);
+
+    expected = makeFlatVector<StringView>(1'000, [&](auto row) {
+      value = "";
+      std::string delim = "$*@";
+      const std::string& s0 =
+          c0[row].str().empty() ? c0[row].str() : delim + c0[row].str();
+      const std::string& s1 =
+          c1[row].str().empty() ? c1[row].str() : delim + c1[row].str();
+
+      value = "aaa" + delim + "测试" + s0 + delim + "eee" + delim + "ddd" + s1 +
+          delim + "\u82f9\u679c" + delim + "fff";
+      return StringView(value);
+    });
+    velox::test::assertEqualVectors(expected, result);
+  }
+
+  // test concat_ws array
+  {
+    using S = StringView;
+    auto arrayVector = makeNullableArrayVector<StringView>({
+        {S("red"), S("blue")},
+        {S("blue"), std::nullopt, S("yellow"), std::nullopt, S("orange")},
+        {},
+        {std::nullopt},
+        {S("red"), S("purple"), S("green")},
+    });
+
+    auto result = evaluate<SimpleVector<StringView>>(
+        "concat_ws('----', c0)", makeRowVector({arrayVector}));
+
+    auto expected = {
+        S("red----blue"),
+        S("blue----yellow----orange"),
+        S(""),
+        S(""),
+        S("red----purple----green"),
+    };
+
+    velox::test::assertEqualVectors(
+        makeFlatVector<StringView>(expected), result);
+  }
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
