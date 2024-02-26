@@ -109,12 +109,12 @@ void castToVarchar(
     if (inputVector.isNullAt(row)) {
       flatResult.setNull(row, true);
     } else {
+      auto tsMillis = timestampVector->valueAt(row);
+      auto tzID = timezoneVector->valueAt(row);
       Timestamp ts = Timestamp::fromMillis(timestampVector->valueAt(row));
-      if (!adjustTimestampToTimezone) {
-        // Convert UTC to the given time zone.
-        ts.toTimezone(timezoneVector->valueAt(row));
-      }
-      auto output = ts.toString() + std::to_string(timezoneVector->valueAt(row));
+      // Convert UTC to the given time zone.
+      ts.toTimezone(timezoneVector->valueAt(row));
+      auto output = ts.toString() + util::getTimeZoneName(timezoneVector->valueAt(row));
 
       try {
         auto writer = exec::StringWriter<>(&flatResult, row);
@@ -141,11 +141,16 @@ void castFromTimestampWithTimeZone(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     BaseVector& result) {
-  VELOX_CHECK_EQ(kind, TypeKind::TIMESTAMP)
 
   const auto inputVector = input.as<RowVector>();
-  auto flatResult = result.as<FlatVector<Timestamp>>();
-  castToTimestamp(*inputVector, context, rows, *flatResult);
+
+  if (kind == TypeKind::TIMESTAMP) {
+    auto flatResult = result.as<FlatVector<Timestamp>>();
+    castToTimestamp(*inputVector, context, rows, *flatResult);
+  } else if (kind == TypeKind::VARCHAR) {
+    auto flatResult = result.as<FlatVector<StringView>>();
+    castToVarchar(*inputVector, context, rows, *flatResult);
+  }
 }
 
 template <TypeKind kind>
@@ -182,7 +187,7 @@ bool TimestampWithTimeZoneCastOperator::isSupportedToType(
     case TypeKind::TIMESTAMP:
       return true;
     case TypeKind::VARCHAR:
-      // TODO: support cast to VARCHAR
+      return true;
     case TypeKind::INTEGER:
       // TODO: support cast to DATE
     default:

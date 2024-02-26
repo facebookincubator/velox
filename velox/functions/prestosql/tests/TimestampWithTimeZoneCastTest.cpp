@@ -93,3 +93,15 @@ TEST_F(TimestampWithTimeZoneCastTest, toTimestamp) {
   // 1969-12-31 16:00:00.
   EXPECT_EQ(Timestamp(-28800, 0), result.value());
 }
+
+TEST_F(TimestampWithTimeZoneCastTest, toVarchar) {
+  const auto tsWithTZVector = makeTimestampWithTimeZoneVector(
+      makeFlatVector<int64_t>(
+          {1996 * kMillisInSecond, 0, 1996 * kMillisInSecond}),
+      makeFlatVector<int16_t>({1825, 0, 1847}));
+  tsWithTZVector->setNull(1, true);
+
+  auto expected = makeNullableFlatVector<StringView>(
+      {"1969-12-31 16:33:16.000 America/Los_Angeles", std::nullopt, "1969-12-31 19:33:16.000 America/New_York"});
+  testCast(tsWithTZVector, expected);
+}
