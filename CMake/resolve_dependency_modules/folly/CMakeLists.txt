@@ -28,13 +28,18 @@ message(STATUS "Building Folly from source")
 if(gflags_SOURCE STREQUAL "BUNDLED")
   set(glog_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly-gflags-glog.patch)
 endif()
+if(VELOX_ENABLE_GPU)
+  set(cudacc_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly-cudacc.patch)
+endif()
+
+set(VELOX_FOLLY_PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch
+                                ${glog_patch} ${cudacc_patch})
 
 FetchContent_Declare(
   folly
   URL ${VELOX_FOLLY_SOURCE_URL}
   URL_HASH ${VELOX_FOLLY_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch
-                ${glog_patch})
+  PATCH_COMMAND ${VELOX_FOLLY_PATCH_COMMAND})
 
 if(ON_APPLE_M1)
   # folly will wrongly assume x86_64 if this is not set

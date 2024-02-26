@@ -26,8 +26,6 @@ add_library(
   Wave.cpp
   Project.cpp)
 
-set_target_properties(velox_wave_exec PROPERTIES CUDA_ARCHITECTURES native)
-
 target_link_libraries(velox_wave_exec velox_wave_vector velox_wave_common
                       velox_exception velox_common_base velox_exec)
 
