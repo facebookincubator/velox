@@ -427,7 +427,9 @@ std::unique_ptr<exec::Aggregate> create(
 
 } // namespace
 
-void registerSetAggAggregate(const std::string& prefix) {
+void registerSetAggAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -491,7 +493,8 @@ void registerSetAggAggregate(const std::string& prefix) {
             VELOX_UNREACHABLE(
                 "Unexpected type {}", mapTypeKindToName(typeKind));
         }
-      });
+      },
+      withCompanionFunctions);
 }
 
 void registerSetUnionAggregate(const std::string& prefix) {

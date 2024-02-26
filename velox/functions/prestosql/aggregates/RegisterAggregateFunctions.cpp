@@ -45,7 +45,9 @@ extern void registerMaxDataSizeForStatsAggregate(const std::string& prefix);
 extern void registerMultiMapAggAggregate(const std::string& prefix);
 extern void registerSumDataSizeForStatsAggregate(const std::string& prefix);
 extern void registerReduceAgg(const std::string& prefix);
-extern void registerSetAggAggregate(const std::string& prefix);
+extern void registerSetAggAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions);
 extern void registerSetUnionAggregate(const std::string& prefix);
 
 extern void registerApproxDistinctAggregates(
@@ -92,7 +94,7 @@ void registerAllAggregateFunctions(
   registerMinMaxAggregates(prefix);
   registerMinMaxByAggregates(prefix);
   registerReduceAgg(prefix);
-  registerSetAggAggregate(prefix);
+  registerSetAggAggregate(prefix, withCompanionFunctions);
   registerSetUnionAggregate(prefix);
   registerSumAggregate(prefix);
   registerVarianceAggregates(prefix);
