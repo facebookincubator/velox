@@ -303,14 +303,15 @@ class ConcatWs : public exec::VectorFunction {
     context.ensureWritable(selected, VARCHAR(), result);
     auto flatResult = result->asFlatVector<StringView>();
     auto numArgs = args.size();
+    // If separator is NULL, result is NULL.
+    if (args[0]->isNullAt(0)) {
+      selected.applyToSelected([&](int row) { result->setNull(row, true); });
+      return;
+    }
+    // If only separator (not a NULL) is provided, result is an empty array.
     if (numArgs == 1) {
       selected.applyToSelected(
           [&](int row) { flatResult->setNoCopy(row, StringView("")); });
-      return;
-    }
-
-    if (args[0]->isNullAt(0)) {
-      selected.applyToSelected([&](int row) { result->setNull(row, true); });
       return;
     }
 
