@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
-    <title>Expression and Aggregation Fuzzer &#8212; Velox  documentation</title>
+    <title>Expression, Aggregation, and Window Fuzzer &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
@@ -34,7 +34,7 @@
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
           <li class="nav-item nav-item-2"><a href="../testing.html" accesskey="U">Testing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Expression and Aggregation Fuzzer</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Expression, Aggregation, and Window Fuzzer</a></li> 
       </ul>
     </div>  
 
@@ -43,8 +43,10 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="expression-and-aggregation-fuzzer">
-<h1>Expression and Aggregation Fuzzer<a class="headerlink" href="#expression-and-aggregation-fuzzer" title="Permalink to this heading">¶</a></h1>
+  <section id="expression-aggregation-and-window-fuzzer">
+<h1>Expression, Aggregation, and Window Fuzzer<a class="headerlink" href="#expression-aggregation-and-window-fuzzer" title="Permalink to this heading">¶</a></h1>
+<section id="expression-fuzzer">
+<h2>Expression Fuzzer<a class="headerlink" href="#expression-fuzzer" title="Permalink to this heading">¶</a></h2>
 <p>Velox allows users to define UDFs (user-defined functions) and UDAFs
 (user-defined aggregate functions) and provides a fuzzer tools to test the
 engine and UDFs thoroughly. These tools are being used to test builtin Presto
@@ -58,6 +60,9 @@ vector can have random and potentially nested encodings.</p>
 expression fuzzer evaluates each expression twice and asserts the results to be
 the same: using regular evaluation path and using simplified evaluation that
 flattens all input vectors before evaluating an expression.</p>
+</section>
+<section id="aggregation-fuzzer">
+<h2>Aggregation Fuzzer<a class="headerlink" href="#aggregation-fuzzer" title="Permalink to this heading">¶</a></h2>
 <p>The Aggregation Fuzzer tests the HashAggregation operator, the StreamingAggregation
 operator and UDAFs by generating random aggregations and evaluating these on
 random input vectors.</p>
@@ -104,6 +109,24 @@ tested:</p>
 <span class="n">Total</span> <span class="n">failed</span> <span class="n">aggregations</span><span class="p">:</span> <span class="mi">1061</span> <span class="p">(</span><span class="mf">18.67</span><span class="o">%</span><span class="p">)</span>
 </pre></div>
 </div>
+</section>
+<section id="window-fuzzer">
+<h2>Window Fuzzer<a class="headerlink" href="#window-fuzzer" title="Permalink to this heading">¶</a></h2>
+<p>The Window fuzzer tests the Window operator with window and aggregation
+functions by generating random window queries and evaluating them on
+random input vectors. Results of the window queries can be compared to
+Presto as the source of truth.</p>
+<p>For each window operation, fuzzer generates multiple logically equivalent
+plans and verifies that results match. These plans include</p>
+<ul class="simple">
+<li><p>Values -&gt; Window</p></li>
+<li><p>TableScan -&gt; PartitionBy -&gt; Window</p></li>
+<li><p>Values -&gt; OrderBy -&gt; Window (streaming)</p></li>
+<li><p>TableScan -&gt; OrderBy -&gt; Window (streaming)</p></li>
+</ul>
+<p>Window fuzzer currently doesn’t use any custom result verifiers. Functions
+that require custom result verifiers are left unverified.</p>
+</section>
 <section id="how-to-integrate">
 <h2>How to integrate<a class="headerlink" href="#how-to-integrate" title="Permalink to this heading">¶</a></h2>
 <p>To integrate with the Expression Fuzzer, create a test, register all scalar
@@ -125,7 +148,7 @@ correctness by ensuring that results of logically equivalent plans match.</p>
 </section>
 <section id="how-to-run">
 <h2>How to run<a class="headerlink" href="#how-to-run" title="Permalink to this heading">¶</a></h2>
-<p>Fuzzers support a number of powerful command line arguments.</p>
+<p>All fuzzers support a number of powerful command line arguments.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">–-steps</span></code>: How many iterations to run. Each iteration generates and evaluates one expression or aggregation. Default is 10.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-duration_sec</span></code>: For how long to run in seconds. If both <code class="docutils literal notranslate"><span class="pre">-–steps</span></code> and <code class="docutils literal notranslate"><span class="pre">-–duration_sec</span></code> are specified, –duration_sec takes precedence.</p></li>
@@ -133,8 +156,10 @@ correctness by ensuring that results of logically equivalent plans match.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-v=1</span></code>: Verbose logging (from <a class="reference external" href="https://github.com/google/glog#setting-flags">Google Logging Library</a>).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-only</span></code>: A comma-separated list of functions to use in generated expressions.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-batch_size</span></code>: The size of input vectors to generate. Default is 100.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--null_ratio</span></code>: Chance of adding a null constant to the plan, or null value in a vector (expressed as double from 0 to 1). Default is 0.1.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--max_num_varargs</span></code>: The maximum number of variadic arguments fuzzer will generate for functions that accept variadic arguments. Fuzzer will generate up to max_num_varargs arguments for the variadic list in addition to the required arguments by the function. Default is 10.</p></li>
 </ul>
-<p>There are also arguments that toggle certain fuzzer features:</p>
+<p>Below are arguments that toggle certain fuzzer features in Expression Fuzzer:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--retry_with_try</span></code>: Retry failed expressions by wrapping it using a try() statement. Default is false.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--enable_variadic_signatures</span></code>: Enable testing of function signatures with variadic arguments. Default is false.</p></li>
@@ -146,17 +171,18 @@ correctness by ensuring that results of logically equivalent plans match.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">--velox_fuzzer_enable_expression_reuse</span></code>: Enable generation of expressions that re-uses already generated subexpressions. Default is false.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--assign_function_tickets</span></code>: Comma separated list of function names and their tickets in the format &lt;function_name&gt;=&lt;tickets&gt;. Every ticket represents an opportunity for a function to be chosen from a pool of candidates. By default, every function has one ticket, and the likelihood of a function being picked can be increased by allotting it more tickets. Note that in practice, increasing the number of tickets does not proportionally increase the likelihood of selection, as the selection process involves filtering the pool of candidates by a required return type so not all functions may compete against the same number of functions at every instance. Number of tickets must be a positive integer. Example: eq=3,floor=5.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--max_expression_trees_per_step</span></code>: This sets an upper limit on the number of expression trees to generate per step. These trees would be executed in the same ExprSet and can re-use already generated columns and subexpressions (if re-use is enabled). Default is 1.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--velox_fuzzer_max_level_of_nesting</span></code>: Max levels of expression nesting. Default is 10 and minimum is 1.</p></li>
 </ul>
-<p>In addition, Aggregation Fuzzer also supports tuning parameters:</p>
+<p>In addition, Aggregation Fuzzer supports the tuning parameter:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--num_batches</span></code>: The number of input vectors of size <cite>–batch_size</cite> to generate. Default is 10.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--max_num_varargs</span></code>: The maximum number of variadic arguments fuzzer will generate for functions that accept variadic arguments. Fuzzer will generate up to max_num_varargs arguments for the variadic list in addition to the required arguments by the function. Default is 10.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--null_ratio</span></code>: Chance of adding a null constant to the plan, or null value in a vector (expressed as double from 0 to 1). Default is 0.1.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--velox_fuzzer_max_level_of_nesting</span></code>: Max levels of expression nesting. Default is 10 and minimum is 1.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--num_batches</span></code>: The number of input vectors of size <cite>–batch_size</cite> to generate. Default is 10.</p></li>
+</ul>
+<p>Window Fuzzer supports verifiering window query results against reference DB:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--enable_window_reference_verification</span></code>: When true, the results of the window aggregation are compared to reference DB results. Default is false.</p></li>
 </ul>
 <p>If running from CLion IDE, add <code class="docutils literal notranslate"><span class="pre">--logtostderr=1</span></code> to see the full output.</p>
-<p>An example set of arguments to run the fuzzer with all features enabled is as follows:
+<p>An example set of arguments to run the expression fuzzer with all features enabled is as follows:
 <code class="docutils literal notranslate"><span class="pre">--duration_sec</span> <span class="pre">60</span>
 <span class="pre">--enable_variadic_signatures</span>
 <span class="pre">--lazy_vector_generation_ratio</span> <span class="pre">0.2</span>
@@ -292,7 +318,10 @@ Result: ROW&lt;_col0:ARRAY&lt;INTEGER&gt;,_col1:ARRAY&lt;INTEGER&gt;&gt;
   <div>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
-<li><a class="reference internal" href="#">Expression and Aggregation Fuzzer</a><ul>
+<li><a class="reference internal" href="#">Expression, Aggregation, and Window Fuzzer</a><ul>
+<li><a class="reference internal" href="#expression-fuzzer">Expression Fuzzer</a></li>
+<li><a class="reference internal" href="#aggregation-fuzzer">Aggregation Fuzzer</a></li>
+<li><a class="reference internal" href="#window-fuzzer">Window Fuzzer</a></li>
 <li><a class="reference internal" href="#how-to-integrate">How to integrate</a></li>
 <li><a class="reference internal" href="#how-to-run">How to run</a></li>
 <li><a class="reference internal" href="#how-to-reproduce-failures">How to reproduce failures</a></li>
@@ -348,7 +377,7 @@ Result: ROW&lt;_col0:ARRAY&lt;INTEGER&gt;,_col1:ARRAY&lt;INTEGER&gt;&gt;
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
           <li class="nav-item nav-item-2"><a href="../testing.html" >Testing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Expression and Aggregation Fuzzer</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Expression, Aggregation, and Window Fuzzer</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">
