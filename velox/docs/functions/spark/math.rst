@@ -236,7 +236,8 @@ Mathematical Functions
 
 .. spark:function:: unhex(x) -> varbinary
 
-    Converts hexadecimal ``x`` to varbinary.
-    If ``x`` has odd number of characters, first character will be parsed first and putted in index 0,
-    remaining characters continue be parsed and putted start from index 0.
-    If ``x`` contains invalid character, null will be returned.
+    Converts hexadecimal varchar ``x`` to varbinary.
+    If size ``x`` is odd, parses the first character and puts it at index 0 of binary result,
+    then, continues parsing remaining characters, if existing, and
+    still puts the parsing result starting from index 0, which will overwrite the previous value.
+    If ``x`` contains invalid character, return null.
