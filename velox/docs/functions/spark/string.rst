@@ -20,6 +20,18 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     If ``n < 0``, the result is an empty string.
     If ``n >= 256``, the result is equivalent to chr(``n % 256``).
 
+.. spark:function:: concat_ws(separator, [array<string>]/[string], ...) -> varchar
+
+   Returns the concatenation of the strings separated by ``separator``. If ``separator`` is NULL, the
+   result is NULL, regardless of the following inputs. If only ``separator`` (not a NULL) is provided,
+   or all remaining inputs are NULL, returns an empty string. ::
+
+        SELECT concat_ws(',', 'a', 'b', 'c'); -- 'a,b,c'
+        SELECT concat_ws(',', ['a', 'b', 'c']); -- 'a,b,c'
+        SELECT concat_ws(NULL, 'a'); -- NULL
+        SELECT concat_ws(','); -- ''
+        SELECT concat_ws(',', NULL, NULL); -- ''
+
 .. spark:function:: contains(left, right) -> boolean
 
     Returns true if 'right' is found in 'left'. Otherwise, returns false. ::
