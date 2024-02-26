@@ -102,6 +102,10 @@ function(set_with_default var_name envvar_name default)
     set(${var_name}
         $ENV{${envvar_name}}
         PARENT_SCOPE)
+  elseif(DEFINED ${envvar_name})
+    set(${var_name}
+        ${${envvar_name}}
+        PARENT_SCOPE)
   else()
     set(${var_name}
         ${default}
