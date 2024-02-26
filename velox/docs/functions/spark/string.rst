@@ -89,6 +89,25 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
     Returns the length of ``string`` in characters.
 
+.. spark:function:: locate(substring, string[, start]) -> integer
+
+    Returns the position of the first occurrence of ``substring`` in given ``string``
+    after position ``start``. The given ``start`` and return value are 1-based.
+    Returns 0 if ``start`` is NULL. Returns NULL if ``substring`` or ``string`` is NULL.
+    Returns 0 if ``start`` is less than 1 or ``substring`` is not found in ``string``. ::
+
+        SELECT locate('aa', 'aaads'); -- 1
+        SELECT locate('aa', 'aaads', -1); -- 0
+        SELECT locate('aa', 'aaads', 2); -- 2
+        SELECT locate('aa', 'aaads', 6); -- 0
+        SELECT locate('aa', 'aaads', NULL) -- 0
+        SELECT locate('', 'aaads', 1); -- 1
+        SELECT locate('', 'aaads', 9); -- 1
+        SELECT locate('', ''); -- 1
+        SELECT locate('aa', '') -- 0
+        SELECT locate(NULL, NULL, NULL) -- 0
+        SELECT locate(NULL, NULL, 1) -- NULL
+
 .. spark:function:: lower(string) -> string
 
     Returns string with all characters changed to lowercase. ::
