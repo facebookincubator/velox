@@ -530,18 +530,15 @@ constructor within the Project operation.</p>
 </pre></div>
 </div>
 <p>Aggregation operator that follows, groups these rows by (l_suppkey, l_partkey, grouping_id_0) and produces:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">..</span> <span class="n">code</span><span class="o">-</span><span class="n">block</span><span class="p">::</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">l_suppkey</span> <span class="n">l_partkey</span> <span class="n">grouping_id_0</span>
+<span class="mi">93</span>        <span class="n">null</span>      <span class="mi">1</span>
+<span class="mi">75</span>        <span class="n">null</span>      <span class="mi">1</span>
+<span class="mi">38</span>        <span class="n">null</span>      <span class="mi">1</span>
+<span class="n">null</span>      <span class="mi">673</span>       <span class="mi">2</span>
+<span class="n">null</span>      <span class="mi">674</span>       <span class="mi">2</span>
+<span class="n">null</span>      <span class="mi">22</span>        <span class="mi">2</span>
 </pre></div>
 </div>
-<blockquote>
-<div><p>l_suppkey l_partkey grouping_id_0
-93        null      1
-75        null      1
-38        null      1
-null      673       2
-null      674       2
-null      22        2</p>
-</div></blockquote>
 <p>Another Aggregation operator that follows, computes global count(l_suppkey) and count(l_partkey) producing final result:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">COUNT</span><span class="p">(</span><span class="n">DISTINCT</span> <span class="n">l_suppkey</span><span class="p">)</span> <span class="n">COUNT</span><span class="p">(</span><span class="n">DISTINCT</span> <span class="n">l_partkey</span><span class="p">)</span>
 <span class="mi">3</span>                         <span class="mi">3</span>
