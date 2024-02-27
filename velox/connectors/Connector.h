@@ -392,15 +392,19 @@ class Connector {
 
 class ConnectorFactory {
  public:
-  explicit ConnectorFactory(const char* name) : name_(name) {}
+  explicit ConnectorFactory(
+      const char* name,
+      const std::vector<std::string>& aliases = {})
+      : name_(name), aliases_(aliases) {}
 
   virtual ~ConnectorFactory() = default;
 
-  // Initialize is called during the factory registration.
-  virtual void initialize() {}
-
   const std::string& connectorName() const {
     return name_;
+  }
+
+  const std::vector<std::string>& getAliases() const {
+    return aliases_;
   }
 
   virtual std::shared_ptr<Connector> newConnector(
@@ -410,6 +414,7 @@ class ConnectorFactory {
 
  private:
   const std::string name_;
+  const std::vector<std::string> aliases_;
 };
 
 /// Adds a factory for creating connectors to the registry using connector name
@@ -417,6 +422,10 @@ class ConnectorFactory {
 /// returns true. The return value makes it easy to use with
 /// FB_ANONYMOUS_VARIABLE.
 bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory);
+
+/// Removes the connector factory from the register using connector name.
+/// Returns true if factory was removed and false if connector didn't exist.
+bool unregisterConnectorFactory(const std::string& connectorName);
 
 /// Returns a factory for creating connectors with the specified name. Throws if
 /// factory doesn't exist.
@@ -438,10 +447,4 @@ std::shared_ptr<Connector> getConnector(const std::string& connectorId);
 /// Returns a map of all (connectorId -> connector) pairs currently registered.
 const std::unordered_map<std::string, std::shared_ptr<Connector>>&
 getAllConnectors();
-
-#define VELOX_REGISTER_CONNECTOR_FACTORY(theFactory)                      \
-  namespace {                                                             \
-  static bool FB_ANONYMOUS_VARIABLE(g_ConnectorFactory) =                 \
-      facebook::velox::connector::registerConnectorFactory((theFactory)); \
-  }
 } // namespace facebook::velox::connector

@@ -129,33 +129,6 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
       constValues_);
 }
 
-void HiveConnectorFactory::initialize() {
-  [[maybe_unused]] static bool once = []() {
-    dwio::common::registerFileSinks();
-    dwrf::registerDwrfReaderFactory();
-    dwrf::registerDwrfWriterFactory();
-// Meta's buck build system needs this check.
-#ifdef VELOX_ENABLE_PARQUET
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
-#endif
-// Meta's buck build system needs this check.
-#ifdef VELOX_ENABLE_S3
-    filesystems::registerS3FileSystem();
-#endif
-#ifdef VELOX_ENABLE_HDFS3
-    filesystems::registerHdfsFileSystem();
-#endif
-#ifdef VELOX_ENABLE_GCS
-    filesystems::registerGCSFileSystem();
-#endif
-#ifdef VELOX_ENABLE_ABFS
-    filesystems::abfs::registerAbfsFileSystem();
-#endif
-    return true;
-  }();
-}
-
 std::string HivePartitionFunctionSpec::toString() const {
   std::ostringstream keys;
   size_t constIndex = 0;
@@ -219,7 +192,4 @@ void registerHivePartitionFunctionSerDe() {
       "HivePartitionFunctionSpec", HivePartitionFunctionSpec::deserialize);
 }
 
-VELOX_REGISTER_CONNECTOR_FACTORY(std::make_shared<HiveConnectorFactory>())
-VELOX_REGISTER_CONNECTOR_FACTORY(
-    std::make_shared<HiveHadoop2ConnectorFactory>())
 } // namespace facebook::velox::connector::hive

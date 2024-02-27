@@ -30,6 +30,8 @@ HiveConnectorTestBase::HiveConnectorTestBase() {
 
 void HiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
+  connector::registerConnectorFactory(
+      std::make_shared<connector::hive::HiveConnectorFactory>());
   auto hiveConnector =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
@@ -45,6 +47,8 @@ void HiveConnectorTestBase::TearDown() {
   // connector.
   ioExecutor_.reset();
   connector::unregisterConnector(kHiveConnectorId);
+  connector::unregisterConnectorFactory(
+      connector::hive::HiveConnectorFactory::kHiveConnectorName);
   OperatorTestBase::TearDown();
 }
 
