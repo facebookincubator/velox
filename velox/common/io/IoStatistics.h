@@ -33,7 +33,7 @@ struct OperationCounters {
   uint64_t retryCount{0};
   uint64_t latencyInMs{0};
   uint64_t requestCount{0};
-  uint64_t delayInjectedInSecs{0};
+  uint64_t delayInjectedInSeconds{0};
 
   void merge(const OperationCounters& other);
 };
@@ -129,7 +129,7 @@ class IoStatistics {
       const uint64_t globalThrottleCount,
       const uint64_t retryCount,
       const uint64_t latencyInMs,
-      const uint64_t delayInjectedInSecs);
+      const uint64_t delayInjectedInSeconds);
 
   std::unordered_map<std::string, OperationCounters> operationStats() const;
 

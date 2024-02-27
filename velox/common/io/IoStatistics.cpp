@@ -77,7 +77,7 @@ void IoStatistics::incOperationCounters(
     const uint64_t globalThrottleCount,
     const uint64_t retryCount,
     const uint64_t latencyInMs,
-    const uint64_t delayInjectedInSecs) {
+    const uint64_t delayInjectedInSeconds) {
   std::lock_guard<std::mutex> lock{operationStatsMutex_};
   operationStats_[operation].localThrottleCount += localThrottleCount;
   operationStats_[operation].resourceThrottleCount += resourceThrottleCount;
@@ -85,7 +85,7 @@ void IoStatistics::incOperationCounters(
   operationStats_[operation].retryCount += retryCount;
   operationStats_[operation].latencyInMs += latencyInMs;
   operationStats_[operation].requestCount++;
-  operationStats_[operation].delayInjectedInSecs += delayInjectedInSecs;
+  operationStats_[operation].delayInjectedInSeconds += delayInjectedInSeconds;
 }
 
 std::unordered_map<std::string, OperationCounters>
@@ -118,7 +118,7 @@ void OperationCounters::merge(const OperationCounters& other) {
   retryCount += other.retryCount;
   latencyInMs += other.latencyInMs;
   requestCount += other.requestCount;
-  delayInjectedInSecs += other.delayInjectedInSecs;
+  delayInjectedInSeconds += other.delayInjectedInSeconds;
 }
 
 folly::dynamic serialize(const OperationCounters& counters) {
@@ -129,7 +129,7 @@ folly::dynamic serialize(const OperationCounters& counters) {
   json["globalThrottleCount"] = counters.globalThrottleCount;
   json["retryCount"] = counters.retryCount;
   json["requestCount"] = counters.requestCount;
-  json["delayInjectedInSecs"] = counters.delayInjectedInSecs;
+  json["delayInjectedInSeconds"] = counters.delayInjectedInSeconds;
   return json;
 }
 
