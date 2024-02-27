@@ -174,7 +174,8 @@ class E2EFilterTestBase : public testing::Test {
   virtual void writeToMemory(
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches,
-      bool forRowGroupSkip) = 0;
+      bool forRowGroupSkip,
+      bool useSparkFlushPolicy = false) = 0;
 
   virtual std::unique_ptr<dwio::common::Reader> makeReader(
       const dwio::common::ReaderOptions& opts,

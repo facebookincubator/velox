@@ -85,6 +85,32 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
   std::function<bool()> lambda_;
 };
 
+class SparkFlushPolicy : public DefaultFlushPolicy {
+  // The default value of bytes and rows in one row group.
+  static constexpr int64_t kDefaultBytesInRowGroup = 128 << 20;
+  static constexpr uint64_t kDefaultRowsInRowGroup = 1'024 * 1'024;
+
+ public:
+  explicit SparkFlushPolicy(
+      uint64_t rowsInRowGroup,
+      int64_t bytesInRowGroup,
+      std::function<bool()> lambda)
+      : DefaultFlushPolicy(
+            std::max(rowsInRowGroup, kDefaultRowsInRowGroup),
+            std::max(bytesInRowGroup, kDefaultBytesInRowGroup)) {
+    lambda_ = std::move(lambda);
+  }
+  virtual ~SparkFlushPolicy() override = default;
+
+  bool shouldFlush(
+      const dwio::common::StripeProgress& stripeProgress) override {
+    return lambda_() || DefaultFlushPolicy::shouldFlush(stripeProgress);
+  }
+
+ private:
+  std::function<bool()> lambda_;
+};
+
 struct WriterOptions {
   bool enableDictionary = true;
   int64_t dataPageSize = 1'024 * 1'024;
