@@ -260,15 +260,24 @@ struct ToUTCTimestampFunction {
       const arg_type<Timestamp>& timestamp,
       const arg_type<Varchar>& timezone) {
     result = timestamp;
-    result.toGMT(setTimezone(timezone));
-    
-  }
- protected:
-  int64_t setTimezone(const arg_type<Varchar>& timezone) {
-    return util::getTimeZoneID(std::string_view(timezone.data(), timezone.size()));
+    result.toGMT(
+        *date::locate_zone(std::string_view(timezone.data(), timezone.size())));
   }
 };
 
+template <typename T>
+struct FromUTCTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& timezone) {
+    result = timestamp;
+    result.toTimezone(
+        *date::locate_zone(std::string_view(timezone.data(), timezone.size())));
+  }
+};
 
 /// Converts date string to Timestmap type.
 template <typename T>
