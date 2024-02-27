@@ -115,20 +115,21 @@ TEST_F(DateTimeFunctionsTest, weekOfYear) {
 }
 
 TEST_F(DateTimeFunctionsTest, unixDate) {
-  const auto unixDate = [&](std::optional<int32_t> value) {
-    return evaluateOnce<int32_t, int32_t>("unix_date(c0)", {value}, {DATE()});
+  const auto unixDate = [&](const StringView& date) {
+    return evaluateOnce<int32_t, int32_t>(
+        "unix_date(c0)", {util::fromDateString(date)}, {DATE()});
   };
 
-  EXPECT_EQ(unixDate(util::fromDateString("1970-01-01")), 0);
-  EXPECT_EQ(unixDate(util::fromDateString("1970-01-02")), 1);
-  EXPECT_EQ(unixDate(util::fromDateString("1969-12-31")), -1);
-  EXPECT_EQ(unixDate(util::fromDateString("1970-02-01")), 31);
-  EXPECT_EQ(unixDate(util::fromDateString("1971-01-31")), 395);
-  EXPECT_EQ(unixDate(util::fromDateString("1971-01-01")), 365);
-  EXPECT_EQ(unixDate(util::fromDateString("1972-02-29")), 365 + 365 + 30 + 29);
-  EXPECT_EQ(unixDate(util::fromDateString("1971-03-01")), 365 + 30 + 28 + 1);
-  EXPECT_EQ(unixDate(util::fromDateString("5881580-07-11")), kMax);
-  EXPECT_EQ(unixDate(util::fromDateString("-5877641-06-23")), kMin);
+  EXPECT_EQ(unixDate("1970-01-01"), 0);
+  EXPECT_EQ(unixDate("1970-01-02"), 1);
+  EXPECT_EQ(unixDate("1969-12-31"), -1);
+  EXPECT_EQ(unixDate("1970-02-01"), 31);
+  EXPECT_EQ(unixDate("1971-01-31"), 395);
+  EXPECT_EQ(unixDate("1971-01-01"), 365);
+  EXPECT_EQ(unixDate("1972-02-29"), 365 + 365 + 30 + 29);
+  EXPECT_EQ(unixDate("1971-03-01"), 365 + 30 + 28 + 1);
+  EXPECT_EQ(unixDate("5881580-07-11"), kMax);
+  EXPECT_EQ(unixDate("-5877641-06-23"), kMin);
 }
 
 TEST_F(DateTimeFunctionsTest, unixTimestamp) {
