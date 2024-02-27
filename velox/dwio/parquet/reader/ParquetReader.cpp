@@ -291,6 +291,10 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           // value children.
           if (schema[parentSchemaIdx].converted_type ==
               thrift::ConvertedType::MAP) {
+            // TODO: the group names need to be checked. According to the spec,
+            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
+            // the name of the schema element being 'key_value' is
+            // also an indication of this is a map type
             VELOX_CHECK_EQ(
                 schemaElement.repetition_type,
                 thrift::FieldRepetitionType::REPEATED);
@@ -347,9 +351,12 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     } else {
       if (schemaElement.repetition_type ==
           thrift::FieldRepetitionType::REPEATED) {
-        VELOX_CHECK_LE(
-            children.size(), 2, "children size should not be larger than 2");
-        if (children.size() == 1) {
+        if (schema[parentSchemaIdx].converted_type ==
+            thrift::ConvertedType::LIST) {
+          // TODO: the group names need to be checked. According to spec,
+          // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+          // the name of the schema element being 'array' is
+          // also an indication of this is a list type
           // child of LIST
           auto childrenCopy = children;
           return std::make_shared<ParquetTypeWithId>(
@@ -365,7 +372,11 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               maxDefine,
               isOptional,
               isRepeated);
-        } else if (children.size() == 2) {
+        } else if (
+            schema[parentSchemaIdx].converted_type ==
+                thrift::ConvertedType::MAP ||
+            schema[parentSchemaIdx].converted_type ==
+                thrift::ConvertedType::MAP_KEY_VALUE) {
           // children  of MAP
           auto childrenCopy = children;
           return std::make_shared<const ParquetTypeWithId>(
