@@ -25,15 +25,6 @@ using namespace facebook::velox::exec;
 
 namespace {
 
-// Init memoryManager
-memory::MemoryPool* rootPool() {
-  static std::shared_ptr<memory::MemoryPool> rootPool_ = []() {
-    memory::MemoryManager::initialize({});
-    return memory::memoryManager()->addRootPool("PrefixSortTest", 4L << 30);
-  }();
-  return rootPool_.get();
-}
-
 class TestCase {
  public:
   TestCase(
@@ -114,15 +105,14 @@ class TestCase {
 
 class PrefixSortBenchmark {
  public:
-  PrefixSortBenchmark() : pool_(rootPool()->addLeafChild("PrefixSortTest")) {}
+  PrefixSortBenchmark(memory::MemoryPool* pool) : pool_(pool) {}
 
   void runPrefixSort(
       const std::vector<char*>& rows,
       RowContainer* rowContainer,
       const std::vector<CompareFlags>& compareFlags) {
     PrefixSortConfig prefixSortConfig(1024);
-    PrefixSort prefixSort(
-        pool_.get(), rowContainer, compareFlags, prefixSortConfig);
+    PrefixSort prefixSort(pool_, rowContainer, compareFlags, prefixSortConfig);
     // Copy rows to sortedRows to avoid sort rows already sorted.
     std::vector<char*> sortedRows = rows;
     prefixSort.sort(sortedRows);
@@ -160,7 +150,7 @@ class PrefixSortBenchmark {
           {true, true, false, CompareFlags::NullHandlingMode::kNullAsValue});
     }
     auto testCase =
-        std::make_unique<TestCase>(pool_.get(), testName, numRows, rowType);
+        std::make_unique<TestCase>(pool_, testName, numRows, rowType);
     // Add benchmarks for std-sort and prefix-sort.
     {
       folly::addBenchmark(
@@ -178,7 +168,7 @@ class PrefixSortBenchmark {
           });
       folly::addBenchmark(
           __FILE__,
-          "PrefixSort_" + testCase->testName(),
+          "%PrefixSort_" + testCase->testName(),
           [rows = testCase->rows(),
            container = testCase->rowContainer(),
            sortFlags = compareFlags,
@@ -195,14 +185,18 @@ class PrefixSortBenchmark {
 
  private:
   std::vector<std::unique_ptr<TestCase>> testCases_;
-  const std::shared_ptr<memory::MemoryPool> pool_;
+  memory::MemoryPool* pool_;
 };
 } // namespace
 
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
 
-  PrefixSortBenchmark bm;
+  memory::MemoryManager::initialize({});
+  auto rootPool = memory::memoryManager()->addRootPool();
+  auto leafPool = rootPool->addLeafChild("leaf");
+
+  PrefixSortBenchmark bm(leafPool.get());
 
   const RowTypePtr rowBigint = ROW({BIGINT()});
   const RowTypePtr row2Bigints = ROW({BIGINT(), BIGINT()});
@@ -224,13 +218,14 @@ int main(int argc, char** argv) {
   bm.benchMark("3_Bigints_100k", 100L << 10, row3Bigints, 100);
   bm.benchMark("4_Bigints_100k", 100L << 10, row4Bigints, 100);
 
-  // For varchar type is still not support normalization, so the performance of
-  // prefix-sort and std-sort is the same.
+  // For varchar type is still not support normalization, so the performance
+  // of prefix-sort and std-sort is the same.
   const RowTypePtr rowVarchar = ROW({VARCHAR()});
   bm.benchMark("Varchar_1k", 1L << 10, rowVarchar, 100);
   bm.benchMark("Varchar_10k", 10L << 10, rowVarchar, 100);
   bm.benchMark("Varchar_100k", 100L << 10, rowVarchar, 100);
 
   folly::runBenchmarks();
+
   return 0;
 }
