@@ -135,9 +135,9 @@ class JsonParseFunction : public exec::VectorFunction {
         paddedInput_.data(), size, paddedInput_.size());
     SIMDJSON_ASSIGN_OR_RAISE(auto doc, simdjsonParse(paddedInput));
     SIMDJSON_TRY(validate<simdjson::ondemand::document&>(doc));
-    /*if (!doc.at_end()) {
+    if (!doc.at_end()) {
       return simdjson::TRAILING_CONTENT;
-    }*/
+    }
     return simdjson::SUCCESS;
   }
 
