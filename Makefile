@@ -116,10 +116,12 @@ minimal:				 #: Minimal build
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL=ON"
 	$(MAKE) build BUILD_DIR=release
 
+# We specify -Dfolly_SOURCE=BUNDLED as we need to pick up the fix at CMake/resolve_dependency_modules/folly/folly-cudacc.patch
 gpu:						 #: Build with GPU support
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON -Dfolly_SOURCE=BUNDLED"
 	$(MAKE) build BUILD_DIR=release
 
+# We specify -Dfolly_SOURCE=BUNDLED as we need to pick up the fix at CMake/resolve_dependency_modules/folly/folly-cudacc.patch
 gpu_debug:			 #: Build with debugging symbols and GPU support
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON -Dfolly_SOURCE=BUNDLED"
 	$(MAKE) build BUILD_DIR=debug
