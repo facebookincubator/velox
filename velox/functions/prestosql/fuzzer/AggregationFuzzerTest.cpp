@@ -69,23 +69,6 @@ getCustomInputGenerators() {
   };
 }
 
-std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner() {
-  if (FLAGS_presto_url.empty()) {
-    auto duckQueryRunner = std::make_unique<DuckQueryRunner>();
-    duckQueryRunner->disableAggregateFunctions({
-        "skewness",
-        // DuckDB results on constant inputs are incorrect. Should be NaN,
-        // but DuckDB returns some random value.
-        "kurtosis",
-        "entropy",
-    });
-    return duckQueryRunner;
-  } else {
-    return std::make_unique<PrestoQueryRunner>(
-        FLAGS_presto_url, "aggregation_fuzzer");
-  }
-}
-
 } // namespace
 } // namespace facebook::velox::exec::test
 
@@ -185,5 +168,8 @@ int main(int argc, char** argv) {
       facebook::velox::exec::test::getCustomInputGenerators();
   options.timestampPrecision =
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
-  return Runner::run(initialSeed, setupReferenceQueryRunner(), options);
+  return Runner::run(
+      initialSeed,
+      setupReferenceQueryRunner(FLAGS_presto_url, "aggregation_fuzzer"),
+      options);
 }

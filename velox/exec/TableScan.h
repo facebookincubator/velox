@@ -80,6 +80,7 @@ class TableScan : public SourceOperator {
   memory::MemoryPool* const connectorPool_;
   ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
   BlockingReason blockingReason_;
+  int64_t currentSplitWeight_{0};
   bool needNewSplit_ = true;
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
@@ -98,7 +99,7 @@ class TableScan : public SourceOperator {
   // callback can schedule preloads on an executor. These preloads may
   // outlive the Task and therefore need to capture a shared_ptr to
   // it.
-  std::function<void(std::shared_ptr<connector::ConnectorSplit>)>
+  std::function<void(const std::shared_ptr<connector::ConnectorSplit>&)>
       splitPreloader_{nullptr};
 
   // Count of splits that started background preload.
