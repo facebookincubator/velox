@@ -26,6 +26,8 @@ class FuzzerConnectorTestBase : public exec::test::OperatorTestBase {
 
   void SetUp() override {
     OperatorTestBase::SetUp();
+    connector::registerConnectorFactory(
+        std::make_shared<connector::fuzzer::FuzzerConnectorFactory>());
     auto fuzzerConnector =
         connector::getConnectorFactory(
             connector::fuzzer::FuzzerConnectorFactory::kFuzzerConnectorName)
@@ -35,6 +37,8 @@ class FuzzerConnectorTestBase : public exec::test::OperatorTestBase {
 
   void TearDown() override {
     connector::unregisterConnector(kFuzzerConnectorId);
+    connector::unregisterConnectorFactory(
+        connector::fuzzer::FuzzerConnectorFactory::kFuzzerConnectorName);
     OperatorTestBase::TearDown();
   }
 
