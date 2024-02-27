@@ -62,8 +62,6 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   // Complex types.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, prefix + "array");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "array_contains");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_array_intersect, prefix + "array_intersect");
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
 
@@ -251,6 +249,10 @@ void registerFunctions(const std::string& prefix) {
 
   registerFunction<FindInSetFunction, int32_t, Varchar, Varchar>(
       {prefix + "find_in_set"});
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, prefix + "array_except");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_array_intersect, prefix + "array_intersect");
 
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
