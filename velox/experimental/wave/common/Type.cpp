@@ -50,7 +50,7 @@ PhysicalType fromCpuType(const Type& type) {
   return ans;
 }
 
-std::string PhysicalType::kindString(Kind kind) {
+std::string_view PhysicalType::kindString(Kind kind) {
   switch (kind) {
     case kInt8:
       return "Int8";

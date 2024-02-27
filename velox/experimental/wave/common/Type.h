@@ -46,7 +46,7 @@ struct PhysicalType {
   int32_t numChildren;
   PhysicalType** children;
 
-  static std::string kindString(Kind kind);
+  static std::string_view kindString(Kind kind);
 };
 
 PhysicalType fromCpuType(const Type&);
