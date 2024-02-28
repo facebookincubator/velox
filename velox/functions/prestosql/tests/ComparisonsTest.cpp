@@ -601,6 +601,46 @@ TEST_F(ComparisonsTest, eqNestedComplex) {
   }
 }
 
+TEST_F(ComparisonsTest, overflowTest) {
+  std::shared_ptr<memory::MemoryPool> pool{memory::addDefaultLeafMemoryPool()};
+  auto makeFlatVector = [&pool](size_t numRows, int64_t delta) {
+    BufferPtr values =
+        AlignedBuffer::allocate<int64_t>(numRows + delta, pool.get());
+    auto rawValues = values->asMutable<int64_t>();
+    for (auto i = 0; i < numRows + delta; ++i) {
+      rawValues[i] = i;
+    }
+    return std::make_shared<FlatVector<int64_t>>(
+        pool.get(),
+        BIGINT(),
+        nullptr,
+        numRows,
+        values,
+        std::vector<BufferPtr>{});
+  };
+
+  size_t numRows = 1006;
+  size_t delta = 2;
+  auto rowVector = makeRowVector(
+      {makeFlatVector(numRows, delta), makeFlatVector(numRows, delta)});
+  auto result =
+      evaluate<SimpleVector<bool>>(fmt::format("{}(c0, c1)", "eq"), rowVector);
+  for (auto i = 0; i < result->size(); ++i) {
+    ASSERT_TRUE(result->valueAt(i));
+  }
+
+  auto flatResult = result->asFlatVector<bool>();
+  auto rawResult = flatResult->mutableRawValues();
+  for (auto i = 0; i < result->size(); ++i) {
+    ASSERT_TRUE(
+        bits::isBitSet(reinterpret_cast<const uint64_t*>(rawResult), i));
+  }
+  for (auto i = result->size(); i < result->size() + delta; ++i) {
+    ASSERT_FALSE(
+        bits::isBitSet(reinterpret_cast<const uint64_t*>(rawResult), i));
+  }
+}
+
 namespace {
 template <typename Tp, typename Op, const char* fnName>
 struct ComparisonTypeOp {
