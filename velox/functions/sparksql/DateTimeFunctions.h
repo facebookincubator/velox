@@ -593,13 +593,13 @@ struct MinuteFunction : public InitSessionTimezone<T> {
 };
 
 template <typename T>
-struct SecondFunction : public InitSessionTimezone<T> {
+struct SecondFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
       int32_t& result,
       const arg_type<Timestamp>& timestamp) {
-    result = getDateTime(timestamp, this->timeZone_).tm_sec;
+    result = getDateTime(timestamp, nullptr).tm_sec;
   }
 };
 } // namespace facebook::velox::functions::sparksql

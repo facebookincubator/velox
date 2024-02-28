@@ -697,9 +697,9 @@ TEST_F(DateTimeFunctionsTest, hour) {
 }
 
 TEST_F(DateTimeFunctionsTest, minute) {
-  const auto minute = [&](const StringView timestampStr) {
-    const auto timeStamp =
-        std::make_optional(util::fromTimestampString(timestampStr));
+  const auto minute = [&](std::string_view timestampStr) {
+    const auto timeStamp = std::make_optional(
+        util::fromTimestampString(timestampStr.data(), timestampStr.length()));
     return evaluateOnce<int32_t>("minute(c0)", timeStamp);
   };
 
@@ -713,22 +713,22 @@ TEST_F(DateTimeFunctionsTest, minute) {
 
   EXPECT_EQ(23, minute("2024-01-08 00:23:00.001"));
   EXPECT_EQ(59, minute("2024-01-08 00:59:59.999"));
-  EXPECT_EQ(23, minute("2024-01-08 01:23:00.001"));
-  EXPECT_EQ(23, minute("1969-01-01 13:23:00.001"));
+  EXPECT_EQ(10, minute("2015-04-08 13:10:15"));
+  EXPECT_EQ(43, minute("1969-01-01 13:43:00.001"));
 
   // Set time zone to Asia/Kolkata (5.5 hours ahead of UTC).
   setQueryTimeZone("Asia/Kolkata");
 
   EXPECT_EQ(53, minute("2024-01-08 00:23:00.001"));
   EXPECT_EQ(29, minute("2024-01-08 00:59:59.999"));
-  EXPECT_EQ(53, minute("2024-01-08 01:23:00.001"));
-  EXPECT_EQ(31, minute("1969-01-01 13:01:00.001"));
+  EXPECT_EQ(40, minute("2015-04-08 13:10:15"));
+  EXPECT_EQ(13, minute("1969-01-01 13:43:00.001"));
 }
 
 TEST_F(DateTimeFunctionsTest, second) {
-  const auto second = [&](const StringView timestampStr) {
-    const auto timeStamp =
-        std::make_optional(util::fromTimestampString(timestampStr));
+  const auto second = [&](std::string_view timestampStr) {
+    const auto timeStamp = std::make_optional(
+        util::fromTimestampString(timestampStr.data(), timestampStr.length()));
     return evaluateOnce<int32_t>("second(c0)", timeStamp);
   };
 
