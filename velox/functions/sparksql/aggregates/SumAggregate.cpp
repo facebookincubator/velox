@@ -26,16 +26,10 @@ namespace {
 template <typename TInput, typename TAccumulator, typename ResultType>
 using SumAggregate = SumAggregateBase<TInput, TAccumulator, ResultType, true>;
 
-TypePtr getDecimalSumType(
-    const TypePtr& resultType,
-    core::AggregationNode::Step step) {
-  if (exec::isPartialOutput(step)) {
-    return resultType->childAt(0);
-  }
-  if (step == core::AggregationNode::Step::kSingle && resultType->isRow()) {
-    // For companion function of decimal sum. For a partial companion function
-    // of single step, the result type is like partial output, consisting of sum
-    // and isEmpty.
+TypePtr getDecimalSumType(const TypePtr& resultType) {
+  if (resultType->isRow()) {
+    // If the resultType is ROW, then the type if sum is the type of the first
+    // child of the ROW.
     return resultType->childAt(0);
   }
   return resultType;
@@ -105,7 +99,7 @@ exec::AggregateRegistrationResult registerSum(
                 BIGINT());
           case TypeKind::BIGINT: {
             if (inputType->isShortDecimal()) {
-              auto const sumType = getDecimalSumType(resultType, step);
+              auto const sumType = getDecimalSumType(resultType);
               if (sumType->isShortDecimal()) {
                 return std::make_unique<exec::SimpleAggregateAdapter<
                     DecimalSumAggregate<int64_t, int64_t>>>(resultType);

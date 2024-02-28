@@ -121,6 +121,10 @@ class DecimalSumAggregate {
 
       // isEmpty is never null.
       VELOX_CHECK(otherIsEmpty.has_value());
+      if (isEmpty && otherIsEmpty.value()) {
+        // Both accumulators are empty, no need to do the combination.
+        return false;
+      }
 
       bool currentOverflow = !isEmpty && !sum.has_value();
       bool otherOverflow = !otherIsEmpty.value() && !otherSum.has_value();
