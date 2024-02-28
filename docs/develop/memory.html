@@ -392,11 +392,11 @@ and memory arbitration. The following is a list of the major APIs to use in each
 of the three sets.</p>
 <section id="memory-pool-management">
 <h4>Memory Pool Management<a class="headerlink" href="#memory-pool-management" title="Permalink to this heading">¶</a></h4>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Creates a root memory pool with specified &#39;name&#39; and &#39;capacity&#39;.</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Creates a root memory pool with specified &#39;name&#39; and &#39;maxCapacity&#39;.</span>
 <span class="c1">/// &#39;reclaimer&#39; is provided for memory arbitration process.</span>
 <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryManager</span><span class="o">::</span><span class="n">addRootPool</span><span class="p">(</span><span class="w"></span>
 <span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">capacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMaxMemory</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">maxCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMaxMemory</span><span class="p">,</span><span class="w"></span>
 <span class="w">   </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">MemoryReclaimer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">);</span><span class="w"></span>
 
 <span class="c1">/// Create an aggregate child memory pool which allows to create child memory</span>
