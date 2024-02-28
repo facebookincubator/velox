@@ -957,13 +957,11 @@ TEST_F(ParquetReaderTest, testEnumType) {
   EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(rowType->size(), 1ULL);
 
-  auto varcharType = rowType->childAt(0);
-  EXPECT_EQ(varcharType->type()->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(rowType->childAt(0)->type()->kind(), TypeKind::VARCHAR);
 
   auto fileSchema = ROW({"test"}, {VARCHAR()});
   auto rowReaderOpts = getReaderOpts(fileSchema);
-  auto scanSpec = makeScanSpec(fileSchema);
-  rowReaderOpts.setScanSpec(scanSpec);
+  rowReaderOpts.setScanSpec(makeScanSpec(fileSchema));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   auto expected =
