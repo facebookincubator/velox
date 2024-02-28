@@ -93,6 +93,19 @@ void castToTimestamp(
   });
 }
 
+std::string makeErrorMessageTsWTz(
+    const RowVector& input,
+    vector_size_t row,
+    std::string& type,
+    const std::string& details = "") {
+  return fmt::format(
+      "Cannot cast {} '{}' to {}. {}",
+      input.type()->toString(),
+      input.toString(row),
+      type,
+      details);
+}
+
 void castToVarchar(
     const RowVector& inputVector,
     exec::EvalCtx& context,
@@ -114,6 +127,8 @@ void castToVarchar(
       Timestamp ts = Timestamp::fromMillis(timestampVector->valueAt(row));
       // Convert UTC to the given time zone.
       ts.toTimezone(timezoneVector->valueAt(row));
+      TimestampToStringOptions options;
+      options.dateTimeSeparator = ' ';
       auto output = ts.toString() + util::getTimeZoneName(timezoneVector->valueAt(row));
 
       try {
@@ -126,10 +141,10 @@ void castToVarchar(
           throw;
         }
       //   VELOX_USER_FAIL(
-      //       makeErrorMessage(row) + " " + ue.message());
+      //       makeErrorMessageTsWTz(inputVector, row, "VARCHAR") + " " + ue.message());
       // } catch (const std::exception& e) {
       //   VELOX_USER_FAIL(
-      //       makeErrorMessage(row) + " " + e.what());
+      //       makeErrorMessageTsWTz(inputVector, row, "VARCHAR") + " " + e.what());
       }
     }
   });
@@ -151,19 +166,6 @@ void castFromTimestampWithTimeZone(
     auto flatResult = result.as<FlatVector<StringView>>();
     castToVarchar(*inputVector, context, rows, *flatResult);
   }
-}
-
-template <TypeKind kind>
-void castFromTimestampWithTimeZoneToVarchar(
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const SelectivityVector& rows,
-    BaseVector& result) {
-  VELOX_CHECK_EQ(kind, TypeKind::VARCHAR)
-
-  const auto inputVector = input.as<RowVector>();
-  auto flatResult = result.as<FlatVector<StringView>>();
-  castToVarchar(*inputVector, context, rows, *flatResult);
 }
 } // namespace
 
