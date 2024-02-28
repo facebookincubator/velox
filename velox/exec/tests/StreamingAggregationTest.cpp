@@ -345,6 +345,84 @@ class StreamingAggregationTest : public OperatorTestBase {
           .assertResults(sql);
     }
   }
+
+  void assertResult(
+      const RowVectorPtr& expected,
+      const core::PlanNodePtr& plan,
+      uint32_t outputBatchSize) {
+    auto actual = AssertQueryBuilder(plan)
+                      .config(
+                          core::QueryConfig::kPreferredOutputBatchRows,
+                          std::to_string(outputBatchSize))
+                      .copyResults(pool());
+    assertEqualResults({expected}, {actual});
+  }
+
+  void testLambdaAggregation(
+      const std::vector<VectorPtr>& keys,
+      const std::vector<std::string>& groupingKeys,
+      uint32_t outputBatchSize = 1'024) {
+    std::vector<RowVectorPtr> data;
+
+    vector_size_t totalSize = 0;
+    for (const auto& keyVector : keys) {
+      auto size = keyVector->size();
+      auto payload = makeFlatVector<int32_t>(
+          size, [totalSize](auto row) { return totalSize + row; });
+      data.push_back(makeRowVector({keyVector, payload, payload}));
+      totalSize += size;
+    }
+
+    std::vector<std::string> aggregates{
+        "max(c1)",
+        "reduce_agg(c1, 0, (a, b) -> a + b, (a, b) -> a + b)",
+        "reduce_agg(c1, 1, (a, b) -> a * b, (a, b) -> a * b)",
+        "sumnonpod(1)",
+    };
+
+    // Use the HashAggregation result as the reference.
+    auto plan = PlanBuilder()
+                    .values(data)
+                    .aggregation(
+                        groupingKeys,
+                        aggregates,
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        false)
+                    .planNode();
+
+    auto expect = AssertQueryBuilder(plan)
+                      .config(
+                          core::QueryConfig::kPreferredOutputBatchRows,
+                          std::to_string(outputBatchSize))
+                      .copyResults(pool());
+
+    plan = PlanBuilder()
+               .values(data)
+               .streamingAggregation(
+                   groupingKeys,
+                   aggregates,
+                   {},
+                   core::AggregationNode::Step::kSingle,
+                   false)
+               .planNode();
+
+    assertResult(expect, plan, outputBatchSize);
+    EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
+
+    plan = PlanBuilder()
+               .values(data)
+               .partialStreamingAggregation(groupingKeys, aggregates)
+               .finalAggregation()
+               .planNode();
+    auto actual = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                      .config(
+                          core::QueryConfig::kPreferredOutputBatchRows,
+                          std::to_string(outputBatchSize))
+                      .copyResults(pool());
+    assertEqualResults({expect}, {actual});
+    EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
+  }
 };
 
 TEST_F(StreamingAggregationTest, smallInputBatches) {
@@ -537,4 +615,37 @@ TEST_F(StreamingAggregationTest, distinctAggregations) {
 
   testMultiKeyDistinctAggregation(multiKeys, 1024);
   testMultiKeyDistinctAggregation(multiKeys, 3);
+}
+
+TEST_F(StreamingAggregationTest, lambdaAggregations) {
+  auto size = 1024;
+
+  std::vector<VectorPtr> keys = {
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(size, [size](auto row) { return (size + row); }),
+      makeFlatVector<int32_t>(
+          size, [size](auto row) { return (2 * size + row); }),
+      makeFlatVector<int32_t>(
+          78, [size](auto row) { return (3 * size + row); }),
+  };
+  testLambdaAggregation(keys, {"c0"}, 1024);
+  testLambdaAggregation(keys, {"c0"}, 32);
+
+  std::vector<RowVectorPtr> multiKeys = {
+      makeRowVector({
+          makeFlatVector<int32_t>({1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 20, 30, 30}),
+      }),
+      makeRowVector({
+          makeFlatVector<int32_t>({2, 3, 3, 3, 4}),
+          makeFlatVector<int64_t>({30, 30, 40, 40, 40}),
+      }),
+      makeRowVector({
+          makeNullableFlatVector<int32_t>({5, 5, 6, 6, 6}),
+          makeNullableFlatVector<int64_t>({40, 50, 50, 50, 50}),
+      }),
+  };
+  auto groupingKeys = multiKeys[0]->type()->asRow().names();
+  testLambdaAggregation(keys, groupingKeys, 1024);
+  testLambdaAggregation(keys, groupingKeys, 32);
 }
