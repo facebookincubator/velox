@@ -14,12 +14,14 @@ To install Sphinx: `easy_install -U sphinx`
 
 If you're using a conda environment, it can be easily installed by `conda install` command.
 
+Create a conda environment by running `conda create -y --name pyveloxenv-docs python=3.7`.
+
 Pandoc is also used to generate `.rst` files from existing markdown files. Refer to installation
 instructions [here](https://pandoc.org/installing.html).
 
 To build the documentation, e.g. generate HTML files from .rst files:
 
-Run the `./scripts/gen-docs.sh` script from the base directory.
+Run `./scripts/gen-docs.sh pyveloxenv-docs` from the base directory.
 
 Navigate to
 `velox/docs/_build/html/index.html` in your browser to view the documentation.
