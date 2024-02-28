@@ -206,4 +206,8 @@ bool HiveConfig::s3UseProxyFromEnv() const {
   return config_->get<bool>(kS3UseProxyFromEnv, false);
 }
 
+uint8_t HiveConfig::arrowBridgeTimestampUnit(const Config* session) const {
+  return session->get<uint8_t>(kArrowBridgeTimestampUnit, 9 /* nano */);
+}
+
 } // namespace facebook::velox::connector::hive

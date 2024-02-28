@@ -45,6 +45,7 @@ class ArrowStream : public SourceOperator {
 
   bool finished_ = false;
   std::shared_ptr<ArrowArrayStream> arrowStream_;
+  ArrowOptions options_;
 };
 
 } // namespace facebook::velox::exec

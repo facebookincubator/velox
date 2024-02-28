@@ -583,6 +583,7 @@ struct WriterOptions {
   std::optional<uint64_t> maxStripeSize{std::nullopt};
   std::optional<uint64_t> maxDictionaryMemory{std::nullopt};
   std::map<std::string, std::string> serdeParameters;
+  std::optional<uint8_t> arrowBridgeTimestampUnit;
 };
 
 } // namespace facebook::velox::dwio::common

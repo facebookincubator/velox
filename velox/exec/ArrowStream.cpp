@@ -27,6 +27,8 @@ ArrowStream::ArrowStream(
           operatorId,
           arrowStreamNode->id(),
           "ArrowStream") {
+  options_.timestampUnit = static_cast<TimestampUnit>(
+      driverCtx->queryConfig().arrowBridgeTimestampUnit());
   arrowStream_ = arrowStreamNode->arrowStream();
 }
 
@@ -66,7 +68,7 @@ RowVectorPtr ArrowStream::getOutput() {
 
   // Convert Arrow Array into RowVector and return.
   return std::dynamic_pointer_cast<RowVector>(
-      importFromArrowAsOwner(arrowSchema, arrowArray, pool()));
+      importFromArrowAsOwner(arrowSchema, arrowArray, options_, pool()));
 }
 
 bool ArrowStream::isFinished() {

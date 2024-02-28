@@ -21,7 +21,6 @@
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 #include "velox/exec/MemoryReclaimer.h"
-#include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::parquet {
 
@@ -234,6 +233,8 @@ Writer::Writer(
   } else {
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }
+  options_.timestampUnit =
+      static_cast<TimestampUnit>(options.arrowBridgeTimestampUnit);
   arrowContext_->properties =
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
@@ -310,11 +311,10 @@ void Writer::write(const VectorPtr& data) {
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
 
-  ArrowOptions options{.flattenDictionary = true, .flattenConstant = true};
   ArrowArray array;
   ArrowSchema schema;
-  exportToArrow(data, array, generalPool_.get(), options);
-  exportToArrow(data, schema, options);
+  exportToArrow(data, array, generalPool_.get(), options_);
+  exportToArrow(data, schema, options_);
 
   // Convert the arrow schema to Schema and then update the column names based
   // on schema_.
@@ -385,6 +385,10 @@ parquet::WriterOptions getParquetOptions(
   parquetOptions.memoryPool = options.memoryPool;
   if (options.compressionKind.has_value()) {
     parquetOptions.compression = options.compressionKind.value();
+  }
+  if (options.arrowBridgeTimestampUnit.has_value()) {
+    parquetOptions.arrowBridgeTimestampUnit =
+        options.arrowBridgeTimestampUnit.value();
   }
   return parquetOptions;
 }

@@ -357,6 +357,10 @@ class QueryConfig {
   static constexpr const char* kDriverCpuTimeSliceLimitMs =
       "driver_cpu_time_slice_limit_ms";
 
+  // Timestamp unit used during Velox-Arrow conversion.
+  static constexpr const char* kArrowBridgeTimestampUnit =
+      "arrow_bridge_timestamp_unit";
+
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
         get<std::string>(kQueryMaxMemoryPerNode, "0B"), CapacityUnit::BYTE);
@@ -580,6 +584,13 @@ class QueryConfig {
   uint8_t spillStartPartitionBit() const {
     constexpr uint8_t kDefaultStartBit = 48;
     return get<uint8_t>(kSpillStartPartitionBit, kDefaultStartBit);
+  }
+
+  /// Returns the timestamp unit used in Velox-Arrow conversion.
+  /// 0: second, 3: milli, 6: micro, 9: nano.
+  uint8_t arrowBridgeTimestampUnit() const {
+    constexpr uint8_t kDefaultUnit = 9;
+    return get<uint8_t>(kArrowBridgeTimestampUnit, kDefaultUnit);
   }
 
   /// Returns the number of bits used to calculate the spilling partition
