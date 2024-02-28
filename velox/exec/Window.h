@@ -46,6 +46,31 @@ class Window : public Operator {
   /// initialization. 'windowNode_' is reset after this call.
   void initialize() override;
 
+  static std::unordered_map<std::string, bool> splitNames(const std::string& names) {
+    // Parse, lower case and trim it.
+    std::vector<folly::StringPiece> nameList;
+    folly::split(',', names, nameList);
+    std::unordered_map<std::string, bool> namesMap;
+
+    for (const auto& it : nameList) {
+      auto str = folly::trimWhitespace(it).toString();
+      folly::toLowerAscii(str);
+
+      int end = str.find(":");
+      if (end != -1) {
+        auto val = str.substr(end, str.length());
+        if (val == "false") {
+          namesMap[str.substr(0, end)] = false;
+        } else {
+          namesMap[str.substr(0, end)] = true;
+        }
+      } else {
+        namesMap[str] = true;
+      }
+    }
+    return namesMap;
+  }
+
   void addInput(RowVectorPtr input) override;
 
   RowVectorPtr getOutput() override;
@@ -175,6 +200,10 @@ class Window : public Operator {
   // WindowFunction is the base API implemented by all the window functions.
   // The functions are ordered by their positions in the output columns.
   std::vector<std::unique_ptr<exec::WindowFunction>> windowFunctions_;
+
+  std::unordered_map<std::string, bool> functionUseSegmentTree_;
+  int32_t minFrameSizeUseSegmentTree_{64};
+  bool enableSegmentTreeOpt_{true};
 
   // Vector of WindowFrames corresponding to each windowFunction above.
   // It represents the frame spec for the function computation.

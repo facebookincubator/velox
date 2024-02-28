@@ -354,6 +354,35 @@ class QueryConfig {
   static constexpr const char* kDriverCpuTimeSliceLimitMs =
       "driver_cpu_time_slice_limit_ms";
 
+  /// When the frame size is large than it, use segmentTree to improve window
+  /// aggregate.
+  static constexpr const char* kMinFrameSizeUseSegmentTree =
+      "min_frame_size_use_segment_tree";
+
+  /// Whether enable window segment tree optimization.
+  static constexpr const char* kEnableWindowSegmentTreeOpt =
+      "enable_window_segment_tree_opt";
+
+  /// Aggregate functions use segmentTree to improve window aggregate, the
+  /// format is "functionName1:orderInsensitive1,functionName2", if
+  /// orderInsensitive is not define, default values is true
+  static constexpr const char* kFunctionUseSegmentTree =
+      "function_use_segment_tree";
+
+  std::string functionUseSegmentTree() const {
+    return get<std::string>(
+        kFunctionUseSegmentTree, "min:true,max:true,sum,avg,stddev");
+  }
+
+  uint64_t minFrameSizeUseSegmentTree() const {
+    static constexpr uint64_t kDefault = 0;
+    return get<uint64_t>(kMinFrameSizeUseSegmentTree, kDefault);
+  }
+
+  bool enableWindowSegmentTreeOpt() const {
+    return get<bool>(kEnableWindowSegmentTreeOpt, true);
+  }
+
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
         get<std::string>(kQueryMaxMemoryPerNode, "0B"), CapacityUnit::BYTE);

@@ -286,6 +286,11 @@ class SelectivityVector {
     allSelected_.reset();
   }
 
+  void updateBounds(vector_size_t begin, vector_size_t end) {
+    begin_ = begin;
+    end_ = end;
+  }
+
   bool isAllSelected() const {
     if (allSelected_.has_value()) {
       return allSelected_.value();

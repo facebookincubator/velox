@@ -96,6 +96,17 @@ class AggregateWindowFunction : public exec::WindowFunction {
         AlignedBuffer::allocate<char>(singleGroupRowSize_, pool_);
     rawSingleGroupRow_ = singleGroupRowBufferPtr_->asMutable<char>();
 
+    leftBufferPtr_ = AlignedBuffer::allocate<char>(singleGroupRowSize_, pool_);
+    leftLeavesState_ = leftBufferPtr_->asMutable<char>();
+    upperBufferPtr_ = AlignedBuffer::allocate<char>(singleGroupRowSize_, pool_);
+    upperLevelsState_ = upperBufferPtr_->asMutable<char>();
+    prevBufferPtr = AlignedBuffer::allocate<char>(singleGroupRowSize_, pool_);
+    prevState_ = prevBufferPtr->asMutable<char>();
+
+    intermediateResultVector_ = BaseVector::create(
+        exec::Aggregate::intermediateType(name, argTypes_), kTreeFanout, pool_);
+    intermediateResultForCombine_ = BaseVector::create(
+        exec::Aggregate::intermediateType(name, argTypes_), 1, pool_);
     // Constructing a vector of a single result value used for copying from
     // the aggregate to the final result.
     aggregateResultVector_ = BaseVector::create(resultType, 1, pool_);
@@ -110,12 +121,129 @@ class AggregateWindowFunction : public exec::WindowFunction {
       std::vector<char*> singleGroupRowVector = {rawSingleGroupRow_};
       aggregate_->destroy(folly::Range(singleGroupRowVector.data(), 1));
     }
+    if (treeNodes_ != nullptr) {
+      std::vector<char*> needDestroy = {
+          leftLeavesState_, upperLevelsState_, prevState_};
+      aggregate_->destroy(folly::Range(needDestroy.data(), needDestroy.size()));
+      aggregate_->destroy(folly::Range(treeNodes_, treeNodeCount_));
+    }
+  }
+
+  char** allocateNodes(
+      memory::AllocationPool& allocationPool,
+      const vector_size_t& n) const {
+    auto* groups = (char**)allocationPool.allocateFixed(sizeof(char*) * n);
+
+    auto alignment = aggregate_->accumulatorAlignmentSize();
+    for (vector_size_t i = 0; i < n; i++) {
+      groups[i] = allocationPool.allocateFixed(singleGroupRowSize_, alignment);
+    }
+    return groups;
+  }
+
+  // Aggregate the leaf nodes for [begin, end) to targetState.
+  void extractFrame(vector_size_t begin, vector_size_t end, char* targetState) {
+    rows_.setValidRange(begin, end, true);
+    rows_.updateBounds(begin, end);
+
+    aggregate_->addSingleGroupRawInput(targetState, rows_, argVectors_, false);
+    rows_.setValidRange(begin, end, false);
+  }
+
+  // Aggregate the nodes for [begin, end) to targetState.
+  void segmentValue(
+      vector_size_t levelIdx,
+      vector_size_t begin,
+      vector_size_t end,
+      char* targetState) {
+    if (begin == end || partition_->numRows() == 0) {
+      return;
+    }
+
+    const auto count = end - begin;
+    if (levelIdx == 0) {
+      // Aggregate the leaf nodes.
+      extractFrame(begin, end, targetState);
+    } else {
+      // Find out where the states begin.
+      auto begin_node = treeNodes_ + begin + levelsStart_[levelIdx - 1];
+      intermediateResultVector_->resize(count);
+      BaseVector::prepareForReuse(intermediateResultVector_, count);
+      // Extract the upper leaf nodes [begin, end) to intermediateResultVector_.
+      aggregate_->extractAccumulators(
+          begin_node, count, &intermediateResultVector_);
+
+      // SelectivityVector rows.
+      if (count != selectivityForSegment_.size()) {
+        selectivityForSegment_.resize(count);
+      }
+      selectivityForSegment_.setValidRange(0, count, true);
+
+      // Aggregate the upper level nodes to targetState.
+      aggregate_->addSingleGroupIntermediateResults(
+          targetState, selectivityForSegment_, {intermediateResultVector_}, false);
+    }
+  }
+
+  // Construct segment tree.
+  void constructSegmentTree() {
+    vector_size_t partitionCount = partition_->numRows();
+    fillArgVectors(0, partitionCount - 1);
+    rows_.resize(partitionCount, false);
+    if (treeNodes_ != nullptr) {
+      aggregate_->destroy(folly::Range(treeNodes_, treeNodeCount_));
+      levelsStart_.clear();
+    }
+
+    // Compute node count of segment tree.
+    treeNodeCount_ = 0;
+    vector_size_t levelNodes = partition_->numRows();
+    do {
+      levelNodes = (levelNodes + (kTreeFanout - 1)) / kTreeFanout;
+      treeNodeCount_ += levelNodes;
+    } while (levelNodes > 1);
+
+    // Allocate treeNodeCount_ nodes for segment tree.
+    memory::AllocationPool allocationPool{pool_};
+    treeNodes_ = allocateNodes(allocationPool, treeNodeCount_);
+
+    std::vector<vector_size_t> allSelectedRange;
+    for (vector_size_t i = 0; i < treeNodeCount_; i++) {
+      allSelectedRange.push_back(i);
+    }
+    aggregate_->clear();
+    // Initialize all the nodes.
+    aggregate_->initializeNewGroups(treeNodes_, allSelectedRange);
+
+    // Level 0 is data itself.
+    levelsStart_.push_back(0);
+    vector_size_t levelsOffset = 0;
+    vector_size_t currentLevel = 0;
+    vector_size_t levelSize;
+    // Iterate over the levels of the segment tree.
+    while ((levelSize =
+                (currentLevel == 0 ? partition_->numRows()
+                                   : levelsOffset -
+                         levelsStart_[currentLevel - 1])) > 1) {
+      for (vector_size_t pos = 0; pos < levelSize; pos += kTreeFanout) {
+        // Compute the aggregate for upper level node in the segment tree.
+        char* node = treeNodes_[levelsOffset];
+        segmentValue(
+            currentLevel, pos, std::min(levelSize, pos + kTreeFanout), node);
+        levelsOffset++;
+      }
+
+      levelsStart_.push_back(levelsOffset);
+      currentLevel++;
+    }
   }
 
   void resetPartition(const exec::WindowPartition* partition) override {
     partition_ = partition;
 
     previousFrameMetadata_.reset();
+    currentPartitionUseSegmentTree_ = false;
+    newPartition_ = true;
   }
 
   void apply(
@@ -164,15 +292,46 @@ class AggregateWindowFunction : public exec::WindowFunction {
           resultOffset,
           result);
     } else {
-      fillArgVectors(frameMetadata.firstRow, frameMetadata.lastRow);
-      simpleAggregation(
-          validRows,
-          frameMetadata.firstRow,
-          frameMetadata.lastRow,
-          rawFrameStarts,
-          rawFrameEnds,
-          resultOffset,
-          result);
+
+      if (newPartition_) {
+        newPartition_ = false;
+        if (useSegmentTreeBySql_) {
+          currentPartitionUseSegmentTree_ = true;
+          constructSegmentTree();
+        } else {
+          auto count = 0;
+          auto sum = 0;
+          validRows.applyToSelected([&](auto i) {
+            sum = sum + rawFrameEnds[i] + 1 - rawFrameStarts[i];
+            count += 1;
+          });
+          if (count > 0 && sum / count >= minFrameUseSegmentTree_) {
+            currentPartitionUseSegmentTree_ = true;
+            constructSegmentTree();
+          }
+        }
+      }
+
+      if (currentPartitionUseSegmentTree_) {
+        segmentTreeAggregation(
+            validRows,
+            frameMetadata.firstRow,
+            frameMetadata.lastRow,
+            rawFrameStarts,
+            rawFrameEnds,
+            resultOffset,
+            result);
+      } else {
+        fillArgVectors(frameMetadata.firstRow, frameMetadata.lastRow);
+        simpleAggregation(
+            validRows,
+            frameMetadata.firstRow,
+            frameMetadata.lastRow,
+            rawFrameStarts,
+            rawFrameEnds,
+            resultOffset,
+            result);
+      }
     }
     previousFrameMetadata_ = frameMetadata;
   }
@@ -345,6 +504,240 @@ class AggregateWindowFunction : public exec::WindowFunction {
     setEmptyFramesResult(validRows, resultOffset, emptyResult_, result);
   }
 
+  void swap(char* left, char* right) {
+    auto tmp = left;
+    left = right;
+    right = left;
+  }
+
+  // Compute the upper level nodes for leave nodes in [frameStart, frameEnd).
+  void evaluateUpperLevels(const vector_size_t& frameStart,
+                           const vector_size_t& frameEnd,
+                           const vector_size_t maxLevel,
+                           vector_size_t row_idx,
+                           char* statePtr) {
+    auto begin = frameStart;
+    auto end = frameEnd;
+    // If two record frame has a same upper level, we can reuse upper level
+    // result. For example:
+    //
+    //   level_3  0
+    //            |         \
+    //   level_2  0         1
+    //            |   \     |   \
+    //   level_1  0    1    2    3
+    //            | \  | \  | \  | \
+    //   level_0  0 1  2 3  4 5  6 7
+    //
+    // rowIdx=3, frame is [1~6), parent is [1, 3)
+    // rowIdx=4, frame is [2~7), parent is [1, 3)
+    // For rowIdx=4, the parent node is the same as rowIdx=3, we can cache the
+    // result of [1, 3) in rowIdx=3 and reuse it in rowIdx=4.
+    if (begin / kTreeFanout == prevBegin_ &&
+        end / kTreeFanout == prevEnd_) {
+      // Just return the previous top level result.
+      tempState_ = statePtr;
+      statePtr = prevState_;
+      return;
+    }
+
+    vector_size_t levelIdx = 0;
+    vector_size_t right_max = 0;
+
+    for (; levelIdx < maxLevel; levelIdx++) {
+      if (orderInsensitive_ && levelIdx == 1) {
+        tempState_ = prevState_;
+        prevState_ = statePtr;
+        prevBegin_ = begin;
+        prevEnd_ = end;
+      }
+
+      auto parentBegin = begin / kTreeFanout;
+      auto parentEnd = end / kTreeFanout;
+      if (parentBegin == parentEnd) {
+        // Skip level 0, level 0 nodes compute in evaluateLeaves().
+        if (levelIdx) {
+          segmentValue(levelIdx, begin, end, statePtr);
+        }
+        break;
+      }
+
+      vector_size_t groupBegin = parentBegin * kTreeFanout;
+      if (begin != groupBegin) {
+        // Skip level 0, level 0 nodes compute in evaluateLeaves().
+        if (levelIdx) {
+          segmentValue(levelIdx, begin, groupBegin + kTreeFanout, statePtr);
+        }
+        parentBegin++;
+      }
+
+      vector_size_t groupEnd = parentEnd * kTreeFanout;
+      if (end != groupEnd) {
+        // Skip level 0, level 0 nodes compute in evaluateLeaves().
+        if (levelIdx) {
+          if (orderInsensitive_) {
+            segmentValue(levelIdx, groupEnd, end, statePtr);
+          } else {
+            // If order sensitive, we should compute left side before right
+            // side, so here we only record the ranges in rightStack_.
+            rightStack_[levelIdx] = {groupEnd, end};
+            right_max = levelIdx;
+          }
+        }
+      }
+      begin = parentBegin;
+      end = parentEnd;
+    }
+
+    // For order sensitive aggregates. As we go up the tree, we can just
+    // reverse scan the array and append the cached ranges.
+    for (levelIdx = right_max; levelIdx > 0; --levelIdx) {
+      auto& rightEntry = rightStack_[levelIdx];
+      const auto groupEnd = rightEntry.first;
+      const auto end = rightEntry.second;
+      if (end) {
+        segmentValue(levelIdx, groupEnd, end, statePtr);
+        rightEntry = {0, 0};
+      }
+    }
+  }
+
+  // Compute the ragged leaf nodes in [begin, end), for order sensitive
+  // aggregates, we should firstly compute the ragged left side, the upper
+  // level nodes, finally compute the ragged right side.
+  void evaluateLeaves(
+      const vector_size_t& begin,
+      const vector_size_t& end,
+      vector_size_t row_idx,
+      char* targetState,
+      FramePart leafPart) {
+    const bool computeLeft = leafPart != FramePart::RIGHT;
+    const bool computeRight = leafPart != FramePart::LEFT;
+    const bool add_curr_row = computeLeft;
+
+    auto parentBegin = begin / kTreeFanout;
+    auto parentEnd = end / kTreeFanout;
+    if (parentBegin == parentEnd) {
+      // Only compute when parentBegin == parentEnd and computeLeft.
+      if (computeLeft) {
+        extractFrame(begin, end, targetState);
+      }
+      return;
+    }
+
+    vector_size_t groupBegin = parentBegin * kTreeFanout;
+    vector_size_t groupEnd = parentEnd * kTreeFanout;
+
+    if (leafPart == FramePart::FULL && begin != groupBegin && end != groupEnd) {
+      rows_.setValidRange(begin, groupBegin + kTreeFanout, true);
+      rows_.setValidRange(groupEnd, end, true);
+      rows_.updateBounds(begin, end);
+
+      aggregate_->addSingleGroupRawInput(targetState, rows_, argVectors_, false);
+      rows_.setValidRange(begin, groupBegin + kTreeFanout, false);
+      rows_.setValidRange(groupEnd, end, false);
+      return;
+    }
+
+    // Compute ragged left side.
+    if (begin != groupBegin && computeLeft) {
+      extractFrame(begin, groupBegin + kTreeFanout, targetState);
+    }
+
+    // Compute ragged right side.
+    if (end != groupEnd && computeRight) {
+      extractFrame(groupEnd, end, targetState);
+    }
+  }
+
+  // Combine the sourceState to targetState.
+  void combine(char* sourceState, char* targetState, SelectivityVector& rows) {
+    aggregate_->extractAccumulators(&sourceState, 1, &intermediateResultForCombine_);
+
+    // Aggregate the intermediateResultForCombine_ to targetState.
+    aggregate_->addSingleGroupIntermediateResults(
+        targetState, rows, {intermediateResultForCombine_}, false);
+  }
+
+  void segmentTreeAggregation(const SelectivityVector& validRows,
+                              vector_size_t minFrame,
+                              vector_size_t maxFrame,
+                              const vector_size_t* frameStartsVector,
+                              const vector_size_t* frameEndsVector,
+                              vector_size_t resultOffset,
+                              const VectorPtr& result) {
+    const auto maxLevel = levelsStart_.size() + 1;
+    rightStack_.resize(maxLevel, {0, 0});
+    prevBegin_ = 1;
+    prevEnd_ = 0;
+    SelectivityVector rowsForCombine;
+    rowsForCombine.resizeFill(1, true);
+    auto singleGroup = std::vector<vector_size_t>{0};
+    aggregate_->clear();
+
+    validRows.applyToSelected([&](auto i) {
+      aggregate_->clear();
+      aggregate_->initializeNewGroups(&leftLeavesState_, singleGroup);
+      aggregate_->initializeNewGroups(&upperLevelsState_, singleGroup);
+
+      if (orderInsensitive_) {
+        // Aggregate the segment tree nodes.
+        evaluateUpperLevels(
+            frameStartsVector[i],
+            frameEndsVector[i] + 1,
+            maxLevel,
+            i,
+            upperLevelsState_);
+
+        memcpy(leftLeavesState_, upperLevelsState_, singleGroupRowSize_);
+        // Aggregate the ragged leaves.
+        evaluateLeaves(
+            frameStartsVector[i],
+            frameEndsVector[i] + 1,
+            i,
+            leftLeavesState_,
+            FramePart::FULL);
+      } else {
+        // Aggregate the ragged left leaves.
+        evaluateLeaves(
+            frameStartsVector[i],
+            frameEndsVector[i] + 1,
+            i,
+            leftLeavesState_,
+            FramePart::LEFT);
+
+        // Aggregate the segment tree nodes.
+        evaluateUpperLevels(
+            frameStartsVector[i],
+            frameEndsVector[i] + 1,
+            maxLevel,
+            i,
+            upperLevelsState_);
+
+        combine(upperLevelsState_, leftLeavesState_, rowsForCombine);
+
+        // Aggregate the ragged right leaves.
+        evaluateLeaves(
+            frameStartsVector[i],
+            frameEndsVector[i] + 1,
+            i,
+            leftLeavesState_,
+            FramePart::RIGHT);
+      }
+      if (upperLevelsState_ == prevState_) {
+        upperLevelsState_ = tempState_;
+        tempState_ = nullptr;
+      }
+
+      aggregate_->extractValues(
+          &leftLeavesState_, 1, &aggregateResultVector_);
+      result->copy(aggregateResultVector_.get(), resultOffset + i, 0, 1);
+    });
+
+    // Set null values for empty (non valid) frames in the output block.
+    setEmptyFramesResult(validRows, resultOffset, emptyResult_, result);
+  }
+
   // Precompute and save the aggregate output for empty input in emptyResult_.
   // This value is returned for rows with empty frames.
   void computeDefaultAggregateValue(const TypePtr& resultType) {
@@ -362,6 +755,50 @@ class AggregateWindowFunction : public exec::WindowFunction {
   std::unique_ptr<exec::Aggregate> aggregate_;
 
   bool aggregateInitialized_{false};
+
+  // Right side nodes need to be cached and processed in reverse order.
+  using RightEntry = std::pair<vector_size_t, vector_size_t>;
+
+  // Cache of right side tree ranges for ordered aggregates
+  std::vector<RightEntry> rightStack_;
+
+  // The actual window segment tree, an array of aggregate states that
+  // represent all the intermediate nodes.
+  char** treeNodes_;
+
+  // The total number of internal nodes of the segment tree.
+  vector_size_t treeNodeCount_{0};
+
+  // For each level, the starting location in the treeNodes_ array.
+  std::vector<vector_size_t> levelsStart_;
+
+  // kTreeFanout needs to cleanly divide STANDARD_VECTOR_SIZE
+  static constexpr vector_size_t kTreeFanout = 16;
+
+  // TypePtr intermediateType_.
+  VectorPtr intermediateResultVector_;
+  VectorPtr intermediateResultForCombine_;
+
+  BufferPtr leftBufferPtr_;
+  BufferPtr upperBufferPtr_;
+  BufferPtr prevBufferPtr;
+
+  // State for ragged left leaves.
+  char* leftLeavesState_;
+
+  // State for upper segment tree nodes.
+  char* upperLevelsState_;
+
+  // State for ragged pre upper segment tree nodes.
+  char* prevState_;
+  char* tempState_;
+  vector_size_t prevBegin_{1};
+  vector_size_t prevEnd_{0};
+  bool currentPartitionUseSegmentTree_{false};
+  bool newPartition_{false};
+
+  SelectivityVector rows_;
+  SelectivityVector selectivityForSegment_;
 
   // Current WindowPartition used for accessing rows in the apply method.
   const exec::WindowPartition* partition_;
