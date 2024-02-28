@@ -850,6 +850,13 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
   dwrfOptions.memoryPool = options.memoryPool;
   dwrfOptions.spillConfig = options.spillConfig;
   dwrfOptions.nonReclaimableSection = options.nonReclaimableSection;
+
+  if (auto flushPolicy =
+          dynamic_cast<DefaultFlushPolicy*>(options.flushPolicy.get())) {
+    dwrfOptions.flushPolicyFactory = [&]() {
+      return std::make_unique<DefaultFlushPolicy>(*flushPolicy);
+    };
+  }
   return dwrfOptions;
 }
 

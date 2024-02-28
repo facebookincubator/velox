@@ -19,8 +19,13 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/writer/Writer.h"
+#endif
 
 namespace facebook::velox::exec::test {
 
@@ -332,12 +337,24 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   VELOX_CHECK_EQ(numPartitionColumns, partitionedBy.size());
   VELOX_CHECK_EQ(numBucketColumns, bucketedBy.size());
   VELOX_CHECK_EQ(numSortingColumns, sortedBy.size());
+
+  std::unique_ptr<dwio::common::FlushPolicy> flushPolicy = nullptr;
+  if (tableStorageFormat == dwio::common::FileFormat::DWRF) {
+    flushPolicy =
+        std::make_unique<velox::dwrf::LambdaFlushPolicy>([]() { return true; });
+  } else if (tableStorageFormat == dwio::common::FileFormat::PARQUET) {
+#ifdef VELOX_ENABLE_PARQUET
+    flushPolicy = std::make_unique<facebook::velox::parquet::LambdaFlushPolicy>(
+        10'000, 128 * 1'024 * 1'024, []() { return false; });
+#endif
+  }
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       columnHandles,
       locationHandle,
       tableStorageFormat,
       bucketProperty,
-      compressionKind);
+      compressionKind,
+      std::move(flushPolicy));
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>
