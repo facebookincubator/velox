@@ -87,9 +87,10 @@ using SetMemoryReclaimer = std::function<void(MemoryPool*)>;
 /// created. Operator and node pools are owned by the Task via 'childPools_'.
 ///
 /// The query pool is created from MemoryManager::addRootPool(), it has no
-/// parent. Each query pool is the root node of its corresponding subtree. While
-/// a query pool is owned by QueryCtx, all query pools are recorded in
-/// MemoryManager::pools_ through weak pointers.
+/// parent and is the root node of its corresponding subtree. Each query pool is
+/// owned by QueryCtx (such as in Prestissimo), and the memory manager also
+/// tracks the current alive query pools in MemoryManager::pools_ through weak
+/// pointers.
 ///
 /// Each child pool object holds a shared reference to its parent pool object.
 /// The parent object tracks its child pool objects through weak pointers
