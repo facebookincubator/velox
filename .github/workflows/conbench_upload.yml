@@ -39,7 +39,7 @@ jobs:
 
     - name: 'Download artifacts'
       id: 'download'
-      uses: actions/github-script@v6
+      uses: actions/github-script@v7
       with:
         script: |
           const run_id = "${{ github.event.workflow_run.id || inputs.run_id }}";
@@ -144,7 +144,7 @@ jobs:
       run: echo "failed=true" >> $GITHUB_OUTPUT
 
     - name: "Create a GitHub Status on the contender commit (whether the upload was successful)"
-      uses: actions/github-script@v6
+      uses: actions/github-script@v7
       if: ${{ !cancelled() && steps.extract.conclusion != 'failure' }}
       with:
         script: |
