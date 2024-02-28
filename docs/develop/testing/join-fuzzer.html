@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Join Fuzzer &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Debugging Tools" href="../debugging.html" />
@@ -44,7 +41,7 @@
           <div class="body" role="main">
             
   <section id="join-fuzzer">
-<h1>Join Fuzzer<a class="headerlink" href="#join-fuzzer" title="Permalink to this heading">¶</a></h1>
+<h1>Join Fuzzer<a class="headerlink" href="#join-fuzzer" title="Link to this heading">¶</a></h1>
 <p>Join fuzzer tests all types of hash and merge joins with up to 5 join keys and
 up to 3 payload columns with and without spilling.</p>
 <p>At each iteration, fuzzer randomly picks a join type (INNER, LEFT, FULL, LEFT
@@ -78,7 +75,7 @@ Values -&gt; LocalExchange(ROUND_ROBIN) -&gt; HashJoin</p></li>
 types (INNER, LEFT).</p></li>
 </ul>
 <section id="how-to-run">
-<h2>How to run<a class="headerlink" href="#how-to-run" title="Permalink to this heading">¶</a></h2>
+<h2>How to run<a class="headerlink" href="#how-to-run" title="Link to this heading">¶</a></h2>
 <p>Use velox_join_fuzzer_test binary to run join fuzzer:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">velox</span><span class="o">/</span><span class="n">exec</span><span class="o">/</span><span class="n">tests</span><span class="o">/</span><span class="n">velox_join_fuzzer_test</span>
 </pre></div>
@@ -170,8 +167,8 @@ generate. Default is 5.</p></li>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Expression Evaluation &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Dictionary Encoding" href="dictionary-encoding.html" />
@@ -43,13 +40,13 @@
           <div class="body" role="main">
             
   <section id="expression-evaluation">
-<h1>Expression Evaluation<a class="headerlink" href="#expression-evaluation" title="Permalink to this heading">¶</a></h1>
+<h1>Expression Evaluation<a class="headerlink" href="#expression-evaluation" title="Link to this heading">¶</a></h1>
 <p>Velox features vectorized expression evaluation. It is used in FilterProject
 operator to evaluate filter and project expressions and in HiveConnector to
 evaluate the “remaining” filter expression. It can also be used standalone.</p>
 <p>Check <strong>velox/example/ExpressionEval.cpp</strong> for an example usage of the API.</p>
 <section id="expression-trees">
-<h2>Expression Trees<a class="headerlink" href="#expression-trees" title="Permalink to this heading">¶</a></h2>
+<h2>Expression Trees<a class="headerlink" href="#expression-trees" title="Link to this heading">¶</a></h2>
 <p>Expression evaluation takes expression trees as input. Each node in the tree is
 a subclass of core::ITypedExpr which specifies return type and zero or more
 input expressions (child nodes in the tree). Each expression can be one of:</p>
@@ -121,7 +118,7 @@ consistent results regardless of the order of the conjuncts.</p>
 always a leaf node in the tree.</p>
 </section>
 <section id="id1">
-<h2>Expression Evaluation<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h2>
+<h2>Expression Evaluation<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <p>Expression evaluation is broken down into two steps: compilation and evaluation.
 Compilation step takes a list of expressions in the form of core::ITypedExpr
 trees and produces a list of executable expressions in the form of exec::Expr
@@ -129,7 +126,7 @@ trees. Evaluation takes input data as a RowVector, evaluates compiled
 expressions and returns the results. The evaluation step can be repeated as
 many times as needed to process all the data.</p>
 <section id="compilation">
-<h3>Compilation<a class="headerlink" href="#compilation" title="Permalink to this heading">¶</a></h3>
+<h3>Compilation<a class="headerlink" href="#compilation" title="Link to this heading">¶</a></h3>
 <p>To compile an expression, one creates an instance of exec::ExprSet. ExprSet’s
 constructor takes a list of expressions (core::ITypedExpr pointing to the root
 of the expression tree) and a context (core::ExecCtx). The constructor
@@ -182,7 +179,7 @@ performed in the following order and the search stops on the first match:</p>
 <li><p>Check if name and signature (i.e. input types) matches one of simple functions.</p></li>
 </ul>
 <section id="common-subexpression-detection">
-<h4>Common SubExpression Detection<a class="headerlink" href="#common-subexpression-detection" title="Permalink to this heading">¶</a></h4>
+<h4>Common SubExpression Detection<a class="headerlink" href="#common-subexpression-detection" title="Link to this heading">¶</a></h4>
 <p>The following diagram shows the expression tree for the <strong>strpos(upper
 (a), ‘FOO’) &gt; 0 OR strpos(upper(a), ‘BAR’) &gt; 0</strong> expression. Here, <strong>upper
 (a)</strong> is a common subexpression. It is represented by a single instance of Expr
@@ -190,14 +187,14 @@ class which appears twice in the tree.</p>
 <a class="reference internal image-reference" href="../_images/cse.png"><img alt="../_images/cse.png" class="align-center" src="../_images/cse.png" style="width: 600px;" /></a>
 </section>
 <section id="flatten-ands-and-ors">
-<h4>Flatten ANDs and ORs<a class="headerlink" href="#flatten-ands-and-ors" title="Permalink to this heading">¶</a></h4>
+<h4>Flatten ANDs and ORs<a class="headerlink" href="#flatten-ands-and-ors" title="Link to this heading">¶</a></h4>
 <p>Adjacent AND nodes are consolidated into one. Similarly, adjacent OR nodes are
 consolidated into one. This maximizes the effect of adaptive conjunct
 reordering during execution of the AND and OR expressions.</p>
 <a class="reference internal image-reference" href="../_images/flatten-and.png"><img alt="../_images/flatten-and.png" class="align-center" src="../_images/flatten-and.png" style="width: 600px;" /></a>
 </section>
 <section id="flatten-concat-like-functions">
-<span id="expr-flatten-concat"></span><h4>Flatten concat-like functions<a class="headerlink" href="#flatten-concat-like-functions" title="Permalink to this heading">¶</a></h4>
+<span id="expr-flatten-concat"></span><h4>Flatten concat-like functions<a class="headerlink" href="#flatten-concat-like-functions" title="Link to this heading">¶</a></h4>
 <p>Functions that behave like associative operators can declare support for
 flattening. In that case, adjacent nodes of the same function are
 consolidated into one.</p>
@@ -231,7 +228,7 @@ will be re-writen as g(f(a, b, c), f(d, b, c)) and no common sub-expression
 will be identified.</p>
 </section>
 <section id="constant-folding">
-<h4>Constant Folding<a class="headerlink" href="#constant-folding" title="Permalink to this heading">¶</a></h4>
+<h4>Constant Folding<a class="headerlink" href="#constant-folding" title="Link to this heading">¶</a></h4>
 <p>Once we have a tree of executable expressions (exec::Expr), ExprSet identifies
 deterministic subexpressions which do not depend on any columns, evaluates
 these and replaces them with a single constant expression. This optimization is
@@ -243,7 +240,7 @@ node <strong>FOO</strong>.</p>
 <a class="reference internal image-reference" href="../_images/constant-folding.png"><img alt="../_images/constant-folding.png" class="align-center" src="../_images/constant-folding.png" style="width: 600px;" /></a>
 </section>
 <section id="expression-metadata">
-<h4>Expression Metadata<a class="headerlink" href="#expression-metadata" title="Permalink to this heading">¶</a></h4>
+<h4>Expression Metadata<a class="headerlink" href="#expression-metadata" title="Link to this heading">¶</a></h4>
 <p>Executable expressions include a set of metadata that’s used during evaluation.
 This is calculated by Expr::computeMetadata() virtual methods and stored in
 member variables of the exec::Expr class.</p>
@@ -268,7 +265,7 @@ and allows to run whole subexpressions on a subset of unique values.</p>
 </section>
 </section>
 <section id="evaluation">
-<h3>Evaluation<a class="headerlink" href="#evaluation" title="Permalink to this heading">¶</a></h3>
+<h3>Evaluation<a class="headerlink" href="#evaluation" title="Link to this heading">¶</a></h3>
 <p>An instance of ExprSet represents one or more executable expressions.
 ExprSet::eval() method can be invoked repeatedly to evaluate all or a subset of
 the expressions on multiple batches of data.</p>
@@ -281,7 +278,7 @@ rows passed the filter, the evaluation of project expressions is skipped.</p>
 the input data and a SelectivityVector which identifies a subset of rows for
 which to evaluate the expressions.</p>
 <section id="common-subexpressions-cses">
-<h4>Common SubExpressions (CSEs)<a class="headerlink" href="#common-subexpressions-cses" title="Permalink to this heading">¶</a></h4>
+<h4>Common SubExpressions (CSEs)<a class="headerlink" href="#common-subexpressions-cses" title="Link to this heading">¶</a></h4>
 <p>ExprSet::eval() calls Expr::eval() for individual expressions. Expr::eval
 () first checks if the expression is a deterministic common subexpression
 (<em>isMultiplyReferenced_</em> == true) and if so whether it has been evaluated
@@ -296,7 +293,7 @@ This allows the common subexpression optimization to apply at any level of the
 tree, not just at the root.</p>
 </section>
 <section id="computing-on-distinct-values-only">
-<h4>Computing on Distinct Values Only<a class="headerlink" href="#computing-on-distinct-values-only" title="Permalink to this heading">¶</a></h4>
+<h4>Computing on Distinct Values Only<a class="headerlink" href="#computing-on-distinct-values-only" title="Link to this heading">¶</a></h4>
 <p>When inputs are dictionary encoded, deterministic expressions are calculated on
 distinct values only. This is achieved by examining input columns
 (<em>distinctFields_</em>) to identify shared dictionary wrappings, peeling off these
@@ -323,7 +320,7 @@ encoding is peeled off at the very top of the expression tree and the whole
 expression is evaluated on just 3 distinct values.</p>
 </section>
 <section id="memoizing-the-dictionaries">
-<h4>Memoizing the Dictionaries<a class="headerlink" href="#memoizing-the-dictionaries" title="Permalink to this heading">¶</a></h4>
+<h4>Memoizing the Dictionaries<a class="headerlink" href="#memoizing-the-dictionaries" title="Link to this heading">¶</a></h4>
 <p>When input vectors come from TableScan we can have multiple batches of input
 dictionary vectors referencing the same base vector. A “color” column may have
 millions of rows that refer to the same base set of values: red, green, blue.
@@ -335,7 +332,7 @@ results using indices buffer of the input vector. This logic is implemented in
 the Expr::evalWithMemo() method and applies only to deterministic expressions.</p>
 </section>
 <section id="handling-nulls">
-<h4>Handling Nulls<a class="headerlink" href="#handling-nulls" title="Permalink to this heading">¶</a></h4>
+<h4>Handling Nulls<a class="headerlink" href="#handling-nulls" title="Link to this heading">¶</a></h4>
 <p>When an expression is propagating nulls (<em>propagatingNulls_</em> metadata described
 earlier), the expression is evaluated only on rows where no input is null and
 the results are updated to set nulls for rows with null inputs. Here, it comes
@@ -345,7 +342,7 @@ Thus nulls can be added efficiently regardless of whether the results of the
 expression evaluation are flat or dictionary encoded.</p>
 </section>
 <section id="evaluation-algorithm">
-<h4>Evaluation Algorithm<a class="headerlink" href="#evaluation-algorithm" title="Permalink to this heading">¶</a></h4>
+<h4>Evaluation Algorithm<a class="headerlink" href="#evaluation-algorithm" title="Link to this heading">¶</a></h4>
 <p>Expression evaluation traverses the expression tree starting at the root in the
 depth-first order. For each node a sequence of operations is performed.</p>
 <a class="reference internal image-reference" href="../_images/expression-evaluation.png"><img alt="../_images/expression-evaluation.png" class="align-center" src="../_images/expression-evaluation.png" style="width: 800px;" /></a>
@@ -358,7 +355,7 @@ depth-first order. For each node a sequence of operations is performed.</p>
 </ol>
 </section>
 <section id="flat-no-nulls-fast-path">
-<span id="expr-flat-no-nulls"></span><h4>Flat No-Nulls Fast Path<a class="headerlink" href="#flat-no-nulls-fast-path" title="Permalink to this heading">¶</a></h4>
+<span id="expr-flat-no-nulls"></span><h4>Flat No-Nulls Fast Path<a class="headerlink" href="#flat-no-nulls-fast-path" title="Link to this heading">¶</a></h4>
 <p>When evaluating simple expressions on short vectors (&lt; 1000 rows), the overhead
 of handling nulls and encodings is visible. To optimize these use cases,
 expression evaluation takes flat-no-nulls fast path
@@ -376,9 +373,9 @@ supportsFlatNoNullsFastPath method.</p>
 <span class="c1">/// 1; (2) returns flat or constant result when inputs are all flat, all</span>
 <span class="c1">/// constant or a mix of flat and constant; (3) guarantees that if all inputs</span>
 <span class="c1">/// are not null, the result is also not null.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsFlatNoNullsFastPath</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsFlatNoNullsFastPath</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>Special forms support flat-no-nulls fast path in some cases, but not all.</p>
@@ -396,7 +393,7 @@ flat-no-nulls fast path.</p></li>
 go through the regular path.</p>
 </section>
 <section id="error-handling-in-and-or-try">
-<h4>Error Handling in AND, OR, TRY<a class="headerlink" href="#error-handling-in-and-or-try" title="Permalink to this heading">¶</a></h4>
+<h4>Error Handling in AND, OR, TRY<a class="headerlink" href="#error-handling-in-and-or-try" title="Link to this heading">¶</a></h4>
 <p>When evaluating AND expression, If some input generates an error for a row on
 which another input returns false, the error is suppressed.</p>
 <p>When evaluating OR expression, If some input generates an error for a row on
@@ -411,7 +408,7 @@ exceptions if a row’s data is invalid, but record the error by calling
 EvalCtx::setError(row, exception).</p>
 </section>
 <section id="adaptive-conjunct-reordering-in-and-and-or">
-<h4>Adaptive Conjunct Reordering in AND and OR<a class="headerlink" href="#adaptive-conjunct-reordering-in-and-and-or" title="Permalink to this heading">¶</a></h4>
+<h4>Adaptive Conjunct Reordering in AND and OR<a class="headerlink" href="#adaptive-conjunct-reordering-in-and-and-or" title="Link to this heading">¶</a></h4>
 <p>AND and OR expressions use the same mechanism as Selective ORC Reader to track
 the performance of individual conjuncts and adaptively reorder these to
 evaluate conjuncts that drop most rows fastest first.</p>
@@ -420,7 +417,7 @@ first while the OR expression evaluates the cheapest conjunct that returns TRUE
 most often first.</p>
 </section>
 <section id="evaluation-of-if-switch">
-<h4>Evaluation of IF, SWITCH<a class="headerlink" href="#evaluation-of-if-switch" title="Permalink to this heading">¶</a></h4>
+<h4>Evaluation of IF, SWITCH<a class="headerlink" href="#evaluation-of-if-switch" title="Link to this heading">¶</a></h4>
 <p>SWITCH expression evaluation goes through the following steps:</p>
 <ul class="simple">
 <li><p>Evaluate the first condition on all rows.</p></li>
@@ -527,8 +524,8 @@ vector must be preserved or can be overwritten.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

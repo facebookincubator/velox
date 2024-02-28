@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>I/O Optimizations and the TpchBenchmark &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Window functions" href="window.html" />
@@ -43,9 +40,9 @@
           <div class="body" role="main">
             
   <section id="i-o-optimizations-and-the-tpchbenchmark">
-<h1>I/O Optimizations and the TpchBenchmark<a class="headerlink" href="#i-o-optimizations-and-the-tpchbenchmark" title="Permalink to this heading">¶</a></h1>
+<h1>I/O Optimizations and the TpchBenchmark<a class="headerlink" href="#i-o-optimizations-and-the-tpchbenchmark" title="Link to this heading">¶</a></h1>
 <section id="introduction">
-<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h2>
+<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h2>
 <p>This document is the outcome from a cycle of benchmarking to determine the best
 I/O performance against AWS S3 Parquet data for TPCH. It is intended to describe
 the tuning process recommendations and general suggestions for tuning the Velox
@@ -54,17 +51,17 @@ query engine.</p>
 (velox_tpch_benchmark) executable. To build the benchmark executable
 (<em>_build/release/velox/benchamrks/tpch/velox_tpch_benchmark</em>), use the
 following command line to do the build with S3 support:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$ make benchmarks-build <span class="nv">EXTRA_CMAKE_FLAGS</span><span class="o">=</span><span class="s2">&quot;-DVELOX_ENABLE_S3=ON&quot;</span>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>make<span class="w"> </span>benchmarks-build<span class="w"> </span><span class="nv">EXTRA_CMAKE_FLAGS</span><span class="o">=</span><span class="s2">&quot;-DVELOX_ENABLE_S3=ON&quot;</span>
 </pre></div>
 </div>
 </section>
 <hr class="docutils" />
 <section id="use-cases-for-velox">
-<h2>Use Cases for Velox<a class="headerlink" href="#use-cases-for-velox" title="Permalink to this heading">¶</a></h2>
+<h2>Use Cases for Velox<a class="headerlink" href="#use-cases-for-velox" title="Link to this heading">¶</a></h2>
 <p>Velox is a library so there are multiple ways to use it. This document will
 describe two models used by popular applications.</p>
 <section id="in-process-multi-threaded-executor-use-case">
-<h3>In-Process Multi-Threaded Executor Use Case<a class="headerlink" href="#in-process-multi-threaded-executor-use-case" title="Permalink to this heading">¶</a></h3>
+<h3>In-Process Multi-Threaded Executor Use Case<a class="headerlink" href="#in-process-multi-threaded-executor-use-case" title="Link to this heading">¶</a></h3>
 <p>This use case is used by <a class="reference external" href="https://github.com/prestodb/presto">Presto</a> and, as
 it turns out, is the use case used by the <em>Velox TpchBenchmark Tool</em> below.
 This use case uses a single multi-threaded process to perform execution of
@@ -79,7 +76,7 @@ Thread pools for Velox. In the case of the benchmark tool, the tool is
 responsible for both <strong>driver</strong> threads and I/O threads.</p>
 </section>
 <section id="multiple-process-executor-use-case">
-<h3>Multiple Process Executor Use Case<a class="headerlink" href="#multiple-process-executor-use-case" title="Permalink to this heading">¶</a></h3>
+<h3>Multiple Process Executor Use Case<a class="headerlink" href="#multiple-process-executor-use-case" title="Link to this heading">¶</a></h3>
 <p>This use case is used by Spark + <a class="reference external" href="https://github.com/oap-project/gluten">Gluten</a>
 and it differs from the Presto use case where parallelism is concerned. Spark
 uses multiple processes where each process is a Gluten+Velox query processor.
@@ -92,7 +89,7 @@ then injecting the I/O thread pool into Velox for parallel I/O.</p>
 </section>
 <hr class="docutils" />
 <section id="built-in-tpchbenchmark">
-<h2>Built-In TpchBenchmark<a class="headerlink" href="#built-in-tpchbenchmark" title="Permalink to this heading">¶</a></h2>
+<h2>Built-In TpchBenchmark<a class="headerlink" href="#built-in-tpchbenchmark" title="Link to this heading">¶</a></h2>
 <p>This tool uses the “in-process” multi-threaded executor use case. This tool
 exposes quite a few benchmark options as command line options. It also
 exposes many Velox internal options. This document will only cover a subset
@@ -101,7 +98,7 @@ of the options and possible best-known values for them.</p>
 ri6-8xlarge (32 vCPUs; 256GB RAM). The values (or formulas) below are based on
 these experiments.</p>
 <section id="tpchbenchmark-tool-optimizations-in-velox">
-<h3>TpchBenchmark Tool Optimizations in Velox<a class="headerlink" href="#tpchbenchmark-tool-optimizations-in-velox" title="Permalink to this heading">¶</a></h3>
+<h3>TpchBenchmark Tool Optimizations in Velox<a class="headerlink" href="#tpchbenchmark-tool-optimizations-in-velox" title="Link to this heading">¶</a></h3>
 <p>The tool exposes the following options (Note: When passing options for the tool
 use a single dash not a double dash; i.e. -option and not –option):</p>
 <ul class="simple">
@@ -130,9 +127,9 @@ coalesced. Larger may mean more fetched data but at greater bytes/sec.</p></li>
 </ul>
 </section>
 <section id="top-optimization-recommendations">
-<h3>Top Optimization Recommendations<a class="headerlink" href="#top-optimization-recommendations" title="Permalink to this heading">¶</a></h3>
+<h3>Top Optimization Recommendations<a class="headerlink" href="#top-optimization-recommendations" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default" id="id1">
-<caption><span class="caption-text">Starting Point for Tuning</span><a class="headerlink" href="#id1" title="Permalink to this table">¶</a></caption>
+<caption><span class="caption-text">Starting Point for Tuning</span><a class="headerlink" href="#id1" title="Link to this table">¶</a></caption>
 <thead>
 <tr class="row-odd"><th class="head"><p>Option Name</p></th>
 <th class="head"><p>Single Process</p></th>
@@ -185,46 +182,46 @@ reduce small I/O requests.</p>
 </section>
 </section>
 <section id="optimizations-for-the-tpchbenchmark-single-process-use-case">
-<h2>Optimizations for the TpchBenchmark (Single Process Use Case)<a class="headerlink" href="#optimizations-for-the-tpchbenchmark-single-process-use-case" title="Permalink to this heading">¶</a></h2>
+<h2>Optimizations for the TpchBenchmark (Single Process Use Case)<a class="headerlink" href="#optimizations-for-the-tpchbenchmark-single-process-use-case" title="Link to this heading">¶</a></h2>
 <section id="num-drivers">
-<h3><strong>num_drivers</strong><a class="headerlink" href="#num-drivers" title="Permalink to this heading">¶</a></h3>
+<h3><strong>num_drivers</strong><a class="headerlink" href="#num-drivers" title="Link to this heading">¶</a></h3>
 <p>This configuration option describes the number of resources available to
 process query plan tasks. This can greatly improve performance of CPU bound
 workloads. The recommendation in the table above seems to be optimal for
 TPCH-like workloads.</p>
 </section>
 <section id="num-io-threads">
-<h3><strong>num_io_threads</strong><a class="headerlink" href="#num-io-threads" title="Permalink to this heading">¶</a></h3>
+<h3><strong>num_io_threads</strong><a class="headerlink" href="#num-io-threads" title="Link to this heading">¶</a></h3>
 <p>This configuration option describes the number of threads available per driver
 to retrieve data from the network source. If the workload is I/O bound, then
 increasing this number is beneficial if the data is fewer requests of larger
 chunks as opposed to many smaller requests.</p>
 </section>
 <section id="cache-gb">
-<h3><strong>cache_gb</strong><a class="headerlink" href="#cache-gb" title="Permalink to this heading">¶</a></h3>
+<h3><strong>cache_gb</strong><a class="headerlink" href="#cache-gb" title="Link to this heading">¶</a></h3>
 <p>This configuration option is useful for workloads that read the same data
 several times per query but only applies to the single process use case.
 <em>NOTE: There is a SSD Caching option in Velox but it to is ONLY useful in
 the single process use case.</em></p>
 </section>
 <section id="num-splits-per-file">
-<h3><strong>num_splits_per_file</strong><a class="headerlink" href="#num-splits-per-file" title="Permalink to this heading">¶</a></h3>
+<h3><strong>num_splits_per_file</strong><a class="headerlink" href="#num-splits-per-file" title="Link to this heading">¶</a></h3>
 <p>This configuration option is best when the data set count of row groups
 matches this value. The affect in overall performance appears based on
 testing to be small, however.</p>
 </section>
 </section>
 <section id="optimizations-for-all-workloads-both-use-cases">
-<h2>Optimizations for All Workloads (Both Use Cases)<a class="headerlink" href="#optimizations-for-all-workloads-both-use-cases" title="Permalink to this heading">¶</a></h2>
+<h2>Optimizations for All Workloads (Both Use Cases)<a class="headerlink" href="#optimizations-for-all-workloads-both-use-cases" title="Link to this heading">¶</a></h2>
 <section id="max-coalesce-bytes">
-<h3><strong>max_coalesce_bytes</strong><a class="headerlink" href="#max-coalesce-bytes" title="Permalink to this heading">¶</a></h3>
+<h3><strong>max_coalesce_bytes</strong><a class="headerlink" href="#max-coalesce-bytes" title="Link to this heading">¶</a></h3>
 <p>This configuration option is the maximum bytes coalesced into a single request
 to the data source. This was tested from the default 128MB to 2GB, and the
 overall improvement was small as size increased. Capturing request data did
 show larger and fewer requests but not enough to vastly improve I/O performance.</p>
 </section>
 <section id="max-coalesce-distance-bytes">
-<h3><strong>max_coalesce_distance_bytes</strong><a class="headerlink" href="#max-coalesce-distance-bytes" title="Permalink to this heading">¶</a></h3>
+<h3><strong>max_coalesce_distance_bytes</strong><a class="headerlink" href="#max-coalesce-distance-bytes" title="Link to this heading">¶</a></h3>
 <p>This configuration option is the maximum byte distance between needed data in
 the same file at the data source that can be coalesced. Increasing this value
 would theoretically reduce the number of requests and increase each request
@@ -234,7 +231,7 @@ fine-tuned for the workload being run.</p>
 </section>
 </section>
 <section id="summary">
-<h2>Summary<a class="headerlink" href="#summary" title="Permalink to this heading">¶</a></h2>
+<h2>Summary<a class="headerlink" href="#summary" title="Link to this heading">¶</a></h2>
 <p>If a use of Velox matches the use case of the TcphBenchmark then it is a good
 tool to test, I/O and driver performance for specific TCP-H queries. This would
 benefit execution of specific production workloads that are like the chosen
@@ -244,10 +241,10 @@ tune the 2 coalesce configurations exposed.</p>
 </section>
 <hr class="docutils" />
 <section id="appendix-a-tpchbenchmark-tool-help-output">
-<h2>Appendix A: TpchBenchmark Tool Help Output<a class="headerlink" href="#appendix-a-tpchbenchmark-tool-help-output" title="Permalink to this heading">¶</a></h2>
+<h2>Appendix A: TpchBenchmark Tool Help Output<a class="headerlink" href="#appendix-a-tpchbenchmark-tool-help-output" title="Link to this heading">¶</a></h2>
 <p>From the repository root, use the following command line to see all the
 available flags in the TpchBenchmark tool.</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$ ./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark -helpon<span class="o">=</span>TpchBenchmark
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark<span class="w"> </span>-helpon<span class="o">=</span>TpchBenchmark
 </pre></div>
 </div>
 </section>
@@ -343,8 +340,8 @@ available flags in the TpchBenchmark tool.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

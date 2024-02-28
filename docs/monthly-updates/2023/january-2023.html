@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>January 2023 Update &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="2022" href="../2022/index.html" />
@@ -44,9 +41,9 @@
           <div class="body" role="main">
             
   <section id="january-2023-update">
-<h1>January 2023 Update<a class="headerlink" href="#january-2023-update" title="Permalink to this heading">¶</a></h1>
+<h1>January 2023 Update<a class="headerlink" href="#january-2023-update" title="Link to this heading">¶</a></h1>
 <section id="core-library">
-<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for authoring simple functions with generic results, e.g <a class="reference internal" href="../../functions/presto/array.html#subscript" title="subscript"><code class="xref py py-func docutils literal notranslate"><span class="pre">subscript()</span></code></a>, <code class="xref py py-func docutils literal notranslate"><span class="pre">array_concat()</span></code>, <a class="reference internal" href="../../functions/presto/array.html#array_intersect" title="array_intersect"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_intersect()</span></code></a>.</p></li>
 <li><p>Reject null aware right semi project joins and add support for null-aware left semi join project with filter.</p></li>
@@ -55,7 +52,7 @@
 </ul>
 </section>
 <section id="presto-functions">
-<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference internal" href="../../functions/presto/array.html#array_frequency" title="array_frequency"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_frequency()</span></code></a>, <a class="reference internal" href="../../functions/presto/json.html#json_parse" title="json_parse"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_parse()</span></code></a>, <a class="reference internal" href="../../functions/presto/json.html#json_format" title="json_format"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_format()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#shuffle" title="shuffle"><code class="xref py py-func docutils literal notranslate"><span class="pre">shuffle()</span></code></a>, <a class="reference internal" href="../../functions/presto/binary.html#sha1" title="sha1"><code class="xref py py-func docutils literal notranslate"><span class="pre">sha1()</span></code></a>, <a class="reference internal" href="../../functions/presto/binary.html#spooky_hash_v2_32" title="spooky_hash_v2_32"><code class="xref py py-func docutils literal notranslate"><span class="pre">spooky_hash_v2_32()</span></code></a>, <a class="reference internal" href="../../functions/presto/binary.html#spooky_hash_v2_64" title="spooky_hash_v2_64"><code class="xref py py-func docutils literal notranslate"><span class="pre">spooky_hash_v2_64()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#repeat" title="repeat"><code class="xref py py-func docutils literal notranslate"><span class="pre">repeat()</span></code></a>, <a class="reference internal" href="../../functions/presto/datetime.html#week" title="week"><code class="xref py py-func docutils literal notranslate"><span class="pre">week()</span></code></a>, <a class="reference internal" href="../../functions/spark/datetime.html#week_of_year" title="week_of_year"><code class="xref py py-func docutils literal notranslate"><span class="pre">week_of_year()</span></code></a> scalar functions.</p></li>
 <li><p>Fix error handling in <a class="reference internal" href="../../functions/presto/comparison.html#least" title="least"><code class="xref py py-func docutils literal notranslate"><span class="pre">least()</span></code></a>, <a class="reference internal" href="../../functions/presto/comparison.html#greatest" title="greatest"><code class="xref py py-func docutils literal notranslate"><span class="pre">greatest()</span></code></a>, <a class="reference internal" href="../../functions/presto/regexp.html#like" title="like"><code class="xref py py-func docutils literal notranslate"><span class="pre">like()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#array_sum" title="array_sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_sum()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#array_position" title="array_position"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_position()</span></code></a>, <a class="reference internal" href="../../functions/presto/regexp.html#regexp_extract" title="regexp_extract"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a>, <a class="reference internal" href="../../functions/presto/regexp.html#regexp_like" title="regexp_like"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_like()</span></code></a>, <a class="reference internal" href="../../functions/presto/regexp.html#regexp_extract_all" title="regexp_extract_all"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_extract_all()</span></code></a> scalar functions.</p></li>
@@ -64,14 +61,14 @@
 </ul>
 </section>
 <section id="spark-functions">
-<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for DATE inputs to least and greatest functions.</p></li>
 <li><p>Fix year function to match Spark’s semantics.</p></li>
 </ul>
 </section>
 <section id="hive-connector">
-<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Fix crashes when reading from an S3 file system.</p></li>
 <li><p>Add support for MAP columns in Parquet reader.</p></li>
@@ -80,13 +77,13 @@
 </ul>
 </section>
 <section id="substrait">
-<h2>Substrait<a class="headerlink" href="#substrait" title="Permalink to this heading">¶</a></h2>
+<h2>Substrait<a class="headerlink" href="#substrait" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Update Substrait to 0.22.0.</p></li>
 </ul>
 </section>
 <section id="performance-and-correctness">
-<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Fix multiple bugs in expression evaluation with TRY.</p></li>
 <li><p>Revamp function selection mechanism in expression fuzzer. This change will promote more even distribution of test coverage across functions, as the selection of functions will now be based on a list of eligible function names, rather than being based on function signatures, which could lead to an uneven distribution based on factors such as the presence of a templated return type or the number of signatures a function has.</p></li>
@@ -95,27 +92,27 @@
 </ul>
 </section>
 <section id="portability">
-<h2>Portability<a class="headerlink" href="#portability" title="Permalink to this heading">¶</a></h2>
+<h2>Portability<a class="headerlink" href="#portability" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Fix Velox build on Mac M1 machines by disabling <cite>lemirebmi2</cite> benchmark.</p></li>
 <li><p>Build using GCC 11.3 and LLVM 15 compilers.</p></li>
 </ul>
 </section>
 <section id="build-system">
-<h2>Build System<a class="headerlink" href="#build-system" title="Permalink to this heading">¶</a></h2>
+<h2>Build System<a class="headerlink" href="#build-system" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Re-enable continuous benchmarking jobs by moving them to Github Actions.</p></li>
 <li><p>Build dependencies in release mode for Ubuntu.</p></li>
 </ul>
 </section>
 <section id="python-bindings">
-<h2>Python Bindings<a class="headerlink" href="#python-bindings" title="Permalink to this heading">¶</a></h2>
+<h2>Python Bindings<a class="headerlink" href="#python-bindings" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Fix memory leak bug when exiting Python.</p></li>
 </ul>
 </section>
 <section id="credits">
-<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
 <p>Adalto Correia,Aditi Pandit,Amit Dutta,Austin Dickey,Bikramjeet Vig,Chad Austin,Deepak Majeti,Ge Gao,Giuseppe Ottaviano,Gosh Arzumanyan,Huameng Jiang,Ivan Morett,Jacob Wujciak-Jens,Jake Jung,Jialiang Tan,Jimmy Lu,Kevin Wilfong,Krishna Pai,Laith Sakka,Masha Basmanova,Matthew William Edwards,Michael Liu,Michael Shang,Mike Decker,Milosz Linkiewicz,Orri Erling,Patrick Somaru,Pavel Solodovnikov,Pedro Eugenio Rocha Pedreira, Pramod, Qitian Zeng, Randeep Singh, Raúl Cumplido, Sergey Pershin, Siva Muthusamy, Uhyon Chung, Vinti Pandey, Wei He, Weile Wei, Zeyi (Rice) Fan, Zhenyuan Zhao, mwish, shengxuan.liu, tanjialiang, xiaoxmeng, yingsu00, zhejiangxiaomai</p>
 </section>
 </section>
@@ -196,8 +193,8 @@
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

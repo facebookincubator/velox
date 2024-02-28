@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Vectors &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="How to add a scalar function?" href="scalar-functions.html" />
@@ -43,7 +40,7 @@
           <div class="body" role="main">
             
   <section id="vectors">
-<h1>Vectors<a class="headerlink" href="#vectors" title="Permalink to this heading">¶</a></h1>
+<h1>Vectors<a class="headerlink" href="#vectors" title="Link to this heading">¶</a></h1>
 <p>Velox vectors is columnar in-memory format for storing query data during
 execution. It is similar to Arrow, but features more encodings and different
 layout for strings, arrays and maps which support out-of-order writes. Vectors
@@ -67,7 +64,7 @@ single column of type struct.</p>
 stored in the vector. Flat, constant and dictionary encodings can be combined
 with any type.</p>
 <section id="buffers">
-<h2>Buffers<a class="headerlink" href="#buffers" title="Permalink to this heading">¶</a></h2>
+<h2>Buffers<a class="headerlink" href="#buffers" title="Link to this heading">¶</a></h2>
 <p>Vector data is stored in memory using one or more buffers. A buffer is a
 contiguous range of bytes. Buffers are reference counted and must be held by
 BufferPtr. Buffers can either own their memory or represent a view into
@@ -81,21 +78,21 @@ methods.</p>
 <p>AlignedBuffer::allocate&lt;T&gt;(size, pool) static method allocates a buffer that can
 hold at least ‘size’ values of type T from the MemoryPool.</p>
 <p>To allocate a buffer to store 100 64-bit integers:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>The resulting buffer is at least sizeof(int64_t) * 100 = 800 bytes long. You can
 access the raw buffer for reading via as&lt;T&gt;() template method and for writing
 using asMutable&lt;T&gt;() template method:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Read-only access.</span>
-<span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span>
 
 <span class="c1">// Read-write access.</span>
-<span class="kt">int64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="kt">int64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span>
 </pre></div>
 </div>
 <p>To allocate a buffer to store 100 boolean flags:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">flags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">flags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>The resulting buffer will be at least 100 / 8 = 13 bytes long (Velox uses just 1
@@ -104,32 +101,32 @@ accessed individually via a bool pointer. Instead, you interpret the buffer as
 a contiguous array of unsigned 64-bit integers and access individual values
 using helper methods from the “bits” namespace.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Read-only access.</span>
-<span class="k">const</span><span class="w"> </span><span class="kt">uint64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawFlags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">flags</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="k">const</span><span class="w"> </span><span class="kt">uint64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawFlags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">flags</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span>
 
 <span class="c1">// Check if flag # 12 is set.</span>
-<span class="kt">bool</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitSet</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span><span class="w"></span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitSet</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span>
 
 <span class="c1">// Read-write access.</span>
-<span class="kt">uint64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawFlags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">flags</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="kt">uint64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawFlags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">flags</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span>
 
 <span class="c1">// Set flag 15 to true/on.</span>
-<span class="n">bits</span><span class="o">::</span><span class="n">setBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">15</span><span class="p">);</span><span class="w"></span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">15</span><span class="p">);</span>
 
 <span class="c1">// or</span>
-<span class="n">bits</span><span class="o">::</span><span class="n">setBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span><span class="w"></span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
 
 <span class="c1">// Set flag 16 to false/off.</span>
-<span class="n">bits</span><span class="o">::</span><span class="n">clearBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="p">);</span><span class="w"></span>
+<span class="n">bits</span><span class="o">::</span><span class="n">clearBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="p">);</span>
 
 <span class="c1">// or</span>
-<span class="n">bits</span><span class="o">::</span><span class="n">setBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span><span class="w"></span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>Since buffers are not typed, the size of the buffer reflects the number of bytes
 in the buffer, not the number of values.</p>
 </section>
 <section id="null-flags">
-<h2>Null Flags<a class="headerlink" href="#null-flags" title="Permalink to this heading">¶</a></h2>
+<h2>Null Flags<a class="headerlink" href="#null-flags" title="Link to this heading">¶</a></h2>
 <p>Each vector contains an optional set of null flags which identify rows with null
 values. If there are no null values in a given vector, null flags may not be
 present. Null flags are bit-packed into an array of 64-bit unsigned integers.
@@ -140,9 +137,9 @@ Zero indicates a null value. One indicates a non-null value.
 <p>BaseVector is a base class for all kinds of vectors. It contains the type of
 values stored in the vector, e.g. INTEGER vs. VARCHAR, nulls buffer, and number
 of rows in the vector.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">Type</span><span class="o">&gt;</span><span class="w"> </span><span class="n">type_</span><span class="p">;</span><span class="w"></span>
-<span class="n">BufferPtr</span><span class="w"> </span><span class="n">nulls_</span><span class="p">;</span><span class="w"></span>
-<span class="n">vector_size_t</span><span class="w"> </span><span class="n">length_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">Type</span><span class="o">&gt;</span><span class="w"> </span><span class="n">type_</span><span class="p">;</span>
+<span class="n">BufferPtr</span><span class="w"> </span><span class="n">nulls_</span><span class="p">;</span>
+<span class="n">vector_size_t</span><span class="w"> </span><span class="n">length_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Vectors are always held by std::shared_ptr using the VectorPtr alias.</p>
@@ -150,20 +147,20 @@ of rows in the vector.</p>
 <p>The “bits” namespace contains a number of convenience functions for working with
 a nulls buffer.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Check if position #12 is null.</span>
-<span class="kt">bool</span><span class="w"> </span><span class="n">isNull</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span><span class="w"></span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">isNull</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span>
 
 <span class="c1">// Set position #12 to null.</span>
-<span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span><span class="w"></span>
-<span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span><span class="w"></span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
 
 <span class="c1">// Set position #12 to non-null.</span>
-<span class="n">bits</span><span class="o">::</span><span class="n">clearNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span><span class="w"></span>
-<span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span><span class="w"></span>
+<span class="n">bits</span><span class="o">::</span><span class="n">clearNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 <section id="flat-vectors-scalar-types">
-<h2>Flat Vectors - Scalar Types<a class="headerlink" href="#flat-vectors-scalar-types" title="Permalink to this heading">¶</a></h2>
+<h2>Flat Vectors - Scalar Types<a class="headerlink" href="#flat-vectors-scalar-types" title="Link to this heading">¶</a></h2>
 <p>Flat vectors of scalar types are represented using the FlatVector&lt;T&gt; template,
 where T is the C++ type of the scalar type. The values stored in the vector
 naturally use the C++ type.</p>
@@ -172,15 +169,15 @@ string buffers. Values buffer is a contiguous byte buffer with sizeof(T) bytes
 per value, including null values. The number of bytes per value is different
 for different types. Boolean values are bit-packed and use 1 byte per 8
 values.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">values_</span><span class="p">;</span><span class="w"></span>
-<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">stringBuffers_</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">values_</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">stringBuffers_</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>FlatVector&lt;T&gt; uses BaseVector as the base class and it gets the type, size and
 nulls buffer from it. Flat vectors like all other vectors are held by
 std::shared_ptr using the FlatVectorPtr alias.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
-<span class="k">using</span><span class="w"> </span><span class="n">FlatVectorPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span>
+<span class="k">using</span><span class="w"> </span><span class="n">FlatVectorPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>The following diagram shows a flat vector of type INTEGER with 11 values. This
@@ -241,33 +238,33 @@ position in the string buffer.</p>
 <p>Flat vectors of type TIMESTAMP are represented by FlatVector&lt;Timestamp&gt;.
 Timestamp struct consists of two 64-bit integers: seconds and nanoseconds. Each
 entry uses 16 bytes.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">int64_t</span><span class="w"> </span><span class="n">seconds_</span><span class="p">;</span><span class="w"></span>
-<span class="kt">uint64_t</span><span class="w"> </span><span class="n">nanos_</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">int64_t</span><span class="w"> </span><span class="n">seconds_</span><span class="p">;</span>
+<span class="kt">uint64_t</span><span class="w"> </span><span class="n">nanos_</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
 <section id="constant-vector-scalar-types">
-<h2>Constant Vector - Scalar Types<a class="headerlink" href="#constant-vector-scalar-types" title="Permalink to this heading">¶</a></h2>
+<h2>Constant Vector - Scalar Types<a class="headerlink" href="#constant-vector-scalar-types" title="Link to this heading">¶</a></h2>
 <p>Constant vectors are represented using ConstantVector&lt;T&gt; template which contains
 a value and a boolean indicating whether the value is null or not. It may
 contain a string buffer if T = StringView and the string is longer than 12
 characters.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">T</span><span class="w"> </span><span class="n">value_</span><span class="p">;</span><span class="w"></span>
-<span class="kt">bool</span><span class="w"> </span><span class="n">isNull_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
-<span class="n">BufferPtr</span><span class="w"> </span><span class="n">stringBuffer_</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">T</span><span class="w"> </span><span class="n">value_</span><span class="p">;</span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">isNull_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="n">BufferPtr</span><span class="w"> </span><span class="n">stringBuffer_</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>BaseVector::wrapInConstant() static method can be used to create a constant
 vector from a scalar value.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="w"> </span><span class="n">createConstant</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="n">variant</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">size</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">velox</span><span class="o">::</span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="n">pool</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="w"> </span><span class="n">createConstant</span><span class="p">(</span>
+<span class="w">    </span><span class="n">variant</span><span class="w"> </span><span class="n">value</span><span class="p">,</span>
+<span class="w">    </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">size</span><span class="p">,</span>
+<span class="w">    </span><span class="n">velox</span><span class="o">::</span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="n">pool</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 <section id="dictionary-vector-scalar-types">
-<h2>Dictionary Vector - Scalar Types<a class="headerlink" href="#dictionary-vector-scalar-types" title="Permalink to this heading">¶</a></h2>
+<h2>Dictionary Vector - Scalar Types<a class="headerlink" href="#dictionary-vector-scalar-types" title="Link to this heading">¶</a></h2>
 <p>Dictionary encoding is used to compactly represent vectors with lots of
 duplicate values as well as a result of a filter or filter-like operation
 without copying the data. Dictionary encoding can also be used to represent a
@@ -276,8 +273,8 @@ result of a sorting operation without copying the data.</p>
 template. Dictionary vectors contain a shared pointer to a base vector which
 may or may not be flat and a buffer of indices into the base vector. Indices
 are 32-bit integers.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">indices_</span><span class="p">;</span><span class="w"></span>
-<span class="n">VectorPtr</span><span class="w"> </span><span class="n">dictionaryValues_</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">indices_</span><span class="p">;</span>
+<span class="n">VectorPtr</span><span class="w"> </span><span class="n">dictionaryValues_</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Here is a dictionary vector of type VARCHAR that represents colors. The base
@@ -335,17 +332,17 @@ entry in the indices buffer contains garbage and should not be accessed.</p>
 <a class="reference internal image-reference" href="../_images/dictionary-with-nulls.png"><img alt="../_images/dictionary-with-nulls.png" class="align-center" src="../_images/dictionary-with-nulls.png" style="width: 500px;" /></a>
 </section>
 <section id="flat-vectors-complex-types">
-<h2>Flat Vectors - Complex Types<a class="headerlink" href="#flat-vectors-complex-types" title="Permalink to this heading">¶</a></h2>
+<h2>Flat Vectors - Complex Types<a class="headerlink" href="#flat-vectors-complex-types" title="Link to this heading">¶</a></h2>
 <p>Flat vectors of complex types ARRAY, MAP and ROW / STRUCT are represented using
 ArrayVector, MapVector and RowVector.</p>
 <section id="arrayvector">
-<h3>ArrayVector<a class="headerlink" href="#arrayvector" title="Permalink to this heading">¶</a></h3>
+<h3>ArrayVector<a class="headerlink" href="#arrayvector" title="Link to this heading">¶</a></h3>
 <p>ArrayVector stores values of type ARRAY. In addition to nulls buffer, it
 contains offsets and sizes buffers and an elements vector. Offsets and sizes
 are 32-bit integers.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">offsets_</span><span class="p">;</span><span class="w"></span>
-<span class="n">BufferPtr</span><span class="w"> </span><span class="n">sizes_</span><span class="p">;</span><span class="w"></span>
-<span class="n">VectorPtr</span><span class="w"> </span><span class="n">elements_</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">offsets_</span><span class="p">;</span>
+<span class="n">BufferPtr</span><span class="w"> </span><span class="n">sizes_</span><span class="p">;</span>
+<span class="n">VectorPtr</span><span class="w"> </span><span class="n">elements_</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Elements vector contains all the individual elements of all the arrays. Elements
@@ -380,14 +377,14 @@ array vector itself. This allows us to specify non-null arrays with some or all
 null elements. Null array and array of all null elements are not the same.</p>
 </section>
 <section id="mapvector">
-<h3>MapVector<a class="headerlink" href="#mapvector" title="Permalink to this heading">¶</a></h3>
+<h3>MapVector<a class="headerlink" href="#mapvector" title="Link to this heading">¶</a></h3>
 <p>MapVector stores values of type MAP. In addition to nulls buffer, it contains
 offsets and sizes buffers, keys and values vectors. Offsets and sizes are
 32-bit integers.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">offsets_</span><span class="p">;</span><span class="w"></span>
-<span class="n">BufferPtr</span><span class="w"> </span><span class="n">sizes_</span><span class="p">;</span><span class="w"></span>
-<span class="n">VectorPtr</span><span class="w"> </span><span class="n">keys_</span><span class="p">;</span><span class="w"></span>
-<span class="n">VectorPtr</span><span class="w"> </span><span class="n">values_</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">offsets_</span><span class="p">;</span>
+<span class="n">BufferPtr</span><span class="w"> </span><span class="n">sizes_</span><span class="p">;</span>
+<span class="n">VectorPtr</span><span class="w"> </span><span class="n">keys_</span><span class="p">;</span>
+<span class="n">VectorPtr</span><span class="w"> </span><span class="n">values_</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Here is an example.</p>
@@ -409,10 +406,10 @@ unique. However, in practice, places which create maps, e.g. ORC and Parquet
 readers, <a class="reference internal" href="../functions/presto/map.html#map" title="map"><code class="xref py py-func docutils literal notranslate"><span class="pre">map()</span></code></a> function, etc., ensure that map keys are unique.</p>
 </section>
 <section id="rowvector">
-<h3>RowVector<a class="headerlink" href="#rowvector" title="Permalink to this heading">¶</a></h3>
+<h3>RowVector<a class="headerlink" href="#rowvector" title="Link to this heading">¶</a></h3>
 <p>Finally, RowVector stores values of type ROW (e.g. structs). In addition to the
 nulls buffer, it contains a list of child vectors.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">children_</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">children_</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Here is an example.</p>
@@ -431,7 +428,7 @@ during query execution.</p>
 </section>
 </section>
 <section id="constant-vector-complex-types">
-<h2>Constant Vector - Complex Types<a class="headerlink" href="#constant-vector-complex-types" title="Permalink to this heading">¶</a></h2>
+<h2>Constant Vector - Complex Types<a class="headerlink" href="#constant-vector-complex-types" title="Link to this heading">¶</a></h2>
 <p>Constant vectors of complex types are represented by
 ConstantVector&lt;ComplexType&gt;, where ComplexType is a special marker type that is
 used for all complex types. Constant vector of type ARRAY(INTEGER) and constant
@@ -439,8 +436,8 @@ vector of type MAP(TINYINT, VARCHAR) as represented by the same class:
 ConstantVector&lt;ComplexType&gt;.</p>
 <p>ConstantVector&lt;ComplexType&gt; identifies a specific complex type value by pointing
 to a particular row in another vector.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorPtr</span><span class="w"> </span><span class="n">valueVector_</span><span class="p">;</span><span class="w"></span>
-<span class="n">vector_size_t</span><span class="w"> </span><span class="n">index_</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorPtr</span><span class="w"> </span><span class="n">valueVector_</span><span class="p">;</span>
+<span class="n">vector_size_t</span><span class="w"> </span><span class="n">index_</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>The following diagram shows a complex vector of type ARRAY(INTEGER) representing
@@ -452,10 +449,10 @@ complex type. Any vector can be wrapped in a constant vector. When you use
 wrapInConstant() with a non-flat vector, the resulting constant vector ends up
 referring to the innermost vector, e.g. wrapInConstant(100, 5, Dict
 (Flat)) returns ConstantVector&lt;ComplexType&gt;(100, Dict-&gt;wrappedIndex(5), Flat).</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="w"> </span><span class="n">wrapInConstant</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">length</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="w"> </span><span class="n">vector</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="w"> </span><span class="n">wrapInConstant</span><span class="p">(</span>
+<span class="w">    </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">length</span><span class="p">,</span>
+<span class="w">    </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="w"> </span><span class="n">vector</span><span class="p">);</span>
 </pre></div>
 </div>
 <p><strong>wrappedVector()</strong> virtual method defined in BaseVector provides access to the
@@ -466,7 +463,7 @@ returns the same value for all inputs as all rows of the constant vector map to
 the same row of the underlying flat vector.</p>
 </section>
 <section id="dictionary-vector-complex-types">
-<h2>Dictionary Vector - Complex Types<a class="headerlink" href="#dictionary-vector-complex-types" title="Permalink to this heading">¶</a></h2>
+<h2>Dictionary Vector - Complex Types<a class="headerlink" href="#dictionary-vector-complex-types" title="Link to this heading">¶</a></h2>
 <p>Similarly to constant vectors, dictionary vectors of complex types are
 represented by DictionaryVector&lt;ComplexType&gt;, where ComplexType is a special
 marker type that is used for all complex types. Dictionary vector of type ARRAY
@@ -554,8 +551,8 @@ complex types are no different than dictionary vectors of scalar types.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>September 2022 Update &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="August 2022 Update" href="august-2022.html" />
@@ -44,9 +41,9 @@
           <div class="body" role="main">
             
   <section id="september-2022-update">
-<h1>September 2022 Update<a class="headerlink" href="#september-2022-update" title="Permalink to this heading">¶</a></h1>
+<h1>September 2022 Update<a class="headerlink" href="#september-2022-update" title="Link to this heading">¶</a></h1>
 <section id="documentation">
-<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Document <a class="reference internal" href="../../develop/expression-evaluation.html#expr-flat-no-nulls"><span class="std std-ref">flat-no-nulls fast path</span></a> in expression evaluation.</p></li>
 <li><p>Document <a class="reference internal" href="../../develop/debugging/vector-saver.html"><span class="doc">encoding-preserving vector serialization format</span></a>.</p></li>
@@ -56,7 +53,7 @@
 </ul>
 </section>
 <section id="core-library">
-<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add spilling support for hash join build.</p></li>
 <li><p>Add support for <a class="reference internal" href="../../develop/expression-evaluation.html#expr-flatten-concat"><span class="std std-ref">flattening concat-like function calls</span></a>
@@ -64,7 +61,7 @@ in expression evaluation.</p></li>
 </ul>
 </section>
 <section id="presto-functions">
-<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference internal" href="../../functions/presto/window.html#rank" title="rank"><code class="xref py py-func docutils literal notranslate"><span class="pre">rank()</span></code></a>, <a class="reference internal" href="../../functions/presto/window.html#dense_rank" title="dense_rank"><code class="xref py py-func docutils literal notranslate"><span class="pre">dense_rank()</span></code></a> and <a class="reference internal" href="../../functions/presto/window.html#percent_rank" title="percent_rank"><code class="xref py py-func docutils literal notranslate"><span class="pre">percent_rank()</span></code></a> window functions.</p></li>
 <li><p>Add <a class="reference internal" href="../../functions/presto/array.html#zip_with" title="zip_with"><code class="xref py py-func docutils literal notranslate"><span class="pre">zip_with()</span></code></a> function.</p></li>
@@ -81,13 +78,13 @@ in expression evaluation.</p></li>
 </ul>
 </section>
 <section id="substrait-extension">
-<h2>Substrait Extension<a class="headerlink" href="#substrait-extension" title="Permalink to this heading">¶</a></h2>
+<h2>Substrait Extension<a class="headerlink" href="#substrait-extension" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for IF and SWITCH expressions.</p></li>
 </ul>
 </section>
 <section id="performance-and-correctness">
-<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for AND/OR expressions and functions with variadic arguments to Fuzzer.</p></li>
 <li><p>Add logic to save input vector and expression SQL to files when expression
@@ -100,7 +97,7 @@ system exceptions only. <a class="reference external" href="https://github.com/f
 </ul>
 </section>
 <section id="credits">
-<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
 <p>Aditi Pandit, Austin Dickey, Behnam Robatmili, Bikramjeet Vig, Bo Yang, Deepak
 Majeti, Huameng Jiang, Jake Jung, Jialiang Tan, Jimmy Lu, Karteek Murthy Samba
 Murthy, Kevin Wilfong, Krishna Pai, Laith Sakka, Masha Basmanova, Michael
@@ -184,8 +181,8 @@ xiaoxmeng, yingsu00, zhejiangxiaomai, zhaozhenhui</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

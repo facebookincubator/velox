@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Memory Management &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Spilling" href="spilling.html" />
@@ -43,9 +40,9 @@
           <div class="body" role="main">
             
   <section id="memory-management">
-<h1>Memory Management<a class="headerlink" href="#memory-management" title="Permalink to this heading">¶</a></h1>
+<h1>Memory Management<a class="headerlink" href="#memory-management" title="Link to this heading">¶</a></h1>
 <section id="background">
-<h2>Background<a class="headerlink" href="#background" title="Permalink to this heading">¶</a></h2>
+<h2>Background<a class="headerlink" href="#background" title="Link to this heading">¶</a></h2>
 <p>The Velox memory system is built on top of the <a class="reference external" href="https://man7.org/linux/man-pages/man2/mmap.2.html">std::mmap</a> library to avoid the
 <a class="reference external" href="https://stackoverflow.com/questions/3770457/what-is-memory-fragmentation">memory fragmentation issue</a> with std::malloc. It provides the basic
 memory allocation functions for query execution as well as the advanced
@@ -88,7 +85,7 @@ unused Velox memory back to the OS when the server is detected under low memory
 condition.</p>
 </section>
 <section id="overall-design">
-<h2>Overall Design<a class="headerlink" href="#overall-design" title="Permalink to this heading">¶</a></h2>
+<h2>Overall Design<a class="headerlink" href="#overall-design" title="Link to this heading">¶</a></h2>
 <p>Velox memory system consists of the following major memory components: memory
 manager (<em>MemoryManager</em>), memory allocator (<em>MemoryAllocator</em>), file cache
 (<em>AsyncDataCache</em>), memory arbitrator (<em>MemoryArbitrator</em>) and a number of memory
@@ -139,7 +136,7 @@ memory and file cache to maximize the memory efficiency. The rest of the
 document describes each memory component in detail.</p>
 </section>
 <section id="memory-manager">
-<h2>Memory Manager<a class="headerlink" href="#memory-manager" title="Permalink to this heading">¶</a></h2>
+<h2>Memory Manager<a class="headerlink" href="#memory-manager" title="Link to this heading">¶</a></h2>
 <a class="reference internal image-reference" href="../_images/memory-manager.png"><img alt="Memory Manager" class="align-center" src="../_images/memory-manager.png" style="width: 600px;" /></a>
 <p>The memory manager is created on server startup with the provided
 <em>MemoryManagerOption</em>. It creates a memory allocator instance to manage the
@@ -191,29 +188,29 @@ memory limit (<em>MemoryManagerOptions::arbitratorCapacity</em>) to be smaller t
 limit (<em>MemoryManagerOptions::allocatorCapacity</em>) (refer to <a class="reference external" href="#server-oom-prevention">OOM prevention section</a>
 for detail).</p>
 <section id="memory-system-setup">
-<h3>Memory System Setup<a class="headerlink" href="#memory-system-setup" title="Permalink to this heading">¶</a></h3>
+<h3>Memory System Setup<a class="headerlink" href="#memory-system-setup" title="Link to this heading">¶</a></h3>
 <p>Here is the code block from Prestissimo that initializes the Velox memory system:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">PrestoServer::initializeVeloxMemory</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="linenos"> 2</span><span class="w">   </span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">systemConfig</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SystemConfig</span><span class="o">::</span><span class="n">instance</span><span class="p">();</span><span class="w"></span>
-<span class="linenos"> 3</span><span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">memoryGb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">systemMemoryGb</span><span class="p">();</span><span class="w"></span>
-<span class="linenos"> 4</span><span class="w">   </span><span class="n">MemoryManagerOptions</span><span class="w"> </span><span class="n">options</span><span class="p">;</span><span class="w"></span>
-<span class="linenos"> 5</span><span class="w">   </span><span class="n">options</span><span class="p">.</span><span class="n">allocatorCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memoryGb</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">30</span><span class="p">;</span><span class="w"></span>
-<span class="linenos"> 6</span><span class="w">   </span><span class="n">options</span><span class="p">.</span><span class="n">useMmapAllocator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">useMmapAllocator</span><span class="p">();</span><span class="w"></span>
-<span class="linenos"> 7</span><span class="w">   </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">memoryArbitratorKind</span><span class="p">().</span><span class="n">empty</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="linenos"> 8</span><span class="w">     </span><span class="n">options</span><span class="p">.</span><span class="n">arbitratorKind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">memoryArbitratorKind</span><span class="p">();</span><span class="w"></span>
-<span class="linenos"> 9</span><span class="w">     </span><span class="k">const</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">queryMemoryGb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">queryMemoryGb</span><span class="p">();</span><span class="w"></span>
-<span class="linenos">10</span><span class="w">     </span><span class="n">options</span><span class="p">.</span><span class="n">queryMemoryCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">queryMemoryGb</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">30</span><span class="p">;</span><span class="w"></span>
-<span class="linenos">11</span><span class="w">     </span><span class="p">...</span><span class="w"></span>
-<span class="linenos">12</span><span class="w">   </span><span class="p">}</span><span class="w"></span>
-<span class="linenos">13</span><span class="w">   </span><span class="n">memory</span><span class="o">::</span><span class="n">initializeMemoryManager</span><span class="p">(</span><span class="n">options</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">PrestoServer::initializeVeloxMemory</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 2</span><span class="w">   </span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">systemConfig</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SystemConfig</span><span class="o">::</span><span class="n">instance</span><span class="p">();</span>
+<span class="linenos"> 3</span><span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">memoryGb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">systemMemoryGb</span><span class="p">();</span>
+<span class="linenos"> 4</span><span class="w">   </span><span class="n">MemoryManagerOptions</span><span class="w"> </span><span class="n">options</span><span class="p">;</span>
+<span class="linenos"> 5</span><span class="w">   </span><span class="n">options</span><span class="p">.</span><span class="n">allocatorCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memoryGb</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">30</span><span class="p">;</span>
+<span class="linenos"> 6</span><span class="w">   </span><span class="n">options</span><span class="p">.</span><span class="n">useMmapAllocator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">useMmapAllocator</span><span class="p">();</span>
+<span class="linenos"> 7</span><span class="w">   </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">memoryArbitratorKind</span><span class="p">().</span><span class="n">empty</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 8</span><span class="w">     </span><span class="n">options</span><span class="p">.</span><span class="n">arbitratorKind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">memoryArbitratorKind</span><span class="p">();</span>
+<span class="linenos"> 9</span><span class="w">     </span><span class="k">const</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">queryMemoryGb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">queryMemoryGb</span><span class="p">();</span>
+<span class="linenos">10</span><span class="w">     </span><span class="n">options</span><span class="p">.</span><span class="n">queryMemoryCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">queryMemoryGb</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">30</span><span class="p">;</span>
+<span class="linenos">11</span><span class="w">     </span><span class="p">...</span>
+<span class="linenos">12</span><span class="w">   </span><span class="p">}</span>
+<span class="linenos">13</span><span class="w">   </span><span class="n">memory</span><span class="o">::</span><span class="n">initializeMemoryManager</span><span class="p">(</span><span class="n">options</span><span class="p">);</span>
 <span class="linenos">14</span>
-<span class="linenos">15</span><span class="w">   </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">asyncDataCacheEnabled</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="linenos">16</span><span class="w">     </span><span class="p">...</span><span class="w"></span>
-<span class="linenos">17</span><span class="w">     </span><span class="n">cache_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">cache</span><span class="o">::</span><span class="n">AsyncDataCache</span><span class="o">&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="linenos">18</span><span class="w">        </span><span class="n">memoryManager</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">allocator</span><span class="p">(),</span><span class="w"> </span><span class="n">memoryBytes</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">ssd</span><span class="p">));</span><span class="w"></span>
-<span class="linenos">19</span><span class="w">   </span><span class="p">}</span><span class="w"></span>
-<span class="linenos">20</span><span class="w">   </span><span class="p">...</span><span class="w"></span>
-<span class="linenos">21</span><span class="w"> </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">15</span><span class="w">   </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">asyncDataCacheEnabled</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">16</span><span class="w">     </span><span class="p">...</span>
+<span class="linenos">17</span><span class="w">     </span><span class="n">cache_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">cache</span><span class="o">::</span><span class="n">AsyncDataCache</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="linenos">18</span><span class="w">        </span><span class="n">memoryManager</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">allocator</span><span class="p">(),</span><span class="w"> </span><span class="n">memoryBytes</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">ssd</span><span class="p">));</span>
+<span class="linenos">19</span><span class="w">   </span><span class="p">}</span>
+<span class="linenos">20</span><span class="w">   </span><span class="p">...</span>
+<span class="linenos">21</span><span class="w"> </span><span class="p">}</span>
 </pre></div>
 </div>
 <ul class="simple">
@@ -236,7 +233,7 @@ config</p></li>
 </section>
 </section>
 <section id="memory-pool">
-<h2>Memory Pool<a class="headerlink" href="#memory-pool" title="Permalink to this heading">¶</a></h2>
+<h2>Memory Pool<a class="headerlink" href="#memory-pool" title="Link to this heading">¶</a></h2>
 <p>The memory pool provides memory allocation functions for query execution. It
 also tracks a query’s memory usage for per-query memory limit enforcement.
 As shown in the Query Memory Pool Hierarchy figure, a query creates a tree of
@@ -268,7 +265,7 @@ directly. Hence, the operator pool is <em>LEAF</em> type and all the others are
 <em>AGGREGATE</em> type. We only enforce the memory limit check at the root query
 pool.</p>
 <section id="memory-usage-tracking">
-<h3>Memory Usage Tracking<a class="headerlink" href="#memory-usage-tracking" title="Permalink to this heading">¶</a></h3>
+<h3>Memory Usage Tracking<a class="headerlink" href="#memory-usage-tracking" title="Link to this heading">¶</a></h3>
 <p>To track query memory usage, a leaf operator pool needs to propagate the memory
 usage all the way up to the root query pool and check the memory limit for
 every allocation, but this would be slow. Hence, memory pool uses a memory
@@ -386,46 +383,46 @@ from the memory arbitrator and throws an query memory capacity exceeded error
 </ol>
 </section>
 <section id="memory-pool-apis">
-<h3>Memory Pool APIs<a class="headerlink" href="#memory-pool-apis" title="Permalink to this heading">¶</a></h3>
+<h3>Memory Pool APIs<a class="headerlink" href="#memory-pool-apis" title="Link to this heading">¶</a></h3>
 <p>Memory pool has three sets of APIs for memory pool management, memory allocation
 and memory arbitration. The following is a list of the major APIs to use in each
 of the three sets.</p>
 <section id="memory-pool-management">
-<h4>Memory Pool Management<a class="headerlink" href="#memory-pool-management" title="Permalink to this heading">¶</a></h4>
+<h4>Memory Pool Management<a class="headerlink" href="#memory-pool-management" title="Link to this heading">¶</a></h4>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Creates a root memory pool with specified &#39;name&#39; and &#39;maxCapacity&#39;.</span>
 <span class="c1">/// &#39;reclaimer&#39; is provided for memory arbitration process.</span>
-<span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryManager</span><span class="o">::</span><span class="n">addRootPool</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">maxCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMaxMemory</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">MemoryReclaimer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">);</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryManager</span><span class="o">::</span><span class="n">addRootPool</span><span class="p">(</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span>
+<span class="w">   </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">maxCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMaxMemory</span><span class="p">,</span>
+<span class="w">   </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">MemoryReclaimer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">);</span>
 
 <span class="c1">/// Create an aggregate child memory pool which allows to create child memory</span>
 <span class="c1">/// pools from it, and it used to aggregate memory usage from its child pools. /// Aggregate memory pool is not allowed to allocate memory directly.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryPool</span><span class="o">::</span><span class="n">addAggregateChild</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">);</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryPool</span><span class="o">::</span><span class="n">addAggregateChild</span><span class="p">(</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">);</span>
 
 <span class="c1">/// Create a leaf child memory pool which allows to allocate memory but are not</span>
 <span class="c1">/// allowed to create child pools.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryPool</span><span class="o">::</span><span class="n">addLeafChild</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">);</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryPool</span><span class="o">::</span><span class="n">addLeafChild</span><span class="p">(</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">);</span>
 
 <span class="c1">/// Creates new instance of MemoryPool for an operator, stores it in the task</span>
 <span class="c1">/// to ensure lifetime and returns a raw pointer.</span>
-<span class="n">velox</span><span class="o">::</span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="nf">Task::addOperatorPool</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">PlanNodeId</span><span class="o">&amp;</span><span class="w"> </span><span class="n">planNodeId</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="kt">int</span><span class="w"> </span><span class="n">pipelineId</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">driverId</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operatorType</span><span class="p">);</span><span class="w"></span>
+<span class="n">velox</span><span class="o">::</span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="nf">Task::addOperatorPool</span><span class="p">(</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">PlanNodeId</span><span class="o">&amp;</span><span class="w"> </span><span class="n">planNodeId</span><span class="p">,</span>
+<span class="w">   </span><span class="kt">int</span><span class="w"> </span><span class="n">pipelineId</span><span class="p">,</span>
+<span class="w">   </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">driverId</span><span class="p">,</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operatorType</span><span class="p">);</span>
 
 <span class="c1">/// Creates new instance of MemoryPool for a plan node, stores it in the task</span>
 <span class="c1">/// to ensure lifetime and returns a raw pointer.</span>
-<span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="nf">Task::getOrAddNodePool</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">PlanNodeId</span><span class="o">&amp;</span><span class="w"> </span><span class="n">planNodeId</span><span class="p">);</span><span class="w"></span>
+<span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="nf">Task::getOrAddNodePool</span><span class="p">(</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">PlanNodeId</span><span class="o">&amp;</span><span class="w"> </span><span class="n">planNodeId</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 <section id="memory-allocation">
-<h4>Memory Allocation<a class="headerlink" href="#memory-allocation" title="Permalink to this heading">¶</a></h4>
+<h4>Memory Allocation<a class="headerlink" href="#memory-allocation" title="Link to this heading">¶</a></h4>
 <p>The memory pool provides three types of memory allocations. If a user needs a
 large chunk of buffer allocation and the allocated buffer doesn’t need to be
 contiguous, then it can use <em>MemoryPool::allocateNonContiguous</em> to allocate a
@@ -441,10 +438,10 @@ how to allocate memory based on the actual allocation size (see
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Allocates a buffer with specified &#39;size&#39;. If the memory allocation is</span>
 <span class="c1">/// smaller than a predefined threshold, then we delegate the allocation to</span>
 <span class="c1">/// std::malloc (MmapAllocator::Options::maxMallocBytes).</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="nf">MemoryPool::allocate</span><span class="p">(</span><span class="kt">int64_t</span><span class="w"> </span><span class="n">size</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="nf">MemoryPool::allocate</span><span class="p">(</span><span class="kt">int64_t</span><span class="w"> </span><span class="n">size</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Frees an allocated buffer.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::free</span><span class="p">(</span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="n">p</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">size</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::free</span><span class="p">(</span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="n">p</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">size</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Allocates one or more runs that add up to at least &#39;numPages&#39;, with the</span>
 <span class="c1">/// smallest run being at least &#39;minSizeClass&#39; pages. &#39;minSizeClass&#39; must</span>
@@ -453,74 +450,74 @@ how to allocate memory based on the actual allocation size (see
 <span class="c1">/// success and any memory formerly referenced by &#39;out&#39; is freed. The function</span>
 <span class="c1">/// throws if allocation fails and &#39;out&#39; references no memory and any partially</span>
 <span class="c1">/// allocated memory is freed.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::allocateNonContiguous</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">minSizeClass</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::allocateNonContiguous</span><span class="p">(</span>
+<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span>
+<span class="w">   </span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span>
+<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">minSizeClass</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Frees non-contiguous &#39;allocation&#39;. &#39;allocation&#39; is empty on return.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::freeNonContiguous</span><span class="p">(</span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::freeNonContiguous</span><span class="p">(</span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Makes a large contiguous mmap of &#39;numPages&#39;. The new mapped pages are</span>
 <span class="c1">/// returned in &#39;out&#39; on success. Any formly mapped pages referenced by &#39;out&#39;</span>
 <span class="c1">/// is unmapped in all the cases even if the allocation fails.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::allocateContiguous</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::allocateContiguous</span><span class="p">(</span>
+<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span>
+<span class="w">   </span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Frees contiguous &#39;allocation&#39;. &#39;allocation&#39; is empty on return.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::freeContiguous</span><span class="p">(</span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::freeContiguous</span><span class="p">(</span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
 <section id="memory-arbitration">
-<h4>Memory Arbitration<a class="headerlink" href="#memory-arbitration" title="Permalink to this heading">¶</a></h4>
+<h4>Memory Arbitration<a class="headerlink" href="#memory-arbitration" title="Link to this heading">¶</a></h4>
 <p>The <a class="reference external" href="#memory-arbitrator">memory arbitrator section</a> below discusses how these memory arbitration
 related methods are used in the memory arbitration and reclaim process.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns the number of bytes that haven&#39;t been reserved for use, and can be</span>
 <span class="c1">/// freed by reducing this memory pool&#39;s limit.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::freeBytes</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::freeBytes</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Invoked to bump up the memory pool&#39;s capacity by &#39;bytes&#39;. The function</span>
 <span class="c1">/// returns the memory pool&#39;s new capacity after the grow.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::grow</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">bytes</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::grow</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">bytes</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Invoked to free up to the specified amount of unused memory reservations by</span>
 <span class="c1">/// reducing this memory pool&#39;s capacity without actually freeing up any</span>
 <span class="c1">/// used memory. The function returns the actually freed memory bytes. If</span>
 <span class="c1">/// &#39;targetBytes&#39; is zero, the function frees all the unused memory reservation</span>
 <span class="c1">/// bytes.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::shrink</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetBytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::shrink</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetBytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Invoked by the memory arbitrator to enter memory arbitration processing. It</span>
 <span class="c1">/// is a noop if &#39;reclaimer_&#39; is not set, otherwise invoke the reclaimer&#39;s</span>
 <span class="c1">/// corresponding method.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::enterArbitration</span><span class="p">();</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::enterArbitration</span><span class="p">();</span>
 
 <span class="c1">/// Invoked by the memory arbitrator to leave memory arbitration processing. It</span>
 <span class="c1">/// is a noop if &#39;reclaimer_&#39; is not set, otherwise invoke the reclaimer&#39;s</span>
 <span class="c1">/// corresponding method.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::leaveArbitration</span><span class="p">();</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::leaveArbitration</span><span class="p">();</span>
 
 <span class="c1">/// Function estimates the number of reclaimable bytes and returns in</span>
 <span class="c1">/// &#39;reclaimableBytes&#39;. If the &#39;reclaimer&#39; is not set, the function returns</span>
 <span class="c1">/// std::nullopt. Otherwise, it will invoke the corresponding method of the</span>
 <span class="c1">/// reclaimer.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimableBytes</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimableBytes</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Invoked by the memory arbitrator to reclaim memory from this memory pool</span>
 <span class="c1">/// with specified reclaim target bytes. If &#39;targetBytes&#39; is zero, then it</span>
 <span class="c1">/// tries to reclaim all the reclaimable memory from the memory pool. It is</span>
 <span class="c1">/// noop if the reclaimer is not set, otherwise invoke the reclaimer&#39;s</span>
 <span class="c1">/// corresponding method.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::reclaim</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetBytes</span><span class="p">);</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::reclaim</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetBytes</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 </section>
 </section>
 <section id="memory-arbitrator">
-<h2>Memory Arbitrator<a class="headerlink" href="#memory-arbitrator" title="Permalink to this heading">¶</a></h2>
+<h2>Memory Arbitrator<a class="headerlink" href="#memory-arbitrator" title="Link to this heading">¶</a></h2>
 <p>The memory arbitrator is used to arbitrate the memory capacity across running
 queries to achieve fair memory sharing and prevent a query from running out of
 its memory limit. To arbitrate memory capacity between running queries, the
@@ -540,7 +537,7 @@ used memory from the query itself if it has exceeded its max memory capacity,
 or increases its capacity by reclaiming used memory from the other queries with
 the largest memory capacity in the system.</p>
 <section id="memory-arbitration-process">
-<h3>Memory Arbitration Process<a class="headerlink" href="#memory-arbitration-process" title="Permalink to this heading">¶</a></h3>
+<h3>Memory Arbitration Process<a class="headerlink" href="#memory-arbitration-process" title="Link to this heading">¶</a></h3>
 <a class="reference internal image-reference" href="../_images/memory-arbitration.png"><img alt="Memory Arbitration Process" class="align-center" src="../_images/memory-arbitration.png" style="width: 800px;" /></a>
 <p>The end-to-end memory arbitration process in <em>SharedArbitrator</em> works as follows:</p>
 <ol class="arabic simple">
@@ -624,7 +621,7 @@ reclaimer moves its driver thread out of suspension state
 </ol>
 </section>
 <section id="memory-reclaim-process">
-<h3>Memory Reclaim Process<a class="headerlink" href="#memory-reclaim-process" title="Permalink to this heading">¶</a></h3>
+<h3>Memory Reclaim Process<a class="headerlink" href="#memory-reclaim-process" title="Link to this heading">¶</a></h3>
 <p>Here is the memory reclaim process within a query:</p>
 <ol class="arabic simple">
 <li><p>The memory arbitrator invokes <em>MemoryPool::reclaim</em> method of a candidate
@@ -667,7 +664,7 @@ actual data processing to allow the memory arbitrator to reclaim memory.</p>
 </section>
 </section>
 <section id="memory-allocator">
-<h2>Memory Allocator<a class="headerlink" href="#memory-allocator" title="Permalink to this heading">¶</a></h2>
+<h2>Memory Allocator<a class="headerlink" href="#memory-allocator" title="Link to this heading">¶</a></h2>
 <p>The memory allocator manages the physical memory allocations for both query
 memory allocated through memory pool and cache memory allocated directly from
 file cache. The memory allocator ensures the total allocated memory is always
@@ -684,7 +681,7 @@ one is better in the future. Users can choose the allocator for their
 application by setting <em>MemoryManagerOptions::useMmapAllocator</em> (see
 <a class="reference external" href="#memory-system-setup">memory system setup section</a> for example).</p>
 <section id="non-contiguous-allocation">
-<h3>Non-Contiguous Allocation<a class="headerlink" href="#non-contiguous-allocation" title="Permalink to this heading">¶</a></h3>
+<h3>Non-Contiguous Allocation<a class="headerlink" href="#non-contiguous-allocation" title="Link to this heading">¶</a></h3>
 <a class="reference internal image-reference" href="../_images/size-class.png"><img alt="Size Class" class="align-center" src="../_images/size-class.png" style="width: 500px;" /></a>
 <p>A non-contiguous allocation is defined as an <em>Allocation</em> object which consists
 of a number of PageRun(s). Each page run contains a contiguous buffer and the
@@ -737,11 +734,11 @@ a group. Each bit in <em>mappedFreeLookup_</em> corresponds to 512 bits (8 words
 bits in <em>pageAllocated_</em> is not set. The other is to use simd instruction to
 operate on the bitmap to further accelerate the cpu execution.</p>
 <p>The simplified <em>MmapAllocator::allocateNonContiguous</em> implementation:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">MmapAllocator::allocateNonContiguous</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">ReservationCallback</span><span class="w"> </span><span class="n">reservationCB</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">minSizeClass</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">MmapAllocator::allocateNonContiguous</span><span class="p">(</span>
+<span class="w">    </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ReservationCallback</span><span class="w"> </span><span class="n">reservationCB</span><span class="p">,</span>
+<span class="w">    </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">minSizeClass</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="p">;</span>
 </pre></div>
 </div>
 <ol class="arabic simple">
@@ -790,12 +787,12 @@ mapped in <em>SizeClass::pageMapped_</em> and the allocation succeeds.</p></li>
 </ol>
 </section>
 <section id="contiguous-allocation">
-<h3>Contiguous Allocation<a class="headerlink" href="#contiguous-allocation" title="Permalink to this heading">¶</a></h3>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">MemoryAllocator::allocateContiguous</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">Allocation</span><span class="o">*</span><span class="w"> </span><span class="n">collateral</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">ReservationCallback</span><span class="w"> </span><span class="n">reservationCB</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<h3>Contiguous Allocation<a class="headerlink" href="#contiguous-allocation" title="Link to this heading">¶</a></h3>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">MemoryAllocator::allocateContiguous</span><span class="p">(</span>
+<span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span>
+<span class="w">   </span><span class="n">Allocation</span><span class="o">*</span><span class="w"> </span><span class="n">collateral</span><span class="p">,</span>
+<span class="w">   </span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">,</span>
+<span class="w">   </span><span class="n">ReservationCallback</span><span class="w"> </span><span class="n">reservationCB</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Contiguous allocation is defined as a <em>ContiguousAllocation</em> object which
@@ -809,10 +806,10 @@ allocation, the memory allocator calls std::munmap to return the physical
 memory back to the OS right away.</p>
 </section>
 <section id="small-allocation">
-<h3>Small Allocation<a class="headerlink" href="#small-allocation" title="Permalink to this heading">¶</a></h3>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="nf">MmapAllocator::allocateBytes</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">bytes</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="kt">uint16_t</span><span class="w"> </span><span class="n">alignment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMinAlignment</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="p">;</span><span class="w"></span>
+<h3>Small Allocation<a class="headerlink" href="#small-allocation" title="Link to this heading">¶</a></h3>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="nf">MmapAllocator::allocateBytes</span><span class="p">(</span>
+<span class="w">   </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">bytes</span><span class="p">,</span>
+<span class="w">   </span><span class="kt">uint16_t</span><span class="w"> </span><span class="n">alignment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMinAlignment</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="p">;</span>
 </pre></div>
 </div>
 <p><em>MmapAllocator::allocateBytes</em> allocate memory in three different ways based on
@@ -834,7 +831,7 @@ these ad-hoc small allocations in practice.</p>
 </section>
 </section>
 <section id="server-oom-prevention">
-<h2>Server OOM Prevention<a class="headerlink" href="#server-oom-prevention" title="Permalink to this heading">¶</a></h2>
+<h2>Server OOM Prevention<a class="headerlink" href="#server-oom-prevention" title="Link to this heading">¶</a></h2>
 <p>The memory allocator ensures all the memory usage from Velox doesn’t exceed
 system memory limit. This is critical to prevent the server from running out
 of memory as we expect Velox to use a significant portion of the server memory
@@ -957,8 +954,8 @@ to the transient spiky memory usage from non-Velox components in a query system.
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

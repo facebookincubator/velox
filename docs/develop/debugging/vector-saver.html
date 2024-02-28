@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>VectorSaver: Encoding-Preserving Serialization &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Metrics" href="metrics.html" />
@@ -44,7 +41,7 @@
           <div class="body" role="main">
             
   <section id="vectorsaver-encoding-preserving-serialization">
-<h1>VectorSaver: Encoding-Preserving Serialization<a class="headerlink" href="#vectorsaver-encoding-preserving-serialization" title="Permalink to this heading">¶</a></h1>
+<h1>VectorSaver: Encoding-Preserving Serialization<a class="headerlink" href="#vectorsaver-encoding-preserving-serialization" title="Link to this heading">¶</a></h1>
 <p>When an error occurs during expression evaluation, it is useful to save the
 input vector as well as the expression to enable reproducing and debugging the
 error in isolation. Saving the input vector can also be useful when an error
@@ -58,7 +55,7 @@ The examples of usage can be found in VectorSaverTest.cpp. This functionlity
 was introduced in <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2563">#2563</a></p>
 <p>Before we proceed to describe the format, we’d like to show an example use case.</p>
 <section id="use-case">
-<h2>Use Case<a class="headerlink" href="#use-case" title="Permalink to this heading">¶</a></h2>
+<h2>Use Case<a class="headerlink" href="#use-case" title="Link to this heading">¶</a></h2>
 <p>When an error happens during expression evaluation we save the input vector to a
 file and include the file path in the Context field of the exception along with
 the expression that was evaluated. The exception may look like this:</p>
@@ -76,33 +73,33 @@ Line: 107
 <p><strong>Input: /tmp/velox_vector_f7dneH</strong> in the <cite>Context:</cite> field shows the file path that
 contains the input data for the expression. We can load this file into a vector in a
 unit test or standalone program:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;fstream&gt;</span><span class="cp"></span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/vector/VectorSaver.h&quot;</span><span class="cp"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;fstream&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/vector/VectorSaver.h&quot;</span>
 
-<span class="n">std</span><span class="o">::</span><span class="n">ifstream</span><span class="w"> </span><span class="nf">inputFile</span><span class="p">(</span><span class="s">&quot;/tmp/velox_vector_f7dneH&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ifstream</span><span class="o">::</span><span class="n">binary</span><span class="p">);</span><span class="w"></span>
-<span class="k">auto</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">restoreVector</span><span class="p">(</span><span class="n">inputFile</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">());</span><span class="w"></span>
-<span class="n">inputFile</span><span class="p">.</span><span class="n">close</span><span class="p">();</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">ifstream</span><span class="w"> </span><span class="n">inputFile</span><span class="p">(</span><span class="s">&quot;/tmp/velox_vector_f7dneH&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ifstream</span><span class="o">::</span><span class="n">binary</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">restoreVector</span><span class="p">(</span><span class="n">inputFile</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">());</span>
+<span class="n">inputFile</span><span class="p">.</span><span class="n">close</span><span class="p">();</span>
 
-<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">data</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
-<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">data</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">data</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">data</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span>
 </pre></div>
 </div>
 <p><strong>concat(cast((c0) as VARCHAR), ,:VARCHAR)</strong> shows the expression. We can
 evaluate it on the input vector (with minimal tweaking to replace
 <cite>,:VARCHAR</cite> with <cite>‘,’</cite>) to reproduce and debug the error:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="s">&quot;concat(cast((c0) as VARCHAR), &#39;,&#39;)&quot;</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">dynamic_pointer_cast</span><span class="o">&lt;</span><span class="n">RowVector</span><span class="o">&gt;</span><span class="p">(</span><span class="n">data</span><span class="p">));</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span>
+<span class="w">    </span><span class="s">&quot;concat(cast((c0) as VARCHAR), &#39;,&#39;)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">dynamic_pointer_cast</span><span class="o">&lt;</span><span class="n">RowVector</span><span class="o">&gt;</span><span class="p">(</span><span class="n">data</span><span class="p">));</span>
 </pre></div>
 </div>
 </section>
 <section id="serialization-format">
-<h2>Serialization Format<a class="headerlink" href="#serialization-format" title="Permalink to this heading">¶</a></h2>
+<h2>Serialization Format<a class="headerlink" href="#serialization-format" title="Link to this heading">¶</a></h2>
 <p>Serialization of flat, constant and dictionary vectors is supported.
 Serialization of lazy, bias and sequence vectors is not supported. Most types
 are supported. Decimal, opaque and function types are not supported.</p>
 <section id="header">
-<h3>Header<a class="headerlink" href="#header" title="Permalink to this heading">¶</a></h3>
+<h3>Header<a class="headerlink" href="#header" title="Link to this heading">¶</a></h3>
 <p>Vector serialization starts with a header:</p>
 <ul class="simple">
 <li><dl class="simple">
@@ -117,7 +114,7 @@ are supported. Decimal, opaque and function types are not supported.</p>
 </ul>
 </section>
 <section id="type">
-<h3>Type<a class="headerlink" href="#type" title="Permalink to this heading">¶</a></h3>
+<h3>Type<a class="headerlink" href="#type" title="Link to this heading">¶</a></h3>
 <p>Scalar types are fully defined by the TypeKind enum. These are serialized into 4
 bytes that contain the integer value of the TypeKind.</p>
 <p>Complex types are serialized recursively. Array type is serialized into 4 bytes
@@ -131,13 +128,13 @@ followed by that many bytes of the name itself.</p>
 <p>Serialization of decimal, opaque and function types is not supported.</p>
 </section>
 <section id="buffer">
-<h3>Buffer<a class="headerlink" href="#buffer" title="Permalink to this heading">¶</a></h3>
+<h3>Buffer<a class="headerlink" href="#buffer" title="Link to this heading">¶</a></h3>
 <p>Serialization of nulls, values, strings, indices, offsets and sizes buffers
 starts with 4 bytes for buffer size, followed by that many bytes of the buffer
 content.</p>
 </section>
 <section id="flat-vector-of-scalar-type">
-<h3>Flat Vector of Scalar Type<a class="headerlink" href="#flat-vector-of-scalar-type" title="Permalink to this heading">¶</a></h3>
+<h3>Flat Vector of Scalar Type<a class="headerlink" href="#flat-vector-of-scalar-type" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
@@ -158,7 +155,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 <p>Both inlined and non-inlined string views serialize into 16 bytes each.</p>
 </section>
 <section id="flat-row-vector">
-<h3>Flat Row Vector<a class="headerlink" href="#flat-row-vector" title="Permalink to this heading">¶</a></h3>
+<h3>Flat Row Vector<a class="headerlink" href="#flat-row-vector" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
@@ -168,7 +165,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 </ul>
 </section>
 <section id="flat-array-vector">
-<h3>Flat Array Vector<a class="headerlink" href="#flat-array-vector" title="Permalink to this heading">¶</a></h3>
+<h3>Flat Array Vector<a class="headerlink" href="#flat-array-vector" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
@@ -179,7 +176,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 </ul>
 </section>
 <section id="flat-map-vector">
-<h3>Flat Map Vector<a class="headerlink" href="#flat-map-vector" title="Permalink to this heading">¶</a></h3>
+<h3>Flat Map Vector<a class="headerlink" href="#flat-map-vector" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
@@ -189,7 +186,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 </ul>
 </section>
 <section id="constant-vector">
-<h3>Constant Vector<a class="headerlink" href="#constant-vector" title="Permalink to this heading">¶</a></h3>
+<h3>Constant Vector<a class="headerlink" href="#constant-vector" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Is-null flag. 1 byte.</p></li>
@@ -213,7 +210,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 </ul>
 </section>
 <section id="dictionary-vector">
-<h3>Dictionary Vector<a class="headerlink" href="#dictionary-vector" title="Permalink to this heading">¶</a></h3>
+<h3>Dictionary Vector<a class="headerlink" href="#dictionary-vector" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
@@ -223,7 +220,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 </ul>
 </section>
 <section id="lazy-vector">
-<h3>Lazy Vector<a class="headerlink" href="#lazy-vector" title="Permalink to this heading">¶</a></h3>
+<h3>Lazy Vector<a class="headerlink" href="#lazy-vector" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the loaded vector. 1 byte.</p></li>
@@ -323,8 +320,8 @@ be used to reproduce the error and not in any other context like testing a fix.<
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

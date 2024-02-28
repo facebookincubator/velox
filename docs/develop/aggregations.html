@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Aggregations &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Connectors" href="connectors.html" />
@@ -43,7 +40,7 @@
           <div class="body" role="main">
             
   <section id="aggregations">
-<h1>Aggregations<a class="headerlink" href="#aggregations" title="Permalink to this heading">¶</a></h1>
+<h1>Aggregations<a class="headerlink" href="#aggregations" title="Link to this heading">¶</a></h1>
 <p>This article discusses aggregation-related optimizations in Velox. We go through
 the different techniques and provide examples and define the conditions for the
 application of each.</p>
@@ -61,7 +58,7 @@ columns and cannot contain expressions. To compute aggregations over
 expressions add ProjectNode just before the AggregationNode.</p>
 <p>Here are examples of aggregation query plans:</p>
 <p>Group-by with a single grouping key and single aggregate function:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span>
 </pre></div>
 </div>
 <ul class="simple">
@@ -69,7 +66,7 @@ expressions add ProjectNode just before the AggregationNode.</p>
 </ul>
 <p>Group-by with a single grouping key and an aggregate function applied to an
 expression:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span>
 </pre></div>
 </div>
 <ul class="simple">
@@ -82,35 +79,35 @@ expression:</p>
 </li>
 </ul>
 <p>Group-by with multiple grouping keys and multiple aggregates:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="k">c</span><span class="p">),</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="k">c</span><span class="p">),</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span>
 </pre></div>
 </div>
 <ul class="simple">
 <li><p>AggregationNode: groupingKeys = {a, b}, aggregates = {sum(c), avg(c)}</p></li>
 </ul>
 <p>Group-by over distinct inputs:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span>
 </pre></div>
 </div>
 <ul class="simple">
 <li><p>AggregationNode: groupingKeys = {a}, aggregates = {count(distinct c)}</p></li>
 </ul>
 <p>Group-by over sorted inputs:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">array_agg</span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">array_agg</span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span>
 </pre></div>
 </div>
 <ul class="simple">
 <li><p>AggregationNode: groupingKeys = {a}, aggregates = {array_agg(b ORDER BY b ASC NULLS LAST)}</p></li>
 </ul>
 <p>Distinct aggregation:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span>
 </pre></div>
 </div>
 <ul class="simple">
 <li><p>AggregationNode: groupingKeys = {a, b}, aggregates = {}</p></li>
 </ul>
 <p>Aggregation with a mask:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="w"> </span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="n">FILTER</span><span class="w"> </span><span class="p">(</span><span class="k">WHERE</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="w"> </span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="n">FILTER</span><span class="w"> </span><span class="p">(</span><span class="k">WHERE</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span>
 </pre></div>
 </div>
 <ul class="simple">
@@ -123,14 +120,14 @@ expression:</p>
 </li>
 </ul>
 <p>Global aggregation:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">a</span><span class="p">),</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">a</span><span class="p">),</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span>
 </pre></div>
 </div>
 <ul class="simple">
 <li><p>AggregationNode: groupingKeys = {}, aggregates = {sum(a), avg(b)}</p></li>
 </ul>
 <section id="hashaggregation-and-streamingaggregation-operators">
-<h2>HashAggregation and StreamingAggregation Operators<a class="headerlink" href="#hashaggregation-and-streamingaggregation-operators" title="Permalink to this heading">¶</a></h2>
+<h2>HashAggregation and StreamingAggregation Operators<a class="headerlink" href="#hashaggregation-and-streamingaggregation-operators" title="Link to this heading">¶</a></h2>
 <p>AggregationNode is translated to the HashAggregation operator for execution.
 Distinct aggregations, e.g. aggregations with no aggregates, run in streaming
 mode. For each batch of input rows, the operator determines a set of new
@@ -149,7 +146,7 @@ the total amount of memory used and allows to unblock downstream operators
 faster.</p>
 </section>
 <section id="push-down-into-table-scan">
-<h2>Push-Down into Table Scan<a class="headerlink" href="#push-down-into-table-scan" title="Permalink to this heading">¶</a></h2>
+<h2>Push-Down into Table Scan<a class="headerlink" href="#push-down-into-table-scan" title="Link to this heading">¶</a></h2>
 <p>HashAggregation operator supports pushing down aggregations into table scan.
 Pushdown is enabled when all of the following conditions are met:</p>
 <ul class="simple">
@@ -158,16 +155,16 @@ Pushdown is enabled when all of the following conditions are met:</p>
 <li><p>that column is not used anywhere else in the query.</p></li>
 </ul>
 <p>For example, pushdown is possible in the following query:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span>
 </pre></div>
 </div>
 <p>Pushdown is also possible if the data is filtered using columns other than the
 column that is the input to the aggregation function. For example, pushdown is
 enabled in the following query:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"></span>
-<span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
-<span class="k">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">100</span><span class="w"></span>
-<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">t</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">100</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span>
 </pre></div>
 </div>
 <p>In these queries, TableScan operator produces “b” column as a LazyVector
@@ -179,7 +176,7 @@ the accumulator. No intermediate vector is produced in this case.</p>
 <a class="reference internal" href="../functions/presto/aggregate.html#bool_or" title="bool_or"><code class="xref py py-func docutils literal notranslate"><span class="pre">bool_or()</span></code></a>.</p>
 </section>
 <section id="adaptive-array-based-aggregation">
-<h2>Adaptive Array-Based Aggregation<a class="headerlink" href="#adaptive-array-based-aggregation" title="Permalink to this heading">¶</a></h2>
+<h2>Adaptive Array-Based Aggregation<a class="headerlink" href="#adaptive-array-based-aggregation" title="Link to this heading">¶</a></h2>
 <p>HashAggregation operator stores aggregated data in rows. Each row corresponds to
 a unique combination of grouping key values. Global aggregations store data in
 a single row. Check out the Memory Layout section of <a class="reference internal" href="aggregate-functions.html"><span class="doc">How to add an aggregate
@@ -187,7 +184,7 @@ function?</span></a> guide for details.</p>
 <p>Data rows are organized into a hash table which can be in either hash, array or
 normalized key mode.</p>
 <section id="hash-mode">
-<h3>Hash mode<a class="headerlink" href="#hash-mode" title="Permalink to this heading">¶</a></h3>
+<h3>Hash mode<a class="headerlink" href="#hash-mode" title="Link to this heading">¶</a></h3>
 <p>In hash mode, the processing of incoming rows consists of the following steps:</p>
 <ul class="simple">
 <li><p>calculate a hash of the grouping keys,</p></li>
@@ -198,7 +195,7 @@ normalized key mode.</p>
 </ul>
 </section>
 <section id="array-mode">
-<h3>Array mode<a class="headerlink" href="#array-mode" title="Permalink to this heading">¶</a></h3>
+<h3>Array mode<a class="headerlink" href="#array-mode" title="Link to this heading">¶</a></h3>
 <p>In array mode, there is an array of pointers to data rows. The grouping key
 values of the incoming rows are mapped to a single integer which is used as an
 index into the array. Entries with no matching grouping keys store nullptr.</p>
@@ -291,7 +288,7 @@ Otherwise, the resulting number could be used in normalized key mode.</p>
 value IDs.</p>
 </section>
 <section id="normalized-key-mode">
-<h3>Normalized Key Mode<a class="headerlink" href="#normalized-key-mode" title="Permalink to this heading">¶</a></h3>
+<h3>Normalized Key Mode<a class="headerlink" href="#normalized-key-mode" title="Link to this heading">¶</a></h3>
 <p>In normalized key mode, multiple grouping key values are mapped to a single
 64-bit integer and the processing continues as in hash mode with a single
 64-bit integer grouping key. This mode is less efficient than array mode, but
@@ -299,7 +296,7 @@ is more efficient than hash mode because hashing and comparing a single 64-bit
 integer value is faster than hashing and comparing multiple values.</p>
 </section>
 <section id="adaptivity">
-<h3>Adaptivity<a class="headerlink" href="#adaptivity" title="Permalink to this heading">¶</a></h3>
+<h3>Adaptivity<a class="headerlink" href="#adaptivity" title="Link to this heading">¶</a></h3>
 <p>Hash table mode is decided adaptively starting with array mode and switching to
 normalized key or hash mode if the new values of the grouping keys require
 that. When switching modes the hash table needs to be re-organized. Once in
@@ -316,7 +313,7 @@ following types: boolean, tinyint, smallint, integer, bigint, varchar.</p>
 </section>
 </section>
 <section id="adaptive-disabling-of-partial-aggregation">
-<h2>Adaptive Disabling of Partial Aggregation<a class="headerlink" href="#adaptive-disabling-of-partial-aggregation" title="Permalink to this heading">¶</a></h2>
+<h2>Adaptive Disabling of Partial Aggregation<a class="headerlink" href="#adaptive-disabling-of-partial-aggregation" title="Link to this heading">¶</a></h2>
 <p>Sometimes partial aggregation encounters mostly unique keys and is not able to
 meaningfully reduce cardinality of the data. In this case, it is more efficient
 to skip partial aggregation and proceed to shuffle the data and compute final
@@ -352,9 +349,9 @@ Aggregate::toIntermediate() API that allows HashAggregation operator to
 efficiently convert raw inputs into intermediate results without using
 accumulators.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns true if toIntermediate() is supported.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsToIntermediate</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsToIntermediate</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="p">}</span>
 
 <span class="c1">/// Produces an accumulator initialized from a single value for each</span>
 <span class="c1">/// row in &#39;rows&#39;. The raw arguments of the aggregate are in &#39;args&#39;,</span>
@@ -366,12 +363,12 @@ accumulators.</p>
 <span class="c1">/// &#39;result&#39; is expected to have rows.size() rows. Invalid rows represent rows</span>
 <span class="c1">/// that were masked out, these need to have correct intermediate results as</span>
 <span class="c1">/// well. It is possible that all entries in &#39;rows&#39; are invalid (masked out).</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span><span class="w"></span>
-<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
-<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
-<span class="w">  </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">    </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">&quot;toIntermediate not supported&quot;</span><span class="p">);</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
+<span class="w">  </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">&quot;toIntermediate not supported&quot;</span><span class="p">);</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>Many aggregate functions implement toIntermediate() fast path. Some examples include:
@@ -456,8 +453,8 @@ partial aggregation was abandoned.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>What’s in the Task? &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="SIMD Usage in Velox" href="simd.html" />
@@ -43,7 +40,7 @@
           <div class="body" role="main">
             
   <section id="what-s-in-the-task">
-<h1>What’s in the Task?<a class="headerlink" href="#what-s-in-the-task" title="Permalink to this heading">¶</a></h1>
+<h1>What’s in the Task?<a class="headerlink" href="#what-s-in-the-task" title="Link to this heading">¶</a></h1>
 <p>Some operators need to coordinate their work with other operators.</p>
 <ul class="simple">
 <li><p>Table scan operators running in parallel need to pull splits from a shared
@@ -61,7 +58,7 @@ partitions.</p></li>
 <p>Task enables coordination between these operators by maintaining a shared
 state.</p>
 <section id="pipelines-and-drivers">
-<h2>Pipelines and Drivers<a class="headerlink" href="#pipelines-and-drivers" title="Permalink to this heading">¶</a></h2>
+<h2>Pipelines and Drivers<a class="headerlink" href="#pipelines-and-drivers" title="Link to this heading">¶</a></h2>
 <p>Task is responsible for converting a query plan into a set of pipelines
 consisting of multiple operators stacked on top of each other.
 See <a class="reference internal" href="operators.html"><span class="doc">Plan Nodes and Operators</span></a> for the mapping between plan
@@ -118,7 +115,7 @@ Drivers. Each Operator is assigned a zero-based sequential operator ID unique
 within a Driver.</p>
 </section>
 <section id="splits">
-<h2>Splits<a class="headerlink" href="#splits" title="Permalink to this heading">¶</a></h2>
+<h2>Splits<a class="headerlink" href="#splits" title="Link to this heading">¶</a></h2>
 <p>Task is responsible for receiving splits from the application, storing these,
 and providing access to the operators.</p>
 <p>Splits can be added only for leaf plan nodes. Operators corresponding to leaf
@@ -138,7 +135,7 @@ received.</p>
 <a class="reference internal image-reference" href="../_images/task-splits.png"><img alt="../_images/task-splits.png" class="align-center" src="../_images/task-splits.png" style="width: 400px;" /></a>
 </section>
 <section id="join-bridges-and-barriers">
-<h2>Join Bridges and Barriers<a class="headerlink" href="#join-bridges-and-barriers" title="Permalink to this heading">¶</a></h2>
+<h2>Join Bridges and Barriers<a class="headerlink" href="#join-bridges-and-barriers" title="Link to this heading">¶</a></h2>
 <p>HashProbe operators need to wait for the corresponding HashBuild operators to
 create a hash table. For each HashJoinNode and NestedLoopJoinNode, the Task creates
 a bridge object, either HashJoinBridge or a NestedLoopJoinBridge. HashProbe and
@@ -164,7 +161,7 @@ build-side rows with no match after all probe rows have been processed.</p>
 <a class="reference internal image-reference" href="../_images/task-join-bridges.png"><img alt="../_images/task-join-bridges.png" class="align-center" src="../_images/task-join-bridges.png" style="width: 400px;" /></a>
 </section>
 <section id="exchange-clients">
-<h2>Exchange Clients<a class="headerlink" href="#exchange-clients" title="Permalink to this heading">¶</a></h2>
+<h2>Exchange Clients<a class="headerlink" href="#exchange-clients" title="Link to this heading">¶</a></h2>
 <p>Exchange operator is designed to fetch a single partition of data from multiple
 remote workers. The exact mechanism of how to fetch the data is not included in
 the Velox library and expected to be provided by the application. The
@@ -199,7 +196,7 @@ operator must run single-threaded and therefore doesn’t require any shared
 state to be maintained in the task.</p>
 </section>
 <section id="local-exchange-queues">
-<h2>Local Exchange Queues<a class="headerlink" href="#local-exchange-queues" title="Permalink to this heading">¶</a></h2>
+<h2>Local Exchange Queues<a class="headerlink" href="#local-exchange-queues" title="Link to this heading">¶</a></h2>
 <p>Local exchange is used to change parallelism or re-partition data between the
 pipelines. The exchange consists of a LocalPartition operator installed at the
 end of the producing pipeline, a LocalExchange installed at the source of the
@@ -215,7 +212,7 @@ data from a single LocalExchangeQueue.</p>
 <a class="reference internal image-reference" href="../_images/task-local-exchange.png"><img alt="../_images/task-local-exchange.png" class="align-center" src="../_images/task-local-exchange.png" style="width: 400px;" /></a>
 </section>
 <section id="local-merge-sources">
-<h2>Local Merge Sources<a class="headerlink" href="#local-merge-sources" title="Permalink to this heading">¶</a></h2>
+<h2>Local Merge Sources<a class="headerlink" href="#local-merge-sources" title="Link to this heading">¶</a></h2>
 <p>LocalMerge operator is similar to LocalExchange, but it receives
 sorted data from multiple threads and must merge the data to preserve
 sortedness. This operator must run single-threaded. It uses
@@ -225,7 +222,7 @@ multiple LocalMergeSource instances to match the parallelism of the producing
 pipeline.</p>
 </section>
 <section id="merge-join-sources">
-<h2>Merge Join Sources<a class="headerlink" href="#merge-join-sources" title="Permalink to this heading">¶</a></h2>
+<h2>Merge Join Sources<a class="headerlink" href="#merge-join-sources" title="Link to this heading">¶</a></h2>
 <p>MergeJoin operator needs a way to receive right-side data. It relies on the Task
 to create a MergeJoinSource and install a CallbackSink operator at the end of
 the right-side pipeline to write data to the MergeJoinSource. MergeJoin
@@ -233,7 +230,7 @@ operator uses Task::getMergeJoinSource() API to get access to the
 MergeJoinSource() to read right-side data from.</p>
 </section>
 <section id="extensibility">
-<h2>Extensibility<a class="headerlink" href="#extensibility" title="Permalink to this heading">¶</a></h2>
+<h2>Extensibility<a class="headerlink" href="#extensibility" title="Link to this heading">¶</a></h2>
 <p>Velox allows applications to define custom plan nodes and operators and also
 custom join node with it’s own join bridge and operators. These operators can
 access splits and use barriers as these constructs are generic and not tied to
@@ -242,7 +239,7 @@ and local merge sources as well as merge join sources are not generic and
 therefore not available to custom operators.</p>
 </section>
 <section id="summary">
-<h2>Summary<a class="headerlink" href="#summary" title="Permalink to this heading">¶</a></h2>
+<h2>Summary<a class="headerlink" href="#summary" title="Link to this heading">¶</a></h2>
 <p>Task is responsible for maintaining shared state and enabling coordination
 between operators. The shared state consists of:</p>
 <ul class="simple">
@@ -334,8 +331,8 @@ operators.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Types &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -44,14 +41,14 @@
           <div class="body" role="main">
             
   <section id="types">
-<h1>Types<a class="headerlink" href="#types" title="Permalink to this heading">¶</a></h1>
+<h1>Types<a class="headerlink" href="#types" title="Link to this heading">¶</a></h1>
 <p>Velox supports scalar types and complex types.
 Scalar types are categorized into a fixed set of physical types,
 and an extensible set of logical types.
 Physical types determine the in-memory layout of the data.
 Logical types add additional semantics to a physical type.</p>
 <section id="physical-types">
-<h2>Physical Types<a class="headerlink" href="#physical-types" title="Permalink to this heading">¶</a></h2>
+<h2>Physical Types<a class="headerlink" href="#physical-types" title="Link to this heading">¶</a></h2>
 <p>Each physical type is implemented using a C++ type. The table
 below shows the supported physical types, their corresponding C++ type,
 and fixed-width bytes required per value.</p>
@@ -156,7 +153,7 @@ Examples:</p>
 </ul>
 </section>
 <section id="logical-types">
-<h2>Logical Types<a class="headerlink" href="#logical-types" title="Permalink to this heading">¶</a></h2>
+<h2>Logical Types<a class="headerlink" href="#logical-types" title="Link to this heading">¶</a></h2>
 <p>Logical types are backed by a physical type and include additional semantics.
 There can be multiple logical types backed by the same physical type.
 Therefore, knowing the C++ type is not sufficient to infer a logical type.
@@ -196,14 +193,14 @@ upto 38 precision, with a range of <span class="math notranslate nohighlight">\(
 decimal value.</p>
 </section>
 <section id="custom-types">
-<h2>Custom Types<a class="headerlink" href="#custom-types" title="Permalink to this heading">¶</a></h2>
+<h2>Custom Types<a class="headerlink" href="#custom-types" title="Link to this heading">¶</a></h2>
 <p>Most custom types can be represented as logical types and can be built by extending
 the existing physical types. For example, Presto Types described below are implemented
 by extending the physical types.
 An OPAQUE type must be used when there is no physical type available to back the logical type.</p>
 </section>
 <section id="complex-types">
-<h2>Complex Types<a class="headerlink" href="#complex-types" title="Permalink to this heading">¶</a></h2>
+<h2>Complex Types<a class="headerlink" href="#complex-types" title="Link to this heading">¶</a></h2>
 <p>Velox supports the ARRAY, MAP, and ROW complex types.
 Complex types are composed of scalar types and can be nested with
 other complex types.</p>
@@ -215,7 +212,7 @@ Map type contains the key type and value type.
 Row type contains its field types along with their names.</p>
 </section>
 <section id="presto-types">
-<h2>Presto Types<a class="headerlink" href="#presto-types" title="Permalink to this heading">¶</a></h2>
+<h2>Presto Types<a class="headerlink" href="#presto-types" title="Link to this heading">¶</a></h2>
 <p>Velox supports a number of Presto-specific logical types.
 The table below shows the supported Presto types.</p>
 <table class="docutils align-default">
@@ -313,8 +310,8 @@ Valid range of timezone ID is [1, 1680], its definition can be found in <code cl
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

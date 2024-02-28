@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>URL Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Aggregate Functions" href="aggregate.html" />
@@ -43,9 +40,9 @@
           <div class="body" role="main">
             
   <section id="url-functions">
-<h1>URL Functions<a class="headerlink" href="#url-functions" title="Permalink to this heading">¶</a></h1>
+<h1>URL Functions<a class="headerlink" href="#url-functions" title="Link to this heading">¶</a></h1>
 <section id="introduction">
-<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h2>
+<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h2>
 <p>The URL extraction functions extract components from HTTP URLs (or any valid URIs conforming to <a class="reference external" href="https://tools.ietf.org/html/rfc3986.html">RFC 3986</a>). The following syntax is supported:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="o">[</span>protocol:<span class="o">][</span>//host<span class="o">[</span>:port<span class="o">]][</span>path<span class="o">][</span>?query<span class="o">][</span><span class="c1">#fragment]</span>
 </pre></div>
@@ -63,7 +60,7 @@ fragment  = Related
 </div>
 </section>
 <section id="invalid-uri-s">
-<h2>Invalid URI’s<a class="headerlink" href="#invalid-uri-s" title="Permalink to this heading">¶</a></h2>
+<h2>Invalid URI’s<a class="headerlink" href="#invalid-uri-s" title="Link to this heading">¶</a></h2>
 <p>Well formed URI’s should not contain ascii whitespace. <a class="reference external" href="https://www.rfc-editor.org/rfc/rfc3986#section-2.1">Percent-encoded URI’s</a> should be followed by two hexadecimal
 digits after the percent character “%”. All the url extract functions will return null when passed an invalid uri.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Examples of url functions with Invalid URI&#39;s.</span>
@@ -79,55 +76,55 @@ digits after the percent character “%”. All the url extract functions will r
 </div>
 </section>
 <section id="extraction-functions">
-<h2>Extraction Functions<a class="headerlink" href="#extraction-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Extraction Functions<a class="headerlink" href="#extraction-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="url_extract_fragment">
-<span class="sig-name descname"><span class="pre">url_extract_fragment</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_fragment" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_extract_fragment</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_fragment" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the fragment identifier from <code class="docutils literal notranslate"><span class="pre">url</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="url_extract_host">
-<span class="sig-name descname"><span class="pre">url_extract_host</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_host" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_extract_host</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_host" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the host from <code class="docutils literal notranslate"><span class="pre">url</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="url_extract_parameter">
-<span class="sig-name descname"><span class="pre">url_extract_parameter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_parameter" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_extract_parameter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_parameter" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the value of the first query string parameter named <code class="docutils literal notranslate"><span class="pre">name</span></code> from <code class="docutils literal notranslate"><span class="pre">url</span></code>. Parameter extraction is handled in the typical manner as specified by <a class="reference external" href="https://tools.ietf.org/html/rfc1866.html#section-8.2.1">RFC 1866#section-8.2.1</a>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="url_extract_path">
-<span class="sig-name descname"><span class="pre">url_extract_path</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_path" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_extract_path</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_path" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the path from <code class="docutils literal notranslate"><span class="pre">url</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="url_extract_port">
-<span class="sig-name descname"><span class="pre">url_extract_port</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#url_extract_port" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_extract_port</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#url_extract_port" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the port number from <code class="docutils literal notranslate"><span class="pre">url</span></code>. Returns NULL if port is missing.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="url_extract_protocol">
-<span class="sig-name descname"><span class="pre">url_extract_protocol</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_protocol" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_extract_protocol</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_protocol" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the protocol from <code class="docutils literal notranslate"><span class="pre">url</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="url_extract_query">
-<span class="sig-name descname"><span class="pre">url_extract_query</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_query" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_extract_query</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_extract_query" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the query string from <code class="docutils literal notranslate"><span class="pre">url</span></code>.</p>
 </dd></dl>
 
 </section>
 <section id="encoding-functions">
-<h2>Encoding Functions<a class="headerlink" href="#encoding-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Encoding Functions<a class="headerlink" href="#encoding-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="url_encode">
-<span class="sig-name descname"><span class="pre">url_encode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_encode" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_encode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_encode" title="Link to this definition">¶</a></dt>
 <dd><p>Escapes <code class="docutils literal notranslate"><span class="pre">value</span></code> by encoding it so that it can be safely included in
 URL query parameter names and values:</p>
 <ul class="simple">
@@ -142,7 +139,7 @@ value of the UTF-8 byte.</p></li>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="url_decode">
-<span class="sig-name descname"><span class="pre">url_decode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_decode" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_decode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_decode" title="Link to this definition">¶</a></dt>
 <dd><p>Unescapes the URL encoded <code class="docutils literal notranslate"><span class="pre">value</span></code>.
 This function is the inverse of <a class="reference internal" href="#url_encode" title="url_encode"><code class="xref py py-func docutils literal notranslate"><span class="pre">url_encode()</span></code></a>.</p>
 </dd></dl>
@@ -163,8 +160,21 @@ This function is the inverse of <a class="reference internal" href="#url_encode"
 <li><a class="reference internal" href="#">URL Functions</a><ul>
 <li><a class="reference internal" href="#introduction">Introduction</a></li>
 <li><a class="reference internal" href="#invalid-uri-s">Invalid URI’s</a></li>
-<li><a class="reference internal" href="#extraction-functions">Extraction Functions</a></li>
-<li><a class="reference internal" href="#encoding-functions">Encoding Functions</a></li>
+<li><a class="reference internal" href="#extraction-functions">Extraction Functions</a><ul>
+<li><a class="reference internal" href="#url_extract_fragment"><code class="docutils literal notranslate"><span class="pre">url_extract_fragment()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_host"><code class="docutils literal notranslate"><span class="pre">url_extract_host()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_parameter"><code class="docutils literal notranslate"><span class="pre">url_extract_parameter()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_path"><code class="docutils literal notranslate"><span class="pre">url_extract_path()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_port"><code class="docutils literal notranslate"><span class="pre">url_extract_port()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_protocol"><code class="docutils literal notranslate"><span class="pre">url_extract_protocol()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_query"><code class="docutils literal notranslate"><span class="pre">url_extract_query()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#encoding-functions">Encoding Functions</a><ul>
+<li><a class="reference internal" href="#url_encode"><code class="docutils literal notranslate"><span class="pre">url_encode()</span></code></a></li>
+<li><a class="reference internal" href="#url_decode"><code class="docutils literal notranslate"><span class="pre">url_decode()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -219,8 +229,8 @@ This function is the inverse of <a class="reference internal" href="#url_encode"
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

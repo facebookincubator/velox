@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Arena Allocation &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Hash table" href="hash-table.html" />
@@ -43,7 +40,7 @@
           <div class="body" role="main">
             
   <section id="arena-allocation">
-<h1>Arena Allocation<a class="headerlink" href="#arena-allocation" title="Permalink to this heading">¶</a></h1>
+<h1>Arena Allocation<a class="headerlink" href="#arena-allocation" title="Link to this heading">¶</a></h1>
 <p>exec::HashStringAllocator implements an arena backed by MappedMemory::Allocation
 and supports contiguous and non-contiguous allocations. It is used to store
 variable width accumulators for the aggregate functions, hash tables for joins
@@ -55,7 +52,7 @@ Real-Time Systems</a> paper and
 <p>If you want to implement aggregate functions with variable width accumulators,
 it would be helpful to understand the HashStringAllocator.</p>
 <section id="layout">
-<h2>Layout<a class="headerlink" href="#layout" title="Permalink to this heading">¶</a></h2>
+<h2>Layout<a class="headerlink" href="#layout" title="Link to this heading">¶</a></h2>
 <p>Memory is allocated in standard size contiguous runs of 4KB pages. The available
 sizes are: 4, 8, 16, 32, 64, 128, 256 pages. The minimum run is 16KB = 4 pages
 of 4KB each. Individual blocks are then allocated from the page runs.</p>
@@ -90,17 +87,17 @@ the presence of the “next” block and store the pointer to that block in the 
 <a class="reference internal image-reference" href="../_images/arena-multipart-block.png"><img alt="../_images/arena-multipart-block.png" src="../_images/arena-multipart-block.png" style="width: 600px;" /></a>
 </section>
 <section id="api">
-<h2>API<a class="headerlink" href="#api" title="Permalink to this heading">¶</a></h2>
+<h2>API<a class="headerlink" href="#api" title="Link to this heading">¶</a></h2>
 <p>Allocate() and free() methods allocate and free continuous blocks of specified
 size. When the free() method is called on the first block in a multi-part
 non-contiguous allocation, it frees all the blocks in that allocation.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Allocates &#39;size&#39; contiguous bytes preceded by a Header. Returns</span>
 <span class="c1">// the address of Header.</span>
-<span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">allocate</span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">size</span><span class="p">);</span><span class="w"></span>
+<span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">allocate</span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">size</span><span class="p">);</span>
 
 <span class="c1">// Adds the allocation of &#39;header&#39; and any extensions (if header has</span>
 <span class="c1">// kContinued set) to the free list.</span>
-<span class="kt">void</span><span class="w"> </span><span class="nf">free</span><span class="p">(</span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">header</span><span class="p">);</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">free</span><span class="p">(</span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">header</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>StlAllocator, an allocator backed by HashStringAllocator that can be used with
@@ -115,34 +112,34 @@ calling HashStringAllocator::newRange() method.</p>
 <span class="c1">// kMinContiguous bytes of contiguous space. finishWrite finalizes</span>
 <span class="c1">// the allocation information after the write is done.</span>
 <span class="c1">// Returns the position at the start of the allocated block.</span>
-<span class="n">Position</span><span class="w"> </span><span class="nf">newWrite</span><span class="p">(</span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">preferredSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMinContiguous</span><span class="p">);</span><span class="w"></span>
+<span class="n">Position</span><span class="w"> </span><span class="nf">newWrite</span><span class="p">(</span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">preferredSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMinContiguous</span><span class="p">);</span>
 
 <span class="c1">// Completes a write prepared with newWrite or</span>
 <span class="c1">// extendWrite. Up to &#39;numReserveBytes&#39; unused bytes, if available, are left</span>
 <span class="c1">// after the end of the write to accommodate another write. Returns the</span>
 <span class="c1">// position immediately after the last written byte.</span>
-<span class="n">Position</span><span class="w"> </span><span class="nf">finishWrite</span><span class="p">(</span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numReserveBytes</span><span class="p">);</span><span class="w"></span>
+<span class="n">Position</span><span class="w"> </span><span class="nf">finishWrite</span><span class="p">(</span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numReserveBytes</span><span class="p">);</span>
 
 <span class="c1">// Sets &#39;stream&#39; to write starting at &#39;position&#39;. If new ranges have to</span>
 <span class="c1">// be allocated when writing, headers will be updated accordingly.</span>
-<span class="kt">void</span><span class="w"> </span><span class="nf">extendWrite</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">position</span><span class="p">,</span><span class="w"> </span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">extendWrite</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">position</span><span class="p">,</span><span class="w"> </span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>The prepareRead() method allows deserializing the data using ByteInputStream.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets &#39;stream&#39; to range over the data in the range of &#39;header&#39; and</span>
 <span class="c1">// possible continuation ranges.</span>
-<span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">prepareRead</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">header</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">ByteInputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">prepareRead</span><span class="p">(</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">header</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ByteInputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 <section id="examples-of-usage">
-<h2>Examples of Usage<a class="headerlink" href="#examples-of-usage" title="Permalink to this heading">¶</a></h2>
+<h2>Examples of Usage<a class="headerlink" href="#examples-of-usage" title="Link to this heading">¶</a></h2>
 <p>Variable-width accumulators of aggregate functions use HashStringAllocator to
 allocate memory.</p>
 <section id="singlevalueaccumulator">
-<h3>SingleValueAccumulator<a class="headerlink" href="#singlevalueaccumulator" title="Permalink to this heading">¶</a></h3>
+<h3>SingleValueAccumulator<a class="headerlink" href="#singlevalueaccumulator" title="Link to this heading">¶</a></h3>
 <p>SingleValueAccumulator used by <a class="reference internal" href="../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> functions stores a single value of variable-width type, e.g. string, array, map or struct.</p>
 <p>To write the first value, the accumulator allocates a new block using newWrite()
 and stores the position to the start of the block in a member variable. When
@@ -150,27 +147,27 @@ re-writing the value, the accumulator calls extendWrite() and provides the
 position to the start of the block. This way the data is re-written in-place.
 The accumulator calls finishWrite() after writing the value.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Write first value</span>
-<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
-<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">newWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">newWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span>
 <span class="c1">// ... write to the stream</span>
-<span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span>
 
 <span class="c1">// Update the value</span>
-<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
-<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">extendWrite</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">extendWrite</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span>
 <span class="c1">// ... write to the stream</span>
-<span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>The accumulator uses prepareRead() to read the data back using ByteInputStream.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">ByteInputStream</span><span class="w"> </span><span class="n">stream</span><span class="p">;</span><span class="w"></span>
-<span class="n">exec</span><span class="o">::</span><span class="n">HashStringAllocator</span><span class="o">::</span><span class="n">prepareRead</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">ByteInputStream</span><span class="w"> </span><span class="n">stream</span><span class="p">;</span>
+<span class="n">exec</span><span class="o">::</span><span class="n">HashStringAllocator</span><span class="o">::</span><span class="n">prepareRead</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span>
 <span class="c1">// … read from the stream</span>
 </pre></div>
 </div>
 </section>
 <section id="valuelist">
-<h3>ValueList<a class="headerlink" href="#valuelist" title="Permalink to this heading">¶</a></h3>
+<h3>ValueList<a class="headerlink" href="#valuelist" title="Link to this heading">¶</a></h3>
 <p>ValueList append-only accumulator used by <a class="reference internal" href="../functions/presto/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> accumulates a
 list of values. ValueListReader allows for copying the values from the ValueList
 into a flat Vector.</p>
@@ -180,27 +177,27 @@ position after the last write returned from the finishWrite() call. To append
 data, the accumulator calls entendWrite() with the position after the last
 write.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Write first value</span>
-<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
-<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">newWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">newWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span>
 <span class="c1">// ... write to the stream</span>
-<span class="k">auto</span><span class="w"> </span><span class="n">current</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">current</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span>
 
 <span class="c1">// Update the value</span>
-<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
-<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">extendWrite</span><span class="p">(</span><span class="n">current</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="n">ByteOutputStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">extendWrite</span><span class="p">(</span><span class="n">current</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span>
 <span class="c1">// ... write to the stream</span>
-<span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 <section id="stlallocator">
-<h3>StlAllocator<a class="headerlink" href="#stlallocator" title="Permalink to this heading">¶</a></h3>
+<h3>StlAllocator<a class="headerlink" href="#stlallocator" title="Link to this heading">¶</a></h3>
 <p>An StlAllocator defined in velox/exec/HashStringAllocator.h can be used to make
 STL containers (e.g. std::vector) backed by memory allocated via the
 HashStringAllocator. StlAllocator is not an accumulator itself, but can be used
 to design accumulators that use STL containers. It is used by <a class="reference internal" href="../functions/presto/aggregate.html#approx_percentile" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a>
 and <a class="reference internal" href="../functions/presto/aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a>.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">values</span><span class="p">{</span><span class="n">exec</span><span class="o">::</span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">allocator</span><span class="p">)};</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">values</span><span class="p">{</span><span class="n">exec</span><span class="o">::</span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">allocator</span><span class="p">)};</span>
 </pre></div>
 </div>
 </section>
@@ -280,8 +277,8 @@ and <a class="reference internal" href="../functions/presto/aggregate.html#appro
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>printPlanWithStats &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="printExprWithStats" href="print-expr-with-stats.html" />
@@ -44,7 +41,7 @@
           <div class="body" role="main">
             
   <section id="printplanwithstats">
-<h1>printPlanWithStats<a class="headerlink" href="#printplanwithstats" title="Permalink to this heading">¶</a></h1>
+<h1>printPlanWithStats<a class="headerlink" href="#printplanwithstats" title="Link to this heading">¶</a></h1>
 <p>Velox collects a number of valuable statistics during query execution.  These
 counters are exposed via Task::taskStats() API for programmatic access and can
 be printed in a human-friendly format for manual inspection. We use these to
@@ -53,7 +50,7 @@ reason about the query execution dynamic and troubleshoot performance issues.</p
 similar to the PrestoQueryLookup tool available via bunnylol presto
 &lt;query-id&gt;.</p>
 <section id="plannode-tostring">
-<h2>PlanNode::toString()<a class="headerlink" href="#plannode-tostring" title="Permalink to this heading">¶</a></h2>
+<h2>PlanNode::toString()<a class="headerlink" href="#plannode-tostring" title="Link to this heading">¶</a></h2>
 <p>PlanNode::toString() method prints a query plan as a tree of plan nodes. This
 API can be used before or after executing a query.</p>
 <p>PlanNode::toString() method takes two optional flags: detailed and recursive.
@@ -94,7 +91,7 @@ and orders, etc.</p>
 </div>
 </section>
 <section id="id1">
-<h2>printPlanWithStats()<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h2>
+<h2>printPlanWithStats()<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <p>printPlanWithStats() function prints a query plan annotated with runtime
 statistics. This function can be used after the query finishes processing. It
 takes a root plan node and a TaskStats struct.</p>
@@ -194,7 +191,7 @@ scan, etc.</p>
 </div>
 </section>
 <section id="common-operator-statistics">
-<h2>Common operator statistics<a class="headerlink" href="#common-operator-statistics" title="Permalink to this heading">¶</a></h2>
+<h2>Common operator statistics<a class="headerlink" href="#common-operator-statistics" title="Link to this heading">¶</a></h2>
 <p>Let’s take a closer look at statistics that are collected for all operators.</p>
 <p>For each operator, Velox tracks the total number of input rows, output rows,
 their estimated sizes, cpu time, blocked wall time, and the number of threads used to run the operator.</p>
@@ -229,7 +226,7 @@ printPlanWithStats shows this information as “Blocked wall time”.</p>
 </div>
 </section>
 <section id="custom-operator-statistics">
-<h2>Custom operator statistics<a class="headerlink" href="#custom-operator-statistics" title="Permalink to this heading">¶</a></h2>
+<h2>Custom operator statistics<a class="headerlink" href="#custom-operator-statistics" title="Link to this heading">¶</a></h2>
 <p>Operators also collect and report operator-specific statistics.</p>
 <p>TableScan operator reports statistics that show how much data has been read from
 cache vs. durable storage, how much data was prefetched, how many files and row
@@ -344,8 +341,8 @@ operator reports whether it received dynamic filter pushed down from the join.</
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

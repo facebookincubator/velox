@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>March 2022 Update &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="February 2022 Update" href="february-2022.html" />
@@ -44,15 +41,15 @@
           <div class="body" role="main">
             
   <section id="march-2022-update">
-<h1>March 2022 Update<a class="headerlink" href="#march-2022-update" title="Permalink to this heading">¶</a></h1>
+<h1>March 2022 Update<a class="headerlink" href="#march-2022-update" title="Link to this heading">¶</a></h1>
 <section id="documentation">
-<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Document <a class="reference internal" href="../../develop/debugging/print-plan-with-stats.html"><span class="doc">printPlanWithStats</span></a> debugging tool.</p></li>
 </ul>
 </section>
 <section id="core-library">
-<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for UNNEST WITH ORDINALITY for single array or map.</p></li>
 <li><p>Add support for filter to INNER and LEFT merge joins.</p></li>
@@ -74,7 +71,7 @@
 </ul>
 </section>
 <section id="presto-functions">
-<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for CAST(x as JSON).</p></li>
 <li><p>Add <a class="reference internal" href="../../functions/presto/array.html#arrays_overlap" title="arrays_overlap"><code class="xref py py-func docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a> function.</p></li>
@@ -84,7 +81,7 @@
 </ul>
 </section>
 <section id="performance-and-correctness-testing">
-<h2>Performance and Correctness Testing<a class="headerlink" href="#performance-and-correctness-testing" title="Permalink to this heading">¶</a></h2>
+<h2>Performance and Correctness Testing<a class="headerlink" href="#performance-and-correctness-testing" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add linux-benchmarks-basic CircleCI job to run micro benchmarks on each PR. Initial set of benchmarks covers SelectivityVector, DecodedVector, simple comparisons and conjuncts.</p></li>
 <li><p>Add TPC-H benchmark with support for q1, q6 and q18.</p></li>
@@ -93,7 +90,7 @@
 </ul>
 </section>
 <section id="debugging-experience">
-<h2>Debugging Experience<a class="headerlink" href="#debugging-experience" title="Permalink to this heading">¶</a></h2>
+<h2>Debugging Experience<a class="headerlink" href="#debugging-experience" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Improve error messages in expression evaluation by including the expression being evaluated. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/1138">#1138</a></p></li>
 <li><p>Improve error messages in CAST expression by including the to and from types. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/1150">#1150</a></p></li>
@@ -104,7 +101,7 @@
 </ul>
 </section>
 <section id="credits">
-<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
 <p>Aditi Pandit, Amit Dutta, Amlan Nayak, Chad Austin, Chao Chen, David Greenberg,
 Deepak Majeti, Dimitri Bouche, Gilson Takaasi Gil, Hanqi Wu, Huameng Jiang,
 Jialiang Tan, im Meyering, Jimmy Lu, Karteek Murthy Samba Murthy, Kevin
@@ -115,9 +112,9 @@ Sridhar Anumandla, Victor Zverovich, Wei He, Wenlei Xie, Yoav Helfman, Yuan
 Chao Chou, Zhenyuan Zhao, tanjialiang</p>
 </section>
 <section id="feature-of-the-month">
-<h2>Feature Of The Month<a class="headerlink" href="#feature-of-the-month" title="Permalink to this heading">¶</a></h2>
+<h2>Feature Of The Month<a class="headerlink" href="#feature-of-the-month" title="Link to this heading">¶</a></h2>
 <section id="using-vector-readers-writers-to-simplify-dealing-with-velox-vectors">
-<h3>Using vector readers/writers to simplify dealing with Velox vectors.<a class="headerlink" href="#using-vector-readers-writers-to-simplify-dealing-with-velox-vectors" title="Permalink to this heading">¶</a></h3>
+<h3>Using vector readers/writers to simplify dealing with Velox vectors.<a class="headerlink" href="#using-vector-readers-writers-to-simplify-dealing-with-velox-vectors" title="Link to this heading">¶</a></h3>
 <p>Although vector readers and writers were created originally as part of the simple function’s interface, they are highly
 convenient tools that can be used in isolation in aggregate and vector functions implementations, and in general
 anywhere we want to read or write vectors. Using those constructs reduces code size and simplifies it, without adding
@@ -131,30 +128,30 @@ performance overhead.</p>
 <li><p>VectorReaders and VectorWriters are efficient, lazy, and should always be preferred.</p></li>
 </ul>
 <section id="vector-reader">
-<h4>Vector reader<a class="headerlink" href="#vector-reader" title="Permalink to this heading">¶</a></h4>
+<h4>Vector reader<a class="headerlink" href="#vector-reader" title="Link to this heading">¶</a></h4>
 <p>Consider a vector  of type Array&lt;Map&lt;int, int&gt;&gt;. The code below reads the vector and iterates over its content.
 For every row, the code reads an array of maps stored at that row.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Decode the vector for rows of interest.</span>
-<span class="n">DecodedVector</span><span class="w"> </span><span class="n">decoded</span><span class="p">;</span><span class="w"></span>
-<span class="n">decoded</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
+<span class="n">DecodedVector</span><span class="w"> </span><span class="n">decoded</span><span class="p">;</span>
+<span class="n">decoded</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span>
 
 <span class="c1">// Define a vector reader for an Array&lt;Map&lt;int, int&gt;&gt;.</span>
-<span class="n">exec</span><span class="o">::</span><span class="n">VectorReader</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Map</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="n">reader</span><span class="p">(</span><span class="n">decoded</span><span class="p">);</span><span class="w"></span>
+<span class="n">exec</span><span class="o">::</span><span class="n">VectorReader</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Map</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="n">reader</span><span class="p">(</span><span class="n">decoded</span><span class="p">);</span>
 
-<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// Check if the row is null.</span>
-<span class="w">    </span><span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">reader</span><span class="p">.</span><span class="n">isSet</span><span class="p">(</span><span class="n">row</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">        </span><span class="k">return</span><span class="p">;</span><span class="w"></span>
-<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">reader</span><span class="p">.</span><span class="n">isSet</span><span class="p">(</span><span class="n">row</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
 
 <span class="w">    </span><span class="c1">// Read the row as ArrayView. ArrayView has std::vector&lt;std::optional&lt;V&gt;&gt; interface.</span>
-<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">arrayView</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader</span><span class="p">[</span><span class="n">row</span><span class="p">];</span><span class="w"></span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">arrayView</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader</span><span class="p">[</span><span class="n">row</span><span class="p">];</span>
 
 <span class="w">    </span><span class="c1">// Elements of the array have std::map&lt;int, std::optional&lt;int&gt;&gt; interface.</span>
-<span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="p">[</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">val</span><span class="p">]</span><span class="o">:</span><span class="w">  </span><span class="n">arrayView</span><span class="p">.</span><span class="n">value</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">      </span><span class="p">...</span><span class="w"></span>
-<span class="w">    </span><span class="p">}</span><span class="w"></span>
-<span class="p">});</span><span class="w"></span>
+<span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="p">[</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">val</span><span class="p">]</span><span class="o">:</span><span class="w">  </span><span class="n">arrayView</span><span class="p">.</span><span class="n">value</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="p">...</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">});</span>
 </pre></div>
 </div>
 <p>The general workflow is to:</p>
@@ -166,34 +163,34 @@ For every row, the code reads an array of maps stored at that row.</p>
 </ol>
 </section>
 <section id="vector-writer">
-<h4>Vector writer<a class="headerlink" href="#vector-writer" title="Permalink to this heading">¶</a></h4>
+<h4>Vector writer<a class="headerlink" href="#vector-writer" title="Link to this heading">¶</a></h4>
 <p>Now consider a function that generates Array&lt;int64_t&gt; as an output. The result vector can be written as the following.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorPtr</span><span class="w"> </span><span class="n">result</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorPtr</span><span class="w"> </span><span class="n">result</span><span class="p">;</span>
 <span class="c1">// Here type is ArrayType(BIGINT()).</span>
-<span class="n">BaseVector</span><span class="o">::</span><span class="n">ensureWritable</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">type</span><span class="p">,</span><span class="w"> </span><span class="n">pool_</span><span class="p">,</span><span class="w"> </span><span class="n">result</span><span class="p">);</span><span class="w"></span>
+<span class="n">BaseVector</span><span class="o">::</span><span class="n">ensureWritable</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">type</span><span class="p">,</span><span class="w"> </span><span class="n">pool_</span><span class="p">,</span><span class="w"> </span><span class="n">result</span><span class="p">);</span>
 
 <span class="c1">// Define a vector writer. ArrayWriterT is a temp holder. Eventually, Array will be used</span>
 <span class="c1">// once old writers are deprecated.</span>
-<span class="n">exec</span><span class="o">::</span><span class="n">VectorWriter</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">vectorWriter</span><span class="p">;</span><span class="w"></span>
+<span class="n">exec</span><span class="o">::</span><span class="n">VectorWriter</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">vectorWriter</span><span class="p">;</span>
 
 <span class="c1">// Initialize the writer to write to result vector.</span>
-<span class="n">vectorWriter</span><span class="p">.</span><span class="n">init</span><span class="p">(</span><span class="o">*</span><span class="n">result</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">ArrayVector</span><span class="o">&gt;</span><span class="p">());</span><span class="w"></span>
+<span class="n">vectorWriter</span><span class="p">.</span><span class="n">init</span><span class="p">(</span><span class="o">*</span><span class="n">result</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">ArrayVector</span><span class="o">&gt;</span><span class="p">());</span>
 
-<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// Specify the row to write.</span>
-<span class="w">    </span><span class="n">vectorWriter</span><span class="p">.</span><span class="n">setOffset</span><span class="p">(</span><span class="n">row</span><span class="p">);</span><span class="w"></span>
+<span class="w">    </span><span class="n">vectorWriter</span><span class="p">.</span><span class="n">setOffset</span><span class="p">(</span><span class="n">row</span><span class="p">);</span>
 
 <span class="w">    </span><span class="c1">// Get writer to the selected offset.</span>
-<span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">arrayWriter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">vectorWriter</span><span class="p">.</span><span class="n">current</span><span class="p">();</span><span class="w"></span>
-<span class="w">    </span><span class="n">arrayWriter</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span><span class="w"></span>
-<span class="w">    </span><span class="n">arrayWriter</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">100</span><span class="p">);</span><span class="w"></span>
-<span class="w">    </span><span class="p">..</span><span class="n">etc</span><span class="w"></span>
+<span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">arrayWriter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">vectorWriter</span><span class="p">.</span><span class="n">current</span><span class="p">();</span>
+<span class="w">    </span><span class="n">arrayWriter</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="n">arrayWriter</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">100</span><span class="p">);</span>
+<span class="w">    </span><span class="p">..</span><span class="n">etc</span>
 
 <span class="w">    </span><span class="c1">// Indicate writing for the row is done.</span>
-<span class="w">    </span><span class="n">vectorWriter</span><span class="p">.</span><span class="n">commit</span><span class="p">();</span><span class="w"></span>
-<span class="p">});</span><span class="w"></span>
+<span class="w">    </span><span class="n">vectorWriter</span><span class="p">.</span><span class="n">commit</span><span class="p">();</span>
+<span class="p">});</span>
 <span class="c1">// Indicate writing result vector is done.</span>
-<span class="n">vectorWriter</span><span class="p">.</span><span class="n">finish</span><span class="p">();</span><span class="w"></span>
+<span class="n">vectorWriter</span><span class="p">.</span><span class="n">finish</span><span class="p">();</span>
 </pre></div>
 </div>
 <p>The general workflow is to:</p>
@@ -213,31 +210,31 @@ For every row, the code reads an array of maps stored at that row.</p>
 </ul>
 </section>
 <section id="reading-optional-free-container">
-<h4>Reading optional-free container<a class="headerlink" href="#reading-optional-free-container" title="Permalink to this heading">¶</a></h4>
+<h4>Reading optional-free container<a class="headerlink" href="#reading-optional-free-container" title="Link to this heading">¶</a></h4>
 <p>If the user knew that a vector does not have null data, there is an option to read an optional-free container using
 readNullFree(). For the example above, it will return a container similar to std::vector&lt;std::map&lt;int, int&gt;&gt; instead of
 std::vector&lt;std::optional&lt;std::map&lt;int, std::optional&lt;int&gt;&gt;&gt;.</p>
 <p>The type returned by readNullFree is the same input type passed to the callNullFree function in the simple function
 interface. The code below shows an example:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Decode the vector for rows of interest.</span>
-<span class="n">DecodedVector</span><span class="w"> </span><span class="n">decoded</span><span class="p">;</span><span class="w"></span>
-<span class="n">decoded</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
+<span class="n">DecodedVector</span><span class="w"> </span><span class="n">decoded</span><span class="p">;</span>
+<span class="n">decoded</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span>
 
 <span class="c1">// Define a vector reader for an Array&lt;Map&lt;int, int&gt;&gt;.</span>
-<span class="n">exec</span><span class="o">::</span><span class="n">VectorReader</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Map</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="n">reader</span><span class="p">(</span><span class="n">decoded</span><span class="p">);</span><span class="w"></span>
+<span class="n">exec</span><span class="o">::</span><span class="n">VectorReader</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Map</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="n">reader</span><span class="p">(</span><span class="n">decoded</span><span class="p">);</span>
 
 <span class="c1">// Make sure there is no null data.</span>
-<span class="n">assert</span><span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">mayHaveNullsRecursive</span><span class="p">());</span><span class="w"></span>
+<span class="n">assert</span><span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">mayHaveNullsRecursive</span><span class="p">());</span>
 
-<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="c1">// Read the row as NullFreeArrayView with interface similar to std::vector&lt;V&gt;.</span>
-<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">arrayView</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader</span><span class="p">.</span><span class="n">readNullFree</span><span class="p">(</span><span class="n">row</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">arrayView</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader</span><span class="p">.</span><span class="n">readNullFree</span><span class="p">(</span><span class="n">row</span><span class="p">);</span>
 
 <span class="w">  </span><span class="c1">// Elements of the array have std::map&lt;int, int&gt; interface.</span>
-<span class="w">  </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="p">[</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">val</span><span class="p">]</span><span class="o">:</span><span class="w">  </span><span class="n">arrayView</span><span class="p">){</span><span class="w"></span>
-<span class="w">      </span><span class="p">...</span><span class="w"></span>
-<span class="w">  </span><span class="p">}</span><span class="w"></span>
-<span class="p">});</span><span class="w"></span>
+<span class="w">  </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="p">[</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">val</span><span class="p">]</span><span class="o">:</span><span class="w">  </span><span class="n">arrayView</span><span class="p">){</span>
+<span class="w">      </span><span class="p">...</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">});</span>
 </pre></div>
 </div>
 </section>
@@ -326,8 +323,8 @@ interface. The code below shows an example:</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

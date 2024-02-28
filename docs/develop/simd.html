@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>SIMD Usage in Velox &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Memory Management" href="memory.html" />
@@ -43,7 +40,7 @@
           <div class="body" role="main">
             
   <section id="simd-usage-in-velox">
-<h1>SIMD Usage in Velox<a class="headerlink" href="#simd-usage-in-velox" title="Permalink to this heading">¶</a></h1>
+<h1>SIMD Usage in Velox<a class="headerlink" href="#simd-usage-in-velox" title="Link to this heading">¶</a></h1>
 <p>SIMD uses special registers in CPU to operate on multiple primitive data
 simultaneously.  In some basic cases compiler is able to translate a tight loop
 into SIMD instructions for us, but often we need to call the SIMD intrinsics
@@ -52,7 +49,7 @@ explicitly.</p>
 performance.  We use <a class="reference external" href="https://github.com/xtensor-stack/xsimd">xsimd</a> as a zero-cost abstraction over the intrinsics, to
 address the portability issue.</p>
 <section id="architectures">
-<h2>Architectures<a class="headerlink" href="#architectures" title="Permalink to this heading">¶</a></h2>
+<h2>Architectures<a class="headerlink" href="#architectures" title="Link to this heading">¶</a></h2>
 <p>In Velox we support 2 families of CPU architectures regarding SIMD: X86 and ARM.
 In X86 there are 3 generations of SIMD technologies: SSE, AVX, and AVX512.  For
 ARM there are NEON and SVE.  Each architecture has its own size of registers, we
@@ -95,7 +92,7 @@ summarize the details below:</p>
 </table>
 </section>
 <section id="xsimd-basics">
-<h2>xsimd Basics<a class="headerlink" href="#xsimd-basics" title="Permalink to this heading">¶</a></h2>
+<h2>xsimd Basics<a class="headerlink" href="#xsimd-basics" title="Link to this heading">¶</a></h2>
 <p>The data structure in <code class="docutils literal notranslate"><span class="pre">xsimd</span></code> to represent a SIMD register is <code class="docutils literal notranslate"><span class="pre">batch&lt;T,</span> <span class="pre">A&gt;</span></code>.
 <code class="docutils literal notranslate"><span class="pre">T</span></code> stands for the element data type and <code class="docutils literal notranslate"><span class="pre">A</span></code> stands for the architecture.
 For example <code class="docutils literal notranslate"><span class="pre">batch&lt;int32_t,</span> <span class="pre">avx2&gt;</span></code> represents a SIMD vector containing 32 bits
@@ -116,11 +113,11 @@ different architectures, including basic arithmetics, comparisons, bitwise
 operations, mathematical functions, loading or storing from memory.</p>
 </section>
 <section id="simd-utilities">
-<h2>SIMD Utilities<a class="headerlink" href="#simd-utilities" title="Permalink to this heading">¶</a></h2>
+<h2>SIMD Utilities<a class="headerlink" href="#simd-utilities" title="Link to this heading">¶</a></h2>
 <p>There are some intrinsics that are not yet abstracted by <code class="docutils literal notranslate"><span class="pre">xsimd</span></code>.  We added
 the ones commonly used in Velox in <code class="docutils literal notranslate"><span class="pre">common/base/SimdUtil.h</span></code>.</p>
 <section id="halfbatch">
-<h3>HalfBatch<a class="headerlink" href="#halfbatch" title="Permalink to this heading">¶</a></h3>
+<h3>HalfBatch<a class="headerlink" href="#halfbatch" title="Link to this heading">¶</a></h3>
 <p>In <code class="docutils literal notranslate"><span class="pre">xsimd</span></code> the vector size is decided uniquely by the architecture <code class="docutils literal notranslate"><span class="pre">A</span></code>.  In
 some cases we need a different size of vector though, for example in gather, if
 the data type is 64 bits and index type is 32 bits, the vector for indices needs
@@ -132,7 +129,7 @@ we define and use a type <code class="docutils literal notranslate"><span class=
 <code class="docutils literal notranslate"><span class="pre">batch&lt;T,</span> <span class="pre">A&gt;</span></code>, so that we can use them interchangeably.</p>
 </section>
 <section id="gather">
-<h3>Gather<a class="headerlink" href="#gather" title="Permalink to this heading">¶</a></h3>
+<h3>Gather<a class="headerlink" href="#gather" title="Link to this heading">¶</a></h3>
 <p>Gather is an operation to load a vector from non-contiguous memory.  In the
 simplest form, given a <code class="docutils literal notranslate"><span class="pre">base</span></code> address and a list of <code class="docutils literal notranslate"><span class="pre">indices</span></code> (saved in a
 SIMD vector), gather returns another vector containing all elements at</p>
@@ -154,7 +151,7 @@ the function returns <code class="docutils literal notranslate"><span class="pre
 </div>
 </section>
 <section id="bit-masks">
-<h3>Bit Masks<a class="headerlink" href="#bit-masks" title="Permalink to this heading">¶</a></h3>
+<h3>Bit Masks<a class="headerlink" href="#bit-masks" title="Link to this heading">¶</a></h3>
 <p>As mentioned above, <code class="docutils literal notranslate"><span class="pre">batch_bool</span></code> is used to represent the result of a
 comparison, and the underlying data can be either a bit mask or a SIMD vector.
 To allow us manipulate this result, we provide some utilities to convert between
@@ -164,7 +161,7 @@ it.  We also provide utilities like <code class="docutils literal notranslate"><
 make it easier and faster to manipulate bits.</p>
 </section>
 <section id="filter">
-<h3>Filter<a class="headerlink" href="#filter" title="Permalink to this heading">¶</a></h3>
+<h3>Filter<a class="headerlink" href="#filter" title="Link to this heading">¶</a></h3>
 <p>Another important function we have in <code class="docutils literal notranslate"><span class="pre">SimdUtil.h</span></code> is <code class="docutils literal notranslate"><span class="pre">filter</span></code>.  It takes a
 SIMD vector <code class="docutils literal notranslate"><span class="pre">data</span></code> and a <code class="docutils literal notranslate"><span class="pre">bitMask</span></code>, then for each <code class="docutils literal notranslate"><span class="pre">i</span></code> where <code class="docutils literal notranslate"><span class="pre">bitMask[i]</span></code>
 is set, we move the corresponding <code class="docutils literal notranslate"><span class="pre">data[i]</span></code> to front and return the result.
@@ -182,7 +179,7 @@ returns <code class="docutils literal notranslate"><span class="pre">dst</span><
 </section>
 </section>
 <section id="bmi-utilities">
-<h2>BMI Utilities<a class="headerlink" href="#bmi-utilities" title="Permalink to this heading">¶</a></h2>
+<h2>BMI Utilities<a class="headerlink" href="#bmi-utilities" title="Link to this heading">¶</a></h2>
 <p>In addition to SIMD abstraction and utilities, we also have some functions that
 depend on BMI2 intrinsics.  We define the portable version of them in
 <code class="docutils literal notranslate"><span class="pre">common/base/BitUtil.h</span></code>.  These functions include <code class="docutils literal notranslate"><span class="pre">extractBits</span></code> and
@@ -190,9 +187,9 @@ depend on BMI2 intrinsics.  We define the portable version of them in
 and you can refer the documentation in the file for their usage.</p>
 </section>
 <section id="use-cases">
-<h2>Use Cases<a class="headerlink" href="#use-cases" title="Permalink to this heading">¶</a></h2>
+<h2>Use Cases<a class="headerlink" href="#use-cases" title="Link to this heading">¶</a></h2>
 <section id="hash-table">
-<h3>Hash Table<a class="headerlink" href="#hash-table" title="Permalink to this heading">¶</a></h3>
+<h3>Hash Table<a class="headerlink" href="#hash-table" title="Link to this heading">¶</a></h3>
 <p>In <code class="docutils literal notranslate"><span class="pre">BigintValuesUsingHashTable::testValues</span></code> we use SIMD to check whether
 multiple values are in the hash table at same time.  In the hash table we use a
 special empty marker to indicate the value is missing.  The process is
@@ -212,7 +209,7 @@ at once, until we find either value match or empty mark.</p></li>
 </ol>
 </section>
 <section id="filtering">
-<h3>Filtering<a class="headerlink" href="#filtering" title="Permalink to this heading">¶</a></h3>
+<h3>Filtering<a class="headerlink" href="#filtering" title="Link to this heading">¶</a></h3>
 <p>A typical use case for filtering values using SIMD is in <code class="docutils literal notranslate"><span class="pre">processFixedFilter</span></code>
 from <code class="docutils literal notranslate"><span class="pre">dwio/dwrf/common/DecoderUtil.h</span></code>.  This function evaluates the filter on
 a batch of values, and stores the passed row numbers from this batch to
@@ -308,8 +305,8 @@ long and one SIME vector is not large enough to contain all the indices needed.<
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

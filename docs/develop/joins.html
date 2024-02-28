@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Joins &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Anti joins" href="anti-join.html" />
@@ -43,7 +40,7 @@
           <div class="body" role="main">
             
   <section id="joins">
-<h1>Joins<a class="headerlink" href="#joins" title="Permalink to this heading">¶</a></h1>
+<h1>Joins<a class="headerlink" href="#joins" title="Link to this heading">¶</a></h1>
 <p>Velox supports inner, left, right, full outer, left semi filter, left semi
 project, right semi filter, right semi project, and anti hash joins using
 either partitioned or broadcast distribution strategies. Semi project and
@@ -53,7 +50,7 @@ anti joins support additional null-aware flag to distinguish between IN
 sorted on the join keys. Right, full, left semi, right semi, and anti merge joins
 are not supported yet.</p>
 <section id="hash-join-implementation">
-<h2>Hash Join Implementation<a class="headerlink" href="#hash-join-implementation" title="Permalink to this heading">¶</a></h2>
+<h2>Hash Join Implementation<a class="headerlink" href="#hash-join-implementation" title="Link to this heading">¶</a></h2>
 <p>Use HashJoinNode plan node to insert a join into a query plan. Specify the join
 type, an equi-clause, e.g. pairs of columns on the left and right side whose
 values need to match, and an optional filter to apply to join results.</p>
@@ -240,7 +237,7 @@ parallel building of the hash table where the operator that finishes building
 its table last is responsible for merging it with all the other hash tables
 before making the hash table available over the JoinBridge.</p>
 <section id="dynamic-filter-pushdown">
-<span id="dynamicfilterpushdown"></span><h3>Dynamic Filter Pushdown<a class="headerlink" href="#dynamic-filter-pushdown" title="Permalink to this heading">¶</a></h3>
+<span id="dynamicfilterpushdown"></span><h3>Dynamic Filter Pushdown<a class="headerlink" href="#dynamic-filter-pushdown" title="Link to this heading">¶</a></h3>
 <p>In some queries the join runs in the same stage as the probe-side table scan.
 This happens if the join build side is broadcasted (when it is small enough) to
 all join nodes or if the query is using bucket-by-bucket execution mode. In
@@ -272,7 +269,7 @@ turns the join into a no-op after pushing the filter down.</p>
 right semi joins.</p>
 </section>
 <section id="broadcast-join">
-<h3>Broadcast Join<a class="headerlink" href="#broadcast-join" title="Permalink to this heading">¶</a></h3>
+<h3>Broadcast Join<a class="headerlink" href="#broadcast-join" title="Link to this heading">¶</a></h3>
 <p>Broadcast join refers to a specific distributed execution strategy where the
 build side is small enough that it can be copied (broadcasted) to all the join
 nodes and that allows to avoid re-shuffling the probe and build sides to
@@ -285,14 +282,14 @@ broadcasting the results of the plan evaluation. This functionality is enabled
 by setting boolean flag “broadcast” in the PartitionedOutputNode to true.</p>
 </section>
 <section id="anti-joins">
-<h3>Anti Joins<a class="headerlink" href="#anti-joins" title="Permalink to this heading">¶</a></h3>
+<h3>Anti Joins<a class="headerlink" href="#anti-joins" title="Link to this heading">¶</a></h3>
 <p>Null aware anti join is used for queries with NOT IN &lt;subquery&gt; clause, while
 regular anti join is used for queries with NOT EXISTS &lt;subquery&gt; clause.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- null-aware anti join</span>
-<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="k">key</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="p">)</span><span class="w"></span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="k">key</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="p">)</span>
 
 <span class="c1">-- regular anti join</span>
-<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="p">)</span><span class="w"></span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>Broadly-speaking anti join returns probe-side rows which have no match on
@@ -325,14 +322,14 @@ safe because that row cannot possibly match anything on these destinations.</p>
 </section>
 </section>
 <section id="semi-joins">
-<h2>Semi Joins<a class="headerlink" href="#semi-joins" title="Permalink to this heading">¶</a></h2>
+<h2>Semi Joins<a class="headerlink" href="#semi-joins" title="Link to this heading">¶</a></h2>
 <p>Semi filter joins are used for queries with IN &lt;subquery&gt; and EXISTS &lt;subquery&gt;
 clauses. Left semi filter join should be used when cardinality of the outer
 query is greater than cardinality of the subquery. Right semi join can be used
 when cardinality of the subquery is greater.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="k">key</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="p">)</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="k">key</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="p">)</span>
 
-<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="p">)</span><span class="w"></span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>Left semi filter join returns probe-side rows which have at least one match on
@@ -340,9 +337,9 @@ the build side. Right semi filter join returns build-side rows which have at
 least one match on the probe side.</p>
 <p>Semi project joins are used for queries where IN &lt;subquery&gt; or EXISTS &lt;subquery&gt;
 expressions are combined with other expressions.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="k">key</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="p">)</span><span class="w"> </span><span class="k">OR</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">col</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="k">key</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="p">)</span><span class="w"> </span><span class="k">OR</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">col</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span>
 
-<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(...)</span><span class="w"> </span><span class="k">OR</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">key2</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(...)</span><span class="w"></span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(...)</span><span class="w"> </span><span class="k">OR</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">key2</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(...)</span>
 </pre></div>
 </div>
 <p>Left semi project join returns all probe-side rows with an extra boolean column
@@ -357,14 +354,14 @@ NULL in the join key as long as build-side is not empty.</p>
 <p>The results of the anti join are equivalent to the results of a semi project
 join followed by a ‘NOT match’ filter.</p>
 <section id="empty-build-side">
-<h3>Empty Build Side<a class="headerlink" href="#empty-build-side" title="Permalink to this heading">¶</a></h3>
+<h3>Empty Build Side<a class="headerlink" href="#empty-build-side" title="Link to this heading">¶</a></h3>
 <p>For inner, left semi, and right semi joins, when the build side is empty,
 Velox implements an optimization to finish the join early and return an empty
 set of results without waiting to receive all the probe side input. In this case
 all upstream operators are canceled to avoid unnecessary computation.</p>
 </section>
 <section id="skipping-duplicate-keys">
-<h3>Skipping Duplicate Keys<a class="headerlink" href="#skipping-duplicate-keys" title="Permalink to this heading">¶</a></h3>
+<h3>Skipping Duplicate Keys<a class="headerlink" href="#skipping-duplicate-keys" title="Link to this heading">¶</a></h3>
 <p>When building a hash table for left semi or anti join, HashBuild operator skips
 entries with duplicate keys as these are not needed. This is achieved by
 configuring exec::HashTable to set the “allowDuplicates” flag to false. This
@@ -372,7 +369,7 @@ optimization reduces memory usage of the hash table in case the build side
 contains duplicate join keys.</p>
 </section>
 <section id="execution-statistics">
-<h3>Execution Statistics<a class="headerlink" href="#execution-statistics" title="Permalink to this heading">¶</a></h3>
+<h3>Execution Statistics<a class="headerlink" href="#execution-statistics" title="Link to this heading">¶</a></h3>
 <p>HashBuild operator reports the range and number of distinct values for each join
 key if these are not too large and allow for array-based join or use of
 normalized keys.</p>
@@ -402,7 +399,7 @@ to HiveConnector.</p>
 </section>
 </section>
 <section id="memory-layout">
-<h2>Memory Layout<a class="headerlink" href="#memory-layout" title="Permalink to this heading">¶</a></h2>
+<h2>Memory Layout<a class="headerlink" href="#memory-layout" title="Link to this heading">¶</a></h2>
 <p>Inside hash table we keep the row values in <cite>RowContainer</cite>.  This is a row-wise
 storage and each row consists the following components:</p>
 <ol class="arabic simple">
@@ -423,7 +420,7 @@ storage and each row consists the following components:</p>
 </ol>
 </section>
 <section id="merge-join-implementation">
-<h2>Merge Join Implementation<a class="headerlink" href="#merge-join-implementation" title="Permalink to this heading">¶</a></h2>
+<h2>Merge Join Implementation<a class="headerlink" href="#merge-join-implementation" title="Link to this heading">¶</a></h2>
 <p>Use MergeJoinNode plan node to insert a merge join into a query plan. Make sure
 both left and right sides of the join produce results sorted on the join keys.
 Specify the join type, an equi-clause, e.g. pairs of columns on the left and
@@ -439,7 +436,7 @@ pipeline. CallbackSink is installed at the end of the right-side pipeline.</p>
 <a class="reference internal image-reference" href="../_images/merge-join-pipelines.png"><img alt="../_images/merge-join-pipelines.png" class="align-center" src="../_images/merge-join-pipelines.png" style="width: 800px;" /></a>
 </section>
 <section id="usage-examples">
-<h2>Usage Examples<a class="headerlink" href="#usage-examples" title="Permalink to this heading">¶</a></h2>
+<h2>Usage Examples<a class="headerlink" href="#usage-examples" title="Link to this heading">¶</a></h2>
 <p>Check out velox/exec/tests/HashJoinTest.cpp and MergeJoinTest.cpp for examples
 of how to build and execute a plan with a hash or merge join.</p>
 </section>
@@ -525,8 +522,8 @@ of how to build and execute a plan with a hash or merge join.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

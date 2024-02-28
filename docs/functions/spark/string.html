@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>String Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Date and Time Functions" href="datetime.html" />
@@ -43,17 +40,17 @@
           <div class="body" role="main">
             
   <section id="string-functions">
-<h1>String Functions<a class="headerlink" href="#string-functions" title="Permalink to this heading">¶</a></h1>
+<h1>String Functions<a class="headerlink" href="#string-functions" title="Link to this heading">¶</a></h1>
 <p>Unless specified otherwise, all functions return NULL if at least one of the arguments is NULL.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="ascii">
-<span class="sig-name descname"><span class="pre">ascii</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#ascii" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">ascii</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#ascii" title="Link to this definition">¶</a></dt>
 <dd><p>Returns unicode code point of the first character of <code class="docutils literal notranslate"><span class="pre">string</span></code>. Returns 0 if <code class="docutils literal notranslate"><span class="pre">string</span></code> is empty.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="chr">
-<span class="sig-name descname"><span class="pre">chr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#chr" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">chr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#chr" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the Unicode code point <code class="docutils literal notranslate"><span class="pre">n</span></code> as a single character string.
 If <code class="docutils literal notranslate"><span class="pre">n</span> <span class="pre">&lt;</span> <span class="pre">0</span></code>, the result is an empty string.
 If <code class="docutils literal notranslate"><span class="pre">n</span> <span class="pre">&gt;=</span> <span class="pre">256</span></code>, the result is equivalent to chr(<code class="docutils literal notranslate"><span class="pre">n</span> <span class="pre">%</span> <span class="pre">256</span></code>).</p>
@@ -61,7 +58,7 @@ If <code class="docutils literal notranslate"><span class="pre">n</span> <span c
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="contains">
-<span class="sig-name descname"><span class="pre">contains</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#contains" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">contains</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#contains" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if ‘right’ is found in ‘left’. Otherwise, returns false.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">contains</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="s1">&#39;Spark&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 <span class="n">SELECT</span> <span class="n">contains</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="s1">&#39;SPARK&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
@@ -73,7 +70,7 @@ If <code class="docutils literal notranslate"><span class="pre">n</span> <span c
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="conv">
-<span class="sig-name descname"><span class="pre">conv</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fromBase</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">toBase</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#conv" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">conv</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fromBase</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">toBase</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#conv" title="Link to this definition">¶</a></dt>
 <dd><p>Converts <code class="docutils literal notranslate"><span class="pre">number</span></code> represented as a string from <code class="docutils literal notranslate"><span class="pre">fromBase</span></code> to <code class="docutils literal notranslate"><span class="pre">toBase</span></code>.
 <code class="docutils literal notranslate"><span class="pre">fromBase</span></code> must be an INTEGER value between 2 and 36 inclusively. <code class="docutils literal notranslate"><span class="pre">toBase</span></code> must
 be an INTEGER value between 2 and 36 inclusively or between -36 and -2 inclusively.
@@ -100,7 +97,7 @@ ignored. Only converts valid characters even though <code class="docutils litera
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="endswith">
-<span class="sig-name descname"><span class="pre">endswith</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#endswith" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">endswith</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#endswith" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if ‘left’ ends with ‘right’. Otherwise, returns false.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">endswith</span><span class="p">(</span><span class="s1">&#39;js SQL&#39;</span><span class="p">,</span> <span class="s1">&#39;SQL&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 <span class="n">SELECT</span> <span class="n">endswith</span><span class="p">(</span><span class="s1">&#39;js SQL&#39;</span><span class="p">,</span> <span class="s1">&#39;js&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
@@ -111,7 +108,7 @@ ignored. Only converts valid characters even though <code class="docutils litera
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="find_in_set">
-<span class="sig-name descname"><span class="pre">find_in_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">strArray</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#find_in_set" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">find_in_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">strArray</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#find_in_set" title="Link to this definition">¶</a></dt>
 <dd><p>Returns 1-based index of the given string <code class="docutils literal notranslate"><span class="pre">str</span></code> in the comma-delimited list <code class="docutils literal notranslate"><span class="pre">strArray</span></code>.
 Returns 0, if the string was not found or if the given string <code class="docutils literal notranslate"><span class="pre">str</span></code> contains a comma.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">find_in_set</span><span class="p">(</span><span class="s1">&#39;ab&#39;</span><span class="p">,</span> <span class="s1">&#39;abc,b,ab,c,def&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
@@ -128,27 +125,27 @@ Returns 0, if the string was not found or if the given string <code class="docut
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="instr">
-<span class="sig-name descname"><span class="pre">instr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#instr" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">instr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#instr" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the starting position of the first instance of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in
 <code class="docutils literal notranslate"><span class="pre">string</span></code>. Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. Returns 0 if ‘substring’ is not found.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="left">
-<span class="sig-name descname"><span class="pre">left</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#left" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">left</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#left" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the leftmost length characters from the <code class="docutils literal notranslate"><span class="pre">string</span></code>.
 If <code class="docutils literal notranslate"><span class="pre">length</span></code> is less or equal than 0 the result is an empty string.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="length">
-<span class="sig-name descname"><span class="pre">length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#length" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#length" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the length of <code class="docutils literal notranslate"><span class="pre">string</span></code> in characters.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="lower">
-<span class="sig-name descname"><span class="pre">lower</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#lower" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">lower</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#lower" title="Link to this definition">¶</a></dt>
 <dd><p>Returns string with all characters changed to lowercase.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">lower</span><span class="p">(</span><span class="s1">&#39;SparkSql&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">sparksql</span>
 </pre></div>
@@ -157,7 +154,7 @@ If <code class="docutils literal notranslate"><span class="pre">length</span></c
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="lpad">
-<span class="sig-name descname"><span class="pre">lpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#lpad" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">lpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#lpad" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">string</span></code>, left-padded with pad to a length of <code class="docutils literal notranslate"><span class="pre">len</span></code>. If <code class="docutils literal notranslate"><span class="pre">string</span></code> is
 longer than <code class="docutils literal notranslate"><span class="pre">len</span></code>, the return value is shortened to <code class="docutils literal notranslate"><span class="pre">len</span></code> characters or bytes.
 If <code class="docutils literal notranslate"><span class="pre">pad</span></code> is not specified, <code class="docutils literal notranslate"><span class="pre">string</span></code> will be padded to the left with space characters
@@ -171,7 +168,7 @@ SELECT lpad(&#39;hi&#39;, 4); --   hi
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="ltrim">
-<span class="sig-name descname"><span class="pre">ltrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#ltrim" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">ltrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#ltrim" title="Link to this definition">¶</a></dt>
 <dd><p>Removes leading 0x20(space) characters from <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ltrim</span><span class="p">(</span><span class="s1">&#39;  data  &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;data  &quot;</span>
 </pre></div>
@@ -193,7 +190,7 @@ is any character contained in <code class="docutils literal notranslate"><span c
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="overlay">
-<span class="sig-name descname"><span class="pre">overlay</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pos</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">len</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">same</span> <span class="pre">as</span> <span class="pre">input</span></span></span><a class="headerlink" href="#overlay" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">overlay</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pos</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">len</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">same</span> <span class="pre">as</span> <span class="pre">input</span></span></span><a class="headerlink" href="#overlay" title="Link to this definition">¶</a></dt>
 <dd><p>Replace a substring of <code class="docutils literal notranslate"><span class="pre">input</span></code> starting at <code class="docutils literal notranslate"><span class="pre">pos</span></code> character with <code class="docutils literal notranslate"><span class="pre">replace</span></code> and
 going for rest <code class="docutils literal notranslate"><span class="pre">len</span></code> characters of <code class="docutils literal notranslate"><span class="pre">input</span></code>.
 Types of <code class="docutils literal notranslate"><span class="pre">input</span></code> and <code class="docutils literal notranslate"><span class="pre">replace</span></code> must be the same. Supported types are: VARCHAR and VARBINARY.
@@ -215,7 +212,7 @@ if pos + len is negative, it refers to -(pos + len)th element before the end of 
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="replace">
-<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replaced</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#replace" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replaced</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#replace" title="Link to this definition">¶</a></dt>
 <dd><p>Removes all instances of <code class="docutils literal notranslate"><span class="pre">replaced</span></code> from <code class="docutils literal notranslate"><span class="pre">input</span></code>.
 If <code class="docutils literal notranslate"><span class="pre">replaced</span></code> is an empty string, returns the original <code class="docutils literal notranslate"><span class="pre">input</span></code> string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">replace</span><span class="p">(</span><span class="s1">&#39;ABCabc&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ABCabc</span>
@@ -226,7 +223,7 @@ If <code class="docutils literal notranslate"><span class="pre">replaced</span><
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="id0">
-<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replaced</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replacement</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replaced</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replacement</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
 <dd><p>Replaces all instances of <code class="docutils literal notranslate"><span class="pre">replaced</span></code> with <code class="docutils literal notranslate"><span class="pre">replacement</span></code> in <code class="docutils literal notranslate"><span class="pre">input</span></code>.
 If <code class="docutils literal notranslate"><span class="pre">replaced</span></code> is an empty string, returns the original <code class="docutils literal notranslate"><span class="pre">input</span></code> string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">replace</span><span class="p">(</span><span class="s1">&#39;ABCabc&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;DEF&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ABCabc</span>
@@ -238,7 +235,7 @@ If <code class="docutils literal notranslate"><span class="pre">replaced</span><
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="rpad">
-<span class="sig-name descname"><span class="pre">rpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#rpad" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">rpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#rpad" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">string</span></code>, right-padded with <code class="docutils literal notranslate"><span class="pre">pad</span></code> to a length of <code class="docutils literal notranslate"><span class="pre">len</span></code>.
 If <code class="docutils literal notranslate"><span class="pre">string</span></code> is longer than <code class="docutils literal notranslate"><span class="pre">len</span></code>, the return value is shortened to <code class="docutils literal notranslate"><span class="pre">len</span></code> characters.
 If <code class="docutils literal notranslate"><span class="pre">pad</span></code> is not specified, <code class="docutils literal notranslate"><span class="pre">string</span></code> will be padded to the right with space characters
@@ -252,7 +249,7 @@ SELECT lpad(&#39;hi&#39;, 4); -- hi
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="rtrim">
-<span class="sig-name descname"><span class="pre">rtrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#rtrim" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">rtrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#rtrim" title="Link to this definition">¶</a></dt>
 <dd><p>Removes trailing 0x20(space) characters from <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">rtrim</span><span class="p">(</span><span class="s1">&#39;  data  &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;  data&quot;</span>
 </pre></div>
@@ -274,7 +271,7 @@ is any character contained in <code class="docutils literal notranslate"><span c
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="split">
-<span class="sig-name descname"><span class="pre">split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delimiter</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#split" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delimiter</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#split" title="Link to this definition">¶</a></dt>
 <dd><p>Splits <code class="docutils literal notranslate"><span class="pre">string</span></code> on <code class="docutils literal notranslate"><span class="pre">delimiter</span></code> and returns an array.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">split</span><span class="p">(</span><span class="s1">&#39;oneAtwoBthreeC&#39;</span><span class="p">,</span> <span class="s1">&#39;[ABC]&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s2">&quot;one&quot;</span><span class="p">,</span><span class="s2">&quot;two&quot;</span><span class="p">,</span><span class="s2">&quot;three&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">]</span>
 <span class="n">SELECT</span> <span class="n">split</span><span class="p">(</span><span class="s1">&#39;one&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s2">&quot;o&quot;</span><span class="p">,</span> <span class="s2">&quot;n&quot;</span><span class="p">,</span> <span class="s2">&quot;e&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]</span>
@@ -298,7 +295,7 @@ is any character contained in <code class="docutils literal notranslate"><span c
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="startswith">
-<span class="sig-name descname"><span class="pre">startswith</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#startswith" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">startswith</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#startswith" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if ‘left’ starts with ‘right’. Otherwise, returns false.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;js SQL&#39;</span><span class="p">,</span> <span class="s1">&#39;js&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 <span class="n">SELECT</span> <span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;js SQL&#39;</span><span class="p">,</span> <span class="s1">&#39;SQL&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
@@ -309,7 +306,7 @@ is any character contained in <code class="docutils literal notranslate"><span c
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="str_to_map">
-<span class="sig-name descname"><span class="pre">str_to_map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">entryDelimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keyValueDelimiter</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#str_to_map" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">str_to_map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">entryDelimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keyValueDelimiter</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#str_to_map" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a map by splitting <code class="docutils literal notranslate"><span class="pre">string</span></code> into entries with <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and splitting
 each entry into key/value with <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code>.
 <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> must be constant strings with single ascii
@@ -326,7 +323,7 @@ behavior.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="substring">
-<span class="sig-name descname"><span class="pre">substring</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#substring" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">substring</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#substring" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the rest of <code class="docutils literal notranslate"><span class="pre">string</span></code> from the starting position <code class="docutils literal notranslate"><span class="pre">start</span></code>.
 Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. A negative starting position is interpreted
 as being relative to the end of the string. When the starting position is 0,
@@ -357,7 +354,7 @@ Type of ‘start’ must be an INTEGER.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="substring_index">
-<span class="sig-name descname"><span class="pre">substring_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delim</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">string]</span></span></span><a class="headerlink" href="#substring_index" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">substring_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delim</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">string]</span></span></span><a class="headerlink" href="#substring_index" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the substring from <code class="docutils literal notranslate"><span class="pre">string</span></code> before <code class="docutils literal notranslate"><span class="pre">count</span></code> occurrences of the delimiter <code class="docutils literal notranslate"><span class="pre">delim</span></code>.
 Here the <code class="docutils literal notranslate"><span class="pre">string</span></code> can be VARCHAR or VARBINARY and return type matches type of <code class="docutils literal notranslate"><span class="pre">string</span></code>.
 If <code class="docutils literal notranslate"><span class="pre">count</span></code> is positive, returns everything to the left of the final delimiter
@@ -384,7 +381,7 @@ If <code class="docutils literal notranslate"><span class="pre">delim</span></co
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="translate">
-<span class="sig-name descname"><span class="pre">translate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">match</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#translate" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">translate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">match</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#translate" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a new translated string. It translates the character in <code class="docutils literal notranslate"><span class="pre">string</span></code> by a
 character in <code class="docutils literal notranslate"><span class="pre">replace</span></code>. The character in <code class="docutils literal notranslate"><span class="pre">replace</span></code> is corresponding to
 the character in <code class="docutils literal notranslate"><span class="pre">match</span></code>. The translation will happen when any character
@@ -402,7 +399,7 @@ occurrence of a character in <code class="docutils literal notranslate"><span cl
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="trim">
-<span class="sig-name descname"><span class="pre">trim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#trim" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">trim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#trim" title="Link to this definition">¶</a></dt>
 <dd><p>Removes leading and trailing 0x20(space) characters from <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">trim</span><span class="p">(</span><span class="s1">&#39;  data  &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;data&quot;</span>
 </pre></div>
@@ -424,7 +421,7 @@ The specified character is any character contained in <code class="docutils lite
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="upper">
-<span class="sig-name descname"><span class="pre">upper</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#upper" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">upper</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#upper" title="Link to this definition">¶</a></dt>
 <dd><p>Returns string with all characters changed to uppercase.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">upper</span><span class="p">(</span><span class="s1">&#39;SparkSql&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">SPARKSQL</span>
 </pre></div>
@@ -440,6 +437,40 @@ The specified character is any character contained in <code class="docutils lite
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">String Functions</a><ul>
+<li><a class="reference internal" href="#ascii"><code class="docutils literal notranslate"><span class="pre">ascii()</span></code></a></li>
+<li><a class="reference internal" href="#chr"><code class="docutils literal notranslate"><span class="pre">chr()</span></code></a></li>
+<li><a class="reference internal" href="#contains"><code class="docutils literal notranslate"><span class="pre">contains()</span></code></a></li>
+<li><a class="reference internal" href="#conv"><code class="docutils literal notranslate"><span class="pre">conv()</span></code></a></li>
+<li><a class="reference internal" href="#endswith"><code class="docutils literal notranslate"><span class="pre">endswith()</span></code></a></li>
+<li><a class="reference internal" href="#find_in_set"><code class="docutils literal notranslate"><span class="pre">find_in_set()</span></code></a></li>
+<li><a class="reference internal" href="#instr"><code class="docutils literal notranslate"><span class="pre">instr()</span></code></a></li>
+<li><a class="reference internal" href="#left"><code class="docutils literal notranslate"><span class="pre">left()</span></code></a></li>
+<li><a class="reference internal" href="#length"><code class="docutils literal notranslate"><span class="pre">length()</span></code></a></li>
+<li><a class="reference internal" href="#lower"><code class="docutils literal notranslate"><span class="pre">lower()</span></code></a></li>
+<li><a class="reference internal" href="#lpad"><code class="docutils literal notranslate"><span class="pre">lpad()</span></code></a></li>
+<li><a class="reference internal" href="#ltrim"><code class="docutils literal notranslate"><span class="pre">ltrim()</span></code></a></li>
+<li><a class="reference internal" href="#overlay"><code class="docutils literal notranslate"><span class="pre">overlay()</span></code></a></li>
+<li><a class="reference internal" href="#replace"><code class="docutils literal notranslate"><span class="pre">replace()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">replace()</span></code></a></li>
+<li><a class="reference internal" href="#rpad"><code class="docutils literal notranslate"><span class="pre">rpad()</span></code></a></li>
+<li><a class="reference internal" href="#rtrim"><code class="docutils literal notranslate"><span class="pre">rtrim()</span></code></a></li>
+<li><a class="reference internal" href="#split"><code class="docutils literal notranslate"><span class="pre">split()</span></code></a></li>
+<li><a class="reference internal" href="#startswith"><code class="docutils literal notranslate"><span class="pre">startswith()</span></code></a></li>
+<li><a class="reference internal" href="#str_to_map"><code class="docutils literal notranslate"><span class="pre">str_to_map()</span></code></a></li>
+<li><a class="reference internal" href="#substring"><code class="docutils literal notranslate"><span class="pre">substring()</span></code></a></li>
+<li><a class="reference internal" href="#substring_index"><code class="docutils literal notranslate"><span class="pre">substring_index()</span></code></a></li>
+<li><a class="reference internal" href="#translate"><code class="docutils literal notranslate"><span class="pre">translate()</span></code></a></li>
+<li><a class="reference internal" href="#trim"><code class="docutils literal notranslate"><span class="pre">trim()</span></code></a></li>
+<li><a class="reference internal" href="#upper"><code class="docutils literal notranslate"><span class="pre">upper()</span></code></a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
   <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="comparison.html"
@@ -489,8 +520,8 @@ The specified character is any character contained in <code class="docutils lite
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

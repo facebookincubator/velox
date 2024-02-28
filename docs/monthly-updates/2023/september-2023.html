@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>September 2023 Update &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="August 2023 Update" href="august-2023.html" />
@@ -44,16 +41,16 @@
           <div class="body" role="main">
             
   <section id="september-2023-update">
-<h1>September 2023 Update<a class="headerlink" href="#september-2023-update" title="Permalink to this heading">¶</a></h1>
+<h1>September 2023 Update<a class="headerlink" href="#september-2023-update" title="Link to this heading">¶</a></h1>
 <section id="documentation">
-<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference internal" href="../../programming-guide/chapter02.html"><span class="doc">Chapter 2 of programming guide</span></a></p></li>
 <li><p>Add blog post about <a class="reference external" href="https://velox-lib.io/blog/optimize-try_cast.">learning from optimizing try_cast</a></p></li>
 </ul>
 </section>
 <section id="core-library">
-<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add BaseVector::containsNullAt API <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6515">#6515</a></p></li>
 <li><p>Add ContainerRowSerde::compareWithNulls API <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6419">#6419</a></p></li>
@@ -66,7 +63,7 @@
 </ul>
 </section>
 <section id="presto-functions">
-<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add overlapped string support in <a class="reference internal" href="../../functions/presto/string.html#strpos" title="strpos"><code class="xref py py-func docutils literal notranslate"><span class="pre">strpos()</span></code></a> function. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6410">#6410</a></p></li>
 <li><p>Add <a class="reference internal" href="../../functions/presto/binary.html#to_ieee754_64" title="to_ieee754_64"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_ieee754_64()</span></code></a> function <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6445">#6445</a></p></li>
@@ -90,7 +87,7 @@
 </ul>
 </section>
 <section id="spark-functions">
-<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add comparison Spark functions <a class="reference external" href="https://github.com/facebookincubator/velox/pull/5569">#5569</a></p></li>
 <li><p>Add support for <a class="reference internal" href="../../functions/spark/math.html#id5" title="rand"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">rand()</span></code></a> function with seed specified <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6112">#6112</a></p></li>
@@ -98,7 +95,7 @@
 </ul>
 </section>
 <section id="hive-connector">
-<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add fast path of FlatMap column reader for scalar types <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6507">#6507</a></p></li>
 <li><p>Add support for writing query results to S3 <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6021">#6021</a></p></li>
@@ -108,7 +105,7 @@
 </ul>
 </section>
 <section id="performance-and-correctness">
-<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Fix CPU time reporting by attributing LazyVector loading time to TableScan <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6558">#6558</a></p></li>
 <li><p>Optimize TRY_CAST performance by reducing throwing <a class="reference external" href="https://github.com/facebookincubator/velox/pull/5913">#5913</a></p></li>
@@ -118,13 +115,13 @@
 </ul>
 </section>
 <section id="build-systems">
-<h2>Build Systems<a class="headerlink" href="#build-systems" title="Permalink to this heading">¶</a></h2>
+<h2>Build Systems<a class="headerlink" href="#build-systems" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Install Azure SDK needed to support Azure Storage ABFS Connector <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6418">#6418</a></p></li>
 </ul>
 </section>
 <section id="credits">
-<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
 <p>Ankita Victor, Artem Gelun, Austin Dickey, Bikramjeet Vig, Chengcheng Jin,
 Christian Zentgraf, Deepak Majeti, Ge Gao, George Wang, Jacob Wujciak-Jens,
 Jia Ke, Jialiang Tan, Jimmy Lu, Jubin Chheda, Karteekmurthys, Ke, Kevin Wilfong,
@@ -212,8 +209,8 @@ xiaodou, xiaoxmeng, xumingming, yingsu00, zhli1142015, 陈旭, 高阳阳</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

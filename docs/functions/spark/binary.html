@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Binary Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="JSON Functions" href="json.html" />
@@ -43,10 +40,10 @@
           <div class="body" role="main">
             
   <section id="binary-functions">
-<h1>Binary Functions<a class="headerlink" href="#binary-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Binary Functions<a class="headerlink" href="#binary-functions" title="Link to this heading">¶</a></h1>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="hash">
-<span class="sig-name descname"><span class="pre">hash</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#hash" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">hash</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#hash" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the hash of one or more input values using seed value of 42. For
 multiple arguments, their types can be different.
 Supported types are: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, VARCHAR,
@@ -55,7 +52,7 @@ VARBINARY, REAL, DOUBLE, HUGEINT and TIMESTAMP.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="hash_with_seed">
-<span class="sig-name descname"><span class="pre">hash_with_seed</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#hash_with_seed" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">hash_with_seed</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#hash_with_seed" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the hash of one or more input values using specified seed. For
 multiple arguments, their types can be different.
 Supported types are: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, VARCHAR,
@@ -64,7 +61,7 @@ VARBINARY, REAL, DOUBLE, HUGEINT and TIMESTAMP.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="xxhash64">
-<span class="sig-name descname"><span class="pre">xxhash64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#xxhash64" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">xxhash64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#xxhash64" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the xxhash64 of one or more input values using seed value of 42.
 For multiple arguments, their types can be different.
 Supported types are: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, VARCHAR,
@@ -73,7 +70,7 @@ VARBINARY, REAL, DOUBLE, HUGEINT and TIMESTAMP.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="xxhash64_with_seed">
-<span class="sig-name descname"><span class="pre">xxhash64_with_seed</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#xxhash64_with_seed" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">xxhash64_with_seed</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#xxhash64_with_seed" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the xxhash64 of one or more input values using specified seed. For
 multiple arguments, their types can be different.
 Supported types are: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, VARCHAR,
@@ -82,13 +79,13 @@ VARBINARY, REAL, DOUBLE, HUGEINT and TIMESTAMP.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="md5">
-<span class="sig-name descname"><span class="pre">md5</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#md5" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">md5</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#md5" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the md5 of x.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="might_contain">
-<span class="sig-name descname"><span class="pre">might_contain</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">bloomFilter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#might_contain" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">might_contain</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">bloomFilter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#might_contain" title="Link to this definition">¶</a></dt>
 <dd><p>Returns TRUE if <code class="docutils literal notranslate"><span class="pre">bloomFilter</span></code> might contain <code class="docutils literal notranslate"><span class="pre">value</span></code>.</p>
 <p><code class="docutils literal notranslate"><span class="pre">bloomFilter</span></code> is a VARBINARY computed using ::spark::function::<cite>bloom_filter_agg</cite> aggregate function.
 <code class="docutils literal notranslate"><span class="pre">value</span></code> is a BIGINT.</p>
@@ -96,14 +93,14 @@ VARBINARY, REAL, DOUBLE, HUGEINT and TIMESTAMP.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="sha1">
-<span class="sig-name descname"><span class="pre">sha1</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#sha1" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">sha1</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#sha1" title="Link to this definition">¶</a></dt>
 <dd><p>Computes SHA-1 digest of x and convert the result to a hex string.
 Note: x can only be varbinary type.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="sha2">
-<span class="sig-name descname"><span class="pre">sha2</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bitLength</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#sha2" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">sha2</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bitLength</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#sha2" title="Link to this definition">¶</a></dt>
 <dd><p>Calculate SHA-2 family of functions (SHA-224, SHA-256, SHA-384, and SHA-512) and
 convert the result to a hex string.
 The second argument indicates the desired bit length of the result, which must
@@ -121,6 +118,23 @@ Note: x can only be varbinary type.</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Binary Functions</a><ul>
+<li><a class="reference internal" href="#hash"><code class="docutils literal notranslate"><span class="pre">hash()</span></code></a></li>
+<li><a class="reference internal" href="#hash_with_seed"><code class="docutils literal notranslate"><span class="pre">hash_with_seed()</span></code></a></li>
+<li><a class="reference internal" href="#xxhash64"><code class="docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></li>
+<li><a class="reference internal" href="#xxhash64_with_seed"><code class="docutils literal notranslate"><span class="pre">xxhash64_with_seed()</span></code></a></li>
+<li><a class="reference internal" href="#md5"><code class="docutils literal notranslate"><span class="pre">md5()</span></code></a></li>
+<li><a class="reference internal" href="#might_contain"><code class="docutils literal notranslate"><span class="pre">might_contain()</span></code></a></li>
+<li><a class="reference internal" href="#sha1"><code class="docutils literal notranslate"><span class="pre">sha1()</span></code></a></li>
+<li><a class="reference internal" href="#sha2"><code class="docutils literal notranslate"><span class="pre">sha2()</span></code></a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
   <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="regexp.html"
@@ -170,8 +184,8 @@ Note: x can only be varbinary type.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

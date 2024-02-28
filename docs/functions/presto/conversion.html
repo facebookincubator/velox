@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Conversion Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="URL Functions" href="url.html" />
@@ -43,22 +40,22 @@
           <div class="body" role="main">
             
   <section id="conversion-functions">
-<h1>Conversion Functions<a class="headerlink" href="#conversion-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Conversion Functions<a class="headerlink" href="#conversion-functions" title="Link to this heading">¶</a></h1>
 <p>During expression evaluations, Velox doesn’t implicitly convert expression
 arguments to the correct types. If such a conversion is necessary, two provided
 conversion functions can be used explicitly cast values to a particular type.</p>
 <section id="id1">
-<h2>Conversion Functions<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h2>
+<h2>Conversion Functions<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="cast">
-<span class="sig-name descname"><span class="pre">cast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span> <span class="pre">AS</span> <span class="pre">type</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">type</span></span></span><a class="headerlink" href="#cast" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">cast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span> <span class="pre">AS</span> <span class="pre">type</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">type</span></span></span><a class="headerlink" href="#cast" title="Link to this definition">¶</a></dt>
 <dd><p>Explicitly cast a value as a type. This can be used to cast a varchar to a
 numeric value type and vice versa.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="try_cast">
-<span class="sig-name descname"><span class="pre">try_cast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span> <span class="pre">AS</span> <span class="pre">type</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">type</span></span></span><a class="headerlink" href="#try_cast" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">try_cast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span> <span class="pre">AS</span> <span class="pre">type</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">type</span></span></span><a class="headerlink" href="#try_cast" title="Link to this definition">¶</a></dt>
 <dd><p>Like <a class="reference internal" href="#cast" title="cast"><code class="xref py py-func docutils literal notranslate"><span class="pre">cast()</span></code></a>, but returns null if the cast fails. <code class="docutils literal notranslate"><span class="pre">try_cast(x</span> <span class="pre">AS</span> <span class="pre">type)</span></code>
 is different from <code class="docutils literal notranslate"><span class="pre">try(cast(x</span> <span class="pre">AS</span> <span class="pre">type))</span></code> in that <code class="docutils literal notranslate"><span class="pre">try_cast</span></code> only suppresses
 errors happening during the casting itself but not those during the evaluation
@@ -68,25 +65,25 @@ error, while <code class="docutils literal notranslate"><span class="pre">try(ca
 
 </section>
 <section id="supported-conversions">
-<h2>Supported Conversions<a class="headerlink" href="#supported-conversions" title="Permalink to this heading">¶</a></h2>
+<h2>Supported Conversions<a class="headerlink" href="#supported-conversions" title="Link to this heading">¶</a></h2>
 <p>The supported conversions are listed below, with from-types given at rows and to-types given at columns. Conversions of ARRAY, MAP, and ROW types
 are supported if the conversion of their element types are supported. In addition,
 supported conversions to/from JSON are listed in <a class="reference internal" href="json.html"><span class="doc">JSON Functions</span></a>.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
-<col style="width: 8%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"></th>
@@ -277,10 +274,10 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 </table>
 </section>
 <section id="cast-to-integral-types">
-<h2>Cast to Integral Types<a class="headerlink" href="#cast-to-integral-types" title="Permalink to this heading">¶</a></h2>
+<h2>Cast to Integral Types<a class="headerlink" href="#cast-to-integral-types" title="Link to this heading">¶</a></h2>
 <p>Integral types include bigint, integer, smallint, and tinyint.</p>
 <section id="from-integral-types">
-<h3>From integral types<a class="headerlink" href="#from-integral-types" title="Permalink to this heading">¶</a></h3>
+<h3>From integral types<a class="headerlink" href="#from-integral-types" title="Link to this heading">¶</a></h3>
 <p>Casting one integral type to another is allowed when the input value is within
 the range of the result type. Casting from invalid input values throws.</p>
 <p>Valid examples:</p>
@@ -295,7 +292,7 @@ the range of the result type. Casting from invalid input values throws.</p>
 </div>
 </section>
 <section id="from-floating-point-types">
-<h3>From floating-point types<a class="headerlink" href="#from-floating-point-types" title="Permalink to this heading">¶</a></h3>
+<h3>From floating-point types<a class="headerlink" href="#from-floating-point-types" title="Link to this heading">¶</a></h3>
 <p>Casting from floating-point input to an integral type rounds the input value to
 the closest integral value. It is allowed when the rounded result is within the
 range of the result type. Casting from invalid input values throws.</p>
@@ -322,7 +319,7 @@ supported cases.</p>
 </div>
 </section>
 <section id="from-strings">
-<h3>From strings<a class="headerlink" href="#from-strings" title="Permalink to this heading">¶</a></h3>
+<h3>From strings<a class="headerlink" href="#from-strings" title="Link to this heading">¶</a></h3>
 <p>Casting a string to an integral type is allowed if the string represents an
 integral number within the range of the result type. By default, casting from
 strings that represent floating-point numbers is not allowed.
@@ -347,7 +344,7 @@ Casting from invalid input values throws.</p>
 </div>
 </section>
 <section id="from-decimal">
-<h3>From decimal<a class="headerlink" href="#from-decimal" title="Permalink to this heading">¶</a></h3>
+<h3>From decimal<a class="headerlink" href="#from-decimal" title="Link to this heading">¶</a></h3>
 <p>The decimal part is rounded.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">2.56</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="k">as</span> <span class="n">integer</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
@@ -361,9 +358,9 @@ Casting from invalid input values throws.</p>
 </section>
 </section>
 <section id="cast-to-boolean">
-<h2>Cast to Boolean<a class="headerlink" href="#cast-to-boolean" title="Permalink to this heading">¶</a></h2>
+<h2>Cast to Boolean<a class="headerlink" href="#cast-to-boolean" title="Link to this heading">¶</a></h2>
 <section id="from-integral-and-floating-point-types">
-<h3>From integral and floating-point types<a class="headerlink" href="#from-integral-and-floating-point-types" title="Permalink to this heading">¶</a></h3>
+<h3>From integral and floating-point types<a class="headerlink" href="#from-integral-and-floating-point-types" title="Link to this heading">¶</a></h3>
 <p>Casting from integral or floating-point numbers to boolean is allowed. Non-zero
 numbers are converted to <cite>true</cite> while zero is converted to <cite>false</cite>.</p>
 <p>Valid examples</p>
@@ -383,7 +380,7 @@ numbers are converted to <cite>true</cite> while zero is converted to <cite>fals
 </div>
 </section>
 <section id="id2">
-<h3>From strings<a class="headerlink" href="#id2" title="Permalink to this heading">¶</a></h3>
+<h3>From strings<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
 <p>There is a set of strings allowed to be casted to boolean. Casting from other strings to boolean throws.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
@@ -407,9 +404,9 @@ numbers are converted to <cite>true</cite> while zero is converted to <cite>fals
 </section>
 </section>
 <section id="cast-to-floating-point-types">
-<h2>Cast to Floating-Point Types<a class="headerlink" href="#cast-to-floating-point-types" title="Permalink to this heading">¶</a></h2>
+<h2>Cast to Floating-Point Types<a class="headerlink" href="#cast-to-floating-point-types" title="Link to this heading">¶</a></h2>
 <section id="from-integral-or-floating-point-types">
-<h3>From integral or floating-point types<a class="headerlink" href="#from-integral-or-floating-point-types" title="Permalink to this heading">¶</a></h3>
+<h3>From integral or floating-point types<a class="headerlink" href="#from-integral-or-floating-point-types" title="Link to this heading">¶</a></h3>
 <p>Casting from an integral or floating-point number is allowed.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.0</span>
@@ -425,7 +422,7 @@ behavior.</p>
 </div>
 </section>
 <section id="id3">
-<h3>From strings<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h3>
+<h3>From strings<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <p>Casting a string to real is allowed if the string represents an integral or
 floating-point number. Casting from invalid input values throws.</p>
 <p>Valid examples</p>
@@ -464,7 +461,7 @@ consistent with other supported cases of cast.</p>
 </div>
 </section>
 <section id="id4">
-<h3>From decimal<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h3>
+<h3>From decimal<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <p>Casting from decimal to double, float or any integral type is allowed. During decimal to an integral type conversion, if result overflows, or underflows, an exception is thrown.</p>
 <p>Valid example</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">decimal</span> <span class="s1">&#39;10.001&#39;</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="mf">10.001</span>
@@ -477,7 +474,7 @@ consistent with other supported cases of cast.</p>
 </section>
 </section>
 <section id="cast-to-string">
-<h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Permalink to this heading">¶</a></h2>
+<h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Link to this heading">¶</a></h2>
 <p>Casting from scalar types to string is allowed.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">123</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;123&#39;</span>
@@ -495,7 +492,7 @@ consistent with other supported cases of cast.</p>
 </pre></div>
 </div>
 <section id="id5">
-<h3>From Floating-Point Types<a class="headerlink" href="#id5" title="Permalink to this heading">¶</a></h3>
+<h3>From Floating-Point Types<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <p>By default, casting a real or double to string returns standard notation if the magnitude of input value is greater than
 or equal to 10 <sup>-3</sup> but less than 10 <sup>7</sup>, and returns scientific notation otherwise.</p>
 <p>Positive zero returns ‘0.0’ and negative zero returns ‘-0.0’. Positive infinity returns ‘Infinity’ and negative infinity
@@ -537,7 +534,7 @@ returns ‘-Infinity’. Positive and negative NaN returns ‘NaN’.</p>
 </div>
 </section>
 <section id="from-timestamp">
-<h3>From TIMESTAMP<a class="headerlink" href="#from-timestamp" title="Permalink to this heading">¶</a></h3>
+<h3>From TIMESTAMP<a class="headerlink" href="#from-timestamp" title="Link to this heading">¶</a></h3>
 <p>By default, casting a timestamp to a string returns ISO 8601 format with space as separator
 between date and time, and the year part is padded with zeros to 4 characters.</p>
 <p>If legacy_cast configuration property is true, the result string uses character ‘T’
@@ -560,9 +557,9 @@ as separator between date and time and the year part is not padded.</p>
 </section>
 </section>
 <section id="cast-to-timestamp">
-<h2>Cast to TIMESTAMP<a class="headerlink" href="#cast-to-timestamp" title="Permalink to this heading">¶</a></h2>
+<h2>Cast to TIMESTAMP<a class="headerlink" href="#cast-to-timestamp" title="Link to this heading">¶</a></h2>
 <section id="id6">
-<h3>From strings<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h3>
+<h3>From strings<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <p>Casting from a string to timestamp is allowed if the string represents a
 timestamp in the format <cite>YYYY-MM-DD</cite> followed by an optional <cite>hh:mm:ssZZ</cite>.
 Casting from invalid input values throws.</p>
@@ -579,7 +576,7 @@ Casting from invalid input values throws.</p>
 </div>
 </section>
 <section id="from-date">
-<h3>From date<a class="headerlink" href="#from-date" title="Permalink to this heading">¶</a></h3>
+<h3>From date<a class="headerlink" href="#from-date" title="Link to this heading">¶</a></h3>
 <p>Casting from date to timestamp is allowed.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">date</span> <span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
@@ -588,7 +585,7 @@ Casting from invalid input values throws.</p>
 </div>
 </section>
 <section id="from-timestamp-with-time-zone">
-<h3>From TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#from-timestamp-with-time-zone" title="Permalink to this heading">¶</a></h3>
+<h3>From TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#from-timestamp-with-time-zone" title="Link to this heading">¶</a></h3>
 <p>The results depend on whether configuration property <cite>adjust_timestamp_to_session_timezone</cite> is set or not.</p>
 <p>If set to true, input timezone is ignored and timestamp is returned as is. For example,
 “1970-01-01 00:00:00.000 America/Los_Angeles” becomes “1970-01-01 08:00:00.000”.</p>
@@ -611,9 +608,9 @@ SELECT to_unixtime(cast(from_unixtime(0, &#39;-02:00&#39;) as timestamp)); -- -7
 </section>
 </section>
 <section id="cast-to-timestamp-with-time-zone">
-<h2>Cast to TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#cast-to-timestamp-with-time-zone" title="Permalink to this heading">¶</a></h2>
+<h2>Cast to TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#cast-to-timestamp-with-time-zone" title="Link to this heading">¶</a></h2>
 <section id="id7">
-<h3>From TIMESTAMP<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
+<h3>From TIMESTAMP<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <p>The results depend on whether configuration property <cite>adjust_timestamp_to_session_timezone</cite> is set or not.</p>
 <p>If set to true, the output is adjusted to be equivalent as the input timestamp in UTC
 based on the user provided <cite>session_timezone</cite> (if any). For example, when user supplies
@@ -635,9 +632,9 @@ SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:0
 </section>
 </section>
 <section id="cast-to-date">
-<h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Permalink to this heading">¶</a></h2>
+<h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Link to this heading">¶</a></h2>
 <section id="id8">
-<h3>From strings<a class="headerlink" href="#id8" title="Permalink to this heading">¶</a></h3>
+<h3>From strings<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <p>Only ISO 8601 strings are supported: <cite>[+-]YYYY-MM-DD</cite>. Casting from invalid input values throws.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>
@@ -656,7 +653,7 @@ SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:0
 </div>
 </section>
 <section id="id9">
-<h3>From TIMESTAMP<a class="headerlink" href="#id9" title="Permalink to this heading">¶</a></h3>
+<h3>From TIMESTAMP<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
 <p>Casting from timestamp to date is allowed. If present, the part of <cite>hh:mm:ss</cite>
 in the input is ignored.</p>
 <p>Valid examples</p>
@@ -667,9 +664,9 @@ in the input is ignored.</p>
 </section>
 </section>
 <section id="cast-to-decimal">
-<h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Permalink to this heading">¶</a></h2>
+<h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Link to this heading">¶</a></h2>
 <section id="from-boolean-type">
-<h3>From boolean type<a class="headerlink" href="#from-boolean-type" title="Permalink to this heading">¶</a></h3>
+<h3>From boolean type<a class="headerlink" href="#from-boolean-type" title="Link to this heading">¶</a></h3>
 <p>Casting a boolean number to decimal of given precision and scale is allowed.
 True value is converted to 1 and false to 0.</p>
 <p>Valid examples</p>
@@ -679,7 +676,7 @@ True value is converted to 1 and false to 0.</p>
 </div>
 </section>
 <section id="id10">
-<h3>From integral types<a class="headerlink" href="#id10" title="Permalink to this heading">¶</a></h3>
+<h3>From integral types<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
 <p>Casting an integral number to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. Casting from
 invalid input values throws.</p>
@@ -696,7 +693,7 @@ invalid input values throws.</p>
 </div>
 </section>
 <section id="from-double-type">
-<h3>From double type<a class="headerlink" href="#from-double-type" title="Permalink to this heading">¶</a></h3>
+<h3>From double type<a class="headerlink" href="#from-double-type" title="Link to this heading">¶</a></h3>
 <p>Casting a double number to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. When the
 given scale is less than the number of decimal places, the double value is
@@ -716,7 +713,7 @@ significant decimal digits precision. Casting from invalid input values throws.<
 </div>
 </section>
 <section id="id11">
-<h3>From decimal<a class="headerlink" href="#id11" title="Permalink to this heading">¶</a></h3>
+<h3>From decimal<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <p>Casting one decimal to another is allowed if the input value can be represented
 by the result decimal type. When casting from a larger scale to a smaller one,
 the fraction part is rounded.</p>
@@ -732,7 +729,7 @@ the fraction part is rounded.</p>
 </div>
 </section>
 <section id="from-varchar">
-<h3>From varchar<a class="headerlink" href="#from-varchar" title="Permalink to this heading">¶</a></h3>
+<h3>From varchar<a class="headerlink" href="#from-varchar" title="Link to this heading">¶</a></h3>
 <p>Casting varchar to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. When casting from
 a larger scale to a smaller one, the fraction part is rounded. Casting from invalid input value throws.</p>
@@ -780,7 +777,11 @@ a larger scale to a smaller one, the fraction part is rounded. Casting from inva
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Conversion Functions</a><ul>
-<li><a class="reference internal" href="#id1">Conversion Functions</a></li>
+<li><a class="reference internal" href="#id1">Conversion Functions</a><ul>
+<li><a class="reference internal" href="#cast"><code class="docutils literal notranslate"><span class="pre">cast()</span></code></a></li>
+<li><a class="reference internal" href="#try_cast"><code class="docutils literal notranslate"><span class="pre">try_cast()</span></code></a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#supported-conversions">Supported Conversions</a></li>
 <li><a class="reference internal" href="#cast-to-integral-types">Cast to Integral Types</a><ul>
 <li><a class="reference internal" href="#from-integral-types">From integral types</a></li>
@@ -882,8 +883,8 @@ a larger scale to a smaller one, the fraction part is rounded. Casting from inva
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

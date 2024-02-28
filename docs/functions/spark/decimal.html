@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Decimal functions and special forms &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Comparison Functions" href="comparison.html" />
@@ -43,22 +40,22 @@
           <div class="body" role="main">
             
   <section id="decimal-functions-and-special-forms">
-<h1>Decimal functions and special forms<a class="headerlink" href="#decimal-functions-and-special-forms" title="Permalink to this heading">¶</a></h1>
+<h1>Decimal functions and special forms<a class="headerlink" href="#decimal-functions-and-special-forms" title="Link to this heading">¶</a></h1>
 <section id="decimal-functions">
-<h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="unscaled_value">
-<span class="sig-name descname"><span class="pre">unscaled_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#unscaled_value" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">unscaled_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#unscaled_value" title="Link to this definition">¶</a></dt>
 <dd><p>Return the unscaled bigint value of a short decimal <code class="docutils literal notranslate"><span class="pre">x</span></code>.
 Supported type is: SHORT_DECIMAL.</p>
 </dd></dl>
 
 </section>
 <section id="decimal-special-forms">
-<h2>Decimal Special Forms<a class="headerlink" href="#decimal-special-forms" title="Permalink to this heading">¶</a></h2>
+<h2>Decimal Special Forms<a class="headerlink" href="#decimal-special-forms" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="make_decimal">
-<span class="sig-name descname"><span class="pre">make_decimal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">nullOnOverflow</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#make_decimal" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">make_decimal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">nullOnOverflow</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#make_decimal" title="Link to this definition">¶</a></dt>
 <dd><p>Create <code class="docutils literal notranslate"><span class="pre">decimal</span></code> of requsted precision and scale from an unscaled bigint value <code class="docutils literal notranslate"><span class="pre">x</span></code>.
 By default, the value of <code class="docutils literal notranslate"><span class="pre">nullOnOverflow</span></code> is true, and null will be returned when <code class="docutils literal notranslate"><span class="pre">x</span></code> is too large for the result precision.
 Otherwise, exception will be thrown when <code class="docutils literal notranslate"><span class="pre">x</span></code> overflows.</p>
@@ -66,7 +63,7 @@ Otherwise, exception will be thrown when <code class="docutils literal notransla
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="decimal_round">
-<span class="sig-name descname"><span class="pre">decimal_round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">decimal</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="p"><span class="pre">[</span></span><span class="pre">decimal</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#decimal_round" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">decimal_round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">decimal</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="p"><span class="pre">[</span></span><span class="pre">decimal</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#decimal_round" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">decimal</span></code> rounded to a new scale using HALF_UP rounding mode. In HALF_UP rounding, the digit 5 is rounded up.
 <code class="docutils literal notranslate"><span class="pre">scale</span></code> is the new scale to be rounded to. It is 0 by default, and integer in [INT_MIN, INT_MAX] is allowed to be its value.
 When the absolute value of scale exceeds the maximum precision of long decimal (38), the round logic is equivalent to the case where it is 38 as we cannot exceed the maximum precision.
@@ -114,8 +111,15 @@ The result precision is decided with the number of integral digits and the resul
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Decimal functions and special forms</a><ul>
-<li><a class="reference internal" href="#decimal-functions">Decimal Functions</a></li>
-<li><a class="reference internal" href="#decimal-special-forms">Decimal Special Forms</a></li>
+<li><a class="reference internal" href="#decimal-functions">Decimal Functions</a><ul>
+<li><a class="reference internal" href="#unscaled_value"><code class="docutils literal notranslate"><span class="pre">unscaled_value()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#decimal-special-forms">Decimal Special Forms</a><ul>
+<li><a class="reference internal" href="#make_decimal"><code class="docutils literal notranslate"><span class="pre">make_decimal()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_round"><code class="docutils literal notranslate"><span class="pre">decimal_round()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -170,8 +174,8 @@ The result precision is decided with the number of integral digits and the resul
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

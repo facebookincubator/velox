@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>How to add a lambda function? &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Expression Evaluation" href="expression-evaluation.html" />
@@ -43,10 +40,10 @@
           <div class="body" role="main">
             
   <section id="how-to-add-a-lambda-function">
-<h1>How to add a lambda function?<a class="headerlink" href="#how-to-add-a-lambda-function" title="Permalink to this heading">¶</a></h1>
+<h1>How to add a lambda function?<a class="headerlink" href="#how-to-add-a-lambda-function" title="Link to this heading">¶</a></h1>
 <p>This article assumes familiarity with <a class="reference external" href="https://prestodb.io/blog/2020/03/02/presto-lambda">Presto’s lambda functions</a>.</p>
 <section id="introduction">
-<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h2>
+<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h2>
 <p>Velox supports lambda functions which are used to implement computations over
 arrays and maps. Lambda functions are higher order functions that take
 arguments which are functions themselves. For example, the <a class="reference internal" href="../functions/presto/array.html#filter" title="filter"><code class="xref py py-func docutils literal notranslate"><span class="pre">filter()</span></code></a>
@@ -55,11 +52,11 @@ array or map elements which pass the predicate. The <a class="reference internal
 takes an array and a function, applies that function to each element of the
 array and returns an array of results.</p>
 <p>Here is an example of using filter and transform functions in Presto SQL:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">filter</span><span class="p">(</span><span class="nb">array</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w"></span>
-<span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">filter</span><span class="p">(</span><span class="nb">array</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">transform</span><span class="p">(</span><span class="nb">array</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"></span>
-<span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">transform</span><span class="p">(</span><span class="nb">array</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span>
+<span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]</span>
 </pre></div>
 </div>
 <p>“x -&gt; x % 2 = 0” is a lambda expression. It consists of a signature and a body
@@ -86,10 +83,10 @@ column “b”:</p>
 </table>
 <p>We can filter the array “a” to keep only elements that are greater than or equal
 to “b”:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">filter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">filter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">b</span><span class="p">)</span>
 
-<span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w"></span>
-<span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">]</span><span class="w"></span>
+<span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span>
+<span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">]</span>
 </pre></div>
 </div>
 <p>Here, “b” in the lambda expression is the capture. Lambda expressions can use
@@ -97,16 +94,16 @@ zero or more captures.</p>
 <p>Further, it is possible to apply different lambda expressions to different rows
 in the dataset. For example, we can filter the array “a” to keep even elements
 if “b” is even and odd elements if “b” is odd.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">filter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">if</span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">filter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">if</span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span>
 
-<span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span><span class="w"></span>
-<span class="p">[</span><span class="mi">6</span><span class="p">]</span><span class="w"></span>
+<span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span>
+<span class="p">[</span><span class="mi">6</span><span class="p">]</span>
 </pre></div>
 </div>
 <p>Note: At the time of writing Presto didn’t support this syntax.</p>
 </section>
 <section id="function-vector">
-<h2>Function Vector<a class="headerlink" href="#function-vector" title="Permalink to this heading">¶</a></h2>
+<h2>Function Vector<a class="headerlink" href="#function-vector" title="Link to this heading">¶</a></h2>
 <p>In Velox, lambda functions must be implemented as vector functions. These
 receive their lambda inputs as vectors of type FUNCTION. For example,
 the “filter” function receives two vectors: a vector of type ARRAY and another
@@ -121,16 +118,16 @@ is possible for different rows to be associated with different lambdas as we
 have seen above. FunctionVector stores a list of different lambdas along with a
 set of rows each lambda applies to. Each lambda is represented as an object of
 type Callable which allows for evaluating the lambda on a set of rows.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">Callable</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">hasCapture</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">Callable</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">hasCapture</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">apply</span><span class="p">(</span><span class="w"></span>
-<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">wrapCapture</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">EvalCtx</span><span class="o">&amp;</span><span class="w"> </span><span class="n">context</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">);</span><span class="w"></span>
-<span class="p">};</span><span class="w"></span>
+<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">apply</span><span class="p">(</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
+<span class="w">      </span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">wrapCapture</span><span class="p">,</span>
+<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">EvalCtx</span><span class="o">&amp;</span><span class="w"> </span><span class="n">context</span><span class="p">,</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
+<span class="w">      </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">);</span>
+<span class="p">};</span>
 </pre></div>
 </div>
 <p>The “apply” method of Callable is similar to the “apply” method of
@@ -164,11 +161,11 @@ the “args” parameter of the “apply()” method.</p>
 for individual rows. Instead, it provides an iterator which returns unique
 instances of the Callable object along with a set of rows they apply to.</p>
 <p>For example, “filter” function can iterate over distinct Callables like so:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">it</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">-&gt;</span><span class="n">asUnchecked</span><span class="o">&lt;</span><span class="n">FunctionVector</span><span class="o">&gt;</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">iterator</span><span class="p">(</span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
-<span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">entry</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">it</span><span class="p">.</span><span class="n">next</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">    </span><span class="p">...</span><span class="w"> </span><span class="n">entry</span><span class="p">.</span><span class="n">callable</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">pointer</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">Callable</span><span class="w"> </span><span class="p">...</span><span class="w"></span>
-<span class="w">    </span><span class="p">...</span><span class="w"> </span><span class="n">entry</span><span class="p">.</span><span class="n">rows</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">set</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">rows</span><span class="w"> </span><span class="k">this</span><span class="w"> </span><span class="n">Callable</span><span class="w"> </span><span class="n">applies</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="p">...</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">it</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">-&gt;</span><span class="n">asUnchecked</span><span class="o">&lt;</span><span class="n">FunctionVector</span><span class="o">&gt;</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">iterator</span><span class="p">(</span><span class="n">rows</span><span class="p">);</span>
+<span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">entry</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">it</span><span class="p">.</span><span class="n">next</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">...</span><span class="w"> </span><span class="n">entry</span><span class="p">.</span><span class="n">callable</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">pointer</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">Callable</span><span class="w"> </span><span class="p">...</span>
+<span class="w">    </span><span class="p">...</span><span class="w"> </span><span class="n">entry</span><span class="p">.</span><span class="n">rows</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">set</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">rows</span><span class="w"> </span><span class="k">this</span><span class="w"> </span><span class="n">Callable</span><span class="w"> </span><span class="n">applies</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="p">...</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>In most cases there will be only one instance of Callable, but function
@@ -179,7 +176,7 @@ usually are the rows the lambda function is evaluated on, e.g. the “rows”
 parameter to VectorFunction::apply() method.</p>
 </section>
 <section id="end-to-end-flow">
-<h2>End-to-End Flow<a class="headerlink" href="#end-to-end-flow" title="Permalink to this heading">¶</a></h2>
+<h2>End-to-End Flow<a class="headerlink" href="#end-to-end-flow" title="Link to this heading">¶</a></h2>
 <p>A lambda function call in an expression tree is represented by a CallTypedExpr
 node with a LambdaTypedExpr child. The “filter(a, x -&gt; x % 2 = 0)” would be
 represented like this:</p>
@@ -196,34 +193,34 @@ LambdaExpr::evalSpecialForm() creates instances of Callable and stores them in
 a FunctionVector.</p>
 </section>
 <section id="lambda-function-signature">
-<h2>Lambda Function Signature<a class="headerlink" href="#lambda-function-signature" title="Permalink to this heading">¶</a></h2>
+<h2>Lambda Function Signature<a class="headerlink" href="#lambda-function-signature" title="Link to this heading">¶</a></h2>
 <p>To specify a signature of a lambda function use “function(argType1, argType2,..,
 returnType)” syntax for the type of the lambda argument. Here is an example of
 the signature of the “filter” function:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// array(T), function(T, boolean) -&gt; array(T)</span>
-<span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
-<span class="w">            </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;T&quot;</span><span class="p">)</span><span class="w"></span>
-<span class="w">            </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;array(T)&quot;</span><span class="p">)</span><span class="w"></span>
-<span class="w">            </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;array(T)&quot;</span><span class="p">)</span><span class="w"></span>
-<span class="w">            </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;function(T,boolean)&quot;</span><span class="p">)</span><span class="w"></span>
-<span class="w">            </span><span class="p">.</span><span class="n">build</span><span class="p">()};</span><span class="w"></span>
+<span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;T&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;array(T)&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;array(T)&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;function(T,boolean)&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">build</span><span class="p">()};</span>
 </pre></div>
 </div>
 </section>
 <section id="testing">
-<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this heading">¶</a></h2>
+<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h2>
 <p>Testing framework doesn’t support Presto SQL lambda expressions, e.g. one cannot
 evaluate “filter(a, x - &gt;x &gt;= b)” expression directly. Instead, use the
 registerLambda helper method of the FunctionBaseTest class to register lambda
 expression and give it a name, then use that name to specify the lambda
 parameter. Here is an example that evaluates “filter(a, x -&gt;x &gt;= b)” expression
 in a test:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">rowType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ROW</span><span class="p">({</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;b&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">ARRAY</span><span class="p">(</span><span class="n">BIGINT</span><span class="p">()),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">()});</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">rowType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ROW</span><span class="p">({</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;b&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">ARRAY</span><span class="p">(</span><span class="n">BIGINT</span><span class="p">()),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">()});</span>
 
-<span class="n">registerLambda</span><span class="p">(</span><span class="s">&quot;lambda&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">ROW</span><span class="p">({</span><span class="s">&quot;x&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">BIGINT</span><span class="p">()}),</span><span class="w"> </span><span class="n">rowType</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;x &gt;= b&quot;</span><span class="p">));</span><span class="w"></span>
+<span class="n">registerLambda</span><span class="p">(</span><span class="s">&quot;lambda&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">ROW</span><span class="p">({</span><span class="s">&quot;x&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">BIGINT</span><span class="p">()}),</span><span class="w"> </span><span class="n">rowType</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;x &gt;= b&quot;</span><span class="p">));</span>
 
-<span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
-<span class="w">    </span><span class="n">evaluate</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="p">(</span><span class="s">&quot;filter(a, function(&#39;lambda&#39;))&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">evaluate</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="p">(</span><span class="s">&quot;filter(a, function(&#39;lambda&#39;))&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>The first argument to registerLambda is the name for the lambda. This name can
@@ -308,8 +305,8 @@ is used to resolve the types of captures.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Aggregate Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Window functions" href="window.html" />
@@ -43,13 +40,13 @@
           <div class="body" role="main">
             
   <section id="aggregate-functions">
-<h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">¶</a></h1>
 <p>Aggregate functions operate on a set of values to compute a single result.</p>
 <section id="general-aggregate-functions">
-<h2>General Aggregate Functions<a class="headerlink" href="#general-aggregate-functions" title="Permalink to this heading">¶</a></h2>
+<h2>General Aggregate Functions<a class="headerlink" href="#general-aggregate-functions" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="avg">
-<span class="sig-name descname"><span class="pre">avg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">decimal</span></span></span><a class="headerlink" href="#avg" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">avg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">decimal</span></span></span><a class="headerlink" href="#avg" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the average (arithmetic mean) of all non-null input values.
 When x is of type DECIMAL, the result type is DECIMAL,
 and the intermediate results are varbinarys or (sum, count) pairs represented as row(decimal, bigint).
@@ -61,13 +58,13 @@ and the final result is null.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="bit_xor">
-<span class="sig-name descname"><span class="pre">bit_xor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#bit_xor" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">bit_xor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#bit_xor" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the bitwise XOR of all non-null input values, or null if none.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="bloom_filter_agg">
-<span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">estimatedNumItems</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">numBits</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#bloom_filter_agg" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">estimatedNumItems</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">numBits</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#bloom_filter_agg" title="Link to this definition">¶</a></dt>
 <dd><p>Creates bloom filter from input hashes and returns it serialized into VARBINARY.
 The caller is expected to apply xxhash64 function to input data before calling bloom_filter_agg.</p>
 <dl class="simple">
@@ -85,7 +82,7 @@ In Velox, the value of <code class="docutils literal notranslate"><span class="p
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="id0">
-<span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">estimatedNumItems</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">estimatedNumItems</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
 <dd><p>A version of <code class="docutils literal notranslate"><span class="pre">bloom_filter_agg</span></code> that uses <code class="docutils literal notranslate"><span class="pre">numBits</span></code> computed as <code class="docutils literal notranslate"><span class="pre">estimatedNumItems</span></code> * 8.</p>
 <p><code class="docutils literal notranslate"><span class="pre">hash</span></code> cannot be null.
 <code class="docutils literal notranslate"><span class="pre">estimatedNumItems</span></code> provides an estimate of the number of values of <code class="docutils literal notranslate"><span class="pre">x</span></code> under the fact of <code class="docutils literal notranslate"><span class="pre">hash</span></code> is xxhash64(x).
@@ -95,38 +92,38 @@ But Spark allows for changing the defaults while Velox does not.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="id1">
-<span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
 <dd><p>A version of <code class="docutils literal notranslate"><span class="pre">bloom_filter_agg</span></code> that use the value of spark.bloom_filter.max_num_bits configuration property as <code class="docutils literal notranslate"><span class="pre">numBits</span></code>.</p>
 <p><code class="docutils literal notranslate"><span class="pre">hash</span></code> cannot be null.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="first">
-<span class="sig-name descname"><span class="pre">first</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#first" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">first</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#first" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the first value of <cite>x</cite>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="first_ignore_null">
-<span class="sig-name descname"><span class="pre">first_ignore_null</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#first_ignore_null" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">first_ignore_null</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#first_ignore_null" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the first non-null value of <cite>x</cite>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="last">
-<span class="sig-name descname"><span class="pre">last</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#last" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">last</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#last" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the last value of <cite>x</cite>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="last_ignore_null">
-<span class="sig-name descname"><span class="pre">last_ignore_null</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#last_ignore_null" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">last_ignore_null</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#last_ignore_null" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the last non-null value of <cite>x</cite>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="max_by">
-<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#max_by" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#max_by" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the value of <cite>x</cite> associated with the maximum value of <cite>y</cite>.
 Note: Spark provides a non-strictly comparator which is greater than or equals to.</p>
 <p>Example:</p>
@@ -144,7 +141,7 @@ Note: Spark provides a non-strictly comparator which is greater than or equals t
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="min_by">
-<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#min_by" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#min_by" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the value of <cite>x</cite> associated with the minimum value of <cite>y</cite>.
 Note: Spark provides a non-strictly comparator which is less than or equals to.</p>
 <p>Example:</p>
@@ -162,7 +159,7 @@ Note: Spark provides a non-strictly comparator which is less than or equals to.<
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="sum">
-<span class="sig-name descname"><span class="pre">sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">double</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">real</span></span></span><a class="headerlink" href="#sum" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">double</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">real</span></span></span><a class="headerlink" href="#sum" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the sum of <cite>x</cite>.</p>
 <p>Supported types are TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.</p>
 <p>When x is of type DOUBLE, the result type is DOUBLE.
@@ -195,7 +192,21 @@ For all other input types, the result type is BIGINT.</p>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Aggregate Functions</a><ul>
-<li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a></li>
+<li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#avg"><code class="docutils literal notranslate"><span class="pre">avg()</span></code></a></li>
+<li><a class="reference internal" href="#bit_xor"><code class="docutils literal notranslate"><span class="pre">bit_xor()</span></code></a></li>
+<li><a class="reference internal" href="#bloom_filter_agg"><code class="docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a></li>
+<li><a class="reference internal" href="#first"><code class="docutils literal notranslate"><span class="pre">first()</span></code></a></li>
+<li><a class="reference internal" href="#first_ignore_null"><code class="docutils literal notranslate"><span class="pre">first_ignore_null()</span></code></a></li>
+<li><a class="reference internal" href="#last"><code class="docutils literal notranslate"><span class="pre">last()</span></code></a></li>
+<li><a class="reference internal" href="#last_ignore_null"><code class="docutils literal notranslate"><span class="pre">last_ignore_null()</span></code></a></li>
+<li><a class="reference internal" href="#max_by"><code class="docutils literal notranslate"><span class="pre">max_by()</span></code></a></li>
+<li><a class="reference internal" href="#min_by"><code class="docutils literal notranslate"><span class="pre">min_by()</span></code></a></li>
+<li><a class="reference internal" href="#sum"><code class="docutils literal notranslate"><span class="pre">sum()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -250,8 +261,8 @@ For all other input types, the result type is BIGINT.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

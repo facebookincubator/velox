@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Chapter 1: Buffers and Flat Vectors &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Chapter 2: Flat Vectors of Strings" href="chapter02.html" />
@@ -43,7 +40,7 @@
           <div class="body" role="main">
             
   <section id="chapter-1-buffers-and-flat-vectors">
-<h1>Chapter 1: Buffers and Flat Vectors<a class="headerlink" href="#chapter-1-buffers-and-flat-vectors" title="Permalink to this heading">¶</a></h1>
+<h1>Chapter 1: Buffers and Flat Vectors<a class="headerlink" href="#chapter-1-buffers-and-flat-vectors" title="Link to this heading">¶</a></h1>
 <p>Velox stores and processes data one column at a time. A column of 64-bit
 integers is stored in memory using 2 contiguous buffers: a buffer of values and
 a buffer of null flags. To store 100 rows, we need to allocate values
@@ -51,17 +48,17 @@ buffer that fits 100 64-bit integers: 100 * 8 = 800 bytes, and nulls buffer
 that fits 100 bits: 100 / 8 = 13 bytes. Velox allocates memory using
 MemoryPool.</p>
 <p>Let’s start by getting access to a MemoryPool:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/common/memory/Memory.h&quot;</span><span class="cp"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/common/memory/Memory.h&quot;</span>
 
-<span class="k">auto</span><span class="w"> </span><span class="n">pool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memory</span><span class="o">::</span><span class="n">memoryManager</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">addLeafPool</span><span class="p">();</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">pool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memory</span><span class="o">::</span><span class="n">memoryManager</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">addLeafPool</span><span class="p">();</span>
 </pre></div>
 </div>
 <p><cite>pool</cite> is a std::shared_ptr&lt;velox::memory::MemoryPool&gt;. We can use it to
 allocate buffers.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/buffer/Buffer.h&quot;</span><span class="cp"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/buffer/Buffer.h&quot;</span>
 
-<span class="k">auto</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">());</span><span class="w"></span>
-<span class="k">auto</span><span class="w"> </span><span class="n">nulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">());</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">());</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">nulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">());</span>
 </pre></div>
 </div>
 <p>AlignedBuffer::allocate is a template with a single template parameter T, which
@@ -70,37 +67,37 @@ to determine how many bytes each value needs. AlignedBuffer::allocate takes
 number of values (numElements) and a memory pool and allocates at least
 numElement * sizeof(T) bytes, but usually more. We can find out how much memory
 was allocated using capacity() method on the returned BufferPtr.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
-<span class="k">static</span><span class="w"> </span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">allocate</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="kt">size_t</span><span class="w"> </span><span class="n">numElements</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">velox</span><span class="o">::</span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="n">pool</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">initValue</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span>
+<span class="k">static</span><span class="w"> </span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">allocate</span><span class="p">(</span>
+<span class="w">   </span><span class="kt">size_t</span><span class="w"> </span><span class="n">numElements</span><span class="p">,</span>
+<span class="w">   </span><span class="n">velox</span><span class="o">::</span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="n">pool</span><span class="p">,</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">initValue</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 </pre></div>
 </div>
 <p>The <cite>values</cite> and <cite>nulls</cite> variables above are instances of BufferPtr, which is a
 boost::intrusive_ptr&lt;Buffer&gt;. Similar to <a class="reference external" href="https://en.cppreference.com/w/cpp/container/vector">std::vector</a>,
 a Buffer has a size and capacity. Let’s check these for the <cite>values</cite> and <cite>nulls</cite>
 buffers.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;, &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">capacity</span><span class="p">();</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;, &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">capacity</span><span class="p">();</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">800</span><span class="p">,</span><span class="w"> </span><span class="mi">928</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">800</span><span class="p">,</span><span class="w"> </span><span class="mi">928</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">nulls</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;, &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">nulls</span><span class="o">-&gt;</span><span class="n">capacity</span><span class="p">();</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">nulls</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;, &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">nulls</span><span class="o">-&gt;</span><span class="n">capacity</span><span class="p">();</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">13</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">13</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span>
 </pre></div>
 </div>
 <p>As expected, the size of the values buffer is 800 bytes and size of the nulls
 buffer is 13 bytes. The capacity of the buffers is slightly more. We can change
 the size of the buffer to any value that doesn’t exceed the buffer’s capacity
 using Buffer::setSize() method.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">values</span><span class="o">-&gt;</span><span class="n">setSize</span><span class="p">(</span><span class="mi">900</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">values</span><span class="o">-&gt;</span><span class="n">setSize</span><span class="p">(</span><span class="mi">900</span><span class="p">);</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">900</span><span class="p">,</span><span class="w"> </span><span class="mi">928</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">900</span><span class="p">,</span><span class="w"> </span><span class="mi">928</span>
 
-<span class="n">nulls</span><span class="o">-&gt;</span><span class="n">setSize</span><span class="p">(</span><span class="mi">20</span><span class="p">);</span><span class="w"></span>
+<span class="n">nulls</span><span class="o">-&gt;</span><span class="n">setSize</span><span class="p">(</span><span class="mi">20</span><span class="p">);</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span>
 </pre></div>
 </div>
 <p>Notice that setSize method takes number of bytes, not number of values of type
@@ -108,27 +105,27 @@ T. Also, Buffer itself is not a template and therefore is not aware of the type
 of values that are being stored in it.</p>
 <p>Setting the size to a value that exceeds the Buffer’s capacity results in an
 error.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">values</span><span class="o">-&gt;</span><span class="n">setSize</span><span class="p">(</span><span class="mi">1&#39;000</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">values</span><span class="o">-&gt;</span><span class="n">setSize</span><span class="p">(</span><span class="mi">1&#39;000</span><span class="p">);</span>
 
-<span class="n">VeloxRuntimeError</span><span class="w"></span>
-<span class="n">Error</span><span class="w"> </span><span class="n">Source</span><span class="o">:</span><span class="w"> </span><span class="n">RUNTIME</span><span class="w"></span>
-<span class="n">Error</span><span class="w"> </span><span class="n">Code</span><span class="o">:</span><span class="w"> </span><span class="n">INVALID_STATE</span><span class="w"></span>
-<span class="nl">Reason</span><span class="p">:</span><span class="w"> </span><span class="p">(</span><span class="mi">1000</span><span class="w"> </span><span class="n">vs</span><span class="p">.</span><span class="w"> </span><span class="mi">928</span><span class="p">)</span><span class="w"></span>
-<span class="nl">Retriable</span><span class="p">:</span><span class="w"> </span><span class="n">False</span><span class="w"></span>
-<span class="nl">Expression</span><span class="p">:</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">capacity_</span><span class="w"></span>
-<span class="nl">Function</span><span class="p">:</span><span class="w"> </span><span class="n">setSize</span><span class="w"></span>
-<span class="nl">File</span><span class="p">:</span><span class="w"> </span><span class="o">/</span><span class="n">Users</span><span class="o">/</span><span class="n">mbasmanova</span><span class="o">/</span><span class="n">cpp</span><span class="o">/</span><span class="n">velox</span><span class="mi">-1</span><span class="o">/</span><span class="p">.</span><span class="o">/</span><span class="n">velox</span><span class="o">/</span><span class="n">buffer</span><span class="o">/</span><span class="n">Buffer</span><span class="p">.</span><span class="n">h</span><span class="w"></span>
-<span class="nl">Line</span><span class="p">:</span><span class="w"> </span><span class="mi">119</span><span class="w"></span>
+<span class="n">VeloxRuntimeError</span>
+<span class="n">Error</span><span class="w"> </span><span class="n">Source</span><span class="o">:</span><span class="w"> </span><span class="n">RUNTIME</span>
+<span class="n">Error</span><span class="w"> </span><span class="n">Code</span><span class="o">:</span><span class="w"> </span><span class="n">INVALID_STATE</span>
+<span class="nl">Reason</span><span class="p">:</span><span class="w"> </span><span class="p">(</span><span class="mi">1000</span><span class="w"> </span><span class="n">vs</span><span class="p">.</span><span class="w"> </span><span class="mi">928</span><span class="p">)</span>
+<span class="nl">Retriable</span><span class="p">:</span><span class="w"> </span><span class="n">False</span>
+<span class="nl">Expression</span><span class="p">:</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">capacity_</span>
+<span class="nl">Function</span><span class="p">:</span><span class="w"> </span><span class="n">setSize</span>
+<span class="nl">File</span><span class="p">:</span><span class="w"> </span><span class="o">/</span><span class="n">Users</span><span class="o">/</span><span class="n">mbasmanova</span><span class="o">/</span><span class="n">cpp</span><span class="o">/</span><span class="n">velox</span><span class="mi">-1</span><span class="o">/</span><span class="p">.</span><span class="o">/</span><span class="n">velox</span><span class="o">/</span><span class="n">buffer</span><span class="o">/</span><span class="n">Buffer</span><span class="p">.</span><span class="n">h</span>
+<span class="nl">Line</span><span class="p">:</span><span class="w"> </span><span class="mi">119</span>
 </pre></div>
 </div>
 <p>To read values from a buffer, call Buffer::as&lt;T&gt; template method that returns a
 const T*. It is effectively a <a class="reference external" href="https://en.cppreference.com/w/cpp/language/reinterpret_cast">reinterpret_cast</a>
 of the underlying memory buffer.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="mi">5</span><span class="p">];</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="mi">5</span><span class="p">];</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">-6799976246779207263</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">-6799976246779207263</span>
 </pre></div>
 </div>
 <p>We allocated memory for the <cite>values</cite> buffer, but didn’t write any values yet,
@@ -136,13 +133,13 @@ hence, we are getting some “garbage” values when reading from the buffer.
 That’s expected.</p>
 <p>We could pass an initial value to AlignedBuffer::allocate though. Let’s allocate
 the <cite>values</cite> buffer and initialize all values to “25”.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="mi">25</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="mi">25</span><span class="p">);</span>
 
-<span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="mi">5</span><span class="p">];</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="mi">5</span><span class="p">];</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">25</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">25</span>
 </pre></div>
 </div>
 <p>To write values into the allocated buffer, call Buffer::asMutable&lt;T&gt; template
@@ -150,27 +147,27 @@ method that returns a T*. Just like the Buffer::a&lt;T&gt; template, it is
 effectively a reinterpret_cast of the underlying memory buffer.</p>
 <p>Let’s populate the buffer with 100 sequential numbers starting from 0: 0, 1,
 2,…99.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span>
 
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i</span><span class="p">;</span>
+<span class="p">}</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="mi">5</span><span class="p">];</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="mi">5</span><span class="p">];</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span>
 </pre></div>
 </div>
 <p>We could also use std::iota to populate the buffer with sequential values:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">iota</span><span class="p">(</span><span class="n">rawValues</span><span class="p">,</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">iota</span><span class="p">(</span><span class="n">rawValues</span><span class="p">,</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
 
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w"> </span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+<span class="p">}</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="o">:</span><span class="w"> </span><span class="mi">0</span><span class="w"></span>
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span><span class="o">:</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">2</span><span class="o">:</span><span class="w"> </span><span class="mi">2</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="o">:</span><span class="w"> </span><span class="mi">0</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span><span class="o">:</span><span class="w"> </span><span class="mi">1</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">2</span><span class="o">:</span><span class="w"> </span><span class="mi">2</span>
 </pre></div>
 </div>
 <p>BufferPtr is a smart pointer, so we don’t need to worry about freeing up memory.
@@ -184,13 +181,13 @@ AlignedBuffer&lt;bool&gt;::allocate template is overwritten to allocate only one
 per entry, not 1 byte (=sizeof(bool)). To read and write null bits we use
 Buffer::as&lt;uint64_t&gt;() and Buffer::asMutable&lt;uint64_t&gt;() method. Notice that we
 use uint64_t as template parameter, not bool.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/common/base/Nulls.h&quot;</span><span class="cp"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/common/base/Nulls.h&quot;</span>
 
-<span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawNulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">nulls</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawNulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">nulls</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">boolalpha</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">);</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">boolalpha</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">);</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="nb">false</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="nb">false</span>
 </pre></div>
 </div>
 <p>We use bits::isBitNull function to read the N-th bit of the nulls buffer and
@@ -200,55 +197,55 @@ initial value when allocating the buffer, hence, we are getting some “garbage�
 values as expected.</p>
 <p>We can pass an initial value to AllignedBuffer::allocate&lt;bool&gt;(): bits::kNull or
 bits::kNotNull.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">nulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">kNull</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">nulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">kNull</span><span class="p">);</span>
 
-<span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawNulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">nulls</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawNulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">nulls</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">boolalpha</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">);</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">boolalpha</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">);</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="nb">true</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="nb">true</span>
 </pre></div>
 </div>
 <p>We can also use helper function allocateNulls:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Allocate nulls buffer to fit 100 null flags and initialize these to bits::kNotNull.</span>
-<span class="k">auto</span><span class="w"> </span><span class="n">nulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocateNulls</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">());</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">nulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocateNulls</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">());</span>
 
 <span class="c1">// Allocate nulls buffer to fit 100 null flags and initialize these to bits::kNull.</span>
-<span class="k">auto</span><span class="w"> </span><span class="n">nulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocateNulls</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">kNull</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">nulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocateNulls</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">kNull</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>Finally, we can fill in the nulls buffer “manually”. Let’s set every other row to null.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawNulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">nulls</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">rawNulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">nulls</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span>
 
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
 
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w"> </span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">boolalpha</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">);</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">boolalpha</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">);</span>
+<span class="p">}</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="o">:</span><span class="w"> </span><span class="nb">true</span><span class="w"></span>
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span><span class="o">:</span><span class="w"> </span><span class="nb">false</span><span class="w"></span>
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">2</span><span class="o">:</span><span class="w"> </span><span class="nb">true</span><span class="w"></span>
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">3</span><span class="o">:</span><span class="w"> </span><span class="nb">false</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="o">:</span><span class="w"> </span><span class="nb">true</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span><span class="o">:</span><span class="w"> </span><span class="nb">false</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">2</span><span class="o">:</span><span class="w"> </span><span class="nb">true</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">3</span><span class="o">:</span><span class="w"> </span><span class="nb">false</span>
 </pre></div>
 </div>
 <p>We can also use printNulls helper function to print the null flags:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">printNulls</span><span class="p">(</span><span class="n">nulls</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">printNulls</span><span class="p">(</span><span class="n">nulls</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">);</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">99</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="mi">104</span><span class="w"> </span><span class="n">rows</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">null</span><span class="o">:</span><span class="w"> </span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">99</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="mi">104</span><span class="w"> </span><span class="n">rows</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">null</span><span class="o">:</span><span class="w"> </span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">printNulls</span><span class="p">(</span><span class="n">nulls</span><span class="p">);</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">printNulls</span><span class="p">(</span><span class="n">nulls</span><span class="p">);</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">99</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="mi">104</span><span class="w"> </span><span class="n">rows</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">null</span><span class="o">:</span><span class="w"> </span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">nnnnnnnnnnnnnnnnnnnn</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">99</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="mi">104</span><span class="w"> </span><span class="n">rows</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">null</span><span class="o">:</span><span class="w"> </span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">n</span><span class="p">.</span><span class="n">nnnnnnnnnnnnnnnnnnnn</span>
 </pre></div>
 </div>
 <p>printNulls function takes a nulls buffer and an optional maxBitsToPrint number
 which has a default value of 30.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="nf">printNulls</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">BufferPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">nulls</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">maxBitsToPrint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="nf">printNulls</span><span class="p">(</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">BufferPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">nulls</span><span class="p">,</span>
+<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">maxBitsToPrint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>This function returns a string where each character represents a single null
@@ -261,14 +258,14 @@ bytes, which is 13. The last byte has some bits unused.</p>
 flags. We are now ready to assemble a flat vector to hold data for a single
 column. Let’s make a vector to store 100 sequential BIGINT values with every
 other value being null: [0, null, 2, null, 4, null, 6,..].</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/vector/FlatVector.h&quot;</span><span class="cp"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/vector/FlatVector.h&quot;</span>
 
-<span class="k">auto</span><span class="w"> </span><span class="n">vector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">(),</span><span class="w"> </span><span class="n">nulls</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="p">{});</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">vector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span>
+<span class="w">   </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">(),</span><span class="w"> </span><span class="n">nulls</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="p">{});</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">();</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">();</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="p">[</span><span class="n">FLAT</span><span class="w"> </span><span class="n">BIGINT</span><span class="o">:</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">elements</span><span class="p">,</span><span class="w"> </span><span class="mi">50</span><span class="w"> </span><span class="n">nulls</span><span class="p">]</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="p">[</span><span class="n">FLAT</span><span class="w"> </span><span class="n">BIGINT</span><span class="o">:</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">elements</span><span class="p">,</span><span class="w"> </span><span class="mi">50</span><span class="w"> </span><span class="n">nulls</span><span class="p">]</span>
 </pre></div>
 </div>
 <p>To make a vector, we use FlatVector&lt;T&gt; class template with T being int64_t
@@ -325,65 +322,65 @@ types are supported in Velox:</p>
 </tbody>
 </table>
 <p>Nulls buffer can be null, which indicates that all values are not null.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">nonNullVector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">(),</span><span class="w"> </span><span class="k">nullptr</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="p">{});</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">nonNullVector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span>
+<span class="w">   </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">(),</span><span class="w"> </span><span class="k">nullptr</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="p">{});</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">nonNullVector</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">();</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">nonNullVector</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">();</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="p">[</span><span class="n">FLAT</span><span class="w"> </span><span class="n">BIGINT</span><span class="o">:</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">elements</span><span class="p">,</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="n">nulls</span><span class="p">]</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="p">[</span><span class="n">FLAT</span><span class="w"> </span><span class="n">BIGINT</span><span class="o">:</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">elements</span><span class="p">,</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="n">nulls</span><span class="p">]</span>
 </pre></div>
 </div>
 <p>Values buffer can also be null in case all values are null.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">nulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocateNulls</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">kNull</span><span class="p">);</span><span class="w"></span>
-<span class="k">auto</span><span class="w"> </span><span class="n">allNullVector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">(),</span><span class="w"> </span><span class="n">nulls</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="k">nullptr</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="p">{});</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">nulls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocateNulls</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">kNull</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">allNullVector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span>
+<span class="w">   </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">(),</span><span class="w"> </span><span class="n">nulls</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="k">nullptr</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="p">{});</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">allNullVector</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">();</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">allNullVector</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">();</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="p">[</span><span class="n">FLAT</span><span class="w"> </span><span class="n">BIGINT</span><span class="o">:</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">elements</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">nulls</span><span class="p">]</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="p">[</span><span class="n">FLAT</span><span class="w"> </span><span class="n">BIGINT</span><span class="o">:</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">elements</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">nulls</span><span class="p">]</span>
 </pre></div>
 </div>
 <p>However, it is invalid to create a vector with both nulls and values buffers being null.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">(),</span><span class="w"> </span><span class="k">nullptr</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="k">nullptr</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="p">{});</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span>
+<span class="w">   </span><span class="n">pool</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">(),</span><span class="w"> </span><span class="k">nullptr</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="k">nullptr</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="p">{});</span>
 
-<span class="n">VeloxRuntimeError</span><span class="w"></span>
-<span class="n">Error</span><span class="w"> </span><span class="n">Source</span><span class="o">:</span><span class="w"> </span><span class="n">RUNTIME</span><span class="w"></span>
-<span class="n">Error</span><span class="w"> </span><span class="n">Code</span><span class="o">:</span><span class="w"> </span><span class="n">INVALID_STATE</span><span class="w"></span>
-<span class="nl">Reason</span><span class="p">:</span><span class="w"> </span><span class="n">FlatVector</span><span class="w"> </span><span class="n">needs</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">either</span><span class="w"> </span><span class="n">have</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="n">or</span><span class="w"> </span><span class="n">nulls</span><span class="w"></span>
-<span class="nl">Retriable</span><span class="p">:</span><span class="w"> </span><span class="n">False</span><span class="w"></span>
-<span class="nl">Expression</span><span class="p">:</span><span class="w"> </span><span class="n">values_</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">BaseVector</span><span class="o">::</span><span class="n">nulls_</span><span class="w"></span>
-<span class="nl">Function</span><span class="p">:</span><span class="w"> </span><span class="n">FlatVector</span><span class="w"></span>
-<span class="nl">File</span><span class="p">:</span><span class="w"> </span><span class="o">/</span><span class="n">Users</span><span class="o">/</span><span class="n">mbasmanova</span><span class="o">/</span><span class="n">cpp</span><span class="o">/</span><span class="n">velox</span><span class="mi">-1</span><span class="o">/</span><span class="p">.</span><span class="o">/</span><span class="n">velox</span><span class="o">/</span><span class="n">vector</span><span class="o">/</span><span class="n">FlatVector</span><span class="p">.</span><span class="n">h</span><span class="w"></span>
-<span class="nl">Line</span><span class="p">:</span><span class="w"> </span><span class="mi">89</span><span class="w"></span>
+<span class="n">VeloxRuntimeError</span>
+<span class="n">Error</span><span class="w"> </span><span class="n">Source</span><span class="o">:</span><span class="w"> </span><span class="n">RUNTIME</span>
+<span class="n">Error</span><span class="w"> </span><span class="n">Code</span><span class="o">:</span><span class="w"> </span><span class="n">INVALID_STATE</span>
+<span class="nl">Reason</span><span class="p">:</span><span class="w"> </span><span class="n">FlatVector</span><span class="w"> </span><span class="n">needs</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">either</span><span class="w"> </span><span class="n">have</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="k">or</span><span class="w"> </span><span class="n">nulls</span>
+<span class="nl">Retriable</span><span class="p">:</span><span class="w"> </span><span class="n">False</span>
+<span class="nl">Expression</span><span class="p">:</span><span class="w"> </span><span class="n">values_</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">BaseVector</span><span class="o">::</span><span class="n">nulls_</span>
+<span class="nl">Function</span><span class="p">:</span><span class="w"> </span><span class="n">FlatVector</span>
+<span class="nl">File</span><span class="p">:</span><span class="w"> </span><span class="o">/</span><span class="n">Users</span><span class="o">/</span><span class="n">mbasmanova</span><span class="o">/</span><span class="n">cpp</span><span class="o">/</span><span class="n">velox</span><span class="mi">-1</span><span class="o">/</span><span class="p">.</span><span class="o">/</span><span class="n">velox</span><span class="o">/</span><span class="n">vector</span><span class="o">/</span><span class="n">FlatVector</span><span class="p">.</span><span class="n">h</span>
+<span class="nl">Line</span><span class="p">:</span><span class="w"> </span><span class="mi">89</span>
 </pre></div>
 </div>
 <p>FlatVector::size() and FlatVector::type() getters return the number and type of
 values stored in the vector.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">();</span><span class="w"></span>
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">type</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">();</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">();</span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">type</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">();</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">100</span><span class="w"></span>
-<span class="o">&gt;</span><span class="w"> </span><span class="n">BIGINT</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">100</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="n">BIGINT</span>
 </pre></div>
 </div>
 <p>FlatVector::isNullAt(index) and FlatVector::isValueAt(index) return the null
 flag and the value at specified index (row).</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">boolalpha</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">isNullAt</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">boolalpha</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">isNullAt</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="nb">false</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="nb">false</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">boolalpha</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">isNullAt</span><span class="p">(</span><span class="mi">6</span><span class="p">);</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">boolalpha</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">isNullAt</span><span class="p">(</span><span class="mi">6</span><span class="p">);</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="nb">true</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="nb">true</span>
 
-<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span><span class="w"></span>
+<span class="n">LOG</span><span class="p">(</span><span class="n">INFO</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">vector</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span>
 
-<span class="o">&gt;</span><span class="w"> </span><span class="mi">6</span><span class="w"></span>
+<span class="o">&gt;</span><span class="w"> </span><span class="mi">6</span>
 </pre></div>
 </div>
 <p>Notice that the values buffer has a value for all positions even the ones that
@@ -450,8 +447,8 @@ strings.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

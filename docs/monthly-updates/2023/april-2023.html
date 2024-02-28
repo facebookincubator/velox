@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>April 2023 Update &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="March 2023 Update" href="march-2023.html" />
@@ -44,9 +41,9 @@
           <div class="body" role="main">
             
   <section id="april-2023-update">
-<h1>April 2023 Update<a class="headerlink" href="#april-2023-update" title="Permalink to this heading">¶</a></h1>
+<h1>April 2023 Update<a class="headerlink" href="#april-2023-update" title="Link to this heading">¶</a></h1>
 <section id="documentation">
-<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
 <blockquote>
 <div><ul class="simple">
 <li><p>Add <span class="xref std std-doc">documentation on UnsafeRow serialization</span>.</p></li>
@@ -54,7 +51,7 @@
 </div></blockquote>
 </section>
 <section id="core-library">
-<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
 <blockquote>
 <div><ul class="simple">
 <li><p>Add support to adaptively disable non-productive partial aggregations. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/4588">#4588</a></p></li>
@@ -67,7 +64,7 @@
 </div></blockquote>
 </section>
 <section id="presto-functions">
-<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
 <blockquote>
 <div><ul class="simple">
 <li><p>Add <a class="reference internal" href="../../functions/presto/datetime.html#date" title="date"><code class="xref py py-func docutils literal notranslate"><span class="pre">date()</span></code></a>,   <a class="reference internal" href="../../functions/presto/math.html#random" title="random"><code class="xref py py-func docutils literal notranslate"><span class="pre">random()</span></code></a>,  <a class="reference internal" href="../../functions/presto/array.html#sequence" title="sequence"><code class="xref py py-func docutils literal notranslate"><span class="pre">sequence()</span></code></a>,  <a class="reference internal" href="../../functions/presto/binary.html#from_base64url" title="from_base64url"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_base64url()</span></code></a> functions.</p></li>
@@ -80,7 +77,7 @@
 </div></blockquote>
 </section>
 <section id="spark-functions">
-<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
 <blockquote>
 <div><ul class="simple">
 <li><p>Add <a class="reference internal" href="../../functions/spark/string.html#substring" title="substring"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">substring()</span></code></a>,   <a class="reference internal" href="../../functions/spark/binary.html#might_contain" title="might_contain"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">might_contain()</span></code></a> functions.</p></li>
@@ -91,7 +88,7 @@
 </div></blockquote>
 </section>
 <section id="hive-connector">
-<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
 <blockquote>
 <div><ul class="simple">
 <li><p>Add support for pushing down deletes into reader.</p></li>
@@ -101,7 +98,7 @@
 </div></blockquote>
 </section>
 <section id="performance-and-correctness">
-<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
 <blockquote>
 <div><ul class="simple">
 <li><p>Enable coalesce in expression fuzzer.</p></li>
@@ -112,7 +109,7 @@
 </div></blockquote>
 </section>
 <section id="build-system">
-<h2>Build System<a class="headerlink" href="#build-system" title="Permalink to this heading">¶</a></h2>
+<h2>Build System<a class="headerlink" href="#build-system" title="Link to this heading">¶</a></h2>
 <blockquote>
 <div><ul class="simple">
 <li><p>Add support to alert on changes in function signatures. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/4461">#4461</a></p></li>
@@ -122,7 +119,7 @@
 </div></blockquote>
 </section>
 <section id="python-bindings">
-<h2>Python Bindings<a class="headerlink" href="#python-bindings" title="Permalink to this heading">¶</a></h2>
+<h2>Python Bindings<a class="headerlink" href="#python-bindings" title="Link to this heading">¶</a></h2>
 <blockquote>
 <div><ul class="simple">
 <li><p>Add bindings for constant and dictionary encoded vectors.</p></li>
@@ -130,7 +127,7 @@
 </div></blockquote>
 </section>
 <section id="credits">
-<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
 <blockquote>
 <div><p>Aditi Pandit, Ann Rose Benny, Bikramjeet Vig, Chad Austin, Chen Zhang, Chengcheng Jin, Deepak Majeti, GOPU-Krishna-S, Ge Gao, Ivan Sadikov, Jacob Wujciak-Jens, Jialiang Tan, Jimmy Lu, Karteek Murthy Samba Murthy, Ke, Krishna Pai, Laith Sakka, Leo Yan, Mark Shroyer, Masha Basmanova, Open Source Bot, Orri Erling, PHILO-HE, Pedro Eugenio Rocha Pedreira, Pramod, Pranjal Shankhdhar, Pratyush Verma, Sasha Krassovsky, Sergey Pershin, Victor Zverovich, Wei He, Xiaoxuan Meng, Zac, akashsha1, ashokku202, joey.ljy, psbell-meta, usurai, xiaodou, xiaoxmeng, yangchuan, zhejiangxiaomai, zky.zhoukeyong</p>
 </div></blockquote>
@@ -212,8 +209,8 @@
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

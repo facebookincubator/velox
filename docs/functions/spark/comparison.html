@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Comparison Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="String Functions" href="string.html" />
@@ -43,10 +40,10 @@
           <div class="body" role="main">
             
   <section id="comparison-functions">
-<h1>Comparison Functions<a class="headerlink" href="#comparison-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Comparison Functions<a class="headerlink" href="#comparison-functions" title="Link to this heading">¶</a></h1>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="between">
-<span class="sig-name descname"><span class="pre">between</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#between" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">between</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#between" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is within the specified [min, max] range
 inclusive. The types of all arguments must be the same.
 Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, DOUBLE, REAL, DECIMAL.</p>
@@ -54,7 +51,7 @@ Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, DOUBLE, REAL, DECIMAL.<
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="equalnullsafe">
-<span class="sig-name descname"><span class="pre">equalnullsafe</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#equalnullsafe" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">equalnullsafe</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#equalnullsafe" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is equal to y. Supports all scalar types. The
 types of x and y must be the same. Unlike <a class="reference internal" href="#equalto" title="equalto"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">equalto()</span></code></a> returns true if both inputs
 are NULL and false if one of the inputs is NULL.
@@ -66,28 +63,28 @@ It is considered larger than any other numeric values. This rule is applied for 
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="equalto">
-<span class="sig-name descname"><span class="pre">equalto</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#equalto" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">equalto</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#equalto" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is equal to y. Supports all scalar types. The
 types of x and y must be the same. Corresponds to Spark’s operators <code class="docutils literal notranslate"><span class="pre">=</span></code> and <code class="docutils literal notranslate"><span class="pre">==</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="greaterthan">
-<span class="sig-name descname"><span class="pre">greaterthan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#greaterthan" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">greaterthan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#greaterthan" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is greater than y. Supports all scalar types. The
 types of x and y must be the same. Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&gt;</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="greaterthanorequal">
-<span class="sig-name descname"><span class="pre">greaterthanorequal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#greaterthanorequal" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">greaterthanorequal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#greaterthanorequal" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is greater than y or x is equal to y. Supports all scalar types. The
 types of x and y must be the same. Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="greatest">
-<span class="sig-name descname"><span class="pre">greatest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valueN</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#greatest" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">greatest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valueN</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#greatest" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the largest of the provided values ignoring nulls. Supports all scalar types.
 The types of all arguments must be the same.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">greatest</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="mi">10</span>
@@ -99,7 +96,7 @@ The types of all arguments must be the same.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="isnotnull">
-<span class="sig-name descname"><span class="pre">isnotnull</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#isnotnull" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">isnotnull</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#isnotnull" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is not null, or false otherwise.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">isnotnull</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 </pre></div>
@@ -108,7 +105,7 @@ The types of all arguments must be the same.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="isnull">
-<span class="sig-name descname"><span class="pre">isnull</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#isnull" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">isnull</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#isnull" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is null, or false otherwise.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">isnull</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
 </pre></div>
@@ -117,7 +114,7 @@ The types of all arguments must be the same.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="least">
-<span class="sig-name descname"><span class="pre">least</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valueN</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#least" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">least</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valueN</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#least" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the smallest of the provided values ignoring nulls. Supports all scalar types.
 The types of all arguments must be the same.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">least</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span>
@@ -129,63 +126,63 @@ The types of all arguments must be the same.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="lessthan">
-<span class="sig-name descname"><span class="pre">lessthan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#lessthan" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">lessthan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#lessthan" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is less than y. Supports all scalar types. The types
 of x and y must be the same. Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&lt;</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="lessthanorequal">
-<span class="sig-name descname"><span class="pre">lessthanorequal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#lessthanorequal" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">lessthanorequal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#lessthanorequal" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is less than y or x is equal to y. Supports all scalar types. The
 types of x and y must be the same. Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="notequalto">
-<span class="sig-name descname"><span class="pre">notequalto</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#notequalto" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">notequalto</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#notequalto" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is not equal to y. Supports all scalar types. The types
 of x and y must be the same. Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">!=</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="decimal_lessthan">
-<span class="sig-name descname"><span class="pre">decimal_lessthan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_lessthan" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">decimal_lessthan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_lessthan" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is less than y. Supports decimal types with different precisions and scales.
 Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&lt;</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="decimal_lessthanorequal">
-<span class="sig-name descname"><span class="pre">decimal_lessthanorequal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_lessthanorequal" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">decimal_lessthanorequal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_lessthanorequal" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is less than y or x is equal to y. Supports decimal types with different precisions and scales.
 Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="decimal_equalto">
-<span class="sig-name descname"><span class="pre">decimal_equalto</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_equalto" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">decimal_equalto</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_equalto" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is equal to y. Supports decimal types with different precisions and scales.
 Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">==</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="decimal_notequalto">
-<span class="sig-name descname"><span class="pre">decimal_notequalto</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_notequalto" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">decimal_notequalto</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_notequalto" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is not equal to y. Supports decimal types with different precisions and scales.
 Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">!=</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="decimal_greaterthan">
-<span class="sig-name descname"><span class="pre">decimal_greaterthan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_greaterthan" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">decimal_greaterthan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_greaterthan" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is greater than y. Supports decimal types with different precisions and scales.
 Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&gt;</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="decimal_greaterthanorequal">
-<span class="sig-name descname"><span class="pre">decimal_greaterthanorequal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_greaterthanorequal" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">decimal_greaterthanorequal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_greaterthanorequal" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is greater than y or x is equal to y. Supports decimal types with different precisions and scales.
 Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>.</p>
 </dd></dl>
@@ -199,6 +196,33 @@ Corresponds to Spark’s operator <code class="docutils literal notranslate"><sp
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Comparison Functions</a><ul>
+<li><a class="reference internal" href="#between"><code class="docutils literal notranslate"><span class="pre">between()</span></code></a></li>
+<li><a class="reference internal" href="#equalnullsafe"><code class="docutils literal notranslate"><span class="pre">equalnullsafe()</span></code></a></li>
+<li><a class="reference internal" href="#equalto"><code class="docutils literal notranslate"><span class="pre">equalto()</span></code></a></li>
+<li><a class="reference internal" href="#greaterthan"><code class="docutils literal notranslate"><span class="pre">greaterthan()</span></code></a></li>
+<li><a class="reference internal" href="#greaterthanorequal"><code class="docutils literal notranslate"><span class="pre">greaterthanorequal()</span></code></a></li>
+<li><a class="reference internal" href="#greatest"><code class="docutils literal notranslate"><span class="pre">greatest()</span></code></a></li>
+<li><a class="reference internal" href="#isnotnull"><code class="docutils literal notranslate"><span class="pre">isnotnull()</span></code></a></li>
+<li><a class="reference internal" href="#isnull"><code class="docutils literal notranslate"><span class="pre">isnull()</span></code></a></li>
+<li><a class="reference internal" href="#least"><code class="docutils literal notranslate"><span class="pre">least()</span></code></a></li>
+<li><a class="reference internal" href="#lessthan"><code class="docutils literal notranslate"><span class="pre">lessthan()</span></code></a></li>
+<li><a class="reference internal" href="#lessthanorequal"><code class="docutils literal notranslate"><span class="pre">lessthanorequal()</span></code></a></li>
+<li><a class="reference internal" href="#notequalto"><code class="docutils literal notranslate"><span class="pre">notequalto()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_lessthan"><code class="docutils literal notranslate"><span class="pre">decimal_lessthan()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_lessthanorequal"><code class="docutils literal notranslate"><span class="pre">decimal_lessthanorequal()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_equalto"><code class="docutils literal notranslate"><span class="pre">decimal_equalto()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_notequalto"><code class="docutils literal notranslate"><span class="pre">decimal_notequalto()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_greaterthan"><code class="docutils literal notranslate"><span class="pre">decimal_greaterthan()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_greaterthanorequal"><code class="docutils literal notranslate"><span class="pre">decimal_greaterthanorequal()</span></code></a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
   <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="decimal.html"
@@ -248,8 +272,8 @@ Corresponds to Spark’s operator <code class="docutils literal notranslate"><sp
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

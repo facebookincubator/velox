@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>printExprWithStats &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="VectorSaver: Encoding-Preserving Serialization" href="vector-saver.html" />
@@ -44,7 +41,7 @@
           <div class="body" role="main">
             
   <section id="printexprwithstats">
-<h1>printExprWithStats<a class="headerlink" href="#printexprwithstats" title="Permalink to this heading">¶</a></h1>
+<h1>printExprWithStats<a class="headerlink" href="#printexprwithstats" title="Link to this heading">¶</a></h1>
 <p>Velox collects a number of statistics during query execution that allow us to
 reason about the execution dynamic and troubleshoot performance issues.
 Initially these statistics were collected at the operator level and accessed
@@ -53,7 +50,7 @@ individual expressions and introduced a helper function printExprWithStats to
 print the expression tree annotated with runtime stats. This allows us to
 identify bottlenecks in the individual functions.</p>
 <section id="id1">
-<h2>printExprWithStats<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h2>
+<h2>printExprWithStats<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <p>This is a helper method that can be used to print out the expression tree
 annotated with runtime statistics for individual expressions. The stats include
 CPU time and number of processed rows.</p>
@@ -136,7 +133,7 @@ computed the results on all the necessary rows.</p>
 </div>
 </section>
 <section id="exprsetlistener">
-<h2>ExprSetListener<a class="headerlink" href="#exprsetlistener" title="Permalink to this heading">¶</a></h2>
+<h2>ExprSetListener<a class="headerlink" href="#exprsetlistener" title="Link to this heading">¶</a></h2>
 <p>One can register a listener that is invoked on destruction of the ExprSet and
 receives the aggregated runtime statistics for the whole expression tree. The
 statistics of the individual expressions as combined based on the expression
@@ -144,23 +141,23 @@ name, i.e. function name or built-in expression name such as AND, OR, IF,
 SWITCH, etc. The listener can be used to log the runtime stats for offline
 analysis.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Listener invoked on ExprSet destruction.</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">ExprSetListener</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w"> </span><span class="k">public</span><span class="o">:</span><span class="w"></span>
-<span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="o">~</span><span class="n">ExprSetListener</span><span class="p">()</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">default</span><span class="p">;</span><span class="w"></span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ExprSetListener</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="k">public</span><span class="o">:</span>
+<span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="o">~</span><span class="n">ExprSetListener</span><span class="p">()</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">default</span><span class="p">;</span>
 
 <span class="w">  </span><span class="c1">/// Called on ExprSet destruction. Provides runtime statistics about</span>
 <span class="w">  </span><span class="c1">/// expression evaluation.</span>
 <span class="w">  </span><span class="c1">/// @param uuid Universally unique identifier of the set of expressions.</span>
 <span class="w">  </span><span class="c1">/// @param event Runtime stats.</span>
-<span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">onCompletion</span><span class="p">(</span><span class="w"></span>
-<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">uuid</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">ExprSetCompletionEvent</span><span class="o">&amp;</span><span class="w"> </span><span class="n">event</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
-<span class="p">};</span><span class="w"></span>
+<span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">onCompletion</span><span class="p">(</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">uuid</span><span class="p">,</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">ExprSetCompletionEvent</span><span class="o">&amp;</span><span class="w"> </span><span class="n">event</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="p">};</span>
 
 <span class="c1">/// Register a listener to be invoked on ExprSet destruction. Returns true if</span>
 <span class="c1">/// listener was successfully registered, false if listener is already</span>
 <span class="c1">/// registered.</span>
-<span class="kt">bool</span><span class="w"> </span><span class="nf">registerExprSetListener</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">ExprSetListener</span><span class="o">&gt;</span><span class="w"> </span><span class="n">listener</span><span class="p">);</span><span class="w"></span>
+<span class="kt">bool</span><span class="w"> </span><span class="nf">registerExprSetListener</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">ExprSetListener</span><span class="o">&gt;</span><span class="w"> </span><span class="n">listener</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
@@ -234,8 +231,8 @@ analysis.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Window functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Programming Guide" href="../programming-guide.html" />
@@ -43,13 +40,13 @@
           <div class="body" role="main">
             
   <section id="window-functions">
-<h1>Window functions<a class="headerlink" href="#window-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Window functions<a class="headerlink" href="#window-functions" title="Link to this heading">¶</a></h1>
 <p>Velox supports window function evaluation using Window operator. In this guide
 we will discuss some intricate design problems in this operator.</p>
 <p>This doc assumes familiarity with Window functions described in
 <a class="reference internal" href="../functions/presto/window.html"><span class="doc">Window functions</span></a>.</p>
 <section id="window-frames">
-<h2>Window frames<a class="headerlink" href="#window-frames" title="Permalink to this heading">¶</a></h2>
+<h2>Window frames<a class="headerlink" href="#window-frames" title="Link to this heading">¶</a></h2>
 <p>Window functions can optionally include a FRAME clause. The FRAME clause
 can be thought of as a spec for a sliding window of rows which bound
 the window function computation for the given row.</p>
@@ -92,7 +89,7 @@ If no ORDER BY is specified, all rows are considered peers of the current row.</
 last rows of the partition in either mode.</p>
 </section>
 <section id="window-frame-indices">
-<h2>Window frame indices<a class="headerlink" href="#window-frame-indices" title="Permalink to this heading">¶</a></h2>
+<h2>Window frame indices<a class="headerlink" href="#window-frame-indices" title="Link to this heading">¶</a></h2>
 <p>As window functions are evaluated for each row, the Window operator provides
 each function a buffer of frame_start and frame_end indices at each
 WindowFunction::apply call.</p>
@@ -127,7 +124,7 @@ the frame indices will be as follows</p>
 </div>
 </section>
 <section id="k-range-frames">
-<h2>k Range frames<a class="headerlink" href="#k-range-frames" title="Permalink to this heading">¶</a></h2>
+<h2>k Range frames<a class="headerlink" href="#k-range-frames" title="Link to this heading">¶</a></h2>
 <p>K range window frames are a special value based window frame.</p>
 <p>An example of a k range frame is <em>RANGE BETWEEEN 5 PRECEDING AND 2 FOLLOWING</em>.
 This frame includes all rows whose order_by keys are values between
@@ -278,8 +275,8 @@ peer row with a NULL and the frame_end index is the last peer row with a NULL va
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Regular Expression Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Binary Functions" href="binary.html" />
@@ -43,14 +40,14 @@
           <div class="body" role="main">
             
   <section id="regular-expression-functions">
-<h1>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Link to this heading">¶</a></h1>
 <p>Regular expression functions use RE2 as the regex engine. RE2 is fast, but
 supports only a subset of PCRE syntax and in particular does not support
 backtracking and associated features (e.g. back references).
 See <a class="reference external" href="https://github.com/google/re2/wiki/Syntax">https://github.com/google/re2/wiki/Syntax</a> for more information.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="regexp_extract">
-<span class="sig-name descname"><span class="pre">regexp_extract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_extract" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">regexp_extract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_extract" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the first substring matched by the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code>
 in <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\d+&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
@@ -72,7 +69,7 @@ in <code class="docutils literal notranslate"><span class="pre">string</span></c
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="rlike">
-<span class="sig-name descname"><span class="pre">rlike</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#rlike" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">rlike</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#rlike" title="Link to this definition">¶</a></dt>
 <dd><p>Evaluates the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> and determines if it is
 contained within <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <p>This function is similar to the <code class="docutils literal notranslate"><span class="pre">LIKE</span></code> operator, except that the
@@ -87,7 +84,7 @@ the entire string by anchoring the pattern using <code class="docutils literal n
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="regexp_replace">
-<span class="sig-name descname"><span class="pre">regexp_replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_replace" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">regexp_replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_replace" title="Link to this definition">¶</a></dt>
 <dd><p>Replaces all substrings in <code class="docutils literal notranslate"><span class="pre">string</span></code> that match the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> with the string <code class="docutils literal notranslate"><span class="pre">overwrite</span></code>. If no match is found, the original string is returned as is.
 There is a limit to the number of unique regexes to be compiled per function call, which is 20.</p>
 <p>Parameters:</p>
@@ -137,6 +134,18 @@ Parameters:</p>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
   <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Regular Expression Functions</a><ul>
+<li><a class="reference internal" href="#regexp_extract"><code class="docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></li>
+<li><a class="reference internal" href="#rlike"><code class="docutils literal notranslate"><span class="pre">rlike()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_replace"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="map.html"
                           title="previous chapter">Map Functions</a></p>
@@ -185,8 +194,8 @@ Parameters:</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

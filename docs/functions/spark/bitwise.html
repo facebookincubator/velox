@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Bitwise Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Decimal functions and special forms" href="decimal.html" />
@@ -43,24 +40,24 @@
           <div class="body" role="main">
             
   <section id="bitwise-functions">
-<h1>Bitwise Functions<a class="headerlink" href="#bitwise-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Bitwise Functions<a class="headerlink" href="#bitwise-functions" title="Link to this heading">¶</a></h1>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="bitwise_and">
-<span class="sig-name descname"><span class="pre">bitwise_and</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#bitwise_and" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">bitwise_and</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#bitwise_and" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the bitwise AND of <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> in 2’s complement representation.
 Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&amp;</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="bitwise_or">
-<span class="sig-name descname"><span class="pre">bitwise_or</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#bitwise_or" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">bitwise_or</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#bitwise_or" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the bitwise OR of <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> in 2’s complement representation.
 Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">^</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="bit_count">
-<span class="sig-name descname"><span class="pre">bit_count</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#bit_count" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">bit_count</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#bit_count" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the number of bits that are set in the argument <code class="docutils literal notranslate"><span class="pre">x</span></code> as an unsigned 64-bit integer,
 or NULL if the argument is NULL.
 Supported types are: BOOLEAN, TINYINT, SMALLINT, INTEGER and BIGINT.</p>
@@ -68,7 +65,7 @@ Supported types are: BOOLEAN, TINYINT, SMALLINT, INTEGER and BIGINT.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="bit_get">
-<span class="sig-name descname"><span class="pre">bit_get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pos</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tinyint</span></span></span><a class="headerlink" href="#bit_get" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">bit_get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pos</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tinyint</span></span></span><a class="headerlink" href="#bit_get" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the value of the bit (0 or 1) at the specified position.
 Supported types of <code class="docutils literal notranslate"><span class="pre">x</span></code> are: TINYINT, SMALLINT, INTEGER and BIGINT.
 Supported types of <code class="docutils literal notranslate"><span class="pre">pos</span></code> are: INTEGER.
@@ -79,13 +76,13 @@ Invalid ‘pos’ values result in an error.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="shiftleft">
-<span class="sig-name descname"><span class="pre">shiftleft</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#shiftleft" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">shiftleft</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#shiftleft" title="Link to this definition">¶</a></dt>
 <dd><p>Returns x bitwise left shifted by n bits. Supported types for ‘x’ are INTEGER and BIGINT.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="shiftright">
-<span class="sig-name descname"><span class="pre">shiftright</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#shiftright" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">shiftright</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#shiftright" title="Link to this definition">¶</a></dt>
 <dd><p>Returns x bitwise right shifted by n bits. Supported types for ‘x’ are INTEGER and BIGINT.</p>
 </dd></dl>
 
@@ -98,6 +95,21 @@ Invalid ‘pos’ values result in an error.</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Bitwise Functions</a><ul>
+<li><a class="reference internal" href="#bitwise_and"><code class="docutils literal notranslate"><span class="pre">bitwise_and()</span></code></a></li>
+<li><a class="reference internal" href="#bitwise_or"><code class="docutils literal notranslate"><span class="pre">bitwise_or()</span></code></a></li>
+<li><a class="reference internal" href="#bit_count"><code class="docutils literal notranslate"><span class="pre">bit_count()</span></code></a></li>
+<li><a class="reference internal" href="#bit_get"><code class="docutils literal notranslate"><span class="pre">bit_get()</span></code></a></li>
+<li><a class="reference internal" href="#shiftleft"><code class="docutils literal notranslate"><span class="pre">shiftleft()</span></code></a></li>
+<li><a class="reference internal" href="#shiftright"><code class="docutils literal notranslate"><span class="pre">shiftright()</span></code></a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
   <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="math.html"
@@ -147,8 +159,8 @@ Invalid ‘pos’ values result in an error.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

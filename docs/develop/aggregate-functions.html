@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>How to add an aggregate function? &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="View and Writer Types" href="view-and-writer-types.html" />
@@ -43,24 +40,24 @@
           <div class="body" role="main">
             
   <section id="how-to-add-an-aggregate-function">
-<h1>How to add an aggregate function?<a class="headerlink" href="#how-to-add-an-aggregate-function" title="Permalink to this heading">¶</a></h1>
+<h1>How to add an aggregate function?<a class="headerlink" href="#how-to-add-an-aggregate-function" title="Link to this heading">¶</a></h1>
 <p>Aggregate functions are calculated by the HashAggregation operator.
 There can be one or more aggregate functions in a single operator.
 Here are some examples.</p>
 <p>Global aggregation (no grouping keys), single aggregate “count”.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span>
 </pre></div>
 </div>
 <p>Global aggregation, two aggregates: “count” and “sum”:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">),</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">),</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span>
 </pre></div>
 </div>
 <p>Aggregation with three aggregates: “count” and two “sum”s.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">),</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">),</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">),</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">),</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span>
 </pre></div>
 </div>
 <p>Aggregation with just one aggregate - “min” - and two grouping keys.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">min</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">min</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span>
 </pre></div>
 </div>
 <p>Typically, aggregations are calculated in two steps: partial aggregation
@@ -109,11 +106,11 @@ counts to produce a total.</p>
 the type of the intermediate result and the type of the final result.</p>
 <p>Aggregate functions can also be used in a window operator. Here is an example of
 computing running total that uses <a class="reference internal" href="../functions/presto/aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a> aggregate function in a window operator.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">d</span><span class="w"> </span><span class="k">DESC</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">d</span><span class="w"> </span><span class="k">DESC</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span>
 </pre></div>
 </div>
 <section id="memory-layout">
-<h2>Memory Layout<a class="headerlink" href="#memory-layout" title="Permalink to this heading">¶</a></h2>
+<h2>Memory Layout<a class="headerlink" href="#memory-layout" title="Link to this heading">¶</a></h2>
 <p>HashAggregation operator stores data in rows. Each row corresponds to a unique combination of grouping key values. Global aggregations store data in a single row.</p>
 <p>Aggregate functions can be classified by the type of their accumulators into three groups:</p>
 <ul class="simple">
@@ -197,30 +194,30 @@ create a new class that extends velox::exec::Aggregate base class
 </ul>
 </section>
 <section id="simple-function-interface">
-<h2>Simple Function Interface<a class="headerlink" href="#simple-function-interface" title="Permalink to this heading">¶</a></h2>
+<h2>Simple Function Interface<a class="headerlink" href="#simple-function-interface" title="Link to this heading">¶</a></h2>
 <p>This section describes the main concepts and the simple interface of
 aggregation functions. Examples of aggregation functions implemented through
 the simple-function interface can be found at velox/exec/tests/SimpleAverageAggregate.cpp
 and velox/exec/tests/SimpleArrayAggAggregate.cpp.</p>
 <p>A simple aggregation function is implemented as a class as the following.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// array_agg(T) -&gt; array(T) -&gt; array(T)</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">ArrayAggAggregate</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w"> </span><span class="k">public</span><span class="o">:</span><span class="w"></span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ArrayAggAggregate</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="k">public</span><span class="o">:</span>
 <span class="w">  </span><span class="c1">// Type(s) of input vector(s) wrapped in Row.</span>
-<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">InputType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Row</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="p">;</span><span class="w"></span>
-<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">IntermediateType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="p">;</span><span class="w"></span>
-<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">OutputType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">InputType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Row</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">IntermediateType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">OutputType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="p">;</span>
 
 <span class="w">  </span><span class="c1">// Optional. Default is true.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">default_null_behavior_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">default_null_behavior_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
 
 <span class="w">  </span><span class="c1">// Optional.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">in</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span>
+<span class="w">    </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span>
+<span class="w">    </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">in</span><span class="p">);</span>
 
-<span class="w">  </span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">};</span><span class="w"></span>
-<span class="p">};</span><span class="w"></span>
+<span class="w">  </span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">};</span>
+<span class="p">};</span>
 </pre></div>
 </div>
 <p>The author declares the function’s input type, intermediate type, and output
@@ -235,7 +232,7 @@ that converts the aggregation function’s raw input directly to its intermediat
 states. Finally, the author must define a struct named <cite>AccumulatorType</cite> in
 the aggregation function class. We explain each part in more details below.</p>
 <section id="default-null-behavior">
-<h3>Default-Null Behavior<a class="headerlink" href="#default-null-behavior" title="Permalink to this heading">¶</a></h3>
+<h3>Default-Null Behavior<a class="headerlink" href="#default-null-behavior" title="Link to this heading">¶</a></h3>
 <p>When adding raw inputs or intermediate states to accumulators, aggregation
 functions of default-null behavior ignore the input values that are nulls. For
 raw inputs that consist of multiple columns, an entire row is ignored if at
@@ -256,7 +253,7 @@ an example of non-default-null behavior.</p>
 in the <cite>AccumulatorType</cite> struct.</p>
 </section>
 <section id="tointermediate">
-<h3>toIntermediate<a class="headerlink" href="#tointermediate" title="Permalink to this heading">¶</a></h3>
+<h3>toIntermediate<a class="headerlink" href="#tointermediate" title="Link to this heading">¶</a></h3>
 <p>The author can optionally define a static method <cite>toIntermediate()</cite> that
 converts a raw input to an intermediate state. If defined, this function is
 used in query plans that abandon the partial aggregation step. If the aggregaiton function has
@@ -273,8 +270,8 @@ is <cite>std::optional&lt;T&gt;</cite>.</p>
 view and writer types of <cite>T</cite>. A datailed explanaion can be found in <a class="reference internal" href="view-and-writer-types.html"><span class="doc">View and Writer Types</span></a>.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 50%" />
-<col style="width: 50%" />
+<col style="width: 50.0%" />
+<col style="width: 50.0%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Default-Null Behavior</p></th>
@@ -299,34 +296,34 @@ exec::optional_arg_type&lt;Generic&lt;T1&gt;&gt; in);</p>
 </table>
 </section>
 <section id="accumulatortype-of-default-null-behavior">
-<h3>AccumulatorType of Default-Null Behavior<a class="headerlink" href="#accumulatortype-of-default-null-behavior" title="Permalink to this heading">¶</a></h3>
+<h3>AccumulatorType of Default-Null Behavior<a class="headerlink" href="#accumulatortype-of-default-null-behavior" title="Link to this heading">¶</a></h3>
 <p>For aggregaiton functions of default-null behavior, the author defines an
 <cite>AccumulatorType</cite> struct as follows.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="c1">// Author defines data members</span>
-<span class="w">  </span><span class="p">...</span><span class="w"></span>
+<span class="w">  </span><span class="p">...</span>
 
 <span class="w">  </span><span class="c1">// Optional. Default is true.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_fixed_size_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_fixed_size_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
 
 <span class="w">  </span><span class="c1">// Optional. Default is false.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">use_external_memory_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">use_external_memory_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
 
-<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
 
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">addInput</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="w"> </span><span class="n">value1</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span><span class="w"></span>
+<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">addInput</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="w"> </span><span class="n">value1</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
 
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">combine</span><span class="p">(</span><span class="w"></span>
-<span class="w">      </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;</span><span class="w"> </span><span class="n">other</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">combine</span><span class="p">(</span>
+<span class="w">      </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span>
+<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;</span><span class="w"> </span><span class="n">other</span><span class="p">);</span>
 
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeIntermediateResult</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeIntermediateResult</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span>
 
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeFinalResult</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">OutputType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeFinalResult</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">OutputType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span>
 
 <span class="w">  </span><span class="c1">// Optional. Called during destruction.</span>
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">destroy</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
-<span class="p">};</span><span class="w"></span>
+<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">destroy</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
+<span class="p">};</span>
 </pre></div>
 </div>
 <p>The author defines an optional flag <cite>is_fixed_size_</cite> indicating whether the
@@ -342,7 +339,7 @@ initialize all accumulators.</p>
 <p>Notice that <cite>writeIntermediateResult</cite> and <cite>writeFinalResult</cite> are expected to not
 modify contents in the accumulator.</p>
 <section id="addinput">
-<h4>addInput<a class="headerlink" href="#addinput" title="Permalink to this heading">¶</a></h4>
+<h4>addInput<a class="headerlink" href="#addinput" title="Link to this heading">¶</a></h4>
 <p>This method adds raw input values to <em>this</em> accumulator. It receives a
 <cite>HashStringAllocator*</cite> followed by <cite>exec::arg_type&lt;T1&gt;</cite>-typed values, one for
 each argument type <cite>Ti</cite> wrapped in InputType.</p>
@@ -351,7 +348,7 @@ ignored before <cite>addInput</cite> is called. After <cite>addInput</cite> is c
 accumulator is assumed to be non-null.</p>
 </section>
 <section id="combine">
-<h4>combine<a class="headerlink" href="#combine" title="Permalink to this heading">¶</a></h4>
+<h4>combine<a class="headerlink" href="#combine" title="Link to this heading">¶</a></h4>
 <p>This method adds an input intermediate state to <em>this</em> accumulator. It receives
 a <cite>HashStringAllocator*</cite> and one <cite>exec::arg_type&lt;IntermediateType&gt;</cite> value. With
 default-null behavior, nulls among the input intermediate states are ignored
@@ -359,7 +356,7 @@ before <cite>combine</cite> is called. After <cite>combine</cite> is called, <em
 assumed to be non-null.</p>
 </section>
 <section id="writeintermediateresult">
-<h4>writeIntermediateResult<a class="headerlink" href="#writeintermediateresult" title="Permalink to this heading">¶</a></h4>
+<h4>writeIntermediateResult<a class="headerlink" href="#writeintermediateresult" title="Link to this heading">¶</a></h4>
 <p>This method writes <em>this</em> accumulator out to an intermediate state vector. It
 has an out-parameter of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite>. This
 method returns true if it writes a non-null value to <cite>out</cite>, or returns false
@@ -369,7 +366,7 @@ nulls in the intermediate state vector without <cite>writeIntermediateResult</ci
 called.</p>
 </section>
 <section id="writefinalresult">
-<h4>writeFinalResult<a class="headerlink" href="#writefinalresult" title="Permalink to this heading">¶</a></h4>
+<h4>writeFinalResult<a class="headerlink" href="#writefinalresult" title="Link to this heading">¶</a></h4>
 <p>This method writes <em>this</em> accumulator out to a final result vector. It
 has an out-parameter of the type <cite>exec::out_type&lt;OutputType&gt;&amp;</cite>. This
 method returns true if it writes a non-null value to <cite>out</cite>, or returns false
@@ -379,34 +376,34 @@ nulls in the final result vector without <cite>writeFinalResult</cite> being cal
 </section>
 </section>
 <section id="accumulatortype-of-non-default-null-behavior">
-<h3>AccumulatorType of Non-Default-Null Behavior<a class="headerlink" href="#accumulatortype-of-non-default-null-behavior" title="Permalink to this heading">¶</a></h3>
+<h3>AccumulatorType of Non-Default-Null Behavior<a class="headerlink" href="#accumulatortype-of-non-default-null-behavior" title="Link to this heading">¶</a></h3>
 <p>For aggregaiton functions of non-default-null behavior, the author defines an
 <cite>AccumulatorType</cite> struct as follows.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="c1">// Author defines data members</span>
-<span class="w">  </span><span class="p">...</span><span class="w"></span>
+<span class="w">  </span><span class="p">...</span>
 
 <span class="w">  </span><span class="c1">// Optional. Default is true.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_fixed_size_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_fixed_size_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
 
 <span class="w">  </span><span class="c1">// Optional. Default is false.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">use_external_memory_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">use_external_memory_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
 
-<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
 
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">addInput</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="w"> </span><span class="n">value1</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span><span class="w"></span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">addInput</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="w"> </span><span class="n">value1</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
 
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">combine</span><span class="p">(</span><span class="w"></span>
-<span class="w">      </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;</span><span class="w"> </span><span class="n">other</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">combine</span><span class="p">(</span>
+<span class="w">      </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span>
+<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;</span><span class="w"> </span><span class="n">other</span><span class="p">);</span>
 
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeIntermediateResult</span><span class="p">(</span><span class="kt">bool</span><span class="w"> </span><span class="n">nonNullGroup</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeIntermediateResult</span><span class="p">(</span><span class="kt">bool</span><span class="w"> </span><span class="n">nonNullGroup</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span>
 
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeFinalResult</span><span class="p">(</span><span class="kt">bool</span><span class="w"> </span><span class="n">nonNullGroup</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">OutputType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeFinalResult</span><span class="p">(</span><span class="kt">bool</span><span class="w"> </span><span class="n">nonNullGroup</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">OutputType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span>
 
 <span class="w">  </span><span class="c1">// Optional.</span>
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">destroy</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
-<span class="p">};</span><span class="w"></span>
+<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">destroy</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
+<span class="p">};</span>
 </pre></div>
 </div>
 <p>The definition of <cite>is_fixed_size_</cite>, <cite>use_external_memory_</cite>, the constructor,
@@ -417,7 +414,7 @@ behavior.</p>
 <p>Same as the case for default-null behavior, <cite>writeIntermediateResult</cite> and
 <cite>writeFinalResult</cite> are expected to not modify contents in the accumulator.</p>
 <section id="id1">
-<h4>addInput<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h4>
+<h4>addInput<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <p>This method receives a <cite>HashStringAllocator*</cite> followed by
 <cite>exec::optional_arg_type&lt;T1&gt;</cite> values, one for each argument type <cite>Ti</cite> wrapped
 in InputType.</p>
@@ -429,21 +426,21 @@ accumulator that’s already non-null remains non-null regardless of the return
 value of <cite>addInput</cite>.</p>
 </section>
 <section id="id2">
-<h4>combine<a class="headerlink" href="#id2" title="Permalink to this heading">¶</a></h4>
+<h4>combine<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
 <p>This method receives a <cite>HashStringAllocator*</cite> and an
 <cite>exec::optional_arg_type&lt;IntermediateType&gt;</cite> value. This method is called on
 all intermediate states even if some are nulls. Same as <cite>addInput</cite>, this method
 returns a boolean meaning whether <em>this</em> accumulator is non-null after the call.</p>
 </section>
 <section id="id3">
-<h4>writeIntermediateResult<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h4>
+<h4>writeIntermediateResult<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
 <p>This method has an out-parameter of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite>
 and a boolean flag <cite>nonNullGroup</cite> indicating whether <em>this</em> accumulator is
 non-null. This method returns true if it writes a non-null value to <cite>out</cite>, or
 return false meaning a null should be written to the intermediate state vector.</p>
 </section>
 <section id="id4">
-<h4>writeFinalResult<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h4>
+<h4>writeFinalResult<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
 <p>This method writes <em>this</em> accumulator out to a final result vector. It has an
 out-parameter of the type <cite>exec::out_type&lt;OutputType&gt;&amp;</cite> and a boolean flag
 <cite>nonNullGroup</cite> indicating whether <em>this</em> accumulator is non-null. This method
@@ -452,7 +449,7 @@ null should be written to the final result vector.</p>
 </section>
 </section>
 <section id="limitations">
-<h3>Limitations<a class="headerlink" href="#limitations" title="Permalink to this heading">¶</a></h3>
+<h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h3>
 <p>The simple aggregation function interface currently has three limitations.</p>
 <ol class="arabic simple">
 <li><p>All values read or written by the aggrgeaiton function must be part of the
@@ -466,23 +463,23 @@ add this support.</p></li>
 </section>
 </section>
 <section id="vector-function-interface">
-<h2>Vector Function Interface<a class="headerlink" href="#vector-function-interface" title="Permalink to this heading">¶</a></h2>
+<h2>Vector Function Interface<a class="headerlink" href="#vector-function-interface" title="Link to this heading">¶</a></h2>
 <p>Aggregation functions that cannot use the simple-function interface can be written as vector funcitons.</p>
 <section id="accumulator-size">
-<h3>Accumulator size<a class="headerlink" href="#accumulator-size" title="Permalink to this heading">¶</a></h3>
+<h3>Accumulator size<a class="headerlink" href="#accumulator-size" title="Link to this heading">¶</a></h3>
 <p>The implementation of the velox::exec::Aggregate interface can start with <em>accumulatorFixedWidthSize()</em> method.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Returns the fixed number of bytes the accumulator takes on a group</span>
 <span class="c1">// row. Variable width accumulators will reference the variable</span>
 <span class="c1">// width part of the state from the fixed part.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="nf">accumulatorFixedWidthSize</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="nf">accumulatorFixedWidthSize</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>If accumulator requires specific alignment you need to implement <em>accumulatorAlignmentSize()</em> method.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns the alignment size of the accumulator.  Some types such as</span>
 <span class="c1">/// int128_t require aligned access.  This value must be a power of 2.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="nf">accumulatorAlignmentSize</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="nf">accumulatorAlignmentSize</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>The HashAggregation operator uses these methods during initialization to calculate the total size
@@ -493,51 +490,51 @@ location of the accumulator.</p>
 <span class="c1">// @param offset Offset in bytes from the start of the row of the accumulator</span>
 <span class="c1">// @param nullByte Offset in bytes from the start of the row of the null flag</span>
 <span class="c1">// @param nullMask The specific bit in the nullByte that stores the null flag</span>
-<span class="kt">void</span><span class="w"> </span><span class="n">setOffsets</span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">offset</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">nullByte</span><span class="p">,</span><span class="w"> </span><span class="kt">uint8_t</span><span class="w"> </span><span class="n">nullMask</span><span class="p">)</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="n">setOffsets</span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">offset</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">nullByte</span><span class="p">,</span><span class="w"> </span><span class="kt">uint8_t</span><span class="w"> </span><span class="n">nullMask</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>The base class implements the setOffsets method by storing the offsets in member variables.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Byte position of null flag in group row.</span>
-<span class="kt">int32_t</span><span class="w"> </span><span class="n">nullByte_</span><span class="p">;</span><span class="w"></span>
-<span class="kt">uint8_t</span><span class="w"> </span><span class="n">nullMask_</span><span class="p">;</span><span class="w"></span>
+<span class="kt">int32_t</span><span class="w"> </span><span class="n">nullByte_</span><span class="p">;</span>
+<span class="kt">uint8_t</span><span class="w"> </span><span class="n">nullMask_</span><span class="p">;</span>
 <span class="c1">// Offset of fixed length accumulator state in group row.</span>
-<span class="kt">int32_t</span><span class="w"> </span><span class="n">offset_</span><span class="p">;</span><span class="w"></span>
+<span class="kt">int32_t</span><span class="w"> </span><span class="n">offset_</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Typically, an aggregate function doesn’t use the offsets directly. Instead, it uses helper methods from the base class.</p>
 <p>To access the accumulator:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
-<span class="n">T</span><span class="o">*</span><span class="w"> </span><span class="n">value</span><span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="n">T</span><span class="o">*&gt;</span><span class="p">(</span><span class="n">group</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">offset_</span><span class="p">);</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span>
+<span class="n">T</span><span class="o">*</span><span class="w"> </span><span class="n">value</span><span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="n">T</span><span class="o">*&gt;</span><span class="p">(</span><span class="n">group</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">offset_</span><span class="p">);</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>To manipulate the null flags:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">isNull</span><span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">isNull</span><span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 
 <span class="c1">// Sets null flag for all specified groups to true.</span>
 <span class="c1">// For any given group, this method can be called at most once.</span>
-<span class="kt">void</span><span class="w"> </span><span class="nf">setAllNulls</span><span class="p">(</span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"> </span><span class="n">folly</span><span class="o">::</span><span class="n">Range</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">vector_size_t</span><span class="o">*&gt;</span><span class="w"> </span><span class="n">indices</span><span class="p">);</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">setAllNulls</span><span class="p">(</span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"> </span><span class="n">folly</span><span class="o">::</span><span class="n">Range</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">vector_size_t</span><span class="o">*&gt;</span><span class="w"> </span><span class="n">indices</span><span class="p">);</span>
 
-<span class="kr">inline</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">clearNull</span><span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">);</span><span class="w"></span>
+<span class="kr">inline</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">clearNull</span><span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 <section id="initialization">
-<h3>Initialization<a class="headerlink" href="#initialization" title="Permalink to this heading">¶</a></h3>
+<h3>Initialization<a class="headerlink" href="#initialization" title="Link to this heading">¶</a></h3>
 <p>Once you have accumulatorFixedWidthSize(), the next method to implement is initializeNewGroups().</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Initializes null flags and accumulators for newly encountered groups.</span>
 <span class="c1">// @param groups Pointers to the start of the new group rows.</span>
 <span class="c1">// @param indices Indices into &#39;groups&#39; of the new entries.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">initializeNewGroups</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">folly</span><span class="o">::</span><span class="n">Range</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">vector_size_t</span><span class="o">*&gt;</span><span class="w"> </span><span class="n">indices</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">initializeNewGroups</span><span class="p">(</span>
+<span class="w">    </span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span>
+<span class="w">    </span><span class="n">folly</span><span class="o">::</span><span class="n">Range</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">vector_size_t</span><span class="o">*&gt;</span><span class="w"> </span><span class="n">indices</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>This method is called by the HashAggregation operator every time it encounters new combinations of the grouping keys. This method should initialize the accumulators for the new groups. For example, partial “count” and “sum” aggregates would set the accumulators to zero. Many aggregate functions would set null flags to true by calling the exec::Aggregate::setAllNulls(groups, indices) helper method.</p>
 </section>
 <section id="groupby-aggregation">
-<h3>GroupBy aggregation<a class="headerlink" href="#groupby-aggregation" title="Permalink to this heading">¶</a></h3>
+<h3>GroupBy aggregation<a class="headerlink" href="#groupby-aggregation" title="Link to this heading">¶</a></h3>
 <p>At this point you have accumulatorFixedWidthSize() and initializeNewGroups() methods implemented. Now, we can proceed to implementing the end-to-end group-by aggregation. We need the following pieces:</p>
 <ul class="simple">
 <li><dl class="simple">
@@ -587,12 +584,12 @@ location of the accumulator.</p>
 table shows which methods are used in which workflows.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 29%" />
-<col style="width: 14%" />
-<col style="width: 14%" />
-<col style="width: 14%" />
-<col style="width: 14%" />
-<col style="width: 14%" />
+<col style="width: 28.6%" />
+<col style="width: 14.3%" />
+<col style="width: 14.3%" />
+<col style="width: 14.3%" />
+<col style="width: 14.3%" />
+<col style="width: 14.3%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Method</p></th>
@@ -661,11 +658,11 @@ table shows which methods are used in which workflows.</p>
 <span class="c1">// @param mayPushdown True if aggregation can be pushdown down via LazyVector.</span>
 <span class="c1">// The pushdown can happen only if this flag is true and &#39;args&#39; is a single</span>
 <span class="c1">// LazyVector.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addRawInput</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addRawInput</span><span class="p">(</span>
+<span class="w">    </span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>addRawInput() method would use DecodedVector’s to decode the input data. Then, loop over rows to update the accumulators. It is a good practice to define a member variable of type DecodedVector for each input vector. This allows for reusing the memory needed to decode the inputs between batches of input.</p>
@@ -675,16 +672,16 @@ table shows which methods are used in which workflows.</p>
 <span class="c1">// @param groups Pointers to the start of the group rows.</span>
 <span class="c1">// @param numGroups Number of groups to extract results from.</span>
 <span class="c1">// @param result The result vector to store the results in.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"></span>
-<span class="nf">extractAccumulators</span><span class="p">(</span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numGroups</span><span class="p">,</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">*</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span>
+<span class="nf">extractAccumulators</span><span class="p">(</span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numGroups</span><span class="p">,</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">*</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Next, we implement the addIntermediateResults() method that receives intermediate results and updates accumulators.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addIntermediateResults</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addIntermediateResults</span><span class="p">(</span>
+<span class="w">    </span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Next, we implement the extractValues() method that extracts final results from the accumulators.</p>
@@ -693,8 +690,8 @@ table shows which methods are used in which workflows.</p>
 <span class="c1">// @param groups Pointers to the start of the group rows.</span>
 <span class="c1">// @param numGroups Number of groups to extract results from.</span>
 <span class="c1">// @param result The result vector to store the results in.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"></span>
-<span class="nf">extractValues</span><span class="p">(</span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numGroups</span><span class="p">,</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">*</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span>
+<span class="nf">extractValues</span><span class="p">(</span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numGroups</span><span class="p">,</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">*</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Finally, we implement the addSingleGroupIntermediateResults() method that is used to add previously spilled data back to the accumulator.</p>
@@ -708,11 +705,11 @@ table shows which methods are used in which workflows.</p>
 <span class="c1">// @param mayPushdown True if aggregation can be pushdown down via LazyVector.</span>
 <span class="c1">// The pushdown can happen only if this flag is true and &#39;args&#39; is a single</span>
 <span class="c1">// LazyVector.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addSingleGroupIntermediateResults</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addSingleGroupIntermediateResults</span><span class="p">(</span>
+<span class="w">    </span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Finally, we can implement optional methods for converting raw inputs into intermediate
@@ -728,9 +725,9 @@ implementation by implementing toIntermediate() method. If they decide to do so,
 also override supportsToIntermediate() method. For example, min and max aggregate functions
 implement toIntermediate() method which simply returns the input unmodified.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns true if toIntermediate() is supported.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsToIntermediate</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsToIntermediate</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="p">}</span>
 
 <span class="c1">/// Produces an accumulator initialized from a single value for each</span>
 <span class="c1">/// row in &#39;rows&#39;. The raw arguments of the aggregate are in &#39;args&#39;,</span>
@@ -742,18 +739,18 @@ implement toIntermediate() method which simply returns the input unmodified.</p>
 <span class="c1">/// &#39;result&#39; is expected to have rows.size() rows. Invalid rows represent rows</span>
 <span class="c1">/// that were masked out, these need to have correct intermediate results as</span>
 <span class="c1">/// well. It is possible that all entries in &#39;rows&#39; are invalid (masked out).</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">&quot;toIntermediate not supported&quot;</span><span class="p">);</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
+<span class="w">    </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">&quot;toIntermediate not supported&quot;</span><span class="p">);</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>GroupBy aggregation code path is done. We proceed to global aggregation.</p>
 </section>
 <section id="global-aggregation">
-<h3>Global aggregation<a class="headerlink" href="#global-aggregation" title="Permalink to this heading">¶</a></h3>
+<h3>Global aggregation<a class="headerlink" href="#global-aggregation" title="Link to this heading">¶</a></h3>
 <p>Global aggregation is similar to group-by aggregation, but there is only one
 group and one accumulator. After implementing group-by aggregation, the only
 thing needed to enable global aggregation is to implement
@@ -766,11 +763,11 @@ already implemented as it is used for spilling group by).</p>
 <span class="c1">// @param mayPushdown True if aggregation can be pushdown down via LazyVector.</span>
 <span class="c1">// The pushdown can happen only if this flag is true and &#39;args&#39; is a single</span>
 <span class="c1">// LazyVector.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addSingleGroupRawInput</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allRows</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addSingleGroupRawInput</span><span class="p">(</span>
+<span class="w">    </span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allRows</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Spilling is not helpful for global aggregations, hence, it is not supported. The
@@ -778,12 +775,12 @@ following table shows which methods are used in different global aggregation
 workflows.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 29%" />
-<col style="width: 14%" />
-<col style="width: 14%" />
-<col style="width: 14%" />
-<col style="width: 14%" />
-<col style="width: 14%" />
+<col style="width: 28.6%" />
+<col style="width: 14.3%" />
+<col style="width: 14.3%" />
+<col style="width: 14.3%" />
+<col style="width: 14.3%" />
+<col style="width: 14.3%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Method</p></th>
@@ -838,7 +835,7 @@ these correctly.</p>
 </section>
 </section>
 <section id="factory-function">
-<h2>Factory function<a class="headerlink" href="#factory-function" title="Permalink to this heading">¶</a></h2>
+<h2>Factory function<a class="headerlink" href="#factory-function" title="Link to this heading">¶</a></h2>
 <p>We can now write a factory function that creates an instance of the new
 aggregation function and register it by calling exec::registerAggregateFunction
 (…) and specifying function name and signatures.</p>
@@ -849,62 +846,62 @@ function.</p>
 <p>Factory function takes core::AggregationNode::Step
 (partial/final/intermediate/single) which tells what type of input to expect,
 input type and result type.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateRegistrationResult</span><span class="w"> </span><span class="nf">registerApproxPercentile</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignature</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">signatures</span><span class="p">;</span><span class="w"></span>
-<span class="w">  </span><span class="p">...</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateRegistrationResult</span><span class="w"> </span><span class="nf">registerApproxPercentile</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignature</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">signatures</span><span class="p">;</span>
+<span class="w">  </span><span class="p">...</span>
 
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">registerAggregateFunction</span><span class="p">(</span><span class="w"></span>
-<span class="w">      </span><span class="n">name</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">signatures</span><span class="p">),</span><span class="w"></span>
-<span class="w">      </span><span class="p">[</span><span class="n">name</span><span class="p">](</span><span class="w"></span>
-<span class="w">          </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="w"> </span><span class="n">step</span><span class="p">,</span><span class="w"></span>
-<span class="w">          </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">TypePtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">argTypes</span><span class="p">,</span><span class="w"></span>
-<span class="w">          </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">resultType</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">step</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="o">::</span><span class="n">kIntermediate</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">          </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="w">              </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="n">VARBINARY</span><span class="p">());</span><span class="w"></span>
-<span class="w">        </span><span class="p">}</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">registerAggregateFunction</span><span class="p">(</span>
+<span class="w">      </span><span class="n">name</span><span class="p">,</span>
+<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">signatures</span><span class="p">),</span>
+<span class="w">      </span><span class="p">[</span><span class="n">name</span><span class="p">](</span>
+<span class="w">          </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="w"> </span><span class="n">step</span><span class="p">,</span>
+<span class="w">          </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">TypePtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">argTypes</span><span class="p">,</span>
+<span class="w">          </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">resultType</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">step</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="o">::</span><span class="n">kIntermediate</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">          </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="p">(</span>
+<span class="w">              </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="n">VARBINARY</span><span class="p">());</span>
+<span class="w">        </span><span class="p">}</span>
 
-<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">hasWeight</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w"></span>
-<span class="w">        </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">isRawInput</span><span class="p">(</span><span class="n">step</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">argTypes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">resultType</span><span class="p">;</span><span class="w"></span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">hasWeight</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="w">        </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">isRawInput</span><span class="p">(</span><span class="n">step</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">argTypes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">resultType</span><span class="p">;</span>
 
-<span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">type</span><span class="o">-&gt;</span><span class="n">kind</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="n">TypeKind</span><span class="o">::</span><span class="n">BIGINT</span><span class="o">:</span><span class="w"></span>
-<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="w">                </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span><span class="w"></span>
-<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="n">TypeKind</span><span class="o">::</span><span class="n">DOUBLE</span><span class="o">:</span><span class="w"></span>
-<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="w">                </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span><span class="w"></span>
-<span class="w">          </span><span class="p">...</span><span class="w"></span>
-<span class="w">        </span><span class="p">}</span><span class="w"></span>
-<span class="w">      </span><span class="p">});</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">type</span><span class="o">-&gt;</span><span class="n">kind</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="no">TypeKind</span><span class="o">::</span><span class="no">BIGINT</span><span class="p">:</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span>
+<span class="w">                </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span>
+<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="no">TypeKind</span><span class="o">::</span><span class="no">DOUBLE</span><span class="p">:</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="p">(</span>
+<span class="w">                </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span>
+<span class="w">          </span><span class="p">...</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">      </span><span class="p">});</span>
+<span class="p">}</span>
 
-<span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">FB_ANONYMOUS_VARIABLE</span><span class="p">(</span><span class="n">g_AggregateFunction</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
-<span class="w">    </span><span class="n">registerApproxPercentile</span><span class="p">(</span><span class="n">kApproxPercentile</span><span class="p">);</span><span class="w"></span>
+<span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">FB_ANONYMOUS_VARIABLE</span><span class="p">(</span><span class="n">g_AggregateFunction</span><span class="p">)</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">registerApproxPercentile</span><span class="p">(</span><span class="n">kApproxPercentile</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>If the aggregation function is implemented through the simple-function
 interface, use <cite>SimpleAggregateAdapter&lt;FunctionClassName&gt;</cite> when creating the
 unique pointers. Below is an example.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateRegistrationResult</span><span class="w"> </span><span class="nf">registerSimpleArrayAggAggregate</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="p">...</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateRegistrationResult</span><span class="w"> </span><span class="nf">registerSimpleArrayAggAggregate</span><span class="p">(</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="p">...</span>
 
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">registerAggregateFunction</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="n">name</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">signatures</span><span class="p">),</span><span class="w"></span>
-<span class="w">    </span><span class="p">[</span><span class="n">name</span><span class="p">](</span><span class="w"></span>
-<span class="w">        </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="w"> </span><span class="cm">/*step*/</span><span class="p">,</span><span class="w"></span>
-<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">TypePtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">argTypes</span><span class="p">,</span><span class="w"></span>
-<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">resultType</span><span class="p">,</span><span class="w"></span>
-<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryConfig</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*config*/</span><span class="p">)</span><span class="w"></span>
-<span class="w">        </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">      </span><span class="n">VELOX_CHECK_EQ</span><span class="p">(</span><span class="w"></span>
-<span class="w">          </span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;{} takes at most one argument&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">);</span><span class="w"></span>
-<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">SimpleAggregateAdapter</span><span class="o">&lt;</span><span class="n">SimpleArrayAggAggregate</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="w">          </span><span class="n">resultType</span><span class="p">);</span><span class="w"></span>
-<span class="w">    </span><span class="p">});</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">registerAggregateFunction</span><span class="p">(</span>
+<span class="w">    </span><span class="n">name</span><span class="p">,</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">signatures</span><span class="p">),</span>
+<span class="w">    </span><span class="p">[</span><span class="n">name</span><span class="p">](</span>
+<span class="w">        </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="w"> </span><span class="cm">/*step*/</span><span class="p">,</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">TypePtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">argTypes</span><span class="p">,</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">resultType</span><span class="p">,</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryConfig</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*config*/</span><span class="p">)</span>
+<span class="w">        </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">VELOX_CHECK_EQ</span><span class="p">(</span>
+<span class="w">          </span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;{} takes at most one argument&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">);</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">SimpleAggregateAdapter</span><span class="o">&lt;</span><span class="n">SimpleArrayAggAggregate</span><span class="o">&gt;&gt;</span><span class="p">(</span>
+<span class="w">          </span><span class="n">resultType</span><span class="p">);</span>
+<span class="w">    </span><span class="p">});</span>
 </pre></div>
 </div>
 <p>}</p>
@@ -919,30 +916,30 @@ functions takes value argument of a numeric type, an optional weight argument
 of type INTEGER, and a percentage argument of type DOUBLE. The intermediate
 type does not depend on the input types and is always VARBINARY. The final
 result type is the same as input value type.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">inputType</span><span class="w"> </span><span class="o">:</span><span class="w"></span>
-<span class="w">       </span><span class="p">{</span><span class="s">&quot;tinyint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;smallint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;integer&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;bigint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;real&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;double&quot;</span><span class="p">})</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">inputType</span><span class="w"> </span><span class="o">:</span>
+<span class="w">       </span><span class="p">{</span><span class="s">&quot;tinyint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;smallint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;integer&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;bigint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;real&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;double&quot;</span><span class="p">})</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// (x, double percentage) -&gt; varbinary -&gt; x</span>
-<span class="w">    </span><span class="n">signatures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">intermediateType</span><span class="p">(</span><span class="s">&quot;varbinary&quot;</span><span class="p">)</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;double&quot;</span><span class="p">)</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">build</span><span class="p">());</span><span class="w"></span>
+<span class="w">    </span><span class="n">signatures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignatureBuilder</span><span class="p">()</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">intermediateType</span><span class="p">(</span><span class="s">&quot;varbinary&quot;</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;double&quot;</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">build</span><span class="p">());</span>
 
 <span class="w">    </span><span class="c1">// (x, integer weight, double percentage) -&gt; varbinary -&gt; x</span>
-<span class="w">    </span><span class="n">signatures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">intermediateType</span><span class="p">(</span><span class="s">&quot;varbinary&quot;</span><span class="p">)</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;bigint&quot;</span><span class="p">)</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;double&quot;</span><span class="p">)</span><span class="w"></span>
-<span class="w">                             </span><span class="p">.</span><span class="n">build</span><span class="p">());</span><span class="w"></span>
-<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="n">signatures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignatureBuilder</span><span class="p">()</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">intermediateType</span><span class="p">(</span><span class="s">&quot;varbinary&quot;</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;bigint&quot;</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;double&quot;</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">build</span><span class="p">());</span>
+<span class="w">  </span><span class="p">}</span>
 </pre></div>
 </div>
 </section>
 <section id="testing">
-<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this heading">¶</a></h2>
+<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h2>
 <p>It is time to put all the pieces together and test how well the new function
 works.</p>
 <p>Use AggregationTestBase from velox/aggregates/tests/AggregationTestBase.h as a
@@ -953,20 +950,20 @@ aggregates and a SQL query to run on DuckDB to calculate the expected results
 and call helper function testAggregates defined in AggregationTestBase class.
 Grouping keys can be empty for global aggregations.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Global aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="s">&quot;SELECT sum(c1) FROM tmp&quot;</span><span class="p">);</span><span class="w"></span>
+<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="s">&quot;SELECT sum(c1) FROM tmp&quot;</span><span class="p">);</span>
 
 <span class="c1">// Group by aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;c0&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="s">&quot;SELECT c0, sum(c1) FROM tmp GROUP BY 1&quot;</span><span class="p">);</span><span class="w"></span>
+<span class="n">testAggregations</span><span class="p">(</span>
+<span class="w">    </span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;c0&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="s">&quot;SELECT c0, sum(c1) FROM tmp GROUP BY 1&quot;</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>If the new function is not supported by DuckDB, you need to specify the expected
 results manually.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Global aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;map_union(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span><span class="w"></span>
+<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;map_union(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span>
 
 <span class="c1">// Group by aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;c0&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;map_union(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span><span class="w"></span>
+<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;c0&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;map_union(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>Under the covers, testAggregations method generates multiple different but
@@ -1001,18 +998,18 @@ and <a class="reference internal" href="../functions/presto/aggregate.html#min_b
 inputs in the presence of ties.</p>
 </section>
 <section id="function-names">
-<h2>Function names<a class="headerlink" href="#function-names" title="Permalink to this heading">¶</a></h2>
+<h2>Function names<a class="headerlink" href="#function-names" title="Link to this heading">¶</a></h2>
 <p>Same as scalar functions, aggregate function names are case insensitive. The names
 are converted to lower case automatically when the functions are registered and
 when they are resolved for a given expression.</p>
 </section>
 <section id="documentation">
-<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
 <p>Finally, document the new function by adding an entry to velox/docs/functions/presto/aggregate.rst</p>
 <p>You can see the documentation for all functions at <a class="reference internal" href="../functions/presto/aggregate.html"><span class="doc">Aggregate Functions</span></a> and read about how documentation is generated at <a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/docs#velox-documentation">https://github.com/facebookincubator/velox/tree/main/velox/docs#velox-documentation</a></p>
 </section>
 <section id="accumulator">
-<h2>Accumulator<a class="headerlink" href="#accumulator" title="Permalink to this heading">¶</a></h2>
+<h2>Accumulator<a class="headerlink" href="#accumulator" title="Link to this heading">¶</a></h2>
 <p>In Velox, efficient use of memory is a priority. This includes both optimizing
 the total amount of memory used as well as the number of memory allocations.
 Note that runtime statistics reported by Velox include both peak memory usage
@@ -1022,7 +1019,7 @@ accumulators. They allocate memory from an arena (<a class="reference internal" 
 <p>StlAllocator is an STL-compatible allocator backed by HashStringAllocator that
 can be used with STL containers. For example, one can define an std::vector
 that allocates memory from the arena like so:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span>
 </pre></div>
 </div>
 <p>This is used, for example, in 3-arg versions of <a class="reference internal" href="../functions/presto/aggregate.html#min_by" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#max_by" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a> with
@@ -1031,12 +1028,12 @@ fixed-width type inputs (e.g. integers).</p>
 arena and can be used with <a class="reference external" href="https://engineering.fb.com/2019/04/25/developer-tools/f14/">F14</a>
 containers which require 16-byte alignment. One can define an F14FastMap that
 allocates memory from the arena like so:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">folly</span><span class="o">::</span><span class="n">F14FastMap</span><span class="o">&lt;</span><span class="w"></span>
-<span class="w">      </span><span class="kt">int64_t</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="kt">double</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">hash</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">equal_to</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">AlignedStlAllocator</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">pair</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="o">&gt;&gt;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">folly</span><span class="o">::</span><span class="n">F14FastMap</span><span class="o">&lt;</span>
+<span class="w">      </span><span class="kt">int64_t</span><span class="p">,</span>
+<span class="w">      </span><span class="kt">double</span><span class="p">,</span>
+<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">hash</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">equal_to</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">      </span><span class="n">AlignedStlAllocator</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">pair</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="o">&gt;&gt;</span>
 </pre></div>
 </div>
 <p>You can find an example usage in <a class="reference internal" href="../functions/presto/aggregate.html#histogram" title="histogram"><code class="xref py py-func docutils literal notranslate"><span class="pre">histogram()</span></code></a> aggregation function.</p>
@@ -1049,13 +1046,13 @@ made the data is copied into the new memory buffer and the old buffer is
 released. One can see this by instrumenting StlAllocator::allocate and
 deallocate methods to add logging and run a simple loop to add elements to a
 vector:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">data</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">allocator_</span><span class="p">.</span><span class="n">get</span><span class="p">()));</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">data</span><span class="p">(</span>
+<span class="w">   </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">allocator_</span><span class="p">.</span><span class="n">get</span><span class="p">()));</span>
 
 
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w"> </span><span class="n">data</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">i</span><span class="p">);</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="n">data</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">i</span><span class="p">);</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>E20230714 14:57:33.717708 975289 HashStringAllocator.h:497] allocate 1
@@ -1086,21 +1083,21 @@ filling that up.</p>
 <p>ValueList is designed to work with data that comes from Velox Vectors, hence,
 its API is different from std::vector. You append values from a DecodedVector
 and read values back into a flat vector. Here is an example of usage:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">DecodedVector</span><span class="w"> </span><span class="nf">decoded</span><span class="p">(</span><span class="o">*</span><span class="n">data</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">DecodedVector</span><span class="w"> </span><span class="nf">decoded</span><span class="p">(</span><span class="o">*</span><span class="n">data</span><span class="p">);</span>
 
 <span class="c1">// Store data.</span>
-<span class="n">ValueList</span><span class="w"> </span><span class="n">values</span><span class="p">;</span><span class="w"></span>
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w"> </span><span class="n">values</span><span class="p">.</span><span class="n">appendValue</span><span class="p">(</span><span class="n">decoded</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">allocator</span><span class="p">());</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="n">ValueList</span><span class="w"> </span><span class="n">values</span><span class="p">;</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="n">values</span><span class="p">.</span><span class="n">appendValue</span><span class="p">(</span><span class="n">decoded</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">allocator</span><span class="p">());</span>
+<span class="p">}</span>
 
 
 <span class="c1">// Read data back.</span>
-<span class="k">auto</span><span class="w"> </span><span class="n">copy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">BaseVector</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">DOUBLE</span><span class="p">(),</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">());</span><span class="w"></span>
-<span class="n">aggregate</span><span class="o">::</span><span class="n">ValueListReader</span><span class="w"> </span><span class="nf">reader</span><span class="p">(</span><span class="n">values</span><span class="p">);</span><span class="w"></span>
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w"> </span><span class="n">reader</span><span class="p">.</span><span class="n">next</span><span class="p">(</span><span class="o">*</span><span class="n">copy</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">);</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">copy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">BaseVector</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">DOUBLE</span><span class="p">(),</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">());</span>
+<span class="n">aggregate</span><span class="o">::</span><span class="n">ValueListReader</span><span class="w"> </span><span class="nf">reader</span><span class="p">(</span><span class="n">values</span><span class="p">);</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="n">reader</span><span class="p">.</span><span class="n">next</span><span class="p">(</span><span class="o">*</span><span class="n">copy</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">);</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>ValueList supports all types, so you can use it to append fixed-width values as
@@ -1140,13 +1137,13 @@ append method takes a StringView and a pointer to the arena, copies the string
 into the arena and returns a StringView pointing to the copy.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Copies the string into contiguous memory allocated via</span>
 <span class="c1">/// HashStringAllocator. Returns StringView over the copy.</span>
-<span class="n">StringView</span><span class="w"> </span><span class="nf">append</span><span class="p">(</span><span class="n">StringView</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">HashStringAllocator</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="n">StringView</span><span class="w"> </span><span class="nf">append</span><span class="p">(</span><span class="n">StringView</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">HashStringAllocator</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>Strings class provides a free method to release memory back to the arena.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Frees memory used by the strings. StringViews returned from &#39;append&#39;</span>
 <span class="c1">/// become invalid after this call.</span>
-<span class="kt">void</span><span class="w"> </span><span class="nf">free</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">free</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>When aggregating complex types (arrays, maps or structs), we use
@@ -1156,11 +1153,11 @@ AddressableNonNullValueList provides methods to compute a hash of a value and
 compare two values. AddressableNonNullValueList uses ContainerRowSerde for
 serializing data and comparing serialized values.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// A set of pointers to values stored in AddressableNonNullValueList.</span>
-<span class="n">SetAccumulator</span><span class="o">&lt;</span><span class="w"></span>
-<span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">::</span><span class="n">Position</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">AddressableNonNullValueList</span><span class="o">::</span><span class="n">Hash</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">AddressableNonNullValueList</span><span class="o">::</span><span class="n">EqualTo</span><span class="o">&gt;</span><span class="w"></span>
-<span class="w">   </span><span class="n">base</span><span class="p">;</span><span class="w"></span>
+<span class="n">SetAccumulator</span><span class="o">&lt;</span>
+<span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">::</span><span class="n">Position</span><span class="p">,</span>
+<span class="w">   </span><span class="n">AddressableNonNullValueList</span><span class="o">::</span><span class="n">Hash</span><span class="p">,</span>
+<span class="w">   </span><span class="n">AddressableNonNullValueList</span><span class="o">::</span><span class="n">EqualTo</span><span class="o">&gt;</span>
+<span class="w">   </span><span class="n">base</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>AddressableNonNullValueList allows to append a value and erase the last value.
@@ -1181,30 +1178,30 @@ AddressableNonNullValueList. T can be a fixed-width type like int32_t or
 int64_t, StringView or ComplexType.</p>
 <p>addValue and addValues method allow to add one or multiple values from a vector.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Adds value if new. No-op if the value was added before.</span>
-<span class="kt">void</span><span class="w"> </span><span class="n">addValue</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decoded</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="n">addValue</span><span class="p">(</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decoded</span><span class="p">,</span>
+<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span>
 <span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">)</span><span class="c1">/// Adds new values from an array.</span>
 
-<span class="kt">void</span><span class="w"> </span><span class="n">addValues</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">ArrayVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">arrayVector</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">)</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="n">addValues</span><span class="p">(</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">ArrayVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">arrayVector</span><span class="p">,</span>
+<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span>
+<span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>size() method returns the number of unique values.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns number of unique values including null.</span>
-<span class="kt">size_t</span><span class="w"> </span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"></span>
+<span class="kt">size_t</span><span class="w"> </span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="k">const</span>
 </pre></div>
 </div>
 <p>extractValues method allows to extract unique values into a vector.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Copies the unique values and null into the specified vector starting at</span>
 <span class="c1">/// the specified offset.</span>
-<span class="n">vector_size_t</span><span class="w"> </span><span class="n">extractValues</span><span class="p">(</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"> </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span><span class="w"></span>
+<span class="n">vector_size_t</span><span class="w"> </span><span class="n">extractValues</span><span class="p">(</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"> </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span>
 
 <span class="c1">/// For complex types.</span>
-<span class="n">vector_size_t</span><span class="w"> </span><span class="n">extractValues</span><span class="p">(</span><span class="n">BaseVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"> </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span><span class="w"></span>
+<span class="n">vector_size_t</span><span class="w"> </span><span class="n">extractValues</span><span class="p">(</span><span class="n">BaseVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"> </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>Both <a class="reference internal" href="../functions/presto/aggregate.html#set_agg" title="set_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_agg()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#set_union" title="set_union"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_union()</span></code></a> functions are implemented using
@@ -1216,19 +1213,19 @@ MapAccumulator is built using F14FastMap, AlignedStlAllocator, Strings and
 AddressableNonNullValueList.</p>
 <p>insert() method adds a pair of (key, value) to the map discarding the value if matching key already exists.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Adds key-value pair if entry with that key doesn&#39;t exist yet.</span>
-<span class="kt">void</span><span class="w"> </span><span class="n">insert</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decodedKeys</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decodedValues</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocator</span><span class="p">)</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="n">insert</span><span class="p">(</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decodedKeys</span><span class="p">,</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decodedValues</span><span class="p">,</span>
+<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span>
+<span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocator</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>size() method returns the number of unique values.</p>
 <p>extract() method copies the keys and the values into vectors, which can be combined to form a MapVector.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">extract</span><span class="p">(</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">mapKeys</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">mapValues</span><span class="p">,</span><span class="w"></span>
-<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">extract</span><span class="p">(</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">mapKeys</span><span class="p">,</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">mapValues</span><span class="p">,</span>
+<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>Both <a class="reference internal" href="../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#map_union" title="map_union"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_union()</span></code></a> functions are implemented using
@@ -1242,11 +1239,11 @@ spill when memory is tight.</p>
 <p>Aggregation functions should use RowSizeTracker to help track memory usage
 per group. Aggregate base class provides helper method trackRowSize(group),
 which can be used like so:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">group</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">groups</span><span class="p">[</span><span class="n">row</span><span class="p">];</span><span class="w"></span>
-<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">tracker</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">trackRowSize</span><span class="p">(</span><span class="n">group</span><span class="p">);</span><span class="w"></span>
-<span class="w">    </span><span class="n">accumulator</span><span class="o">-&gt;</span><span class="n">append</span><span class="p">(...);</span><span class="w"></span>
-<span class="p">});</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">group</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">groups</span><span class="p">[</span><span class="n">row</span><span class="p">];</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">tracker</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">trackRowSize</span><span class="p">(</span><span class="n">group</span><span class="p">);</span>
+<span class="w">    </span><span class="n">accumulator</span><span class="o">-&gt;</span><span class="n">append</span><span class="p">(...);</span>
+<span class="p">});</span>
 </pre></div>
 </div>
 <p>The ‘trackRowSize’ method returns an instance of RowSizeTracker initialized
@@ -1255,14 +1252,14 @@ object returned by trackRowSize goes out of scope, the counter is updated to
 add memory allocated since object’s creation.</p>
 </section>
 <section id="end-to-end-testing">
-<h2>End-to-End Testing<a class="headerlink" href="#end-to-end-testing" title="Permalink to this heading">¶</a></h2>
+<h2>End-to-End Testing<a class="headerlink" href="#end-to-end-testing" title="Link to this heading">¶</a></h2>
 <p>To confirm that aggregate function works end to end as part of query, update testAggregations() test in TestHiveAggregationQueries.java in presto_cpp repo to add a query that uses the new function.</p>
 <div class="highlight-java notranslate"><div class="highlight"><pre><span></span><span class="n">assertQuery</span><span class="p">(</span><span class="s">&quot;SELECT orderkey, array_agg(linenumber) FROM lineitem GROUP BY 1&quot;</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 <section id="overwrite-intermediate-type-in-presto">
-<h2>Overwrite Intermediate Type in Presto<a class="headerlink" href="#overwrite-intermediate-type-in-presto" title="Permalink to this heading">¶</a></h2>
+<h2>Overwrite Intermediate Type in Presto<a class="headerlink" href="#overwrite-intermediate-type-in-presto" title="Link to this heading">¶</a></h2>
 <p>Sometimes we need to change the intermediate type of aggregation function in
 Presto, due to the differences in implementation or in the type information
 worker node receives.  This is done in Presto class
@@ -1377,8 +1374,8 @@ example pull request can be found at
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

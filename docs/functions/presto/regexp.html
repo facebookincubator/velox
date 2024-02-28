@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Regular Expression Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Binary Functions" href="binary.html" />
@@ -43,7 +40,7 @@
           <div class="body" role="main">
             
   <section id="regular-expression-functions">
-<h1>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Link to this heading">¶</a></h1>
 <p>Regular expression functions use RE2 as the regex engine. RE2 is fast, but
 supports only a subset of PCRE syntax and in particular does not support
 backtracking and associated features (e.g. back references).
@@ -52,7 +49,7 @@ See <a class="reference external" href="https://github.com/google/re2/wiki/Synta
 limited to 20 different expressions per instance and thread of execution.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="like">
-<span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#like" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#like" title="Link to this definition">¶</a></dt>
 <dt class="sig sig-object py">
 <span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">escape</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span></dt>
 <dd><p>Evaluates if the <code class="docutils literal notranslate"><span class="pre">string</span></code> matches the <code class="docutils literal notranslate"><span class="pre">pattern</span></code>. Patterns can contain
@@ -75,7 +72,7 @@ SELECT like(‘a_c’, ‘%#_%’, ‘#’); – true</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="regexp_extract">
-<span class="sig-name descname"><span class="pre">regexp_extract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_extract" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">regexp_extract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_extract" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the first substring matched by the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code>
 in <code class="docutils literal notranslate"><span class="pre">string</span></code>:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\d+&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
@@ -95,7 +92,7 @@ in <code class="docutils literal notranslate"><span class="pre">string</span></c
 
 <dl class="py function">
 <dt class="sig sig-object py" id="regexp_extract_all">
-<span class="sig-name descname"><span class="pre">regexp_extract_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array(varchar):</span></span></span><a class="headerlink" href="#regexp_extract_all" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">regexp_extract_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array(varchar):</span></span></span><a class="headerlink" href="#regexp_extract_all" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the substring(s) matched by the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code>
 in <code class="docutils literal notranslate"><span class="pre">string</span></code>:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract_all</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\d+&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">14</span><span class="p">]</span>
@@ -115,7 +112,7 @@ in <code class="docutils literal notranslate"><span class="pre">string</span></c
 
 <dl class="py function">
 <dt class="sig sig-object py" id="regexp_like">
-<span class="sig-name descname"><span class="pre">regexp_like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#regexp_like" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">regexp_like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#regexp_like" title="Link to this definition">¶</a></dt>
 <dd><p>Evaluates the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> and determines if it is
 contained within <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <p>This function is similar to the <code class="docutils literal notranslate"><span class="pre">LIKE</span></code> operator, except that the
@@ -130,7 +127,7 @@ the entire string by anchoring the pattern using <code class="docutils literal n
 
 <dl class="py function">
 <dt class="sig sig-object py" id="regexp_replace">
-<span class="sig-name descname"><span class="pre">regexp_replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_replace" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">regexp_replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_replace" title="Link to this definition">¶</a></dt>
 <dd><p>Removes every instance of the substring matched by the regular expression
 <code class="docutils literal notranslate"><span class="pre">pattern</span></code> from <code class="docutils literal notranslate"><span class="pre">string</span></code>:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\d+[ab] &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;14m&#39;</span>
@@ -160,6 +157,20 @@ backslash (<code class="docutils literal notranslate"><span class="pre">\$</span
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Regular Expression Functions</a><ul>
+<li><a class="reference internal" href="#like"><code class="docutils literal notranslate"><span class="pre">like()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_extract"><code class="docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_extract_all"><code class="docutils literal notranslate"><span class="pre">regexp_extract_all()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_like"><code class="docutils literal notranslate"><span class="pre">regexp_like()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_replace"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
   <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="map.html"
@@ -209,8 +220,8 @@ backslash (<code class="docutils literal notranslate"><span class="pre">\$</span
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

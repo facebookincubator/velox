@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>January 2024 Update &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
-    <script src="../_static/jquery.js"></script>
-    <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="2023" href="2023/index.html" />
@@ -43,16 +40,16 @@
           <div class="body" role="main">
             
   <section id="january-2024-update">
-<h1>January 2024 Update<a class="headerlink" href="#january-2024-update" title="Permalink to this heading">¶</a></h1>
+<h1>January 2024 Update<a class="headerlink" href="#january-2024-update" title="Link to this heading">¶</a></h1>
 <section id="documentation">
-<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add documentation about <a class="reference internal" href="../develop/hash-table.html"><span class="doc">Hash Table</span></a>.</p></li>
 <li><p>Add documentation about <a class="reference internal" href="../develop/memory.html"><span class="doc">memory management</span></a>.</p></li>
 </ul>
 </section>
 <section id="core-library">
-<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add metrics to track time spent in memory arbitration. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8497">#8497</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8482">#8482</a></p></li>
 <li><p>Add metric to track average buffer time for exchange. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8534">#8534</a></p></li>
@@ -69,7 +66,7 @@
 </ul>
 </section>
 <section id="presto-functions">
-<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference internal" href="../functions/presto/binary.html#from_ieee754_64" title="from_ieee754_64"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_ieee754_64()</span></code></a>, <a class="reference internal" href="../functions/presto/map.html#multimap_from_entries" title="multimap_from_entries"><code class="xref py py-func docutils literal notranslate"><span class="pre">multimap_from_entries()</span></code></a>, <a class="reference internal" href="../functions/presto/array.html#ngrams" title="ngrams"><code class="xref py py-func docutils literal notranslate"><span class="pre">ngrams()</span></code></a> functions.</p></li>
 <li><p>Add support for VARBINARY inputs to <a class="reference internal" href="../functions/presto/array.html#reverse" title="reverse"><code class="xref py py-func docutils literal notranslate"><span class="pre">reverse()</span></code></a> function.</p></li>
@@ -86,7 +83,7 @@
 </ul>
 </section>
 <section id="spark-functions">
-<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference internal" href="../functions/spark/datetime.html#from_unixtime" title="from_unixtime"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a>, <a class="reference internal" href="../functions/spark/string.html#find_in_set" title="find_in_set"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">find_in_set()</span></code></a>, <a class="reference internal" href="../functions/spark/datetime.html#get_timestamp" title="get_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">get_timestamp()</span></code></a>,
 <a class="reference internal" href="../functions/spark/datetime.html#hour" title="hour"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">hour()</span></code></a>, <a class="reference internal" href="../functions/spark/math.html#hex" title="hex"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">hex()</span></code></a>, <a class="reference internal" href="../functions/spark/math.html#isnan" title="isnan"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">isnan()</span></code></a>, <a class="reference internal" href="../functions/spark/string.html#id0" title="replace"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">replace()</span></code></a> functions.</p></li>
@@ -96,14 +93,14 @@
 </ul>
 </section>
 <section id="hive-connector">
-<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Fix crash in Parquet reader when processing empty row groups. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8000">#8000</a></p></li>
 <li><p>Fix data sink to avoid writing partition columns to files. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8089">#8089</a></p></li>
 </ul>
 </section>
 <section id="performance-and-correctness">
-<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for aggregations over distinct inputs to AggregationFuzzer.</p></li>
 <li><p>Reduce memory usage of histogram metrics. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8458">#8458</a></p></li>
@@ -112,14 +109,14 @@
 </ul>
 </section>
 <section id="build-system">
-<h2>Build System<a class="headerlink" href="#build-system" title="Permalink to this heading">¶</a></h2>
+<h2>Build System<a class="headerlink" href="#build-system" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Upgrade folly to v2023.12.04.00 (from v2022.11.14.00).</p></li>
 <li><p>Upgrade fmt to 10.1.1 (from 8.0.1).</p></li>
 </ul>
 </section>
 <section id="credits">
-<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
 <p>Amit Dutta, Benwei Shi, Bikramjeet Vig, Chen Zhang, Chengcheng Jin, Christian
 Zentgraf, Deepak Majeti, Ge Gao, Hongze Zhang, Jacob Wujciak-Jens, Jia Ke,
 Jialiang Tan, Jimmy Lu, Ke, Kevin Wilfong, Krishna Pai, Laith Sakka, Lu Niu,
@@ -205,8 +202,8 @@ yingsu00, youxiduo, yuling.sh, zhli1142015, zky.zhoukeyong, zwangsheng</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>

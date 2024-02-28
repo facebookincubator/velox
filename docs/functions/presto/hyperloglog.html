@@ -1,19 +1,16 @@
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>HyperLogLog Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-    <script src="../../_static/jquery.js"></script>
-    <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-    <script src="../../_static/doctools.js"></script>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Spark Functions" href="../../spark_functions.html" />
@@ -43,11 +40,11 @@
           <div class="body" role="main">
             
   <section id="hyperloglog-functions">
-<h1>HyperLogLog Functions<a class="headerlink" href="#hyperloglog-functions" title="Permalink to this heading">¶</a></h1>
+<h1>HyperLogLog Functions<a class="headerlink" href="#hyperloglog-functions" title="Link to this heading">¶</a></h1>
 <p>Velox implements the Presto’s <a class="reference internal" href="aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> function using the
 <a class="reference external" href="https://en.wikipedia.org/wiki/HyperLogLog">HyperLogLog</a> data structure.</p>
 <section id="data-structures">
-<h2>Data Structures<a class="headerlink" href="#data-structures" title="Permalink to this heading">¶</a></h2>
+<h2>Data Structures<a class="headerlink" href="#data-structures" title="Link to this heading">¶</a></h2>
 <p>Like Presto, Velox implements HyperLogLog data sketches as a set of 32-bit
 buckets which store a <em>maximum hash</em>. They can be stored sparsely (as a map
 from bucket ID to bucket), or densely (as a contiguous memory block). The
@@ -55,7 +52,7 @@ HyperLogLog data structure starts as the sparse representation, switching to
 dense when it is more efficient.</p>
 </section>
 <section id="serialization">
-<h2>Serialization<a class="headerlink" href="#serialization" title="Permalink to this heading">¶</a></h2>
+<h2>Serialization<a class="headerlink" href="#serialization" title="Link to this heading">¶</a></h2>
 <p>Data sketches can be serialized to and deserialized from <code class="docutils literal notranslate"><span class="pre">varbinary</span></code>. This
 allows them to be stored for later use.  Combined with the ability to merge
 multiple sketches, this allows one to calculate <a class="reference internal" href="aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> of the
@@ -67,10 +64,10 @@ dailies. This is similar to computing weekly revenue by summing daily revenue.</
 <p>Serialization format is compatible (actually, identical) to Presto’s.</p>
 </section>
 <section id="functions">
-<h2>Functions<a class="headerlink" href="#functions" title="Permalink to this heading">¶</a></h2>
+<h2>Functions<a class="headerlink" href="#functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="approx_set">
-<span class="sig-name descname"><span class="pre">approx_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#approx_set" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">approx_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#approx_set" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> sketch of the input data set of <code class="docutils literal notranslate"><span class="pre">x</span></code>.
 The value of the maximum standard error is defaulted to <code class="docutils literal notranslate"><span class="pre">0.01625</span></code>.
 This data sketch underlies <a class="reference internal" href="aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> and can be stored and
@@ -98,7 +95,7 @@ used later by calling <code class="docutils literal notranslate"><span class="pr
 
 <dl class="py function">
 <dt class="sig sig-object py" id="empty_approx_set">
-<span class="sig-name descname"><span class="pre">empty_approx_set</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#empty_approx_set" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">empty_approx_set</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#empty_approx_set" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an empty <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code>.
 The value of the maximum standard error is defaulted to <code class="docutils literal notranslate"><span class="pre">0.01625</span></code>.</p>
 </dd></dl>
@@ -115,7 +112,7 @@ the range of <code class="docutils literal notranslate"><span class="pre">[0.004
 
 <dl class="py function">
 <dt class="sig sig-object py" id="merge">
-<span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">HyperLogLog</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#merge" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">HyperLogLog</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#merge" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> of the aggregate union of the individual <code class="docutils literal notranslate"><span class="pre">hll</span></code>
 HyperLogLog structures.</p>
 </dd></dl>
@@ -136,7 +133,12 @@ HyperLogLog structures.</p>
 <li><a class="reference internal" href="#">HyperLogLog Functions</a><ul>
 <li><a class="reference internal" href="#data-structures">Data Structures</a></li>
 <li><a class="reference internal" href="#serialization">Serialization</a></li>
-<li><a class="reference internal" href="#functions">Functions</a></li>
+<li><a class="reference internal" href="#functions">Functions</a><ul>
+<li><a class="reference internal" href="#approx_set"><code class="docutils literal notranslate"><span class="pre">approx_set()</span></code></a></li>
+<li><a class="reference internal" href="#empty_approx_set"><code class="docutils literal notranslate"><span class="pre">empty_approx_set()</span></code></a></li>
+<li><a class="reference internal" href="#merge"><code class="docutils literal notranslate"><span class="pre">merge()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -191,8 +193,8 @@ HyperLogLog structures.</p>
       </ul>
     </div>
     <div class="footer" role="contentinfo">
-        &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
     </div>
   </body>
 </html>
