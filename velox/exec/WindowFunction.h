@@ -55,6 +55,14 @@ class WindowFunction {
     return pool_;
   }
 
+  void setUseSegmentTree(bool useSegmentTreeBySql,
+                         bool orderInsensitive,
+                         int32_t minFrameUseSegmentTree) {
+    useSegmentTreeBySql_ = useSegmentTreeBySql;
+    orderInsensitive_ = orderInsensitive;
+    minFrameUseSegmentTree_ = minFrameUseSegmentTree;
+  }
+
   const HashStringAllocator* stringAllocator() const {
     return stringAllocator_;
   }
@@ -127,6 +135,13 @@ class WindowFunction {
 
   // Used for setting null for empty frames.
   SelectivityVector invalidRows_;
+
+  // Whether this function use segment tree optimization.
+  bool useSegmentTreeBySql_{false};
+  // The min average frame size will use segmentTree.
+  int32_t minFrameUseSegmentTree_{64};
+  // Whether the aggregate is order insensitive.
+  bool orderInsensitive_{true};
 };
 
 /// Information from the Window operator that is useful for the function logic.
