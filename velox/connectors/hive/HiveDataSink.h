@@ -19,6 +19,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
+#include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
@@ -198,12 +199,14 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
           dwio::common::FileFormat::DWRF,
       std::shared_ptr<HiveBucketProperty> bucketProperty = nullptr,
       std::optional<common::CompressionKind> compressionKind = {},
+      std::unique_ptr<dwio::common::FlushPolicy> flushPolicy = nullptr,
       const std::unordered_map<std::string, std::string>& serdeParameters = {})
       : inputColumns_(std::move(inputColumns)),
         locationHandle_(std::move(locationHandle)),
         tableStorageFormat_(tableStorageFormat),
         bucketProperty_(std::move(bucketProperty)),
         compressionKind_(compressionKind),
+        flushPolicy_(std::move(flushPolicy)),
         serdeParameters_(serdeParameters) {
     if (compressionKind.has_value()) {
       VELOX_CHECK(
@@ -225,6 +228,10 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
 
   std::optional<common::CompressionKind> compressionKind() const {
     return compressionKind_;
+  }
+
+  std::unique_ptr<dwio::common::FlushPolicy> flushPolicy() {
+    return std::move(flushPolicy_);
   }
 
   dwio::common::FileFormat tableStorageFormat() const {
@@ -261,6 +268,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const dwio::common::FileFormat tableStorageFormat_;
   const std::shared_ptr<HiveBucketProperty> bucketProperty_;
   const std::optional<common::CompressionKind> compressionKind_;
+  std::unique_ptr<dwio::common::FlushPolicy> flushPolicy_;
   const std::unordered_map<std::string, std::string> serdeParameters_;
 };
 
@@ -413,7 +421,7 @@ class HiveDataSink : public DataSink {
  public:
   HiveDataSink(
       RowTypePtr inputType,
-      std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      std::shared_ptr<HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig);
@@ -543,7 +551,7 @@ class HiveDataSink : public DataSink {
   void closeInternal();
 
   const RowTypePtr inputType_;
-  const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;
+  const std::shared_ptr<HiveInsertTableHandle> insertTableHandle_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const CommitStrategy commitStrategy_;
   const std::shared_ptr<const HiveConfig> hiveConfig_;

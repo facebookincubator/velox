@@ -386,6 +386,15 @@ parquet::WriterOptions getParquetOptions(
   if (options.compressionKind.has_value()) {
     parquetOptions.compression = options.compressionKind.value();
   }
+
+  if (auto flushPolicy =
+          dynamic_cast<DefaultFlushPolicy*>(options.flushPolicy.get())) {
+    parquetOptions.flushPolicyFactory = [&]() {
+      return std::make_unique<DefaultFlushPolicy>(*flushPolicy);
+      ;
+    };
+  }
+
   return parquetOptions;
 }
 

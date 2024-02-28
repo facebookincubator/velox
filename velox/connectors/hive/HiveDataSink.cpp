@@ -342,7 +342,7 @@ std::string HiveBucketProperty::toString() const {
 
 HiveDataSink::HiveDataSink(
     RowTypePtr inputType,
-    std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+    std::shared_ptr<HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig)
@@ -666,6 +666,7 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
 
   options.memoryPool = writerInfo_.back()->writerPool.get();
   options.compressionKind = insertTableHandle_->compressionKind();
+  options.flushPolicy = insertTableHandle_->flushPolicy();
   if (canReclaim()) {
     options.spillConfig = spillConfig_;
   }
