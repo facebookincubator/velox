@@ -115,9 +115,11 @@ TEST_F(DateTimeFunctionsTest, weekOfYear) {
 }
 
 TEST_F(DateTimeFunctionsTest, unixDate) {
-  const auto unixDate = [&](const StringView& date) {
+  const auto unixDate = [&](std::string_view date) {
     return evaluateOnce<int32_t, int32_t>(
-        "unix_date(c0)", {util::fromDateString(date)}, {DATE()});
+        "unix_date(c0)",
+        {util::fromDateString(date.data(), date.length())},
+        {DATE()});
   };
 
   EXPECT_EQ(unixDate("1970-01-01"), 0);
