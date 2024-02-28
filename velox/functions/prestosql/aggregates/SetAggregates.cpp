@@ -479,7 +479,8 @@ void registerSetAggAggregate(const std::string& prefix) {
             VELOX_UNREACHABLE(
                 "Unexpected type {}", mapTypeKindToName(typeKind));
         }
-      });
+      },
+      /*registerCompanionFunctions*/ true);
 }
 
 void registerSetUnionAggregate(const std::string& prefix) {
