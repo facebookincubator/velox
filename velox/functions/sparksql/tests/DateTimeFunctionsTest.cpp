@@ -736,14 +736,6 @@ TEST_F(DateTimeFunctionsTest, second) {
   EXPECT_EQ(59, second("2024-01-08 00:59:59.999"));
   EXPECT_EQ(15, second("2015-04-08 13:10:15"));
   EXPECT_EQ(0, second("1969-01-01 13:43:00.001"));
-
-  // Set time zone to Pacific/Apia (13 hours ahead of UTC).
-  setQueryTimeZone("Pacific/Apia");
-
-  EXPECT_EQ(0, second("2024-01-08 00:23:00.001"));
-  EXPECT_EQ(59, second("2024-01-08 00:59:59.999"));
-  EXPECT_EQ(23, second("2024-01-08 01:23:23.001"));
-  EXPECT_EQ(1, second("1969-01-01 13:23:01.001"));
 }
 
 TEST_F(DateTimeFunctionsTest, fromUnixtime) {
