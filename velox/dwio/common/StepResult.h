@@ -35,6 +35,10 @@ namespace facebook::velox::dwio::common {
 template <typename StateEnum, StateEnum HasResultState, typename ResultType>
 class StepResult {
  public:
+  using StateEnumT = StateEnum;
+  using ResultT = ResultType;
+  static constexpr StateEnum kHasResultState = HasResultState;
+
   template <
       typename T = ResultType,
       typename std::enable_if_t<!std::is_void_v<T>, int> = 0>
@@ -174,5 +178,25 @@ class StepResult {
           ResultType>>
       resultOrActions_;
 };
+
+template <typename StateEnum, typename Step>
+auto tryUntilState(StateEnum state, Step step) {
+  auto result = step();
+  while (result.state() != state) {
+    result.runAllActions();
+    result = step();
+  }
+  return result;
+}
+
+template <typename StateEnum, typename Step>
+auto tryUntilNotState(StateEnum state, Step step) {
+  auto result = step();
+  while (result.state() == state) {
+    result.runAllActions();
+    result = step();
+  }
+  return result;
+}
 
 } // namespace facebook::velox::dwio::common

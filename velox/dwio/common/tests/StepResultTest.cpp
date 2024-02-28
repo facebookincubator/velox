@@ -65,6 +65,22 @@ std::vector<std::function<void()>> getActions(
   return actions;
 }
 
+template <typename Result>
+class StepsJob {
+ public:
+  explicit StepsJob(std::vector<Result> results)
+      : results_{std::move(results)} {}
+
+  Result tryNext() {
+    VELOX_CHECK_LT(i_, results_.size());
+    return results_.at(i_++);
+  }
+
+ private:
+  std::vector<Result> results_;
+  size_t i_ = 0;
+};
+
 template <typename T>
 class StepResultTypedTest : public testing::Test {};
 
@@ -272,4 +288,28 @@ TYPED_TEST(StepResultTypedTest, MergeActions) {
   EXPECT_EQ(executedActions, actions({1, 1}));
   EXPECT_EQ(splitResult.runAllActions(), 2);
   EXPECT_EQ(executedActions, actions({2, 2}));
+}
+
+TYPED_TEST(StepResultTypedTest, TryUntilState) {
+  actions executedActions;
+  StepsJob<TypeParam> stepsJob(
+      {TypeParam(ReaderState::NEEDS_MORE_IO, getAction(executedActions)),
+       TypeParam(ReaderState::NEEDS_MORE_IO, getActions(executedActions, 2)),
+       TypeParam(ReaderState::END_OF_FILE, getAction(executedActions))});
+  auto lastState = tryUntilState(
+      ReaderState::END_OF_FILE, [&stepsJob]() { return stepsJob.tryNext(); });
+  EXPECT_EQ(executedActions, actions({1, 1, 1, 0}));
+  EXPECT_EQ(lastState.state(), ReaderState::END_OF_FILE);
+}
+
+TYPED_TEST(StepResultTypedTest, TryUntilNotState) {
+  actions executedActions;
+  StepsJob<TypeParam> stepsJob(
+      {TypeParam(ReaderState::NEEDS_MORE_IO, getAction(executedActions)),
+       TypeParam(ReaderState::NEEDS_MORE_IO, getActions(executedActions, 2)),
+       TypeParam(ReaderState::END_OF_FILE, getAction(executedActions))});
+  auto lastState = tryUntilNotState(
+      ReaderState::NEEDS_MORE_IO, [&stepsJob]() { return stepsJob.tryNext(); });
+  EXPECT_EQ(executedActions, actions({1, 1, 1, 0}));
+  EXPECT_EQ(lastState.state(), ReaderState::END_OF_FILE);
 }
