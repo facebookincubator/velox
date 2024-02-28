@@ -602,7 +602,7 @@ TEST_F(ComparisonsTest, eqNestedComplex) {
 }
 
 TEST_F(ComparisonsTest, overflowTest) {
-  std::shared_ptr<memory::MemoryPool> pool{memory::addDefaultLeafMemoryPool()};
+  auto pool = memory::memoryManager()->addLeafPool();
   auto makeFlatVector = [&pool](size_t numRows, int64_t delta) {
     BufferPtr values =
         AlignedBuffer::allocate<int64_t>(numRows + delta, pool.get());
