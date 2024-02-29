@@ -1862,3 +1862,20 @@ TEST_F(StringFunctionsTest, varbinaryLength) {
   auto result = evaluate("length(c0)", makeRowVector({vector}));
   test::assertEqualVectors(expected, result);
 }
+
+TEST_F(StringFunctionsTest, keySamplingPercent) {
+  const auto keySamplingPercent = [&](std::optional<std::string> string) {
+    return evaluateOnce<double>("key_sampling_percent(c0)", string);
+  };
+
+  EXPECT_EQ(std::nullopt, keySamplingPercent(std::nullopt));
+  EXPECT_EQ(0.56, keySamplingPercent("abc"));
+  EXPECT_EQ(6.11561179120687E-153, keySamplingPercent("abcdefghskwkjadhwd"));
+  EXPECT_EQ(2.393674127734674E-93, keySamplingPercent("001yxzuj"));
+  EXPECT_EQ(0.48, keySamplingPercent("56wfythjhdhvgewuikwemn"));
+  EXPECT_EQ(0.7520703125, keySamplingPercent("special_#@,$|%/^~?{}+-"));
+  EXPECT_EQ(0.4, keySamplingPercent("     "));
+  EXPECT_EQ(0.28, keySamplingPercent(""));
+  EXPECT_EQ(
+      4.143659858002825E-274, keySamplingPercent("Hello World from Velox!"));
+}

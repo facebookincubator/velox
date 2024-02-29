@@ -127,5 +127,8 @@ void registerStringFunctions(const std::string& prefix) {
       {prefix + "strrpos"});
   registerFunction<StrRPosFunction, int64_t, Varchar, Varchar, int64_t>(
       {prefix + "strrpos"});
+
+  registerFunction<KeySamplingPercentFunction, double, Varchar>(
+      {prefix + "key_sampling_percent"});
 }
 } // namespace facebook::velox::functions

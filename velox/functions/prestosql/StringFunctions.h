@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#define XXH_INLINE_ALL
+#include "velox/external/xxhash/xxhash.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
@@ -430,4 +432,17 @@ struct LevenshteinDistanceFunction {
   }
 };
 
+template <typename T>
+struct KeySamplingPercentFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Varchar>& string) {
+    static constexpr auto kTypeLength = sizeof(int64_t);
+    int64_t hash = XXH64(string.data(), string.size(), 0);
+    memcpy(&result, &hash, kTypeLength);
+    result = fmod(abs(result), 100) / 100;
+  }
+};
 } // namespace facebook::velox::functions
