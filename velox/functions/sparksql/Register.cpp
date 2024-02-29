@@ -18,6 +18,7 @@
 #include "velox/expression/RegisterSpecialForm.h"
 #include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
+#include "velox/functions/lib/ArrayUnionFunction.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
@@ -118,6 +119,12 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions<Date>(prefix);
 }
 } // namespace
+
+template <typename T>
+inline void registerArrayUnionFunctions(const std::string& prefix) {
+  registerFunction<ArrayUnionFunctionNaNEqual, Array<T>, Array<T>, Array<T>>(
+      {prefix + "array_union"});
+}
 
 void registerFunctions(const std::string& prefix) {
   registerAllSpecialFormGeneralFunctions();
@@ -334,6 +341,20 @@ void registerFunctions(const std::string& prefix) {
       prefix + "unscaled_value",
       unscaledValueSignatures(),
       makeUnscaledValue());
+
+  registerArrayUnionFunctions<bool>(prefix);
+  registerArrayUnionFunctions<int8_t>(prefix);
+  registerArrayUnionFunctions<int16_t>(prefix);
+  registerArrayUnionFunctions<int32_t>(prefix);
+  registerArrayUnionFunctions<int64_t>(prefix);
+  registerArrayUnionFunctions<int128_t>(prefix);
+  registerArrayUnionFunctions<float>(prefix);
+  registerArrayUnionFunctions<double>(prefix);
+  registerArrayUnionFunctions<Varchar>(prefix);
+  registerArrayUnionFunctions<Varbinary>(prefix);
+  registerArrayUnionFunctions<Date>(prefix);
+  registerArrayUnionFunctions<Timestamp>(prefix);
+  registerArrayUnionFunctions<Generic<T1>>(prefix);
 }
 
 } // namespace sparksql
