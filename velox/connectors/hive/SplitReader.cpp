@@ -95,13 +95,15 @@ SplitReader::SplitReader(
       ioStats_(ioStats),
       baseReaderOpts_(connectorQueryCtx->memoryPool()) {}
 
-void SplitReader::configureReaderOptions() {
+void SplitReader::configureReaderOptions(
+    std::shared_ptr<random::RandomSkipTracker> randomSkip) {
   hive::configureReaderOptions(
       baseReaderOpts_,
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
       hiveTableHandle_,
       hiveSplit_);
+  baseReaderOpts_.setRandomSkip(std::move(randomSkip));
 }
 
 void SplitReader::prepareSplit(
@@ -113,8 +115,8 @@ void SplitReader::prepareSplit(
   std::shared_ptr<FileHandle> fileHandle;
   try {
     fileHandle = fileHandleFactory_->generate(hiveSplit_->filePath).second;
-  } catch (VeloxRuntimeError& e) {
-    if (e.errorCode() == error_code::kFileNotFound.c_str() &&
+  } catch (const VeloxRuntimeError& e) {
+    if (e.errorCode() == error_code::kFileNotFound &&
         hiveConfig_->ignoreMissingFiles(
             connectorQueryCtx_->sessionProperties())) {
       emptySplit_ = true;
@@ -223,7 +225,12 @@ std::vector<TypePtr> SplitReader::adaptColumns(
 }
 
 uint64_t SplitReader::next(int64_t size, VectorPtr& output) {
-  return baseRowReader_->next(size, output);
+  if (!baseReaderOpts_.randomSkip()) {
+    return baseRowReader_->next(size, output);
+  }
+  dwio::common::Mutation mutation;
+  mutation.randomSkip = baseReaderOpts_.randomSkip().get();
+  return baseRowReader_->next(size, output, &mutation);
 }
 
 void SplitReader::resetFilterCaches() {
