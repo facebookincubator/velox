@@ -11,7 +11,7 @@ __global__ void boolToIndices(
     int32_t** indices,
     int32_t* sizes,
     int64_t* times) {
-  __shared__ __align__(alignof(ScanAlgorithm::TempStorage)) char smem[1];
+  __shared__ ScanAlgorithm::TempStorage smem;
   int32_t idx = blockIdx.x;
   // Start cycle timer
   clock_t start = clock();
@@ -20,7 +20,7 @@ __global__ void boolToIndices(
       [&]() { return blockBools[threadIdx.x]; },
       idx * 256,
       indices[idx],
-      smem,
+      &smem,
       sizes[idx]);
   clock_t stop = clock();
   if (threadIdx.x == 0) {
@@ -34,26 +34,23 @@ void BlockTestStream::testBoolToIndices(
     int32_t** indices,
     int32_t* sizes,
     int64_t* times) {
-  auto tempBytes = sizeof(typename ScanAlgorithm::TempStorage);
-  boolToIndices<<<numBlocks, 256, tempBytes, stream_->stream>>>(
+  boolToIndices<<<numBlocks, 256, 0, stream_->stream>>>(
       flags, indices, sizes, times);
   CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void sum64(int64_t* numbers, int64_t* results) {
-  __shared__ __align__(
-      alignof(cub::BlockReduce<int64_t, 256>::TempStorage)) char smem[1];
+  __shared__ cub::BlockReduce<int64_t, 256>::TempStorage smem;
   int32_t idx = blockIdx.x;
   blockSum<256>(
-      [&]() { return numbers[idx * 256 + threadIdx.x]; }, smem, results);
+      [&]() { return numbers[idx * 256 + threadIdx.x]; }, &smem, results);
 }
 
 void BlockTestStream::testSum64(
     int32_t numBlocks,
     int64_t* numbers,
     int64_t* results) {
-  auto tempBytes = sizeof(typename cub::BlockReduce<int64_t, 256>::TempStorage);
-  sum64<<<numBlocks, 256, tempBytes, stream_->stream>>>(numbers, results);
+  sum64<<<numBlocks, 256, 0, stream_->stream>>>(numbers, results);
   CUDA_CHECK(cudaGetLastError());
 }
 
