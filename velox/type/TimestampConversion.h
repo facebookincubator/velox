@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include "velox/common/base/Status.h"
 #include "velox/type/Timestamp.h"
 
 namespace facebook::velox::util {
@@ -64,14 +65,23 @@ int64_t lastDayOfMonthSinceEpochFromDate(const std::tm& dateTime);
 /// Throws VeloxUserError if the date is invalid.
 int64_t daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day);
 
-/// Returns the (signed) number of days since unix epoch (1970-01-01).
-int64_t daysSinceEpochFromWeekDate(
+/// Computes the (signed) number of days since unix epoch (1970-01-01).
+/// Returns UserError status if the date is invalid.
+Status
+daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day, int64_t& out);
+
+/// Computes the (signed) number of days since unix epoch (1970-01-01).
+/// Returns UserError status if the date is invalid.
+Status daysSinceEpochFromWeekDate(
     int32_t weekYear,
     int32_t weekOfYear,
-    int32_t dayOfWeek);
+    int32_t dayOfWeek,
+    int64_t& out);
 
-/// Returns the (signed) number of days since unix epoch (1970-01-01).
-int64_t daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear);
+/// Computes the (signed) number of days since unix epoch (1970-01-01).
+/// Returns UserError status if the date is invalid.
+Status
+daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear, int64_t& out);
 
 /// Returns the (signed) number of days since unix epoch (1970-01-01), following
 /// the "YYYY-MM-DD" format (ISO 8601). ' ', '/' and '\' are also acceptable
