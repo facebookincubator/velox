@@ -18,7 +18,6 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <fmt/format.h>
 
@@ -28,30 +27,41 @@ using facebook::velox::VectorFuzzer;
 namespace facebook::velox::aggregate::test {
 
 namespace {
+const std::vector<std::string> kColumnNames =
+    {"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"};
+const std::vector<TypePtr> kSupportedTypes = {
+    BOOLEAN(),
+    TINYINT(),
+    SMALLINT(),
+    INTEGER(),
+    BIGINT(),
+    REAL(),
+    DOUBLE(),
+    VARCHAR(),
+    TIMESTAMP(),
+    DATE()};
 
+// Test parmeters with value and compare types for min_by and max_by functions.
 struct TestParam {
-  // Specify the value type of minmax_by in test.
-  TypeKind valueType;
-  // Specify the comparison value type of minmax_by in test.
-  TypeKind comparisonType;
+  // Specify the index in kSupportedTypes for value type.
+  int valueTypeIndex;
+  // Specify the index in kSupportedTypes for compare type.
+  int compareTypeIndex;
 };
 
-const std::unordered_set<TypeKind> kSupportedTypes = {
-    TypeKind::BOOLEAN,
-    TypeKind::TINYINT,
-    TypeKind::SMALLINT,
-    TypeKind::INTEGER,
-    TypeKind::BIGINT,
-    TypeKind::REAL,
-    TypeKind::DOUBLE,
-    TypeKind::VARCHAR,
-    TypeKind::TIMESTAMP};
+#define GET_VAL_TYPE_COL_NAME kColumnNames[GetParam().valueTypeIndex]
+#define GET_COMPARE_TYPE_COL_NAME kColumnNames[GetParam().compareTypeIndex]
+#define GET_VALUE_TYPEKIND kSupportedTypes[GetParam().valueTypeIndex]->kind()
+#define GET_VALUE_TYPE kSupportedTypes[GetParam().valueTypeIndex]
+#define GET_COMPARE_TYPE kSupportedTypes[GetParam().compareTypeIndex]
+#define GET_COMPARE_TYPEKIND \
+  kSupportedTypes[GetParam().compareTypeIndex]->kind()
 
 std::vector<TestParam> getTestParams() {
   std::vector<TestParam> params;
-  for (TypeKind valueType : kSupportedTypes) {
-    for (TypeKind comparisonType : kSupportedTypes) {
-      params.push_back({valueType, comparisonType});
+  for (auto valueIndex = 0; valueIndex < kSupportedTypes.size(); ++valueIndex) {
+    for (auto colIndex = 0; colIndex < kSupportedTypes.size(); ++colIndex) {
+      params.push_back({valueIndex, colIndex});
     }
   }
   return params;
@@ -59,7 +69,7 @@ std::vector<TestParam> getTestParams() {
 
 #define EXECUTE_TEST_BY_VALUE_TYPE(testFunc, valueType)              \
   do {                                                               \
-    switch (GetParam().comparisonType) {                             \
+    switch (GET_COMPARE_TYPEKIND) {                                  \
       case TypeKind::BOOLEAN:                                        \
         testFunc<valueType, bool>();                                 \
         break;                                                       \
@@ -89,13 +99,13 @@ std::vector<TestParam> getTestParams() {
         break;                                                       \
       default:                                                       \
         LOG(FATAL) << "Unsupported comparison type of minmax_by(): " \
-                   << mapTypeKindToName(GetParam().comparisonType);  \
+                   << mapTypeKindToName(GET_COMPARE_TYPEKIND);       \
     }                                                                \
   } while (0);
 
 #define EXECUTE_TEST(testFunc)                                  \
   do {                                                          \
-    switch (GetParam().valueType) {                             \
+    switch (GET_VALUE_TYPEKIND) {                               \
       case TypeKind::BOOLEAN:                                   \
         EXECUTE_TEST_BY_VALUE_TYPE(testFunc, bool);             \
         break;                                                  \
@@ -125,7 +135,7 @@ std::vector<TestParam> getTestParams() {
         break;                                                  \
       default:                                                  \
         LOG(FATAL) << "Unsupported value type of minmax_by(): " \
-                   << mapTypeKindToName(GetParam().valueType);  \
+                   << mapTypeKindToName(GET_VALUE_TYPEKIND);    \
     }                                                           \
   } while (0);
 
@@ -171,16 +181,16 @@ class MinMaxByAggregationTestBase : public AggregationTestBase {
   }
 
   // Get the column name in 'rowType_' for the given 'kind'.
-  std::string getColumnName(TypeKind kind) const {
+  std::string getColumnName(TypePtr type) const {
     for (int childIndex = 0; childIndex < rowType_->size(); ++childIndex) {
       const auto& childType = rowType_->childAt(childIndex);
-      if (childType->kind() == kind) {
+      if (childType == type) {
         return rowType_->nameOf(childIndex);
       }
     }
     VELOX_FAIL(
         "Type {} is not found in rowType_: ",
-        mapTypeKindToName(kind),
+        mapTypeKindToName(type->kind()),
         rowType_->toString());
   }
 
@@ -190,19 +200,8 @@ class MinMaxByAggregationTestBase : public AggregationTestBase {
       folly::Range<const int*> values);
 
   const RowTypePtr rowType_{
-      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"},
-          {
-              BOOLEAN(),
-              TINYINT(),
-              SMALLINT(),
-              INTEGER(),
-              BIGINT(),
-              REAL(),
-              DOUBLE(),
-              VARCHAR(),
-              DATE(),
-              TIMESTAMP(),
-          })};
+      ROW(std::vector<std::string>(kColumnNames),
+          std::vector<TypePtr>(kSupportedTypes))};
   // Specify the number of values in each typed data vector in
   // 'dataVectorsByType_'.
   const int numValues_;
@@ -310,42 +309,42 @@ void MinMaxByAggregationTestBase::SetUp() {
   AggregationTestBase::SetUp();
   AggregationTestBase::disallowInputShuffle();
 
-  for (const TypeKind type : kSupportedTypes) {
-    switch (type) {
+  for (const TypePtr type : kSupportedTypes) {
+    auto kind = type->kind();
+    switch (kind) {
       case TypeKind::BOOLEAN:
-        dataVectorsByType_.emplace(type, buildDataVector<bool>(numValues_));
+        dataVectorsByType_.emplace(kind, buildDataVector<bool>(numValues_));
         break;
       case TypeKind::TINYINT:
-        dataVectorsByType_.emplace(type, buildDataVector<int8_t>(numValues_));
+        dataVectorsByType_.emplace(kind, buildDataVector<int8_t>(numValues_));
         break;
       case TypeKind::SMALLINT:
-        dataVectorsByType_.emplace(type, buildDataVector<int16_t>(numValues_));
+        dataVectorsByType_.emplace(kind, buildDataVector<int16_t>(numValues_));
         break;
       case TypeKind::INTEGER:
-        dataVectorsByType_.emplace(type, buildDataVector<int32_t>(numValues_));
+        dataVectorsByType_.emplace(kind, buildDataVector<int32_t>(numValues_));
         break;
       case TypeKind::BIGINT:
-        dataVectorsByType_.emplace(type, buildDataVector<int64_t>(numValues_));
+        dataVectorsByType_.emplace(kind, buildDataVector<int64_t>(numValues_));
         break;
       case TypeKind::REAL:
-        dataVectorsByType_.emplace(type, buildDataVector<float>(numValues_));
+        dataVectorsByType_.emplace(kind, buildDataVector<float>(numValues_));
         break;
       case TypeKind::DOUBLE:
-        dataVectorsByType_.emplace(type, buildDataVector<double>(numValues_));
+        dataVectorsByType_.emplace(kind, buildDataVector<double>(numValues_));
         break;
       case TypeKind::TIMESTAMP:
         dataVectorsByType_.emplace(
-            type, buildDataVector<Timestamp>(numValues_));
+            kind, buildDataVector<Timestamp>(numValues_));
         break;
       case TypeKind::VARCHAR:
         dataVectorsByType_.emplace(
-            type, buildDataVector<StringView>(numValues_));
+            kind, buildDataVector<StringView>(numValues_));
         break;
       default:
-        LOG(FATAL) << "Unsupported data type: " << mapTypeKindToName(type);
+        LOG(FATAL) << "Unsupported data type: " << mapTypeKindToName(kind);
     }
   }
-  ASSERT_EQ(dataVectorsByType_.size(), kSupportedTypes.size());
   rowVectors_ = makeVectors(rowType_, 5, 10);
   createDuckDbTable(rowVectors_);
 };
@@ -405,11 +404,11 @@ class MinMaxByGlobalByAggregationTest
         // All null cases.
         {makeRowVector(
              {makeConstant(std::optional<T>(dataAt<T>(0)), 10),
-              makeNullConstant(GetParam().comparisonType, 10)}),
+              makeNullConstant(GET_COMPARE_TYPEKIND, 10)}),
          "SELECT NULL"},
 
         {makeRowVector(
-             {makeNullConstant(GetParam().valueType, 10),
+             {makeNullConstant(GET_VALUE_TYPEKIND, 10),
               makeConstant(std::optional<U>(dataAt<U>(0)), 10)}),
          "SELECT NULL"},
 
@@ -503,11 +502,11 @@ class MinMaxByGlobalByAggregationTest
         // All null cases.
         {makeRowVector(
              {makeConstant(std::optional<T>(dataAt<T>(0)), 10),
-              makeNullConstant(GetParam().comparisonType, 10)}),
+              makeNullConstant(GET_COMPARE_TYPEKIND, 10)}),
          "SELECT NULL"},
 
         {makeRowVector(
-             {makeNullConstant(GetParam().valueType, 10),
+             {makeNullConstant(GET_VALUE_TYPEKIND, 10),
               makeConstant(std::optional<U>(dataAt<U>(0)), 10)}),
          "SELECT NULL"},
 
@@ -589,50 +588,41 @@ TEST_P(MinMaxByGlobalByAggregationTest, randomMinByGlobalBy) {
   // to generate only valid Timestamp values. Currently, VectorFuzzer may
   // generate values that are too large (and therefore are not supported by
   // DuckDB).
-  if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
-      GetParam().valueType == TypeKind::TIMESTAMP) {
+  if (GET_COMPARE_TYPEKIND == TypeKind::TIMESTAMP ||
+      GET_VALUE_TYPEKIND == TypeKind::TIMESTAMP) {
     return;
   }
 
   testGlobalAggregation(
-      rowVectors_,
-      kMinBy,
-      getColumnName(GetParam().valueType),
-      getColumnName(GetParam().comparisonType));
+      rowVectors_, kMinBy, GET_VAL_TYPE_COL_NAME, GET_COMPARE_TYPE_COL_NAME);
 }
 
 TEST_P(MinMaxByGlobalByAggregationTest, randomMaxByGlobalBy) {
-  if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
-      GetParam().valueType == TypeKind::TIMESTAMP) {
+  if (GET_COMPARE_TYPEKIND == TypeKind::TIMESTAMP ||
+      GET_VALUE_TYPEKIND == TypeKind::TIMESTAMP) {
     return;
   }
 
   testGlobalAggregation(
-      rowVectors_,
-      kMaxBy,
-      getColumnName(GetParam().valueType),
-      getColumnName(GetParam().comparisonType));
+      rowVectors_, kMaxBy, GET_VAL_TYPE_COL_NAME, GET_COMPARE_TYPE_COL_NAME);
 }
 
 TEST_P(
     MinMaxByGlobalByAggregationTest,
     randomMaxByGlobalByWithDistinctCompareValue) {
-  if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
-      GetParam().valueType == TypeKind::TIMESTAMP ||
-      GetParam().comparisonType == TypeKind::BOOLEAN) {
+  if (GET_COMPARE_TYPEKIND == TypeKind::TIMESTAMP ||
+      GET_VALUE_TYPEKIND == TypeKind::TIMESTAMP ||
+      GET_COMPARE_TYPEKIND == TypeKind::BOOLEAN) {
     return;
   }
 
   // Enable disk spilling test with distinct comparison values.
   AggregationTestBase::allowInputShuffle();
 
-  auto rowType =
-      ROW({"c0", "c1"},
-          {fromKindToScalerType(GetParam().valueType),
-           fromKindToScalerType(GetParam().comparisonType)});
+  auto rowType = ROW({"c0", "c1"}, {GET_VALUE_TYPE, GET_COMPARE_TYPE});
 
-  const bool isSmallInt = GetParam().comparisonType == TypeKind::TINYINT ||
-      GetParam().comparisonType == TypeKind::SMALLINT;
+  const bool isSmallInt = GET_COMPARE_TYPEKIND == TypeKind::TINYINT ||
+      GET_COMPARE_TYPEKIND == TypeKind::SMALLINT;
   const int kBatchSize = isSmallInt ? 1 << 4 : 1 << 10;
   const int kNumBatches = isSmallInt ? 4 : 10;
   const int kNumValues = kNumBatches * kBatchSize;
@@ -652,9 +642,9 @@ TEST_P(
   for (int i = 0; i < kNumBatches; ++i) {
     // Generate a non-lazy vector so that it can be written out as a duckDB
     // table.
-    auto valueVector = fuzzer.fuzz(fromKindToScalerType(GetParam().valueType));
+    auto valueVector = fuzzer.fuzz(GET_VALUE_TYPE);
     auto comparisonVector = buildDataVector(
-        GetParam().comparisonType,
+        GET_COMPARE_TYPEKIND,
         kBatchSize,
         folly::range<const int*>(rawValues, rawValues + kBatchSize));
     rawValues += kBatchSize;
@@ -688,7 +678,7 @@ class MinMaxByGroupByAggregationTest
     const std::string aggregate = fmt::format(
         "{}({}, {})", aggName, valueColumnName, comparisonColumnName);
     std::string verifyDuckDbSql;
-    if (GetParam().valueType == TypeKind::BOOLEAN) {
+    if (GET_VALUE_TYPEKIND == TypeKind::BOOLEAN) {
       verifyDuckDbSql = fmt::format(
           "SELECT {}, CAST({} as BOOLEAN) FROM tmp GROUP BY {}",
           groupByColumnName,
@@ -746,7 +736,7 @@ class MinMaxByGroupByAggregationTest
 
         // All null cases.
         {makeRowVector(
-             {makeNullConstant(GetParam().valueType, 6),
+             {makeNullConstant(GET_VALUE_TYPEKIND, 6),
               makeNullableFlatVector<U>(
                   {dataAt<U>(4),
                    dataAt<U>(5),
@@ -775,7 +765,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<T>(1),
                    std::nullopt,
                    dataAt<T>(0)}),
-              makeNullConstant(GetParam().valueType, 6),
+              makeNullConstant(GET_VALUE_TYPEKIND, 6),
               makeNullableFlatVector<int32_t>(
                   {dataAt<int32_t>(0),
                    dataAt<int32_t>(0),
@@ -899,7 +889,7 @@ class MinMaxByGroupByAggregationTest
 
         // All null cases.
         {makeRowVector(
-             {makeNullConstant(GetParam().valueType, 6),
+             {makeNullConstant(GET_VALUE_TYPEKIND, 6),
               makeNullableFlatVector<U>(
                   {dataAt<U>(4),
                    dataAt<U>(5),
@@ -928,7 +918,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<T>(1),
                    std::nullopt,
                    dataAt<T>(0)}),
-              makeNullConstant(GetParam().valueType, 6),
+              makeNullConstant(GET_VALUE_TYPEKIND, 6),
               makeNullableFlatVector<int32_t>(
                   {dataAt<int32_t>(0),
                    dataAt<int32_t>(0),
@@ -1027,39 +1017,39 @@ TEST_P(MinMaxByGroupByAggregationTest, maxByGroupBy) {
 }
 
 TEST_P(MinMaxByGroupByAggregationTest, randomMinByGroupBy) {
-  if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
-      GetParam().valueType == TypeKind::TIMESTAMP) {
+  if (GET_COMPARE_TYPEKIND == TypeKind::TIMESTAMP ||
+      GET_VALUE_TYPEKIND == TypeKind::TIMESTAMP) {
     return;
   }
 
   testGroupByAggregation(
       rowVectors_,
       kMinBy,
-      getColumnName(GetParam().valueType),
-      getColumnName(GetParam().comparisonType),
-      getColumnName(TypeKind::INTEGER));
+      getColumnName(GET_VALUE_TYPE),
+      getColumnName(GET_COMPARE_TYPE),
+      getColumnName(INTEGER()));
 }
 
 TEST_P(MinMaxByGroupByAggregationTest, randomMaxByGroupBy) {
-  if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
-      GetParam().valueType == TypeKind::TIMESTAMP) {
+  if (GET_COMPARE_TYPEKIND == TypeKind::TIMESTAMP ||
+      GET_VALUE_TYPEKIND == TypeKind::TIMESTAMP) {
     return;
   }
 
   testGroupByAggregation(
       rowVectors_,
       kMaxBy,
-      getColumnName(GetParam().valueType),
-      getColumnName(GetParam().comparisonType),
-      getColumnName(TypeKind::INTEGER));
+      getColumnName(GET_VALUE_TYPE),
+      getColumnName(GET_COMPARE_TYPE),
+      getColumnName(INTEGER()));
 }
 
 TEST_P(
     MinMaxByGroupByAggregationTest,
     randomMinMaxByGroupByWithDistinctCompareValue) {
-  if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
-      GetParam().valueType == TypeKind::TIMESTAMP ||
-      GetParam().comparisonType == TypeKind::BOOLEAN) {
+  if (GET_COMPARE_TYPEKIND == TypeKind::TIMESTAMP ||
+      GET_VALUE_TYPEKIND == TypeKind::TIMESTAMP ||
+      GET_COMPARE_TYPEKIND == TypeKind::BOOLEAN) {
     return;
   }
 
@@ -1067,13 +1057,10 @@ TEST_P(
   AggregationTestBase::allowInputShuffle();
 
   auto rowType =
-      ROW({"c0", "c1", "c2"},
-          {fromKindToScalerType(GetParam().valueType),
-           fromKindToScalerType(GetParam().comparisonType),
-           INTEGER()});
+      ROW({"c0", "c1", "c2"}, {GET_VALUE_TYPE, GET_COMPARE_TYPE, INTEGER()});
 
-  const bool isSmallInt = GetParam().comparisonType == TypeKind::TINYINT ||
-      GetParam().comparisonType == TypeKind::SMALLINT;
+  const bool isSmallInt = GET_COMPARE_TYPEKIND == TypeKind::TINYINT ||
+      GET_COMPARE_TYPEKIND == TypeKind::SMALLINT;
   const int kBatchSize = isSmallInt ? 1 << 4 : 1 << 10;
   const int kNumBatches = isSmallInt ? 3 : 10;
   const int kNumValues = kNumBatches * kBatchSize;
@@ -1093,10 +1080,10 @@ TEST_P(
   for (int i = 0; i < kNumBatches; ++i) {
     // Generate a non-lazy vector so that it can be written out as a duckDB
     // table.
-    auto valueVector = fuzzer.fuzz(fromKindToScalerType(GetParam().valueType));
+    auto valueVector = fuzzer.fuzz(GET_VALUE_TYPE);
     auto groupByVector = makeFlatVector<int32_t>(kBatchSize);
     auto comparisonVector = buildDataVector(
-        GetParam().comparisonType,
+        GET_COMPARE_TYPEKIND,
         kBatchSize,
         folly::range<const int*>(rawValues, rawValues + kBatchSize));
     rawValues += kBatchSize;
