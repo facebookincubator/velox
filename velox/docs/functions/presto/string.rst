@@ -372,3 +372,8 @@ Unicode Functions
 .. function:: to_utf8(string) -> varbinary
 
     Encodes ``string`` into a UTF-8 varbinary representation.
+
+.. function:: key_sampling_percent(varchar) -> double
+
+    Generates a double value between 0.0 and 1.0 based on the hash of the given ``varchar``.
+    This function is useful for deterministic sampling of data.
