@@ -76,8 +76,7 @@ std::vector<AggregateInfo> toAggregateInfo(
         }
       } else {
         VELOX_FAIL(
-            "Expression must be field access, constant, or "
-            "lambda (HashAggregation/StreamingAggregation): {}",
+            "Expression must be field access, constant, or lambda: {}",
             arg->toString());
       }
     }
