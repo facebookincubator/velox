@@ -953,10 +953,7 @@ MachinePageCount MmapAllocator::SizeClass::free(Allocation& allocation) {
         (runAddress - address_) / (AllocationTraits::kPageSize * unitSize_);
     for (auto page = firstBit; page < firstBit + numPages; ++page) {
       if (!bits::isBitSet(pageAllocated_.data(), page)) {
-        // TODO: change this to a velox failure to catch the bug.
-        VELOX_MEM_LOG(ERROR)
-            << "Double free: page = " << page << " sizeclass = " << unitSize_;
-        continue;
+        VELOX_FAIL("Double free: page = {} sizeclass = {}", page, unitSize_);
       }
       if (bits::isBitSet(pageMapped_.data(), page)) {
         ++numMappedFreePages_;
