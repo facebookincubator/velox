@@ -228,7 +228,8 @@ then null is returned.</p>
 <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> splits <code class="docutils literal notranslate"><span class="pre">string</span></code> into key-value pairs. <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> splits
 each pair into key and value. Note that <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> are
 interpreted literally, i.e., as full string matches.</p>
-<p>entryDelimiter and keyValueDelimiter must not be empty and must not be the same.</p>
+<p><code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> must not be empty and must not be the same.
+<code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> is allowed to be the trailing character.</p>
 <p>Raises an error if there are duplicate keys.</p>
 </dd></dl>
 
