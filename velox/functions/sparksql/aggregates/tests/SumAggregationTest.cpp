@@ -96,25 +96,16 @@ class SumAggregationTest : public SumTestBase {
       const std::vector<std::optional<TOut>>& output,
       const TypePtr& outputType) {
     std::vector<RowVectorPtr> vectors;
-    VectorPtr inputDecimalVector;
-    if constexpr (std::is_same_v<int64_t, TIn>) {
-      inputDecimalVector = makeNullableFlatVector<int64_t>(input, inputType);
-    } else {
-      inputDecimalVector = makeNullableFlatVector<int128_t>(input, inputType);
-    }
+    VectorPtr inputDecimalVector =
+        makeNullableFlatVector<TIn>(input, inputType);
     for (int i = 0; i < 5; ++i) {
       vectors.emplace_back(makeRowVector(
           {makeFlatVector<int32_t>(20, [](auto row) { return row % 4; }),
            inputDecimalVector}));
     }
 
-    VectorPtr outputDecimalVector;
-    if constexpr (std::is_same_v<int64_t, TOut>) {
-      outputDecimalVector = makeNullableFlatVector<int64_t>(output, outputType);
-    } else {
-      outputDecimalVector =
-          makeNullableFlatVector<int128_t>(output, outputType);
-    }
+    VectorPtr outputDecimalVector =
+        makeNullableFlatVector<TOut>(output, outputType);
     auto expected = makeRowVector(
         {makeFlatVector<int32_t>(std::vector<int32_t>{0, 1, 2, 3}),
          outputDecimalVector});

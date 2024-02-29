@@ -277,8 +277,8 @@ The author defines an optional flag `is_fixed_size_` indicating whether the
 every accumulator takes fixed amount of memory. This flag is true by default.
 Next, the author defines another optional flag `use_external_memory_`
 indicating whether the accumulator uses memory that is not tracked by Velox.
-This flag is false by default. Then, the author can define optional flag
-`aligned_accumulator_` indicationg whether the accumulator requires aligned
+This flag is false by default. Then, the author can define an optional flag
+`aligned_accumulator_` indicating whether the accumulator requires aligned
 access. This flag is false by default.
 
 The author defines a constructor that takes a single argument of
@@ -370,7 +370,7 @@ For aggregaiton functions of non-default-null behavior, the author defines an
   };
 
 The definition of `is_fixed_size_`, `use_external_memory_`,
-`aligned_accumulator_` the constructor, and the `destroy` method are exactly
+`aligned_accumulator_`, the constructor, and the `destroy` method are exactly
 the same as those for default-null behavior.
 
 On the other hand, the C++ function signatures of `addInput`, `combine`,
