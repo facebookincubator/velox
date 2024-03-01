@@ -531,6 +531,12 @@ class BaseVector {
       vector_size_t size,
       velox::memory::MemoryPool* pool);
 
+  static VectorPtr createConstant(
+      const std::optional<std::string>& value,
+      const TypePtr& type,
+      vector_size_t size,
+      velox::memory::MemoryPool* pool);
+
   static VectorPtr createNullConstant(
       const TypePtr& type,
       vector_size_t size,
