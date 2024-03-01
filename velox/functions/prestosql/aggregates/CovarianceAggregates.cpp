@@ -346,7 +346,7 @@ struct RegrAccumulator : public CovarAccumulator {
 
 struct RegrCountResultAccessor {
   static bool hasResult(const RegrAccumulator& accumulator) {
-    return accumulator.count() >= 0;
+    return accumulator.count() > 0;
   }
 
   static double result(const RegrAccumulator& accumulator) {
