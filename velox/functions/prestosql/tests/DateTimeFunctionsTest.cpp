@@ -804,6 +804,41 @@ TEST_F(DateTimeFunctionsTest, dayOfMonthDate) {
   EXPECT_EQ(2, day(-18262));
 }
 
+TEST_F(DateTimeFunctionsTest, plusMinusDateIntervalYearMonth) {
+  const auto makeInput = [&](const std::string& date, int32_t interval) {
+    return makeRowVector({
+        makeNullableFlatVector<int32_t>({parseDate(date)}, DATE()),
+        makeNullableFlatVector<int32_t>({interval}, INTERVAL_YEAR_MONTH()),
+    });
+  };
+
+  const auto plus = [&](const std::string& date, int32_t interval) {
+    return evaluateOnce<int32_t>("c0 + c1", makeInput(date, interval));
+  };
+
+  const auto minus = [&](const std::string& date, int32_t interval) {
+    return evaluateOnce<int32_t>("c0 - c1", makeInput(date, interval));
+  };
+
+  EXPECT_EQ(parseDate("2021-10-15"), plus("2020-10-15", 12));
+  EXPECT_EQ(parseDate("2022-01-15"), plus("2020-10-15", 15));
+  EXPECT_EQ(parseDate("2020-11-15"), plus("2020-10-15", 1));
+  EXPECT_EQ(parseDate("2020-11-30"), plus("2020-10-30", 1));
+  EXPECT_EQ(parseDate("2020-11-30"), plus("2020-10-31", 1));
+  EXPECT_EQ(parseDate("2021-02-28"), plus("2020-02-28", 12));
+  EXPECT_EQ(parseDate("2021-02-28"), plus("2020-02-29", 12));
+  EXPECT_EQ(parseDate("2016-02-29"), plus("2020-02-29", -48));
+
+  EXPECT_EQ(parseDate("2019-10-15"), minus("2020-10-15", 12));
+  EXPECT_EQ(parseDate("2019-07-15"), minus("2020-10-15", 15));
+  EXPECT_EQ(parseDate("2020-09-15"), minus("2020-10-15", 1));
+  EXPECT_EQ(parseDate("2020-09-30"), minus("2020-10-30", 1));
+  EXPECT_EQ(parseDate("2020-09-30"), minus("2020-10-31", 1));
+  EXPECT_EQ(parseDate("2019-02-28"), minus("2020-02-29", 12));
+  EXPECT_EQ(parseDate("2019-02-28"), minus("2020-02-28", 12));
+  EXPECT_EQ(parseDate("2024-02-29"), minus("2020-02-29", -48));
+}
+
 TEST_F(DateTimeFunctionsTest, plusMinusDateIntervalDayTime) {
   const auto plus = [&](std::optional<int32_t> date,
                         std::optional<int64_t> interval) {
@@ -2603,6 +2638,21 @@ TEST_F(DateTimeFunctionsTest, parseDatetime) {
   EXPECT_EQ(
       TimestampWithTimezone(-66600000, util::getTimeZoneID("+02:00")),
       parseDatetime("1969-12-31+07:30+02:00", "YYYY-MM-dd+HH:mmZZ"));
+
+  // Joda also lets 'Z' to be UTC|UCT|GMT|GMT0.
+  auto ts = TimestampWithTimezone(1708840800000, util::getTimeZoneID("GMT"));
+  EXPECT_EQ(
+      ts, parseDatetime("2024-02-25+06:00:99 GMT", "yyyy-MM-dd+HH:mm:99 ZZZ"));
+  EXPECT_EQ(
+      ts, parseDatetime("2024-02-25+06:00:99 GMT0", "yyyy-MM-dd+HH:mm:99 ZZZ"));
+  EXPECT_EQ(
+      ts, parseDatetime("2024-02-25+06:00:99 UTC", "yyyy-MM-dd+HH:mm:99 ZZZ"));
+  EXPECT_EQ(
+      ts, parseDatetime("2024-02-25+06:00:99 UTC", "yyyy-MM-dd+HH:mm:99 ZZZ"));
+
+  VELOX_ASSERT_THROW(
+      parseDatetime("2024-02-25+06:00:99 PST", "yyyy-MM-dd+HH:mm:99 ZZZ"),
+      "Invalid format: \"2024-02-25+06:00:99 PST\" is malformed at \"PST\"");
 }
 
 TEST_F(DateTimeFunctionsTest, formatDateTime) {
@@ -3261,6 +3311,18 @@ TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
   EXPECT_EQ(
       "69-May-11 20:04:45 PM",
       testDateFormat("%y-%M-%e %T %p", -20220915000, "-03:00"));
+}
+
+TEST_F(DateTimeFunctionsTest, fromIso8601Date) {
+  const auto fromIso = [&](const std::string& input) {
+    return evaluateOnce<int32_t, std::string>("from_iso8601_date(c0)", input);
+  };
+
+  EXPECT_EQ(0, fromIso("1970-01-01"));
+  EXPECT_EQ(9, fromIso("1970-01-10"));
+  EXPECT_EQ(-1, fromIso("1969-12-31"));
+
+  VELOX_ASSERT_THROW(fromIso("2024-01-xx"), "Unable to parse date value");
 }
 
 TEST_F(DateTimeFunctionsTest, dateParse) {

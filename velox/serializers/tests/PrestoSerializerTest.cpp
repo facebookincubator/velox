@@ -383,8 +383,8 @@ class PrestoSerializerTest
     auto concatenation = BaseVector::create(rowType, 0, pool_.get());
     auto arena = std::make_unique<StreamArena>(pool_.get());
     auto paramOptions = getParamSerdeOptions(serdeOptions);
-    auto serializer =
-        serde_->createSerializer(rowType, 10, arena.get(), &paramOptions);
+    auto serializer = serde_->createIterativeSerializer(
+        rowType, 10, arena.get(), &paramOptions);
 
     for (const auto& vector : vectors) {
       auto data = makeRowVector({"f"}, {vector});
@@ -1188,6 +1188,46 @@ TEST_P(PrestoSerializerTest, lexer) {
   }
 }
 
+TEST_P(PrestoSerializerTest, checksum) {
+  std::ostringstream output;
+  // The payload (doesn't matter what as long as it's not 0).
+  vector_size_t data = 4;
+
+  // Write out the number of rows.
+  vector_size_t numRows = std::numeric_limits<int32_t>::max();
+  output.write(reinterpret_cast<char*>(&numRows), sizeof(numRows));
+  // Set the bit indicating there's a checksum.
+  char marker = 4;
+  output.write(&marker, sizeof(marker));
+  vector_size_t size = sizeof(data);
+  // Write out the uncompressed size and size (we're not compressing the data so
+  // they're the same).
+  output.write(reinterpret_cast<char*>(&size), sizeof(size));
+  output.write(reinterpret_cast<char*>(&size), sizeof(size));
+  // Write out the checksum, it shouldn't match the checksum of data.
+  int64_t checksum = 0;
+  output.write(reinterpret_cast<char*>(&checksum), sizeof(checksum));
+  output.write(reinterpret_cast<char*>(&data), sizeof(data));
+
+  auto paramOptions = getParamSerdeOptions(nullptr);
+  RowVectorPtr result;
+  auto serialized = output.str();
+  auto byteStream = toByteStream(serialized);
+  // Make a small memory pool, if we try to allocate a Vector with numRows we'll
+  // OOM.
+  auto pool = memory::memoryManager()->addRootPool("checksum", 1UL << 10);
+  // This should fail because the checksums don't match.
+  VELOX_ASSERT_THROW(
+      serde_->deserialize(
+          &byteStream,
+          pool->addLeafChild("child").get(),
+          ROW({BIGINT()}),
+          &result,
+          0,
+          &paramOptions),
+      "Received corrupted serialized page.");
+}
+
 INSTANTIATE_TEST_SUITE_P(
     PrestoSerializerTest,
     PrestoSerializerTest,
@@ -1213,8 +1253,8 @@ TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
     auto arena = std::make_unique<StreamArena>(pool_.get());
     auto rowType = asRowType(rowVector->type());
     auto numRows = rowVector->size();
-    auto serializer =
-        serde_->createSerializer(rowType, numRows, arena.get(), nullptr);
+    auto serializer = serde_->createIterativeSerializer(
+        rowType, numRows, arena.get(), nullptr);
     serializer->append(rowVector);
     facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
     OStreamOutputStream out(&output, &listener);
