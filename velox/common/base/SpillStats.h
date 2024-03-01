@@ -44,8 +44,9 @@ struct SpillStats {
   uint64_t spillSortTimeUs{0};
   /// The time spent on serializing rows for spilling.
   uint64_t spillSerializationTimeUs{0};
-  /// The number of disk writes to spill rows.
-  uint64_t spillDiskWrites{0};
+  /// The number of spill writer flushes, equivalent to number of write calls to
+  /// underlying filesystem.
+  uint64_t spillWrites{0};
   /// The time spent on copy out serialized rows for disk write. If compression
   /// is enabled, this includes the compression time.
   uint64_t spillFlushTimeUs{0};
@@ -65,7 +66,7 @@ struct SpillStats {
       uint64_t _spillFillTimeUs,
       uint64_t _spillSortTimeUs,
       uint64_t _spillSerializationTimeUs,
-      uint64_t _spillDiskWrites,
+      uint64_t _spillWrites,
       uint64_t _spillFlushTimeUs,
       uint64_t _spillWriteTimeUs,
       uint64_t _spillMaxLevelExceededCount);
@@ -138,3 +139,13 @@ void updateGlobalMaxSpillLevelExceededCount(
 /// Gets the cumulative global spill stats.
 SpillStats globalSpillStats();
 } // namespace facebook::velox::common
+
+template <>
+struct fmt::formatter<facebook::velox::common::SpillStats>
+    : fmt::formatter<std::string> {
+  auto format(
+      const facebook::velox::common::SpillStats& s,
+      format_context& ctx) {
+    return formatter<std::string>::format(s.toString(), ctx);
+  }
+};

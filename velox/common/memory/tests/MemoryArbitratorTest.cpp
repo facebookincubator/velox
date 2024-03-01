@@ -57,6 +57,13 @@ TEST_F(MemoryArbitrationTest, stats) {
       "queueTime 230.00ms arbitrationTime 1.02ms reclaimTime 1.00ms "
       "shrunkMemory 95.37MB reclaimedMemory 9.77KB "
       "maxCapacity 0B freeCapacity 0B]");
+  ASSERT_EQ(
+      fmt::format("{}", stats),
+      "STATS[numRequests 2 numSucceeded 0 numAborted 3 numFailures 100 "
+      "numNonReclaimableAttempts 5 numReserves 0 numReleases 0 "
+      "queueTime 230.00ms arbitrationTime 1.02ms reclaimTime 1.00ms "
+      "shrunkMemory 95.37MB reclaimedMemory 9.77KB "
+      "maxCapacity 0B freeCapacity 0B]");
 }
 
 TEST_F(MemoryArbitrationTest, create) {
@@ -674,29 +681,29 @@ TEST_F(MemoryReclaimerTest, arbitrationContext) {
   ASSERT_FALSE(isSpillMemoryPool(leafChild2.get()));
   ASSERT_TRUE(memoryArbitrationContext() == nullptr);
   {
-    ScopedMemoryArbitrationContext arbitrationContext(*leafChild1);
+    ScopedMemoryArbitrationContext arbitrationContext(leafChild1.get());
     ASSERT_TRUE(memoryArbitrationContext() != nullptr);
-    ASSERT_EQ(&memoryArbitrationContext()->requestor, leafChild1.get());
+    ASSERT_EQ(memoryArbitrationContext()->requestor, leafChild1.get());
   }
   ASSERT_TRUE(memoryArbitrationContext() == nullptr);
   {
-    ScopedMemoryArbitrationContext arbitrationContext(*leafChild2);
+    ScopedMemoryArbitrationContext arbitrationContext(leafChild2.get());
     ASSERT_TRUE(memoryArbitrationContext() != nullptr);
-    ASSERT_EQ(&memoryArbitrationContext()->requestor, leafChild2.get());
+    ASSERT_EQ(memoryArbitrationContext()->requestor, leafChild2.get());
   }
   ASSERT_TRUE(memoryArbitrationContext() == nullptr);
   std::thread nonAbitrationThread([&]() {
     ASSERT_TRUE(memoryArbitrationContext() == nullptr);
     {
-      ScopedMemoryArbitrationContext arbitrationContext(*leafChild1);
+      ScopedMemoryArbitrationContext arbitrationContext(leafChild1.get());
       ASSERT_TRUE(memoryArbitrationContext() != nullptr);
-      ASSERT_EQ(&memoryArbitrationContext()->requestor, leafChild1.get());
+      ASSERT_EQ(memoryArbitrationContext()->requestor, leafChild1.get());
     }
     ASSERT_TRUE(memoryArbitrationContext() == nullptr);
     {
-      ScopedMemoryArbitrationContext arbitrationContext(*leafChild2);
+      ScopedMemoryArbitrationContext arbitrationContext(leafChild2.get());
       ASSERT_TRUE(memoryArbitrationContext() != nullptr);
-      ASSERT_EQ(&memoryArbitrationContext()->requestor, leafChild2.get());
+      ASSERT_EQ(memoryArbitrationContext()->requestor, leafChild2.get());
     }
     ASSERT_TRUE(memoryArbitrationContext() == nullptr);
   });

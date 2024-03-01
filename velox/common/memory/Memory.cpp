@@ -44,7 +44,9 @@ std::shared_ptr<MemoryAllocator> createAllocator(
     mmapOptions.mmapArenaCapacityRatio = options.mmapArenaCapacityRatio;
     return std::make_shared<MmapAllocator>(mmapOptions);
   } else {
-    return std::make_shared<MallocAllocator>(options.allocatorCapacity);
+    return std::make_shared<MallocAllocator>(
+        options.allocatorCapacity,
+        options.allocationSizeThresholdWithReservation);
   }
 }
 
@@ -173,7 +175,7 @@ uint16_t MemoryManager::alignment() const {
 
 std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     const std::string& name,
-    int64_t capacity,
+    int64_t maxCapacity,
     std::unique_ptr<MemoryReclaimer> reclaimer) {
   std::string poolName = name;
   if (poolName.empty()) {
@@ -183,7 +185,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
 
   MemoryPool::Options options;
   options.alignment = alignment_;
-  options.maxCapacity = capacity;
+  options.maxCapacity = maxCapacity;
   options.trackUsage = true;
   options.debugEnabled = debugEnabled_;
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
@@ -204,7 +206,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   pools_.emplace(poolName, pool);
   VELOX_CHECK_EQ(pool->capacity(), 0);
   arbitrator_->growCapacity(
-      pool.get(), std::min<uint64_t>(poolInitCapacity_, capacity));
+      pool.get(), std::min<uint64_t>(poolInitCapacity_, maxCapacity));
   return pool;
 }
 
@@ -243,7 +245,7 @@ void MemoryManager::dropPool(MemoryPool* pool) {
 
 MemoryPool& MemoryManager::deprecatedSharedLeafPool() {
   const auto idx = std::hash<std::thread::id>{}(std::this_thread::get_id());
-  folly::SharedMutex::ReadHolder guard{mutex_};
+  std::shared_lock guard{mutex_};
   return *sharedLeafPools_.at(idx % sharedLeafPools_.size());
 }
 
@@ -255,7 +257,7 @@ size_t MemoryManager::numPools() const {
   size_t numPools = defaultRoot_->getChildCount();
   VELOX_CHECK_GE(numPools, 0);
   {
-    folly::SharedMutex::ReadHolder guard{mutex_};
+    std::shared_lock guard{mutex_};
     numPools += pools_.size() - sharedLeafPools_.size();
   }
   return numPools;
@@ -301,7 +303,7 @@ std::string MemoryManager::toString(bool detail) const {
 
 std::vector<std::shared_ptr<MemoryPool>> MemoryManager::getAlivePools() const {
   std::vector<std::shared_ptr<MemoryPool>> pools;
-  folly::SharedMutex::ReadHolder guard{mutex_};
+  std::shared_lock guard{mutex_};
   pools.reserve(pools_.size());
   for (const auto& entry : pools_) {
     auto pool = entry.second.lock();

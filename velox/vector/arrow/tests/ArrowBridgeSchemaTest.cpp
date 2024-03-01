@@ -195,6 +195,8 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
 
   testScalarType(DECIMAL(10, 4), "d:10,4");
   testScalarType(DECIMAL(20, 15), "d:20,15");
+
+  testScalarType(UNKNOWN(), "n");
 }
 
 TEST_F(ArrowBridgeSchemaExportTest, nested) {
@@ -238,24 +240,14 @@ TEST_F(ArrowBridgeSchemaExportTest, constant) {
   testConstant(DOUBLE(), "g");
   testConstant(VARCHAR(), "u");
   testConstant(DATE(), "tdD");
+  testConstant(UNKNOWN(), "n");
 
   testConstant(ARRAY(INTEGER()), "+l");
+  testConstant(ARRAY(UNKNOWN()), "+l");
   testConstant(MAP(BOOLEAN(), REAL()), "+m");
+  testConstant(MAP(UNKNOWN(), REAL()), "+m");
   testConstant(ROW({TIMESTAMP(), DOUBLE()}), "+s");
-}
-
-TEST_F(ArrowBridgeSchemaExportTest, unsupported) {
-  // Try some combination of unsupported types to ensure there's no crash or
-  // memory leak in failure scenarios.
-  EXPECT_THROW(testScalarType(UNKNOWN(), ""), VeloxException);
-
-  EXPECT_THROW(testScalarType(ARRAY(UNKNOWN()), ""), VeloxException);
-  EXPECT_THROW(testScalarType(MAP(UNKNOWN(), INTEGER()), ""), VeloxException);
-  EXPECT_THROW(testScalarType(MAP(BIGINT(), UNKNOWN()), ""), VeloxException);
-
-  EXPECT_THROW(testScalarType(ROW({BIGINT(), UNKNOWN()}), ""), VeloxException);
-  EXPECT_THROW(
-      testScalarType(ROW({BIGINT(), REAL(), UNKNOWN()}), ""), VeloxException);
+  testConstant(ROW({UNKNOWN(), UNKNOWN()}), "+s");
 }
 
 class ArrowBridgeSchemaImportTest : public ArrowBridgeSchemaExportTest {
@@ -273,6 +265,20 @@ class ArrowBridgeSchemaImportTest : public ArrowBridgeSchemaExportTest {
 
     auto type = importFromArrow(dictionarySchema);
     dictionarySchema.release(&dictionarySchema);
+    return type;
+  }
+
+  TypePtr testSchemaReeImport(const char* valuesFmt) {
+    auto reeSchema = makeArrowSchema("+r");
+    auto runsSchema = makeArrowSchema("i");
+    auto valuesSchema = makeArrowSchema(valuesFmt);
+
+    std::vector<ArrowSchema*> schemas{&runsSchema, &valuesSchema};
+    reeSchema.n_children = 2;
+    reeSchema.children = schemas.data();
+
+    auto type = importFromArrow(reeSchema);
+    reeSchema.release(&reeSchema);
     return type;
   }
 
@@ -395,7 +401,6 @@ TEST_F(ArrowBridgeSchemaImportTest, complexTypes) {
 }
 
 TEST_F(ArrowBridgeSchemaImportTest, unsupported) {
-  EXPECT_THROW(testSchemaImport("n"), VeloxUserError);
   EXPECT_THROW(testSchemaImport("C"), VeloxUserError);
   EXPECT_THROW(testSchemaImport("S"), VeloxUserError);
   EXPECT_THROW(testSchemaImport("I"), VeloxUserError);
@@ -576,6 +581,13 @@ TEST_F(ArrowBridgeSchemaImportTest, dictionaryTypeTest) {
               "+s",
               {"s", "f"},
               {"col1", "col2"})));
+}
+
+TEST_F(ArrowBridgeSchemaImportTest, reeTypeTest) {
+  // Ensure REE just returns the type of the inner `values` child.
+  EXPECT_EQ(DOUBLE(), testSchemaReeImport("g"));
+  EXPECT_EQ(INTEGER(), testSchemaReeImport("i"));
+  EXPECT_EQ(BIGINT(), testSchemaReeImport("l"));
 }
 
 } // namespace

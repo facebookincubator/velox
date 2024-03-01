@@ -14,16 +14,15 @@
 
 add_library(
   velox_dwio_native_parquet_reader
+  Metadata.cpp
   NestedStructureDecoder.cpp
   ParquetReader.cpp
   ParquetTypeWithId.cpp
   PageReader.cpp
   ParquetColumnReader.cpp
   ParquetData.cpp
-  ParquetReaderUtil.cpp
   RepeatedColumnReader.cpp
   RleBpDecoder.cpp
-  Statistics.cpp
   StructColumnReader.cpp
   StringColumnReader.cpp)
 

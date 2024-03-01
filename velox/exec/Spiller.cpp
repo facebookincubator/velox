@@ -96,8 +96,7 @@ Spiller::Spiller(
     Type type,
     RowTypePtr rowType,
     HashBitRange bits,
-    const common::SpillConfig* spillConfig,
-    uint64_t targetFileSize)
+    const common::SpillConfig* spillConfig)
     : Spiller(
           type,
           nullptr,
@@ -108,7 +107,7 @@ Spiller::Spiller(
           spillConfig->getSpillDirPathCb,
           spillConfig->updateAndCheckSpillLimitCb,
           spillConfig->fileNamePrefix,
-          targetFileSize,
+          spillConfig->maxFileSize,
           spillConfig->writeBufferSize,
           spillConfig->compressionKind,
           spillConfig->executor,
@@ -126,8 +125,7 @@ Spiller::Spiller(
     RowContainer* container,
     RowTypePtr rowType,
     HashBitRange bits,
-    const common::SpillConfig* spillConfig,
-    uint64_t targetFileSize)
+    const common::SpillConfig* spillConfig)
     : Spiller(
           type,
           container,
@@ -138,7 +136,7 @@ Spiller::Spiller(
           spillConfig->getSpillDirPathCb,
           spillConfig->updateAndCheckSpillLimitCb,
           spillConfig->fileNamePrefix,
-          targetFileSize,
+          spillConfig->maxFileSize,
           spillConfig->writeBufferSize,
           spillConfig->compressionKind,
           spillConfig->executor,
@@ -375,7 +373,7 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
       }
     }
     return std::make_unique<SpillStatus>(partition, written, nullptr);
-  } catch (const std::exception& e) {
+  } catch (const std::exception&) {
     // The exception is passed to the caller thread which checks this in
     // advanceSpill().
     return std::make_unique<SpillStatus>(
@@ -409,7 +407,7 @@ void Spiller::runSpill(bool lastRun) {
       // already captured before this runs.
       try {
         write->move();
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
       }
     }
   });

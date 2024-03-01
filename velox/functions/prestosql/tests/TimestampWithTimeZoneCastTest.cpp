@@ -21,16 +21,17 @@ using namespace facebook::velox;
 
 class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
  public:
-  RowVectorPtr makeTimestampWithTimeZoneVector(
-      const VectorPtr& timestamps,
-      const VectorPtr& timezones) {
-    VELOX_CHECK_EQ(timestamps->size(), timezones->size());
-    return std::make_shared<RowVector>(
-        pool(),
-        TIMESTAMP_WITH_TIME_ZONE(),
+  VectorPtr makeTimestampWithTimeZoneVector(
+      vector_size_t size,
+      const std::function<int64_t(int32_t row)>& timestampAt,
+      const std::function<int16_t(int32_t row)>& timezoneAt) {
+    return makeFlatVector<int64_t>(
+        size,
+        [&](int32_t index) {
+          return pack(timestampAt(index), timezoneAt(index));
+        },
         nullptr,
-        timestamps->size(),
-        std::vector<VectorPtr>({timestamps, timezones}));
+        TIMESTAMP_WITH_TIME_ZONE());
   }
 
  protected:
@@ -51,27 +52,34 @@ class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
 TEST_F(TimestampWithTimeZoneCastTest, fromTimestamp) {
   const auto tsVector = makeNullableFlatVector<Timestamp>(
       {Timestamp(1996, 0), std::nullopt, Timestamp(19920, 0)});
+  auto timestamps =
+      std::vector<int64_t>{1996 * kMillisInSecond, 0, 19920 * kMillisInSecond};
+  auto timezones = std::vector<TimeZoneKey>{0, 0, 0};
   const auto expected = makeTimestampWithTimeZoneVector(
-      makeFlatVector<int64_t>(
-          {1996 * kMillisInSecond, 0, 19920 * kMillisInSecond}),
-      makeFlatVector<int16_t>({0, 0, 0}));
+      timestamps.size(),
+      [&](int32_t index) { return timestamps[index]; },
+      [&](int32_t index) { return timezones[index]; });
   expected->setNull(1, true);
 
-  testCast(TIMESTAMP(), TIMESTAMP_WITH_TIME_ZONE(), tsVector, expected);
+  testCast(tsVector, expected);
 }
 
 TEST_F(TimestampWithTimeZoneCastTest, toTimestamp) {
+  auto timestamps =
+      std::vector<int64_t>{1996 * kMillisInSecond, 0, 19920 * kMillisInSecond};
+  auto timezones = std::vector<TimeZoneKey>{0, 0, 1825 /*America/Los_Angeles*/};
+
   const auto tsWithTZVector = makeTimestampWithTimeZoneVector(
-      makeFlatVector<int64_t>(
-          {1996 * kMillisInSecond, 0, 19920 * kMillisInSecond}),
-      makeFlatVector<int16_t>({0, 0, 1825 /*America/Los_Angeles*/}));
+      timestamps.size(),
+      [&](int32_t index) { return timestamps[index]; },
+      [&](int32_t index) { return timezones[index]; });
   tsWithTZVector->setNull(1, true);
 
   for (const char* timezone : {"America/Los_Angeles", "America/New_York"}) {
     setQueryTimeZone(timezone);
     auto expected = makeNullableFlatVector<Timestamp>(
         {Timestamp(1996, 0), std::nullopt, Timestamp(19920, 0)});
-    testCast(TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP(), tsWithTZVector, expected);
+    testCast(tsWithTZVector, expected);
 
     // Cast('1969-12-31 16:00:00 -08:00' as timestamp).
     auto result = evaluateOnce<Timestamp>(
@@ -84,7 +92,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toTimestamp) {
   disableAdjustTimestampToTimezone();
   auto expected = makeNullableFlatVector<Timestamp>(
       {Timestamp(1996, 0), std::nullopt, Timestamp(19920 - 8 * 3600, 0)});
-  testCast(TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP(), tsWithTZVector, expected);
+  testCast(tsWithTZVector, expected);
 
   // Cast('1969-12-31 16:00:00 -08:00' as timestamp).
   auto result = evaluateOnce<Timestamp>(

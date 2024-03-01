@@ -112,7 +112,7 @@ void checkSpillStats(PlanNodeStats& stats, bool expectedSpill) {
     ASSERT_GT(stats.customStats["spillSortTime"].sum, 0);
     ASSERT_GT(stats.customStats["spillSerializationTime"].sum, 0);
     ASSERT_GT(stats.customStats["spillFlushTime"].sum, 0);
-    ASSERT_GT(stats.customStats["spillDiskWrites"].sum, 0);
+    ASSERT_GT(stats.customStats["spillWrites"].sum, 0);
     ASSERT_GT(stats.customStats["spillWriteTime"].sum, 0);
   } else {
     ASSERT_EQ(stats.spilledRows, 0);
@@ -125,14 +125,14 @@ void checkSpillStats(PlanNodeStats& stats, bool expectedSpill) {
     ASSERT_EQ(stats.customStats["spillSortTime"].sum, 0);
     ASSERT_EQ(stats.customStats["spillSerializationTime"].sum, 0);
     ASSERT_EQ(stats.customStats["spillFlushTime"].sum, 0);
-    ASSERT_EQ(stats.customStats["spillDiskWrites"].sum, 0);
+    ASSERT_EQ(stats.customStats["spillWrites"].sum, 0);
     ASSERT_EQ(stats.customStats["spillWriteTime"].sum, 0);
   }
   ASSERT_EQ(
       stats.customStats["spillSerializationTime"].count,
       stats.customStats["spillFlushTime"].count);
   ASSERT_EQ(
-      stats.customStats["spillDiskWrites"].count,
+      stats.customStats["spillWrites"].count,
       stats.customStats["spillWriteTime"].count);
 }
 
@@ -1500,9 +1500,46 @@ TEST_F(AggregationTest, groupingSetsEmptyInput) {
 
   assertQuery(
       plan,
-      makeRowVector(
-          {makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
-           makeFlatVector<int64_t>({0, 1})}));
+      makeRowVector({
+          makeAllNullFlatVector<int64_t>(2),
+          makeFlatVector<int64_t>({0, 1}),
+      }));
+
+  // Aggregations over distinct inputs over empty input with global grouping
+  // sets.
+  plan = PlanBuilder()
+             .values({data})
+             .filter("c1 < 0")
+             .groupId({"c1"}, {{}, {}}, {"c2"})
+             .singleAggregation(
+                 {"c1", "group_id"}, {"count(distinct c2)", "min(distinct c2)"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      makeRowVector({
+          makeAllNullFlatVector<int64_t>(2),
+          makeFlatVector<int64_t>({0, 1}),
+          makeFlatVector<int64_t>({0, 0}),
+          makeAllNullFlatVector<std::string>(2),
+      }));
+
+  // Aggregations over sorted inputs over empty input with global grouping sets.
+  plan =
+      PlanBuilder()
+          .values({data})
+          .filter("c1 < 0")
+          .groupId({"c1"}, {{}, {}}, {"c2"})
+          .singleAggregation({"c1", "group_id"}, {"array_agg(c2 order by c2)"})
+          .planNode();
+
+  assertQuery(
+      plan,
+      makeRowVector({
+          makeAllNullFlatVector<int64_t>(2),
+          makeFlatVector<int64_t>({0, 1}),
+          makeAllNullArrayVector(2, VARCHAR()),
+      }));
 }
 
 TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {

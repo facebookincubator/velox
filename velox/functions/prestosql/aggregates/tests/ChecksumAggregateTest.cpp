@@ -375,17 +375,18 @@ TEST_F(ChecksumAggregateTest, globalAggregationNoData) {
 }
 
 TEST_F(ChecksumAggregateTest, timestampWithTimezone) {
-  auto timestamp =
-      makeFlatVector<int64_t>(5, [](auto row) { return 1639426440000; });
-  auto timezone = makeFlatVector<int16_t>(5, [](auto row) { return 0; });
-
-  auto timestampWithTzVector = std::make_shared<RowVector>(
-      pool_.get(),
-      TIMESTAMP_WITH_TIME_ZONE(),
-      BufferPtr(nullptr),
+  auto timestampWithTimezone = makeFlatVector<int64_t>(
       5,
-      std::vector<VectorPtr>{timestamp, timezone});
+      [](auto /* row */) { return pack(1639426440000, 0); },
+      /* isNullAt */ nullptr,
+      TIMESTAMP_WITH_TIME_ZONE());
 
-  assertChecksum(timestampWithTzVector, "jwqENA0VLZY=");
+  assertChecksum(timestampWithTimezone, "jwqENA0VLZY=");
 }
+
+TEST_F(ChecksumAggregateTest, unknown) {
+  auto data = makeAllNullFlatVector<UnknownValue>(100);
+  assertChecksum(data, "vBwbUFiJq80=");
+}
+
 } // namespace facebook::velox::aggregate::test

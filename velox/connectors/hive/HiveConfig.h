@@ -113,6 +113,9 @@ class HiveConfig {
   static constexpr const char* kPartitionPathAsLowerCaseSession =
       "partition_path_as_lower_case";
 
+  static constexpr const char* kIgnoreMissingFilesSession =
+      "ignore_missing_files";
+
   /// The max coalesce bytes for a request.
   static constexpr const char* kMaxCoalescedBytes = "max-coalesced-bytes";
 
@@ -172,6 +175,9 @@ class HiveConfig {
   static constexpr const char* kSortWriterMaxOutputBytesSession =
       "sort_writer_max_output_bytes";
 
+  static constexpr const char* kS3UseProxyFromEnv =
+      "hive.s3.use-proxy-from-env";
+
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* session) const;
 
@@ -209,6 +215,8 @@ class HiveConfig {
 
   bool isPartitionPathAsLowerCase(const Config* session) const;
 
+  bool ignoreMissingFiles(const Config* session) const;
+
   int64_t maxCoalescedBytes() const;
 
   int32_t maxCoalescedDistanceBytes() const;
@@ -236,6 +244,8 @@ class HiveConfig {
   uint64_t footerEstimatedSize() const;
 
   uint64_t filePreloadThreshold() const;
+
+  bool s3UseProxyFromEnv() const;
 
   HiveConfig(std::shared_ptr<const Config> config) {
     VELOX_CHECK_NOT_NULL(

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/common/memory/MemoryAllocator.h"
-#include <fstream>
 #include <thread>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/AllocationPool.h"
@@ -31,7 +30,12 @@
 #include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
 
+#ifdef linux
+#include <fstream>
+#endif // linux
+
 DECLARE_int32(velox_memory_pool_mb);
+DECLARE_bool(velox_memory_leak_check_enabled);
 
 using namespace facebook::velox::common::testutil;
 
@@ -48,10 +52,11 @@ static constexpr uint64_t kCapacityBytes = 1024UL * 1024 * 1024;
 static constexpr MachinePageCount kCapacityPages =
     (kCapacityBytes / AllocationTraits::kPageSize);
 
-class MemoryAllocatorTest : public testing::TestWithParam<bool> {
+class MemoryAllocatorTest : public testing::TestWithParam<int> {
  protected:
   static void SetUpTestCase() {
     TestValue::enable();
+    FLAGS_velox_memory_leak_check_enabled = true;
   }
 
   void SetUp() override {
@@ -60,7 +65,8 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
 
   void setupAllocator() {
     pool_.reset();
-    useMmap_ = GetParam();
+    useMmap_ = GetParam() == 0;
+    enableReservation_ = GetParam() == 2;
     maxMallocBytes_ = 3072;
     if (useMmap_) {
       MemoryManagerOptions options;
@@ -78,6 +84,9 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
     } else {
       MemoryManagerOptions options;
       options.allocatorCapacity = kCapacityBytes;
+      if (!enableReservation_) {
+        options.allocationSizeThresholdWithReservation = 0;
+      }
       memoryManager_ = std::make_unique<MemoryManager>(options);
     }
     instance_ = memoryManager_->allocator();
@@ -334,7 +343,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
 
   bool allocateContiguous(
       int numPages,
-      Allocation* FOLLY_NULLABLE collateral,
+      Allocation* collateral,
       ContiguousAllocation& allocation) {
     bool success =
         instance_->allocateContiguous(numPages, collateral, allocation);
@@ -400,6 +409,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
   }
 
   bool useMmap_;
+  bool enableReservation_;
   int32_t maxMallocBytes_;
   MemoryAllocator* instance_;
   std::unique_ptr<MemoryManager> memoryManager_;
@@ -617,6 +627,9 @@ TEST_P(MemoryAllocatorTest, allocationClass2) {
 }
 
 TEST_P(MemoryAllocatorTest, singleAllocation) {
+  if (!useMmap_ && enableReservation_) {
+    return;
+  }
   const std::vector<MachinePageCount>& sizes = instance_->sizeClasses();
   MachinePageCount capacity = kCapacityPages;
   for (auto i = 0; i < sizes.size(); ++i) {
@@ -678,6 +691,9 @@ TEST_P(MemoryAllocatorTest, increasingSize) {
 }
 
 TEST_P(MemoryAllocatorTest, increasingSizeWithThreads) {
+  if (!useMmap_ && enableReservation_) {
+    return;
+  }
   const int32_t numThreads = 20;
   std::vector<std::vector<std::unique_ptr<Allocation>>> allocations;
   allocations.reserve(numThreads);
@@ -1395,7 +1411,7 @@ TEST_P(MemoryAllocatorTest, contiguousAllocation) {
     ASSERT_EQ(movedAllocation.pool(), pool_.get());
     *allocation = std::move(movedAllocation);
     ASSERT_TRUE(!allocation->empty()); // NOLINT
-    ASSERT_TRUE(movedAllocation.empty());
+    ASSERT_TRUE(movedAllocation.empty()); // NOLINT
     ASSERT_EQ(allocation->pool(), pool_.get());
   }
   ASSERT_THROW(allocation->setPool(pool_.get()), VeloxRuntimeError);
@@ -1445,7 +1461,8 @@ TEST_P(MemoryAllocatorTest, allocatorCapacity) {
 TEST_P(MemoryAllocatorTest, allocatorCapacityWithThreads) {
   std::atomic<int64_t> numOps{0};
   const int64_t numMaxOps = 100000;
-  const int64_t nonContAllocPages = Allocation::PageRun::kMaxPagesInRun;
+  const int64_t nonContAllocPages =
+      Allocation::PageRun::kMaxPagesInRun / 256 * 256;
 
   std::function<void()> nonContiguousReserveFail = [&, this]() {
     while (numOps < numMaxOps) {
@@ -1555,11 +1572,6 @@ TEST_P(MemoryAllocatorTest, allocatorCapacityWithThreads) {
   EXPECT_TRUE(instance_->checkConsistency());
   EXPECT_EQ(instance_->numAllocated(), 0);
 }
-
-VELOX_INSTANTIATE_TEST_SUITE_P(
-    MemoryAllocatorTests,
-    MemoryAllocatorTest,
-    testing::ValuesIn({false, true}));
 
 class MmapArenaTest : public testing::Test {
  public:
@@ -1889,4 +1901,9 @@ TEST_P(MemoryAllocatorTest, unmap) {
     ASSERT_EQ(instance_->unmap(numAllocated), 0);
   }
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    MemoryAllocatorTestSuite,
+    MemoryAllocatorTest,
+    testing::ValuesIn({0, 1, 2}));
 } // namespace facebook::velox::memory

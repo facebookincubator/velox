@@ -92,6 +92,10 @@ Date and Time Functions
 
     This is an alias for ``CAST(x AS date)``.
 
+.. function:: from_iso8601_date(string) -> date
+
+    Parses the ISO 8601 formatted ``string`` into a ``date``.
+
 .. function:: from_unixtime(unixtime) -> timestamp
 
     Returns the UNIX timestamp ``unixtime`` as a timestamp.
@@ -223,7 +227,12 @@ The functions in this section leverage a native cpp implementation that follows
 a format string compatible with JodaTime’s `DateTimeFormat
 <http://joda-time.sourceforge.net/apidocs/org/joda/time/format/DateTimeFormat.html>`_
 pattern format. The symbols currently supported are ``y``, ``Y``, ``M`` , ``d``,
-``H``, ``m``, ``s``, ``S``, and ``Z``.
+``H``, ``m``, ``s``, ``S``, ``z`` and ``Z``.
+
+``z`` represents a timezone name (3-letter format), and ``Z`` a timezone offset
+specified using the format ``+00``, ``+00:00`` or ``+0000`` (or ``-``). ``Z``
+also accepts ``UTC``,  ``UCT``, ``GMT``, and ``GMT0`` as valid representations
+of GMT.
 
 .. function:: parse_datetime(string, format) -> timestamp with time zone
 
@@ -368,6 +377,6 @@ It can be interpreted as `2014-11-02 01:30:00 PDT`, or `2014-11-02 01:30:00 PST`
 `2014-11-02 08:30:00 UTC` or `2014-11-02 09:30:00 UTC` respectively. The former one is
 picked to be consistent with Presto.
 
-**Timezone Name Parsing**: When parsing strings that contain timezone names, the 
+**Timezone Name Parsing**: When parsing strings that contain timezone names, the
 list of supported timezones follow the definition `here
 <https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>`_.

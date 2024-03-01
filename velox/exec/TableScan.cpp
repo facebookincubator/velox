@@ -53,10 +53,9 @@ TableScan::TableScan(
   connector_ = connector::getConnector(tableHandle_->connectorId());
 }
 
-std::string TableScan::toJsonString() const {
-  auto ret = SourceOperator::toJsonString();
-  ret += ", status: ";
-  ret += curStatus_;
+folly::dynamic TableScan::toJson() const {
+  auto ret = SourceOperator::toJson();
+  ret["status"] = curStatus_.load();
   return ret;
 }
 
@@ -128,7 +127,12 @@ RowVectorPtr TableScan::getOutput() {
       }
 
       const auto& connectorSplit = split.connectorSplit;
+      currentSplitWeight_ = connectorSplit->splitWeight;
       needNewSplit_ = false;
+
+      // A point for test code injection.
+      TestValue::adjust(
+          "facebook::velox::exec::TableScan::getOutput::gotSplit", this);
 
       VELOX_CHECK_EQ(
           connector_->connectorId(),
@@ -262,7 +266,7 @@ RowVectorPtr TableScan::getOutput() {
     }
 
     curStatus_ = "getOutput: task->splitFinished";
-    driverCtx_->task->splitFinished();
+    driverCtx_->task->splitFinished(true, currentSplitWeight_);
     needNewSplit_ = true;
   }
 }
@@ -317,12 +321,14 @@ void TableScan::checkPreload() {
         maxSplitPreloadPerDriver_;
     if (!splitPreloader_) {
       splitPreloader_ =
-          [executor, this](std::shared_ptr<connector::ConnectorSplit> split) {
+          [executor,
+           this](const std::shared_ptr<connector::ConnectorSplit>& split) {
             preload(split);
 
-            executor->add([taskHolder = operatorCtx_->task(), split]() mutable {
-              split->dataSource->prepare();
-              split.reset();
+            executor->add([taskHolder = operatorCtx_->task(),
+                           connectorSplit = split]() mutable {
+              connectorSplit->dataSource->prepare();
+              connectorSplit.reset();
             });
           };
     }

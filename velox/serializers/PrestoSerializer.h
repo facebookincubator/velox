@@ -24,10 +24,11 @@ namespace facebook::velox::serializer::presto {
 /// There are two ways to serialize data using PrestoVectorSerde:
 ///
 /// 1. In order to append multiple RowVectors into the same serialized payload,
-/// one can first create a VectorSerializer using createSerializer(), then
-/// append successive RowVectors using VectorSerializer::append(). In this case,
-/// since different RowVector might encode columns differently, data is always
-/// flattened in the serialized payload.
+/// one can first create an IterativeVectorSerializer using
+/// createIterativeSerializer(), then append successive RowVectors using
+/// IterativeVectorSerializer::append(). In this case, since different RowVector
+/// might encode columns differently, data is always flattened in the serialized
+/// payload.
 ///
 /// Note that there are two flavors of append(), one that takes a range of rows,
 /// and one that takes a list of row ids. The former is useful when serializing
@@ -35,10 +36,9 @@ namespace facebook::velox::serializer::presto {
 /// efficient for a selective subset, e.g. when splitting a vector to a large
 /// number of output shuffle destinations.
 ///
-/// 2. To serialize a single RowVector, one can use the serializeEncoded()
-/// method. Since it serializes a single RowVector, it tries to preserve the
-/// encodings of the input data. Check the method documentation below to learn
-/// about the cases in which encodings are preserved.
+/// 2. To serialize a single RowVector, one can use the BatchVectorSerializer
+/// returned by createBatchSerializer(). Since it serializes a single RowVector,
+/// it tries to preserve the encodings of the input data.
 class PrestoVectorSerde : public VectorSerde {
  public:
   // Input options that the serializer recognizes.
@@ -47,20 +47,27 @@ class PrestoVectorSerde : public VectorSerde {
 
     PrestoOptions(
         bool _useLosslessTimestamp,
-        common::CompressionKind _compressionKind)
+        common::CompressionKind _compressionKind,
+        bool _nullsFirst = false)
         : useLosslessTimestamp(_useLosslessTimestamp),
-          compressionKind(_compressionKind) {}
+          compressionKind(_compressionKind),
+          nullsFirst(_nullsFirst) {}
 
     /// Currently presto only supports millisecond precision and the serializer
     /// converts velox native timestamp to that resulting in loss of precision.
     /// This option allows it to serialize with nanosecond precision and is
     /// currently used for spilling. Is false by default.
     bool useLosslessTimestamp{false};
+
     common::CompressionKind compressionKind{
         common::CompressionKind::CompressionKind_NONE};
 
-    /// Specifies the encoding for each of the top-level child vector.
-    std::vector<VectorEncoding::Simple> encodings;
+    /// Serializes nulls of structs before the columns. Used to allow
+    /// single pass reading of in spilling.
+    ///
+    /// TODO: Make Presto also serialize nulls before columns of
+    /// structs.
+    bool nullsFirst{false};
   };
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
@@ -77,27 +84,18 @@ class PrestoVectorSerde : public VectorSerde {
       vector_size_t** sizes,
       Scratch& scratch) override;
 
-  std::unique_ptr<VectorSerializer> createSerializer(
+  std::unique_ptr<IterativeVectorSerializer> createIterativeSerializer(
       RowTypePtr type,
       int32_t numRows,
       StreamArena* streamArena,
       const Options* options) override;
 
-  /// Serializes a single RowVector with possibly encoded children, preserving
-  /// their encodings. Encodings are preserved recursively for any RowVector
-  /// children, but not for children of other nested vectors such as Array, Map,
-  /// and Dictionary.
-  ///
-  /// PrestoPage does not support serialization of Dictionaries with nulls;
-  /// in case dictionaries contain null they are serialized as flat buffers.
-  ///
-  /// In order to override the encodings of top-level columns in the RowVector,
-  /// you can specifiy the encodings using PrestoOptions.encodings
-  void serializeEncoded(
-      const RowVectorPtr& vector,
-      StreamArena* streamArena,
-      const Options* options,
-      OutputStream* out);
+  /// Note that in addition to the differences highlighted in the VectorSerde
+  /// interface, BatchVectorSerializer returned by this function can maintain
+  /// the encodings of the input vectors recursively.
+  std::unique_ptr<BatchVectorSerializer> createBatchSerializer(
+      memory::MemoryPool* pool,
+      const Options* options) override;
 
   bool supportsAppendInDeserialize() const override {
     return true;
@@ -120,17 +118,62 @@ class PrestoVectorSerde : public VectorSerde {
       vector_size_t resultOffset,
       const Options* options) override;
 
+  /// This function is used to deserialize a single column that is serialized in
+  /// PrestoPage format. It is important to note that the PrestoPage format used
+  /// here does not include the Presto page header. Therefore, the 'source'
+  /// should contain uncompressed, serialized binary data, beginning at the
+  /// column header.
+  void deserializeSingleColumn(
+      ByteInputStream* source,
+      velox::memory::MemoryPool* pool,
+      TypePtr type,
+      VectorPtr* result,
+      const Options* options);
+
+  enum class TokenType {
+    HEADER,
+    NUM_COLUMNS,
+    COLUMN_ENCODING,
+    NUM_ROWS,
+    NULLS,
+    BYTE_ARRAY,
+    SHORT_ARRAY,
+    INT_ARRAY,
+    LONG_ARRAY,
+    INT128_ARRAY,
+    VARIABLE_WIDTH_DATA_SIZE,
+    VARIABLE_WIDTH_DATA,
+    DICTIONARY_INDICES,
+    DICTIONARY_ID,
+    HASH_TABLE_SIZE,
+    HASH_TABLE,
+    NUM_FIELDS,
+    OFFSETS,
+  };
+
+  struct Token {
+    TokenType tokenType;
+    uint32_t length;
+  };
+
+  /**
+   * This function lexes the PrestoPage encoded source into tokens so that
+   * Zstrong can parse the PrestoPage without knowledge of the PrestoPage
+   * format. The compressor, which needs to parse presto page, uses this
+   * function to attach meaning to each token in the source. Then the decoder
+   * can simply regnerate the tokens and concatenate, so it is independent of
+   * the PrestoPage format and agnostic to any changes in the format.
+   *
+   * NOTE: This function does not support compression, encryption, nulls first,
+   * or lossless timestamps and will throw an exception if these features are
+   * enabled.
+   */
+  static std::vector<Token> lex(
+      ByteInputStream* source,
+      const Options* options = nullptr);
+
   static void registerVectorSerde();
 };
-
-// Testing function for nested encodings. See comments in scatterStructNulls().
-void testingScatterStructNulls(
-    vector_size_t size,
-    vector_size_t scatterSize,
-    const vector_size_t* scatter,
-    const uint64_t* incomingNulls,
-    RowVector& row,
-    vector_size_t rowOffset);
 
 class PrestoOutputStreamListener : public OutputStreamListener {
  public:

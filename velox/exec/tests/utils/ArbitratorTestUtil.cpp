@@ -15,8 +15,6 @@
  */
 
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
-#include "velox/common/memory/Memory.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/exec/TableWriter.h"
 
 using namespace facebook::velox;
@@ -45,13 +43,19 @@ std::shared_ptr<core::QueryCtx> newQueryCtx(
   return queryCtx;
 }
 
-std::unique_ptr<memory::MemoryManager> createMemoryManager() {
+std::unique_ptr<memory::MemoryManager> createMemoryManager(
+    int64_t arbitratorCapacity,
+    uint64_t memoryPoolInitCapacity,
+    uint64_t memoryPoolTransferCapacity,
+    uint64_t maxReclaimWaitMs) {
   memory::MemoryManagerOptions options;
-  options.allocatorCapacity = kMemoryCapacity;
+  options.arbitratorCapacity = arbitratorCapacity;
+  // Avoid allocation failure in unit tests.
+  options.allocatorCapacity = arbitratorCapacity * 2;
   options.arbitratorKind = "SHARED";
-  options.memoryPoolInitCapacity = kMemoryPoolInitCapacity;
-  options.memoryPoolTransferCapacity = kMemoryPoolTransferCapacity;
-  options.memoryReclaimWaitMs = 0;
+  options.memoryPoolInitCapacity = memoryPoolInitCapacity;
+  options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
+  options.memoryReclaimWaitMs = maxReclaimWaitMs;
   options.checkUsageLeak = true;
   options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
   return std::make_unique<memory::MemoryManager>(options);
@@ -93,6 +97,7 @@ QueryTestResult runHashJoinTask(
                       .spillDirectory(spillDirectory->path)
                       .config(core::QueryConfig::kSpillEnabled, true)
                       .config(core::QueryConfig::kJoinSpillEnabled, true)
+                      .config(core::QueryConfig::kSpillStartPartitionBit, "29")
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -342,6 +347,22 @@ QueryTestResult runWriteTask(
     assertEqualResults({result.data}, {expectedResult});
   }
   return result;
+}
+
+void testingRunArbitration(
+    memory::MemoryPool* pool,
+    uint64_t targetBytes,
+    memory::MemoryManager* manager) {
+  if (manager == nullptr) {
+    manager = memory::memoryManager();
+  }
+  if (pool != nullptr) {
+    pool->enterArbitration();
+    manager->shrinkPools(targetBytes);
+    pool->leaveArbitration();
+  } else {
+    manager->shrinkPools(targetBytes);
+  }
 }
 
 } // namespace facebook::velox::exec::test

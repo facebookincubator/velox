@@ -34,6 +34,13 @@ These functions support TIMESTAMP and DATE input types.
     deducted from ``start_date``.
     Supported types for ``num_days`` are: TINYINT, SMALLINT, INTEGER.
 
+.. spark:function:: date_from_unix_date(integer) -> date
+
+    Creates date from the number of days since 1970-01-01 in either direction. Returns null when input is null.
+
+        SELECT date_from_unix_date(1); -- '1970-01-02'
+        SELECT date_from_unix_date(-1); -- '1969-12-31'
+
 .. spark:function:: date_sub(start_date, num_days) -> date
 
     Returns the date that is ``num_days`` before ``start_date``. According to the inputs,
@@ -64,19 +71,14 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT dayofyear('2016-04-09'); -- 100
 
-.. spark:function:: dayofweek(date/timestamp) -> integer
+.. spark:function:: dayofweek(date) -> integer
 
-    Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
-    We can use `dow` as alias for ::
+    Returns the day of the week for date (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
 
         SELECT dayofweek('2009-07-30'); -- 5
-        SELECT dayofweek('2023-08-22 11:23:00.100'); -- 3
+        SELECT dayofweek('2023-08-22'); -- 3
 
-.. spark::function:: dow(x) -> integer
-
-    This is an alias for :func:`day_of_week`.
-
-.. spark::function::from_unixtime(unixTime, format) -> string
+.. spark:function:: from_unixtime(unixTime, format) -> string
 
     Adjusts ``unixTime`` (elapsed seconds since UNIX epoch) to configured session timezone, then
     converts it to a formatted time string according to ``format``. Only supports BIGINT type for
@@ -91,7 +93,7 @@ These functions support TIMESTAMP and DATE input types.
         SELECT from_unixtime(3600, 'yyyy'); -- '1970'
         SELECT from_unixtime(9223372036854775807, "yyyy-MM-dd HH:mm:ss");  -- '1969-12-31 23:59:59'
 
-.. function:: get_timestamp(string, dateFormat) -> timestamp
+.. spark:function:: get_timestamp(string, dateFormat) -> timestamp
 
     Returns timestamp by parsing ``string`` according to the specified ``dateFormat``.
     The format follows Spark's
@@ -125,6 +127,12 @@ These functions support TIMESTAMP and DATE input types.
     ``day`` need to be from 1 to 31, and matches the number of days in each month.
     days of ``year-month-day - 1970-01-01`` need to be in the range of INTEGER type.
 
+.. spark:function:: minute(timestamp) -> integer
+
+    Returns the minutes of ``timestamp``.::
+
+        SELECT minute('2009-07-30 12:58:59'); -- 58
+
 .. spark:function:: quarter(date) -> integer
 
     Returns the quarter of ``date``. The value ranges from ``1`` to ``4``. ::
@@ -151,6 +159,12 @@ These functions support TIMESTAMP and DATE input types.
         SELECT next_day('2015-07-23', "Tue"); -- '2015-07-28'
         SELECT next_day('2015-07-23', "tu"); -- '2015-07-28'
         SELECT next_day('2015-07-23', "we"); -- '2015-07-29'
+
+.. spark:function:: second(timestamp) -> integer
+
+    Returns the seconds of ``timestamp``.::
+
+        SELECT second('2009-07-30 12:58:59'); -- 59
 
 .. spark:function:: to_unix_timestamp(string) -> integer
 
@@ -186,6 +200,13 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns the `ISO-Week`_ of the year from x. The value ranges from ``1`` to ``53``.
     A week is considered to start on a Monday and week 1 is the first week with >3 days.
+
+.. function:: weekday(date) -> integer
+
+    Returns the day of the week for date (0 = Monday, 1 = Tuesday, …, 6 = Sunday).
+
+        SELECT weekday('2015-04-08'); -- 2
+        SELECT weekday('2024-02-10'); -- 5
 
 .. _ISO-Week: https://en.wikipedia.org/wiki/ISO_week_date
 

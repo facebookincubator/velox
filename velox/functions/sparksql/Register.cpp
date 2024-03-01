@@ -21,6 +21,7 @@
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/lib/Repeat.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
@@ -257,6 +258,11 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
 
+  exec::registerStatefulVectorFunction(
+      prefix + "array_repeat",
+      repeatSignatures(),
+      makeRepeatAllowNegativeCount);
+
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
@@ -286,6 +292,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<DateAddFunction, Date, Date, int16_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
 
+  registerFunction<DateFromUnixDateFunction, Date, int32_t>(
+      {prefix + "date_from_unix_date"});
+
   registerFunction<DateSubFunction, Date, Date, int8_t>({prefix + "date_sub"});
   registerFunction<DateSubFunction, Date, Date, int16_t>({prefix + "date_sub"});
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
@@ -295,10 +304,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<DayOfYearFunction, int32_t, Date>(
       {prefix + "doy", prefix + "dayofyear"});
 
-  registerFunction<DayOfWeekFunction, int32_t, Timestamp>(
-      {prefix + "dow", prefix + "dayofweek"});
-  registerFunction<DayOfWeekFunction, int32_t, Date>(
-      {prefix + "dow", prefix + "dayofweek"});
+  registerFunction<DayOfWeekFunction, int32_t, Date>({prefix + "dayofweek"});
+
+  registerFunction<WeekdayFunction, int32_t, Date>({prefix + "weekday"});
 
   registerFunction<QuarterFunction, int32_t, Date>({prefix + "quarter"});
 
@@ -310,6 +318,10 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "get_timestamp"});
 
   registerFunction<HourFunction, int32_t, Timestamp>({prefix + "hour"});
+
+  registerFunction<MinuteFunction, int32_t, Timestamp>({prefix + "minute"});
+
+  registerFunction<SecondFunction, int32_t, Timestamp>({prefix + "second"});
 
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(

@@ -24,17 +24,30 @@ namespace facebook::velox::exec {
 /// sequence is the same as specified in BufferManager::getData call. The
 /// caller is expected to advance sequence by the number of entries in groups
 /// and call BufferManager::acknowledge.
-using DataAvailableCallback = std::function<
-    void(std::vector<std::unique_ptr<folly::IOBuf>> pages, int64_t sequence)>;
+using DataAvailableCallback = std::function<void(
+    std::vector<std::unique_ptr<folly::IOBuf>> pages,
+    int64_t sequence,
+    std::vector<int64_t> remainingBytes)>;
+
+/// Callback provided to indicate if the consumer of a destination buffer is
+/// currently active or not. It is used by arbitrary output buffer to optimize
+/// the http based streaming shuffle in Prestissimo. For instance, the arbitrary
+/// output buffer shall skip sending data to inactive destination buffer and
+/// only send to the currently active ones to reduce the time that a buffer
+/// stays in a destination buffer. Note that once a data is sent to a
+/// destination buffer, it can't be sent to the other destination buffers no
+/// matter the current destination buffer is active or not.
+using DataConsumerActiveCheckCallback = std::function<bool()>;
 
 struct DataAvailable {
   DataAvailableCallback callback;
   int64_t sequence;
   std::vector<std::unique_ptr<folly::IOBuf>> data;
+  std::vector<int64_t> remainingBytes;
 
   void notify() {
     if (callback) {
-      callback(std::move(data), sequence);
+      callback(std::move(data), sequence, remainingBytes);
     }
   }
 };
@@ -67,6 +80,9 @@ class ArbitraryBuffer {
   /// Returns a number of pages with total bytes no less than 'maxBytes' if
   /// there are sufficient buffered pages.
   std::vector<std::shared_ptr<SerializedPage>> getPages(uint64_t maxBytes);
+
+  /// Append the available page sizes to `out'.
+  void getAvailablePageSizes(std::vector<int64_t>& out) const;
 
   std::string toString() const;
 
@@ -115,43 +131,67 @@ class DestinationBuffer {
   /// arbitrary buffer on demand.
   void loadData(ArbitraryBuffer* buffer, uint64_t maxBytes);
 
-  // Returns a shallow copy (folly::IOBuf::clone) of the data starting at
-  // 'sequence', stopping after exceeding 'maxBytes'. If there is no data,
-  // 'notify' is installed so that this gets called when data is added.
-  std::vector<std::unique_ptr<folly::IOBuf>> getData(
+  struct Data {
+    /// The actual data available at this buffer.
+    std::vector<std::unique_ptr<folly::IOBuf>> data;
+
+    /// The byte sizes of pages that can be fetched.
+    std::vector<int64_t> remainingBytes;
+
+    /// Whether the result is returned immediately without invoking the `notify'
+    /// callback.
+    bool immediate;
+  };
+
+  /// Returns a shallow copy (folly::IOBuf::clone) of the data starting at
+  /// 'sequence', stopping after exceeding 'maxBytes'. If there is no data,
+  /// 'notify' is installed so that this gets called when data is added. If not
+  /// null, 'activeCheck' is used to check if the consumer of a destination
+  /// buffer with 'notify' installed is currently active or not. This only
+  /// applies for arbitrary output buffer for now.
+  ///
+  /// When arbitraryBuffer is provided, and this buffer is not at end (no null
+  /// marker received), we append the remaining bytes from arbitraryBuffer in
+  /// the result, even the arbitraryBuffer could be shared among multiple
+  /// DestinationBuffers.
+  Data getData(
       uint64_t maxBytes,
       int64_t sequence,
       DataAvailableCallback notify,
+      DataConsumerActiveCheckCallback activeCheck,
       ArbitraryBuffer* arbitraryBuffer = nullptr);
 
-  // Removes data from the queue and returns removed data. If 'fromGetData' we
-  // do not give a warning for the case where no data is removed, otherwise we
-  // expect that data does get freed. We cannot assert that data gets
-  // deleted because acknowledge messages can arrive out of order.
+  /// Removes data from the queue and returns removed data. If 'fromGetData' we
+  /// do not give a warning for the case where no data is removed, otherwise we
+  /// expect that data does get freed. We cannot assert that data gets deleted
+  /// because acknowledge messages can arrive out of order.
   std::vector<std::shared_ptr<SerializedPage>> acknowledge(
       int64_t sequence,
       bool fromGetData);
 
-  // Removes all remaining data from the queue and returns the removed data.
+  /// Removes all remaining data from the queue and returns the removed data.
   std::vector<std::shared_ptr<SerializedPage>> deleteResults();
 
-  // Returns and clears the notify callback, if any, along with arguments for
-  // the callback.
+  /// Returns and clears the notify callback, if any, along with arguments for
+  /// the callback.
   DataAvailable getAndClearNotify();
 
-  // Finishes this destination buffer, set finished stats.
+  /// Finishes this destination buffer, set finished stats.
   void finish();
 
-  // Returns the stats of this buffer.
+  /// Returns the stats of this buffer.
   Stats stats() const;
 
   std::string toString();
 
  private:
+  void clearNotify();
+
   std::vector<std::shared_ptr<SerializedPage>> data_;
   // The sequence number of the first in 'data_'.
   int64_t sequence_ = 0;
-  DataAvailableCallback notify_ = nullptr;
+  DataAvailableCallback notify_{nullptr};
+  DataConsumerActiveCheckCallback aliveCheck_{nullptr};
   // The sequence number of the first item to pass to 'notify'.
   int64_t notifySequence_{0};
   uint64_t notifyMaxBytes_{0};
@@ -170,8 +210,11 @@ class OutputBuffer {
         bool _finished,
         int64_t _bufferedBytes,
         int64_t _bufferedPages,
+        int64_t _totalBytesSent,
         int64_t _totalRowsSent,
         int64_t _totalPagesSent,
+        int64_t _averageBufferTimeMs,
+        int32_t _numTopBuffers,
         const std::vector<DestinationBuffer::Stats>& _buffersStats)
         : kind(_kind),
           noMoreBuffers(_noMoreBuffers),
@@ -179,8 +222,11 @@ class OutputBuffer {
           finished(_finished),
           bufferedBytes(_bufferedBytes),
           bufferedPages(_bufferedPages),
+          totalBytesSent(_totalBytesSent),
           totalRowsSent(_totalRowsSent),
           totalPagesSent(_totalPagesSent),
+          averageBufferTimeMs(_averageBufferTimeMs),
+          numTopBuffers(_numTopBuffers),
           buffersStats(_buffersStats) {}
 
     core::PartitionedOutputNode::Kind kind;
@@ -194,12 +240,21 @@ class OutputBuffer {
     int64_t bufferedBytes{0};
     int64_t bufferedPages{0};
 
-    /// The total number of rows/pages sent this output buffer.
+    /// The total number of bytes/rows/pages sent via this output buffer.
+    int64_t totalBytesSent{0};
     int64_t totalRowsSent{0};
     int64_t totalPagesSent{0};
 
+    /// Average time each piece of data has been buffered for in milliseconds.
+    int64_t averageBufferTimeMs{0};
+
+    /// The number of largest buffers that handle 80% of the total data.
+    int32_t numTopBuffers{0};
+
     /// Stats of the OutputBuffer's destinations.
     std::vector<DestinationBuffer::Stats> buffersStats;
+
+    std::string toString() const;
   };
 
   OutputBuffer(
@@ -247,7 +302,8 @@ class OutputBuffer {
       int destination,
       uint64_t maxSize,
       int64_t sequence,
-      DataAvailableCallback notify);
+      DataAvailableCallback notify,
+      DataConsumerActiveCheckCallback activeCheck);
 
   // Continues any possibly waiting producers. Called when the
   // producer task has an error or cancellation.
@@ -275,6 +331,10 @@ class OutputBuffer {
   void updateStatsWithEnqueuedPageLocked(int64_t pageBytes, int64_t pageRows);
 
   void updateStatsWithFreedPagesLocked(int numPages, int64_t pageBytes);
+
+  void updateTotalBufferedBytesMsLocked();
+
+  int64_t getAverageBufferTimeMsLocked() const;
 
   // If this is called due to a driver processed all its data (no more data),
   // we increment the number of finished drivers. If it is called due to us
@@ -347,7 +407,8 @@ class OutputBuffer {
   int64_t bufferedBytes_{0};
   // The number of buffered pages which corresponds to 'bufferedBytes_'.
   int64_t bufferedPages_{0};
-  // The total number of output rows and pages.
+  // The total number of output bytes, rows and pages.
+  uint64_t numOutputBytes_{0};
   uint64_t numOutputRows_{0};
   uint64_t numOutputPages_{0};
   std::vector<ContinuePromise> promises_;
@@ -364,6 +425,13 @@ class OutputBuffer {
   // When this reaches buffers_.size(), 'this' can be freed.
   int numFinalAcknowledges_ = 0;
   bool atEnd_ = false;
+
+  // Time since last change in bufferedBytes_. Used to compute total time data
+  // is buffered. Ignored if bufferedBytes_ is zero.
+  uint64_t bufferStartMs_;
+
+  // Total time data is buffered as bytes * time.
+  double totalBufferedBytesMs_;
 };
 
 } // namespace facebook::velox::exec

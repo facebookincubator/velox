@@ -339,10 +339,10 @@ void Operator::recordSpillStats(const common::SpillStats& spillStats) {
                 Timestamp::kNanosecondsInMicrosecond),
             RuntimeCounter::Unit::kNanos});
   }
-  if (spillStats.spillDiskWrites != 0) {
+  if (spillStats.spillWrites != 0) {
     lockedStats->addRuntimeStat(
-        "spillDiskWrites",
-        RuntimeCounter{static_cast<int64_t>(spillStats.spillDiskWrites)});
+        "spillWrites",
+        RuntimeCounter{static_cast<int64_t>(spillStats.spillWrites)});
   }
   if (spillStats.spillWriteTimeUs != 0) {
     lockedStats->addRuntimeStat(
@@ -481,6 +481,8 @@ void OperatorStats::add(const OperatorStats& other) {
   spilledRows += other.spilledRows;
   spilledPartitions += other.spilledPartitions;
   spilledFiles += other.spilledFiles;
+
+  numNullKeys += other.numNullKeys;
 }
 
 void OperatorStats::clear() {
@@ -640,7 +642,7 @@ void Operator::MemoryReclaimer::abort(
       driver->state().isTerminated);
   VELOX_CHECK(driver->task()->isCancelled());
 
-  // Calls operator abort to free up major memory usage.
-  op_->abort();
+  // Calls operator close to free up major memory usage.
+  op_->close();
 }
 } // namespace facebook::velox::exec

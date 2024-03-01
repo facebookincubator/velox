@@ -31,6 +31,10 @@ class OutputBufferManager;
 
 class HashJoinBridge;
 class NestedLoopJoinBridge;
+
+using ConnectorSplitPreloadFunc =
+    std::function<void(const std::shared_ptr<connector::ConnectorSplit>&)>;
+
 class Task : public std::enable_shared_from_this<Task> {
  public:
   /// Creates a task to execute a plan fragment, but doesn't start execution
@@ -79,9 +83,9 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::string toString() const;
 
-  std::string toJsonString() const;
+  folly::dynamic toJson() const;
 
-  std::string toShortJsonString() const;
+  folly::dynamic toShortJson() const;
 
   /// Returns universally unique identifier of the task.
   const std::string& uuid() const {
@@ -221,7 +225,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns current state of execution.
   TaskState state() const {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::timed_mutex> l(mutex_);
     return state_;
   }
 
@@ -242,7 +246,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns task execution error or nullptr if no error occurred.
   std::exception_ptr error() const {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::timed_mutex> l(mutex_);
     return exception_;
   }
 
@@ -257,13 +261,19 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Information about an operator call that helps debugging stuck calls.
   struct OpCallInfo {
     size_t durationMs;
+    /// Thread id of where the operator got stuck.
     int32_t tid;
     int32_t opId;
     std::string taskId;
+    /// Call in the format of "<operatorType>.<nodeId>::<operatorMethod>".
+    std::string opCall;
   };
 
   /// Collect long running operator calls across all drivers in this task.
-  void getLongRunningOpCalls(
+  /// Return false when the lock cannot be taken within the timeout, in that
+  /// case the result is not populated.  Return true if everything works well.
+  bool getLongRunningOpCalls(
+      std::chrono::nanoseconds lockTimeout,
       size_t thresholdDurationMs,
       std::vector<OpCallInfo>& out) const;
 
@@ -286,19 +296,19 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns the number of running drivers.
   uint32_t numRunningDrivers() const {
-    std::lock_guard<std::mutex> taskLock(mutex_);
+    std::lock_guard<std::timed_mutex> taskLock(mutex_);
     return numRunningDrivers_;
   }
 
   /// Returns the total number of drivers the task needs to run.
   uint32_t numTotalDrivers() const {
-    std::lock_guard<std::mutex> taskLock(mutex_);
+    std::lock_guard<std::timed_mutex> taskLock(mutex_);
     return numTotalDrivers_;
   }
 
   /// Returns the number of finished drivers so far.
   uint32_t numFinishedDrivers() const {
-    std::lock_guard<std::mutex> taskLock(mutex_);
+    std::lock_guard<std::timed_mutex> taskLock(mutex_);
     return numFinishedDrivers_;
   }
 
@@ -354,12 +364,14 @@ class Task : public std::enable_shared_from_this<Task> {
       exec::Split& split,
       ContinueFuture& future,
       int32_t maxPreloadSplits = 0,
-      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload =
-          nullptr);
+      const ConnectorSplitPreloadFunc& preload = nullptr);
 
-  void splitFinished();
+  void splitFinished(bool fromTableScan, int64_t splitWeight);
 
-  void multipleSplitsFinished(int32_t numSplits);
+  void multipleSplitsFinished(
+      bool fromTableScan,
+      int32_t numSplits,
+      int64_t splitsWeight);
 
   /// Adds a MergeSource for the specified splitGroupId and planNodeId.
   std::shared_ptr<MergeSource> addLocalMergeSource(
@@ -554,7 +566,7 @@ class Task : public std::enable_shared_from_this<Task> {
   }
 
   void requestYield() {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::timed_mutex> l(mutex_);
     toYield_ = numThreads_;
   }
 
@@ -570,7 +582,7 @@ class Task : public std::enable_shared_from_this<Task> {
     return pauseRequested_;
   }
 
-  std::mutex& mutex() {
+  std::timed_mutex& mutex() {
     return mutex_;
   }
 
@@ -700,6 +712,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // occurred. This should only be called inside mutex_ protection.
   std::string errorMessageLocked() const;
 
+  folly::dynamic toShortJsonLocked() const;
+
   class MemoryReclaimer : public exec::MemoryReclaimer {
    public:
     static std::unique_ptr<memory::MemoryReclaimer> create(
@@ -726,6 +740,12 @@ class Task : public std::enable_shared_from_this<Task> {
     std::shared_ptr<Task> ensureTask() const {
       return task_.lock();
     }
+
+    uint64_t reclaimTask(
+        const std::shared_ptr<Task>& task,
+        uint64_t targetBytes,
+        uint64_t maxWaitMs,
+        memory::MemoryReclaimer::Stats& stats);
 
     std::weak_ptr<Task> task_;
   };
@@ -770,19 +790,20 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Retrieve a split or split future from the given split store structure.
   BlockingReason getSplitOrFutureLocked(
+      bool forTableScan,
       SplitsStore& splitsStore,
       exec::Split& split,
       ContinueFuture& future,
-      int32_t maxPreloadSplits = 0,
-      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload =
-          nullptr);
+      int32_t maxPreloadSplits,
+      const ConnectorSplitPreloadFunc& preload);
 
   /// Returns next split from the store. The caller must ensure the store is not
   /// empty.
   exec::Split getSplitLocked(
+      bool forTableScan,
       SplitsStore& splitsStore,
       int32_t maxPreloadSplits,
-      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload);
+      const ConnectorSplitPreloadFunc& preload);
 
   // Creates for the given split group and fills up the 'SplitGroupState'
   // structure, which stores inter-operator state (local exchange, bridges).
@@ -845,7 +866,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // executing for 'this'. 'comment' is used as a debugging label on
   // the promise/future pair.
   ContinueFuture makeFinishFuture(const char* comment) {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::timed_mutex> l(mutex_);
     return makeFinishFutureLocked(comment);
   }
 
@@ -872,7 +893,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // created for 'planNodeId' in 'exchangeClientByPlanNode_'.
   std::shared_ptr<ExchangeClient> getExchangeClient(
       const core::PlanNodeId& planNodeId) const {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::timed_mutex> l(mutex_);
     return getExchangeClientLocked(planNodeId);
   }
 
@@ -940,7 +961,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // Set if terminated by an error. This is the first error reported
   // by any of the instances.
   std::exception_ptr exception_ = nullptr;
-  mutable std::mutex mutex_;
+  mutable std::timed_mutex mutex_;
 
   // Exchange clients. One per pipeline / source. Null for pipelines, which
   // don't need it.

@@ -17,9 +17,12 @@
 #include "velox/connectors/hive/SplitReader.h"
 
 #include "velox/common/caching/CacheTTLController.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
+#include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive {
@@ -37,17 +40,33 @@ std::unique_ptr<SplitReader> SplitReader::create(
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats) {
-  return std::make_unique<SplitReader>(
-      hiveSplit,
-      hiveTableHandle,
-      scanSpec,
-      readerOutputType,
-      partitionKeys,
-      fileHandleFactory,
-      executor,
-      connectorQueryCtx,
-      hiveConfig,
-      ioStats);
+  //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
+  if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
+      hiveSplit->customSplitInfo["table_format"] == "hive-iceberg") {
+    return std::make_unique<iceberg::IcebergSplitReader>(
+        hiveSplit,
+        hiveTableHandle,
+        scanSpec,
+        readerOutputType,
+        partitionKeys,
+        fileHandleFactory,
+        executor,
+        connectorQueryCtx,
+        hiveConfig,
+        ioStats);
+  } else {
+    return std::make_unique<SplitReader>(
+        hiveSplit,
+        hiveTableHandle,
+        scanSpec,
+        readerOutputType,
+        partitionKeys,
+        fileHandleFactory,
+        executor,
+        connectorQueryCtx,
+        hiveConfig,
+        ioStats);
+  }
 }
 
 SplitReader::SplitReader(
@@ -81,7 +100,7 @@ void SplitReader::configureReaderOptions() {
       baseReaderOpts_,
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
-      hiveTableHandle_->dataColumns(),
+      hiveTableHandle_,
       hiveSplit_);
 }
 
@@ -91,7 +110,19 @@ void SplitReader::prepareSplit(
   VELOX_CHECK_NE(
       baseReaderOpts_.getFileFormat(), dwio::common::FileFormat::UNKNOWN);
 
-  auto fileHandle = fileHandleFactory_->generate(hiveSplit_->filePath).second;
+  std::shared_ptr<FileHandle> fileHandle;
+  try {
+    fileHandle = fileHandleFactory_->generate(hiveSplit_->filePath).second;
+  } catch (VeloxRuntimeError& e) {
+    if (e.errorCode() == error_code::kFileNotFound.c_str() &&
+        hiveConfig_->ignoreMissingFiles(
+            connectorQueryCtx_->sessionProperties())) {
+      emptySplit_ = true;
+      return;
+    } else {
+      throw;
+    }
+  }
   // Here we keep adding new entries to CacheTTLController when new fileHandles
   // are generated, if CacheTTLController was created. Creator of
   // CacheTTLController needs to make sure a size control strategy was available
@@ -250,13 +281,19 @@ void SplitReader::setNullConstantValue(
 namespace {
 
 template <TypeKind ToKind>
-velox::variant convertFromString(const std::optional<std::string>& value) {
+velox::variant convertFromString(
+    const std::optional<std::string>& value,
+    const TypePtr& toType) {
   if (value.has_value()) {
     if constexpr (ToKind == TypeKind::VARCHAR) {
       return velox::variant(value.value());
     }
     if constexpr (ToKind == TypeKind::VARBINARY) {
       return velox::variant::binary((value.value()));
+    }
+    if (toType->isDate()) {
+      return velox::variant(util::castFromDateString(
+          StringView(value.value()), true /*isIso8601*/));
     }
     auto result = velox::util::Converter<ToKind>::cast(value.value());
     if constexpr (ToKind == TypeKind::TIMESTAMP) {
@@ -279,7 +316,10 @@ void SplitReader::setPartitionValue(
       "ColumnHandle is missing for partition key {}",
       partitionKey);
   auto constValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      convertFromString, it->second->dataType()->kind(), value);
+      convertFromString,
+      it->second->dataType()->kind(),
+      value,
+      it->second->dataType());
   setConstantValue(spec, it->second->dataType(), constValue);
 }
 

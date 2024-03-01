@@ -590,9 +590,50 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailsTask) {
   growOp->freeAll();
 }
 
-TEST_F(MockSharedArbitrationTest, shrinkMemory) {
-  std::vector<std::shared_ptr<MemoryPool>> pools;
-  ASSERT_THROW(arbitrator_->shrinkCapacity(pools, 128), VeloxException);
+TEST_F(MockSharedArbitrationTest, shrinkPools) {
+  struct {
+    uint64_t targetBytes;
+    uint64_t expectedFreedBytes;
+
+    std::string debugString() const {
+      return fmt::format(
+          "targetBytes: {}, expectedFreedBytes: {}",
+          succinctBytes(targetBytes),
+          succinctBytes(expectedFreedBytes));
+    }
+  } testSettings[] = {
+      {0, kMemoryCapacity},
+      {1UL << 30, kMemoryCapacity},
+      {1, kMemoryPoolTransferCapacity}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    auto task1 = addTask(kMemoryCapacity / 4);
+    auto* op1 = addMemoryOp(task1);
+    auto* buf1 = op1->allocate(kMemoryCapacity / 4);
+    ASSERT_EQ(op1->capacity(), kMemoryCapacity / 4);
+
+    auto task2 = addTask(kMemoryCapacity);
+    auto* op2 = addMemoryOp(task2);
+    auto* buf2 = op2->allocate(kMemoryCapacity / 4 * 3);
+    ASSERT_EQ(op2->capacity(), kMemoryCapacity / 4 * 3);
+
+    ASSERT_EQ(
+        manager_->shrinkPools(testData.targetBytes),
+        testData.expectedFreedBytes);
+    if (testData.targetBytes == 1) {
+      ASSERT_GT(op1->capacity(), 0);
+      ASSERT_GT(op2->capacity(), 0);
+    } else {
+      ASSERT_EQ(op1->capacity(), 0);
+      ASSERT_EQ(op2->capacity(), 0);
+    }
+    ASSERT_EQ(
+        op1->capacity() + op2->capacity() +
+            arbitrator_->stats().freeCapacityBytes,
+        arbitrator_->capacity());
+  }
 }
 
 TEST_F(MockSharedArbitrationTest, singlePoolGrowWithoutArbitration) {

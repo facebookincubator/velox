@@ -404,7 +404,8 @@ class ExchangeFuzzer : public VectorTestBase {
 int32_t ExchangeFuzzer::iteration_;
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  ::testing::InitGoogleTest(&argc, argv);
+  folly::Init init{&argc, &argv};
   memory::MemoryManagerOptions options;
   options.useMmapAllocator = true;
   options.allocatorCapacity = 20UL << 30;
@@ -432,5 +433,6 @@ int main(int argc, char** argv) {
     fuzzer.seed(seed);
   }
   fuzzer.run();
+  exec::test::testingShutdownLocalExchangeSource();
   return 0;
 }

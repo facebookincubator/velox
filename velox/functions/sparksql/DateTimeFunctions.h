@@ -361,6 +361,15 @@ struct LastDayFunction {
 };
 
 template <typename T>
+struct DateFromUnixDateFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(out_type<Date>& result, const int32_t& value) {
+    result = value;
+  }
+};
+
+template <typename T>
 struct DateAddFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -387,18 +396,12 @@ struct DateSubFunction {
 };
 
 template <typename T>
-struct DayOfWeekFunction : public InitSessionTimezone<T> {
+struct DayOfWeekFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // 1 = Sunday, 2 = Monday, ..., 7 = Saturday
   FOLLY_ALWAYS_INLINE int32_t getDayOfWeek(const std::tm& time) {
     return time.tm_wday + 1;
-  }
-
-  FOLLY_ALWAYS_INLINE void call(
-      int32_t& result,
-      const arg_type<Timestamp>& timestamp) {
-    result = getDayOfWeek(getDateTime(timestamp, this->timeZone_));
   }
 
   FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
@@ -497,6 +500,20 @@ struct DayOfYearFunction {
 };
 
 template <typename T>
+struct WeekdayFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // 0 = Monday, 1 = Tuesday, ..., 6 = Sunday
+  FOLLY_ALWAYS_INLINE int32_t getWeekday(const std::tm& time) {
+    return (time.tm_wday + 6) % 7;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+    result = getWeekday(getDateTime(date));
+  }
+};
+
+template <typename T>
 struct NextDayFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -561,6 +578,28 @@ struct HourFunction : public InitSessionTimezone<T> {
       int32_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getDateTime(timestamp, this->timeZone_).tm_hour;
+  }
+};
+
+template <typename T>
+struct MinuteFunction : public InitSessionTimezone<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getDateTime(timestamp, this->timeZone_).tm_min;
+  }
+};
+
+template <typename T>
+struct SecondFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getDateTime(timestamp, nullptr).tm_sec;
   }
 };
 } // namespace facebook::velox::functions::sparksql

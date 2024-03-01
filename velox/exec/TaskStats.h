@@ -52,6 +52,12 @@ struct TaskStats {
   int32_t numQueuedSplits{0};
   std::unordered_set<int32_t> completedSplitGroups;
 
+  /// Table scan split stats.
+  int32_t numRunningTableScanSplits{0};
+  int32_t numQueuedTableScanSplits{0};
+  int64_t runningTableScanSplitWeights{0};
+  int64_t queuedTableScanSplitWeights{0};
+
   /// The subscript is given by each Operator's
   /// DriverCtx::pipelineId. This is a sum total reflecting fully
   /// processed Splits for Drivers of this pipeline.
@@ -105,6 +111,11 @@ struct TaskStats {
   std::string longestRunningOpCall;
   /// The longest still running operator call's duration in ms.
   size_t longestRunningOpCallMs{0};
+
+  /// The total memory reclamation count.
+  uint32_t memoryReclaimCount{0};
+  /// The total memory reclamation time.
+  uint64_t memoryReclaimMs{0};
 };
 
 } // namespace facebook::velox::exec

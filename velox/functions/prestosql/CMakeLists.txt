@@ -44,7 +44,6 @@ add_library(
   MapZipWith.cpp
   Not.cpp
   Reduce.cpp
-  Repeat.cpp
   Reverse.cpp
   RowFunction.cpp
   Sequence.cpp
@@ -57,6 +56,7 @@ add_library(
   Transform.cpp
   TransformKeys.cpp
   TransformValues.cpp
+  TypeOf.cpp
   URLFunctions.cpp
   Utf8Utils.cpp
   VectorArithmetic.cpp

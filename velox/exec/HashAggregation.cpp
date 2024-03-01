@@ -53,7 +53,7 @@ void HashAggregation::initialize() {
 
   VELOX_CHECK(pool()->trackUsage());
 
-  auto inputType = aggregationNode_->sources()[0]->outputType();
+  const auto& inputType = aggregationNode_->sources()[0]->outputType();
   auto hashers =
       createVectorHashers(inputType, aggregationNode_->groupingKeys());
   auto numHashers = hashers.size();
@@ -448,10 +448,6 @@ void HashAggregation::close() {
 
   output_ = nullptr;
   groupingSet_.reset();
-}
-
-void HashAggregation::abort() {
-  close();
 }
 
 void HashAggregation::updateEstimatedOutputRowSize() {

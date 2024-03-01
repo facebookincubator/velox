@@ -394,7 +394,7 @@ bool Expr::evalArgsDefaultNulls(
       auto& arg = inputValues_[i];
       if (arg->mayHaveNulls()) {
         decoded.get()->decode(*arg, rows.rows());
-        flatNulls = decoded.get()->nulls();
+        flatNulls = decoded.get()->nulls(&rows.rows());
       }
       // A null with no error deselects the row.
       // An error adds itself to argument errors.
@@ -533,7 +533,7 @@ void Expr::evalSimplifiedImpl(
   try {
     vectorFunction_->apply(
         remainingRows.rows(), inputValues_, type(), context, result);
-  } catch (const VeloxException& ve) {
+  } catch (const VeloxException&) {
     throw;
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(e.what());
@@ -1111,7 +1111,7 @@ bool Expr::removeSureNulls(
 
     if (values->mayHaveNulls()) {
       LocalDecodedVector decoded(context, *values, rows);
-      if (auto* rawNulls = decoded->nulls()) {
+      if (auto* rawNulls = decoded->nulls(&rows)) {
         if (!result) {
           result = nullHolder.get(rows);
         }
@@ -1122,7 +1122,7 @@ bool Expr::removeSureNulls(
   }
   if (result) {
     result->updateBounds();
-    return true;
+    return result->countSelected() != rows.countSelected();
   }
   return false;
 }
@@ -1441,7 +1441,7 @@ void Expr::evalAllImpl(
 
   // Write non-selected rows in remainingRows as nulls in the result if some
   // rows have been skipped.
-  if (remainingRows.mayHaveChanged()) {
+  if (remainingRows.hasChanged()) {
     addNulls(rows, remainingRows.rows().asRange().bits(), context, result);
   }
   releaseInputValues(context);
@@ -1509,7 +1509,7 @@ void Expr::applyFunction(
 
   try {
     vectorFunction_->apply(rows, inputValues_, type(), context, result);
-  } catch (const VeloxException& ve) {
+  } catch (const VeloxException&) {
     throw;
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(e.what());
@@ -1526,7 +1526,7 @@ void Expr::applyFunction(
         // should only apply when the UDF is buggy (hopefully rarely).
         VELOX_USER_FAIL(
             "Function neither returned results nor threw exception.");
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
         context.setErrors(remainingRows.rows(), std::current_exception());
       }
     }

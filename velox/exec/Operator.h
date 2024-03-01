@@ -152,6 +152,11 @@ struct OperatorStats {
   int64_t lastLazyCpuNanos{0};
   int64_t lastLazyWallNanos{0};
 
+  // Total null keys processed by the operator.
+  // Currently populated only by HashJoin/HashBuild.
+  // HashProbe doesn't populate numNullKeys when build side is empty.
+  int64_t numNullKeys{0};
+
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
 
   int numDrivers = 0;
@@ -419,15 +424,6 @@ class Operator : public BaseRuntimeStatWriter {
     operatorCtx_->pool()->release();
   }
 
-  /// Invoked by memory arbitrator to free up operator's resource immediately on
-  /// memory abort, and the query will stop running after this call.
-  ///
-  /// NOTE: we don't expect any access to this operator except close method
-  /// call.
-  virtual void abort() {
-    close();
-  }
-
   // Returns true if 'this' never has more output rows than input rows.
   virtual bool isFilter() const {
     return false;
@@ -459,8 +455,10 @@ class Operator : public BaseRuntimeStatWriter {
   virtual std::string toString() const;
 
   /// Used in debug ednpoints.
-  virtual std::string toJsonString() const {
-    return toString();
+  virtual folly::dynamic toJson() const {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["operator"] = toString();
+    return obj;
   }
 
   velox::memory::MemoryPool* pool() const {
@@ -510,6 +508,10 @@ class Operator : public BaseRuntimeStatWriter {
 
   const std::string& operatorType() const {
     return operatorCtx_->operatorType();
+  }
+
+  const std::string& taskId() const {
+    return operatorCtx_->taskId();
   }
 
   /// Registers 'translator' for mapping user defined PlanNode subclass
@@ -657,6 +659,10 @@ class Operator : public BaseRuntimeStatWriter {
   /// Returns true if this is a spillable operator and has configured spilling.
   FOLLY_ALWAYS_INLINE bool canSpill() const {
     return spillConfig_.has_value();
+  }
+
+  const common::SpillConfig* spillConfig() const {
+    return spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   }
 
   /// Creates output vector from 'input_' and 'results' according to

@@ -76,7 +76,6 @@ add_executable(
   RandTest.cpp
   ReduceTest.cpp
   RegexpReplaceTest.cpp
-  RepeatTest.cpp
   ReverseTest.cpp
   RoundTest.cpp
   ScalarFunctionRegTest.cpp
@@ -91,6 +90,7 @@ add_executable(
   TransformKeysTest.cpp
   TransformValuesTest.cpp
   TrimFunctionsTest.cpp
+  TypeOfTest.cpp
   URLFunctionsTest.cpp
   Utf8Test.cpp
   WidthBucketArrayTest.cpp

@@ -260,7 +260,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     ASSERT_GT(stats.spillFlushTimeUs, 0);
     ASSERT_GT(stats.spillFillTimeUs, 0);
     ASSERT_GT(stats.spillSerializationTimeUs, 0);
-    ASSERT_GT(stats.spillDiskWrites, 0);
+    ASSERT_GT(stats.spillWrites, 0);
 
     const auto newGStats = common::globalSpillStats();
     ASSERT_EQ(
@@ -290,8 +290,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         prevGStats.spillSerializationTimeUs + stats.spillSerializationTimeUs,
         newGStats.spillSerializationTimeUs);
     ASSERT_EQ(
-        prevGStats.spillDiskWrites + stats.spillDiskWrites,
-        newGStats.spillDiskWrites);
+        prevGStats.spillWrites + stats.spillWrites, newGStats.spillWrites);
 
     spiller_.reset();
     // Verify the spilled files are still there after spiller destruction.
@@ -487,12 +486,13 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     spillConfig.executor = executor();
     spillConfig.compressionKind = compressionKind_;
     spillConfig.maxSpillRunRows = maxSpillRunRows;
+    spillConfig.maxFileSize = targetFileSize;
     spillConfig.fileCreateConfig = {};
 
     if (type_ == Spiller::Type::kHashJoinProbe) {
       // kHashJoinProbe doesn't have associated row container.
-      spiller_ = std::make_unique<Spiller>(
-          type_, rowType_, hashBits_, &spillConfig, targetFileSize);
+      spiller_ =
+          std::make_unique<Spiller>(type_, rowType_, hashBits_, &spillConfig);
     } else if (
         type_ == Spiller::Type::kOrderByInput ||
         type_ == Spiller::Type::kAggregateInput) {
@@ -513,12 +513,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     } else {
       VELOX_CHECK_EQ(type_, Spiller::Type::kHashJoinBuild);
       spiller_ = std::make_unique<Spiller>(
-          type_,
-          rowContainer_.get(),
-          rowType_,
-          hashBits_,
-          &spillConfig,
-          targetFileSize);
+          type_, rowContainer_.get(), rowType_, hashBits_, &spillConfig);
     }
     ASSERT_EQ(spiller_->state().maxPartitions(), numPartitions_);
     ASSERT_FALSE(spiller_->isAllSpilled());
@@ -759,14 +754,14 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           ASSERT_EQ(stats.spillWriteTimeUs, 0);
           ASSERT_EQ(stats.spillFlushTimeUs, 0);
           ASSERT_EQ(stats.spillSerializationTimeUs, 0);
-          ASSERT_EQ(stats.spillDiskWrites, 0);
+          ASSERT_EQ(stats.spillWrites, 0);
         } else {
           ASSERT_GT(stats.spilledRows, 0);
           ASSERT_GT(stats.spilledBytes, 0);
           ASSERT_GT(stats.spillWriteTimeUs, 0);
           ASSERT_GT(stats.spillFlushTimeUs, 0);
           ASSERT_GT(stats.spillSerializationTimeUs, 0);
-          ASSERT_GT(stats.spillDiskWrites, 0);
+          ASSERT_GT(stats.spillWrites, 0);
         }
       } else {
         ASSERT_GT(stats.spilledRows, 0);
@@ -774,7 +769,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         ASSERT_GT(stats.spillWriteTimeUs, 0);
         ASSERT_GT(stats.spillFlushTimeUs, 0);
         ASSERT_GT(stats.spillSerializationTimeUs, 0);
-        ASSERT_GT(stats.spillDiskWrites, 0);
+        ASSERT_GT(stats.spillWrites, 0);
       }
       ASSERT_GT(stats.spilledPartitions, 0);
       ASSERT_EQ(stats.spillSortTimeUs, 0);
@@ -812,8 +807,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           prevGStats.spillSerializationTimeUs + stats.spillSerializationTimeUs,
           newGStats.spillSerializationTimeUs);
       ASSERT_EQ(
-          prevGStats.spillDiskWrites + stats.spillDiskWrites,
-          newGStats.spillDiskWrites);
+          prevGStats.spillWrites + stats.spillWrites, newGStats.spillWrites);
 
       spillers.push_back(std::move(spiller_));
     }
@@ -1015,63 +1009,73 @@ class SpillerTest : public exec::test::RowContainerTestBase {
   std::unique_ptr<Spiller> spiller_;
 };
 
-class AllTypes : public SpillerTest,
-                 public testing::WithParamInterface<TestParam> {
- public:
-  AllTypes() : SpillerTest(GetParam()) {}
+struct AllTypesTestParam {
+  TestParam param;
+  uint64_t maxSpillRunRows;
+};
 
-  static std::vector<TestParam> getTestParams() {
-    return TestParamsBuilder().getTestParams();
+class AllTypes : public SpillerTest,
+                 public testing::WithParamInterface<AllTypesTestParam> {
+ public:
+  AllTypes()
+      : SpillerTest(GetParam().param),
+        maxSpillRunRows_(GetParam().maxSpillRunRows) {}
+
+  static std::vector<AllTypesTestParam> getTestParams() {
+    auto testParams = TestParamsBuilder().getTestParams();
+
+    std::vector<AllTypesTestParam> allTypesTestParams;
+    for (const auto& testParam : testParams) {
+      for (const auto& maxSpillRunRows :
+           std::vector<uint64_t>{0, 101, 1'000'000}) {
+        allTypesTestParams.push_back({testParam, maxSpillRunRows});
+      }
+    }
+
+    return allTypesTestParams;
   }
+
+ protected:
+  uint64_t maxSpillRunRows_;
 };
 
 TEST_P(AllTypes, nonSortedSpillFunctions) {
-  struct {
-    uint64_t maxSpillRunRows;
-
-    std::string debugString() const {
-      return fmt::format("maxSpillRunRows {}", maxSpillRunRows);
+  if (type_ == Spiller::Type::kOrderByInput ||
+      type_ == Spiller::Type::kOrderByOutput ||
+      type_ == Spiller::Type::kAggregateInput ||
+      type_ == Spiller::Type::kAggregateOutput) {
+    setupSpillData(rowType_, numKeys_, 5'000, 1, nullptr, {});
+    sortSpillData();
+    setupSpiller(100'000, 0, false, maxSpillRunRows_);
+    {
+      RowVectorPtr dummyVector;
+      VELOX_ASSERT_THROW(
+          spiller_->spill(0, dummyVector), "Unexpected spiller type");
     }
-  } testSettings[] = {{0}, {101}, {1'000'000}};
 
-  for (const auto& testData : testSettings) {
-    if (type_ == Spiller::Type::kOrderByInput ||
-        type_ == Spiller::Type::kOrderByOutput ||
-        type_ == Spiller::Type::kAggregateInput ||
-        type_ == Spiller::Type::kAggregateOutput) {
-      setupSpillData(rowType_, numKeys_, 5'000, 1, nullptr, {});
-      sortSpillData();
-      setupSpiller(100'000, 0, false, testData.maxSpillRunRows);
-      {
-        RowVectorPtr dummyVector;
-        VELOX_ASSERT_THROW(
-            spiller_->spill(0, dummyVector), "Unexpected spiller type");
-      }
-
-      if (type_ == Spiller::Type::kOrderByOutput) {
-        RowContainerIterator rowIter;
-        std::vector<char*> rows(5'000);
-        int numListedRows{0};
-        numListedRows = rowContainer_->listRows(&rowIter, 5000, rows.data());
-        ASSERT_EQ(numListedRows, 5000);
-        spiller_->spill(rows);
-      } else {
-        spiller_->spill();
-      }
-
-      ASSERT_FALSE(spiller_->finalized());
-      SpillPartitionSet spillPartitionSet;
-      spiller_->finishSpill(spillPartitionSet);
-      ASSERT_TRUE(spiller_->finalized());
-      ASSERT_EQ(spillPartitionSet.size(), 1);
-      verifySortedSpillData(spillPartitionSet.begin()->second.get());
-      continue;
+    if (type_ == Spiller::Type::kOrderByOutput) {
+      RowContainerIterator rowIter;
+      std::vector<char*> rows(5'000);
+      int numListedRows{0};
+      numListedRows = rowContainer_->listRows(&rowIter, 5000, rows.data());
+      ASSERT_EQ(numListedRows, 5000);
+      spiller_->spill(rows);
+    } else {
+      spiller_->spill();
     }
-    testNonSortedSpill(2, 5'000, 3, 1, testData.maxSpillRunRows);
-    testNonSortedSpill(2, 5'000, 3, 1'000'000'000, testData.maxSpillRunRows);
-    // Empty case.
-    testNonSortedSpill(1, 5'000, 0, 1, testData.maxSpillRunRows);
+
+    ASSERT_FALSE(spiller_->finalized());
+    SpillPartitionSet spillPartitionSet;
+    spiller_->finishSpill(spillPartitionSet);
+    ASSERT_TRUE(spiller_->finalized());
+    ASSERT_EQ(spillPartitionSet.size(), 1);
+    verifySortedSpillData(spillPartitionSet.begin()->second.get());
+    return;
   }
+  testNonSortedSpill(2, 5'000, 3, 1, maxSpillRunRows_);
+  testNonSortedSpill(2, 5'000, 3, 1'000'000'000, maxSpillRunRows_);
+  // Empty case.
+  testNonSortedSpill(1, 5'000, 0, 1, maxSpillRunRows_);
 }
 
 class NoHashJoin : public SpillerTest,
@@ -1172,7 +1176,7 @@ TEST_P(HashJoinBuildOnly, writeBufferSize) {
     setupSpiller(4'000'000'000, writeBufferSize, false);
     spiller_->spill();
     ASSERT_TRUE(spiller_->isAllSpilled());
-    const int numDiskWrites = spiller_->stats().spillDiskWrites;
+    const int numDiskWrites = spiller_->stats().spillWrites;
     if (writeBufferSize != 0) {
       ASSERT_EQ(numDiskWrites, 0);
     }
@@ -1216,10 +1220,10 @@ TEST_P(HashJoinBuildOnly, writeBufferSize) {
     if (writeBufferSize > 0) {
       // With disk write buffering, all the input merged into one disk write per
       // partition.
-      ASSERT_EQ(stats.spillDiskWrites, numNonEmptySpilledPartitions);
+      ASSERT_EQ(stats.spillWrites, numNonEmptySpilledPartitions);
     } else {
       // By disable write buffering, then each spill input causes a disk write.
-      ASSERT_EQ(stats.spillDiskWrites, numDiskWrites + spillInputVectorCount);
+      ASSERT_EQ(stats.spillWrites, numDiskWrites + spillInputVectorCount);
     }
   }
 }

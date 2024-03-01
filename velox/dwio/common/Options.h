@@ -93,7 +93,16 @@ class SerDeOptions {
 };
 
 struct TableParameter {
+  /// If present in the table parameters, the option is passed to the row reader
+  /// to instruct it to skip the number of rows from the current position. Used
+  /// to skip the column header row(s).
   static constexpr const char* kSkipHeaderLineCount = "skip.header.line.count";
+  /// If present in the table parameters, the option overrides the default value
+  /// of the SerDeOptions::nullString. It causes any field read from the file
+  /// (usually of the TEXT format) to be considered NULL if it is equal to this
+  /// string.
+  static constexpr const char* kSerializationNullFormat =
+      "serialization.null.format";
 };
 
 /**
@@ -131,7 +140,8 @@ class RowReaderOptions {
   // (in dwrf row reader). todo: encapsulate this and keySelectionCallBack_ in a
   // struct
   std::function<void(uint64_t)> blockedOnIoCallback_;
-  std::function<void(uint64_t)> decodingTimeMsCallback_;
+  std::function<void(uint64_t)> decodingTimeUsCallback_;
+  std::function<void(uint16_t)> stripeCountCallback_;
   bool eagerFirstStripeLoad = true;
   uint64_t skipRows_ = 0;
 
@@ -349,12 +359,21 @@ class RowReaderOptions {
     return blockedOnIoCallback_;
   }
 
-  void setDecodingTimeMsCallback(std::function<void(int64_t)> decodingTimeMs) {
-    decodingTimeMsCallback_ = std::move(decodingTimeMs);
+  void setDecodingTimeUsCallback(std::function<void(int64_t)> decodingTimeUs) {
+    decodingTimeUsCallback_ = std::move(decodingTimeUs);
   }
 
-  const std::function<void(int64_t)> getDecodingTimeMsCallback() const {
-    return decodingTimeMsCallback_;
+  std::function<void(int64_t)> getDecodingTimeUsCallback() const {
+    return decodingTimeUsCallback_;
+  }
+
+  void setStripeCountCallback(
+      std::function<void(uint16_t)> stripeCountCallback) {
+    stripeCountCallback_ = std::move(stripeCountCallback);
+  }
+
+  std::function<void(uint16_t)> getStripeCountCallback() const {
+    return stripeCountCallback_;
   }
 
   void setSkipRows(uint64_t skipRows) {

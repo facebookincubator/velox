@@ -34,27 +34,9 @@ source $SCRIPTDIR/setup-helper-functions.sh
 NPROC=$(getconf _NPROCESSORS_ONLN)
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_DEPS="ninja flex bison cmake ccache protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
+MACOS_DEPS="ninja flex bison cmake ccache protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl libsodium"
 
-function run_and_time {
-  time "$@" || (echo "Failed to run $* ." ; exit 1 )
-  { echo "+ Finished running $*"; } 2> /dev/null
-}
-
-function prompt {
-  (
-    while true; do
-      local input="${PROMPT_ALWAYS_RESPOND:-}"
-      echo -n "$(tput bold)$* [Y, n]$(tput sgr0) "
-      [[ -z "${input}" ]] && read input
-      if [[ "${input}" == "Y" || "${input}" == "y" || "${input}" == "" ]]; then
-        return 0
-      elif [[ "${input}" == "N" || "${input}" == "n" ]]; then
-        return 1
-      fi
-    done
-  ) 2> /dev/null
-}
+FB_OS_VERSION="v2023.12.04.00"
 
 function update_brew {
   DEFAULT_BREW_PATH=/usr/local/bin/brew
@@ -93,9 +75,29 @@ function install_fmt {
 }
 
 function install_folly {
-  github_checkout facebook/folly "v2022.11.14.00"
-  OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+  github_checkout facebook/folly "${FB_OS_VERSION}"
   cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+}
+
+function install_fizz {
+  github_checkout facebookincubator/fizz "${FB_OS_VERSION}"
+  cmake_install -DBUILD_TESTS=OFF -S fizz
+}
+
+function install_wangle {
+  github_checkout facebook/wangle "${FB_OS_VERSION}"
+  cmake_install -DBUILD_TESTS=OFF -S wangle
+}
+
+function install_mvfst {
+    github_checkout facebook/mvfst "${FB_OS_VERSION}"
+    cmake_install -DBUILD_TESTS=OFF
+}
+
+
+function install_fbthrift {
+  github_checkout facebook/fbthrift "${FB_OS_VERSION}"
+  cmake_install -DBUILD_TESTS=OFF
 }
 
 function install_double_conversion {
@@ -118,9 +120,14 @@ function install_velox_deps {
     run_and_time install_build_prerequisites
   fi
   run_and_time install_ranges_v3
-  run_and_time install_fmt
   run_and_time install_double_conversion
   run_and_time install_re2
+  run_and_time install_fmt
+  run_and_time install_folly
+  run_and_time install_fizz
+  run_and_time install_wangle
+  run_and_time install_mvfst
+  run_and_time install_fbthrift
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

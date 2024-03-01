@@ -20,8 +20,31 @@
 #include <sys/mman.h>
 
 namespace facebook::velox::memory {
-MallocAllocator::MallocAllocator(size_t capacity)
-    : kind_(MemoryAllocator::Kind::kMalloc), capacity_(capacity) {}
+MallocAllocator::MallocAllocator(size_t capacity, uint32_t reservationByteLimit)
+    : kind_(MemoryAllocator::Kind::kMalloc),
+      capacity_(capacity),
+      reservationByteLimit_(reservationByteLimit),
+      reserveFunc_(
+          [this](uint32_t& counter, uint32_t increment, std::mutex& lock) {
+            return incrementUsageWithReservationFunc(counter, increment, lock);
+          }),
+      releaseFunc_(
+          [&](uint32_t& counter, uint32_t decrement, std::mutex& lock) {
+            decrementUsageWithReservationFunc(counter, decrement, lock);
+            return true;
+          }),
+      reservations_(std::thread::hardware_concurrency()) {}
+
+MallocAllocator::~MallocAllocator() {
+  // TODO: Remove the check when memory leak issue is resolved.
+  if (FLAGS_velox_memory_leak_check_enabled) {
+    VELOX_CHECK(
+        ((allocatedBytes_ - reservations_.read()) == 0) &&
+            (numAllocated_ == 0) && (numMapped_ == 0),
+        "{}",
+        toString());
+  }
+}
 
 bool MallocAllocator::allocateNonContiguousWithoutRetry(
     MachinePageCount numPages,
@@ -72,8 +95,8 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
     }
   }
 
-  std::unordered_map<void*, MachinePageCount> pages;
-  pages.reserve(mix.numSizes);
+  std::vector<void*> buffers;
+  buffers.reserve(mix.numSizes);
   for (int32_t i = 0; i < mix.numSizes; ++i) {
     MachinePageCount numSizeClassPages =
         mix.sizeCounts[i] * sizeClassSizes_[mix.sizeIndices[i]];
@@ -99,15 +122,15 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
       setAllocatorFailureMessage(errorMsg);
       break;
     }
-    pages.emplace(ptr, numSizeClassPages);
+    buffers.push_back(ptr);
     out.append(reinterpret_cast<uint8_t*>(ptr), numSizeClassPages); // NOLINT
   }
 
-  if (pages.size() != mix.numSizes) {
+  if (buffers.size() != mix.numSizes) {
     // Failed to allocate memory using malloc. Free any malloced pages and
     // return false.
-    for (const auto& [ptr, numMachinePages] : pages) {
-      ::free(ptr);
+    for (auto* buffer : buffers) {
+      ::free(buffer);
     }
     out.clear();
     if (reservationCB != nullptr) {
@@ -120,11 +143,6 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
     }
     decrementUsage(totalBytes);
     return false;
-  }
-
-  {
-    std::lock_guard<std::mutex> l(nonContiguousMallocsMutex_);
-    nonContiguousMallocs_.insert(pages.begin(), pages.end());
   }
 
   // Successfully allocated all pages.
@@ -239,36 +257,20 @@ int64_t MallocAllocator::freeNonContiguous(Allocation& allocation) {
   if (allocation.empty()) {
     return 0;
   }
-  MachinePageCount numFreed = 0;
+  MachinePageCount freedPages{0};
   for (int32_t i = 0; i < allocation.numRuns(); ++i) {
     Allocation::PageRun run = allocation.runAt(i);
     void* ptr = run.data();
-    int64_t numPages;
-    {
-      std::lock_guard<std::mutex> l(nonContiguousMallocsMutex_);
-      const auto it = nonContiguousMallocs_.find(ptr);
-      VELOX_CHECK(
-          it != nonContiguousMallocs_.end(), "Bad free page pointer: {}", ptr);
-      numPages = static_cast<int64_t>(it->second);
-      nonContiguousMallocs_.erase(it);
-    }
-    numFreed += numPages;
+    const int64_t numPages = run.numPages();
+    freedPages += numPages;
     stats_.recordFree(AllocationTraits::pageBytes(numPages), [&]() {
       ::free(ptr); // NOLINT
     });
-    numPages -= static_cast<int64_t>(run.numPages());
-    // It is possible that an allocation spans multiple PageRuns.
-    while (numPages > 0) {
-      ++i;
-      VELOX_CHECK_LT(i, allocation.numRuns());
-      numPages -= allocation.runAt(i).numPages();
-    }
-    VELOX_CHECK_EQ(numPages, 0);
   }
 
-  const auto freedBytes = AllocationTraits::pageBytes(numFreed);
+  const auto freedBytes = AllocationTraits::pageBytes(freedPages);
   decrementUsage(freedBytes);
-  numAllocated_.fetch_sub(numFreed);
+  numAllocated_.fetch_sub(freedPages);
   allocation.clear();
   return freedBytes;
 }

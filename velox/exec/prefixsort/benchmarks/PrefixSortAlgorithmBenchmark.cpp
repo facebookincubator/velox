@@ -17,7 +17,7 @@
 #include <folly/init/Init.h>
 #include "velox/buffer/Buffer.h"
 #include "velox/exec/prefixsort/PrefixSortAlgorithm.h"
-#include "velox/exec/prefixsort/PrefixSortEncoder.h"
+#include "velox/exec/prefixsort/tests/utils/EncoderTestUtils.h"
 
 DEFINE_int32(sort_data_seed, 1, "random test data generate seed.");
 
@@ -25,6 +25,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 
 namespace {
+
 class PrefixSortAlgorithmBenchmark {
  public:
   void seed(int32_t seed) {
@@ -48,7 +49,7 @@ class PrefixSortAlgorithmBenchmark {
     std::generate(randomTestVec.begin(), randomTestVec.end(), [&]() {
       return folly::Random::rand64(rng_);
     });
-    prefixsort::testingEncodeInPlace(randomTestVec);
+    prefixsort::test::encodeInPlace(randomTestVec);
     return randomTestVec;
   }
 
@@ -58,7 +59,7 @@ class PrefixSortAlgorithmBenchmark {
   folly::Random::DefaultGenerator rng_;
 };
 
-PrefixSortAlgorithmBenchmark bm;
+std::unique_ptr<PrefixSortAlgorithmBenchmark> bm;
 
 std::vector<int64_t> data10k;
 std::vector<int64_t> data100k;
@@ -66,19 +67,19 @@ std::vector<int64_t> data1000k;
 std::vector<int64_t> data10000k;
 
 BENCHMARK(PrefixSort_algorithm_10k) {
-  bm.runQuickSort(data10k);
+  bm->runQuickSort(data10k);
 }
 
 BENCHMARK(PrefixSort_algorithm_100k) {
-  bm.runQuickSort(data100k);
+  bm->runQuickSort(data100k);
 }
 
 BENCHMARK(PrefixSort_algorithm_1000k) {
-  bm.runQuickSort(data1000k);
+  bm->runQuickSort(data1000k);
 }
 
 BENCHMARK(PrefixSort_algorithm_10000k) {
-  bm.runQuickSort(data10000k);
+  bm->runQuickSort(data10000k);
 }
 
 } // namespace
@@ -86,11 +87,12 @@ BENCHMARK(PrefixSort_algorithm_10000k) {
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   memory::MemoryManager::initialize({});
-  bm.seed(FLAGS_sort_data_seed);
-  data10k = bm.generateTestVector(10'000);
-  data100k = bm.generateTestVector(100'000);
-  data1000k = bm.generateTestVector(1'000'000);
-  data10000k = bm.generateTestVector(10'000'000);
+  bm = std::make_unique<PrefixSortAlgorithmBenchmark>();
+  bm->seed(FLAGS_sort_data_seed);
+  data10k = bm->generateTestVector(10'000);
+  data100k = bm->generateTestVector(100'000);
+  data1000k = bm->generateTestVector(1'000'000);
+  data10000k = bm->generateTestVector(10'000'000);
   folly::runBenchmarks();
   return 0;
 }

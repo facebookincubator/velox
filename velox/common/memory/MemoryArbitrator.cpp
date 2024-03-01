@@ -116,8 +116,8 @@ class NoopArbitrator : public MemoryArbitrator {
   // Noop arbitrator has no memory capacity limit so no operation needed for
   // memory pool capacity shrink.
   uint64_t shrinkCapacity(
-      const std::vector<std::shared_ptr<MemoryPool>>& /*unused*/,
-      uint64_t /*unused*/) override {
+      const std::vector<std::shared_ptr<MemoryPool>>& /* unused */,
+      uint64_t /* unused */) override {
     return 0;
   }
 
@@ -215,7 +215,7 @@ uint64_t MemoryReclaimer::reclaim(
   };
   std::vector<Candidate> candidates;
   {
-    folly::SharedMutex::ReadHolder guard{pool->poolMutex_};
+    std::shared_lock guard{pool->poolMutex_};
     candidates.reserve(pool->children_.size());
     for (auto& entry : pool->children_) {
       auto child = entry.second.lock();
@@ -440,7 +440,7 @@ bool MemoryArbitrator::Stats::operator<=(const Stats& other) const {
 }
 
 ScopedMemoryArbitrationContext::ScopedMemoryArbitrationContext(
-    const MemoryPool& requestor)
+    const MemoryPool* requestor)
     : savedArbitrationCtx_(arbitrationCtx),
       currentArbitrationCtx_({.requestor = requestor}) {
   arbitrationCtx = &currentArbitrationCtx_;

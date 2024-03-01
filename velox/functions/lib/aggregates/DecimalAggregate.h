@@ -74,7 +74,7 @@ class DecimalAggregate : public exec::Aggregate {
   explicit DecimalAggregate(TypePtr resultType) : exec::Aggregate(resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(DecimalAggregate);
+    return sizeof(LongDecimalWithOverflowState);
   }
 
   int32_t accumulatorAlignmentSize() const override {
@@ -132,9 +132,6 @@ class DecimalAggregate : public exec::Aggregate {
     decodedRaw_.decode(*args[0], rows);
     if (decodedRaw_.isConstantMapping()) {
       if (!decodedRaw_.isNullAt(0)) {
-        const auto numRows = rows.countSelected();
-        int64_t overflow = 0;
-        int128_t totalSum{0};
         auto value = decodedRaw_.valueAt<TInputType>(0);
         rows.template applyToSelected([&](vector_size_t i) {
           updateNonNullValue(group, TResultType(value));

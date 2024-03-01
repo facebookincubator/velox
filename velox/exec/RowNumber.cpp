@@ -78,7 +78,12 @@ void RowNumber::addInput(RowVectorPtr input) {
     }
 
     SelectivityVector rows(numInput);
-    table_->prepareForGroupProbe(*lookup_, input, rows, false);
+    table_->prepareForGroupProbe(
+        *lookup_,
+        input,
+        rows,
+        false,
+        BaseHashTable::kNoSpillInputStartPartitionBit);
     table_->groupProbe(*lookup_);
 
     // Initialize new partitions with zeros.
@@ -93,7 +98,8 @@ void RowNumber::addInput(RowVectorPtr input) {
 void RowNumber::addSpillInput() {
   const auto numInput = input_->size();
   SelectivityVector rows(numInput);
-  table_->prepareForGroupProbe(*lookup_, input_, rows, false);
+  table_->prepareForGroupProbe(
+      *lookup_, input_, rows, false, spillConfig_->startPartitionBit);
   table_->groupProbe(*lookup_);
 
   // Initialize new partitions with zeros.
@@ -157,7 +163,8 @@ void RowNumber::restoreNextSpillPartition() {
 
       const auto numInput = input->size();
       SelectivityVector rows(numInput);
-      table_->prepareForGroupProbe(*lookup_, input, rows, false);
+      table_->prepareForGroupProbe(
+          *lookup_, input, rows, false, spillConfig_->startPartitionBit);
       table_->groupProbe(*lookup_);
 
       auto* counts = data->children().back()->as<FlatVector<int64_t>>();
@@ -395,8 +402,7 @@ void RowNumber::setupHashTableSpiller() {
       table_->rows(),
       tableType,
       std::move(hashBits),
-      &spillConfig,
-      spillConfig.maxFileSize);
+      &spillConfig);
 }
 
 void RowNumber::setupInputSpiller() {
@@ -405,11 +411,7 @@ void RowNumber::setupInputSpiller() {
 
   // TODO Replace Spiller::Type::kHashJoinProbe.
   inputSpiller_ = std::make_unique<Spiller>(
-      Spiller::Type::kHashJoinProbe,
-      inputType_,
-      hashBits,
-      &spillConfig,
-      spillConfig.maxFileSize);
+      Spiller::Type::kHashJoinProbe, inputType_, hashBits, &spillConfig);
 
   const auto& hashers = table_->hashers();
 

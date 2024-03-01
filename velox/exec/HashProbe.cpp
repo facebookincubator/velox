@@ -253,8 +253,7 @@ void HashProbe::maybeSetupSpillInput(
           spillInputPartitionIds_.begin()->partitionBitOffset(),
           spillInputPartitionIds_.begin()->partitionBitOffset() +
               spillConfig.joinPartitionBits),
-      &spillConfig,
-      spillConfig.maxFileSize);
+      &spillConfig);
   // Set the spill partitions to the corresponding ones at the build side. The
   // hash probe operator itself won't trigger any spilling.
   spiller_->setPartitionsSpilled(toPartitionNumSet(spillInputPartitionIds_));
@@ -580,6 +579,17 @@ void HashProbe::addInput(RowVectorPtr input) {
     decodeAndDetectNonNullKeys();
   }
   activeRows_ = nonNullInputRows_;
+
+  // Update statistics for null keys in join operator.
+  // Updating here means we will report 0 null keys when build side is empty.
+  // If we want more accurate stats, we will have to decode input vector
+  // even when not needed. So we tradeoff less accurate stats for more
+  // performance.
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->numNullKeys +=
+        activeRows_.size() - activeRows_.countSelected();
+  }
 
   table_->prepareForJoinProbe(*lookup_.get(), input_, activeRows_, false);
 
@@ -998,10 +1008,21 @@ void HashProbe::prepareFilterRowsForNullAwareJoin(
       filterInputColumnDecodedVector_.decode(
           *filterInput_->childAt(projection.outputChannel), filterInputRows_);
       if (filterInputColumnDecodedVector_.mayHaveNulls()) {
+        SelectivityVector nullsInActiveRows(numRows);
+        memcpy(
+            nullsInActiveRows.asMutableRange().bits(),
+            filterInputColumnDecodedVector_.nulls(&filterInputRows_),
+            bits::nbytes(numRows));
+        // All rows that are not active count as non-null here.
+        bits::orWithNegatedBits(
+            nullsInActiveRows.asMutableRange().bits(),
+            filterInputRows_.asRange().bits(),
+            0,
+            numRows);
         // NOTE: the false value of a raw null bit indicates null so we OR with
         // negative of the raw bit.
         bits::orWithNegatedBits(
-            rawNullRows, filterInputColumnDecodedVector_.nulls(), 0, numRows);
+            rawNullRows, nullsInActiveRows.asRange().bits(), 0, numRows);
       }
     }
     nullFilterInputRows_.updateBounds();
@@ -1418,8 +1439,8 @@ void HashProbe::setRunning() {
   setState(ProbeOperatorState::kRunning);
 }
 
-void HashProbe::abort() {
-  Operator::abort();
+void HashProbe::close() {
+  Operator::close();
 
   // Free up major memory usage.
   joinBridge_.reset();

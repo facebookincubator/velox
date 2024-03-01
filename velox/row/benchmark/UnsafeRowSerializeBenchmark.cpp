@@ -189,8 +189,9 @@ class SerializeBenchmark {
       HashStringAllocator& allocator) {
     ByteOutputStream out(&allocator);
     auto position = allocator.newWrite(out);
+    const exec::ContainerRowSerdeOptions options{};
     for (auto i = 0; i < data->size(); ++i) {
-      exec::ContainerRowSerde::serialize(*data, i, out);
+      exec::ContainerRowSerde::serialize(*data, i, out, options);
     }
     allocator.finishWrite(out, 0);
     return position;
@@ -299,7 +300,7 @@ SERDE_BENCHMARKS(
 } // namespace facebook::velox::row
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   facebook::velox::memory::MemoryManager::initialize({});
   folly::runBenchmarks();
   return 0;
