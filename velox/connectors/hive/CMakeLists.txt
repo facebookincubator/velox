@@ -40,7 +40,6 @@ target_link_libraries(
           velox_dwio_dwrf_writer
           velox_dwio_parquet_reader
           velox_dwio_parquet_writer
-          velox_vector
           velox_file
           velox_hive_partition_function
           velox_s3fs

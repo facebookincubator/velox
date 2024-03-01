@@ -678,20 +678,24 @@ VectorPtr newConstantFromString(
     return std::make_shared<ConstantVector<T>>(pool, size, true, type, T());
   }
 
-  T copy;
-  if constexpr (std::is_same_v<T, StringView>) {
-    copy = StringView(value.value());
-  } else if constexpr (std::is_same_v<T, Date>) {
-    copy =
+  if (type->isDate()) {
+    auto copy =
         util::castFromDateString(StringView(value.value()), true /*isIso8601*/);
+    return std::make_shared<ConstantVector<int32_t>>(
+        pool, size, false, type, std::move(copy));
+  }
+
+  if constexpr (std::is_same_v<T, StringView>) {
+    return std::make_shared<ConstantVector<StringView>>(
+        pool, size, false, type, StringView(value.value()));
   } else {
-    copy = velox::util::Converter<kind>::cast(value.value());
+    auto copy = velox::util::Converter<kind>::cast(value.value());
+    if constexpr (kind == TypeKind::TIMESTAMP) {
+      copy.toGMT(Timestamp::defaultTimezone());
+    }
+    return std::make_shared<ConstantVector<T>>(
+        pool, size, false, type, std::move(copy));
   }
-  if constexpr (kind == TypeKind::TIMESTAMP) {
-    copy.toGMT(Timestamp::defaultTimezone());
-  }
-  return std::make_shared<ConstantVector<T>>(
-      pool, size, false, type, std::move(copy));
 }
 
 // static
