@@ -44,14 +44,25 @@ std::string DataSink::Stats::toString() const {
 }
 
 bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory) {
-  factory->initialize();
-  bool ok =
-      connectorFactories().insert({factory->connectorName(), factory}).second;
-  VELOX_CHECK(
-      ok,
-      "ConnectorFactory with name '{}' is already registered",
-      factory->connectorName());
+  auto addFactory = [](const std::string& name,
+                       std::shared_ptr<ConnectorFactory>& factory) {
+    bool ok = connectorFactories().insert({name, factory}).second;
+    VELOX_CHECK(
+        ok,
+        "ConnectorFactory with name '{}' is already registered",
+        factory->connectorName());
+  };
+  addFactory(factory->connectorName(), factory);
+  // Register aliases.
+  for (const auto& alias : factory->getAliases()) {
+    addFactory(alias, factory);
+  }
   return true;
+}
+
+bool unregisterConnectorFactory(const std::string& connectorName) {
+  auto count = connectorFactories().erase(connectorName);
+  return count == 1;
 }
 
 std::shared_ptr<ConnectorFactory> getConnectorFactory(
