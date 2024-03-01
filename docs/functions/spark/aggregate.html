@@ -161,11 +161,16 @@ Note: Spark provides a non-strictly comparator which is less than or equals to.<
 <dt class="sig sig-object spark" id="sum">
 <span class="sig-name descname"><span class="pre">sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">double</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">real</span></span></span><a class="headerlink" href="#sum" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the sum of <cite>x</cite>.</p>
-<p>Supported types are TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.</p>
+<p>Supported types are TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE and DECIMAL.</p>
 <p>When x is of type DOUBLE, the result type is DOUBLE.
 When x is of type REAL, the result type is REAL.
-For all other input types, the result type is BIGINT.</p>
-<p>Note: When the sum of BIGINT values exceeds its limit, it cycles to the overflowed value rather than raising an error.</p>
+When x is of type DECIMAL(p, s), the result type is DECIMAL(p + 10, s), where (p + 10) is capped at 38.</p>
+<p>For all other input types, the result type is BIGINT.</p>
+<p>Note:
+When all input values is NULL, for all input types, the result is NULL.</p>
+<p>For DECIMAL type, when an overflow occurs in the accumulation, it returns NULL. For REAL and DOUBLE type, it
+returns Infinity. For all other input types, when the sum of input values exceeds its limit, it cycles to the
+overflowed value rather than raising an error.</p>
 <p>Example:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 <span class="n">FROM</span> <span class="p">(</span>
