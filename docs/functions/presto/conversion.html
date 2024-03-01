@@ -764,6 +764,20 @@ a larger scale to a smaller one, the fraction part is rounded. Casting from inva
 </div>
 </section>
 </section>
+<section id="miscellaneous">
+<h2>Miscellaneous<a class="headerlink" href="#miscellaneous" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="typeof">
+<span class="sig-name descname"><span class="pre">typeof</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#typeof" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the name of the type of x:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">typeof</span><span class="p">(</span><span class="mi">123</span><span class="p">);</span> <span class="o">--</span> <span class="n">integer</span>
+<span class="n">SELECT</span> <span class="n">typeof</span><span class="p">(</span><span class="mf">1.5</span><span class="p">);</span> <span class="o">--</span> <span class="n">double</span>
+<span class="n">SELECT</span> <span class="n">typeof</span><span class="p">(</span><span class="n">array</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]);</span> <span class="o">--</span> <span class="n">array</span><span class="p">(</span><span class="n">integer</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+</section>
 </section>
 
 
@@ -827,6 +841,10 @@ a larger scale to a smaller one, the fraction part is rounded. Casting from inva
 <li><a class="reference internal" href="#from-double-type">From double type</a></li>
 <li><a class="reference internal" href="#id11">From decimal</a></li>
 <li><a class="reference internal" href="#from-varchar">From varchar</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#miscellaneous">Miscellaneous</a><ul>
+<li><a class="reference internal" href="#typeof"><code class="docutils literal notranslate"><span class="pre">typeof()</span></code></a></li>
 </ul>
 </li>
 </ul>
