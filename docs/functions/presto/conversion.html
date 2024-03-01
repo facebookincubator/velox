@@ -184,7 +184,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
-<td></td>
+<td><p>Y</p></td>
 </tr>
 <tr class="row-even"><td><p>double</p></td>
 <td><p>Y</p></td>
@@ -692,18 +692,20 @@ invalid input values throws.</p>
 </pre></div>
 </div>
 </section>
-<section id="from-double-type">
-<h3>From double type<a class="headerlink" href="#from-double-type" title="Link to this heading">¶</a></h3>
-<p>Casting a double number to a decimal of given precision and scale is allowed
-if the input value can be represented by the precision and scale. When the
-given scale is less than the number of decimal places, the double value is
-rounded. The conversion precision is up to 15 as double provides 16(±1)
-significant decimal digits precision. Casting from invalid input values throws.</p>
+<section id="id11">
+<h3>From floating-point types<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<p>Casting a floating-point number to a decimal of given precision and scale is allowed
+if the input value can be represented by the precision and scale. When the given
+scale is less than the number of decimal places, the floating-point value is rounded.
+The conversion precision is up to 15 for double and 6 for real according to the
+significant decimal digits precision they provide. Casting from NaN or infinite value
+throws.</p>
 <p>Valid example</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.12</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.1200&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.12</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.1&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.19</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.2&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.123456789123123</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">18</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.123456789123123000&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">real</span> <span class="s1">&#39;0.123456&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">18</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.123456000000000000&#39;</span>
 </pre></div>
 </div>
 <p>Invalid example</p>
@@ -712,8 +714,8 @@ significant decimal digits precision. Casting from invalid input values throws.<
 </pre></div>
 </div>
 </section>
-<section id="id11">
-<h3>From decimal<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="id12">
+<h3>From decimal<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <p>Casting one decimal to another is allowed if the input value can be represented
 by the result decimal type. When casting from a larger scale to a smaller one,
 the fraction part is rounded.</p>
@@ -838,8 +840,8 @@ a larger scale to a smaller one, the fraction part is rounded. Casting from inva
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
 <li><a class="reference internal" href="#from-boolean-type">From boolean type</a></li>
 <li><a class="reference internal" href="#id10">From integral types</a></li>
-<li><a class="reference internal" href="#from-double-type">From double type</a></li>
-<li><a class="reference internal" href="#id11">From decimal</a></li>
+<li><a class="reference internal" href="#id11">From floating-point types</a></li>
+<li><a class="reference internal" href="#id12">From decimal</a></li>
 <li><a class="reference internal" href="#from-varchar">From varchar</a></li>
 </ul>
 </li>
