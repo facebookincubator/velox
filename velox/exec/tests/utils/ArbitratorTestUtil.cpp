@@ -15,8 +15,6 @@
  */
 
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
-#include "velox/common/memory/Memory.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/exec/TableWriter.h"
 
 using namespace facebook::velox;
@@ -349,6 +347,22 @@ QueryTestResult runWriteTask(
     assertEqualResults({result.data}, {expectedResult});
   }
   return result;
+}
+
+void testingRunArbitration(
+    memory::MemoryPool* pool,
+    uint64_t targetBytes,
+    memory::MemoryManager* manager) {
+  if (manager == nullptr) {
+    manager = memory::memoryManager();
+  }
+  if (pool != nullptr) {
+    pool->enterArbitration();
+    manager->shrinkPools(targetBytes);
+    pool->leaveArbitration();
+  } else {
+    manager->shrinkPools(targetBytes);
+  }
 }
 
 } // namespace facebook::velox::exec::test
