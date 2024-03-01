@@ -263,6 +263,17 @@ Returns null if <code class="docutils literal notranslate"><span class="pre">day
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="unix_date">
+<span class="sig-name descname"><span class="pre">unix_date</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#unix_date" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of days since 1970-01-01.:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unix_date</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;0&#39;</span>
+<span class="n">SELECT</span> <span class="n">unix_date</span><span class="p">(</span><span class="s1">&#39;1970-01-02&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1&#39;</span>
+<span class="n">SELECT</span> <span class="n">unix_date</span><span class="p">(</span><span class="s1">&#39;1969-12-31&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-1&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="unix_timestamp">
 <span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#unix_timestamp" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the current UNIX timestamp in seconds.</p>
@@ -300,11 +311,11 @@ A week is considered to start on a Monday and week 1 is the first week with &gt;
 <dl class="py function">
 <dt class="sig sig-object py" id="weekday">
 <span class="sig-name descname"><span class="pre">weekday</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#weekday" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the day of the week for date (0 = Monday, 1 = Tuesday, …, 6 = Sunday).</p>
-<blockquote>
-<div><p>SELECT weekday(‘2015-04-08’); – 2
-SELECT weekday(‘2024-02-10’); – 5</p>
-</div></blockquote>
+<dd><p>Returns the day of the week for date (0 = Monday, 1 = Tuesday, …, 6 = Sunday).:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">weekday</span><span class="p">(</span><span class="s1">&#39;2015-04-08&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">weekday</span><span class="p">(</span><span class="s1">&#39;2024-02-10&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">5</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="spark function">
@@ -347,6 +358,7 @@ SELECT weekday(‘2024-02-10’); – 5</p>
 <li><a class="reference internal" href="#next_day"><code class="docutils literal notranslate"><span class="pre">next_day()</span></code></a></li>
 <li><a class="reference internal" href="#second"><code class="docutils literal notranslate"><span class="pre">second()</span></code></a></li>
 <li><a class="reference internal" href="#to_unix_timestamp"><code class="docutils literal notranslate"><span class="pre">to_unix_timestamp()</span></code></a></li>
+<li><a class="reference internal" href="#unix_date"><code class="docutils literal notranslate"><span class="pre">unix_date()</span></code></a></li>
 <li><a class="reference internal" href="#unix_timestamp"><code class="docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#week_of_year"><code class="docutils literal notranslate"><span class="pre">week_of_year()</span></code></a></li>
 <li><a class="reference internal" href="#weekday"><code class="docutils literal notranslate"><span class="pre">weekday()</span></code></a></li>
