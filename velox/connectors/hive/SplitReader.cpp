@@ -26,6 +26,38 @@
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive {
+namespace {
+template <TypeKind kind>
+VectorPtr newConstantFromString(
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    vector_size_t size,
+    velox::memory::MemoryPool* pool) {
+  using T = typename TypeTraits<kind>::NativeType;
+  if (!value.has_value()) {
+    return std::make_shared<ConstantVector<T>>(pool, size, true, type, T());
+  }
+
+  if (type->isDate()) {
+    auto copy =
+        util::castFromDateString(StringView(value.value()), true /*isIso8601*/);
+    return std::make_shared<ConstantVector<int32_t>>(
+        pool, size, false, type, std::move(copy));
+  }
+
+  if constexpr (std::is_same_v<T, StringView>) {
+    return std::make_shared<ConstantVector<StringView>>(
+        pool, size, false, type, StringView(value.value()));
+  } else {
+    auto copy = velox::util::Converter<kind>::cast(value.value());
+    if constexpr (kind == TypeKind::TIMESTAMP) {
+      copy.toGMT(Timestamp::defaultTimezone());
+    }
+    return std::make_shared<ConstantVector<T>>(
+        pool, size, false, type, std::move(copy));
+  }
+}
+} // namespace
 
 std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<velox::connector::hive::HiveConnectorSplit>&
@@ -284,9 +316,15 @@ void SplitReader::setPartitionValue(
       it != partitionKeys_->end(),
       "ColumnHandle is missing for partition key {}",
       partitionKey);
-
-  spec->setConstantValue(BaseVector::createConstant(
-      value, it->second->dataType(), 1, connectorQueryCtx_->memoryPool()));
+  auto type = it->second->dataType();
+  auto constant = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+      newConstantFromString,
+      type->kind(),
+      type,
+      value,
+      1,
+      connectorQueryCtx_->memoryPool());
+  spec->setConstantValue(constant);
 }
 
 std::string SplitReader::toString() const {
