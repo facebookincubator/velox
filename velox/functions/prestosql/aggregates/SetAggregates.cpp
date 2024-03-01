@@ -497,7 +497,9 @@ void registerSetAggAggregate(
       withCompanionFunctions);
 }
 
-void registerSetUnionAggregate(const std::string& prefix) {
+void registerSetUnionAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -519,7 +521,8 @@ void registerSetUnionAggregate(const std::string& prefix) {
         VELOX_CHECK_EQ(argTypes.size(), 1);
 
         return create<SetUnionAggregate>(argTypes[0]->childAt(0), resultType);
-      });
+      },
+      withCompanionFunctions);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
