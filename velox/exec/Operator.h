@@ -424,15 +424,6 @@ class Operator : public BaseRuntimeStatWriter {
     operatorCtx_->pool()->release();
   }
 
-  /// Invoked by memory arbitrator to free up operator's resource immediately on
-  /// memory abort, and the query will stop running after this call.
-  ///
-  /// NOTE: we don't expect any access to this operator except close method
-  /// call.
-  virtual void abort() {
-    close();
-  }
-
   // Returns true if 'this' never has more output rows than input rows.
   virtual bool isFilter() const {
     return false;
@@ -668,6 +659,10 @@ class Operator : public BaseRuntimeStatWriter {
   /// Returns true if this is a spillable operator and has configured spilling.
   FOLLY_ALWAYS_INLINE bool canSpill() const {
     return spillConfig_.has_value();
+  }
+
+  const common::SpillConfig* spillConfig() const {
+    return spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   }
 
   /// Creates output vector from 'input_' and 'results' according to
