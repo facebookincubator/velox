@@ -860,6 +860,8 @@ TEST_F(StringTest, initCap) {
       initcap("àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"),
       "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ");
   EXPECT_EQ(initcap("αβγδεζηθικλμνξοπρςστυφχψ"), "Αβγδεζηθικλμνξοπρςστυφχψ");
+  // Mix of ascii and unicode
+  EXPECT_EQ(initcap("αβγδεζ world"), "Αβγδεζ World");
   EXPECT_EQ(initcap("hello world"), "Hello World");
   EXPECT_EQ(initcap("HELLO WORLD"), "Hello World");
   EXPECT_EQ(initcap("1234"), "1234");
