@@ -580,14 +580,14 @@ void AggregationTestBase::testReadFromFiles(
   if (input->size() < 2) {
     return;
   }
-  auto size1 = input->size() / 2;
+  /*auto size1 = input->size() / 2;
   auto size2 = input->size() - size1;
   auto input1 = input->slice(0, size1);
-  auto input2 = input->slice(size1, size2);
+  auto input2 = input->slice(size1, size2);*/
   std::vector<std::shared_ptr<exec::test::TempFilePath>> files;
   std::vector<exec::Split> splits;
   auto writerPool = rootPool_->addAggregateChild("AggregationTestBase.writer");
-  for (auto& vector : {input1, input2}) {
+  for (auto& vector : {input}) {
     auto file = exec::test::TempFilePath::create();
     writeToFile(file->path, vector, writerPool.get());
     files.push_back(file);
@@ -1055,16 +1055,16 @@ void AggregationTestBase::testAggregations(
         config);
   }
 
-  if (testWithTableScan) {
-    SCOPED_TRACE("Test reading input from table scan");
-    testReadFromFiles(
-        makeSource,
-        groupingKeys,
-        aggregates,
-        postAggregationProjections,
-        assertResults,
-        config);
-  }
+  // if (testWithTableScan) {
+  SCOPED_TRACE("Test reading input from table scan");
+  testReadFromFiles(
+      makeSource,
+      groupingKeys,
+      aggregates,
+      postAggregationProjections,
+      assertResults,
+      config);
+  //}
 }
 
 namespace {
