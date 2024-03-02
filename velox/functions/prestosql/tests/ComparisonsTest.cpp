@@ -602,16 +602,15 @@ TEST_F(ComparisonsTest, eqNestedComplex) {
 }
 
 TEST_F(ComparisonsTest, overflowTest) {
-  auto pool = memory::memoryManager()->addLeafPool();
-  auto makeFlatVector = [&pool](size_t numRows, int64_t delta) {
+  auto makeFlatVector = [](size_t numRows, size_t delta) {
     BufferPtr values =
-        AlignedBuffer::allocate<int64_t>(numRows + delta, pool.get());
+        AlignedBuffer::allocate<int64_t>(numRows + delta, pool());
     auto rawValues = values->asMutable<int64_t>();
-    for (auto i = 0; i < numRows + delta; ++i) {
+    for (size_t i = 0; i < numRows + delta; ++i) {
       rawValues[i] = i;
     }
     return std::make_shared<FlatVector<int64_t>>(
-        pool.get(),
+        pool(),
         BIGINT(),
         nullptr,
         numRows,
