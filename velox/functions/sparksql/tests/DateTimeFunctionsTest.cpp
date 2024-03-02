@@ -58,52 +58,45 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
 };
 
 TEST_F(DateTimeFunctionsTest, toUTCTimestamp) {
-  const auto toUTCTimestamp = [&](std::optional<Timestamp> ts,
+  const auto toUTCTimestamp = [&](const std::string_view ts,
                                   const std::optional<std::string> tz) {
-    return evaluateOnce<Timestamp>("to_utc_timestamp(c0, c1)", ts, tz);
+    auto timestamp = std::make_optional<Timestamp>(
+        util::fromTimestampString(ts.data(), ts.length()));
+    return evaluateOnce<Timestamp>("to_utc_timestamp(c0, c1)", timestamp, tz);
   };
   EXPECT_EQ(
       util::fromTimestampString("2015-07-24 07:00:00"),
-      toUTCTimestamp(
-          util::fromTimestampString("2015-07-24 00:00:00"),
-          "America/Los_Angeles"));
+      toUTCTimestamp("2015-07-24 00:00:00", "America/Los_Angeles"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 08:00:00"),
-      toUTCTimestamp(
-          util::fromTimestampString("2015-01-24 00:00:00"),
-          "America/Los_Angeles"));
+      toUTCTimestamp("2015-01-24 00:00:00", "America/Los_Angeles"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
-      toUTCTimestamp(util::fromTimestampString("2015-01-24 00:00:00"), "UTC"));
+      toUTCTimestamp("2015-01-24 00:00:00", "UTC"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
-      toUTCTimestamp(
-          util::fromTimestampString("2015-01-24 05:30:00"), "Asia/Kolkata"));
+      toUTCTimestamp("2015-01-24 05:30:00", "Asia/Kolkata"));
 }
 
 TEST_F(DateTimeFunctionsTest, fromUTCTimestamp) {
-  const auto fromUTCTimestamp = [&](std::optional<Timestamp> ts,
+  const auto fromUTCTimestamp = [&](const std::string_view ts,
                                     const std::optional<std::string> tz) {
-    return evaluateOnce<Timestamp>("from_utc_timestamp(c0, c1)", ts, tz);
+    auto timestamp = std::make_optional<Timestamp>(
+        util::fromTimestampString(ts.data(), ts.length()));
+    return evaluateOnce<Timestamp>("from_utc_timestamp(c0, c1)", timestamp, tz);
   };
   EXPECT_EQ(
       util::fromTimestampString("2015-07-24 00:00:00"),
-      fromUTCTimestamp(
-          util::fromTimestampString("2015-07-24 07:00:00"),
-          "America/Los_Angeles"));
+      fromUTCTimestamp("2015-07-24 07:00:00", "America/Los_Angeles"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
-      fromUTCTimestamp(
-          util::fromTimestampString("2015-01-24 08:00:00"),
-          "America/Los_Angeles"));
+      fromUTCTimestamp("2015-01-24 08:00:00", "America/Los_Angeles"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
-      fromUTCTimestamp(
-          util::fromTimestampString("2015-01-24 00:00:00"), "UTC"));
+      fromUTCTimestamp("2015-01-24 00:00:00", "UTC"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 05:30:00"),
-      fromUTCTimestamp(
-          util::fromTimestampString("2015-01-24 00:00:00"), "Asia/Kolkata"));
+      fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
 }
 
 TEST_F(DateTimeFunctionsTest, year) {
