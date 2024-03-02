@@ -17,6 +17,7 @@
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/lib/CheckDuplicateKeys.h"
+// #include "velox/functions/lib/CheckDuplicateKeys.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/tests/TestingDictionaryArrayElementsFunction.h"
 

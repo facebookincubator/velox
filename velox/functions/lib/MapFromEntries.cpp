@@ -30,7 +30,10 @@ static const char* kIndeterminateKeyErrorMessage =
     "map key cannot be indeterminate";
 static const char* kErrorMessageEntryNotNull = "map entry cannot be null";
 
-// See documentation at https://prestodb.io/docs/current/functions/map.html
+// allowNullEle If true, will return null if map has
+// an entry with null as key or map is null (Spark's behavior)
+// instead of throw execeptions(Presto's behavior)
+template <bool allowNullEle>
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
   void apply(
@@ -94,14 +97,14 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     auto& inputValueVector = inputArray->elements();
     exec::LocalDecodedVector decodedRowVector(context);
     decodedRowVector.get()->decode(*inputValueVector);
-    // If the input array(unknown) then all rows should have errors.
     if (inputValueVector->typeKind() == TypeKind::UNKNOWN) {
-      try {
-        VELOX_USER_FAIL(kErrorMessageEntryNotNull);
-      } catch (...) {
-        context.setErrors(rows, std::current_exception());
+      if (!allowNullEle) {
+        try {
+          VELOX_USER_FAIL(kErrorMessageEntryNotNull);
+        } catch (...) {
+          context.setErrors(rows, std::current_exception());
+        }
       }
-
       auto sizes = allocateSizes(rows.end(), context.pool());
       auto offsets = allocateSizes(rows.end(), context.pool());
 
@@ -129,8 +132,9 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     });
 
     auto resetSize = [&](vector_size_t row) { mutableSizes[row] = 0; };
+    auto nulls = allocateNulls(decodedRowVector->size(), context.pool());
+    auto* mutableNulls = nulls->asMutable<uint64_t>();
 
-    // Validate all map entries and map keys are not null.
     if (decodedRowVector->mayHaveNulls() || keyVector->mayHaveNulls() ||
         keyVector->mayHaveNullsRecursive()) {
       context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
@@ -140,9 +144,14 @@ class MapFromEntriesFunction : public exec::VectorFunction {
         for (auto i = 0; i < size; ++i) {
           // Check nulls in the top level row vector.
           const bool isMapEntryNull = decodedRowVector->isNullAt(offset + i);
-          if (isMapEntryNull) {
-            // Set the sizes to 0 so that the final map vector generated is
-            // valid in case we are inside a try. The map vector needs to be
+          if (isMapEntryNull && allowNullEle) {
+            // Spark: For nulls in the top level row vector, return null.
+            bits::setNull(mutableNulls, row);
+            resetSize(row);
+            break;
+          } else if (isMapEntryNull) {
+            // Presto: Set the sizes to 0 so that the final map vector generated
+            // is valid in case we are inside a try. The map vector needs to be
             // valid because its consumed by checkDuplicateKeys before try
             // sets invalid rows to null.
             resetSize(row);
@@ -200,8 +209,6 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     } else {
       // Dictionary.
       auto indices = allocateIndices(decodedRowVector->size(), context.pool());
-      auto nulls = allocateNulls(decodedRowVector->size(), context.pool());
-      auto* mutableNulls = nulls->asMutable<uint64_t>();
       memcpy(
           indices->asMutable<vector_size_t>(),
           decodedRowVector->indices(),
@@ -219,12 +226,13 @@ class MapFromEntriesFunction : public exec::VectorFunction {
           nulls, indices, decodedRowVector->size(), rowVector->childAt(1));
     }
 
-    // To avoid creating new buffers, we try to reuse the input's buffers
-    // as many as possible.
+    // For Presto, need construct map vector based on input nulls for possible
+    // outer expression like try(). For Spark, use the updated nulls.
+    auto mapVetorNulls = allowNullEle ? nulls : inputArray->nulls();
     auto mapVector = std::make_shared<MapVector>(
         context.pool(),
         outputType,
-        inputArray->nulls(),
+        mapVetorNulls,
         rows.end(),
         inputArray->offsets(),
         sizes,
@@ -237,8 +245,17 @@ class MapFromEntriesFunction : public exec::VectorFunction {
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_map_from_entries,
-    MapFromEntriesFunction::signatures(),
-    std::make_unique<MapFromEntriesFunction>());
+void registerMapFromEntriesFunction(const std::string& name) {
+  exec::registerVectorFunction(
+      name,
+      MapFromEntriesFunction</*AllowNullEle=*/false>::signatures(),
+      std::make_unique<MapFromEntriesFunction</*AllowNullEle=*/false>>());
+}
+
+void registerMapFromEntriesAllowNullEleFunction(const std::string& name) {
+  exec::registerVectorFunction(
+      name,
+      MapFromEntriesFunction</*AllowNullEle=*/true>::signatures(),
+      std::make_unique<MapFromEntriesFunction</*AllowNullEle=*/true>>());
+}
 } // namespace facebook::velox::functions

@@ -20,6 +20,7 @@
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/ArrayShuffle.h"
 #include "velox/functions/lib/IsNull.h"
+#include "velox/functions/lib/MapFromEntries.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/Repeat.h"
@@ -110,8 +111,7 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_allow_duplicates, prefix + "map_from_arrays");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_from_entries, prefix + "map_from_entries");
+  registerMapFromEntriesAllowNullEleFunction(prefix + "map_from_entries");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_concat_row, exec::RowConstructorCallToSpecialForm::kRowConstructor);
   // String functions.

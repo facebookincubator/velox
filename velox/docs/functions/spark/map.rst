@@ -41,12 +41,14 @@ Map Functions
 
     Returns all the values in the map ``x``.
 
-.. spark:function:: map_from_entries(struct(K,V)) -> map(K,V)
+.. spark:function:: map_from_entries(array(struct(K,V))) -> map(K,V)
 
     Converts an array of entries (key value struct types) to a map of values. All elements in keys should not be null.
     If null entry exists in the array, return null for this whole array.::
 
-        SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b'))); -- {1 -> 'a', 2 -> 'b'}
+        SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'null'))); -- {1 -> 'a', 2 -> 'null'}
+        SELECT map_from_entries(array(struct(1, 'a'), null)); -- {null}
+
 
 .. spark:function:: size(map(K,V)) -> bigint
    :noindex:
