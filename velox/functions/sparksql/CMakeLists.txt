@@ -25,7 +25,6 @@ add_library(
   LeastGreatest.cpp
   MakeTimestamp.cpp
   Map.cpp
-  MapFromEntries.cpp
   RegexFunctions.cpp
   Register.cpp
   RegisterArithmetic.cpp
