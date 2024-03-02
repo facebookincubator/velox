@@ -870,6 +870,10 @@ TEST_F(StringTest, initCap) {
   EXPECT_EQ(initcap("1234"), "1234");
   EXPECT_EQ(initcap("a b c d"), "A B C D");
   EXPECT_EQ(initcap("abcd"), "Abcd");
+  // numbers
+  EXPECT_EQ(initcap("123"), "123");
+  EXPECT_EQ(initcap("1abc"), "1abc");
+  // edge cases
   EXPECT_EQ(initcap(""), "");
   EXPECT_EQ(initcap(std::nullopt), std::nullopt);
 }
