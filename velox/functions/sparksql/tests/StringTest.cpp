@@ -856,12 +856,15 @@ TEST_F(StringTest, findInSet) {
 }
 
 TEST_F(StringTest, initCap) {
+  // unicode only
   EXPECT_EQ(
       initcap("àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"),
       "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ");
   EXPECT_EQ(initcap("αβγδεζηθικλμνξοπρςστυφχψ"), "Αβγδεζηθικλμνξοπρςστυφχψ");
   // Mix of ascii and unicode
   EXPECT_EQ(initcap("αβγδεζ world"), "Αβγδεζ World");
+  EXPECT_EQ(initcap("αfoo wβ"), "Αfoo Wβ");
+  // Ascii only
   EXPECT_EQ(initcap("hello world"), "Hello World");
   EXPECT_EQ(initcap("HELLO WORLD"), "Hello World");
   EXPECT_EQ(initcap("1234"), "1234");
