@@ -602,7 +602,7 @@ TEST_F(ComparisonsTest, eqNestedComplex) {
 }
 
 TEST_F(ComparisonsTest, overflowTest) {
-  auto makeFlatVector = [](size_t numRows, size_t delta) {
+  auto makeFlatVector = [&](size_t numRows, size_t delta) {
     BufferPtr values =
         AlignedBuffer::allocate<int64_t>(numRows + delta, pool());
     auto rawValues = values->asMutable<int64_t>();
