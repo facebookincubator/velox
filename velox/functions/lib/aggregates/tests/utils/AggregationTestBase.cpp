@@ -17,6 +17,7 @@
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
+#include <glog/logging.h>
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -587,6 +588,8 @@ void AggregationTestBase::testReadFromFiles(
   std::vector<std::shared_ptr<exec::test::TempFilePath>> files;
   std::vector<exec::Split> splits;
   auto writerPool = rootPool_->addAggregateChild("AggregationTestBase.writer");
+  LOG(ERROR) << "Input vectors sink to the file are: \n"
+             << input->toString(0, input->size());
   for (auto& vector : {input}) {
     auto file = exec::test::TempFilePath::create();
     writeToFile(file->path, vector, writerPool.get());
@@ -594,6 +597,17 @@ void AggregationTestBase::testReadFromFiles(
     splits.emplace_back(std::make_shared<connector::hive::HiveConnectorSplit>(
         kHiveConnectorId, file->path, dwio::common::FileFormat::DWRF));
   }
+
+  {
+    PlanBuilder builder(pool());
+    makeSource(builder);
+    builder.tableScan(asRowType(input->type()));
+    AssertQueryBuilder queryBuilder(builder.planNode());
+    auto output = queryBuilder.splits(splits).copyResults(pool());
+    LOG(ERROR) << "Output vectors scan form the file are: \n"
+               << output->toString(0, output->size());
+  }
+
   // No need to test streaming as the streaming test generates its own inputs,
   // so it would be the same as the original test.
   {

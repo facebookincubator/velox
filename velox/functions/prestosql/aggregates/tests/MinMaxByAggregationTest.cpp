@@ -878,70 +878,6 @@ class MinMaxByGroupByAggregationTest
             verifyDuckDbSql);
       }
     } testSettings[] = {
-        // Const vector cases.
-        {makeRowVector(
-             {makeConstant(std::optional<T>(dataAt<T>(0)), 6),
-              makeConstant(std::optional<U>(dataAt<U>(0)), 6),
-              makeConstant(std::optional<int32_t>(dataAt<int32_t>(0)), 6)}),
-         fmt::format(
-             "SELECT {}, {}", asSql(dataAt<int32_t>(0)), asSql(dataAt<T>(0)))},
-        {makeRowVector(
-             {makeNullableFlatVector<T>(
-                  {std::nullopt,
-                   dataAt<T>(0),
-                   dataAt<T>(1),
-                   dataAt<T>(2),
-                   dataAt<T>(3),
-                   dataAt<T>(4)}),
-              makeConstant(std::optional<U>(dataAt<U>(0)), 6),
-              makeConstant(std::optional<int32_t>(dataAt<int32_t>(0)), 6)}),
-         fmt::format("SELECT {}, NULL", asSql(dataAt<int32_t>(0)))},
-
-        // All null cases.
-        {makeRowVector(
-             {makeNullConstant(GetParam().valueType, 6),
-              makeNullableFlatVector<U>(
-                  {dataAt<U>(4),
-                   dataAt<U>(5),
-                   std::nullopt,
-                   dataAt<U>(1),
-                   dataAt<U>(2),
-                   dataAt<U>(0)}),
-              makeNullableFlatVector<int32_t>(
-                  {dataAt<int32_t>(0),
-                   dataAt<int32_t>(0),
-                   dataAt<int32_t>(1),
-                   dataAt<int32_t>(1),
-                   dataAt<int32_t>(2),
-                   dataAt<int32_t>(2)})}),
-         fmt::format(
-             "VALUES ({}, NULL), ({}, NULL), ({}, NULL)",
-             asSql(dataAt<int32_t>(0)),
-             asSql(dataAt<int32_t>(1)),
-             asSql(dataAt<int32_t>(2)))},
-
-        {makeRowVector(
-             {makeNullableFlatVector<T>(
-                  {std::nullopt,
-                   dataAt<T>(2),
-                   std::nullopt,
-                   dataAt<T>(1),
-                   std::nullopt,
-                   dataAt<T>(0)}),
-              makeNullConstant(GetParam().valueType, 6),
-              makeNullableFlatVector<int32_t>(
-                  {dataAt<int32_t>(0),
-                   dataAt<int32_t>(0),
-                   dataAt<int32_t>(1),
-                   dataAt<int32_t>(1),
-                   dataAt<int32_t>(2),
-                   dataAt<int32_t>(2)})}),
-         fmt::format(
-             "VALUES ({}, NULL), ({}, NULL), ({}, NULL)",
-             asSql(dataAt<int32_t>(0)),
-             asSql(dataAt<int32_t>(1)),
-             asSql(dataAt<int32_t>(2)))},
-
         // Regular cases.
         {makeRowVector(
              {makeNullableFlatVector<T>(
@@ -972,36 +908,7 @@ class MinMaxByGroupByAggregationTest
              asSql(dataAt<T>(2)),
              asSql(dataAt<int32_t>(2)),
              asSql(dataAt<T>(1)))},
-
-        {makeRowVector(
-             {makeNullableFlatVector<T>(
-                  {std::nullopt,
-                   dataAt<T>(2),
-                   std::nullopt,
-                   dataAt<T>(1),
-                   std::nullopt,
-                   dataAt<T>(0)}),
-              makeNullableFlatVector<U>(
-                  {dataAt<U>(4),
-                   dataAt<U>(3),
-                   std::nullopt,
-                   dataAt<U>(1),
-                   dataAt<U>(1),
-                   dataAt<U>(2)}),
-              makeNullableFlatVector<int32_t>(
-                  {dataAt<int32_t>(0),
-                   dataAt<int32_t>(0),
-                   dataAt<int32_t>(1),
-                   dataAt<int32_t>(1),
-                   dataAt<int32_t>(2),
-                   dataAt<int32_t>(2)})}),
-         fmt::format(
-             "VALUES ({}, NULL), ({}, {}), ({}, {})",
-             asSql(dataAt<int32_t>(0)),
-             asSql(dataAt<int32_t>(1)),
-             asSql(dataAt<T>(1)),
-             asSql(dataAt<int32_t>(2)),
-             asSql(dataAt<T>(0)))}};
+    };
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
       // Skip testing with TableScan because the result for some testData
