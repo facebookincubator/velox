@@ -610,12 +610,7 @@ TEST_F(ComparisonsTest, overflowTest) {
       rawValues[i] = i;
     }
     return std::make_shared<FlatVector<int64_t>>(
-        pool(),
-        BIGINT(),
-        nullptr,
-        numRows,
-        values,
-        std::vector<BufferPtr>{});
+        pool(), BIGINT(), nullptr, numRows, values, std::vector<BufferPtr>{});
   };
 
   size_t numRows = 1006;
