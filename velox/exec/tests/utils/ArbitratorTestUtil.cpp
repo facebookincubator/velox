@@ -348,5 +348,4 @@ QueryTestResult runWriteTask(
   }
   return result;
 }
-
 } // namespace facebook::velox::exec::test
