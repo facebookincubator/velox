@@ -24,7 +24,6 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
@@ -586,6 +585,7 @@ class HashJoinBuilder {
     }
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_);
     std::shared_ptr<TempDirectoryPath> spillDirectory;
+    int32_t spillPct{0};
     if (injectSpill) {
       spillDirectory = exec::test::TempDirectoryPath::create();
       builder.spillDirectory(spillDirectory->path);
@@ -595,7 +595,7 @@ class HashJoinBuilder {
       // Disable write buffering to ease test verification. For example, we want
       // many spilled vectors in a spilled file to trigger recursive spilling.
       config(core::QueryConfig::kSpillWriteBufferSize, std::to_string(0));
-      config(core::QueryConfig::kTestingSpillPct, "100");
+      spillPct = 100;
     } else if (spillMemoryThreshold_ != 0) {
       spillDirectory = exec::test::TempDirectoryPath::create();
       builder.spillDirectory(spillDirectory->path);
@@ -636,6 +636,7 @@ class HashJoinBuilder {
     ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
     const uint64_t peakSpillMemoryUsage =
         memory::spillMemoryPool()->stats().peakBytes;
+    TestScopedSpillInjection scopedSpillInjection(spillPct);
     auto task = builder.assertResults(referenceQuery_);
     const auto statsPair = taskSpilledStats(*task);
     if (injectSpill) {
@@ -732,6 +733,11 @@ class HashJoinBuilder {
 
 class HashJoinTest : public HiveConnectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    FLAGS_velox_testing_enable_arbitration = true;
+    HiveConnectorTestBase::SetUpTestCase();
+  }
+
   HashJoinTest() : HashJoinTest(TestParam(1)) {}
 
   explicit HashJoinTest(const TestParam& param)
