@@ -240,4 +240,9 @@ Mathematical Functions
     If size ``x`` is odd, parses the first character and puts it at index 0 of binary result,
     then, continues parsing remaining characters, if existing, and
     still puts the parsing result starting from index 0, which will overwrite the previous value.
-    If ``x`` contains invalid character, return null.
+    If ``x`` contains invalid character, return null. ::
+
+        SELECT unhex("23"); -- #
+        SELECT unhex("b2323"); -- ##\0
+        SELECT unhex("G"); -- null
+        SELECT unhex("G23"); -- null

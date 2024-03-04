@@ -283,7 +283,9 @@ TEST_F(ArithmeticTest, unhex) {
   EXPECT_EQ(unhex("b2323"), b);
   EXPECT_EQ(unhex("F"), "\x0F");
   EXPECT_EQ(unhex("ff"), "\xFF");
+  EXPECT_EQ(unhex("G"), std::nullopt);
   EXPECT_EQ(unhex("GG"), std::nullopt);
+  EXPECT_EQ(unhex("G23"), std::nullopt);
   EXPECT_EQ(unhex("E4B889E9878DE79A84"), "\u4E09\u91CD\u7684");
 }
 
