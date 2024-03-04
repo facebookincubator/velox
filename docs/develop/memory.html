@@ -397,7 +397,8 @@ of the three sets.</p>
 <span class="w">   </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">MemoryReclaimer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">);</span>
 
 <span class="c1">/// Create an aggregate child memory pool which allows to create child memory</span>
-<span class="c1">/// pools from it, and it used to aggregate memory usage from its child pools. /// Aggregate memory pool is not allowed to allocate memory directly.</span>
+<span class="c1">/// pools from it, and it used to aggregate memory usage from its child pools.</span>
+<span class="c1">/// Aggregate memory pool is not allowed to allocate memory directly.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryPool</span><span class="o">::</span><span class="n">addAggregateChild</span><span class="p">(</span>
 <span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">);</span>
 
