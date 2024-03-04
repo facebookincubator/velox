@@ -172,6 +172,11 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
       {prefix + "left"});
 
+  registerFunction<sparksql::BitLengthVarcharFunction, int32_t, Varchar>(
+      {prefix + "bit_length"});
+  registerFunction<sparksql::BitLengthVarbinaryFunction, int32_t, Varbinary>(
+      {prefix + "bit_length"});
+
   exec::registerStatefulVectorFunction(
       prefix + "instr", instrSignatures(), makeInstr);
   exec::registerStatefulVectorFunction(

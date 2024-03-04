@@ -759,6 +759,28 @@ struct LeftFunction {
   }
 };
 
+template <typename T>
+struct BitLengthVarcharFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& input) {
+    result = input.size() * 8;
+  }
+};
+
+template <typename T>
+struct BitLengthVarbinaryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int32_t>& result,
+      const arg_type<Varbinary>& input) {
+    result = input.size() * 8;
+  }
+};
+
 /// translate(string, match, replace) -> varchar
 ///
 ///   Returns a new translated string. It translates the character in ``string``
