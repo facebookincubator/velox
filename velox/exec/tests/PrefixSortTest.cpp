@@ -134,7 +134,7 @@ const RowVectorPtr PrefixSortTest::generateExpectedResult(
       });
   const RowVectorPtr result =
       BaseVector::create<RowVector>(sortedRowsType, numRows, pool_.get());
-  for (int column = 0; column < sortedRows->childrenSize(); ++column) {
+  for (int column = 0; column < compareFlags.size(); ++column) {
     rowContainer.extractColumn(
         rows.data(), numRows, column, result->childAt(column));
   }
@@ -152,18 +152,19 @@ void PrefixSortTest::testSort(
     RowContainer rowContainer(sortedRowsType->children(), pool_.get());
     std::vector<char*> rows = storeRows(numRows, sortedRows, &rowContainer);
     // 2. Use PrefixSort sort rows.
-    PrefixSortConfig prefixSortConfig(1024);
-    PrefixSort prefixSort(
+    PrefixSort::sort(
+        rows,
         pool_.get(),
         &rowContainer,
         setting.sortCompareFlags(),
-        prefixSortConfig);
-    prefixSort.sort(rows);
+        {1024,
+         // Set threshold to 0 to enable prefix-sort in small dataset.
+         0});
 
     // 3. Extract columns from row container.
     const RowVectorPtr actual =
         BaseVector::create<RowVector>(sortedRowsType, numRows, pool_.get());
-    for (int column = 0; column < sortedRows->childrenSize(); ++column) {
+    for (int column = 0; column < setting.sortCompareFlags().size(); ++column) {
       rowContainer.extractColumn(
           rows.data(), numRows, column, actual->childAt(column));
     }
@@ -329,11 +330,12 @@ TEST_F(PrefixSortTest, fuzzMulti) {
       VARCHAR(),
       VARBINARY()};
   const int numRows = 10240;
+  const TypePtr payload = VARCHAR();
   VectorFuzzer fuzzer(
       {.vectorSize = numRows, .nullRatio = 0.1}, fuzzerPool.get());
   for (const auto& type1 : allTypes) {
     for (const auto& type2 : allTypes) {
-      RowVectorPtr sortedRows = fuzzer.fuzzRow(ROW({type1, type2}));
+      RowVectorPtr sortedRows = fuzzer.fuzzRow(ROW({type1, type2, payload}));
       std::vector<CompareFlags> ascFlag = {
           {true, true, false, CompareFlags::NullHandlingMode::kNullAsValue},
           {true, true, false, CompareFlags::NullHandlingMode::kNullAsValue}};

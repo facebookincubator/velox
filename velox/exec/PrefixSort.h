@@ -22,12 +22,37 @@
 
 namespace facebook::velox::exec {
 
+namespace detail {
+
+FOLLY_ALWAYS_INLINE void stdSort(
+    std::vector<char*>& rows,
+    RowContainer* rowContainer,
+    const std::vector<CompareFlags>& compareFlags) {
+  std::sort(
+      rows.begin(), rows.end(), [&](const char* leftRow, const char* rightRow) {
+        for (auto i = 0; i < compareFlags.size(); ++i) {
+          if (auto result = rowContainer->compare(
+                  leftRow, rightRow, i, compareFlags[i])) {
+            return result < 0;
+          }
+        }
+        return false;
+      });
+}
+}; // namespace detail
+
 struct PrefixSortConfig {
-  PrefixSortConfig(const uint32_t maxNormalizedKeySize)
-      : maxNormalizedKeySize(maxNormalizedKeySize) {}
+  PrefixSortConfig(uint32_t maxNormalizedKeySize, uint32_t threshold = 100)
+      : maxNormalizedKeySize(maxNormalizedKeySize), threshold(threshold) {}
+
   /// Max number of bytes can store normalized keys in prefix-sort buffer per
   /// entry.
   const uint32_t maxNormalizedKeySize;
+
+  /// PrefixSort will have performance regression when the dateset is too small.
+  /// The threshold is set to 100 according to the benchmark test results by
+  /// default.
+  const int64_t threshold;
 };
 
 /// The layout of prefix-sort buffer, a prefix entry includes:
@@ -35,15 +60,15 @@ struct PrefixSortConfig {
 /// 2. non-normalized data ptr for semi-normalized types such as
 /// string_view`s ptr, it will be filled when support Varchar.
 /// 3. the row address ptr point to RowContainer`s rows is added at the end of
-// prefix.
+/// prefix.
 struct PrefixSortLayout {
-  /// Number of bytes to store a prefix, it equals to
-  /// normalizedKeySize_ + 8 (non-normalized-ptr) + sizeof(char*).
+  /// Number of bytes to store a prefix, it equals to:
+  /// normalizedKeySize_ + 8 (non-normalized-ptr) + 8(row address).
   const uint64_t entrySize;
 
   /// If a sort key supports normalization and can be added to the prefix
   /// sort buffer, it is called a normalized key.
-  const uint32_t normalizedKeySize;
+  const uint32_t normalizedBufferSize;
 
   const uint32_t numNormalizedKeys;
 
@@ -52,6 +77,10 @@ struct PrefixSortLayout {
 
   /// CompareFlags of all sort keys.
   const std::vector<CompareFlags> compareFlags;
+
+  /// Whether the sort keys contains normalized key.
+  /// It equals to 'numNormalizedKeys == 0', a little faster.
+  const bool noNormalizedKeys;
 
   /// Whether the sort keys contains non-normalized key.
   const bool hasNonNormalizedKey;
@@ -62,6 +91,10 @@ struct PrefixSortLayout {
 
   /// The encoders for normalized keys.
   const std::vector<prefixsort::PrefixSortEncoder> encoders;
+
+  /// Align the buffer size to 8 so that long compare can replace byte compare
+  /// during ‘memcmp’
+  const int32_t padding;
 
   static PrefixSortLayout makeSortLayout(
       const std::vector<TypePtr>& types,
@@ -75,7 +108,8 @@ class PrefixSort {
       memory::MemoryPool* pool,
       RowContainer* rowContainer,
       const std::vector<CompareFlags>& keyCompareFlags,
-      const PrefixSortConfig& config);
+      const PrefixSortConfig& config,
+      const PrefixSortLayout& sortLayout);
 
   /// Follow the steps below to sort the data in RowContainer:
   /// 1. Allocate a contiguous block of memory to store normalized keys.
@@ -100,9 +134,32 @@ class PrefixSort {
   ///
   /// @param rows The result of RowContainer::listRows(), assuming that the
   /// caller (SortBuffer etc.) has already got the result.
-  void sort(std::vector<char*>& rows);
+  FOLLY_ALWAYS_INLINE static void sort(
+      std::vector<char*>& rows,
+      memory::MemoryPool* pool,
+      RowContainer* rowContainer,
+      const std::vector<CompareFlags>& compareFlags,
+      const PrefixSortConfig& config) {
+    if (rowContainer->numRows() < config.threshold) {
+      detail::stdSort(rows, rowContainer, compareFlags);
+      return;
+    }
+    const auto sortLayout = PrefixSortLayout::makeSortLayout(
+        rowContainer->keyTypes(), compareFlags, config.maxNormalizedKeySize);
+    // All keys can not normalize, skip the binary string compare opt.
+    // Putting this outside sort-internal helps with inline std-sort.
+    if (sortLayout.noNormalizedKeys) {
+      detail::stdSort(rows, rowContainer, compareFlags);
+      return;
+    }
+
+    PrefixSort prefixSort(pool, rowContainer, compareFlags, config, sortLayout);
+    prefixSort.sortInternal(rows);
+  }
 
  private:
+  void sortInternal(std::vector<char*>& rows);
+
   int compareAllNormalizedKeys(char* left, char* right);
 
   int comparePartNormalizedKeys(char* left, char* right);
@@ -111,11 +168,11 @@ class PrefixSort {
 
   // Return the reference of row address ptr for read/write.
   FOLLY_ALWAYS_INLINE char*& getAddressFromPrefix(char* prefix) {
-    return *reinterpret_cast<char**>(prefix + sortLayout_.normalizedKeySize);
+    return *reinterpret_cast<char**>(prefix + sortLayout_.normalizedBufferSize);
   }
 
-  memory::MemoryPool* pool_;
+  memory::MemoryPool* const pool_;
   const PrefixSortLayout sortLayout_;
-  RowContainer* rowContainer_;
+  RowContainer* const rowContainer_;
 };
 } // namespace facebook::velox::exec
