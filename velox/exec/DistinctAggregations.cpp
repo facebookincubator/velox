@@ -43,9 +43,9 @@ class TypedDistinctAggregations : public DistinctAggregations {
         sizeof(AccumulatorType),
         false, // usesExternalMemory
         1, // alignment
-        nullptr,
-        [](folly::Range<char**> /*groups*/, VectorPtr& /*result*/) {
-          VELOX_UNREACHABLE();
+        ARRAY(VARBINARY()),
+        [this](folly::Range<char**> groups, VectorPtr& result) {
+          extractForSpill(groups, result);
         },
         [this](folly::Range<char**> groups) {
           for (auto* group : groups) {
@@ -103,6 +103,21 @@ class TypedDistinctAggregations : public DistinctAggregations {
     inputForAccumulator_.reset();
   }
 
+  void addSingleGroupSpillInput(
+      char* group,
+      const VectorPtr& input,
+      vector_size_t index) override {
+    auto* arrayVector = input->as<ArrayVector>();
+    auto* elementsVector = arrayVector->elements()->asFlatVector<StringView>();
+
+    const auto size = arrayVector->sizeAt(index);
+    const auto offset = arrayVector->offsetAt(index);
+
+    auto* accumulator = reinterpret_cast<AccumulatorType*>(group + offset_);
+    RowSizeTracker<char, uint32_t> tracker(group[rowSizeOffset_], *allocator_);
+    accumulator->deserialize(*elementsVector, offset, size, allocator_);
+  }
+
   void extractValues(folly::Range<char**> groups, const RowVectorPtr& result)
       override {
     SelectivityVector rows;
@@ -147,6 +162,8 @@ class TypedDistinctAggregations : public DistinctAggregations {
               iota(groups.size(), temp), groups.size()));
     }
   }
+
+  void clear() override {}
 
  private:
   bool isSingleInputAggregate() const {
@@ -193,6 +210,35 @@ class TypedDistinctAggregations : public DistinctAggregations {
       return {std::move(input)};
     }
     return input->template asUnchecked<RowVector>()->children();
+  }
+
+  void extractForSpill(folly::Range<char**> groups, VectorPtr& result) const {
+    auto* arrayVector = result->as<ArrayVector>();
+    arrayVector->resize(groups.size());
+
+    auto* rawOffsets =
+        arrayVector->mutableOffsets(groups.size())->asMutable<vector_size_t>();
+    auto* rawSizes =
+        arrayVector->mutableSizes(groups.size())->asMutable<vector_size_t>();
+
+    vector_size_t offset = 0;
+    for (auto i = 0; i < groups.size(); ++i) {
+      auto* accumulator =
+          reinterpret_cast<AccumulatorType*>(groups[i] + offset_);
+      rawSizes[i] = accumulator->size() + 1;
+      rawOffsets[i] = offset;
+      offset += accumulator->size() + 1;
+    }
+
+    auto& elementsVector = arrayVector->elements();
+    elementsVector->resize(offset);
+    offset = 0;
+    for (auto i = 0; i < groups.size(); ++i) {
+      auto* accumulator =
+          reinterpret_cast<AccumulatorType*>(groups[i] + offset_);
+      accumulator->serialize(elementsVector, offset);
+      offset += accumulator->size() + 1;
+    }
   }
 
   memory::MemoryPool* const pool_;
