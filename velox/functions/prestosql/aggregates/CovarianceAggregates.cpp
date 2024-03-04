@@ -301,16 +301,44 @@ struct RegrAccumulator : public CovarAccumulator {
     return m2X_;
   }
 
+  void update(double x, double y) {
+    double oldMeanX = meanX();
+    CovarAccumulator::update(x, y);
+
+    m2X_ += (x - oldMeanX) * (x - meanX());
+  }
+
+  void merge(
+      int64_t countOther,
+      double meanXOther,
+      double meanYOther,
+      double c2Other,
+      double m2XOther) {
+    if (countOther == 0) {
+      return;
+    }
+    if (count() == 0) {
+      m2X_ = m2XOther;
+    } else {
+      m2X_ += m2XOther +
+          1.0 * count() / (count() + countOther) * countOther *
+              std::pow(meanX() - meanXOther, 2);
+    }
+    CovarAccumulator::merge(countOther, meanXOther, meanYOther, c2Other);
+  }
+
+ protected:
+  double m2X_{0};
+};
+
+struct ExtendedRegrAccumulator : public RegrAccumulator {
   double m2Y() const {
     return m2Y_;
   }
 
   void update(double x, double y) {
-    double oldMeanX = meanX();
     double oldMeanY = meanY();
-    CovarAccumulator::update(x, y);
-
-    m2X_ += (x - oldMeanX) * (x - meanX());
+    RegrAccumulator::update(x, y);
     m2Y_ += (y - oldMeanY) * (y - meanY());
   }
 
@@ -340,77 +368,76 @@ struct RegrAccumulator : public CovarAccumulator {
   }
 
  private:
-  double m2X_{0};
   double m2Y_{0};
 };
 
 struct RegrCountResultAccessor {
-  static bool hasResult(const RegrAccumulator& accumulator) {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.count() > 0;
   }
 
-  static double result(const RegrAccumulator& accumulator) {
+  static double result(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.count();
   }
 };
 
 struct RegrAvgyResultAccessor {
-  static bool hasResult(const RegrAccumulator& accumulator) {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.count() > 0;
   }
 
-  static double result(const RegrAccumulator& accumulator) {
+  static double result(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.meanY();
   }
 };
 
 struct RegrAvgxResultAccessor {
-  static bool hasResult(const RegrAccumulator& accumulator) {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.count() > 0;
   }
 
-  static double result(const RegrAccumulator& accumulator) {
+  static double result(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.meanX();
   }
 };
 
 struct RegrSxyResultAccessor {
-  static bool hasResult(const RegrAccumulator& accumulator) {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.count() > 0;
   }
 
-  static double result(const RegrAccumulator& accumulator) {
+  static double result(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.c2();
   }
 };
 
 struct RegrR2ResultAccessor {
-  static bool hasResult(const RegrAccumulator& accumulator) {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.count() > 0;
   }
 
-  static double result(const RegrAccumulator& accumulator) {
+  static double result(const ExtendedRegrAccumulator& accumulator) {
     return std::pow(accumulator.c2(), 2) /
         (accumulator.m2X() * accumulator.m2Y());
   }
 };
 
 struct RegrSyyResultAccessor {
-  static bool hasResult(const RegrAccumulator& accumulator) {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.count() > 0;
   }
 
-  static double result(const RegrAccumulator& accumulator) {
+  static double result(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.m2Y();
   }
 };
 
 struct RegrSxxResultAccessor {
-  static bool hasResult(const RegrAccumulator& accumulator) {
+  static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.count() > 0;
   }
 
-  static double result(const RegrAccumulator& accumulator) {
+  static double result(const ExtendedRegrAccumulator& accumulator) {
     return accumulator.m2X();
   }
 };
@@ -440,10 +467,28 @@ class RegrIntermediateInput : public CovarIntermediateInput {
  public:
   explicit RegrIntermediateInput(const RowVector* rowVector)
       : CovarIntermediateInput(rowVector, kRegrIndices),
-        m2X_{asSimpleVector<double>(rowVector, kRegrIndices.m2X)},
-        m2Y_{asSimpleVector<double>(rowVector, kRegrIndices.m2Y)} {};
+        m2X_{asSimpleVector<double>(rowVector, kRegrIndices.m2X)} {};
 
   void mergeInto(RegrAccumulator& accumulator, vector_size_t row) {
+    accumulator.merge(
+        count_->valueAt(row),
+        meanX_->valueAt(row),
+        meanY_->valueAt(row),
+        c2_->valueAt(row),
+        m2X_->valueAt(row));
+  }
+
+ protected:
+  SimpleVector<double>* m2X_;
+};
+
+class ExtendedRegrIntermediateInput : public RegrIntermediateInput {
+ public:
+  explicit ExtendedRegrIntermediateInput(const RowVector* rowVector)
+      : RegrIntermediateInput(rowVector),
+        m2Y_{asSimpleVector<double>(rowVector, kRegrIndices.m2Y)} {};
+
+  void mergeInto(ExtendedRegrAccumulator& accumulator, vector_size_t row) {
     accumulator.merge(
         count_->valueAt(row),
         meanX_->valueAt(row),
@@ -454,7 +499,6 @@ class RegrIntermediateInput : public CovarIntermediateInput {
   }
 
  private:
-  SimpleVector<double>* m2X_;
   SimpleVector<double>* m2Y_;
 };
 
@@ -462,21 +506,37 @@ class RegrIntermediateResult : public CovarIntermediateResult {
  public:
   explicit RegrIntermediateResult(const RowVector* rowVector)
       : CovarIntermediateResult(rowVector, kRegrIndices),
-        m2X_{mutableRawValues<double>(rowVector, kRegrIndices.m2X)},
+        m2X_{mutableRawValues<double>(rowVector, kRegrIndices.m2X)} {};
+
+  static std::string type() {
+    return "row(double,bigint,double,double,double)";
+  }
+
+  void set(vector_size_t row, const RegrAccumulator& accumulator) {
+    CovarIntermediateResult::set(row, accumulator);
+    m2X_[row] = accumulator.m2X();
+  }
+
+ private:
+  double* m2X_;
+};
+
+class ExtendedRegrIntermediateResult : public RegrIntermediateResult {
+ public:
+  explicit ExtendedRegrIntermediateResult(const RowVector* rowVector)
+      : RegrIntermediateResult(rowVector),
         m2Y_{mutableRawValues<double>(rowVector, kRegrIndices.m2Y)} {};
 
   static std::string type() {
     return "row(double,bigint,double,double,double,double)";
   }
 
-  void set(vector_size_t row, const RegrAccumulator& accumulator) {
-    CovarIntermediateResult::set(row, accumulator);
-    m2X_[row] = accumulator.m2X();
+  void set(vector_size_t row, const ExtendedRegrAccumulator& accumulator) {
+    RegrIntermediateResult::set(row, accumulator);
     m2Y_[row] = accumulator.m2Y();
   }
 
  private:
-  double* m2X_;
   double* m2Y_;
 };
 
@@ -510,7 +570,9 @@ class CovarianceAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /* mayPushdown */) override {
-    if constexpr (std::is_same_v<TAccumulator, RegrAccumulator>) {
+    if constexpr (
+        std::is_same_v<TAccumulator, RegrAccumulator> ||
+        std::is_same_v<TAccumulator, ExtendedRegrAccumulator>) {
       // The args order of linear regression function is (y, x), so we need to
       // swap the order
       decodedX_.decode(*args[1], rows);
@@ -557,7 +619,9 @@ class CovarianceAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /* mayPushdown */) override {
-    if constexpr (std::is_same_v<TAccumulator, RegrAccumulator>) {
+    if constexpr (
+        std::is_same_v<TAccumulator, RegrAccumulator> ||
+        std::is_same_v<TAccumulator, ExtendedRegrAccumulator>) {
       // The args order of linear regression function is (y, x), so we need to
       // swap the order
       decodedX_.decode(*args[1], rows);
@@ -743,39 +807,39 @@ void registerCovarianceAggregates(const std::string& prefix) {
       RegrIntermediateResult,
       RegrSlopeResultAccessor>(prefix + kRegrSlop);
   registerCovariance<
-      RegrAccumulator,
-      RegrIntermediateInput,
-      RegrIntermediateResult,
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
       RegrCountResultAccessor>(prefix + kRegrCount);
   registerCovariance<
-      RegrAccumulator,
-      RegrIntermediateInput,
-      RegrIntermediateResult,
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
       RegrAvgyResultAccessor>(prefix + kRegrAvgy);
   registerCovariance<
-      RegrAccumulator,
-      RegrIntermediateInput,
-      RegrIntermediateResult,
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
       RegrAvgxResultAccessor>(prefix + kRegrAvgx);
   registerCovariance<
-      RegrAccumulator,
-      RegrIntermediateInput,
-      RegrIntermediateResult,
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
       RegrSxyResultAccessor>(prefix + kRegrSxy);
   registerCovariance<
-      RegrAccumulator,
-      RegrIntermediateInput,
-      RegrIntermediateResult,
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
       RegrSxxResultAccessor>(prefix + kRegrSxx);
   registerCovariance<
-      RegrAccumulator,
-      RegrIntermediateInput,
-      RegrIntermediateResult,
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
       RegrSyyResultAccessor>(prefix + kRegrSyy);
   registerCovariance<
-      RegrAccumulator,
-      RegrIntermediateInput,
-      RegrIntermediateResult,
+      ExtendedRegrAccumulator,
+      ExtendedRegrIntermediateInput,
+      ExtendedRegrIntermediateResult,
       RegrR2ResultAccessor>(prefix + kRegrR2);
 }
 
