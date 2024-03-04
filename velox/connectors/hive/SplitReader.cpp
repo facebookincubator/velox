@@ -37,6 +37,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
+    core::ExpressionEvaluator* expressionEvaluator,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats) {
@@ -51,6 +52,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         partitionKeys,
         fileHandleFactory,
         executor,
+        expressionEvaluator,
         connectorQueryCtx,
         hiveConfig,
         ioStats);
@@ -63,6 +65,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         partitionKeys,
         fileHandleFactory,
         executor,
+        expressionEvaluator,
         connectorQueryCtx,
         hiveConfig,
         ioStats);
@@ -79,6 +82,7 @@ SplitReader::SplitReader(
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
+    core::ExpressionEvaluator* expressionEvaluator,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats)
@@ -90,6 +94,7 @@ SplitReader::SplitReader(
       pool_(connectorQueryCtx->memoryPool()),
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
+      expressionEvaluator_(expressionEvaluator),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
       ioStats_(ioStats),
@@ -106,123 +111,20 @@ void SplitReader::configureReaderOptions() {
 
 void SplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
+    std::shared_ptr<exec::ExprSet>& remainingFilterExprSet,
     dwio::common::RuntimeStatistics& runtimeStats) {
-  VELOX_CHECK_NE(
-      baseReaderOpts_.getFileFormat(), dwio::common::FileFormat::UNKNOWN);
+  createReader();
 
-  std::shared_ptr<FileHandle> fileHandle;
-  try {
-    fileHandle = fileHandleFactory_->generate(hiveSplit_->filePath).second;
-  } catch (VeloxRuntimeError& e) {
-    if (e.errorCode() == error_code::kFileNotFound.c_str() &&
-        hiveConfig_->ignoreMissingFiles(
-            connectorQueryCtx_->sessionProperties())) {
-      emptySplit_ = true;
-      return;
-    } else {
-      throw;
-    }
-  }
-  // Here we keep adding new entries to CacheTTLController when new fileHandles
-  // are generated, if CacheTTLController was created. Creator of
-  // CacheTTLController needs to make sure a size control strategy was available
-  // such as removing aged out entries.
-  if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
-    cacheTTLController->addOpenFileInfo(fileHandle->uuid.id());
-  }
-  auto baseFileInput = createBufferedInput(
-      *fileHandle, baseReaderOpts_, connectorQueryCtx_, ioStats_, executor_);
-
-  baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.getFileFormat())
-                    ->createReader(std::move(baseFileInput), baseReaderOpts_);
-
-  // Note that this doesn't apply to Hudi tables.
   emptySplit_ = false;
-  if (baseReader_->numberOfRows() == 0) {
+  if (testEmptySplit(runtimeStats)) {
     emptySplit_ = true;
     return;
   }
 
-  // Check filters and see if the whole split can be skipped. Note that this
-  // doesn't apply to Hudi tables.
-  if (!testFilters(
-          scanSpec_.get(),
-          baseReader_.get(),
-          hiveSplit_->filePath,
-          hiveSplit_->partitionKeys,
-          partitionKeys_)) {
-    emptySplit_ = true;
-    ++runtimeStats.skippedSplits;
-    runtimeStats.skippedSplitBytes += hiveSplit_->length;
-    return;
-  }
-
-  auto& fileType = baseReader_->rowType();
-  auto columnTypes = adaptColumns(fileType, baseReaderOpts_.getFileSchema());
-
-  configureRowReaderOptions(
-      baseRowReaderOpts_,
-      hiveTableHandle_->tableParameters(),
-      scanSpec_,
-      metadataFilter,
-      ROW(std::vector<std::string>(fileType->names()), std::move(columnTypes)),
-      hiveSplit_);
-  // NOTE: we firstly reset the finished 'baseRowReader_' of previous split
-  // before setting up for the next one to avoid doubling the peak memory usage.
-  baseRowReader_.reset();
-  baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
+  createRowReader(metadataFilter);
 }
 
-std::vector<TypePtr> SplitReader::adaptColumns(
-    const RowTypePtr& fileType,
-    const std::shared_ptr<const velox::RowType>& tableSchema) {
-  // Keep track of schema types for columns in file, used by ColumnSelector.
-  std::vector<TypePtr> columnTypes = fileType->children();
-
-  auto& childrenSpecs = scanSpec_->children();
-  for (size_t i = 0; i < childrenSpecs.size(); ++i) {
-    auto* childSpec = childrenSpecs[i].get();
-    const std::string& fieldName = childSpec->fieldName();
-
-    auto iter = hiveSplit_->partitionKeys.find(fieldName);
-    if (iter != hiveSplit_->partitionKeys.end()) {
-      setPartitionValue(childSpec, fieldName, iter->second);
-    } else if (fieldName == kPath) {
-      setConstantValue(
-          childSpec, VARCHAR(), velox::variant(hiveSplit_->filePath));
-    } else if (fieldName == kBucket) {
-      if (hiveSplit_->tableBucketNumber.has_value()) {
-        setConstantValue(
-            childSpec,
-            INTEGER(),
-            velox::variant(hiveSplit_->tableBucketNumber.value()));
-      }
-    } else {
-      auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
-      if (!fileTypeIdx.has_value()) {
-        // Column is missing. Most likely due to schema evolution.
-        VELOX_CHECK(tableSchema);
-        setNullConstantValue(childSpec, tableSchema->findChild(fieldName));
-      } else {
-        // Column no longer missing, reset constant value set on the spec.
-        childSpec->setConstantValue(nullptr);
-        auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
-        if (outputTypeIdx.has_value()) {
-          // We know the fieldName exists in the file, make the type at that
-          // position match what we expect in the output.
-          columnTypes[fileTypeIdx.value()] =
-              readerOutputType_->childAt(*outputTypeIdx);
-        }
-      }
-    }
-  }
-
-  scanSpec_->resetCachedValues(false);
-
-  return columnTypes;
-}
-
-uint64_t SplitReader::next(int64_t size, VectorPtr& output) {
+uint64_t SplitReader::next(uint64_t size, VectorPtr& output) {
   return baseRowReader_->next(size, output);
 }
 
@@ -238,6 +140,11 @@ bool SplitReader::emptySplit() const {
 
 void SplitReader::resetSplit() {
   hiveSplit_.reset();
+}
+
+std::shared_ptr<const dwio::common::TypeWithId> SplitReader::baseFileSchema() {
+  VELOX_CHECK_NOT_NULL(baseReader_.get());
+  return baseReader_->typeWithId();
 }
 
 int64_t SplitReader::estimatedRowSize() const {
@@ -340,6 +247,128 @@ std::string SplitReader::toString() const {
       partitionKeys,
       static_cast<const void*>(baseReader_.get()),
       static_cast<const void*>(baseRowReader_.get()));
+}
+
+void SplitReader::createReader() {
+  VELOX_CHECK_NE(
+      baseReaderOpts_.getFileFormat(), dwio::common::FileFormat::UNKNOWN);
+
+  std::shared_ptr<FileHandle> fileHandle;
+  try {
+    fileHandle = fileHandleFactory_->generate(hiveSplit_->filePath).second;
+  } catch (VeloxRuntimeError& e) {
+    if (e.errorCode() == error_code::kFileNotFound.c_str() &&
+        hiveConfig_->ignoreMissingFiles(
+            connectorQueryCtx_->sessionProperties())) {
+      emptySplit_ = true;
+      return;
+    } else {
+      throw;
+    }
+  }
+
+  // Here we keep adding new entries to CacheTTLController when new fileHandles
+  // are generated, if CacheTTLController was created. Creator of
+  // CacheTTLController needs to make sure a size control strategy was available
+  // such as removing aged out entries.
+  if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
+    cacheTTLController->addOpenFileInfo(fileHandle->uuid.id());
+  }
+  auto baseFileInput = createBufferedInput(
+      *fileHandle, baseReaderOpts_, connectorQueryCtx_, ioStats_, executor_);
+
+  baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.getFileFormat())
+                    ->createReader(std::move(baseFileInput), baseReaderOpts_);
+}
+
+void SplitReader::createRowReader(
+    std::shared_ptr<common::MetadataFilter> metadataFilter) {
+  auto& fileType = baseReader_->rowType();
+  auto columnTypes = adaptColumns(fileType, baseReaderOpts_.getFileSchema());
+
+  configureRowReaderOptions(
+      baseRowReaderOpts_,
+      hiveTableHandle_->tableParameters(),
+      scanSpec_,
+      metadataFilter,
+      ROW(std::vector<std::string>(fileType->names()), std::move(columnTypes)),
+      hiveSplit_);
+  // NOTE: we firstly reset the finished 'baseRowReader_' of previous split
+  // before setting up for the next one to avoid doubling the peak memory usage.
+  baseRowReader_.reset();
+  baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
+}
+
+bool SplitReader::testEmptySplit(
+    dwio::common::RuntimeStatistics& runtimeStats) {
+  // Note that this doesn't apply to Hudi tables.
+  if (baseReader_->numberOfRows() == 0) {
+    return true;
+  }
+
+  // Check filters and see if the whole split can be skipped. Note that this
+  // doesn't apply to Hudi tables.
+  if (!testFilters(
+          scanSpec_.get(),
+          baseReader_.get(),
+          hiveSplit_->filePath,
+          hiveSplit_->partitionKeys,
+          partitionKeys_)) {
+    ++runtimeStats.skippedSplits;
+    runtimeStats.skippedSplitBytes += hiveSplit_->length;
+    return true;
+  }
+
+  return false;
+}
+
+std::vector<TypePtr> SplitReader::adaptColumns(
+    const RowTypePtr& fileType,
+    const std::shared_ptr<const velox::RowType>& tableSchema) {
+  // Keep track of schema types for columns in file, used by ColumnSelector.
+  std::vector<TypePtr> columnTypes = fileType->children();
+
+  auto& childrenSpecs = scanSpec_->children();
+  for (size_t i = 0; i < childrenSpecs.size(); ++i) {
+    auto* childSpec = childrenSpecs[i].get();
+    const std::string& fieldName = childSpec->fieldName();
+
+    auto iter = hiveSplit_->partitionKeys.find(fieldName);
+    if (iter != hiveSplit_->partitionKeys.end()) {
+      setPartitionValue(childSpec, fieldName, iter->second);
+    } else if (fieldName == kPath) {
+      setConstantValue(
+          childSpec, VARCHAR(), velox::variant(hiveSplit_->filePath));
+    } else if (fieldName == kBucket) {
+      if (hiveSplit_->tableBucketNumber.has_value()) {
+        setConstantValue(
+            childSpec,
+            INTEGER(),
+            velox::variant(hiveSplit_->tableBucketNumber.value()));
+      }
+    } else {
+      auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
+      if (!fileTypeIdx.has_value()) {
+        // Column is missing. Most likely due to schema evolution.
+        VELOX_CHECK(tableSchema);
+        setNullConstantValue(childSpec, tableSchema->findChild(fieldName));
+      } else {
+        // Column no longer missing, reset constant value set on the spec.
+        childSpec->setConstantValue(nullptr);
+        auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
+        if (outputTypeIdx.has_value()) {
+          // We know the fieldName exists in the file, make the type at that
+          // position match what we expect in the output.
+          columnTypes[fileTypeIdx.value()] =
+              readerOutputType_->childAt(*outputTypeIdx);
+        }
+      }
+    }
+  }
+
+  scanSpec_->resetCachedValues(false);
+
+  return columnTypes;
 }
 
 } // namespace facebook::velox::connector::hive

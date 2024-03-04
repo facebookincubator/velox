@@ -1750,6 +1750,12 @@ ExprSet::ExprSet(
   }
 }
 
+ExprSet::ExprSet(const ExprSet& another) : execCtx_(another.execCtx()) {
+  exprs_ = another.exprs_;
+  distinctFields_ = another.distinctFields_;
+  multiplyReferencedFields_ = another.multiplyReferencedFields_;
+}
+
 namespace {
 void addStats(
     const exec::Expr& expr,
@@ -1810,6 +1816,24 @@ ExprSet::~ExprSet() {
       }
     }
   });
+}
+
+void ExprSet::addExpr(const std::shared_ptr<Expr>& expr) {
+  if (expr) {
+    exprs_.push_back(expr);
+    Expr::mergeFields(
+        distinctFields_, multiplyReferencedFields_, expr->distinctFields());
+  }
+}
+
+void ExprSet::addExprs(const std::vector<std::shared_ptr<Expr>>& exprs) {
+  if (!exprs.empty()) {
+    exprs_.insert(exprs_.end(), exprs.begin(), exprs.end());
+    for (auto& expr : exprs_) {
+      Expr::mergeFields(
+          distinctFields_, multiplyReferencedFields_, expr->distinctFields());
+    }
+  }
 }
 
 std::string ExprSet::toString(bool compact) const {
@@ -1988,6 +2012,27 @@ core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
     execCtx_ = std::make_unique<core::ExecCtx>(pool_, queryCtx_);
   }
   return execCtx_.get();
+}
+
+void LogicalExpressionEvaluator::evaluate(
+    exec::ExprSet* exprSet,
+    const SelectivityVector& rows,
+    const RowVector& input,
+    VectorPtr& result) {
+  EvalCtx context(ensureExecCtx(), exprSet, &input);
+  // TODO:: Logical ExprSet evaluation can be additionally optimized, for
+  // example, the result vector can be reused. However this will need to touch
+  // the internals of ExprSet and we will do it later.
+  std::vector<VectorPtr> results(exprSet->size());
+  exprSet->eval(0, exprSet->size(), true, rows, context, results);
+
+  std::vector<std::string> resultNames(exprSet->size(), "");
+  std::vector<TypePtr> resultTypes(exprSet->size(), BOOLEAN());
+  auto rowType = ROW(std::move(resultNames), std::move(resultTypes));
+  VectorPtr rowVector = std::make_shared<RowVector>(
+      pool_, rowType, nullptr, input.size(), results, 0);
+
+  result = rowVector;
 }
 
 } // namespace facebook::velox::exec
