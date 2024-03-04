@@ -467,7 +467,7 @@ class RegrIntermediateInput : public CovarIntermediateInput {
  public:
   explicit RegrIntermediateInput(const RowVector* rowVector)
       : CovarIntermediateInput(rowVector, kRegrIndices),
-        m2X_{asSimpleVector<double>(rowVector, kRegrIndices.m2X)} {};
+        m2X_{asSimpleVector<double>(rowVector, kRegrIndices.m2X)} {}
 
   void mergeInto(RegrAccumulator& accumulator, vector_size_t row) {
     accumulator.merge(
@@ -506,7 +506,7 @@ class RegrIntermediateResult : public CovarIntermediateResult {
  public:
   explicit RegrIntermediateResult(const RowVector* rowVector)
       : CovarIntermediateResult(rowVector, kRegrIndices),
-        m2X_{mutableRawValues<double>(rowVector, kRegrIndices.m2X)} {};
+        m2X_{mutableRawValues<double>(rowVector, kRegrIndices.m2X)} {}
 
   static std::string type() {
     return "row(double,bigint,double,double,double)";
