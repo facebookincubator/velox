@@ -218,7 +218,7 @@ struct UnixTimestampParseWithFormatFunction
 
 // Parses unix time in seconds to a formatted string.
 template <typename T>
-struct FromUnixtimeFunction : public InitSessionTimezone<T> {
+struct FromUnixtimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void initialize(
