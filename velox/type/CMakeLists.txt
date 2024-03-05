@@ -28,6 +28,7 @@ add_library(
   HugeInt.cpp
   StringView.cpp
   StringView.h
+  StringViewIdMap.cpp
   Subfield.cpp
   Timestamp.cpp
   TimestampConversion.cpp
