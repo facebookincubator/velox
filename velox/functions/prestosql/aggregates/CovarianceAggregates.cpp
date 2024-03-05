@@ -726,7 +726,9 @@ template <
     typename TIntermediateInput,
     typename TIntermediateResult,
     typename TResultAccessor>
-exec::AggregateRegistrationResult registerCovariance(const std::string& name) {
+exec::AggregateRegistrationResult registerCovariance(
+    const std::string& name,
+    bool withCompanionFunctions) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       // (double, double) -> double
       exec::AggregateFunctionSignatureBuilder()
@@ -775,72 +777,84 @@ exec::AggregateRegistrationResult registerCovariance(const std::string& name) {
                 "Unsupported raw input type: {}. Expected DOUBLE or REAL.",
                 rawInputType->toString())
         }
-      });
+      },
+      withCompanionFunctions);
 }
 
 } // namespace
 
-void registerCovarianceAggregates(const std::string& prefix) {
+void registerCovarianceAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions) {
   registerCovariance<
       CovarAccumulator,
       CovarIntermediateInput,
       CovarIntermediateResult,
-      CovarPopResultAccessor>(prefix + kCovarPop);
+      CovarPopResultAccessor>(prefix + kCovarPop, withCompanionFunctions);
   registerCovariance<
       CovarAccumulator,
       CovarIntermediateInput,
       CovarIntermediateResult,
-      CovarSampResultAccessor>(prefix + kCovarSamp);
+      CovarSampResultAccessor>(prefix + kCovarSamp, withCompanionFunctions);
   registerCovariance<
       CorrAccumulator,
       CorrIntermediateInput,
       CorrIntermediateResult,
-      CorrResultAccessor>(prefix + kCorr);
+      CorrResultAccessor>(prefix + kCorr, withCompanionFunctions);
   registerCovariance<
       RegrAccumulator,
       RegrIntermediateInput,
       RegrIntermediateResult,
-      RegrInterceptResultAccessor>(prefix + kRegrIntercept);
+      RegrInterceptResultAccessor>(
+      prefix + kRegrIntercept, withCompanionFunctions);
   registerCovariance<
       RegrAccumulator,
       RegrIntermediateInput,
       RegrIntermediateResult,
-      RegrSlopeResultAccessor>(prefix + kRegrSlop);
+      RegrSlopeResultAccessor>(
+      prefix + kRegrSlop, withCompanionFunctions);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrCountResultAccessor>(prefix + kRegrCount);
+      RegrCountResultAccessor>(
+      prefix + kRegrCount, withCompanionFunctions);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrAvgyResultAccessor>(prefix + kRegrAvgy);
+      RegrAvgyResultAccessor>(
+      prefix + kRegrAvgy, withCompanionFunctions);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrAvgxResultAccessor>(prefix + kRegrAvgx);
+      RegrAvgxResultAccessor>(
+      prefix + kRegrAvgx, withCompanionFunctions);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrSxyResultAccessor>(prefix + kRegrSxy);
+      RegrSxyResultAccessor>(
+      prefix + kRegrSxy, withCompanionFunctions);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrSxxResultAccessor>(prefix + kRegrSxx);
+      RegrSxxResultAccessor>(
+      prefix + kRegrSxx, withCompanionFunctions);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrSyyResultAccessor>(prefix + kRegrSyy);
+      RegrSyyResultAccessor>(
+      prefix + kRegrSyy, withCompanionFunctions);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrR2ResultAccessor>(prefix + kRegrR2);
+      RegrR2ResultAccessor>(
+      prefix + kRegrR2, withCompanionFunctions);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

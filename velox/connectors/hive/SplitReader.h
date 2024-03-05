@@ -83,7 +83,8 @@ class SplitReader {
 
   virtual ~SplitReader() = default;
 
-  void configureReaderOptions();
+  void configureReaderOptions(
+      std::shared_ptr<random::RandomSkipTracker> randomSkip);
 
   /// This function is used by different table formats like Iceberg and Hudi to
   /// do additional preparations before reading the split, e.g. Open delete
@@ -114,15 +115,6 @@ class SplitReader {
   virtual std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const std::shared_ptr<const velox::RowType>& tableSchema);
-
-  void setConstantValue(
-      common::ScanSpec* FOLLY_NONNULL spec,
-      const TypePtr& type,
-      const velox::variant& value) const;
-
-  void setNullConstantValue(
-      common::ScanSpec* FOLLY_NONNULL spec,
-      const TypePtr& type) const;
 
   void setPartitionValue(
       common::ScanSpec* FOLLY_NONNULL spec,
