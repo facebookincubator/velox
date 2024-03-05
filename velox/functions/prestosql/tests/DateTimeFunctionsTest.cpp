@@ -882,12 +882,12 @@ TEST_F(DateTimeFunctionsTest, plusMinusDateIntervalDayTime) {
 }
 
 TEST_F(DateTimeFunctionsTest, timestampMinusIntervalYearMonth) {
-  const auto minus = [&](std::optional<StringView> timestamp,
+  const auto minus = [&](std::optional<std::string> timestamp,
                          std::optional<int32_t> interval) {
-    return evaluateOnce<StringView>(
+    return evaluateOnce<std::string>(
         "date_format(date_parse(c0, '%Y-%m-%d %H:%i:%s') - c1, '%Y-%m-%d %H:%i:%s')",
         makeRowVector({
-            makeNullableFlatVector<StringView>({timestamp}, VARCHAR()),
+            makeNullableFlatVector<std::string>({timestamp}, VARCHAR()),
             makeNullableFlatVector<int32_t>({interval}, INTERVAL_YEAR_MONTH()),
         }));
   };
@@ -905,13 +905,13 @@ TEST_F(DateTimeFunctionsTest, timestampMinusIntervalYearMonth) {
 }
 
 TEST_F(DateTimeFunctionsTest, timestampPlusIntervalYearMonth) {
-  const auto plus = [&](std::optional<StringView> timestamp,
+  const auto plus = [&](std::optional<std::string> timestamp,
                         std::optional<int32_t> interval) {
     // timestamp + interval.
     auto result1 = evaluateOnce<std::string>(
         "date_format(date_parse(c0, '%Y-%m-%d %H:%i:%s') + c1, '%Y-%m-%d %H:%i:%s')",
         makeRowVector(
-            {makeNullableFlatVector<StringView>({timestamp}, VARCHAR()),
+            {makeNullableFlatVector<std::string>({timestamp}, VARCHAR()),
              makeNullableFlatVector<int32_t>(
                  {interval}, INTERVAL_YEAR_MONTH())}));
 
@@ -919,7 +919,7 @@ TEST_F(DateTimeFunctionsTest, timestampPlusIntervalYearMonth) {
     auto result2 = evaluateOnce<std::string>(
         "date_format(c1 + date_parse(c0, '%Y-%m-%d %H:%i:%s'), '%Y-%m-%d %H:%i:%s')",
         makeRowVector(
-            {makeNullableFlatVector<StringView>({timestamp}, VARCHAR()),
+            {makeNullableFlatVector<std::string>({timestamp}, VARCHAR()),
              makeNullableFlatVector<int32_t>(
                  {interval}, INTERVAL_YEAR_MONTH())}));
 
