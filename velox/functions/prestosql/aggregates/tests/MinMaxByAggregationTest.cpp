@@ -2201,5 +2201,142 @@ TEST_F(MinMaxByNTest, incrementalWindow) {
   }
 }
 
+TEST_F(MinMaxByComplexTypes, arrayTypeCompare) {
+  // The data consists of five rows, and the comparison key is arrayType.
+  // Each array contains two elements.
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({8, 3, 4, 5, 6}),
+      makeArrayVector<int64_t>({{3, 4}, {2, 4}, {2, 3}, {0, 3}, {0, 2}}),
+  });
+
+  auto expected = makeRowVector({makeArrayVector<int64_t>({
+      {6, 5},
+  })});
+
+  testAggregations({data}, {}, {"min_by(c0, c1, 2)"}, {expected});
+
+  // The data consists of five rows, and the comparison key is arrayType.
+  // Each array contains two elements.
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2, 1}),
+      makeFlatVector<int64_t>({8, 3, 4, 5, 6}),
+      makeArrayVector<int64_t>({{3, 4}, {2, 4}, {2, 3}, {0, 3}, {0, 2}}),
+  });
+
+  expected = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2}),
+       makeArrayVector<int64_t>({{8, 4}, {3, 5}})});
+
+  testAggregations({data}, {"c0"}, {"max_by(c1, c2, 2)"}, {expected});
+}
+
+TEST_F(MinMaxByComplexTypes, mapTypeCompare) {
+  // The data consists of four rows, and both the comparison key and the value
+  // key are mapType. The first compare row has three elements.
+  auto data = makeRowVector({
+      makeMapVector<int64_t, int64_t>({
+          {{1, 10}, {2, 20}, {3, 30}},
+          {{4, 40}, {5, 50}},
+          {{2, 1}},
+          {{6, 60}, {7, 70}, {8, 80}},
+      }),
+      makeMapVector<int64_t, int64_t>({
+          {{50, 5}, {10, 1}, {20, 2}},
+          {{20, 2}},
+          {{40, 4}, {0, 0}},
+          {{40, 4}, {30, 6}},
+      }),
+  });
+
+  // When comparing a map, it is sorted by key in ascending order, then compare
+  // keys one by one. If all the keys are the same, then the values are
+  // compared. So the second row and the forth row are chosen.
+  auto expected = makeRowVector({makeArrayVector(
+      {0},
+      makeMapVector(
+          {0, 3},
+          makeFlatVector<int64_t>({6, 7, 8, 4, 5}),
+          makeFlatVector<int64_t>({60, 70, 80, 40, 50})))});
+
+  testAggregations({data}, {}, {"max_by(c0, c1, 2)"}, {expected});
+
+  // The data consists of four rows, and both the comparison key and the value
+  // key are mapType. The first compare row has two elements.
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2}),
+      makeMapVector<int64_t, int64_t>({
+          {{1, 10}, {2, 20}, {3, 30}},
+          {{4, 40}, {5, 50}},
+          {{2, 1}},
+          {{6, 60}, {7, 70}, {8, 80}},
+      }),
+      makeMapVector<int64_t, int64_t>({
+          {{40, 4}, {0, 0}},
+          {{40, 4}},
+          {{40, 4}, {0, 2}},
+          {{50, 5}, {30, 6}},
+      }),
+  });
+
+  // For the same reason as above. The first row are chosen in first group and
+  // the second row are chosen in second group.
+  expected = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2}),
+       makeArrayVector(
+           {0, 1},
+           makeMapVector(
+               {0, 3},
+               makeFlatVector<int64_t>({1, 2, 3, 6, 7, 8}),
+               makeFlatVector<int64_t>({10, 20, 30, 60, 70, 80})))});
+
+  testAggregations({data}, {"c0"}, {"min_by(c1, c2, 1)"}, {expected});
+}
+
+TEST_F(MinMaxByComplexTypes, rowTypeCompare) {
+  // The data consists of four rows, and the comparison key is RowType and
+  // the value key are ArrayType. Each comparison key has two attributes.
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+          {9, 10},
+      }),
+      makeRowVector(
+          {makeFlatVector<int32_t>({10, 10, 30, 20}),
+           makeFlatVector<int32_t>({3, 2, 1, 4})}),
+  });
+
+  auto expected = makeRowVector({makeArrayVector(
+      {0},
+      makeArrayVector(
+          {0, 2, 5}, makeFlatVector<int64_t>({4, 5, 1, 2, 3, 9, 10})))});
+
+  testAggregations({data}, {}, {"min_by(c0, c1, 3)"}, {expected});
+
+  // The data consists of four rows, and the comparison key is RowType and
+  // the value key are ArrayType. Each comparison key has two attributes.
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2}),
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+          {9, 10},
+      }),
+      makeRowVector(
+          {makeFlatVector<int32_t>({10, 10, 30, 20}),
+           makeFlatVector<int32_t>({3, 2, 1, 4})}),
+  });
+
+  expected = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2}),
+       makeArrayVector(
+           {0, 1},
+           makeArrayVector({0, 3}, makeFlatVector<int64_t>({1, 2, 3, 4, 5})))});
+
+  testAggregations({data}, {"c0"}, {"min_by(c1, c2, 1)"}, {expected});
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test
