@@ -121,6 +121,40 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         unpackZoneKeyId(timestampWithTimezone)};
   }
 
+  std::optional<TimestampWithTimezone> timestampWithTimezoneAtTimezone(
+      std::optional<int64_t> timestamp,
+      const std::optional<std::string>& timeZoneName,
+      const std::optional<std::string>& newTimeZoneName) {
+    facebook::velox::VectorPtr resultVector;
+    if (!timestamp.has_value() || !timeZoneName.has_value()) {
+      resultVector = evaluate(
+          "at_timezone(c0, c1)",
+          makeRowVector(
+              {BaseVector::createNullConstant(
+                   TIMESTAMP_WITH_TIME_ZONE(), 1, pool()),
+               makeNullableFlatVector<std::string>({newTimeZoneName})}));
+    } else {
+      resultVector = evaluate(
+          "at_timezone(c0, c1)",
+          makeRowVector(
+              {makeTimestampWithTimeZoneVector(
+                   timestamp.value(), timeZoneName.value().c_str()),
+               makeNullableFlatVector<std::string>({newTimeZoneName})}));
+    }
+
+    EXPECT_EQ(1, resultVector->size());
+
+    if (resultVector->isNullAt(0)) {
+      return std::nullopt;
+    }
+
+    auto timestampWithTimezone =
+        resultVector->as<FlatVector<int64_t>>()->valueAt(0);
+    return TimestampWithTimezone{
+        unpackMillisUtc(timestampWithTimezone),
+        unpackZoneKeyId(timestampWithTimezone)};
+  }
+
   std::optional<Timestamp> dateParse(
       const std::optional<std::string>& input,
       const std::optional<std::string>& format) {
@@ -3908,3 +3942,29 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeDouble) {
   });
   assertEqualVectors(expected, actual);
 }
+
+TEST_F(
+    DateTimeFunctionsTest,
+    timestampAtTimezoneTestTimestampWithTimezoneInput) {
+  EXPECT_EQ(
+      TimestampWithTimezone(1500101514, util::getTimeZoneID("America/Boise")),
+      timestampWithTimezoneAtTimezone(
+          1500101514, "Asia/Kathmandu", "America/Boise"));
+
+  EXPECT_EQ(
+      TimestampWithTimezone(1500101514, util::getTimeZoneID("Europe/London")),
+      timestampWithTimezoneAtTimezone(
+          1500101514, "America/Boise", "Europe/London"));
+
+  EXPECT_EQ(
+      TimestampWithTimezone(
+          1500321297, util::getTimeZoneID("Australia/Melbourne")),
+      timestampWithTimezoneAtTimezone(
+          1500321297, "Canada/Yukon", "Australia/Melbourne"));
+
+  EXPECT_EQ(
+      TimestampWithTimezone(-2749482486, util::getTimeZoneID("Pacific/Fiji")),
+      timestampWithTimezoneAtTimezone(
+          -2749482486, "Atlantic/Bermuda", "Pacific/Fiji"));
+}
+
