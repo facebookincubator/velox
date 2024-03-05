@@ -523,25 +523,15 @@ bool isValidDayOfYear(int32_t year, int32_t dayOfYear) {
   return true;
 }
 
-int64_t lastDayOfMonthSinceEpochFromDate(const std::tm& dateTime) {
+Status lastDayOfMonthSinceEpochFromDate(const std::tm& dateTime, int64_t& out) {
   auto year = dateTime.tm_year + 1900;
   auto month = dateTime.tm_mon + 1;
   auto day = util::getMaxDayOfMonth(year, month);
-  return util::daysSinceEpochFromDate(year, month, day);
+  return util::daysSinceEpochFromDate(year, month, day, out);
 }
 
 int32_t getMaxDayOfMonth(int32_t year, int32_t month) {
   return isLeapYear(year) ? kLeapDays[month] : kNormalDays[month];
-}
-
-int64_t daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day) {
-  int64_t daysSinceEpoch;
-  auto status = daysSinceEpochFromDate(year, month, day, daysSinceEpoch);
-  if (!status.ok()) {
-    VELOX_DCHECK(status.isUserError());
-    VELOX_USER_FAIL(status.message());
-  }
-  return daysSinceEpoch;
 }
 
 Status
