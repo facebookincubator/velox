@@ -930,25 +930,35 @@ TEST_F(Re2FunctionsTest, likeSubstringPattern) {
 }
 
 TEST_F(Re2FunctionsTest, likeRelaxedSubstringPattern) {
+  // Basic tests.
   testLike("abcde", "%_bcd_%%", true);
   testLike("abcde", "%%b_de%", true);
+  testLike("abcde", "%%_b_d_%", true);
+  testLike("abcde", "%cc_%", false);
+  testLike("abcde", "%%_ccd_%%%", false);
+  testLike("abcde", "%%_be_%", false);
+  testLike("abcde", "%_cb%%", false);
   testLike("ABCDE", "%%C_%%%", true);
   testLike("ABCDE", "%%_C%%%", true);
   testLike("ABCDE", "%%_C_%%%", true);
+  testLike("ABCDE", "%_BD_%%", false);
+  testLike("ABCDE", "%%_BDE%", false);
+  testLike("ABCDE", "%_de%%", false);
+  testLike("ABCDE", "%%Ab_%", false);
+
   testLike("FGH_ABCDE", "%_ABCDE%", true);
   testLike("ABCDE", "%_ABCDE%", false);
   testLike("_ABCDE", "%_ABCDE%", true);
-
-  testLike("abcde", "%cc_%", false);
-  testLike("ABCDE", "%_BD_%%", false);
-  testLike("abcde", "%%_ccd_%%%", false);
-  testLike("ABCDE", "%%_BDE%", false);
-  testLike("abcde", "%%_be_%", false);
-  testLike("ABCDE", "%_de%%", false);
-  testLike("abcde", "%_cb%%", false);
-  testLike("ABCDE", "%%Ab_%", false);
   testLike("a_a_b_ca_b", "%a_b_c%", true);
 
+  // Inputs with special chars.
+  testLike("\nabc\nde\n", "%\n_e%%", true);
+  testLike("\nabcde\n", "%%_de%", true);
+  testLike("\nabc\tde\b", "%%%_d%%", true);
+  testLike("\nabcde\t", "%%_e\t%%", true);
+  testLike("\nabcde\n", "%%_d\n%", false);
+
+  // Unicode test.
   testLike("你好啊世界", "%_好啊_%%", true);
   testLike("你好啊世界", "%%好_世界%", true);
   testLike("你好你好哈哈世界", "%%你好__世界%", true);
@@ -959,15 +969,8 @@ TEST_F(Re2FunctionsTest, likeRelaxedSubstringPattern) {
   testLike("你好啊世界", "%_好好_%%", false);
   testLike("你好啊世界", "%%_好世_%", false);
 
-  testLike("\nabc\nde\n", "%\n_e%%", true);
-  testLike("\nabcde\n", "%%_de%", true);
-  testLike("\nabc\tde\b", "%%%_d%%", true);
-  testLike("\nabcde\t", "%%_e\t%%", true);
-  testLike("\nabcde\n", "%%_d\n%", false);
-
   testLike("aaaaaaaaaaaaaaaaaaaaaaabcdef", "%a_c%", true);
   testLike("aaaaaaaaaaaaaaaaaaaaaaabcdef", "%a_c_e%", true);
-
   testLike("abababababababaaaaaaaaaaaaaaaabcdef", "%ab_d%", true);
 
   // There are a lot 'noise': a_b which is similar to our pattern: a_b_c, it
@@ -988,6 +991,9 @@ TEST_F(Re2FunctionsTest, likeRelaxedSubstringPattern) {
       "a_b__ca_b__ca_b__ca_b__ca_b__ca_b__ca_b__ca_b__ca_b__cdef",
       "%a_b_c%",
       false);
+
+  // This one needs backtrack(in our implementation).
+  testLike("a_b_aab_b", "%a__b%", true);
 
   // Test literal '_' & '%' in pattern.
   testLike("cd_be", R"(%_\_b%)", '\\', true);

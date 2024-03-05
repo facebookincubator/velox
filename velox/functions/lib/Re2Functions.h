@@ -105,7 +105,7 @@ class PatternMetadata {
   static PatternMetadata substring(const std::string& fixedPattern);
 
   static PatternMetadata relaxedSubstring(
-      const std::string& fixedPattern,
+      const std::string fixedPattern,
       const std::vector<SubPatternMetadata>& subPatterns);
 
   const PatternKind patternKind() const {
