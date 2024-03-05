@@ -1714,8 +1714,18 @@ VectorPtr importFromArrowImpl(
         arrowArray.n_buffers,
         2,
         "Primitive types expect two buffers as input.");
-    auto values = wrapInBufferView(
-        arrowArray.buffers[1], arrowArray.length * type->cppSizeInBytes());
+    BufferPtr values = nullptr;
+    if (type->isShortDecimal()) {
+      values = AlignedBuffer::allocate<int64_t>(arrowArray.length, pool);
+      auto rawValues = values->asMutable<int64_t>();
+      auto oldValues = static_cast<const int128_t*>(arrowArray.buffers[1]);
+      for (size_t i = 0; i < arrowArray.length; ++i) {
+        memcpy(rawValues + i, oldValues + i, sizeof(int64_t));
+      }
+    } else {
+      values = wrapInBufferView(
+          arrowArray.buffers[1], arrowArray.length * type->cppSizeInBytes());
+    }
 
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         createFlatVector,
