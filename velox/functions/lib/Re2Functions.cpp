@@ -406,8 +406,6 @@ class Re2SearchAndExtract final : public exec::VectorFunction {
   mutable ReCache cache_;
 };
 
-namespace {
-
 // Sub-pattern's stats in a top-level pattern.
 struct SubPatternStats {
   SubPatternKind kind;
@@ -481,8 +479,6 @@ size_t unicodeCharLength(const char* str) {
   return UNLIKELY(size < 0) ? 1 : size;
 }
 
-} // namespace
-
 // Match string 'input' with a fixed pattern (with no wildcard characters).
 bool matchExactPattern(
     StringView input,
@@ -496,7 +492,6 @@ bool matchExactPattern(
   return input.size() == 0;
 }
 
-namespace {
 class RelaxedPatternMatchResult {
  public:
   static RelaxedPatternMatchResult success(size_t cursor) {
@@ -509,24 +504,24 @@ class RelaxedPatternMatchResult {
     return RelaxedPatternMatchResult{false, cursor, failingPatternIndex};
   }
 
-  static RelaxedPatternMatchResult failedForTooShortInput() {
+  static RelaxedPatternMatchResult inputTooShort() {
     return RelaxedPatternMatchResult{false, 0, -1};
   }
 
-  bool match() {
+  bool match() const {
     return match_;
   }
 
-  // The input the not long enough to match.
-  bool tooShortInputToMatch() {
+  // The input is not long enough to match.
+  bool isInputTooShort() const {
     return failingPatternIndex_ < 0;
   }
 
-  size_t cursor() {
+  size_t cursor() const {
     return cursor_;
   }
 
-  int32_t failingPatternIndex() {
+  int32_t failingPatternIndex() const {
     return failingPatternIndex_;
   }
 
@@ -540,37 +535,36 @@ class RelaxedPatternMatchResult {
         failingPatternIndex_(failingPatternIndex) {}
 
   // Whether it matches.
-  bool match_;
+  const bool match_;
 
   // If match == true, it stores the cursor in the input
   // when we finished matching.
   // If match == false, it stores the cursor in the input where we failed the
   // matching.
-  size_t cursor_;
+  const size_t cursor_;
 
   // If match == false, this field is used. It is assigned -1 if the match
   // fails not because of any sub-pattern(e.g. the input is too short).
-  int32_t failingPatternIndex_;
+  const int32_t failingPatternIndex_;
 };
-} // namespace
 
 // Matches a kRelaxedFixed pattern forward against ASCII input.
 RelaxedPatternMatchResult matchRelaxedFixedForwardAscii(
     StringView input,
     const PatternMetadata& patternMetadata,
     size_t start,
-    size_t startSubPatternIndex,
-    size_t endSubPatternIndex) {
-  const auto lengthOfThePattern =
-      patternMetadata.lengthOf(startSubPatternIndex, endSubPatternIndex);
+    size_t startSubPatternIndex) {
+  const auto lengthOfThePattern = patternMetadata.lengthOf(
+      startSubPatternIndex, patternMetadata.numSubPatterns() - 1);
   // Compare the length first.
   if (input.size() - start < lengthOfThePattern) {
-    return RelaxedPatternMatchResult::failedForTooShortInput();
+    return RelaxedPatternMatchResult::inputTooShort();
   }
 
   const auto patternOffset =
       patternMetadata.subPatterns()[startSubPatternIndex].start;
-  for (auto i = startSubPatternIndex; i < endSubPatternIndex + 1; ++i) {
+  for (auto i = startSubPatternIndex; i < patternMetadata.numSubPatterns();
+       ++i) {
     const auto& subPattern = patternMetadata.subPatterns()[i];
     const auto currentMatchingOffset =
         start + (subPattern.start - patternOffset);
@@ -591,23 +585,24 @@ RelaxedPatternMatchResult matchRelaxedFixedForwardUnicode(
     StringView input,
     const PatternMetadata& patternMetadata,
     size_t start,
-    size_t startSubPatternIndex,
-    size_t endSubPatternIndex) {
+    size_t startSubPatternIndex) {
   // Compare the length first.
   if (input.size() - start <
-      patternMetadata.lengthOf(startSubPatternIndex, endSubPatternIndex)) {
-    return RelaxedPatternMatchResult::failedForTooShortInput();
+      patternMetadata.lengthOf(
+          startSubPatternIndex, patternMetadata.numSubPatterns() - 1)) {
+    return RelaxedPatternMatchResult::inputTooShort();
   }
 
   int32_t cursor = start;
-  for (auto i = startSubPatternIndex; i < endSubPatternIndex + 1; ++i) {
+  for (auto i = startSubPatternIndex; i < patternMetadata.numSubPatterns();
+       ++i) {
     const auto& subPattern = patternMetadata.subPatterns()[i];
     if (subPattern.kind == SubPatternKind::kSingleCharWildcard) {
       // Match every single char wildcard.
       for (auto i = 0; i < subPattern.length; i++) {
         auto numBytes = unicodeCharLength(input.data() + cursor);
         if (cursor + numBytes > input.size()) {
-          return RelaxedPatternMatchResult::failedForTooShortInput();
+          return RelaxedPatternMatchResult::inputTooShort();
         }
         cursor += numBytes;
       }
@@ -637,18 +632,10 @@ RelaxedPatternMatchResult matchRelaxedFixedForward(
     size_t startSubPatternIndex = 0) {
   if constexpr (isAscii) {
     return matchRelaxedFixedForwardAscii(
-        input,
-        patternMetadata,
-        start,
-        startSubPatternIndex,
-        patternMetadata.numSubPatterns() - 1);
+        input, patternMetadata, start, startSubPatternIndex);
   } else {
     return matchRelaxedFixedForwardUnicode(
-        input,
-        patternMetadata,
-        start,
-        startSubPatternIndex,
-        patternMetadata.numSubPatterns() - 1);
+        input, patternMetadata, start, startSubPatternIndex);
   }
 }
 
@@ -662,7 +649,7 @@ RelaxedPatternMatchResult matchRelaxedFixedBackwardAscii(
   auto lengthOfInput = start + 1;
   auto lengthOfThePattern = patternMetadata.lengthOf(0, startSubPatternIndex);
   if (lengthOfInput < lengthOfThePattern) {
-    return RelaxedPatternMatchResult::failedForTooShortInput();
+    return RelaxedPatternMatchResult::inputTooShort();
   }
 
   auto startMatchingOffset = start - lengthOfThePattern + 1;
@@ -693,7 +680,7 @@ RelaxedPatternMatchResult matchRelaxedFixedBackwardUnicode(
     size_t startSubPatternIndex) {
   // Compare the length first.
   if ((start + 1) < patternMetadata.lengthOf(0, startSubPatternIndex)) {
-    return RelaxedPatternMatchResult::failedForTooShortInput();
+    return RelaxedPatternMatchResult::inputTooShort();
   }
 
   const auto& subPatterns = patternMetadata.subPatterns();
@@ -796,15 +783,12 @@ FOLLY_ALWAYS_INLINE static bool isAsciiArg(
       rows);
 }
 
-namespace {
-
 FOLLY_ALWAYS_INLINE bool isRightMostSubPattern(
     const PatternMetadata& patternMetadata,
     size_t patternIdx) {
   return patternIdx == patternMetadata.numSubPatterns() - 1;
 }
 
-} // namespace
 // Match the input against a kRelaxedSubString pattern.
 // The algorithm is:
 // - Start by searching the first literal sub-pattern in the input.
@@ -843,6 +827,7 @@ bool matchRelaxedSubstringPattern(
       (patternMetadata.subPatterns()[0].kind == kLiteralString ? 0 : 1);
   auto currentSubPattern = patternMetadata.subPatterns()[currentPatternIndex];
   auto end = input.size();
+  std::unique_ptr<RelaxedPatternMatchResult> matchResult;
   while (currentMatchingOffsetInInput < end) {
     // Search current literal pattern to find out where to start matching
     // the whole pattern.
@@ -852,15 +837,14 @@ bool matchRelaxedSubstringPattern(
       return false;
     }
 
-    RelaxedPatternMatchResult matchResult =
-        RelaxedPatternMatchResult::failedForTooShortInput();
     // Match the right part of the pattern(if there is a right part).
     if (!isRightMostSubPattern(patternMetadata, currentPatternIndex)) {
-      matchResult = matchRelaxedFixedForward<isAscii>(
-          input,
-          patternMetadata,
-          currentMatchingOffsetInInput + currentSubPattern.length,
-          currentPatternIndex + 1);
+      matchResult = std::make_unique<RelaxedPatternMatchResult>(
+          matchRelaxedFixedForward<isAscii>(
+              input,
+              patternMetadata,
+              currentMatchingOffsetInInput + currentSubPattern.length,
+              currentPatternIndex + 1));
     }
 
     // Match the left part of the pattern(if there is a left part).
@@ -868,27 +852,28 @@ bool matchRelaxedSubstringPattern(
     // - Current pattern is the right most.
     // - We successfully matched the right part of the pattern.
     if (isRightMostSubPattern(patternMetadata, currentPatternIndex) ||
-        (matchResult.match() && currentPatternIndex > 0)) {
-      matchResult = matchRelaxedFixedBackward<isAscii>(
-          input,
-          patternMetadata,
-          currentMatchingOffsetInInput - 1,
-          currentPatternIndex - 1);
+        (matchResult->match() && currentPatternIndex > 0)) {
+      matchResult = std::make_unique<RelaxedPatternMatchResult>(
+          matchRelaxedFixedBackward<isAscii>(
+              input,
+              patternMetadata,
+              currentMatchingOffsetInInput - 1,
+              currentPatternIndex - 1));
     }
 
     // Both the left and right part of the pattern match, the whole pattern
     // matches.
-    if (matchResult.match()) {
+    if (matchResult->match()) {
       return true;
     }
 
-    if (matchResult.tooShortInputToMatch()) {
+    if (matchResult->isInputTooShort()) {
       return false;
     }
 
     // Search the mismatch literal pattern to find the location where we can
     // start matching.
-    currentPatternIndex = matchResult.failingPatternIndex();
+    currentPatternIndex = matchResult->failingPatternIndex();
     currentSubPattern = patternMetadata.subPatterns()[currentPatternIndex];
     // The mismatch pattern is not a literal means the input is not long
     // enough.
@@ -898,7 +883,7 @@ bool matchRelaxedSubstringPattern(
 
     // matchResult.cursor() is where we failed matching the sub-pattern, we
     // start from `matchResult.cursor() + 1` to search for the sub-pattern.
-    currentMatchingOffsetInInput = matchResult.cursor() + 1;
+    currentMatchingOffsetInInput = matchResult->cursor() + 1;
   }
 
   return false;
