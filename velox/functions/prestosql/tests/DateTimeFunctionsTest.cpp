@@ -3837,3 +3837,72 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeDouble) {
   });
   assertEqualVectors(expected, actual);
 }
+
+TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
+  static const int kSecondsInMinute = 60;
+  static const int kSecondsInHour = 3'600;
+  static const int64_t kSecondsInDay = 86'400;
+  static const int64_t kMillisInSecond = 1'000;
+  static const uint64_t kNanosInSecond = 1'000'000'000;
+
+  const auto toISO8601 = [&](std::optional<int64_t> timestamp,
+                             const std::optional<std::string>& timeZoneName) {
+    return evaluateWithTimestampWithTimezone<std::string>(
+        "to_iso8601(c0)", timestamp, timeZoneName);
+  };
+
+  EXPECT_EQ(std::nullopt, toISO8601(std::nullopt, std::nullopt));
+
+  // (A) wall clock passed to function = 1180149582s (UTC relative)
+  // (B) wall clock to output          = 1180149582s - 04:00 (local)
+  EXPECT_EQ(
+      "2007-05-25T23:19:42.555-04:00",
+      toISO8601(1180149582 * kMillisInSecond + 555, "America/New_York"));
+
+  // (A) wall clock passed to function = 1180149582s (UTC relative)
+  // (B) wall clock to output          = 1180149582s - 04:00 (local)
+  EXPECT_EQ(
+      "2007-05-25T23:19:42.555-04:00",
+      toISO8601(1180149582 * kMillisInSecond + 555, "-04:00"));
+
+  // (A) wall clock passed to function = 1180149582s (UTC relative)
+  // (B) wall clock to output          = 1180149582s + 02:00 (local)
+  EXPECT_EQ(
+      "2007-05-26T05:19:42.298+02:00",
+      toISO8601(1180149582 * kMillisInSecond + 298, "+02:00"));
+
+  // (A) wall clock passed to function = -2821042378s (UTC relative)
+  // (B) wall clock to output          = -2821042378s - 08:00 (local)
+  EXPECT_EQ(
+      "1880-08-08T17:07:02.298-08:00",
+      toISO8601(-2821042378 * kMillisInSecond + 298, "-08:00"));
+
+  // (A) wall clock passed to function = -2821042800s (UTC relative)
+  // (B) wall clock to output          = -2821042800s - 07:52 (local)
+  EXPECT_EQ(
+      "1880-08-08T17:07:02.007-07:52",
+      toISO8601(-2821042800 * kMillisInSecond + 7, "America/Los_Angeles"));
+
+  // (A) wall clock passed to function = 86399s (UTC relative)
+  // (B) wall clock to output          = 86399s + 06:30 (local)
+  // Last second of day 0
+  EXPECT_EQ(
+      "1970-01-02T06:29:59.304+06:30",
+      toISO8601(86399 * kMillisInSecond + 304, "Asia/Yangon"));
+
+  // Last second of day 0
+  // (A) wall clock passed to function = 86399s (UTC relative)
+  // (B) wall clock to output          = 86399s + 00:00 (local)
+  EXPECT_EQ(
+      "1970-01-01T23:59:59.061+00:00",
+      toISO8601(86399 * kMillisInSecond + 61, "Atlantic/Madeira"));
+
+  // First second of day 0
+  EXPECT_EQ("1970-01-01T00:00:00.000+00:00", toISO8601(0, "+00:00"));
+
+  // First second of day 0
+  // (A) wall clock passed to function = 0s (UTC relative)
+  // (B) wall clock to output          = 0s - 08:00 (local)
+  EXPECT_EQ(
+      "1969-12-31T16:00:00.000-08:00", toISO8601(0, "America/Los_Angeles"));
+}

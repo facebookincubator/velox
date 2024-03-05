@@ -15,7 +15,12 @@
  */
 #pragma once
 
+#include <time.h>
+#include <chrono>
+#include <string>
 #include <string_view>
+
+#include "velox/external/date/tz.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -1389,6 +1394,35 @@ struct TimeZoneMinuteFunction : public TimestampWithTimezoneSupport<T> {
     // Get offset in seconds with GMT and convert to minute
     auto offset = this->getGMTOffsetSec(input);
     result = (offset / 60) % 60;
+  }
+};
+
+template <typename T>
+struct ToISO8601FromTimestampWithTimezoneFunction
+    : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    auto timestamp = unpackTimestampUtc(timestampWithTimezone);
+    auto timezoneID = unpackZoneKeyId(timestampWithTimezone);
+    auto timezoneName = util::getTimeZoneName(timezoneID);
+
+    timestamp.toTimezone(timezoneID);
+    TimestampToStringOptions options;
+    options.mode = TimestampToStringOptions::Mode::kFull;
+    options.zeroPaddingYear = true;
+    options.precision = TimestampToStringOptions::Precision::kMilliseconds;
+    auto tsStr = timestamp.toString(options);
+
+    if (isalpha(timezoneName[0])) {
+      auto starting_timepoint = date::make_zoned(
+          timezoneName,
+          date::sys_seconds{(std::chrono::seconds)(timestamp.getSeconds())});
+      timezoneName = format("%Ez", starting_timepoint);
+    }
+    result = tsStr + timezoneName;
   }
 };
 

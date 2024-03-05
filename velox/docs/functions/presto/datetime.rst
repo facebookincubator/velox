@@ -106,6 +106,10 @@ Date and Time Functions
 
     Returns ``timestamp`` as a UNIX timestamp.
 
+.. function:: to_iso8601(x) -> varchar
+
+    Formats timestamp with timezone ``x`` as an ISO 8601 string.
+
 Truncation Function
 -------------------
 
