@@ -486,7 +486,7 @@ class ExtendedRegrIntermediateInput : public RegrIntermediateInput {
  public:
   explicit ExtendedRegrIntermediateInput(const RowVector* rowVector)
       : RegrIntermediateInput(rowVector),
-        m2Y_{asSimpleVector<double>(rowVector, kRegrIndices.m2Y)} {};
+        m2Y_{asSimpleVector<double>(rowVector, kRegrIndices.m2Y)} {}
 
   void mergeInto(ExtendedRegrAccumulator& accumulator, vector_size_t row) {
     accumulator.merge(
@@ -525,7 +525,7 @@ class ExtendedRegrIntermediateResult : public RegrIntermediateResult {
  public:
   explicit ExtendedRegrIntermediateResult(const RowVector* rowVector)
       : RegrIntermediateResult(rowVector),
-        m2Y_{mutableRawValues<double>(rowVector, kRegrIndices.m2Y)} {};
+        m2Y_{mutableRawValues<double>(rowVector, kRegrIndices.m2Y)} {}
 
   static std::string type() {
     return "row(double,bigint,double,double,double,double)";
