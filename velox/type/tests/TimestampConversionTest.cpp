@@ -56,19 +56,27 @@ TEST(DateTimeUtilTest, fromDate) {
 
 TEST(DateTimeUtilTest, fromDateInvalid) {
   auto testDaysSinceEpochFromDateInvalid =
-      [](int32_t year, int32_t month, int32_t day) {
+      [](int32_t year, int32_t month, int32_t day, const std::string& error) {
         int64_t daysSinceEpoch;
         auto status =
             util::daysSinceEpochFromDate(year, month, day, daysSinceEpoch);
         EXPECT_TRUE(status.isUserError());
+        EXPECT_EQ(status.message(), error);
       };
-  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(1970, 1, -1));
-  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(1970, -1, 1));
-  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(1970, 0, 1));
-  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(1970, 13, 1));
-  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(1970, 1, 32));
-  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(1970, 2, 29)); // non-leap.
-  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(1970, 6, 31));
+  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(
+      1970, 1, -1, "Date out of range: 1970-1--1"));
+  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(
+      1970, -1, 1, "Date out of range: 1970--1-1"));
+  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(
+      1970, 0, 1, "Date out of range: 1970-0-1"));
+  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(
+      1970, 13, 1, "Date out of range: 1970-13-1"));
+  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(
+      1970, 1, 32, "Date out of range: 1970-1-32"));
+  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(
+      1970, 2, 29, "Date out of range: 1970-2-29")); // non-leap.
+  EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(
+      1970, 6, 31, "Date out of range: 1970-6-31"));
 }
 
 TEST(DateTimeUtilTest, fromDateString) {
