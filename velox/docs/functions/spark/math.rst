@@ -237,12 +237,14 @@ Mathematical Functions
 .. spark:function:: unhex(x) -> varbinary
 
     Converts hexadecimal varchar ``x`` to varbinary.
-    If size ``x`` is odd, parses the first character and puts it at index 0 of binary result,
-    then, continues parsing remaining characters, if existing, and
-    still puts the parsing result starting from index 0, which will overwrite the previous value.
-    If ``x`` contains invalid character, return null. ::
+    ``x`` is considered case insensitive and expected to contain only hexadecimal characters 0-9 and A-F.
+    If ``x`` contains non-hexadecimal character, the function returns NULL.
+    When ``x`` contains even number of characters, each pair is converted to a single byte. The number of bytes in the result is half the number of bytes in the input.
+    When ``x`` contains a single character, the result contains a single byte whose value matches the hexadecimal character.
+    When ``x`` contains an odd number characters greater than 2, the first character is ignored, the remaining pairs of characters are converted to bytes, then zero byte is added at the end of the output. ::
 
         SELECT unhex("23"); -- #
+        SELECT unhex("f"); -- \x0F
         SELECT unhex("b2323"); -- ##\0
-        SELECT unhex("G"); -- null
-        SELECT unhex("G23"); -- null
+        SELECT unhex("G"); -- NULL
+        SELECT unhex("G23"); -- NULL
