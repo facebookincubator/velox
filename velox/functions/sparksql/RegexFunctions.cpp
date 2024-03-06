@@ -173,15 +173,9 @@ struct RegexpReplaceFunction {
       return true;
     }
 
-    if (stringInput.size() == 0) {
-      if (pattern.size() == 0 && position == 1) {
-        result = replace;
-        return true;
-      }
-      if (pattern.size() > 0) {
-        result = stringInput;
-        return true;
-      }
+    if (stringInput.size() == 0 && pattern.size() == 0 && position == 1) {
+      result = replace;
+      return true;
     }
     return false;
   }

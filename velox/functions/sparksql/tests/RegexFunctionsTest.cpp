@@ -260,6 +260,18 @@ TEST_F(RegexFunctionsTest, regexpReplaceSimple) {
   auto result = testRegexpReplace("Hello World", "l", "L");
   EXPECT_EQ(result, output);
 }
+TEST_F(RegexFunctionsTest, badUTF8) {
+  std::string badUTF = "\xF0\x82\x82\xAC";
+  std::string badHalf = "\xF0\x82";
+  VELOX_ASSERT_THROW(
+      testingRegexpReplaceRows({badUTF}, {badHalf}, {"Bad"}), "invalid UTF-8");
+  // python converts above values to below and completes regexp_replace
+  // converts.
+  badUTF = "\xc3\xb0\xc2\xac";
+  badHalf = "\xc3\xb0";
+  auto result = testRegexpReplace(badUTF, badHalf, "");
+  EXPECT_EQ(result, "\xc2\xac");
+}
 
 TEST_F(RegexFunctionsTest, regexpReplaceSimplePosition) {
   std::string output = "Hello WorLd";
