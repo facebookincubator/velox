@@ -411,6 +411,14 @@ TEST_F(DecimalArithmeticTest, round) {
       {makeFlatVector<int128_t>(
           {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
           DECIMAL(38, 1))});
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>(
+          {3000000000000000, -3000000000000000}, DECIMAL(17, 0))},
+      "round(c0)",
+      {makeFlatVector<int128_t>(
+          {facebook::velox::HugeInt::parse("3000000000000000000000"),
+           facebook::velox::HugeInt::parse("-3000000000000000000000")},
+          DECIMAL(22, 6))});
 
   // Min and max short decimals.
   testDecimalExpr<TypeKind::BIGINT>(

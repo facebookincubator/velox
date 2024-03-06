@@ -278,7 +278,9 @@ class DecimalUtil {
       uint8_t /*bRescale*/) {
     VELOX_USER_CHECK_NE(b, 0, "Division by zero");
     int resultSign = 1;
-    R unsignedDividendRescaled(a);
+    using IntermediateType =
+        std::conditional_t<std::is_same_v<A, velox::int128_t>, A, R>;
+    IntermediateType unsignedDividendRescaled(a);
     if (a < 0) {
       resultSign = -1;
       unsignedDividendRescaled *= -1;
@@ -288,9 +290,9 @@ class DecimalUtil {
       resultSign *= -1;
       unsignedDivisor *= -1;
     }
-    unsignedDividendRescaled = checkedMultiply<R>(
+    unsignedDividendRescaled = checkedMultiply<IntermediateType>(
         unsignedDividendRescaled,
-        R(DecimalUtil::kPowersOfTen[aRescale]),
+        IntermediateType(DecimalUtil::kPowersOfTen[aRescale]),
         "Decimal");
     R quotient = unsignedDividendRescaled / unsignedDivisor;
     R remainder = unsignedDividendRescaled % unsignedDivisor;
