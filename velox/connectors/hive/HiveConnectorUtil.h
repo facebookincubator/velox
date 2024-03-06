@@ -88,7 +88,7 @@ bool testFilters(
     const std::string& filePath,
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKey,
-    std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         partitionKeysHandle);
 
 std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
