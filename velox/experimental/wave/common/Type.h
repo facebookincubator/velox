@@ -16,9 +16,9 @@
 
 #pragma once
 
+#include <fmt/format.h>
 #include <cstdint>
 #include <string>
-#include <fmt/format.h>
 #if FMT_VERSION >= 100100
 #include <fmt/std.h>
 #endif

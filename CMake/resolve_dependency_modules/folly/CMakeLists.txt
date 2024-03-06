@@ -32,8 +32,9 @@ if(VELOX_ENABLE_GPU)
   set(cudacc_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly-cudacc.patch)
 endif()
 
-set(VELOX_FOLLY_PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch
-                                ${glog_patch} ${cudacc_patch})
+set(VELOX_FOLLY_PATCH_COMMAND
+    git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch ${glog_patch}
+    ${cudacc_patch})
 
 FetchContent_Declare(
   folly

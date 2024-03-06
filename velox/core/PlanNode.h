@@ -2406,8 +2406,11 @@ struct fmt::formatter<facebook::velox::core::JoinType> : formatter<int> {
 };
 
 template <>
-struct fmt::formatter<facebook::velox::core::AggregationNode::Step> : formatter<std::string> {
-  auto format(facebook::velox::core::AggregationNode::Step s, format_context& ctx) {
+struct fmt::formatter<facebook::velox::core::AggregationNode::Step>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::core::AggregationNode::Step s,
+      format_context& ctx) {
     return formatter<std::string>::format(
         facebook::velox::core::mapAggregationStepToName(s), ctx);
   }
