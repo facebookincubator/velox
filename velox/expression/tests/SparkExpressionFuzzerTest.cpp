@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
 
   // Required by spark_partition_id function.
   std::unordered_map<std::string, std::string> queryConfigs = {
-      {facebook::velox::core::QueryConfig::kSparkPartitionId, "0"}};
+      {facebook::velox::core::QueryConfig::kSparkPartitionId, "123"}};
 
   return FuzzerRunner::run(FLAGS_seed, skipFunctions, queryConfigs);
 }

@@ -13,7 +13,7 @@ Spark Functions
     functions/spark/datetime
     functions/spark/array
     functions/spark/map
-    functions/spark/misc_function
+    functions/spark/misc
     functions/spark/regexp
     functions/spark/binary
     functions/spark/json
