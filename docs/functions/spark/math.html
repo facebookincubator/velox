@@ -348,6 +348,24 @@ Corresponds to Spark’s operator <code class="docutils literal notranslate"><sp
 <dd><p>Returns the negative of <cite>x</cite>.  Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">-</span></code>.</p>
 </dd></dl>
 
+<dl class="spark function">
+<dt class="sig sig-object spark" id="unhex">
+<span class="sig-name descname"><span class="pre">unhex</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#unhex" title="Link to this definition">¶</a></dt>
+<dd><p>Converts hexadecimal varchar <code class="docutils literal notranslate"><span class="pre">x</span></code> to varbinary.
+<code class="docutils literal notranslate"><span class="pre">x</span></code> is considered case insensitive and expected to contain only hexadecimal characters 0-9 and A-F.
+If <code class="docutils literal notranslate"><span class="pre">x</span></code> contains non-hexadecimal character, the function returns NULL.
+When <code class="docutils literal notranslate"><span class="pre">x</span></code> contains even number of characters, each pair is converted to a single byte. The number of bytes in the result is half the number of bytes in the input.
+When <code class="docutils literal notranslate"><span class="pre">x</span></code> contains a single character, the result contains a single byte whose value matches the hexadecimal character.
+When <code class="docutils literal notranslate"><span class="pre">x</span></code> contains an odd number characters greater than 2, the first character is ignored, the remaining pairs of characters are converted to bytes, then zero byte is added at the end of the output.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">&quot;23&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="c1">#</span>
+<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">&quot;f&quot;</span><span class="p">);</span> <span class="o">--</span> \<span class="n">x0F</span>
+<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">&quot;b2323&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="c1">##\0</span>
+<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">&quot;G&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">&quot;G23&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 
 
@@ -399,6 +417,7 @@ Corresponds to Spark’s operator <code class="docutils literal notranslate"><sp
 <li><a class="reference internal" href="#subtract"><code class="docutils literal notranslate"><span class="pre">subtract()</span></code></a></li>
 <li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">subtract()</span></code></a></li>
 <li><a class="reference internal" href="#unaryminus"><code class="docutils literal notranslate"><span class="pre">unaryminus()</span></code></a></li>
+<li><a class="reference internal" href="#unhex"><code class="docutils literal notranslate"><span class="pre">unhex()</span></code></a></li>
 </ul>
 </li>
 </ul>
