@@ -27,16 +27,17 @@ using namespace facebook::velox::dwio::common;
 namespace facebook::velox::connector::hive::iceberg {
 
 IcebergSplitReader::IcebergSplitReader(
-    std::shared_ptr<velox::connector::hive::HiveConnectorSplit> hiveSplit,
-    std::shared_ptr<HiveTableHandle> hiveTableHandle,
-    std::shared_ptr<common::ScanSpec> scanSpec,
-    const RowTypePtr readerOutputType,
+    const std::shared_ptr<velox::connector::hive::HiveConnectorSplit>&
+        hiveSplit,
+    const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    const RowTypePtr& readerOutputType,
     std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<HiveConfig> hiveConfig,
+    const std::shared_ptr<HiveConfig>& hiveConfig,
     std::shared_ptr<io::IoStatistics> ioStats)
     : SplitReader(
           hiveSplit,
@@ -48,39 +49,52 @@ IcebergSplitReader::IcebergSplitReader(
           executor,
           connectorQueryCtx,
           hiveConfig,
-          ioStats) {}
+          ioStats),
+      baseReadOffset_(0),
+      splitOffset_(0) {}
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats) {
-  SplitReader::prepareSplit(metadataFilter, runtimeStats);
-  baseReadOffset_ = 0;
-  positionalDeleteFileReaders_.clear();
-  splitOffset_ = baseRowReader_->nextRowNumber();
+  createReader();
 
-  // TODO: Deserialize the std::vector<IcebergDeleteFile> deleteFiles. For now
-  // we assume it's already deserialized.
+  if (checkIfSplitIsEmpty(runtimeStats)) {
+    VELOX_CHECK(emptySplit_);
+    return;
+  }
+
+  createRowReader(metadataFilter);
+
   std::shared_ptr<HiveIcebergSplit> icebergSplit =
       std::dynamic_pointer_cast<HiveIcebergSplit>(hiveSplit_);
+  baseReadOffset_ = 0;
+  splitOffset_ = baseRowReader_->nextRowNumber();
+  positionalDeleteFileReaders_.clear();
 
   const auto& deleteFiles = icebergSplit->deleteFiles;
   for (const auto& deleteFile : deleteFiles) {
-    positionalDeleteFileReaders_.push_back(
-        std::make_unique<PositionalDeleteFileReader>(
-            deleteFile,
-            hiveSplit_->filePath,
-            fileHandleFactory_,
-            connectorQueryCtx_,
-            executor_,
-            hiveConfig_,
-            ioStats_,
-            runtimeStats,
-            splitOffset_,
-            hiveSplit_->connectorId));
+    if (deleteFile.content == FileContent::kPositionalDeletes) {
+      if (deleteFile.recordCount > 0) {
+        positionalDeleteFileReaders_.push_back(
+            std::make_unique<PositionalDeleteFileReader>(
+                deleteFile,
+                hiveSplit_->filePath,
+                fileHandleFactory_,
+                connectorQueryCtx_,
+                executor_,
+                hiveConfig_,
+                ioStats_,
+                runtimeStats,
+                splitOffset_,
+                hiveSplit_->connectorId));
+      }
+    } else {
+      VELOX_NYI();
+    }
   }
 }
 
-uint64_t IcebergSplitReader::next(int64_t size, VectorPtr& output) {
+uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   Mutation mutation;
   mutation.randomSkip = baseReaderOpts_.randomSkip().get();
   mutation.deletedRows = nullptr;

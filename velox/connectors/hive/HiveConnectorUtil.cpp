@@ -574,8 +574,10 @@ bool testFilters(
     const std::string& filePath,
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKey,
-    std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         partitionKeysHandle) {
+  VELOX_CHECK_EQ(partitionKey.size(), partitionKeysHandle.size());
+
   auto totalRows = reader->numberOfRows();
   const auto& fileTypeWithId = reader->typeWithId();
   const auto& rowType = reader->rowType();
@@ -586,8 +588,11 @@ bool testFilters(
         // If missing column is partition key.
         auto iter = partitionKey.find(name);
         if (iter != partitionKey.end() && iter->second.has_value()) {
+          auto handlesIter = partitionKeysHandle.find(name);
+          VELOX_CHECK(handlesIter != partitionKeysHandle.end());
+
           return applyPartitionFilter(
-              (*partitionKeysHandle)[name]->dataType()->kind(),
+              handlesIter->second->dataType()->kind(),
               iter->second.value(),
               child->filter());
         }
