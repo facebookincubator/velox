@@ -234,6 +234,7 @@ struct ParseUrlFunction {
         match1[submatchIndex1].first,
         match2[submatchIndex2].first - match1[submatchIndex1].first +
             match2[submatchIndex2].length()));
+    return true;
   }
 
   submatchEnum getSubmatchEnum(const arg_type<Varchar>& partToExtract) {
