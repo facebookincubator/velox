@@ -726,11 +726,16 @@ void HashTable<ignoreNullKeys>::allocateTables(uint64_t size) {
 }
 
 template <bool ignoreNullKeys>
-void HashTable<ignoreNullKeys>::clear() {
+void HashTable<ignoreNullKeys>::clear(bool freeTable) {
   rows_->clear();
   if (table_) {
-    // All modes have 8 bytes per slot.
-    memset(table_, 0, capacity_ * sizeof(char*));
+    if (!freeTable) {
+      // All modes have 8 bytes per slot.
+      ::memset(table_, 0, capacity_ * sizeof(char*));
+    } else {
+      rows_->pool()->freeContiguous(tableAllocation_);
+      table_ = nullptr;
+    }
   }
   numDistinct_ = 0;
   numTombstones_ = 0;
@@ -1477,6 +1482,17 @@ void HashTable<ignoreNullKeys>::decideHashMode(
   }
   setHasherMode(hashers_, useRange, rangeSizes, distinctSizes);
   setHashMode(HashMode::kNormalizedKey, numNew);
+}
+
+template <bool ignoreNullKeys>
+std::vector<RowContainer*> HashTable<ignoreNullKeys>::allRows() const {
+  std::vector<RowContainer*> rowContainers;
+  rowContainers.reserve(otherTables_.size() + 1);
+  rowContainers.push_back(rows_.get());
+  for (auto& other : otherTables_) {
+    rowContainers.push_back(other->rows_.get());
+  }
+  return rowContainers;
 }
 
 template <bool ignoreNullKeys>

@@ -56,13 +56,7 @@ class ChecksumAggregateTest : public AggregationTestBase {
         fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum);
 
     testAggregations(
-        rowVectors,
-        {},
-        {"checksum(c0)"},
-        {"to_base64(a0)"},
-        expectedDuckDbSql,
-        /*config*/ {},
-        testWithTableScan);
+        rowVectors, {}, {"checksum(c0)"}, {"to_base64(a0)"}, expectedDuckDbSql);
   }
 
   template <typename G, typename T>
@@ -375,17 +369,18 @@ TEST_F(ChecksumAggregateTest, globalAggregationNoData) {
 }
 
 TEST_F(ChecksumAggregateTest, timestampWithTimezone) {
-  auto timestamp =
-      makeFlatVector<int64_t>(5, [](auto row) { return 1639426440000; });
-  auto timezone = makeFlatVector<int16_t>(5, [](auto row) { return 0; });
-
-  auto timestampWithTzVector = std::make_shared<RowVector>(
-      pool_.get(),
-      TIMESTAMP_WITH_TIME_ZONE(),
-      BufferPtr(nullptr),
+  auto timestampWithTimezone = makeFlatVector<int64_t>(
       5,
-      std::vector<VectorPtr>{timestamp, timezone});
+      [](auto /* row */) { return pack(1639426440000, 0); },
+      /* isNullAt */ nullptr,
+      TIMESTAMP_WITH_TIME_ZONE());
 
-  assertChecksum(timestampWithTzVector, "jwqENA0VLZY=");
+  assertChecksum(timestampWithTimezone, "jwqENA0VLZY=");
 }
+
+TEST_F(ChecksumAggregateTest, unknown) {
+  auto data = makeAllNullFlatVector<UnknownValue>(100);
+  assertChecksum(data, "vBwbUFiJq80=");
+}
+
 } // namespace facebook::velox::aggregate::test

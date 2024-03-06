@@ -40,7 +40,7 @@ struct ToUnixtimeFunction {
   FOLLY_ALWAYS_INLINE bool call(
       double& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
-    const auto milliseconds = *timestampWithTimezone.template at<0>();
+    const auto milliseconds = unpackMillisUtc(timestampWithTimezone);
     result = (double)milliseconds / kMillisecondsInSecond;
     return true;
   }
@@ -75,11 +75,9 @@ struct TimestampWithTimezoneSupport {
   Timestamp toTimestamp(
       const arg_type<TimestampWithTimezone>& timestampWithTimezone,
       bool asGMT = false) {
-    const auto milliseconds = *timestampWithTimezone.template at<0>();
-    auto tz = *timestampWithTimezone.template at<1>();
-    Timestamp timestamp = Timestamp::fromMillis(milliseconds);
+    auto timestamp = unpackTimestampUtc(timestampWithTimezone);
     if (!asGMT) {
-      timestamp.toTimezone(*timestampWithTimezone.template at<1>());
+      timestamp.toTimezone(unpackZoneKeyId(timestampWithTimezone));
     }
 
     return timestamp;
@@ -90,10 +88,9 @@ struct TimestampWithTimezoneSupport {
   int64_t getGMTOffsetSec(
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     Timestamp inputTimeStamp = this->toTimestamp(timestampWithTimezone);
-
     // Create a copy of inputTimeStamp and convert it to GMT
     auto gmtTimeStamp = inputTimeStamp;
-    gmtTimeStamp.toGMT(*timestampWithTimezone.template at<1>());
+    gmtTimeStamp.toGMT(unpackZoneKeyId(timestampWithTimezone));
 
     // Get offset in seconds with GMT and convert to hour
     return (inputTimeStamp.getSeconds() - gmtTimeStamp.getSeconds());
@@ -342,14 +339,28 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
       out_type<Date>& result,
       const arg_type<Timestamp>& timestamp) {
     auto dt = getDateTime(timestamp, this->timeZone_);
-    result = util::lastDayOfMonthSinceEpochFromDate(dt);
+    int64_t daysSinceEpochFromDate;
+    auto status =
+        util::lastDayOfMonthSinceEpochFromDate(dt, daysSinceEpochFromDate);
+    if (!status.ok()) {
+      VELOX_DCHECK(status.isUserError());
+      VELOX_USER_FAIL(status.message());
+    }
+    result = daysSinceEpochFromDate;
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date) {
     auto dt = getDateTime(date);
-    result = util::lastDayOfMonthSinceEpochFromDate(dt);
+    int64_t daysSinceEpochFromDate;
+    auto status =
+        util::lastDayOfMonthSinceEpochFromDate(dt, daysSinceEpochFromDate);
+    if (!status.ok()) {
+      VELOX_DCHECK(status.isUserError());
+      VELOX_USER_FAIL(status.message());
+    }
+    result = daysSinceEpochFromDate;
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -357,7 +368,14 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     auto dt = getDateTime(timestamp, nullptr);
-    result = util::lastDayOfMonthSinceEpochFromDate(dt);
+    int64_t daysSinceEpochFromDate;
+    auto status =
+        util::lastDayOfMonthSinceEpochFromDate(dt, daysSinceEpochFromDate);
+    if (!status.ok()) {
+      VELOX_DCHECK(status.isUserError());
+      VELOX_USER_FAIL(status.message());
+    }
+    result = daysSinceEpochFromDate;
   }
 };
 
@@ -374,7 +392,7 @@ int64_t intervalDays(int64_t milliseconds) {
 } // namespace
 
 template <typename T>
-struct DateMinusIntervalDayTime {
+struct DateMinusInterval {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
@@ -386,10 +404,17 @@ struct DateMinusIntervalDayTime {
         "Cannot subtract hours, minutes, seconds or milliseconds from a date");
     result = addToDate(date, DateTimeUnit::kDay, -intervalDays(interval));
   }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const arg_type<IntervalYearMonth>& interval) {
+    result = addToDate(date, DateTimeUnit::kMonth, -interval);
+  }
 };
 
 template <typename T>
-struct DatePlusIntervalDayTime {
+struct DatePlusInterval {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
@@ -400,6 +425,13 @@ struct DatePlusIntervalDayTime {
         isIntervalWholeDays(interval),
         "Cannot add hours, minutes, seconds or milliseconds to a date");
     result = addToDate(date, DateTimeUnit::kDay, intervalDays(interval));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const arg_type<IntervalYearMonth>& interval) {
+    result = addToDate(date, DateTimeUnit::kMonth, interval);
   }
 };
 
@@ -416,7 +448,7 @@ struct TimestampMinusFunction {
 };
 
 template <typename T>
-struct TimestampPlusIntervalDayTime {
+struct TimestampPlusInterval {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
@@ -431,10 +463,17 @@ struct TimestampPlusIntervalDayTime {
   {
     result = Timestamp::fromMillisNoError(a.toMillis() + b);
   }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<IntervalYearMonth>& interval) {
+    result = addToTimestamp(timestamp, DateTimeUnit::kMonth, interval);
+  }
 };
 
 template <typename T>
-struct IntervalDayTimePlusTimestamp {
+struct IntervalPlusTimestamp {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
@@ -449,10 +488,17 @@ struct IntervalDayTimePlusTimestamp {
   {
     result = Timestamp::fromMillisNoError(a + b.toMillis());
   }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const arg_type<IntervalYearMonth>& interval,
+      const arg_type<Timestamp>& timestamp) {
+    result = addToTimestamp(timestamp, DateTimeUnit::kMonth, interval);
+  }
 };
 
 template <typename T>
-struct TimestampMinusIntervalDayTime {
+struct TimestampMinusInterval {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
@@ -466,6 +512,13 @@ struct TimestampMinusIntervalDayTime {
 #endif
   {
     result = Timestamp::fromMillisNoError(a.toMillis() - b);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<IntervalYearMonth>& interval) {
+    result = addToTimestamp(timestamp, DateTimeUnit::kMonth, -interval);
   }
 };
 
@@ -908,11 +961,10 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     }
 
     if (unit == DateTimeUnit::kSecond) {
-      auto utcTimestamp =
-          Timestamp::fromMillis(*timestampWithTimezone.template at<0>());
-      result.template get_writer_at<0>() = utcTimestamp.getSeconds() * 1000;
-      result.template get_writer_at<1>() =
-          *timestampWithTimezone.template at<1>();
+      auto utcTimestamp = unpackTimestampUtc(timestampWithTimezone);
+      result = pack(
+          utcTimestamp.getSeconds() * 1000,
+          unpackZoneKeyId(timestampWithTimezone));
       return;
     }
 
@@ -920,11 +972,9 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     auto dateTime = getDateTime(timestamp, nullptr);
     adjustDateTime(dateTime, unit);
     timestamp = Timestamp::fromMillis(timegm(&dateTime) * 1000);
-    timestamp.toGMT(*timestampWithTimezone.template at<1>());
+    timestamp.toGMT(unpackZoneKeyId(timestampWithTimezone));
 
-    result.template get_writer_at<0>() = timestamp.toMillis();
-    result.template get_writer_at<1>() =
-        *timestampWithTimezone.template at<1>();
+    result = pack(timestamp.toMillis(), unpackZoneKeyId(timestampWithTimezone));
   }
 };
 
@@ -1009,9 +1059,9 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
 
     auto finalTimeStamp = addToTimestamp(
         this->toTimestamp(timestampWithTimezone), unit, (int32_t)value);
-    finalTimeStamp.toGMT(*timestampWithTimezone.template at<1>());
-    result = std::make_tuple(
-        finalTimeStamp.toMillis(), *timestampWithTimezone.template at<1>());
+    auto tzID = unpackZoneKeyId(timestampWithTimezone);
+    finalTimeStamp.toGMT(tzID);
+    result = pack(finalTimeStamp.toMillis(), tzID);
 
     return true;
   }
@@ -1191,6 +1241,17 @@ struct DateFormatFunction : public TimestampWithTimezoneSupport<T> {
 };
 
 template <typename T>
+struct FromIso8601Date {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Varchar>& input) {
+    result = util::fromDateString(input.data(), input.size());
+  }
+};
+
+template <typename T>
 struct DateParseFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -1278,9 +1339,8 @@ struct FormatDateTimeFunction {
       const arg_type<Varchar>& formatString) {
     ensureFormatter(formatString);
 
-    const auto milliseconds = *timestampWithTimezone.template at<0>();
-    Timestamp timestamp = Timestamp::fromMillis(milliseconds);
-    int16_t timeZoneId = *timestampWithTimezone.template at<1>();
+    const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
+    const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
     auto* timezonePtr = date::locate_zone(util::getTimeZoneName(timeZoneId));
 
     auto maxResultSize = jodaDateTime_->maxResultSize(timezonePtr);
@@ -1345,7 +1405,7 @@ struct ParseDateTimeFunction {
         ? dateTimeResult.timezoneId
         : sessionTzID_.value_or(0);
     dateTimeResult.timestamp.toGMT(timezoneId);
-    result = std::make_tuple(dateTimeResult.timestamp.toMillis(), timezoneId);
+    result = pack(dateTimeResult.timestamp.toMillis(), timezoneId);
     return true;
   }
 };

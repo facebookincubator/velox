@@ -24,24 +24,10 @@ namespace facebook::velox::functions::sparksql {
 
 void registerRandFunctions(const std::string& prefix) {
   registerFunction<RandFunction, double>({prefix + "rand", prefix + "random"});
-  // Has seed & partition index as input.
-  registerFunction<
-      RandFunction,
-      double,
-      int32_t /*seed*/,
-      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
-  // Has seed & partition index as input.
-  registerFunction<
-      RandFunction,
-      double,
-      int64_t /*seed*/,
-      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
-  // NULL constant as seed of unknown type.
-  registerFunction<
-      RandFunction,
-      double,
-      UnknownValue /*seed*/,
-      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
+  registerFunction<RandFunction, double, Constant<int32_t>>(
+      {prefix + "rand", prefix + "random"});
+  registerFunction<RandFunction, double, Constant<int64_t>>(
+      {prefix + "rand", prefix + "random"});
 }
 
 void registerArithmeticFunctions(const std::string& prefix) {
@@ -84,6 +70,7 @@ void registerArithmeticFunctions(const std::string& prefix) {
       {prefix + "round"});
   registerFunction<RoundFunction, double, double, int32_t>({prefix + "round"});
   registerFunction<RoundFunction, float, float, int32_t>({prefix + "round"});
+  registerFunction<UnHexFunction, Varbinary, Varchar>({prefix + "unhex"});
   // In Spark only long, double, and decimal have ceil/floor
   registerFunction<sparksql::CeilFunction, int64_t, int64_t>({prefix + "ceil"});
   registerFunction<sparksql::CeilFunction, int64_t, double>({prefix + "ceil"});

@@ -253,8 +253,7 @@ void HashProbe::maybeSetupSpillInput(
           spillInputPartitionIds_.begin()->partitionBitOffset(),
           spillInputPartitionIds_.begin()->partitionBitOffset() +
               spillConfig.joinPartitionBits),
-      &spillConfig,
-      spillConfig.maxFileSize);
+      &spillConfig);
   // Set the spill partitions to the corresponding ones at the build side. The
   // hash probe operator itself won't trigger any spilling.
   spiller_->setPartitionsSpilled(toPartitionNumSet(spillInputPartitionIds_));
@@ -1440,8 +1439,8 @@ void HashProbe::setRunning() {
   setState(ProbeOperatorState::kRunning);
 }
 
-void HashProbe::abort() {
-  Operator::abort();
+void HashProbe::close() {
+  Operator::close();
 
   // Free up major memory usage.
   joinBridge_.reset();

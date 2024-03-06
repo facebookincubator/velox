@@ -58,7 +58,6 @@ class SortBufferTest : public OperatorTestBase {
         0,
         0,
         0,
-        0,
         "none");
   }
 
@@ -282,6 +281,7 @@ TEST_F(SortBufferTest, batchOutput) {
       {false, {1024, 1024, 1024}, 1000, {1000, 1000, 1000, 72}},
       {true, {1024, 1024, 1024}, 1000, {1000, 1000, 1000, 72}}};
 
+  TestScopedSpillInjection scopedSpillInjection(100);
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto spillDirectory = exec::test::TempDirectoryPath::create();
@@ -300,7 +300,6 @@ TEST_F(SortBufferTest, batchOutput) {
         0,
         0,
         0,
-        100, //  testSpillPct
         "none");
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,
@@ -393,7 +392,6 @@ TEST_F(SortBufferTest, spill) {
         executor_.get(),
         100,
         spillableReservationGrowthPct,
-        0,
         0,
         0,
         0,

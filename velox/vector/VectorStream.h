@@ -86,6 +86,11 @@ class IterativeVectorSerializer {
 
   /// Write serialized data to 'stream'.
   virtual void flush(OutputStream* stream) = 0;
+
+  /// Resets 'this' to post construction state.
+  virtual void clear() {
+    VELOX_UNSUPPORTED("clear");
+  }
 };
 
 /// Serializer that writes a subset of rows from a single RowVector to the
@@ -159,18 +164,6 @@ class VectorSerde {
   ///
   /// This is more appropriate if the use case involves many small writes, e.g.
   /// partitioning a RowVector across multiple destinations.
-  ///
-  /// TODO: Remove createSerializer once Presto is updated to call
-  /// createIterativeSerializer.
-  virtual std::unique_ptr<IterativeVectorSerializer> createSerializer(
-      RowTypePtr type,
-      int32_t numRows,
-      StreamArena* streamArena,
-      const Options* options = nullptr) {
-    return createIterativeSerializer(
-        std::move(type), numRows, streamArena, options);
-  }
-
   virtual std::unique_ptr<IterativeVectorSerializer> createIterativeSerializer(
       RowTypePtr type,
       int32_t numRows,
@@ -308,6 +301,11 @@ class VectorStreamGroup : public StreamArena {
       RowTypePtr type,
       RowVectorPtr* result,
       const VectorSerde::Options* options = nullptr);
+
+  void clear() override {
+    StreamArena::clear();
+    serializer_->clear();
+  }
 
  private:
   std::unique_ptr<IterativeVectorSerializer> serializer_;

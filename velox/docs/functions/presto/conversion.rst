@@ -123,7 +123,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
-     -
+     - Y
    * - double
      - Y
      - Y
@@ -724,14 +724,15 @@ Invalid examples
   SELECT cast(123 as decimal(6, 4)); -- Out of range
   SELECT cast(123 as decimal(4, 2)); -- Out of range
 
-From double type
-^^^^^^^^^^^^^^^^
+From floating-point types
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Casting a double number to a decimal of given precision and scale is allowed
-if the input value can be represented by the precision and scale. When the
-given scale is less than the number of decimal places, the double value is
-rounded. The conversion precision is up to 15 as double provides 16(±1)
-significant decimal digits precision. Casting from invalid input values throws.
+Casting a floating-point number to a decimal of given precision and scale is allowed
+if the input value can be represented by the precision and scale. When the given
+scale is less than the number of decimal places, the floating-point value is rounded.
+The conversion precision is up to 15 for double and 6 for real according to the
+significant decimal digits precision they provide. Casting from NaN or infinite value
+throws.
 
 Valid example
 
@@ -741,6 +742,7 @@ Valid example
   SELECT cast(0.12 as decimal(4, 1)); -- decimal '0.1'
   SELECT cast(0.19 as decimal(4, 1)); -- decimal '0.2'
   SELECT cast(0.123456789123123 as decimal(38, 18)); -- decimal '0.123456789123123000'
+  SELECT cast(real '0.123456' as decimal(38, 18)); -- decimal '0.123456000000000000'
 
 Invalid example
 
@@ -809,3 +811,14 @@ Invalid example
   SELECT cast(' -3E+2' as decimal(12, 2)); -- Value is not a number
   SELECT cast('-3E+2.1' as decimal(12, 2)); -- Value is not a number
   SELECT cast('3E+' as decimal(12, 2)); -- Value is not a number
+
+Miscellaneous
+-------------
+
+.. function:: typeof(x) -> varchar
+
+    Returns the name of the type of x::
+
+        SELECT typeof(123); -- integer
+        SELECT typeof(1.5); -- double
+        SELECT typeof(array[1,2,3]); -- array(integer)

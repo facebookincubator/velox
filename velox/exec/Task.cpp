@@ -18,10 +18,10 @@
 #include <boost/uuid/uuid_io.hpp>
 #include <string>
 
-#include "velox/codegen/Codegen.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashBuild.h"
@@ -32,10 +32,6 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
-#if CODEGEN_ENABLED == 1
-#include "velox/experimental/codegen/CodegenLogger.h"
-#endif
-#include "velox/common/testutil/TestValue.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -47,7 +43,7 @@ namespace {
 // Inactive on creation. Must be activated explicitly by calling 'activate'.
 class EventCompletionNotifier {
  public:
-  /// Calls notify() if it hasn't been called yet.
+  // Calls notify() if it hasn't been called yet.
   ~EventCompletionNotifier() {
     notify();
   }
@@ -164,6 +160,22 @@ std::string makeUuid() {
 bool isHashJoinOperator(const std::string& operatorType) {
   return (operatorType == "HashBuild") || (operatorType == "HashProbe");
 }
+
+// Moves split promises from one vector to another.
+void movePromisesOut(
+    std::vector<ContinuePromise>& from,
+    std::vector<ContinuePromise>& to) {
+  if (to.empty()) {
+    to.swap(from);
+    return;
+  }
+
+  for (auto& promise : from) {
+    to.emplace_back(std::move(promise));
+  }
+  from.clear();
+}
+
 } // namespace
 
 std::string taskStateString(TaskState state) {
@@ -1171,6 +1183,8 @@ bool Task::addSplitWithSequence(
   }
 
   if (!isTaskRunning) {
+    // Safe because 'split' is moved away above only if 'isTaskRunning'.
+    // @lint-ignore CLANGTIDY bugprone-use-after-move
     addRemoteSplit(planNodeId, split);
   }
 
@@ -1195,6 +1209,7 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
 
   if (!isTaskRunning) {
     // Safe because 'split' is moved away above only if 'isTaskRunning'.
+    // @lint-ignore CLANGTIDY bugprone-use-after-move
     addRemoteSplit(planNodeId, split);
   }
 }
@@ -1292,22 +1307,39 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
 
-    // Global 'no more splits' for a plan node comes in case of ungrouped
-    // execution when no more splits will arrive. For grouped execution it
-    // comes when no more split groups will arrive for that plan node.
+    // Global 'no more splits' message for a plan node comes in two cases:
+    // 1. For an ungrouped execution plan node when no more splits will
+    // arrive for that plan node.
+    // 2. For a grouped execution plan node when no more split groups will
+    // arrive for that plan node.
     auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
     splitsState.noMoreSplits = true;
-    if (not splitsState.groupSplitsStores.empty()) {
+    if (!planFragment_.leafNodeRunsGroupedExecution(planNodeId)) {
+      // Ungrouped execution branch.
+      if (!splitsState.groupSplitsStores.empty()) {
+        // Mark the only split store as 'no more splits'.
+        VELOX_CHECK_EQ(
+            splitsState.groupSplitsStores.size(),
+            1,
+            "Expect 1 split store in a plan node in ungrouped execution mode, has {}",
+            splitsState.groupSplitsStores.size());
+        auto it = splitsState.groupSplitsStores.begin();
+        it->second.noMoreSplits = true;
+        splitPromises.swap(it->second.splitPromises);
+      } else {
+        // For an ungrouped execution plan node, in the unlikely case when there
+        // are no split stores created (this means there were no splits at all),
+        // we create one.
+        splitsState.groupSplitsStores.emplace(
+            kUngroupedGroupId, SplitsStore{{}, true, {}});
+      }
+    } else {
+      // Grouped execution branch.
       // Mark all split stores as 'no more splits'.
       for (auto& it : splitsState.groupSplitsStores) {
         it.second.noMoreSplits = true;
-        splitPromises = std::move(it.second.splitPromises);
+        movePromisesOut(it.second.splitPromises, splitPromises);
       }
-    } else if (!planFragment_.leafNodeRunsGroupedExecution(planNodeId)) {
-      // During ungrouped execution, in the unlikely case there are no split
-      // stores (this means there were no splits at all), we create one.
-      splitsState.groupSplitsStores.emplace(
-          kUngroupedGroupId, SplitsStore{{}, true, {}});
     }
 
     allFinished = checkNoMoreSplitGroupsLocked();
@@ -1365,8 +1397,7 @@ BlockingReason Task::getSplitOrFuture(
     exec::Split& split,
     ContinueFuture& future,
     int32_t maxPreloadSplits,
-    const std::function<void(std::shared_ptr<connector::ConnectorSplit>)>&
-        preload) {
+    const ConnectorSplitPreloadFunc& preload) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
   return getSplitOrFutureLocked(
@@ -1384,8 +1415,7 @@ BlockingReason Task::getSplitOrFutureLocked(
     exec::Split& split,
     ContinueFuture& future,
     int32_t maxPreloadSplits,
-    const std::function<void(std::shared_ptr<connector::ConnectorSplit>)>&
-        preload) {
+    const ConnectorSplitPreloadFunc& preload) {
   if (splitsStore.splits.empty()) {
     if (splitsStore.noMoreSplits) {
       return BlockingReason::kNotBlocked;
@@ -1405,8 +1435,7 @@ exec::Split Task::getSplitLocked(
     bool forTableScan,
     SplitsStore& splitsStore,
     int32_t maxPreloadSplits,
-    const std::function<void(std::shared_ptr<connector::ConnectorSplit>)>&
-        preload) {
+    const ConnectorSplitPreloadFunc& preload) {
   int32_t readySplitIndex = -1;
   if (maxPreloadSplits) {
     for (auto i = 0; i < splitsStore.splits.size() && i < maxPreloadSplits;
@@ -1755,16 +1784,6 @@ std::string Task::shortId(const std::string& id) {
   }
   auto hash = std::hash<std::string_view>()(std::string_view(str, dot - str));
   return fmt::format("tk:{}", hash & 0xffff);
-}
-
-/// Moves split promises from one vector to another.
-static void movePromisesOut(
-    std::vector<ContinuePromise>& from,
-    std::vector<ContinuePromise>& to) {
-  for (auto& promise : from) {
-    to.push_back(std::move(promise));
-  }
-  from.clear();
 }
 
 ContinueFuture Task::terminate(TaskState terminalState) {

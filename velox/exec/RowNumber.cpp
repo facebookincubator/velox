@@ -206,7 +206,7 @@ void RowNumber::ensureInputFits(const RowVectorPtr& input) {
   const auto outOfLineBytesPerRow = outOfLineBytes / numDistinct;
 
   // Test-only spill path.
-  if (spillConfig_->testSpillPct > 0) {
+  if (testingTriggerSpill()) {
     spill();
     return;
   }
@@ -402,8 +402,7 @@ void RowNumber::setupHashTableSpiller() {
       table_->rows(),
       tableType,
       std::move(hashBits),
-      &spillConfig,
-      spillConfig.maxFileSize);
+      &spillConfig);
 }
 
 void RowNumber::setupInputSpiller() {
@@ -412,11 +411,7 @@ void RowNumber::setupInputSpiller() {
 
   // TODO Replace Spiller::Type::kHashJoinProbe.
   inputSpiller_ = std::make_unique<Spiller>(
-      Spiller::Type::kHashJoinProbe,
-      inputType_,
-      hashBits,
-      &spillConfig,
-      spillConfig.maxFileSize);
+      Spiller::Type::kHashJoinProbe, inputType_, hashBits, &spillConfig);
 
   const auto& hashers = table_->hashers();
 

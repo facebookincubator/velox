@@ -69,27 +69,17 @@ getCustomInputGenerators() {
   };
 }
 
-std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner() {
-  if (FLAGS_presto_url.empty()) {
-    auto duckQueryRunner = std::make_unique<DuckQueryRunner>();
-    duckQueryRunner->disableAggregateFunctions({
-        "skewness",
-        // DuckDB results on constant inputs are incorrect. Should be NaN,
-        // but DuckDB returns some random value.
-        "kurtosis",
-        "entropy",
-    });
-    return duckQueryRunner;
-  } else {
-    return std::make_unique<PrestoQueryRunner>(
-        FLAGS_presto_url, "aggregation_fuzzer");
-  }
-}
-
 } // namespace
 } // namespace facebook::velox::exec::test
 
 int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+
+  // Calls common init functions in the necessary order, initializing
+  // singletons, installing proper signal handlers for better debugging
+  // experience, and initialize glog and gflags.
+  folly::Init init(&argc, &argv);
+
   // Register only presto supported signatures if we are verifying against
   // Presto.
   if (FLAGS_presto_url.empty()) {
@@ -104,13 +94,6 @@ int main(int argc, char** argv) {
   facebook::velox::window::prestosql::registerAllWindowFunctions();
   facebook::velox::functions::prestosql::registerInternalFunctions();
   facebook::velox::memory::MemoryManager::initialize({});
-
-  ::testing::InitGoogleTest(&argc, argv);
-
-  // Calls common init functions in the necessary order, initializing
-  // singletons, installing proper signal handlers for better debugging
-  // experience, and initialize glog and gflags.
-  folly::Init init(&argc, &argv);
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
@@ -185,5 +168,8 @@ int main(int argc, char** argv) {
       facebook::velox::exec::test::getCustomInputGenerators();
   options.timestampPrecision =
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
-  return Runner::run(initialSeed, setupReferenceQueryRunner(), options);
+  return Runner::run(
+      initialSeed,
+      setupReferenceQueryRunner(FLAGS_presto_url, "aggregation_fuzzer"),
+      options);
 }

@@ -91,6 +91,17 @@ class ChecksumAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushDown*/) override {
     const auto& arg = args[0];
+
+    if (arg->type()->isUnKnown()) {
+      rows.applyToSelected([&](auto row) {
+        auto group = groups[row];
+        clearNull(group);
+        computeHashForNull(group);
+      });
+
+      return;
+    }
+
     auto hasher = getPrestoHasher(arg->type());
     auto hashes = getHashBuffer(rows.end(), arg->pool());
     hasher->hash(arg, rows, hashes);
@@ -137,6 +148,16 @@ class ChecksumAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushDown*/) override {
     const auto& arg = args[0];
+
+    if (arg->type()->isUnKnown()) {
+      rows.applyToSelected([&](auto row) {
+        clearNull(group);
+        computeHashForNull(group);
+      });
+
+      return;
+    }
+
     auto hasher = getPrestoHasher(arg->type());
     auto hashes = getHashBuffer(rows.end(), arg->pool());
     hasher->hash(arg, rows, hashes);
@@ -209,7 +230,9 @@ class ChecksumAggregate : public exec::Aggregate {
 
 } // namespace
 
-void registerChecksumAggregate(const std::string& prefix) {
+void registerChecksumAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -236,7 +259,8 @@ void registerChecksumAggregate(const std::string& prefix) {
         }
 
         return std::make_unique<ChecksumAggregate>(VARBINARY());
-      });
+      },
+      withCompanionFunctions);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -205,12 +205,12 @@ class MemoryManager {
   /// Returns the memory allocation alignment of this memory manager.
   uint16_t alignment() const;
 
-  /// Creates a root memory pool with specified 'name' and 'capacity'. If 'name'
-  /// is missing, the memory manager generates a default name internally to
-  /// ensure uniqueness.
+  /// Creates a root memory pool with specified 'name' and 'maxCapacity'. If
+  /// 'name' is missing, the memory manager generates a default name internally
+  /// to ensure uniqueness.
   std::shared_ptr<MemoryPool> addRootPool(
       const std::string& name = "",
-      int64_t capacity = kMaxMemory,
+      int64_t maxCapacity = kMaxMemory,
       std::unique_ptr<MemoryReclaimer> reclaimer = nullptr);
 
   /// Creates a leaf memory pool for direct memory allocation use with specified
@@ -224,8 +224,12 @@ class MemoryManager {
       bool threadSafe = true);
 
   /// Invoked to shrink alive pools to free 'targetBytes' capacity. The function
-  /// returns the actual freed memory capacity in bytes.
-  uint64_t shrinkPools(uint64_t targetBytes);
+  /// returns the actual freed memory capacity in bytes. If 'targetBytes' is
+  /// zero, then try to reclaim all the memory from the alive pools.
+  ///
+  /// TODO: add option to enable spilling or not. If spilling is disabled, then
+  /// the arbitrator might reclaim memory by killing queries.
+  uint64_t shrinkPools(uint64_t targetBytes = 0);
 
   /// Default unmanaged leaf pool with no threadsafe stats support. Libraries
   /// using this method can get a pool that is shared with other threads. The
