@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/RandomUtil.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/dwio/common/Options.h"
 
@@ -93,7 +94,7 @@ class SplitReader {
       std::shared_ptr<common::MetadataFilter> metadataFilter,
       dwio::common::RuntimeStatistics& runtimeStats);
 
-  virtual uint64_t next(int64_t size, VectorPtr& output);
+  virtual uint64_t next(uint64_t size, VectorPtr& output);
 
   void resetFilterCaches();
 
@@ -110,6 +111,12 @@ class SplitReader {
   std::string toString() const;
 
  protected:
+  void createReader();
+
+  bool testEmptySplit(dwio::common::RuntimeStatistics& runtimeStats);
+
+  void createRowReader(std::shared_ptr<common::MetadataFilter> metadataFilter);
+
   // Different table formats may have different meatadata columns. This function
   // will be used to update the scanSpec for these columns.
   virtual std::vector<TypePtr> adaptColumns(
@@ -137,8 +144,6 @@ class SplitReader {
   std::shared_ptr<io::IoStatistics> ioStats_;
   dwio::common::ReaderOptions baseReaderOpts_;
   dwio::common::RowReaderOptions baseRowReaderOpts_;
-
- private:
   bool emptySplit_;
 };
 

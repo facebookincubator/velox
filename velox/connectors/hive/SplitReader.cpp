@@ -128,7 +128,7 @@ SplitReader::SplitReader(
       baseReaderOpts_(connectorQueryCtx->memoryPool()) {}
 
 void SplitReader::configureReaderOptions(
-    std::shared_ptr<random::RandomSkipTracker> randomSkip) {
+    std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
   hive::configureReaderOptions(
       baseReaderOpts_,
       hiveConfig_,
@@ -141,6 +141,16 @@ void SplitReader::configureReaderOptions(
 void SplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats) {
+  createReader();
+
+  if (testEmptySplit(runtimeStats)) {
+    return;
+  }
+
+  createRowReader(metadataFilter);
+}
+
+void SplitReader::createReader() {
   VELOX_CHECK_NE(
       baseReaderOpts_.getFileFormat(), dwio::common::FileFormat::UNKNOWN);
 
@@ -157,6 +167,7 @@ void SplitReader::prepareSplit(
       throw;
     }
   }
+
   // Here we keep adding new entries to CacheTTLController when new fileHandles
   // are generated, if CacheTTLController was created. Creator of
   // CacheTTLController needs to make sure a size control strategy was available
@@ -169,28 +180,35 @@ void SplitReader::prepareSplit(
 
   baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.getFileFormat())
                     ->createReader(std::move(baseFileInput), baseReaderOpts_);
+}
+
+bool SplitReader::testEmptySplit(
+    dwio::common::RuntimeStatistics& runtimeStats) {
+  emptySplit_ = false;
 
   // Note that this doesn't apply to Hudi tables.
-  emptySplit_ = false;
-  if (baseReader_->numberOfRows() == 0) {
+  if (!baseReader_ || baseReader_->numberOfRows() == 0) {
     emptySplit_ = true;
-    return;
+  } else {
+    // Check filters and see if the whole split can be skipped. Note that this
+    // doesn't apply to Hudi tables.
+    if (!testFilters(
+            scanSpec_.get(),
+            baseReader_.get(),
+            hiveSplit_->filePath,
+            hiveSplit_->partitionKeys,
+            partitionKeys_)) {
+      ++runtimeStats.skippedSplits;
+      runtimeStats.skippedSplitBytes += hiveSplit_->length;
+      emptySplit_ = true;
+    }
   }
 
-  // Check filters and see if the whole split can be skipped. Note that this
-  // doesn't apply to Hudi tables.
-  if (!testFilters(
-          scanSpec_.get(),
-          baseReader_.get(),
-          hiveSplit_->filePath,
-          hiveSplit_->partitionKeys,
-          partitionKeys_)) {
-    emptySplit_ = true;
-    ++runtimeStats.skippedSplits;
-    runtimeStats.skippedSplitBytes += hiveSplit_->length;
-    return;
-  }
+  return emptySplit_;
+}
 
+void SplitReader::createRowReader(
+    std::shared_ptr<common::MetadataFilter> metadataFilter) {
   auto& fileType = baseReader_->rowType();
   auto columnTypes = adaptColumns(fileType, baseReaderOpts_.getFileSchema());
 
@@ -280,7 +298,7 @@ std::vector<TypePtr> SplitReader::adaptColumns(
   return columnTypes;
 }
 
-uint64_t SplitReader::next(int64_t size, VectorPtr& output) {
+uint64_t SplitReader::next(uint64_t size, VectorPtr& output) {
   if (!baseReaderOpts_.randomSkip()) {
     return baseRowReader_->next(size, output);
   }
