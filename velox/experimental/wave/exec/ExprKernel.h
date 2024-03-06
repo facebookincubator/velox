@@ -63,9 +63,7 @@ enum class OpCode {
 
 };
 
-inline std::ostream& operator<<(
-    std::ostream& out,
-    const OpCode& opcode) {
+inline std::ostream& operator<<(std::ostream& out, const OpCode& opcode) {
   switch (opcode) {
     case OpCode::kFilter:
       return out << "Filter";
