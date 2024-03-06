@@ -147,6 +147,19 @@ These functions support TIMESTAMP and DATE input types.
     Otherwise the function assumes the inputs are in the session's configured time zone.
     Requires ``session_timezone`` to be set, or an exceptions will be thrown.
 
+    Arguments:
+        * year - the year to represent, within the Joda datetime
+        * month - the month-of-year to represent, from 1 (January) to 12 (December)
+        * day - the day-of-month to represent, from 1 to 31
+        * hour - the hour-of-day to represent, from 0 to 23
+        * min - the minute-of-hour to represent, from 0 to 59
+        * sec - the second-of-minute and its micro-fraction to represent, from 0 to 60.
+                The value can be either an integer like 13, or a fraction like 13.123.
+                The fractional part can have up to 6 digits to represent microseconds.
+                If the sec argument equals to 60, the seconds field is set
+                to 0 and 1 minute is added to the final timestamp.
+        * timezone - the time zone identifier. For example, CET, UTC and etc.
+
     Returns the timestamp adjusted to the GMT time zone. ::
 
         SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887); -- 2014-12-28 06:30:45.887

@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-#include <boost/algorithm/string.hpp>
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
-#include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions::sparksql {

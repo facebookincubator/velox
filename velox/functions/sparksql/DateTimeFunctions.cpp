@@ -50,20 +50,20 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
   }
 
   // year, month, day will be checked in utils::daysSinceEpochFromDate;
-  try {
-    auto daysSinceEpoch = util::daysSinceEpochFromDate(
-        yearVector->valueAt<int32_t>(row),
-        monthVector->valueAt<int32_t>(row),
-        dayVector->valueAt<int32_t>(row));
-    // micros has at most 8 digits (2 for seconds + 6 for microseconds),
-    // thus it's safe to cast micros from int64_t to int32_t.
-    auto localMicros = util::fromTime(hour, minute, 0, (int32_t)micros);
-    return util::fromDatetime(daysSinceEpoch, localMicros);
-  } catch (const VeloxUserError& e) {
+  int64_t daysSinceEpoch;
+  auto status = util::daysSinceEpochFromDate(
+      yearVector->valueAt<int32_t>(row),
+      monthVector->valueAt<int32_t>(row),
+      dayVector->valueAt<int32_t>(row),
+      daysSinceEpoch);
+  if (!status.ok()) {
+    VELOX_DCHECK(status.isUserError());
     return std::nullopt;
-  } catch (const std::exception&) {
-    throw;
   }
+  // micros has at most 8 digits (2 for seconds + 6 for microseconds),
+  // thus it's safe to cast micros from int64_t to int32_t.
+  auto localMicros = util::fromTime(hour, minute, 0, (int32_t)micros);
+  return util::fromDatetime(daysSinceEpoch, localMicros);
 }
 
 void setTimestampOrNull(
