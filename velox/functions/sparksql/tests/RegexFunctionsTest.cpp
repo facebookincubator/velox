@@ -320,13 +320,13 @@ TEST_F(RegexFunctionsTest, regexpReplaceWithEmptyString) {
 TEST_F(RegexFunctionsTest, regexBadJavaPattern) {
   VELOX_ASSERT_THROW(
       testRegexpReplace("[]", "[a[b]]", ""),
-      "regexp_replace does not support character class union, intersection, or difference ([a[b]], [a&&[b]], [a&&[^b]])");
+      "regexp_replace does not support named ASCII character classes or class union, intersection, or difference ([a[b]], [a&&[b]], [a&&[^b]])");
   VELOX_ASSERT_THROW(
       testRegexpReplace("[]", "[a&&[b]]", ""),
-      "regexp_replace does not support character class union, intersection, or difference ([a[b]], [a&&[b]], [a&&[^b]])");
+      "regexp_replace does not support named ASCII character classes or class union, intersection, or difference ([a[b]], [a&&[b]], [a&&[^b]])");
   VELOX_ASSERT_THROW(
       testRegexpReplace("[]", "[a&&[^b]]", ""),
-      "regexp_replace does not support character class union, intersection, or difference ([a[b]], [a&&[b]], [a&&[^b]])");
+      "regexp_replace does not support named ASCII character classes or class union, intersection, or difference ([a[b]], [a&&[b]], [a&&[^b]])");
 }
 
 

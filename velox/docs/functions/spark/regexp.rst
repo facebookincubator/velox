@@ -42,7 +42,7 @@ See https://github.com/google/re2/wiki/Syntax for more information.
 
     regexp_replace will throw an exception if ``string`` contains an invalid UTF-8 character, or if ``pattern`` does not conform to RE2 syntax: https://github.com/google/re2/wiki/Syntax.
 
-    regexp_replace does not support character class union, intersection, or difference and will throw an exception if they are detected within the provided ``pattern``.
+    regexp_replace does not support named ASCII character classes or ASCII character class union, intersection, or difference and will throw an exception if they are detected within the provided ``pattern``.
 
 
     Parameters:
@@ -67,7 +67,7 @@ See https://github.com/google/re2/wiki/Syntax for more information.
 
     regexp_replace will throw an exception if ``string`` contains an invalid UTF-8 character, if ``position`` is less than 1, or if ``pattern`` does not conform to RE2 syntax: https://github.com/google/re2/wiki/Syntax.
 
-    regexp_replace does not support character class union, intersection, or difference and will throw an exception if they are detected within the provided ``pattern``.
+    regexp_replace does not support named ASCII character classes or character class union, intersection, or difference and will throw an exception if they are detected within the provided ``pattern``.
 
 
     This function is 1-indexed, meaning the position of the first character is 1.

@@ -66,7 +66,7 @@ void checkForCompatiblePattern(
     } else if (*c == '[') {
       if (charClassStart) {
         VELOX_USER_FAIL(
-            "{} does not support character class union, intersection, "
+            "{} does not support named ASCII character classes or class union, intersection, "
             "or difference ([a[b]], [a&&[b]], [a&&[^b]])",
             functionName);
       }
