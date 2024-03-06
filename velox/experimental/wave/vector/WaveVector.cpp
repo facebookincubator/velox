@@ -50,6 +50,7 @@ WaveVector::WaveVector(
 void WaveVector::resize(vector_size_t size, bool nullable) {
   if (size > size_) {
     int64_t bytes;
+    size_ = size;
     if (type_->kind() == TypeKind::VARCHAR) {
       bytes = sizeof(StringView) * size;
     } else {
@@ -59,14 +60,17 @@ void WaveVector::resize(vector_size_t size, bool nullable) {
       values_ = arena_->allocateBytes(bytes);
     }
     if (nullable) {
-      if (!nulls_ || nulls_->capacity() < size) {
-        nulls_ = arena_->allocateBytes(size);
-      }
+      ensureNulls();
     } else {
       nulls_.reset();
     }
-    size_ = size;
   }
+}
+
+void WaveVector::ensureNulls() {
+    if (!nulls_ || (nulls_->capacity() < size_)) {
+      nulls_ = arena_->allocateBytes(size_);
+    }
 }
 
 void WaveVector::toOperand(Operand* operand) const {
