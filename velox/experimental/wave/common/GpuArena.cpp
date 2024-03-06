@@ -43,7 +43,7 @@ void* GpuSlab::allocate(uint64_t bytes) {
   if (bytes == 0) {
     return nullptr;
   }
-  bytes = roundBytes(bytes);
+  bytes = roundBytes(bytes & 15 ? bytes|15 : bytes);
 
   // First match in the list that can give this many bytes
   auto lookupItr = freeLookup_.lower_bound(bytes);
@@ -72,7 +72,7 @@ void GpuSlab::free(void* address, uint64_t bytes) {
   if (address == nullptr || bytes == 0) {
     return;
   }
-  bytes = roundBytes(bytes);
+  bytes = roundBytes(bytes & 15 ? bytes|15 : bytes);
   freeBytes_ += bytes;
 
   const auto curAddr = reinterpret_cast<uint64_t>(address);
@@ -308,7 +308,7 @@ WaveBufferPtr GpuArena::allocateBytes(uint64_t bytes) {
   bytes = GpuSlab::roundBytes(bytes);
   std::lock_guard<std::mutex> l(mutex_);
   auto* result = currentArena_->allocate(bytes);
-  if (result != nullptr) {
+  if ((result != nullptr) || (bytes == 0)) {
     return getBuffer(result, bytes);
   }
   for (auto pair : arenas_) {
@@ -343,18 +343,20 @@ void GpuArena::free(Buffer* buffer) {
   VELOX_CHECK_EQ(0, buffer->referenceCount_);
   VELOX_CHECK_EQ(0, buffer->pinCount_);
   std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK(!arenas_.empty());
+  if( addressU64 ) {
+    VELOX_CHECK(!arenas_.empty());
 
-  auto iter = arenas_.lower_bound(addressU64);
-  if (iter == arenas_.end() || iter->first != addressU64) {
-    VELOX_CHECK(iter != arenas_.begin());
-    --iter;
-    VELOX_CHECK_GE(
-        iter->first + singleArenaCapacity_, addressU64 + buffer->size_);
-  }
-  iter->second->free(buffer->ptr_, buffer->size_);
-  if (iter->second->empty() && iter->second != currentArena_) {
-    arenas_.erase(iter);
+    auto iter = arenas_.lower_bound(addressU64);
+    if (iter == arenas_.end() || iter->first != addressU64) {
+      VELOX_CHECK(iter != arenas_.begin());
+      --iter;
+      VELOX_CHECK_GE(
+          iter->first + singleArenaCapacity_, addressU64 + buffer->size_);
+    }
+    iter->second->free(buffer->ptr_, buffer->size_);
+    if (iter->second->empty() && iter->second != currentArena_) {
+      arenas_.erase(iter);
+    }
   }
   buffer->ptr_ = firstFreeBuffer_;
   buffer->size_ = 0;
