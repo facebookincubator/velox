@@ -40,6 +40,10 @@ struct SIMDGetJsonObjectFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& json,
       const arg_type<Varchar>& jsonPath) {
+    // Spark requires the first char in jsonPath is '$'.
+    if (jsonPath.data()[0] != '$') {
+      return false;
+    }
     ParserContext ctx(json.data(), json.size());
     ctx.parseDocument();
     auto rawResult = formattedJsonPath_.has_value()
@@ -59,15 +63,17 @@ struct SIMDGetJsonObjectFunction {
   }
 
  private:
-  // Makes a conversion from spark's json path, e.g., converts
+  // Makes a conversion from spark's json path to json pointer, e.g., converts
   // "$.a.b" to "/a/b".
+  // See simdjson link:
+  // https://github.com/simdjson/simdjson/blob/master/doc/dom.md#json-pointer
   FOLLY_ALWAYS_INLINE std::string getFormattedJsonPath(
       const arg_type<Varchar>& jsonPath) {
-    char formattedJsonPath[jsonPath.size() + 1];
+    // Ignore '$'.
+    char formattedJsonPath[jsonPath.size()];
     int j = 0;
-    for (int i = 0; i < jsonPath.size(); i++) {
-      if (jsonPath.data()[i] == '$' || jsonPath.data()[i] == ']' ||
-          jsonPath.data()[i] == '\'') {
+    for (int i = 1; i < jsonPath.size(); i++) {
+      if (jsonPath.data()[i] == ']' || jsonPath.data()[i] == '\'') {
         continue;
       } else if (jsonPath.data()[i] == '[' || jsonPath.data()[i] == '.') {
         formattedJsonPath[j] = '/';
@@ -164,9 +170,9 @@ struct SIMDGetJsonObjectFunction {
     if (endingChar == ',' || endingChar == '}' || endingChar == ']') {
       return true;
     }
+    // These chars can be prior to a valid ending char.
     if (endingChar == ' ' || endingChar == '\r' || endingChar == '\n' ||
         endingChar == '\t') {
-      // These chars can be prior to a valid ending char.
       return isValidEndingCharacter(currentPos++);
     }
     return false;

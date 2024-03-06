@@ -88,11 +88,18 @@ TEST_F(JsonFunctionTest, getJsonObject) {
 
   // Field not found.
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5"})", "$.hi"), std::nullopt);
+
   // Illegal json.
   EXPECT_EQ(getJsonObject(R"({"hello"-3.5})", "$.hello"), std::nullopt);
+
   // Illegal json path.
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5"})", "$hello"), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5"})", "$."), std::nullopt);
+  // The first char is not '$'.
+  EXPECT_EQ(getJsonObject(R"({"hello": "3.5"})", ".hello"), std::nullopt);
+  // Constains '$' not in the first position.
+  EXPECT_EQ(getJsonObject(R"({"hello": "3.5"})", "$.$hello"), std::nullopt);
+
   // Invalid ending character.
   EXPECT_EQ(
       getJsonObject(
