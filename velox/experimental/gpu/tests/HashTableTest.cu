@@ -289,7 +289,7 @@ __global__ void probe<true>(
           values[i] = table->values[jj];
           goto end;
         }
-        hits &= hits - 1;
+        hits &= ~(0xFF<<(__ffs(hits)-1));
       }
       if (__vcmpeq4(*(uint32_t*)&table->tags[j], 0) & cmpMask) {
         hasValue[i] = false;
