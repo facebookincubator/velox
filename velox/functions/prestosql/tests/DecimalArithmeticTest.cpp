@@ -416,8 +416,8 @@ TEST_F(DecimalArithmeticTest, round) {
           {3000000000000000, -3000000000000000}, DECIMAL(17, 0))},
       "round(c0)",
       {makeFlatVector<int128_t>(
-          {facebook::velox::HugeInt::parse("3000000000000000000000"),
-           facebook::velox::HugeInt::parse("-3000000000000000000000")},
+          {HugeInt::parse("3" + std::string(21, '0')),
+           HugeInt::parse("-3" + std::string(21, '0'))},
           DECIMAL(22, 6))});
 
   // Min and max short decimals.
