@@ -27,6 +27,11 @@ __device__ inline T opFunc_kPlus(T left, T right) {
   return left + right;
 }
 
+template <typename T>
+__device__ inline T opFunc_kDivide(T left, T right) {
+  return left / right;
+}
+
 template <typename T, typename OpFunc>
 __device__ inline void binaryOpKernel(
     OpFunc func,
@@ -83,9 +88,9 @@ __device__ void wrapKernel(
     int32_t blockBase,
     int32_t& numRows) {}
 
-#define BINARY_TYPES(opCode, OP)                             \
-  case OP_MIX(opCode, ScalarType::kInt64):                   \
-    binaryOpKernel<int64_t>(                                 \
+#define BINARY_TYPES(opCode, OP, TYPECODE, TYPE)             \
+  case OP_MIX(opCode, ScalarType::TYPECODE):                 \
+    binaryOpKernel<TYPE>(                                    \
         [](auto left, auto right) { return left OP right; }, \
         instruction->_.binary,                               \
         operands,                                            \
@@ -124,7 +129,18 @@ __global__ void waveBaseKernel(
         wrapKernel(instruction->_.wrap, operands, blockBase, status->numRows);
         break;
 
-        BINARY_TYPES(OpCode::kPlus, +);
+        BINARY_TYPES(OpCode::kPlus, +, kInt64, int64_t);
+        BINARY_TYPES(OpCode::kDivide, /, kDouble, double);
+
+#ifndef NDEBUG
+      default:
+        printf(
+            "%s:%d: Unsupported OpCode %d\n",
+            __FILE__,
+            __LINE__,
+            (int)instruction->opCode);
+        break;
+#endif
     }
   }
 }

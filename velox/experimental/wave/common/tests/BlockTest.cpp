@@ -65,7 +65,7 @@ TEST_F(BlockTest, boolToIndices) {
     } else if ((i >> 8) % 23 == 0) {
       flags[i] = 1;
     } else {
-      flags[i] = (i * 1121) % 73 > 50;
+      flags[i] = ((uint32_t)i * 1121) % 73 > 50;
     }
   }
   for (auto b = 0; b < kNumBlocks; ++b) {

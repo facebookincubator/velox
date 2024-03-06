@@ -44,6 +44,9 @@ PhysicalType fromCpuType(const Type& type) {
     case TypeKind::VARCHAR:
       ans.kind = PhysicalType::kString;
       break;
+    case TypeKind::BOOLEAN:
+      ans.kind = PhysicalType::kInt8;
+      break;
     default:
       VELOX_UNSUPPORTED("{}", type.kind());
   }

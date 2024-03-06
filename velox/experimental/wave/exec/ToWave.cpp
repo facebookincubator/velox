@@ -23,7 +23,7 @@
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 
-DEFINE_int64(velox_wave_arena_unit_size, 1 << 30, "Per Driver GPU memory size");
+DEFINE_int64(velox_wave_arena_unit_size, 1ull << 32, "Per Driver GPU memory size");
 
 namespace facebook::velox::wave {
 
@@ -120,6 +120,9 @@ std::optional<OpCode> binaryOpCode(const Expr& expr) {
   auto& name = expr.name();
   if (name == "plus") {
     return OpCode::kPlus;
+  }
+  if (name == "divide") {
+    return OpCode::kDivide;
   }
   return std::nullopt;
 }
@@ -256,7 +259,7 @@ int32_t findOutputChannel(
 void CompileState::addFilterProject(
     exec::Operator* op,
     RowTypePtr outputType,
-    int32_t& nodeIndex) {
+    int32_t nodeIndex) {
   auto filterProject = reinterpret_cast<exec::FilterProject*>(op);
   auto data = filterProject->exprsAndProjection();
   VELOX_CHECK(!data.hasFilter);
@@ -297,7 +300,7 @@ CompileState::aggregateFunctionRegistry() {
 
 bool CompileState::addOperator(
     exec::Operator* op,
-    int32_t& nodeIndex,
+    int32_t nodeIndex,
     RowTypePtr& outputType) {
   auto& name = op->operatorType();
   if (name == "Values") {
@@ -348,17 +351,15 @@ bool CompileState::compile() {
   auto& nodes = driverFactory_.planNodes;
 
   int32_t first = 0;
-  int32_t operatorIndex = 0;
-  int32_t nodeIndex = 0;
+  int32_t operatorIndex = first;
   RowTypePtr outputType;
   // Make sure operator states are initialized.  We will need to inspect some of
   // them during the transformation.
   driver_.initializeOperators();
   for (; operatorIndex < operators.size(); ++operatorIndex) {
-    if (!addOperator(operators[operatorIndex], nodeIndex, outputType)) {
+    if (!addOperator(operators[operatorIndex], operatorIndex, outputType)) {
       break;
     }
-    ++nodeIndex;
     auto& identity = operators[operatorIndex]->identityProjections();
     for (auto i = 0; i < outputType->size(); ++i) {
       Value value = Value(toSubfield(outputType->nameOf(i)));
@@ -408,7 +409,11 @@ bool waveDriverAdapter(
 }
 
 void registerWave() {
-  exec::DriverAdapter waveAdapter{"Wave", {}, waveDriverAdapter};
-  exec::DriverFactory::registerAdapter(waveAdapter);
+  static bool registered = false;
+  if( !registered ) {
+    exec::DriverAdapter waveAdapter{"Wave", {}, waveDriverAdapter};
+    exec::DriverFactory::registerAdapter(waveAdapter);
+    registered = true;
+  }
 }
 } // namespace facebook::velox::wave

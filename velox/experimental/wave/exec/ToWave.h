@@ -76,12 +76,12 @@ class CompileState {
 
  private:
   bool
-  addOperator(exec::Operator* op, int32_t& nodeIndex, RowTypePtr& outputType);
+  addOperator(exec::Operator* op, int32_t nodeIndex, RowTypePtr& outputType);
 
   void addFilterProject(
       exec::Operator* op,
       RowTypePtr outputType,
-      int32_t& nodeIndex);
+      int32_t nodeIndex);
 
   bool reserveMemory();
 

@@ -28,6 +28,9 @@ void WaveOperator::definesSubfields(
     CompileState& state,
     const TypePtr& type,
     const std::string& parentPath) {
+  if(!type) {
+    return;
+  }
   switch (type->kind()) {
     case TypeKind::ROW: {
       auto& row = type->as<TypeKind::ROW>();
@@ -44,10 +47,11 @@ void WaveOperator::definesSubfields(
         outputIds_.add(operand->id);
         defines_[Value(field)] = operand;
       }
+      break;
     }
       // TODO:Add cases for nested types.
     default: {
-      return;
+      VELOX_UNSUPPORTED("definesSubfields() unsupported type");
     }
   }
 }

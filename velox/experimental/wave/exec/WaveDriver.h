@@ -74,9 +74,8 @@ class WaveDriver : public exec::SourceOperator {
   // True if all output from 'stream' is fetched.
   bool streamAtEnd(WaveStream& stream);
 
-  // Makes a RowVector from the result buffers of the last stage of executables
-  // in 'stream'.
-  RowVectorPtr makeResult(WaveStream& stream, const OperandSet& outputIds);
+  // Makes a RowVector from the result buffers of the stream at end of specified pipe.
+  RowVectorPtr makeRowVector(WaveStream& stream, size_t pipe_idx);
 
   WaveVectorPtr makeWaveResult(
       const TypePtr& rowType,

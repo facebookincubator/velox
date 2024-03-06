@@ -32,7 +32,8 @@ namespace facebook::velox::wave {
 
 /// Mixed with opcode to switch between instantiations of instructions for
 /// different types.
-enum class ScalarType {
+/// NB. NOT enum class, because the mixing means most vales of this type are not actually members of the enum
+enum ScalarType {
   kInt32,
   kInt64,
   kReal,

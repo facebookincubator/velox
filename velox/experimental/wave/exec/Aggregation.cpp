@@ -19,11 +19,16 @@
 #include "velox/experimental/wave/common/IdMap.h"
 #include "velox/experimental/wave/exec/ToWave.h"
 #include "velox/experimental/wave/exec/Vectors.h"
+#include "velox/core/PlanNode.h"
 
 #define KEY_TYPE_DISPATCH(_func, _kindExpr, ...) \
   [&]() {                                        \
     auto _kind = (_kindExpr);                    \
     switch (_kind) {                             \
+      case PhysicalType::kInt8:                  \
+        return _func<int8_t>(__VA_ARGS__);       \
+      case PhysicalType::kInt16:                 \
+        return _func<int16_t>(__VA_ARGS__);      \
       case PhysicalType::kInt32:                 \
         return _func<int32_t>(__VA_ARGS__);      \
       case PhysicalType::kInt64:                 \
@@ -31,7 +36,7 @@
       case PhysicalType::kString:                \
         return _func<StringView>(__VA_ARGS__);   \
       default:                                   \
-        VELOX_UNSUPPORTED("{}", _kind);          \
+        VELOX_UNSUPPORTED("unsupported key type");\
     };                                           \
   }()
 
@@ -39,8 +44,8 @@ namespace facebook::velox::wave {
 
 namespace {
 
-constexpr int kInitialNumGroups = 16;
-constexpr int kInitialTableCapacity = 64;
+constexpr int kInitialNumGroups = 4*1024;
+constexpr int kInitialTableCapacity = 8*1024;
 
 template <typename T>
 Aggregation::IdMapHolder createIdMap(GpuArena& arena, int capacity) {
@@ -83,7 +88,7 @@ Aggregation::Aggregation(
     : WaveOperator(state, node.outputType()),
       arena_(&state.arena()),
       functionRegistry_(functionRegistry) {
-  VELOX_CHECK_EQ(node.step(), core::AggregationNode::Step::kSingle);
+  VELOX_CHECK(node.step() == core::AggregationNode::Step::kSingle);
   VELOX_CHECK(node.preGroupedKeys().empty());
   auto& inputType = node.sources()[0]->outputType();
   container_ = arena_->allocate<aggregation::GroupsContainer>(
@@ -118,7 +123,7 @@ Aggregation::Aggregation(
   containerHolder_.accumulators.resize(container_->numAggregates);
   for (int i = 0; i < container_->numAggregates; ++i) {
     toAggregateInfo(inputType, node.aggregates()[i], &aggregates_[i]);
-    auto accumulatorSize = aggregates_[i].function->accumulatorSize;
+    size_t accumulatorSize = aggregates_[i].function->accumulatorSize;
     if (container_->useThreadLocalAccumulator) {
       accumulatorSize *= kBlockSize;
     }
@@ -143,7 +148,10 @@ Aggregation::Aggregation(
           i * KEY_TYPE_DISPATCH(sizeOf, container_->keyTypes[j].kind);
     }
     for (int j = 0; j < container_->numAggregates; ++j) {
-      auto accumulatorSize = aggregates_[j].function->accumulatorSize;
+      VELOX_CHECK_NOT_NULL(containerHolder_.accumulators[j]->as<char>());
+    }
+    for (int j = 0; j < container_->numAggregates; ++j) {
+      size_t accumulatorSize = aggregates_[j].function->accumulatorSize;
       if (container_->useThreadLocalAccumulator) {
         accumulatorSize *= kBlockSize;
       }
@@ -161,6 +169,7 @@ Aggregation::~Aggregation() {
 
 BlockStatus* Aggregation::getStatus(int size, WaveBufferPtr& holder) {
   if (holder && holder->capacity() >= size * sizeof(BlockStatus)) {
+    bzero(holder->as<BlockStatus>(), size * sizeof(BlockStatus));
     return holder->as<BlockStatus>();
   }
   auto* status = arena_->allocate<BlockStatus>(size, holder);
@@ -195,7 +204,7 @@ void Aggregation::normalizeKeys() {
       inputs_[i]->childAt(keyChannels_[j]).toOperand(&normalizeKeys.inputs[j]);
     }
     ensureWaveVector(
-        holder.results[i], INTEGER(), inputs_[i]->size(), false, *arena_);
+        holder.results[i], INTEGER(), inputs_[i]->childAt(keyChannels_[0]).size(), false, *arena_);
     holder.results[i]->toOperand(normalizeKeys.result);
   }
   for (int j = 0; j < numBlocks; ++j) {

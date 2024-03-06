@@ -13,11 +13,52 @@
 # limitations under the License.
 
 add_executable(velox_wave_exec_test FilterProjectTest.cpp Main.cpp)
+add_executable(velox_wave_aggregation_test AggregationTest.cpp)
 
 add_test(velox_wave_exec_test velox_wave_exec_test)
+add_test(velox_wave_aggregation_test velox_wave_aggregation_test)
 
 target_link_libraries(
   velox_wave_exec_test
+  velox_wave_exec
+  velox_aggregates
+  velox_dwio_common
+  velox_dwio_common_exception
+  velox_dwio_common_test_utils
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
+  velox_exec
+  velox_exec_test_lib
+  velox_functions_json
+  velox_functions_lib
+  velox_functions_prestosql
+  velox_functions_test_lib
+  velox_hive_connector
+  velox_memory
+  velox_serialization
+  velox_test_util
+  velox_type
+  velox_vector
+  velox_vector_fuzzer
+  Boost::atomic
+  Boost::context
+  Boost::date_time
+  Boost::filesystem
+  Boost::program_options
+  Boost::regex
+  Boost::thread
+  Boost::system
+  gtest
+  gtest_main
+  gmock
+  Folly::folly
+  gflags::gflags
+  glog::glog
+  fmt::fmt
+  ${FILESYSTEM})
+
+target_link_libraries(
+  velox_wave_aggregation_test
   velox_wave_exec
   velox_aggregates
   velox_dwio_common

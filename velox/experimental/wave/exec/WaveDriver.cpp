@@ -17,6 +17,7 @@
 #include "velox/experimental/wave/exec/WaveDriver.h"
 #include "velox/experimental/wave/exec/Instruction.h"
 #include "velox/experimental/wave/exec/WaveOperator.h"
+#include "velox/experimental/wave/exec/ToWave.h"
 
 namespace facebook::velox::wave {
 
@@ -44,7 +45,7 @@ WaveDriver::WaveDriver(
   pipelines_.emplace_back();
   for (auto& op : waveOperators) {
     op->setDriver(this);
-    if (!op->isStreaming()) {
+    if (!op->isStreaming() && !pipelines_.back().operators.empty()) {
       pipelines_.emplace_back();
     }
     pipelines_.back().operators.push_back(std::move(op));
@@ -76,7 +77,7 @@ RowVectorPtr WaveDriver::getOutput() {
                   << i + 1;
           pipelines_[i + 1].operators[0]->enqueue(std::move(waveResult));
         } else {
-          result = makeResult(*stream, lastSet);
+          result = makeRowVector(*stream, i);
           VLOG(1) << "Final output size: " << result->size();
         }
         if (streamAtEnd(*stream)) {
@@ -91,7 +92,7 @@ RowVectorPtr WaveDriver::getOutput() {
       }
       if (i + 1 < pipelines_.size()) {
         pipelines_[i + 1].operators[0]->flush(
-            streams.empty() && pipelines_[i].operators[0]->isFinished());
+            streams.empty() && pipelines_[i].operators.back()->isFinished());
       }
       running = true;
     }
@@ -122,32 +123,51 @@ WaveVectorPtr WaveDriver::makeWaveResult(
   return std::make_unique<WaveVector>(rowType, *arena_, std::move(children));
 }
 
-RowVectorPtr WaveDriver::makeResult(
+RowVectorPtr WaveDriver::makeRowVector(
     WaveStream& stream,
-    const OperandSet& lastSet) {
-  auto& last = *pipelines_.back().operators.back();
-  auto& rowType = last.outputType();
+    size_t pipe_idx
+) {
+
+  VELOX_CHECK( !pipelines_[pipe_idx].operators.empty() );
+
+  auto& op = *pipelines_[pipe_idx].operators.back().get();
+  auto& rowType = op.outputType();
+
   std::vector<VectorPtr> children(rowType->size());
   auto result = std::make_shared<RowVector>(
       operatorCtx_->pool(),
       rowType,
       BufferPtr(nullptr),
-      last.outputSize(stream),
+      op.outputSize(stream),
       std::move(children));
   int32_t nthChild = 0;
-  for (auto id : resultOrder_) {
-    auto exe = stream.operandExecutable(id);
-    VELOX_CHECK_NOT_NULL(exe);
-    auto ordinal = exe->outputOperands.ordinal(id);
-    auto waveVector = std::move(exe->output[ordinal]);
-    result->childAt(nthChild++) = waveVector->toVelox(operatorCtx_->pool());
-  };
+  if( pipe_idx+1 < pipelines_.size() ) {
+    op.syncSet().forEach([&](int32_t id) {
+      auto exe = stream.operandExecutable(id);
+      VELOX_CHECK( op.syncSet().size() == rowType->size() );
+      VELOX_CHECK_NOT_NULL(exe);
+      auto ordinal = exe->outputOperands.ordinal(id);
+      auto waveVector = std::move(exe->output[ordinal]);
+      result->childAt(nthChild++) = waveVector->toVelox(operatorCtx_->pool());
+    });
+  } else {
+    VELOX_CHECK( resultOrder_.size() == rowType->size() );
+    for (auto id : resultOrder_) {
+      auto exe = stream.operandExecutable(id);
+      VELOX_CHECK_NOT_NULL(exe);
+      auto ordinal = exe->outputOperands.ordinal(id);
+      auto waveVector = std::move(exe->output[ordinal]);
+      result->childAt(nthChild++) = waveVector->toVelox(operatorCtx_->pool());
+    };
+  }
   return result;
 }
 
 void WaveDriver::startMore() {
   for (int i = 0; i < pipelines_.size(); ++i) {
     auto& ops = pipelines_[i].operators;
+    if( ops.empty() ) continue;
+
     if (auto rows = ops[0]->canAdvance()) {
       VLOG(1) << "Advance " << rows << " rows in pipeline " << i;
       auto stream = std::make_unique<WaveStream>(*arena_);
