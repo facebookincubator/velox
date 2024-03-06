@@ -63,7 +63,7 @@ struct SIMDGetJsonObjectFunction {
   }
 
  private:
-  // Makes a conversion from spark's json path to json pointer, e.g., converts
+  // Makes a conversion from Spark's json path to json pointer, e.g., converts
   // "$.a.b" to "/a/b".
   // See simdjson link:
   // https://github.com/simdjson/simdjson/blob/master/doc/dom.md#json-pointer

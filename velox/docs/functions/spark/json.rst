@@ -23,11 +23,12 @@ JSON Functions
 .. spark:function:: get_json_object(jsonString, path) -> varchar
 
     Returns a json object, represented by VARCHAR, from ``jsonString`` by searching ``path``.
-    Valid ``path`` should contain "[index]", "[field]" or ".field" to define a JSON path.
-    Here are some examples: "$.a" "$.a.b", "$[0][a].b". Returns NULL if it finds json string
-    is malformed or ``path`` doesn't exist. ::
+    Valid ``path`` should start with '$' and then contain "[index]", "[field]" or ".field"
+    to define a JSON path. Here are some examples: "$.a" "$.a.b", "$[0][a].b". Returns NULL if
+    ``jsonString`` or ``path`` is malformed. Also returns NULL if ``path`` doesn't exist. ::
 
         SELECT get_json_object('{"a":"b"}', '$.a'); -- 'b'
         SELECT get_json_object('{"a":{"b":"c"}}', '$.a'); -- '{"b":"c"}'
-        SELECT get_json_object('{"a": "3"}', '$.b'; -- NULL (not found field)
-        SELECT get_json_object('{"a"-3}'', $.a); -- NULL (malformed JSON string)
+        SELECT get_json_object('{"a":3}', '$.b'); -- NULL (not found field)
+        SELECT get_json_object('{"a"-3}'', '$.a'); -- NULL (malformed JSON string)
+        SELECT get_json_object('{"a":3}'', '.a'); -- NULL (malformed JSON path)
