@@ -39,22 +39,21 @@ class IdMap {
  private:
   __device__ static T casValue(T* address, T compare, T val);
 
-  __device__ void storeNewId(volatile int32_t* id);
+  __device__ int32_t storeNewId(volatile int32_t* id);
 
   // `ensureIdReady' cannot be executed in the same lockstep with `storeNewId'
   // (e.g. in the else branch of `storeNewId'), which will cause deadlock if
   // both branches are executed on the same warp (making one single thread wait
   // will cause the whole warp to wait).
-  __device__ static void ensureIdReady(
-      volatile const int32_t* id,
-      int32_t placeholder);
+  __device__ static int32_t ensureIdReady(
+      volatile int32_t* id);
 
   static constexpr T kEmptyMarker = {};
+  static constexpr int kEmptyId = 0;
   int capacity_;
   T* values_;
   int32_t* ids_;
-  volatile int emptyId_;
-  volatile int lastId_;
+  int lastId_;
 };
 
 // Non-trivial class does not play well in device code.
@@ -74,8 +73,7 @@ void IdMap<T, H>::init(int capacity, T* values, int32_t* ids) {
   capacity_ = capacity;
   values_ = values;
   ids_ = ids;
-  emptyId_ = 0;
-  lastId_ = 0;
+  lastId_ = kEmptyId;
 }
 
 } // namespace facebook::velox::wave
