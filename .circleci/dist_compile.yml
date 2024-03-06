@@ -352,6 +352,7 @@ jobs:
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
       DuckDB_SOURCE: BUNDLED
+      Boost_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/fuzzer.log"
@@ -374,6 +375,7 @@ jobs:
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       simdjson_SOURCE: BUNDLED
+      Boost_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/spark_fuzzer.log"
@@ -403,6 +405,7 @@ jobs:
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       simdjson_SOURCE: BUNDLED
+      Boost_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/aggregate_fuzzer.log"
@@ -417,6 +420,7 @@ jobs:
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       simdjson_SOURCE: BUNDLED
+      Boost_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/join_fuzzer.log"
