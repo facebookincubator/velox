@@ -930,6 +930,42 @@ TEST_F(Re2FunctionsTest, likeSubstringPattern) {
 }
 
 TEST_F(Re2FunctionsTest, likeRelaxedSubstringPattern) {
+  // In the following code, we will be use some notation described here:
+  // - <Sx>: a kSingleCharWildcard pattern. e.g. <S0>, <S1>
+  // - <Lx>: a kLiteralString pattern. e.g. <L0>, <L1>
+
+  // For case: `%<L0><S0>%`
+  testLike("abdef", "%abc__%", false);
+  testLike("abcd", "%abc__%", false);
+  testLike("abcde", "%abc__%", true);
+  testLike("abcdef", "%abc__%", true);
+  testLike("xabcdef", "%abc__%", true);
+
+  // For case: `%<S0><L0>%`
+  testLike("abdef", "%__abc%", false);
+  testLike("abc", "%__abc%", false);
+  testLike("xabc", "%__abc%", false);
+  testLike("xxabc", "%__abc%", true);
+  testLike("xxxabc", "%__abc%", true);
+  testLike("xxxabcx", "%__abc%", true);
+
+  // For case: `%<S0><L0><S1>%`
+  testLike("abdef", "%_abc__%", false);
+  testLike("xabcd", "%_abc__%", false);
+  testLike("xabcd", "%_abc__%", false);
+  testLike("abcde", "%_abc__%", false);
+  testLike("abcabcde", "%_abc__%", true);
+  testLike("abcabcdef", "%_abc__%", true);
+
+  // For case: `%<L0><S1><L1>%`
+  testLike("abdef", "%abc__de%", false);
+  testLike("abcxxxe", "%abc__de%", false);
+  testLike("abcxxxde", "%abc__de%", false);
+  testLike("abcxxxdeabc", "%abc__de%", false);
+  testLike("abcxxxdeabcxxde", "%abc__de%", true);
+  testLike("abcxxxdeabcxxdef", "%abc__de%", true);
+  testLike("abcxxxdeabcxxdefg", "%abc__de%", true);
+
   // Basic tests.
   testLike("abcde", "%_bcd_%%", true);
   testLike("abcde", "%%b_de%", true);

@@ -514,7 +514,7 @@ class RelaxedPatternMatchResult {
 
   // The input is not long enough to match.
   bool isInputTooShort() const {
-    return failingPatternIndex_ < 0;
+    return !match_ && failingPatternIndex_ < 0;
   }
 
   size_t cursor() const {
@@ -845,6 +845,12 @@ bool matchRelaxedSubstringPattern(
               patternMetadata,
               currentMatchingOffsetInInput + currentSubPattern.length,
               currentPatternIndex + 1));
+
+      // If the input is too short when we match the right sub-patterns, we can
+      // return right away.
+      if (matchResult->isInputTooShort()) {
+        return false;
+      }
     }
 
     // Match the left part of the pattern(if there is a left part).
@@ -868,22 +874,19 @@ bool matchRelaxedSubstringPattern(
     }
 
     if (matchResult->isInputTooShort()) {
-      return false;
-    }
+      // Input too short when match left sub-patterns, we need to continue
+      // searching in the input.
+      currentMatchingOffsetInInput++;
+    } else {
+      // Search the mismatch literal pattern to find the location where we can
+      // start matching.
+      currentPatternIndex = matchResult->failingPatternIndex();
+      currentSubPattern = patternMetadata.subPatterns()[currentPatternIndex];
 
-    // Search the mismatch literal pattern to find the location where we can
-    // start matching.
-    currentPatternIndex = matchResult->failingPatternIndex();
-    currentSubPattern = patternMetadata.subPatterns()[currentPatternIndex];
-    // The mismatch pattern is not a literal means the input is not long
-    // enough.
-    if (currentSubPattern.kind != kLiteralString) {
-      return false;
+      // matchResult.cursor() is where we failed matching the sub-pattern, we
+      // start from `matchResult.cursor() + 1` to search for the sub-pattern.
+      currentMatchingOffsetInInput = matchResult->cursor() + 1;
     }
-
-    // matchResult.cursor() is where we failed matching the sub-pattern, we
-    // start from `matchResult.cursor() + 1` to search for the sub-pattern.
-    currentMatchingOffsetInInput = matchResult->cursor() + 1;
   }
 
   return false;
