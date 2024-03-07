@@ -381,16 +381,15 @@ struct UnHexFunction {
     char* resultBuffer = result.data();
 
     int32_t i = 0;
+    int32_t oddShift = 0;
     if ((input.size() & 0x01) != 0) {
       const auto v = detail::fromHex(inputBuffer[0]);
       if (v == -1) {
         return false;
       }
-      // out_type<Varbinary> resize does not guarantee all chars initialized
-      // with 0, filling last char with 0 to align with Spark.
-      resultBuffer[resultSize - 1] = 0;
       resultBuffer[0] = v;
       i += 1;
+      oddShift = 1;
     }
 
     while (i < input.size()) {
@@ -399,7 +398,7 @@ struct UnHexFunction {
       if (first == -1 || second == -1) {
         return false;
       }
-      resultBuffer[i / 2] = (first << 4) | second;
+      resultBuffer[i / 2 + oddShift] = (first << 4) | second;
       i += 2;
     }
     return true;
