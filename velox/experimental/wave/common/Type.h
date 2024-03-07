@@ -55,11 +55,11 @@ PhysicalType fromCpuType(const Type&);
 
 template <>
 struct fmt::formatter<facebook::velox::wave::PhysicalType::Kind>
-    : formatter<std::string> {
+    : formatter<std::string_view> {
   auto format(
       facebook::velox::wave::PhysicalType::Kind s,
       format_context& ctx) {
-    return formatter<std::string>::format(
+    return formatter<std::string_view>::format(
         facebook::velox::wave::PhysicalType::kindString(s), ctx);
   }
 };
