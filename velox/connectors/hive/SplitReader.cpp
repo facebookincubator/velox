@@ -138,6 +138,7 @@ void SplitReader::configureReaderOptions(
   baseReaderOpts_.setRandomSkip(std::move(randomSkip));
 }
 
+// Just a mock test
 void SplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats) {
