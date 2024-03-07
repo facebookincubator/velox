@@ -127,6 +127,10 @@ class VectorFunction {
       const {
     return std::nullopt;
   }
+
+  virtual FunctionCanonicalName getCanonicalName() const {
+    return FunctionCanonicalName::kUnknown;
+  }
 };
 
 /// Vector function that generates the specified error for every row. Use this
@@ -136,8 +140,15 @@ class VectorFunction {
 /// evaluate the function.
 class AlwaysFailingVectorFunction final : public VectorFunction {
  public:
-  explicit AlwaysFailingVectorFunction(std::exception_ptr exceptionPtr)
-      : exceptionPtr_{std::move(exceptionPtr)} {}
+  explicit AlwaysFailingVectorFunction(
+      std::exception_ptr exceptionPtr,
+      bool defaultNullBehavior = true)
+      : exceptionPtr_{std::move(exceptionPtr)},
+        defaultNullBehavior_{defaultNullBehavior} {}
+
+  bool isDefaultNullBehavior() const override {
+    return defaultNullBehavior_;
+  }
 
   void apply(
       const SelectivityVector& rows,
@@ -150,6 +161,7 @@ class AlwaysFailingVectorFunction final : public VectorFunction {
 
  private:
   std::exception_ptr exceptionPtr_;
+  const bool defaultNullBehavior_;
 };
 
 // This functions is used when we know a function will never be called because

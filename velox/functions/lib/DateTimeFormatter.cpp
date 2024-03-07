@@ -410,10 +410,24 @@ int64_t parseTimezoneOffset(const char* cur, const char* end, Date& date) {
         return 3;
       }
     }
-    // Single 'Z' character maps to GMT
+    // Single 'Z' character maps to GMT.
     else if (*cur == 'Z') {
       date.timezoneId = 0;
       return 1;
+    }
+    // "UTC", "UCT", "GMT" and "GMT0" are also acceptable by joda.
+    else if ((end - cur) >= 3) {
+      if (std::strncmp(cur, "UTC", 3) == 0 ||
+          std::strncmp(cur, "UCT", 3) == 0) {
+        date.timezoneId = 0;
+        return 3;
+      } else if (std::strncmp(cur, "GMT", 3) == 0) {
+        date.timezoneId = 0;
+        if ((end - cur) >= 4 && *(cur + 3) == '0') {
+          return 4;
+        }
+        return 3;
+      }
     }
   }
   return -1;
@@ -1333,15 +1347,23 @@ std::optional<DateTimeResult> DateTimeFormatter::parse(
 
   // Convert the parsed date/time into a timestamp.
   int64_t daysSinceEpoch;
+  Status status;
   if (date.weekDateFormat) {
-    daysSinceEpoch =
-        util::daysSinceEpochFromWeekDate(date.year, date.week, date.dayOfWeek);
+    status = util::daysSinceEpochFromWeekDate(
+        date.year, date.week, date.dayOfWeek, daysSinceEpoch);
   } else if (date.dayOfYearFormat) {
-    daysSinceEpoch =
-        util::daysSinceEpochFromDayOfYear(date.year, date.dayOfYear);
+    status = util::daysSinceEpochFromDayOfYear(
+        date.year, date.dayOfYear, daysSinceEpoch);
   } else {
-    daysSinceEpoch =
-        util::daysSinceEpochFromDate(date.year, date.month, date.day);
+    status = util::daysSinceEpochFromDate(
+        date.year, date.month, date.day, daysSinceEpoch);
+  }
+  if (!status.ok()) {
+    VELOX_DCHECK(status.isUserError());
+    if (!failOnError) {
+      return std::nullopt;
+    }
+    VELOX_USER_FAIL(status.message());
   }
 
   int64_t microsSinceMidnight =

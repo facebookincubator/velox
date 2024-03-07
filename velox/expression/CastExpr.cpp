@@ -576,8 +576,12 @@ VectorPtr CastExpr::applyDecimal(
       applyIntToDecimalCastKernel<int32_t, toDecimalType>(
           rows, input, context, toType, castResult);
       break;
+    case TypeKind::REAL:
+      applyFloatingPointToDecimalCastKernel<float, toDecimalType>(
+          rows, input, context, toType, castResult);
+      break;
     case TypeKind::DOUBLE:
-      applyDoubleToDecimalCastKernel<toDecimalType>(
+      applyFloatingPointToDecimalCastKernel<double, toDecimalType>(
           rows, input, context, toType, castResult);
       break;
     case TypeKind::BIGINT: {
@@ -752,7 +756,7 @@ void CastExpr::apply(
   context.deselectErrors(*remainingRows);
 
   LocalDecodedVector decoded(context, *input, *remainingRows);
-  auto* rawNulls = decoded->nulls();
+  auto* rawNulls = decoded->nulls(remainingRows.get());
 
   if (rawNulls) {
     remainingRows->deselectNulls(

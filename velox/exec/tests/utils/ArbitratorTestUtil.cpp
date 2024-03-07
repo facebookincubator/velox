@@ -15,8 +15,6 @@
  */
 
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
-#include "velox/common/memory/Memory.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/exec/TableWriter.h"
 
 using namespace facebook::velox;
@@ -350,5 +348,4 @@ QueryTestResult runWriteTask(
   }
   return result;
 }
-
 } // namespace facebook::velox::exec::test

@@ -127,6 +127,12 @@ These functions support TIMESTAMP and DATE input types.
     ``day`` need to be from 1 to 31, and matches the number of days in each month.
     days of ``year-month-day - 1970-01-01`` need to be in the range of INTEGER type.
 
+.. spark:function:: minute(timestamp) -> integer
+
+    Returns the minutes of ``timestamp``.::
+
+        SELECT minute('2009-07-30 12:58:59'); -- 58
+
 .. spark:function:: quarter(date) -> integer
 
     Returns the quarter of ``date``. The value ranges from ``1`` to ``4``. ::
@@ -154,6 +160,12 @@ These functions support TIMESTAMP and DATE input types.
         SELECT next_day('2015-07-23', "tu"); -- '2015-07-28'
         SELECT next_day('2015-07-23', "we"); -- '2015-07-29'
 
+.. spark:function:: second(timestamp) -> integer
+
+    Returns the seconds of ``timestamp``.::
+
+        SELECT second('2009-07-30 12:58:59'); -- 59
+
 .. spark:function:: to_unix_timestamp(string) -> integer
 
     Alias for ``unix_timestamp(string) -> integer``.
@@ -162,6 +174,14 @@ These functions support TIMESTAMP and DATE input types.
    :noindex:
 
     Alias for ``unix_timestamp(string, format) -> integer``.
+
+.. spark:function:: unix_date(date) -> integer
+
+    Returns the number of days since 1970-01-01.::
+   
+        SELECT unix_date('1970-01-01'); -- '0'
+        SELECT unix_date('1970-01-02'); -- '1'
+        SELECT unix_date('1969-12-31'); -- '-1'
 
 .. spark:function:: unix_timestamp() -> integer
 
@@ -191,7 +211,7 @@ These functions support TIMESTAMP and DATE input types.
 
 .. function:: weekday(date) -> integer
 
-    Returns the day of the week for date (0 = Monday, 1 = Tuesday, …, 6 = Sunday).
+    Returns the day of the week for date (0 = Monday, 1 = Tuesday, …, 6 = Sunday).::
 
         SELECT weekday('2015-04-08'); -- 2
         SELECT weekday('2024-02-10'); -- 5

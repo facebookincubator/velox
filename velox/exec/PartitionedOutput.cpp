@@ -73,7 +73,7 @@ BlockingReason Destination::flush(
     OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     ContinueFuture* future) {
-  if (!current_) {
+  if (!current_ || rowsInCurrent_ == 0) {
     return BlockingReason::kNotBlocked;
   }
 
@@ -87,7 +87,7 @@ BlockingReason Destination::flush(
   const int64_t flushedRows = rowsInCurrent_;
 
   current_->flush(&stream);
-  current_.reset();
+  current_->clear();
 
   const int64_t flushedBytes = stream.tellp();
 
@@ -289,7 +289,7 @@ void PartitionedOutput::collectNullRows() {
     auto& keyVector = input_->childAt(i);
     if (keyVector->mayHaveNulls()) {
       decodedVectors_[i].decode(*keyVector, rows_);
-      if (auto* rawNulls = decodedVectors_[i].nulls()) {
+      if (auto* rawNulls = decodedVectors_[i].nulls(&rows_)) {
         bits::orWithNegatedBits(
             nullRows_.asMutableRange().bits(), rawNulls, 0, size);
       }

@@ -194,9 +194,7 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
   const int64_t flatInputBytes = input->estimateFlatSize();
 
   // Test-only spill path.
-  if (numRows > 0 && spillConfig_->testSpillPct &&
-      (folly::hasher<uint64_t>()(++spillTestCounter_)) % 100 <=
-          spillConfig_->testSpillPct) {
+  if (numRows > 0 && testingTriggerSpill()) {
     spill();
     return;
   }
@@ -235,7 +233,7 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
       estimatedIncrementalBytes * 2,
       currentMemoryUsage * spillConfig_->spillableReservationGrowthPct / 100);
   {
-    exec::ReclaimableSectionGuard guard(nonReclaimableSection_);
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
     if (pool_->maybeReserve(targetIncrementBytes)) {
       return;
     }

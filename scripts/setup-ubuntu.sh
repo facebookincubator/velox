@@ -25,16 +25,12 @@ COMPILER_FLAGS=$(get_cxx_flags "$CPU_TARGET")
 export COMPILER_FLAGS
 FB_OS_VERSION=v2023.12.04.00
 FMT_VERSION=10.1.1
+BOOST_VERSION=boost-1.84.0
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 export CMAKE_BUILD_TYPE=Release
 AGGRESSIVE_CLEANUP="${AGGRESSIVE_CLEANUP:-false}"
-
-# Install sudo if not already installed
-if ! dpkg -s sudo; then
-  # If it's not installed, we assume we are running inside a container as root already
-  apt update && apt install sudo
-fi
+export SUDO=sudo
 
 # Install all velox and folly dependencies.
 # The is an issue on 22.04 where a version conflict prevents glog install,
@@ -50,7 +46,6 @@ sudo --preserve-env apt update && sudo --preserve-env apt install -y libunwind-d
   libc-ares-dev \
   libcurl4-openssl-dev \
   libssl-dev \
-  libboost-all-dev \
   libicu-dev \
   libdouble-conversion-dev \
   libgoogle-glog-dev \
@@ -80,6 +75,17 @@ function install_fmt {
   )
   if [ $AGGRESSIVE_CLEANUP = "true" ]; then
     rm -rf fmt
+  fi
+}
+
+function install_boost {
+  (
+    github_checkout boostorg/boost "${BOOST_VERSION}" --recursive
+    ./bootstrap.sh --prefix=/usr/local
+    ./b2 "-j$(nproc)" -d0 install threading=multi
+  )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf boost
   fi
 }
 
@@ -159,6 +165,7 @@ function install_cuda {
 
 function install_velox_deps {
   run_and_time install_fmt
+  run_and_time install_boost
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle

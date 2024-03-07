@@ -94,6 +94,15 @@ struct WeekFunction : public InitSessionTimezone<T> {
 };
 
 template <typename T>
+struct UnixDateFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+    result = date;
+  }
+};
+
+template <typename T>
 struct UnixTimestampFunction {
   // unix_timestamp();
   // If no parameters, return the current unix timestamp without adjusting
@@ -312,7 +321,13 @@ struct MakeDateFunction {
       const int32_t year,
       const int32_t month,
       const int32_t day) {
-    auto daysSinceEpoch = util::daysSinceEpochFromDate(year, month, day);
+    int64_t daysSinceEpoch;
+    auto status =
+        util::daysSinceEpochFromDate(year, month, day, daysSinceEpoch);
+    if (!status.ok()) {
+      VELOX_DCHECK(status.isUserError());
+      VELOX_USER_FAIL(status.message());
+    }
     VELOX_USER_CHECK_EQ(
         daysSinceEpoch,
         (int32_t)daysSinceEpoch,
@@ -348,7 +363,13 @@ struct LastDayFunction {
     int32_t month = getMonth(dateTime);
     int32_t day = getMonth(dateTime);
     auto lastDay = util::getMaxDayOfMonth(year, month);
-    auto daysSinceEpoch = util::daysSinceEpochFromDate(year, month, lastDay);
+    int64_t daysSinceEpoch;
+    auto status =
+        util::daysSinceEpochFromDate(year, month, lastDay, daysSinceEpoch);
+    if (!status.ok()) {
+      VELOX_DCHECK(status.isUserError());
+      VELOX_USER_FAIL(status.message());
+    }
     VELOX_USER_CHECK_EQ(
         daysSinceEpoch,
         (int32_t)daysSinceEpoch,
@@ -451,8 +472,14 @@ struct AddMonthsFunction {
     auto lastDayOfMonth = util::getMaxDayOfMonth(yearResult, monthResult);
     // Adjusts day to valid one.
     auto dayResult = lastDayOfMonth < day ? lastDayOfMonth : day;
-    auto daysSinceEpoch =
-        util::daysSinceEpochFromDate(yearResult, monthResult, dayResult);
+
+    int64_t daysSinceEpoch;
+    auto status = util::daysSinceEpochFromDate(
+        yearResult, monthResult, dayResult, daysSinceEpoch);
+    if (!status.ok()) {
+      VELOX_DCHECK(status.isUserError());
+      VELOX_USER_FAIL(status.message());
+    }
     VELOX_USER_CHECK_EQ(
         daysSinceEpoch,
         (int32_t)daysSinceEpoch,
@@ -578,6 +605,28 @@ struct HourFunction : public InitSessionTimezone<T> {
       int32_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getDateTime(timestamp, this->timeZone_).tm_hour;
+  }
+};
+
+template <typename T>
+struct MinuteFunction : public InitSessionTimezone<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getDateTime(timestamp, this->timeZone_).tm_min;
+  }
+};
+
+template <typename T>
+struct SecondFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getDateTime(timestamp, nullptr).tm_sec;
   }
 };
 } // namespace facebook::velox::functions::sparksql

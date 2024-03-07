@@ -24,7 +24,6 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
@@ -586,6 +585,7 @@ class HashJoinBuilder {
     }
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_);
     std::shared_ptr<TempDirectoryPath> spillDirectory;
+    int32_t spillPct{0};
     if (injectSpill) {
       spillDirectory = exec::test::TempDirectoryPath::create();
       builder.spillDirectory(spillDirectory->path);
@@ -595,7 +595,7 @@ class HashJoinBuilder {
       // Disable write buffering to ease test verification. For example, we want
       // many spilled vectors in a spilled file to trigger recursive spilling.
       config(core::QueryConfig::kSpillWriteBufferSize, std::to_string(0));
-      config(core::QueryConfig::kTestingSpillPct, "100");
+      spillPct = 100;
     } else if (spillMemoryThreshold_ != 0) {
       spillDirectory = exec::test::TempDirectoryPath::create();
       builder.spillDirectory(spillDirectory->path);
@@ -636,7 +636,25 @@ class HashJoinBuilder {
     ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
     const uint64_t peakSpillMemoryUsage =
         memory::spillMemoryPool()->stats().peakBytes;
+    TestScopedSpillInjection scopedSpillInjection(spillPct);
     auto task = builder.assertResults(referenceQuery_);
+    // Wait up to 5 seconds for all the task background activities to complete.
+    // Then we can collect the stats from all the operators.
+    //
+    // TODO: replace this with task utility to ensure all the background
+    // activities to finish and all the drivers stats have been reported.
+    uint64_t totalTaskWaitTimeUs{0};
+    while (task.use_count() != 1) {
+      constexpr uint64_t kWaitInternalUs = 1'000;
+      std::this_thread::sleep_for(std::chrono::microseconds(kWaitInternalUs));
+      totalTaskWaitTimeUs += kWaitInternalUs;
+      if (totalTaskWaitTimeUs >= 5'000'000) {
+        VELOX_FAIL(
+            "Failed to wait for all the background activities of task {} to finish, pending reference count: {}",
+            task->taskId(),
+            task.use_count());
+      }
+    }
     const auto statsPair = taskSpilledStats(*task);
     if (injectSpill) {
       if (checkSpillStats_) {
@@ -732,6 +750,11 @@ class HashJoinBuilder {
 
 class HashJoinTest : public HiveConnectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    FLAGS_velox_testing_enable_arbitration = true;
+    HiveConnectorTestBase::SetUpTestCase();
+  }
+
   HashJoinTest() : HashJoinTest(TestParam(1)) {}
 
   explicit HashJoinTest(const TestParam& param)
@@ -5263,9 +5286,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringInputProcessing) {
             const auto statsPair = taskSpilledStats(*task);
             if (testData.expectedReclaimable) {
               ASSERT_GT(statsPair.first.spilledBytes, 0);
-              ASSERT_EQ(statsPair.first.spilledPartitions, 4);
+              ASSERT_EQ(statsPair.first.spilledPartitions, 8);
               ASSERT_GT(statsPair.second.spilledBytes, 0);
-              ASSERT_EQ(statsPair.second.spilledPartitions, 4);
+              ASSERT_EQ(statsPair.second.spilledPartitions, 8);
               verifyTaskSpilledRuntimeStats(*task, true);
             } else {
               ASSERT_EQ(statsPair.first.spilledBytes, 0);
@@ -5415,9 +5438,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringReserve) {
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
           const auto statsPair = taskSpilledStats(*task);
           ASSERT_GT(statsPair.first.spilledBytes, 0);
-          ASSERT_EQ(statsPair.first.spilledPartitions, 4);
+          ASSERT_EQ(statsPair.first.spilledPartitions, 8);
           ASSERT_GT(statsPair.second.spilledBytes, 0);
-          ASSERT_EQ(statsPair.second.spilledPartitions, 4);
+          ASSERT_EQ(statsPair.second.spilledPartitions, 8);
           verifyTaskSpilledRuntimeStats(*task, true);
         })
         .run();
@@ -5810,9 +5833,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
           const auto statsPair = taskSpilledStats(*task);
           ASSERT_GT(statsPair.first.spilledBytes, 0);
-          ASSERT_EQ(statsPair.first.spilledPartitions, 4);
+          ASSERT_EQ(statsPair.first.spilledPartitions, 8);
           ASSERT_GT(statsPair.second.spilledBytes, 0);
-          ASSERT_EQ(statsPair.second.spilledPartitions, 4);
+          ASSERT_EQ(statsPair.second.spilledPartitions, 8);
         })
         .run();
   });
@@ -6376,13 +6399,13 @@ TEST_F(HashJoinTest, exceededMaxSpillLevel) {
                              .pipelineStats.back()
                              .operatorStats.back()
                              .runtimeStats;
-        ASSERT_EQ(joinStats["exceededMaxSpillLevel"].sum, 4);
-        ASSERT_EQ(joinStats["exceededMaxSpillLevel"].count, 4);
+        ASSERT_EQ(joinStats["exceededMaxSpillLevel"].sum, 8);
+        ASSERT_EQ(joinStats["exceededMaxSpillLevel"].count, 8);
       })
       .run();
   ASSERT_EQ(
       common::globalSpillStats().spillMaxLevelExceededCount,
-      exceededMaxSpillLevelCount + 4);
+      exceededMaxSpillLevelCount + 8);
 }
 
 TEST_F(HashJoinTest, maxSpillBytes) {

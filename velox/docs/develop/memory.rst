@@ -398,15 +398,16 @@ Memory Pool Management
 
 .. code-block:: c++
 
-  /// Creates a root memory pool with specified 'name' and 'capacity'.
+  /// Creates a root memory pool with specified 'name' and 'maxCapacity'.
   /// 'reclaimer' is provided for memory arbitration process.
   std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
      const std::string& name = "",
-     int64_t capacity = kMaxMemory,
+     int64_t maxCapacity = kMaxMemory,
      std::unique_ptr<MemoryReclaimer> reclaimer = nullptr);
 
   /// Create an aggregate child memory pool which allows to create child memory
-  /// pools from it, and it used to aggregate memory usage from its child pools. /// Aggregate memory pool is not allowed to allocate memory directly.
+  /// pools from it, and it used to aggregate memory usage from its child pools.
+  /// Aggregate memory pool is not allowed to allocate memory directly.
   virtual std::shared_ptr<MemoryPool> MemoryPool::addAggregateChild(
      const std::string& name);
 
