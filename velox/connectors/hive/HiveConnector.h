@@ -83,13 +83,8 @@ class HiveConnector : public Connector {
 class HiveConnectorFactory : public ConnectorFactory {
  public:
   static constexpr const char* FOLLY_NONNULL kHiveConnectorName = "hive";
-  static constexpr const char* FOLLY_NONNULL kHiveHadoop2ConnectorName =
-      "hive-hadoop2";
 
   HiveConnectorFactory() : ConnectorFactory(kHiveConnectorName) {}
-
-  explicit HiveConnectorFactory(const char* FOLLY_NONNULL connectorName)
-      : ConnectorFactory(connectorName) {}
 
   /// Register HiveConnector components such as Dwrf, Parquet readers and
   /// writers and FileSystems.
@@ -101,12 +96,6 @@ class HiveConnectorFactory : public ConnectorFactory {
       folly::Executor* FOLLY_NULLABLE executor = nullptr) override {
     return std::make_shared<HiveConnector>(id, config, executor);
   }
-};
-
-class HiveHadoop2ConnectorFactory : public HiveConnectorFactory {
- public:
-  HiveHadoop2ConnectorFactory()
-      : HiveConnectorFactory(kHiveHadoop2ConnectorName) {}
 };
 
 class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {

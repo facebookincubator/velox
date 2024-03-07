@@ -54,6 +54,19 @@ bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory) {
   return true;
 }
 
+bool registerConnectorFactoryAlias(
+    const std::string& alias,
+    const std::string& connectorId) {
+  auto factory = getConnectorFactory(connectorId);
+  bool ok = connectorFactories().insert({alias, factory}).second;
+  VELOX_CHECK(
+      ok,
+      "Alias '{}' is already registered for factory '{}'",
+      alias,
+      connectorId);
+  return true;
+}
+
 std::shared_ptr<ConnectorFactory> getConnectorFactory(
     const std::string& connectorName) {
   auto it = connectorFactories().find(connectorName);
