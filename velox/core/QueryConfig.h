@@ -363,24 +363,13 @@ class QueryConfig {
   static constexpr const char* kEnableWindowSegmentTreeOpt =
       "enable_window_segment_tree_opt";
 
-  /// Aggregate functions use segmentTree to improve window aggregate, the
-  /// format is "functionName1:orderInsensitive1,functionName2", if
-  /// orderInsensitive is not define, default values is true
-  static constexpr const char* kFunctionUseSegmentTree =
-      "function_use_segment_tree";
-
-  std::string functionUseSegmentTree() const {
-    return get<std::string>(
-        kFunctionUseSegmentTree, "min:true,max:true,sum,avg,stddev");
-  }
-
   uint64_t minFrameSizeUseSegmentTree() const {
-    static constexpr uint64_t kDefault = 0;
+    static constexpr uint64_t kDefault = 16;
     return get<uint64_t>(kMinFrameSizeUseSegmentTree, kDefault);
   }
 
   bool enableWindowSegmentTreeOpt() const {
-    return get<bool>(kEnableWindowSegmentTreeOpt, true);
+    return get<bool>(kEnableWindowSegmentTreeOpt, false);
   }
 
   uint64_t queryMaxMemoryPerNode() const {

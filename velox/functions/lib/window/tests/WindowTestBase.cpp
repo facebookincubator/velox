@@ -307,6 +307,65 @@ void WindowTestBase::rangeFrameTest(
     const RangeFrameBound& endBound) {
   rangeFrameTestImpl(ascending, function, startBound, endBound, false);
   rangeFrameTestImpl(ascending, function, startBound, endBound, true);
+void WindowTestBase::testSegmentTreeFrames(const std::string& function) {
+  int64_t rowCount = 500;
+  int64_t frame = 65;
+  // RANGE BETWEEN frame/2 PRECEDING AND frame/2 FOLLOWING.
+  rangeFrameTest(
+      true,
+      function,
+      {frame / 2, BoundType::kPreceding},
+      {frame / 2, BoundType::kFollowing},
+      rowCount);
+  rangeFrameTest(
+      false,
+      function,
+      {frame / 2, BoundType::kPreceding},
+      {frame / 2, BoundType::kFollowing},
+      rowCount);
+
+  // RANGE BETWEEN frame PRECEDING AND CURRENT ROW.
+  rangeFrameTest(
+      true,
+      function,
+      {frame, BoundType::kPreceding},
+      {std::nullopt, BoundType::kCurrentRow},
+      rowCount);
+  rangeFrameTest(
+      false,
+      function,
+      {frame, BoundType::kPreceding},
+      {std::nullopt, BoundType::kCurrentRow},
+      rowCount);
+
+  // RANGE BETWEEN frame PRECEDING AND 2 PRECEDING. There are no rows in that
+  // range. So this tests empty frames.
+  rangeFrameTest(
+      true,
+      function,
+      {frame, BoundType::kPreceding},
+      {2, BoundType::kPreceding},
+      rowCount);
+  rangeFrameTest(
+      false,
+      function,
+      {frame, BoundType::kPreceding},
+      {2, BoundType::kPreceding},
+      rowCount);
+
+  // RANGE BETWEEN CURRENT ROW AND frame FOLLOWING.
+  rangeFrameTest(
+      true,
+      function,
+      {std::nullopt, BoundType::kCurrentRow},
+      {frame, BoundType::kFollowing},
+      rowCount);
+  rangeFrameTest(
+      false,
+      function,
+      {std::nullopt, BoundType::kCurrentRow},
+      {frame, BoundType::kFollowing},
+      rowCount);
 }
 
 void WindowTestBase::testKRangeFrames(const std::string& function) {

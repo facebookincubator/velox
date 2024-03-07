@@ -33,8 +33,8 @@ using namespace facebook::velox::test;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
-static constexpr int32_t kNumVectors = 10;
-static constexpr int32_t kRowsPerVector = 30'000;
+static constexpr int32_t kNumVectors = 30;
+static constexpr int32_t kRowsPerVector = 10'000;
 
 namespace {
 
@@ -202,7 +202,7 @@ void rawRowFrame(uint32_t, const std::string& key, const std::string& aggregate,
 }
 
 void segmentOptRowFrame(uint32_t, const std::string& key, const std::string& aggregate, uint32_t frameSize) {
- benchmark->run(key, aggregate, "rows", frameSize, true);
+  benchmark->run(key, aggregate, "rows", frameSize, true);
 }
 
 #define WINDOW_AGG_BENCHMARKS(_name_, _key_)       \
@@ -268,6 +268,10 @@ void segmentOptRowFrame(uint32_t, const std::string& key, const std::string& agg
       2048);                                       \
  BENCHMARK_DRAW_LINE();
 
+// Count aggregate.
+WINDOW_AGG_BENCHMARKS(count, k_array)
+BENCHMARK_DRAW_LINE();
+
 // Sum aggregate.
 WINDOW_AGG_BENCHMARKS(sum, k_array)
 BENCHMARK_DRAW_LINE();
@@ -291,7 +295,7 @@ BENCHMARK_DRAW_LINE();
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   facebook::velox::memory::MemoryManager::initialize({});
 
   benchmark = std::make_unique<WindowBenchmark>();

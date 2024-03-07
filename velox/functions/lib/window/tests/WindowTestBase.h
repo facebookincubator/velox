@@ -189,6 +189,8 @@ class WindowTestBase : public exec::test::OperatorTestBase {
   /// These are special as they require generating frame bound value columns.
   void testKRangeFrames(const std::string& function);
 
+  void testSegmentTreeFrames(const std::string& function);
+
   /// ParseOptions for the DuckDB Parser. nth_value in Spark expects to parse
   /// integer as int vs bigint in Presto. The default is to parse integer
   /// as bigint (Presto behavior).
