@@ -141,6 +141,18 @@ TEST_F(AggregateWindowTest, rangeFrames) {
   }
 }
 
+// Tests window aggregate function with segmentTree.
+TEST_F(AggregateWindowTest, segmentTreeFrames) {
+  for (const auto& function : kAggregateFunctions) {
+    // count function is skipped as DuckDB returns inconsistent results
+    // with Velox for rows with empty frames. Velox expects empty frames to
+    // return 0, but DuckDB returns null.
+    if (function != "count(c2)") {
+      testSegmentTreeFrames(function);
+    }
+  }
+}
+
 // Test for aggregates that return NULL as the default value for empty frames
 // against DuckDb.
 TEST_F(AggregateWindowTest, nullEmptyResult) {

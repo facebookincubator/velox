@@ -286,6 +286,12 @@ class SelectivityVector {
     allSelected_.reset();
   }
 
+  /**
+   * This method is an optimization of updateBounds(). It can only be called if
+   * you exactly know the begin and end position. It's no need to call
+   * bits::findFirstBit and bits::findLastBit to determine the begin and end
+   * position.
+   */
   void updateBounds(vector_size_t begin, vector_size_t end) {
     begin_ = begin;
     end_ = end;

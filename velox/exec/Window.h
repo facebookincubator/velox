@@ -46,31 +46,6 @@ class Window : public Operator {
   /// initialization. 'windowNode_' is reset after this call.
   void initialize() override;
 
-  static std::unordered_map<std::string, bool> splitNames(const std::string& names) {
-    // Parse, lower case and trim it.
-    std::vector<folly::StringPiece> nameList;
-    folly::split(',', names, nameList);
-    std::unordered_map<std::string, bool> namesMap;
-
-    for (const auto& it : nameList) {
-      auto str = folly::trimWhitespace(it).toString();
-      folly::toLowerAscii(str);
-
-      int end = str.find(":");
-      if (end != -1) {
-        auto val = str.substr(end, str.length());
-        if (val == "false") {
-          namesMap[str.substr(0, end)] = false;
-        } else {
-          namesMap[str.substr(0, end)] = true;
-        }
-      } else {
-        namesMap[str] = true;
-      }
-    }
-    return namesMap;
-  }
-
   void addInput(RowVectorPtr input) override;
 
   RowVectorPtr getOutput() override;
@@ -93,26 +68,6 @@ class Window : public Operator {
       override;
 
  private:
-  // Used for k preceding/following frames. Index is the column index if k is a
-  // column. value is used to read column values from the column index when k
-  // is a column. The field constant stores constant k values.
-  struct FrameChannelArg {
-    column_index_t index;
-    VectorPtr value;
-    std::optional<int64_t> constant;
-  };
-
-  // Structure for the window frame for each function.
-  struct WindowFrame {
-    const core::WindowNode::WindowType type;
-    const core::WindowNode::BoundType startType;
-    const core::WindowNode::BoundType endType;
-    // Set only when startType is BoundType::kPreceding or kFollowing.
-    const std::optional<FrameChannelArg> start;
-    // Set only when endType is BoundType::kPreceding or kFollowing.
-    const std::optional<FrameChannelArg> end;
-  };
-
   // Creates WindowFunction and frame objects for this operator.
   void createWindowFunctions();
 
@@ -192,6 +147,12 @@ class Window : public Operator {
   // operator and functions. This structure is owned by the WindowBuild.
   std::unique_ptr<WindowPartition> currentPartition_;
 
+  // The min average frame size can use segment tree.
+  int32_t minFrameSizeUseSegmentTree_;
+
+  // Whether turn on the optimization of segment tree.
+  bool enableSegmentTreeOpt_;
+
   // HashStringAllocator required by functions that allocate out of line
   // buffers.
   HashStringAllocator stringAllocator_;
@@ -200,10 +161,6 @@ class Window : public Operator {
   // WindowFunction is the base API implemented by all the window functions.
   // The functions are ordered by their positions in the output columns.
   std::vector<std::unique_ptr<exec::WindowFunction>> windowFunctions_;
-
-  std::unordered_map<std::string, bool> functionUseSegmentTree_;
-  int32_t minFrameSizeUseSegmentTree_{64};
-  bool enableSegmentTreeOpt_{true};
 
   // Vector of WindowFrames corresponding to each windowFunction above.
   // It represents the frame spec for the function computation.

@@ -17,7 +17,7 @@ endif()
 
 add_subdirectory(benchmark)
 
-add_library(velox_window CumeDist.cpp FirstLastValue.cpp LeadLag.cpp Ntile.cpp
+add_library(velox_window CumeDist.cpp FirstLastValue.cpp LeadLag.cpp
                          WindowFunctionsRegistration.cpp)
 
 target_link_libraries(velox_window velox_buffer velox_exec

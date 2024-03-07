@@ -37,8 +37,10 @@ Window::Window(
       numInputColumns_(windowNode->inputType()->size()),
       windowNode_(windowNode),
       currentPartition_(nullptr),
-      minFrameSizeUseSegmentTree_(driverCtx->queryConfig().minFrameSizeUseSegmentTree()),
-      enableSegmentTreeOpt_(driverCtx->queryConfig().enableWindowSegmentTreeOpt()),
+      minFrameSizeUseSegmentTree_(
+          driverCtx->queryConfig().minFrameSizeUseSegmentTree()),
+      enableSegmentTreeOpt_(
+          driverCtx->queryConfig().enableWindowSegmentTreeOpt()),
       stringAllocator_(pool()) {
   auto* spillConfig =
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
@@ -49,8 +51,6 @@ Window::Window(
     windowBuild_ = std::make_unique<SortWindowBuild>(
         windowNode, pool(), spillConfig, &nonReclaimableSection_, &spillStats_);
   }
-
-  functionUseSegmentTree_ = Window::splitNames(driverCtx->queryConfig().functionUseSegmentTree());
 }
 
 void Window::initialize() {
@@ -112,7 +112,7 @@ void checkKRangeFrameBounds(
 
 } // namespace
 
-Window::WindowFrame Window::createWindowFrame(
+WindowFrame Window::createWindowFrame(
     const std::shared_ptr<const core::WindowNode>& windowNode,
     const core::WindowNode::Frame& frame,
     const RowTypePtr& inputType) {
@@ -188,35 +188,10 @@ void Window::createWindowFunctions() {
 
     windowFrames_.push_back(
         createWindowFrame(windowNode_, windowNodeFunction.frame, inputType));
-  }
 
-  vector_size_t numFuncs = windowFunctions_.size();
-  for (auto i = 0; i < numFuncs; i++) {
-    const auto& windowFrame = windowFrames_[i];
-    windowFunctions_[i]->setUseSegmentTree(
-        false, true, minFrameSizeUseSegmentTree_);
-    auto function = functionUseSegmentTree_.find(
-        windowNode_->windowFunctions()[i].functionCall->name());
-    // Enable use segment tree when:
-    // 1 Frame must be kPreceding and kFollowing.
-    // 2 Frame size must >= minFrameSizeUseSegmentTree_.
-    // 3 Aggregation function must in functionUseSegmentTree_.
-    if (enableSegmentTreeOpt_ && function != functionUseSegmentTree_.end() &&
-        windowFrame.startType == core::WindowNode::BoundType::kPreceding &&
-        windowFrame.endType == core::WindowNode::BoundType::kFollowing &&
-        windowFrame.start.has_value() &&
-        windowFrame.start.value().constant.has_value() &&
-        windowFrame.end.has_value() &&
-        windowFrame.end.value().constant.has_value() &&
-        windowFrame.start.value().constant.value() +
-                windowFrame.end.value().constant.value() >=
-            minFrameSizeUseSegmentTree_) {
-      windowFunctions_[i]->setUseSegmentTree(
-          true, function->second, minFrameSizeUseSegmentTree_);
-    } else {
-      windowFunctions_[i]->setUseSegmentTree(
-          false, function->second, minFrameSizeUseSegmentTree_);
-    }
+    windowFunctions_.back()->initialize(windowFrames_.back(),
+                                       minFrameSizeUseSegmentTree_,
+                                       enableSegmentTreeOpt_);
   }
 }
 
