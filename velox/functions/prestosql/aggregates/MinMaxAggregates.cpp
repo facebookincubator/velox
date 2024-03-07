@@ -916,6 +916,17 @@ exec::AggregateRegistrationResult registerMinMax(
             .build());
   }
 
+  // decimal(p,s), bigint -> row(array(decimal(p,s)), bigint) -> array(decimal(p,s))
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .argumentType("bigint")
+          .intermediateType("row(bigint, array(DECIMAL(a_precision, a_scale)))")
+          .returnType("array(DECIMAL(a_precision, a_scale))")
+          .build());
+
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
@@ -952,7 +963,10 @@ exec::AggregateRegistrationResult registerMinMax(
             case TypeKind::TIMESTAMP:
               return std::make_unique<TNumericN<Timestamp>>(resultType);
             case TypeKind::HUGEINT:
-              return std::make_unique<TNumericN<int128_t>>(resultType);
+              if (inputType->isLongDecimal()) {
+                return std::make_unique<TNumericN<int128_t>>(resultType);
+              }
+              VELOX_NYI();
             default:
               VELOX_CHECK(
                   false,
