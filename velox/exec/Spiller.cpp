@@ -383,7 +383,6 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
 
 void Spiller::runSpill(bool lastRun) {
   ++stats_.wlock()->spillRuns;
-  VELOX_CHECK(type_ != Spiller::Type::kOrderByOutput || lastRun);
 
   std::vector<std::shared_ptr<AsyncSource<SpillStatus>>> writes;
   for (auto partition = 0; partition < spillRuns_.size(); ++partition) {
@@ -488,7 +487,7 @@ void Spiller::spill(const RowContainerIterator* startRowIter) {
   checkEmptySpillRuns();
 }
 
-void Spiller::spill(std::vector<char*>& rows) {
+void Spiller::spill(std::vector<char*>& rows, bool lastRun) {
   CHECK_NOT_FINALIZED();
   VELOX_CHECK_EQ(type_, Type::kOrderByOutput);
   VELOX_CHECK(!rows.empty());
@@ -496,7 +495,7 @@ void Spiller::spill(std::vector<char*>& rows) {
   markAllPartitionsSpilled();
 
   fillSpillRun(rows);
-  runSpill(true);
+  runSpill(lastRun);
   checkEmptySpillRuns();
 }
 

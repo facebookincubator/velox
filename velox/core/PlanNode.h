@@ -2134,8 +2134,7 @@ class WindowNode : public PlanNode {
     // No partitioning keys means the whole input is one big partition. In this
     // case, spilling is not helpful because we need to have a full partition in
     // memory to produce results.
-    return !partitionKeys_.empty() && !inputsSorted_ &&
-        queryConfig.windowSpillEnabled();
+    return !partitionKeys_.empty() && queryConfig.windowSpillEnabled();
   }
 
   const RowTypePtr& inputType() const {

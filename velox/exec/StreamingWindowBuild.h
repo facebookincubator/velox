@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/exec/Spiller.h"
 #include "velox/exec/WindowBuild.h"
 
 namespace facebook::velox::exec {
@@ -34,12 +35,20 @@ class StreamingWindowBuild : public WindowBuild {
 
   void addInput(RowVectorPtr input) override;
 
-  void spill() override {
-    VELOX_UNREACHABLE();
-  }
+  void spill() override;
 
   std::optional<common::SpillStats> spilledStats() const override {
-    return std::nullopt;
+    if (spillers_.size() == 0) {
+      return std::nullopt;
+    }
+
+    common::SpillStats stats;
+    for (auto& spiller : spillers_) {
+      if (spiller != nullptr) {
+        stats += spiller->stats();
+      }
+    }
+    return stats;
   }
 
   void noMoreInput() override;
@@ -56,12 +65,23 @@ class StreamingWindowBuild : public WindowBuild {
   }
 
  private:
+  void ensureInputFits(const RowVectorPtr& input);
+
+  void setupSpiller();
+
   void buildNextPartition();
+
+  // Reads next partition from spilled data into 'data_' and
+  // 'spilledSortedRows_'.
+  void loadNextPartitionFromSpill();
 
   // Vector of pointers to each input row in the data_ RowContainer.
   // Rows are erased from data_ when they are output from the
   // Window operator.
   std::vector<char*> sortedRows_;
+
+  // Store the spilled sorted rows.
+  std::vector<char*> spilledSortedRows_;
 
   // Holds input rows within the current partition.
   std::vector<char*> inputRows_;
@@ -71,12 +91,34 @@ class StreamingWindowBuild : public WindowBuild {
   // partitions.
   std::vector<vector_size_t> partitionStartRows_;
 
+  // Record the rows in each window partition.
+  vector_size_t partitionRows_ = -1;
+
   // Used to compare rows based on partitionKeys.
   char* previousRow_ = nullptr;
 
   // Current partition being output. Used to construct WindowPartitions
   // during resetPartition.
   vector_size_t currentPartition_ = -1;
+
+  // Current spilled partition index. Used to construct spillers_ and merges_.
+  vector_size_t currentSpilledPartition_ = 0;
+
+  // Spiller for contents of the 'data_'.
+  std::vector<std::unique_ptr<Spiller>> spillers_;
+
+  // Used to sort-merge spilled data.
+  std::vector<std::unique_ptr<TreeOfLosers<SpillMergeStream>>> merges_;
+
+  // allKeyInfo_ is a combination of (partitionKeyInfo_ and sortKeyInfo_).
+  // It is used to perform a full sorting of the input rows to be able to
+  // separate partitions and sort the rows in it. The rows are output in
+  // this order by the operator.
+  std::vector<std::pair<column_index_t, core::SortOrder>> allKeyInfo_;
+
+  bool lastRun = false;
+
+  memory::MemoryPool* const pool_;
 };
 
 } // namespace facebook::velox::exec
