@@ -146,6 +146,23 @@ TEST_P(CovarianceAggregationTest, floatSomeNulls) {
   testDistinctGroupBy(aggName, data);
 }
 
+TEST_P(CovarianceAggregationTest, allSameValue) {
+  vector_size_t size = 1'000;
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 7; }),
+      makeFlatVector<float>(size, [](auto row) { return 1; }),
+      makeFlatVector<float>(size, [](auto row) { return 2; }),
+  });
+
+  createDuckDbTable({data});
+
+  auto aggName = GetParam();
+  testGlobalAgg(aggName, data);
+  testGroupBy(aggName, data);
+  testDistinctGlobalAgg(aggName, data);
+  testDistinctGroupBy(aggName, data);
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     CovarianceAggregationTest,
     CovarianceAggregationTest,

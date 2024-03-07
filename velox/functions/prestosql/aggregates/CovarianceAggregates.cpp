@@ -413,7 +413,7 @@ struct RegrSxyResultAccessor {
 
 struct RegrR2ResultAccessor {
   static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
-    return !std::isnan(result(accumulator));
+    return accumulator.m2Y() != 0 && accumulator.m2X() != 0;
   }
 
   static double result(const ExtendedRegrAccumulator& accumulator) {
