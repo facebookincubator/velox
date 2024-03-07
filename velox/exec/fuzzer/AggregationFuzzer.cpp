@@ -1018,37 +1018,65 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
       ++stats_.numFailed;
     }
 
-    // TODO Use ResultVerifier::compare API to compare Velox results with
-    // reference DB results once reference query runner is updated to return
-    // results as Velox vectors.
-    std::optional<MaterializedRowMultiset> expectedResult;
+    // If Velox successfully executes a plan, we attempt to verify
+    // the plan against the reference DB as follows:
+    // 1) If deterministic function (i.e. customVerification) is false
+    //    then try and have the reference DB execute the plan and assert
+    //    results are equal.
+    // 2) If Non deterministic function, and if the reference query runner
+    //    supports Velox vectors then we have the reference DB execute the plan
+    //    and use ResultVerifier::compare api (if supported ) to validate the
+    //    results.
+
     if (resultOrError.result != nullptr) {
       if (!customVerification) {
+        std::optional<MaterializedRowMultiset> expectedResult;
         auto referenceResult = computeReferenceResults(firstPlan, input);
         stats_.updateReferenceQueryStats(referenceResult.second);
         expectedResult = referenceResult.first;
-      } else {
-        ++stats_.numVerificationSkipped;
 
-        for (auto& verifier : customVerifiers) {
-          if (verifier != nullptr && verifier->supportsVerify()) {
-            VELOX_CHECK(
-                verifier->verify(resultOrError.result),
-                "Aggregation results failed custom verification");
+        if (expectedResult && resultOrError.result) {
+          ++stats_.numVerified;
+          VELOX_CHECK(
+              assertEqualResults(
+                  expectedResult.value(),
+                  firstPlan->outputType(),
+                  {resultOrError.result}),
+              "Velox and reference DB results don't match");
+          LOG(INFO) << "Verified results against reference DB";
+        }
+      } else if (referenceQueryRunner_->supportsVeloxVectorResults()) {
+        if (isSupportedType(firstPlan->outputType()) &&
+            isSupportedType(input.front()->type())) {
+          auto referenceResult =
+              computeReferenceResultsAsVector(firstPlan, input);
+          stats_.updateReferenceQueryStats(referenceResult.second);
+
+          if (referenceResult.first) {
+            velox::test::ResultOrError expected;
+
+            // Merge all the results into one.
+            auto results = referenceResult.first.value();
+            auto totalCount = 0;
+            for (const auto& result : results) {
+              totalCount += result->size();
+            }
+            auto copy = BaseVector::create<RowVector>(
+                results[0]->type(), totalCount, pool_.get());
+            auto copyCount = 0;
+            for (const auto& result : results) {
+              copy->copy(result.get(), copyCount, 0, result->size());
+              copyCount += result->size();
+            }
+
+            expected.result = copy;
+
+            compare(
+                resultOrError, customVerification, customVerifiers, expected);
+            ++stats_.numVerified;
           }
         }
       }
-    }
-
-    if (expectedResult && resultOrError.result) {
-      ++stats_.numVerified;
-      VELOX_CHECK(
-          assertEqualResults(
-              expectedResult.value(),
-              firstPlan->outputType(),
-              {resultOrError.result}),
-          "Velox and reference DB results don't match");
-      LOG(INFO) << "Verified results against reference DB";
     }
 
     testPlans(
