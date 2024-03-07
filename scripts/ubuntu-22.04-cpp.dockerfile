@@ -17,6 +17,8 @@ ARG tz="Europe/Madrid"
 
 FROM ${base}
 
+ENV AGGRESSIVE_CLEANUP=true
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt update && \

@@ -28,11 +28,17 @@ FMT_VERSION=10.1.1
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 export CMAKE_BUILD_TYPE=Release
+AGGRESSIVE_CLEANUP="${AGGRESSIVE_CLEANUP:-false}"
+
+# Install sudo if not already installed
+if ! dpkg -s sudo; then
+  # If it's not installed, we assume we are running inside a container as root already
+  apt update && apt install sudo
+fi
 
 # Install all velox and folly dependencies.
 # The is an issue on 22.04 where a version conflict prevents glog install,
 # installing libunwind first fixes this.
-apt update && apt install sudo
 sudo --preserve-env apt update && sudo --preserve-env apt install -y libunwind-dev && \
   sudo --preserve-env apt install -y \
   g++ \
@@ -68,33 +74,63 @@ sudo --preserve-env apt update && sudo --preserve-env apt install -y libunwind-d
   wget
 
 function install_fmt {
-  github_checkout fmtlib/fmt "${FMT_VERSION}"
-  cmake_install -DFMT_TEST=OFF
+  (
+    github_checkout fmtlib/fmt "${FMT_VERSION}"
+    cmake_install -DFMT_TEST=OFF
+  )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf fmt
+  fi
 }
 
 function install_folly {
-  github_checkout facebook/folly "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  (
+    github_checkout facebook/folly "${FB_OS_VERSION}"
+    cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf folly
+  fi
 }
 
 function install_fizz {
-  github_checkout facebookincubator/fizz "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF -S fizz
+  (
+    github_checkout facebookincubator/fizz "${FB_OS_VERSION}"
+    cmake_install -DBUILD_TESTS=OFF -S fizz
+  )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf fizz
+  fi
 }
 
 function install_wangle {
-  github_checkout facebook/wangle "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF -S wangle
+  (
+    github_checkout facebook/wangle "${FB_OS_VERSION}"
+    cmake_install -DBUILD_TESTS=OFF -S wangle
+  )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf wangle
+  fi
 }
 
 function install_mvfst {
-  github_checkout facebook/mvfst "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF
+  (
+    github_checkout facebook/mvfst "${FB_OS_VERSION}"
+    cmake_install -DBUILD_TESTS=OFF
+  )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf mvfst
+  fi
 }
 
 function install_fbthrift {
-  github_checkout facebook/fbthrift "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF
+  (
+    github_checkout facebook/fbthrift "${FB_OS_VERSION}"
+    cmake_install -DBUILD_TESTS=OFF
+  )
+  if [ $AGGRESSIVE_CLEANUP = "true" ]; then
+    rm -rf fbthrift
+  fi
 }
 
 function install_conda {
@@ -112,6 +148,14 @@ function install_conda {
   bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
 
+function install_cuda {
+  wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+  sudo dpkg -i cuda-keyring_1.1-1_all.deb
+  rm cuda-keyring_1.1-1_all.deb
+  sudo apt update
+  sudo apt -y install cuda-toolkit-12-3
+}
+
 
 function install_velox_deps {
   run_and_time install_fmt
@@ -121,6 +165,7 @@ function install_velox_deps {
   run_and_time install_mvfst
   run_and_time install_fbthrift
   run_and_time install_conda
+  run_and_time install_cuda
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
