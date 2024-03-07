@@ -1062,7 +1062,17 @@ TypePtr importFromArrowImpl(
         // Parse "d:".
         int precision = std::stoi(&format[2], &sz);
         // Parse ",".
-        int scale = std::stoi(&format[2 + sz + 1], &sz);
+        int idx = 2 + sz + 1;
+        int scale = std::stoi(&format[idx], &sz);
+        // Handle bitwidth.
+        if (format[idx + sz] == ',') {
+          int bitWidth = std::stoi(&format[idx + sz + 1], &sz);
+          if (bitWidth != 128) {
+            VELOX_USER_FAIL(
+                "Conversion failed for '{}'. Velox decimal does not support custom bitwidth.",
+                format);
+          }
+        }
         return DECIMAL(precision, scale);
       } catch (std::invalid_argument&) {
         VELOX_USER_FAIL(
@@ -1626,12 +1636,7 @@ VectorPtr createShortDecimalVector(
   }
 
   return createFlatVector<TypeKind::BIGINT>(
-      pool,
-      type,
-      nulls,
-      length,
-      values,
-      nullCount);
+      pool, type, nulls, length, values, nullCount);
 }
 
 bool isREE(const ArrowSchema& arrowSchema) {
