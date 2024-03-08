@@ -106,7 +106,7 @@ jobs:
 
 
   presto-java-aggregation-fuzzer-run:
-    runs-on: 8-core
+    runs-on: 16-core
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
@@ -145,13 +145,15 @@ jobs:
           cd  velox
           cp ./scripts/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          /opt/start-prestojava.sh > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
-          sleep 60          
+          sleep 60
+          echo "Creating hive.tpch schema.."
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
           mkdir -p /tmp/aggregate_fuzzer_repro/
           rm -rfv /tmp/aggregate_fuzzer_repro/*
           chmod -R 777 /tmp/aggregate_fuzzer_repro
+          echo "Running aggregation fuzzer.."
           _build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec 3600 \
