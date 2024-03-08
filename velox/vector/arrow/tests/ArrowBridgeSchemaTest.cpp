@@ -385,6 +385,9 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
   VELOX_ASSERT_THROW(
       *testSchemaImport("d:10,4,256"),
       "Conversion failed for 'd:10,4,256'. Velox decimal does not support custom bitwidth.");
+  VELOX_ASSERT_THROW(
+      *testSchemaImport("d:10,4,"),
+      "Unable to convert 'd:10,4,' ArrowSchema decimal format to Velox decimal");
 }
 
 TEST_F(ArrowBridgeSchemaImportTest, complexTypes) {

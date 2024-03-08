@@ -1067,11 +1067,11 @@ TypePtr importFromArrowImpl(
         // Handle bitwidth.
         if (format[idx + sz] == ',') {
           int bitWidth = std::stoi(&format[idx + sz + 1], &sz);
-          if (bitWidth != 128) {
-            VELOX_USER_FAIL(
-                "Conversion failed for '{}'. Velox decimal does not support custom bitwidth.",
-                format);
-          }
+          VELOX_USER_CHECK_EQ(
+              bitWidth,
+              128,
+              "Conversion failed for '{}'. Velox decimal does not support custom bitwidth.",
+              format);
         }
         return DECIMAL(precision, scale);
       } catch (std::invalid_argument&) {
