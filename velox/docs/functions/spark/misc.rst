@@ -2,6 +2,13 @@
 Miscellaneous Functions
 ====================================
 
+.. spark:function:: monotonically_increasing_id() -> bigint
+
+    Returns monotonically increasing 64-bit integers. The generated Id is guaranteed to be monotonically increasing and unique, but not consecutive.
+    The current implementation puts the partition Id in the upper 31 bits, and the lower 33 bits represent the record number within each partition.
+    The assumption is that the data frame has less than 1 billion partitions, and each partition has less than 8 billion records.
+    The function is non-deterministic because its result depends on partition IDs.
+
 .. spark:function:: spark_partition_id() -> integer
 
     Returns the current partition id.
