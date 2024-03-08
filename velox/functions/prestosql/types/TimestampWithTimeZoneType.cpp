@@ -14,6 +14,13 @@
  * limitations under the License.
  */
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include <time.h>
+#include <chrono>
+#include <string>
+#include "velox/expression/StringWriter.h"
+#include "velox/external/date/tz.h"
+#include "velox/type/Timestamp.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
@@ -53,15 +60,47 @@ void castFromTimestamp(
   });
 }
 
+void castFromString(
+    const SimpleVector<StringView>& inputVector,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    VectorPtr& result) {
+  auto timestampWithTzVector = result->asFlatVector<int64_t>();
+  auto rawTimestampWithTzValues =
+      timestampWithTzVector->values()->asMutable<int64_t>();
+  timestampWithTzVector->clearNulls(rows);
+
+  context.applyToSelectedNoThrow(rows, [&](auto row) {
+    if (inputVector.isNullAt(row)) {
+      result->setNull(row, true);
+    } else {
+      auto tsTzStr = std::string_view(
+          inputVector.valueAt(row).data(), inputVector.valueAt(row).size());
+      auto tuple = util::splitTimestampWithTimezoneString(tsTzStr);
+      auto tsStr = std::get<0>(tuple);
+      auto tzStr = std::get<1>(tuple);
+      auto ts = util::fromTimestampString(tsStr);
+      auto tzID = util::getTimeZoneID(tzStr);
+      ts.toGMT(tzID);
+      int64_t outputMilliseconds = ts.getSeconds() * (int64_t)(1000);
+      rawTimestampWithTzValues[row] = pack(outputMilliseconds, tzID);
+    }
+  });
+}
+
 template <TypeKind kind>
 void castToTimestampWithTimeZone(
     const BaseVector& input,
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     VectorPtr& result) {
-  VELOX_CHECK_EQ(kind, TypeKind::TIMESTAMP)
-  const auto inputVector = input.as<SimpleVector<Timestamp>>();
-  castFromTimestamp(*inputVector, context, rows, result);
+  if (kind == TypeKind::TIMESTAMP) {
+    const auto inputVector = input.as<SimpleVector<Timestamp>>();
+    castFromTimestamp(*inputVector, context, rows, result);
+  } else if (kind == TypeKind::VARCHAR) {
+    const auto inputVector = input.as<SimpleVector<StringView>>();
+    castFromString(*inputVector, context, rows, result);
+  }
 }
 
 void castToTimestamp(
@@ -107,7 +146,7 @@ bool TimestampWithTimeZoneCastOperator::isSupportedFromType(
     case TypeKind::TIMESTAMP:
       return true;
     case TypeKind::VARCHAR:
-      // TODO: support cast from VARCHAR
+      return true;
     case TypeKind::INTEGER:
       // TODO: support cast from DATE
     default:

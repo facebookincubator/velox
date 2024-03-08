@@ -134,4 +134,9 @@ inline Timestamp fromTimestampString(const StringView& str) {
 
 Timestamp fromDatetime(int64_t daysSinceEpoch, int64_t microsSinceMidnight);
 
+// Extracts the timestamp and time zone components from a string representing a
+// TimestampWithTimezone, returns them together as a tuple.
+std::tuple<const StringView&, std::string_view>
+splitTimestampWithTimezoneString(const std::string_view& tsTzStr);
+
 } // namespace facebook::velox::util
