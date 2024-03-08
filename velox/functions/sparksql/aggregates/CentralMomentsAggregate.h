@@ -24,6 +24,7 @@ namespace facebook::velox::functions::aggregate::sparksql {
 
 void registerCentralMomentsAggregate(
     const std::string& name,
-    bool withCompanionFunctions);
+    bool withCompanionFunctions,
+    bool overwrite);
 
 } // namespace facebook::velox::functions::aggregate::sparksql

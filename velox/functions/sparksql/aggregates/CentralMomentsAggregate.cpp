@@ -34,7 +34,8 @@ struct SkewnessResultAccessor {
 template <typename TResultAccessor>
 exec::AggregateRegistrationResult registerCentralMoments(
     const std::string& name,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> inputTypes = {
       "smallint", "integer", "bigint", "real", "double"};
@@ -97,15 +98,17 @@ exec::AggregateRegistrationResult registerCentralMoments(
               TResultAccessor>>(resultType);
         }
       },
-      withCompanionFunctions);
+      withCompanionFunctions,
+      overwrite);
 }
 } // namespace
 
 void registerCentralMomentsAggregate(
     const std::string& prefix,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerCentralMoments<SkewnessResultAccessor>(
-      prefix + "skewness", withCompanionFunctions);
+      prefix + "skewness", withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql

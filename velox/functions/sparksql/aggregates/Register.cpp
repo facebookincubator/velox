@@ -44,6 +44,6 @@ void registerAggregateFunctions(
       prefix + "bloom_filter_agg", withCompanionFunctions, overwrite);
   registerAverage(prefix + "avg", withCompanionFunctions, overwrite);
   registerSum(prefix + "sum", withCompanionFunctions, overwrite);
-  registerCentralMomentsAggregate(prefix, withCompanionFunctions);
+  registerCentralMomentsAggregate(prefix, withCompanionFunctions, overwrite);
 }
 } // namespace facebook::velox::functions::aggregate::sparksql
