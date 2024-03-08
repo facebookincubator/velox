@@ -1064,7 +1064,7 @@ TypePtr importFromArrowImpl(
         // Parse ",".
         int idx = 2 + sz + 1;
         int scale = std::stoi(&format[idx], &sz);
-        // Handle bitwidth.
+        // If bitwidth is provided, check if it is equal to 128.
         if (format[idx + sz] == ',') {
           int bitWidth = std::stoi(&format[idx + sz + 1], &sz);
           VELOX_USER_CHECK_EQ(

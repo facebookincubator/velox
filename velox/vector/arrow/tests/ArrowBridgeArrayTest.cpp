@@ -1314,6 +1314,8 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
   }
 
  private:
+  // Creates short decimals from int128 and asserts the content of actual vector
+  // with the expected values.
   void assertShortDecimalVectorContent(
       const std::vector<std::optional<int128_t>>& expectedValues,
       const VectorPtr& actual,
