@@ -15,7 +15,13 @@
  */
 #pragma once
 
+#include <time.h>
+#include <chrono>
+#include <cmath>
+#include <string>
 #include <string_view>
+#include "velox/external/date/date.h"
+#include "velox/external/date/tz.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -1496,6 +1502,37 @@ struct ToISO8601Function {
       out_type<Varchar>& result,
       const arg_type<Date>& date) {
     result = DateType::toIso8601(date);
+  }
+
+  std::string sessionTzName = "";
+  const date::time_zone* sessionTimezone = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* timestamp) {
+    sessionTimezone = getTimeZoneFromConfig(config);
+    sessionTzName = (sessionTimezone != NULL ? sessionTimezone->name() : NULL);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Timestamp>& timestamp) {
+    std::string tzOffsetStr = "";
+    Timestamp ts = timestamp;
+    TimestampToStringOptions options;
+    options.mode = TimestampToStringOptions::Mode::kFull;
+    options.zeroPaddingYear = true;
+    options.precision = TimestampToStringOptions::Precision::kMilliseconds;
+    auto tsStr = ts.toString(options);
+
+    if (sessionTzName == "UTC") {
+      tzOffsetStr = " UTC";
+    } else if (sessionTimezone != NULL) {
+      date::local_time<std::chrono::nanoseconds> tp{
+          std::chrono::nanoseconds{timestamp.toNanos()}};
+      tzOffsetStr = format("%Ez", date::zoned_time{sessionTzName, tp});
+    }
+    result = tsStr + tzOffsetStr;
   }
 };
 

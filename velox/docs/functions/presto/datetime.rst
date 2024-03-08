@@ -114,6 +114,9 @@ Date and Time Functions
 
     Returns ``timestamp`` as a UNIX timestamp.
 
+.. function:: to_iso8601(x) -> varchar
+
+    Formats timestamp ``x`` as an ISO 8601 string.
 Truncation Function
 -------------------
 

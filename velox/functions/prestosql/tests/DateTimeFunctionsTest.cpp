@@ -4014,3 +4014,50 @@ TEST_F(DateTimeFunctionsTest, toISO8601Date) {
   EXPECT_EQ("-3492-10-05", toISO8601("-3492-10-05"));
   EXPECT_EQ("-0653-07-12", toISO8601("-653-07-12"));
 }
+
+TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
+  const auto toISO8601 = [&](std::optional<Timestamp> timestamp) {
+    return evaluateOnce<std::string>("to_iso8601(c0)", timestamp);
+  };
+
+  auto getTimestamp = [](const std::string& timestampStr) {
+    return util::fromTimestampString(StringView{timestampStr});
+  };
+
+  setQueryTimeZone("UTC");
+
+  EXPECT_EQ(std::nullopt, toISO8601(std::nullopt));
+
+  EXPECT_EQ(
+      "2017-07-17T19:54:57.828 UTC",
+      toISO8601(Timestamp(1500321297, 827910000)));
+
+  setQueryTimeZone("America/Denver");
+
+  EXPECT_EQ(
+      "2017-07-17T19:54:57.828-06:00",
+      toISO8601(Timestamp(1500321297, 827910000)));
+
+  EXPECT_EQ(
+      "2017-07-17T19:54:57.820-06:00",
+      toISO8601(Timestamp(1500321297, 820000000)));
+
+  setQueryTimeZone("Australia/Adelaide");
+
+  EXPECT_EQ(
+      "2017-07-17T19:54:57.127+09:30",
+      toISO8601(Timestamp(1500321297, 126548219)));
+
+  EXPECT_EQ(
+      "2017-07-17T19:54:57.095+09:30",
+      toISO8601(Timestamp(1500321297, 95421806)));
+
+  EXPECT_EQ(
+      "1970-01-01T12:00:12.002+09:30", toISO8601(Timestamp(43212, 1599247)));
+
+  setQueryTimeZone("America/Los_Angeles");
+
+  EXPECT_EQ(
+      "1880-10-30T06:21:47.001-07:52",
+      toISO8601(Timestamp(-2813938693, 818583)));
+}

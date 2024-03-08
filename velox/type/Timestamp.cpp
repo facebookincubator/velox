@@ -241,6 +241,11 @@ StringView Timestamp::tmToStringView(
     char* const startPosition) {
   VELOX_DCHECK_GE(nanos, 0);
   VELOX_DCHECK_LT(nanos, 1'000'000'000);
+  double kNanosecondsInMillisecond = 1'000'000;
+  double kNanosecondsInMicrosecond = 1'000;
+  auto precisionWidth = static_cast<int8_t>(options.precision);
+  std::string out;
+  out.reserve(getCapacity(options));
 
   const auto appendDigits = [](const int value,
                                const std::optional<uint32_t> minWidth,
@@ -310,10 +315,10 @@ StringView Timestamp::tmToStringView(
   writePosition += appendDigits(tmValue.tm_sec, 2, writePosition);
 
   if (options.precision == TimestampToStringOptions::Precision::kMilliseconds) {
-    nanos /= 1'000'000;
+    nanos = round(nanos / kNanosecondsInMillisecond);
   } else if (
       options.precision == TimestampToStringOptions::Precision::kMicroseconds) {
-    nanos /= 1'000;
+    nanos = round(nanos / kNanosecondsInMicrosecond);
   }
   if (options.skipTrailingZeros && nanos == 0) {
     return StringView(startPosition, writePosition - startPosition);
