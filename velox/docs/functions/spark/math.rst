@@ -240,7 +240,7 @@ Mathematical Functions
     If ``x`` contains non-hexadecimal character, the function returns NULL.
     When ``x`` contains even number of characters, each pair is converted to a single byte. The number of bytes in the result is half the number of bytes in the input.
     When ``x`` contains a single character, the result contains a single byte whose value matches the hexadecimal character.
-    When ``x`` contains an odd number characters greater than 2, the first character is decoded into the first byte of the result and the remaining pairs of characters are decoded into subsequent bytes, this matches Spark since 3.3.2, but not earlier ::
+    When ``x`` contains an odd number characters greater than 2, the first character is decoded into the first byte of the result and the remaining pairs of characters are decoded into subsequent bytes. This behavior matches Spark 3.3.2 and newer. ::
 
         SELECT unhex("23"); -- #
         SELECT unhex("f"); -- \x0F
