@@ -239,6 +239,10 @@ class AggregationFuzzerBase {
       const std::vector<std::shared_ptr<ResultVerifier>>& customVerifiers,
       const velox::test::ResultOrError& expected);
 
+  /// Returns false if the type or its children are unsupported.
+  /// Currently returns false if type is Date,IntervalDayTime or Unknown.
+  /// @param type
+  /// @return bool
   bool isSupportedType(const TypePtr& type) const;
 
   // @param customVerification If false, results are compared as is. Otherwise,

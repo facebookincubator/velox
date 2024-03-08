@@ -88,6 +88,7 @@ DEFINE_bool(
 namespace facebook::velox::exec::test {
 
 bool AggregationFuzzerBase::isSupportedType(const TypePtr& type) const {
+  // Date / IntervalDayTime/ Unknown are not currently supported by DWRF.
   if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown()) {
     return false;
   }
@@ -459,17 +460,14 @@ AggregationFuzzerBase::computeReferenceResults(
           referenceQueryRunner_->execute(
               sql.value(), input, plan->outputType()),
           ReferenceQueryErrorCode::kSuccess);
-    } catch (std::exception& e) {
-      // ++stats_.numReferenceQueryFailed;
+    } catch (...) {
       LOG(WARNING) << "Query failed in the reference DB";
       return std::make_pair(
           std::nullopt, ReferenceQueryErrorCode::kReferenceQueryFail);
     }
-  } else {
-    LOG(INFO) << "Query not supported by the reference DB";
-    // ++stats_.numVerificationNotSupported;
   }
 
+  LOG(INFO) << "Query not supported by the reference DB";
   return std::make_pair(
       std::nullopt, ReferenceQueryErrorCode::kReferenceQueryUnsupported);
 }
@@ -488,8 +486,7 @@ AggregationFuzzerBase::computeReferenceResultsAsVector(
           referenceQueryRunner_->executeVector(
               sql.value(), input, plan->outputType()),
           ReferenceQueryErrorCode::kSuccess);
-    } catch (std::exception& e) {
-      // ++stats_.numReferenceQueryFailed;
+    } catch (...) {
       LOG(WARNING) << "Query failed in the reference DB";
       return std::make_pair(
           std::nullopt, ReferenceQueryErrorCode::kReferenceQueryFail);

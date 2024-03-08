@@ -1004,6 +1004,27 @@ void AggregationFuzzer::Stats::print(size_t numIterations) const {
   AggregationFuzzerBase::Stats::print(numIterations);
 }
 
+namespace {
+// Merges a vector of RowVectors into one RowVector.
+RowVectorPtr mergeRowVectors(
+    const std::vector<RowVectorPtr>& results,
+    velox::memory::MemoryPool* pool) {
+  auto totalCount = 0;
+  for (const auto& result : results) {
+    totalCount += result->size();
+  }
+  auto copy =
+      BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
+  auto copyCount = 0;
+  for (const auto& result : results) {
+    copy->copy(result.get(), copyCount, 0, result->size());
+    copyCount += result->size();
+  }
+  return copy;
+}
+
+} // namespace
+
 bool AggregationFuzzer::compareEquivalentPlanResults(
     const std::vector<PlanWithSplits>& plans,
     bool customVerification,
@@ -1020,7 +1041,7 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
 
     // If Velox successfully executes a plan, we attempt to verify
     // the plan against the reference DB as follows:
-    // 1) If deterministic function (i.e. customVerification) is false
+    // 1) If deterministic function (i.e. customVerification is false)
     //    then try and have the reference DB execute the plan and assert
     //    results are equal.
     // 2) If Non deterministic function, and if the reference query runner
@@ -1030,12 +1051,11 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
 
     if (resultOrError.result != nullptr) {
       if (!customVerification) {
-        std::optional<MaterializedRowMultiset> expectedResult;
         auto referenceResult = computeReferenceResults(firstPlan, input);
         stats_.updateReferenceQueryStats(referenceResult.second);
-        expectedResult = referenceResult.first;
+        auto expectedResult = referenceResult.first;
 
-        if (expectedResult && resultOrError.result) {
+        if (expectedResult) {
           ++stats_.numVerified;
           VELOX_CHECK(
               assertEqualResults(
@@ -1054,22 +1074,8 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
 
           if (referenceResult.first) {
             velox::test::ResultOrError expected;
-
-            // Merge all the results into one.
-            auto results = referenceResult.first.value();
-            auto totalCount = 0;
-            for (const auto& result : results) {
-              totalCount += result->size();
-            }
-            auto copy = BaseVector::create<RowVector>(
-                results[0]->type(), totalCount, pool_.get());
-            auto copyCount = 0;
-            for (const auto& result : results) {
-              copy->copy(result.get(), copyCount, 0, result->size());
-              copyCount += result->size();
-            }
-
-            expected.result = copy;
+            expected.result =
+                mergeRowVectors(referenceResult.first.value(), pool_.get());
 
             compare(
                 resultOrError, customVerification, customVerifiers, expected);
