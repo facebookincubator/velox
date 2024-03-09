@@ -24,6 +24,8 @@
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/common/Reader.h"
+#include "velox/expression/Expr.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -237,6 +239,13 @@ inline uint8_t parseDelimiter(const std::string& delim) {
   return stoi(delim);
 }
 
+inline bool isSynthesizedColumn(
+    const std::string& name,
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
+        infoColumns) {
+  return name == kPath || name == kBucket || infoColumns.count(name) != 0;
+}
+
 } // namespace
 
 const std::string& getColumnName(const common::Subfield& subfield) {
@@ -271,9 +280,13 @@ void checkColumnNameLowerCase(const std::shared_ptr<const Type>& type) {
   }
 }
 
-void checkColumnNameLowerCase(const SubfieldFilters& filters) {
+void checkColumnNameLowerCase(
+    const SubfieldFilters& filters,
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
+        infoColumns) {
   for (auto& pair : filters) {
-    if (auto name = pair.first.toString(); name == kPath || name == kBucket) {
+    if (auto name = pair.first.toString();
+        isSynthesizedColumn(name, infoColumns)) {
       continue;
     }
     auto& path = pair.first.path();
@@ -308,6 +321,8 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         partitionKeys,
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
+        infoColumns,
     memory::MemoryPool* pool) {
   auto spec = std::make_shared<common::ScanSpec>("root");
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
@@ -315,7 +330,8 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
   std::vector<SubfieldSpec> subfieldSpecs;
   for (auto& [subfield, _] : filters) {
     if (auto name = subfield.toString();
-        name != kPath && name != kBucket && partitionKeys.count(name) == 0) {
+        !isSynthesizedColumn(name, infoColumns) &&
+        partitionKeys.count(name) == 0) {
       filterSubfields[getColumnName(subfield)].push_back(&subfield);
     }
   }
@@ -362,11 +378,13 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     // SelectiveColumnReader doesn't support constant columns with filters,
     // hence, we can't have a filter for a $path or $bucket column.
     //
-    // Unfortunately, Presto happens to specify a filter for $path or
-    // $bucket column. This filter is redundant and needs to be removed.
+    // Unfortunately, Presto happens to specify a filter for $path, $file_size,
+    // $file_modified_time or $bucket column. This filter is redundant and needs
+    // to be removed.
     // TODO Remove this check when Presto is fixed to not specify a filter
     // on $path and $bucket column.
-    if (auto name = pair.first.toString(); name == kPath || name == kBucket) {
+    if (auto name = pair.first.toString();
+        isSynthesizedColumn(name, infoColumns)) {
       continue;
     }
     auto fieldSpec = spec->getOrCreateChild(pair.first);
@@ -446,6 +464,7 @@ void configureReaderOptions(
     const RowTypePtr& fileSchema,
     const std::shared_ptr<HiveConnectorSplit>& hiveSplit,
     const std::unordered_map<std::string, std::string>& tableParameters) {
+  readerOptions.setLoadQuantum(hiveConfig->loadQuantum());
   readerOptions.setMaxCoalesceBytes(hiveConfig->maxCoalescedBytes());
   readerOptions.setMaxCoalesceDistance(hiveConfig->maxCoalescedDistanceBytes());
   readerOptions.setFileColumnNamesReadAsLowerCase(
@@ -505,6 +524,8 @@ void configureRowReaderOptions(
   rowReaderOptions.select(cs).range(hiveSplit->start, hiveSplit->length);
 }
 
+namespace {
+
 bool applyPartitionFilter(
     TypeKind kind,
     const std::string& partitionValue,
@@ -530,6 +551,8 @@ bool applyPartitionFilter(
       VELOX_FAIL("Bad type {} for partition value: {}", kind, partitionValue);
   }
 }
+
+} // namespace
 
 bool testFilters(
     common::ScanSpec* scanSpec,
@@ -609,6 +632,133 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
       ioStats,
       executor,
       readerOpts);
+}
+
+namespace {
+
+core::CallTypedExprPtr replaceInputs(
+    const core::CallTypedExpr* call,
+    std::vector<core::TypedExprPtr>&& inputs) {
+  return std::make_shared<core::CallTypedExpr>(
+      call->type(), std::move(inputs), call->name());
+}
+
+bool endWith(const std::string& str, const char* suffix) {
+  int len = strlen(suffix);
+  if (str.size() < len) {
+    return false;
+  }
+  for (int i = 0, j = str.size() - len; i < len; ++i, ++j) {
+    if (str[j] != suffix[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isNotExpr(
+    const core::TypedExprPtr& expr,
+    const core::CallTypedExpr* call,
+    core::ExpressionEvaluator* evaluator) {
+  if (!endWith(call->name(), "not")) {
+    return false;
+  }
+  auto exprs = evaluator->compile(expr);
+  VELOX_CHECK_EQ(exprs->size(), 1);
+  auto& compiled = exprs->expr(0);
+  return compiled->vectorFunction() &&
+      compiled->vectorFunction()->getCanonicalName() ==
+      exec::FunctionCanonicalName::kNot;
+}
+
+double getPrestoSampleRate(
+    const core::TypedExprPtr& expr,
+    const core::CallTypedExpr* call,
+    core::ExpressionEvaluator* evaluator) {
+  if (!endWith(call->name(), "lt")) {
+    return -1;
+  }
+  VELOX_CHECK_EQ(call->inputs().size(), 2);
+  auto exprs = evaluator->compile(expr);
+  VELOX_CHECK_EQ(exprs->size(), 1);
+  auto& lt = exprs->expr(0);
+  if (!(lt->vectorFunction() &&
+        lt->vectorFunction()->getCanonicalName() ==
+            exec::FunctionCanonicalName::kLt)) {
+    return -1;
+  }
+  auto& rand = lt->inputs()[0];
+  if (!(rand->inputs().empty() && rand->vectorFunction() &&
+        rand->vectorFunction()->getCanonicalName() ==
+            exec::FunctionCanonicalName::kRand)) {
+    return -1;
+  }
+  auto* rate =
+      dynamic_cast<const core::ConstantTypedExpr*>(call->inputs()[1].get());
+  if (!(rate && rate->type()->kind() == TypeKind::DOUBLE)) {
+    return -1;
+  }
+  return std::max(0.0, std::min(1.0, rate->value().value<double>()));
+}
+
+} // namespace
+
+core::TypedExprPtr extractFiltersFromRemainingFilter(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    bool negated,
+    SubfieldFilters& filters,
+    double& sampleRate) {
+  auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
+  if (!call) {
+    return expr;
+  }
+  common::Filter* oldFilter = nullptr;
+  try {
+    common::Subfield subfield;
+    if (auto filter = exec::leafCallToSubfieldFilter(
+            *call, subfield, evaluator, negated)) {
+      if (auto it = filters.find(subfield); it != filters.end()) {
+        oldFilter = it->second.get();
+        filter = filter->mergeWith(oldFilter);
+      }
+      filters.insert_or_assign(std::move(subfield), std::move(filter));
+      return nullptr;
+    }
+  } catch (const VeloxException&) {
+    LOG(WARNING) << "Unexpected failure when extracting filter for: "
+                 << expr->toString();
+    if (oldFilter) {
+      LOG(WARNING) << "Merging with " << oldFilter->toString();
+    }
+  }
+  if (isNotExpr(expr, call, evaluator)) {
+    auto inner = extractFiltersFromRemainingFilter(
+        call->inputs()[0], evaluator, !negated, filters, sampleRate);
+    return inner ? replaceInputs(call, {inner}) : nullptr;
+  }
+  if ((call->name() == "and" && !negated) ||
+      (call->name() == "or" && negated)) {
+    auto lhs = extractFiltersFromRemainingFilter(
+        call->inputs()[0], evaluator, negated, filters, sampleRate);
+    auto rhs = extractFiltersFromRemainingFilter(
+        call->inputs()[1], evaluator, negated, filters, sampleRate);
+    if (!lhs) {
+      return rhs;
+    }
+    if (!rhs) {
+      return lhs;
+    }
+    return replaceInputs(call, {lhs, rhs});
+  }
+  if (!negated) {
+    double rate = getPrestoSampleRate(expr, call, evaluator);
+    if (rate != -1) {
+      sampleRate *= rate;
+      return nullptr;
+    }
+  }
+  return expr;
 }
 
 } // namespace facebook::velox::connector::hive

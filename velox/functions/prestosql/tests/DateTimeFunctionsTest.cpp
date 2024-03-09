@@ -881,6 +881,66 @@ TEST_F(DateTimeFunctionsTest, plusMinusDateIntervalDayTime) {
   EXPECT_THROW(minus(baseDate, partDay), VeloxUserError);
 }
 
+TEST_F(DateTimeFunctionsTest, timestampMinusIntervalYearMonth) {
+  const auto minus = [&](std::optional<std::string> timestamp,
+                         std::optional<int32_t> interval) {
+    return evaluateOnce<std::string>(
+        "date_format(date_parse(c0, '%Y-%m-%d %H:%i:%s') - c1, '%Y-%m-%d %H:%i:%s')",
+        makeRowVector({
+            makeNullableFlatVector<std::string>({timestamp}, VARCHAR()),
+            makeNullableFlatVector<int32_t>({interval}, INTERVAL_YEAR_MONTH()),
+        }));
+  };
+
+  EXPECT_EQ("2001-01-03 04:05:06", minus("2001-02-03 04:05:06", 1));
+  EXPECT_EQ("2000-04-03 04:05:06", minus("2001-02-03 04:05:06", 10));
+  EXPECT_EQ("1999-06-03 04:05:06", minus("2001-02-03 04:05:06", 20));
+
+  // Some special dates.
+  EXPECT_EQ("2001-04-30 04:05:06", minus("2001-05-31 04:05:06", 1));
+  EXPECT_EQ("2001-03-30 04:05:06", minus("2001-04-30 04:05:06", 1));
+  EXPECT_EQ("2001-02-28 04:05:06", minus("2001-03-30 04:05:06", 1));
+  EXPECT_EQ("2000-02-29 04:05:06", minus("2000-03-30 04:05:06", 1));
+  EXPECT_EQ("2000-01-29 04:05:06", minus("2000-02-29 04:05:06", 1));
+}
+
+TEST_F(DateTimeFunctionsTest, timestampPlusIntervalYearMonth) {
+  const auto plus = [&](std::optional<std::string> timestamp,
+                        std::optional<int32_t> interval) {
+    // timestamp + interval.
+    auto result1 = evaluateOnce<std::string>(
+        "date_format(date_parse(c0, '%Y-%m-%d %H:%i:%s') + c1, '%Y-%m-%d %H:%i:%s')",
+        makeRowVector(
+            {makeNullableFlatVector<std::string>({timestamp}, VARCHAR()),
+             makeNullableFlatVector<int32_t>(
+                 {interval}, INTERVAL_YEAR_MONTH())}));
+
+    // interval + timestamp.
+    auto result2 = evaluateOnce<std::string>(
+        "date_format(c1 + date_parse(c0, '%Y-%m-%d %H:%i:%s'), '%Y-%m-%d %H:%i:%s')",
+        makeRowVector(
+            {makeNullableFlatVector<std::string>({timestamp}, VARCHAR()),
+             makeNullableFlatVector<int32_t>(
+                 {interval}, INTERVAL_YEAR_MONTH())}));
+
+    // They should be the same.
+    EXPECT_EQ(result1, result2);
+
+    return result1;
+  };
+
+  EXPECT_EQ("2001-02-03 04:05:06", plus("2001-01-03 04:05:06", 1));
+  EXPECT_EQ("2001-02-03 04:05:06", plus("2000-04-03 04:05:06", 10));
+  EXPECT_EQ("2001-02-03 04:05:06", plus("1999-06-03 04:05:06", 20));
+
+  // Some special dates.
+  EXPECT_EQ("2001-06-30 04:05:06", plus("2001-05-31 04:05:06", 1));
+  EXPECT_EQ("2001-05-30 04:05:06", plus("2001-04-30 04:05:06", 1));
+  EXPECT_EQ("2001-02-28 04:05:06", plus("2001-01-31 04:05:06", 1));
+  EXPECT_EQ("2000-02-29 04:05:06", plus("2000-01-31 04:05:06", 1));
+  EXPECT_EQ("2000-02-29 04:05:06", plus("2000-01-29 04:05:06", 1));
+}
+
 TEST_F(DateTimeFunctionsTest, plusMinusTimestampIntervalDayTime) {
   constexpr int64_t kLongMax = std::numeric_limits<int64_t>::max();
   constexpr int64_t kLongMin = std::numeric_limits<int64_t>::min();
@@ -3700,17 +3760,26 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimezoneComparisons) {
     test::assertEqualVectors(expectedResult, actual);
   };
 
-  auto timezones = std::vector<TimeZoneKey>{900, 900, 800};
+  /// Timestamp with timezone is internally represented with the milliseconds
+  /// already converted to UTC and thus normalized. The timezone does not play
+  /// a role in the comparison.
+  /// For example, 1970-01-01-06:00:00+02:00 is stored as
+  /// TIMESTAMP WITH TIMEZONE value (14400000, 960). 960 being the tzid
+  /// representing +02:00. And 1970-01-01-04:00:00+00:00 is stored as (14400000,
+  /// 0). These timestamps are equivalent.
+  auto timestampsLhs = std::vector<int64_t>{0, 0, 1000};
+  auto timezonesLhs = std::vector<TimeZoneKey>{900, 900, 800};
   VectorPtr timestampWithTimezoneLhs = makeTimestampWithTimeZoneVector(
-      timezones.size(),
-      [](auto /*row*/) { return 0; },
-      [&](auto row) { return timezones[row]; });
+      timestampsLhs.size(),
+      [&](auto row) { return timestampsLhs[row]; },
+      [&](auto row) { return timezonesLhs[row]; });
 
-  auto timestamps = std::vector<int64_t>{0, 1000, 0};
+  auto timestampsRhs = std::vector<int64_t>{0, 1000, 0};
+  auto timezonesRhs = std::vector<TimeZoneKey>{900, 900, 800};
   VectorPtr timestampWithTimezoneRhs = makeTimestampWithTimeZoneVector(
-      timestamps.size(),
-      [&](auto row) { return timestamps[row]; },
-      [](auto /*row*/) { return 900; });
+      timestampsRhs.size(),
+      [&](auto row) { return timestampsRhs[row]; },
+      [&](auto row) { return timezonesRhs[row]; });
   auto inputs =
       makeRowVector({timestampWithTimezoneLhs, timestampWithTimezoneRhs});
 

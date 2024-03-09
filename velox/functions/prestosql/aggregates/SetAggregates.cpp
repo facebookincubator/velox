@@ -427,7 +427,10 @@ std::unique_ptr<exec::Aggregate> create(
 
 } // namespace
 
-void registerSetAggAggregate(const std::string& prefix) {
+void registerSetAggAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -491,10 +494,15 @@ void registerSetAggAggregate(const std::string& prefix) {
             VELOX_UNREACHABLE(
                 "Unexpected type {}", mapTypeKindToName(typeKind));
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
-void registerSetUnionAggregate(const std::string& prefix) {
+void registerSetUnionAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -516,7 +524,9 @@ void registerSetUnionAggregate(const std::string& prefix) {
         VELOX_CHECK_EQ(argTypes.size(), 1);
 
         return create<SetUnionAggregate>(argTypes[0]->childAt(0), resultType);
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

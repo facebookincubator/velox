@@ -57,11 +57,14 @@ int main(int argc, char** argv) {
       // https://github.com/facebookincubator/velox/issues/8919
       "plus(date,interval year to month) -> date",
       "minus(date,interval year to month) -> date",
+      "plus(timestamp,interval year to month) -> timestamp",
+      "plus(interval year to month,timestamp) -> timestamp",
+      "minus(timestamp,interval year to month) -> timestamp",
       // https://github.com/facebookincubator/velox/issues/8438#issuecomment-1907234044
       "regexp_extract",
       "regexp_extract_all",
       "regexp_like",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return FuzzerRunner::run(initialSeed, skipFunctions);
+  return FuzzerRunner::run(initialSeed, skipFunctions, {{}});
 }

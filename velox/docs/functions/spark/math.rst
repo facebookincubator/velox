@@ -175,14 +175,13 @@ Mathematical Functions
 
         SELECT rand(); -- 0.9629742951434543
 
-.. spark:function:: rand(seed, partitionIndex) -> double
+.. spark:function:: rand(seed) -> double
 
     Returns a random value with uniformly distributed values in [0, 1) using a seed formed
-    by combining user-specified ``seed`` and framework provided ``partitionIndex``. The
+    by combining user-specified ``seed`` and the configuration `spark.partition_id`. The
     framework is responsible for deterministic partitioning of the data and assigning unique
-    ``partitionIndex`` to each thread (in a deterministic way).
-    ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``. ``partitionIndex``
-    cannot be NULL. ::
+    `spark.partition_id` to each thread (in a deterministic way) .
+    ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``. ::
 
         SELECT rand(0);    -- 0.5488135024422883
         SELECT rand(NULL); -- 0.5488135024422883
@@ -191,9 +190,9 @@ Mathematical Functions
 
     An alias for ``rand()``.
 
-.. spark:function:: random(seed, partitionIndex) -> double
+.. spark:function:: random(seed) -> double
 
-    An alias for ``rand(seed, partitionIndex)``.
+    An alias for ``rand(seed)``.
 
 .. spark:function:: remainder(n, m) -> [same as n]
 
@@ -233,3 +232,18 @@ Mathematical Functions
 .. spark:function:: unaryminus(x) -> [same as x]
 
     Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+
+.. spark:function:: unhex(x) -> varbinary
+
+    Converts hexadecimal varchar ``x`` to varbinary.
+    ``x`` is considered case insensitive and expected to contain only hexadecimal characters 0-9 and A-F.
+    If ``x`` contains non-hexadecimal character, the function returns NULL.
+    When ``x`` contains even number of characters, each pair is converted to a single byte. The number of bytes in the result is half the number of bytes in the input.
+    When ``x`` contains a single character, the result contains a single byte whose value matches the hexadecimal character.
+    When ``x`` contains an odd number characters greater than 2, the first character is ignored, the remaining pairs of characters are converted to bytes, then zero byte is added at the end of the output. ::
+
+        SELECT unhex("23"); -- #
+        SELECT unhex("f"); -- \x0F
+        SELECT unhex("b2323"); -- ##\0
+        SELECT unhex("G"); -- NULL
+        SELECT unhex("G23"); -- NULL

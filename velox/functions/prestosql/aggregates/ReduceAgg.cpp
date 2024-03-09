@@ -786,7 +786,10 @@ class ReduceAgg : public exec::Aggregate {
 
 } // namespace
 
-void registerReduceAgg(const std::string& prefix) {
+void registerReduceAgg(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -810,7 +813,9 @@ void registerReduceAgg(const std::string& prefix) {
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         return std::make_unique<ReduceAgg>(resultType);
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include <utility>
 
 #include "folly/io/Cursor.h"
 #include "velox/dwio/common/BufferedInput.h"
@@ -24,6 +25,16 @@ DEFINE_bool(wsVRLoad, false, "Use WS VRead API to load");
 using ::facebook::velox::common::Region;
 
 namespace facebook::velox::dwio::common {
+
+static_assert(std::is_move_constructible<BufferedInput>());
+
+namespace {
+void copyIOBufToMemory(folly::IOBuf&& iobuf, folly::Range<char*> allocated) {
+  folly::io::Cursor cursor(&iobuf);
+  DWIO_ENSURE_EQ(cursor.totalLength(), allocated.size(), "length mismatch.");
+  cursor.pull(allocated.data(), allocated.size());
+}
+} // namespace
 
 void BufferedInput::load(const LogType logType) {
   // no regions to load
@@ -47,34 +58,31 @@ void BufferedInput::load(const LogType logType) {
     std::vector<folly::IOBuf> iobufs(regions_.size());
     input_->vread(regions_, {iobufs.data(), iobufs.size()}, logType);
     for (size_t i = 0; i < regions_.size(); ++i) {
-      const auto& region = regions_[i];
-      auto iobuf = std::move(iobufs[i]);
-
-      auto allocated = allocate(region);
-      folly::io::Cursor cursor(&iobuf);
-      DWIO_ENSURE_EQ(
-          cursor.totalLength(), allocated.size(), "length mismatch.");
-      cursor.pull(allocated.data(), allocated.size());
+      copyIOBufToMemory(std::move(iobufs[i]), allocate(regions_[i]));
     }
-
   } else {
     for (const auto& region : regions_) {
-      auto allocated = allocate(region);
-      uint64_t usec = 0;
-      {
-        MicrosecondTimer timer(&usec);
-        input_->read(
-            allocated.data(), allocated.size(), region.offset, logType);
-      }
-      if (auto* stats = input_->getStats()) {
-        stats->read().increment(region.length);
-        stats->queryThreadIoLatency().increment(usec);
-      }
+      readToBuffer(region.offset, allocate(region), logType);
     }
   }
 
   // clear the loaded regions
   regions_.clear();
+}
+
+void BufferedInput::readToBuffer(
+    uint64_t offset,
+    folly::Range<char*> allocated,
+    const LogType logType) {
+  uint64_t usec = 0;
+  {
+    MicrosecondTimer timer(&usec);
+    input_->read(allocated.data(), allocated.size(), offset, logType);
+  }
+  if (auto* stats = input_->getStats()) {
+    stats->read().increment(allocated.size());
+    stats->queryThreadIoLatency().increment(usec);
+  }
 }
 
 std::unique_ptr<SeekableInputStream> BufferedInput::enqueue(

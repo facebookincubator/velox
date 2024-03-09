@@ -36,22 +36,22 @@ class BufferedInput {
       IoStatistics* FOLLY_NULLABLE stats = nullptr,
       uint64_t maxMergeDistance = kMaxMergeDistance,
       std::optional<bool> wsVRLoad = std::nullopt)
-      : input_{std::make_shared<ReadFileInputStream>(
-            std::move(readFile),
-            metricsLog,
-            stats)},
-        pool_{pool},
-        maxMergeDistance_{maxMergeDistance},
-        wsVRLoad_{wsVRLoad},
-        allocPool_{std::make_unique<memory::AllocationPool>(&pool)} {}
+      : BufferedInput(
+            std::make_shared<ReadFileInputStream>(
+                std::move(readFile),
+                metricsLog,
+                stats),
+            pool,
+            maxMergeDistance,
+            wsVRLoad) {}
 
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
       memory::MemoryPool& pool,
       uint64_t maxMergeDistance = kMaxMergeDistance,
       std::optional<bool> wsVRLoad = std::nullopt)
-      : input_(std::move(input)),
-        pool_(pool),
+      : input_{std::move(input)},
+        pool_{pool},
         maxMergeDistance_{maxMergeDistance},
         wsVRLoad_{wsVRLoad},
         allocPool_{std::make_unique<memory::AllocationPool>(&pool)} {}
@@ -175,6 +175,10 @@ class BufferedInput {
       uint64_t offset,
       uint64_t length,
       std::optional<size_t> i = std::nullopt) const;
+  void readToBuffer(
+      uint64_t offset,
+      folly::Range<char*> allocated,
+      const LogType logType);
 
   folly::Range<char*> allocate(const velox::common::Region& region) {
     // Save the file offset and the buffer to which we'll read it

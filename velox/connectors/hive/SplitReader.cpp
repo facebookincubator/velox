@@ -26,6 +26,38 @@
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive {
+namespace {
+template <TypeKind kind>
+VectorPtr newConstantFromString(
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    vector_size_t size,
+    velox::memory::MemoryPool* pool) {
+  using T = typename TypeTraits<kind>::NativeType;
+  if (!value.has_value()) {
+    return std::make_shared<ConstantVector<T>>(pool, size, true, type, T());
+  }
+
+  if (type->isDate()) {
+    auto copy =
+        util::castFromDateString(StringView(value.value()), true /*isIso8601*/);
+    return std::make_shared<ConstantVector<int32_t>>(
+        pool, size, false, type, std::move(copy));
+  }
+
+  if constexpr (std::is_same_v<T, StringView>) {
+    return std::make_shared<ConstantVector<StringView>>(
+        pool, size, false, type, StringView(value.value()));
+  } else {
+    auto copy = velox::util::Converter<kind>::cast(value.value());
+    if constexpr (kind == TypeKind::TIMESTAMP) {
+      copy.toGMT(Timestamp::defaultTimezone());
+    }
+    return std::make_shared<ConstantVector<T>>(
+        pool, size, false, type, std::move(copy));
+  }
+}
+} // namespace
 
 std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<velox::connector::hive::HiveConnectorSplit>&
@@ -95,13 +127,15 @@ SplitReader::SplitReader(
       ioStats_(ioStats),
       baseReaderOpts_(connectorQueryCtx->memoryPool()) {}
 
-void SplitReader::configureReaderOptions() {
+void SplitReader::configureReaderOptions(
+    std::shared_ptr<random::RandomSkipTracker> randomSkip) {
   hive::configureReaderOptions(
       baseReaderOpts_,
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
       hiveTableHandle_,
       hiveSplit_);
+  baseReaderOpts_.setRandomSkip(std::move(randomSkip));
 }
 
 void SplitReader::prepareSplit(
@@ -113,8 +147,8 @@ void SplitReader::prepareSplit(
   std::shared_ptr<FileHandle> fileHandle;
   try {
     fileHandle = fileHandleFactory_->generate(hiveSplit_->filePath).second;
-  } catch (VeloxRuntimeError& e) {
-    if (e.errorCode() == error_code::kFileNotFound.c_str() &&
+  } catch (const VeloxRuntimeError& e) {
+    if (e.errorCode() == error_code::kFileNotFound &&
         hiveConfig_->ignoreMissingFiles(
             connectorQueryCtx_->sessionProperties())) {
       emptySplit_ = true;
@@ -184,25 +218,49 @@ std::vector<TypePtr> SplitReader::adaptColumns(
     auto* childSpec = childrenSpecs[i].get();
     const std::string& fieldName = childSpec->fieldName();
 
-    auto iter = hiveSplit_->partitionKeys.find(fieldName);
-    if (iter != hiveSplit_->partitionKeys.end()) {
-      setPartitionValue(childSpec, fieldName, iter->second);
+    if (auto it = hiveSplit_->partitionKeys.find(fieldName);
+        it != hiveSplit_->partitionKeys.end()) {
+      setPartitionValue(childSpec, fieldName, it->second);
     } else if (fieldName == kPath) {
-      setConstantValue(
-          childSpec, VARCHAR(), velox::variant(hiveSplit_->filePath));
+      auto constantVec = std::make_shared<ConstantVector<StringView>>(
+          connectorQueryCtx_->memoryPool(),
+          1,
+          false,
+          VARCHAR(),
+          StringView(hiveSplit_->filePath));
+      childSpec->setConstantValue(constantVec);
     } else if (fieldName == kBucket) {
       if (hiveSplit_->tableBucketNumber.has_value()) {
-        setConstantValue(
-            childSpec,
+        int32_t bucket = hiveSplit_->tableBucketNumber.value();
+        auto constantVec = std::make_shared<ConstantVector<int32_t>>(
+            connectorQueryCtx_->memoryPool(),
+            1,
+            false,
             INTEGER(),
-            velox::variant(hiveSplit_->tableBucketNumber.value()));
+            std::move(bucket));
+        childSpec->setConstantValue(constantVec);
       }
+    } else if (auto iter = hiveSplit_->infoColumns.find(fieldName);
+               iter != hiveSplit_->infoColumns.end()) {
+      auto infoColumnType =
+          readerOutputType_->childAt(readerOutputType_->getChildIdx(fieldName));
+      auto constant = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+          newConstantFromString,
+          infoColumnType->kind(),
+          infoColumnType,
+          iter->second,
+          1,
+          connectorQueryCtx_->memoryPool());
+      childSpec->setConstantValue(constant);
     } else {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
       if (!fileTypeIdx.has_value()) {
         // Column is missing. Most likely due to schema evolution.
         VELOX_CHECK(tableSchema);
-        setNullConstantValue(childSpec, tableSchema->findChild(fieldName));
+        childSpec->setConstantValue(BaseVector::createNullConstant(
+            tableSchema->findChild(fieldName),
+            1,
+            connectorQueryCtx_->memoryPool()));
       } else {
         // Column no longer missing, reset constant value set on the spec.
         childSpec->setConstantValue(nullptr);
@@ -223,7 +281,12 @@ std::vector<TypePtr> SplitReader::adaptColumns(
 }
 
 uint64_t SplitReader::next(int64_t size, VectorPtr& output) {
-  return baseRowReader_->next(size, output);
+  if (!baseReaderOpts_.randomSkip()) {
+    return baseRowReader_->next(size, output);
+  }
+  dwio::common::Mutation mutation;
+  mutation.randomSkip = baseReaderOpts_.randomSkip().get();
+  return baseRowReader_->next(size, output, &mutation);
 }
 
 void SplitReader::resetFilterCaches() {
@@ -263,49 +326,6 @@ bool SplitReader::allPrefetchIssued() const {
   return baseRowReader_ && baseRowReader_->allPrefetchIssued();
 }
 
-void SplitReader::setConstantValue(
-    common::ScanSpec* spec,
-    const TypePtr& type,
-    const velox::variant& value) const {
-  spec->setConstantValue(BaseVector::createConstant(
-      type, value, 1, connectorQueryCtx_->memoryPool()));
-}
-
-void SplitReader::setNullConstantValue(
-    common::ScanSpec* spec,
-    const TypePtr& type) const {
-  spec->setConstantValue(BaseVector::createNullConstant(
-      type, 1, connectorQueryCtx_->memoryPool()));
-}
-
-namespace {
-
-template <TypeKind ToKind>
-velox::variant convertFromString(
-    const std::optional<std::string>& value,
-    const TypePtr& toType) {
-  if (value.has_value()) {
-    if constexpr (ToKind == TypeKind::VARCHAR) {
-      return velox::variant(value.value());
-    }
-    if constexpr (ToKind == TypeKind::VARBINARY) {
-      return velox::variant::binary((value.value()));
-    }
-    if (toType->isDate()) {
-      return velox::variant(util::castFromDateString(
-          StringView(value.value()), true /*isIso8601*/));
-    }
-    auto result = velox::util::Converter<ToKind>::cast(value.value());
-    if constexpr (ToKind == TypeKind::TIMESTAMP) {
-      result.toGMT(Timestamp::defaultTimezone());
-    }
-    return velox::variant(result);
-  }
-  return velox::variant(ToKind);
-}
-
-} // namespace
-
 void SplitReader::setPartitionValue(
     common::ScanSpec* spec,
     const std::string& partitionKey,
@@ -315,12 +335,15 @@ void SplitReader::setPartitionValue(
       it != partitionKeys_->end(),
       "ColumnHandle is missing for partition key {}",
       partitionKey);
-  auto constValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      convertFromString,
-      it->second->dataType()->kind(),
+  auto type = it->second->dataType();
+  auto constant = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+      newConstantFromString,
+      type->kind(),
+      type,
       value,
-      it->second->dataType());
-  setConstantValue(spec, it->second->dataType(), constValue);
+      1,
+      connectorQueryCtx_->memoryPool());
+  spec->setConstantValue(constant);
 }
 
 std::string SplitReader::toString() const {
