@@ -24,7 +24,10 @@ template <typename TInput, typename TAccumulator, typename ResultType>
 using SumAggregate = SumAggregateBase<TInput, TAccumulator, ResultType, false>;
 
 template <template <typename U, typename V, typename W> class T>
-exec::AggregateRegistrationResult registerSum(const std::string& name) {
+exec::AggregateRegistrationResult registerSum(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("real")
@@ -107,12 +110,17 @@ exec::AggregateRegistrationResult registerSum(const std::string& name) {
                 name,
                 inputType->kindName());
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 } // namespace
 
-void registerSumAggregate(const std::string& prefix) {
-  registerSum<SumAggregate>(prefix + kSum);
+void registerSumAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  registerSum<SumAggregate>(prefix + kSum, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

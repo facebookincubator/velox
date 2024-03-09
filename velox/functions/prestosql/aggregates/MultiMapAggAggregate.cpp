@@ -477,7 +477,10 @@ class MultiMapAggAggregate : public exec::Aggregate {
 
 } // namespace
 
-void registerMultiMapAggAggregate(const std::string& prefix) {
+void registerMultiMapAggAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("K")
@@ -535,7 +538,9 @@ void registerMultiMapAggAggregate(const std::string& prefix) {
             VELOX_UNREACHABLE(
                 "Unexpected type {}", mapTypeKindToName(typeKind));
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

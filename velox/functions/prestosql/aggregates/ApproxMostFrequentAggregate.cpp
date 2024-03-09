@@ -351,7 +351,10 @@ std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
 
 } // namespace
 
-void registerApproxMostFrequentAggregate(const std::string& prefix) {
+void registerApproxMostFrequentAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& valueType :
        {"tinyint", "smallint", "integer", "bigint", "varchar"}) {
@@ -384,7 +387,9 @@ void registerApproxMostFrequentAggregate(const std::string& prefix) {
             resultType,
             name,
             valueType);
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

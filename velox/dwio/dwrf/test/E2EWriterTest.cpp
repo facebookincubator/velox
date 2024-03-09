@@ -258,7 +258,6 @@ class E2EWriterTest : public testing::Test {
         0,
         0,
         writerFlushThresholdSize,
-        0,
         "none");
   }
 
@@ -1655,7 +1654,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
     // Expect a throw if we don't set the non-reclaimable section.
     VELOX_ASSERT_THROW(writer->write(vectors[0]), "");
     {
-      exec::NonReclaimableSectionGuard nonReclaimableGuard(
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
           &nonReclaimableSection);
       for (size_t i = 0; i < vectors.size(); ++i) {
         writer->write(vectors[i]);
@@ -1754,7 +1753,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnFlush) {
         }));
 
     {
-      exec::NonReclaimableSectionGuard nonReclaimableGuard(
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
           &nonReclaimableSection);
       for (size_t i = 0; i < vectors.size(); ++i) {
         writer->write(vectors[i]);
@@ -1834,7 +1833,7 @@ TEST_F(E2EWriterTest, memoryReclaimAfterClose) {
     writer->flush();
 
     {
-      exec::NonReclaimableSectionGuard nonReclaimableGuard(
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
           &nonReclaimableSection);
       for (size_t i = 0; i < vectors.size(); ++i) {
         writer->write(vectors[i]);
@@ -1927,7 +1926,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimDuringInit) {
 
     std::unique_ptr<dwrf::Writer> writer;
     {
-      exec::NonReclaimableSectionGuard nonReclaimableGuard(
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
           &nonReclaimableSection);
       std::thread writerThread([&]() {
         writer =
@@ -1990,7 +1989,7 @@ TEST_F(E2EWriterTest, memoryReclaimThreshold) {
         std::make_unique<dwrf::Writer>(std::move(sink), options, dwrfPool);
 
     {
-      exec::NonReclaimableSectionGuard nonReclaimableGuard(
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
           &nonReclaimableSection);
       for (size_t i = 0; i < vectors.size(); ++i) {
         writer->write(vectors[i]);

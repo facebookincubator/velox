@@ -19,19 +19,20 @@
 #include <re2/re2.h>
 #include <deque>
 
+#include <folly/init/Init.h>
 #include <functional>
 #include <optional>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MallocAllocator.h"
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/core/PlanNode.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashBuild.h"
-#include "velox/exec/SharedArbitrator.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
@@ -45,7 +46,7 @@ using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::memory {
 // Custom node for the custom factory.
 class FakeMemoryNode : public core::PlanNode {
  public:
@@ -259,21 +260,10 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
 
   void setupMemory(
       int64_t memoryCapacity = 0,
-      uint64_t memoryPoolInitCapacity = kMemoryPoolInitCapacity,
-      uint64_t memoryPoolTransferCapacity = kMemoryPoolTransferCapacity,
-      uint64_t maxReclaimWaitMs = 0) {
+      uint64_t memoryPoolInitCapacity = kMemoryPoolInitCapacity) {
     memoryCapacity = (memoryCapacity != 0) ? memoryCapacity : kMemoryCapacity;
-    MemoryManagerOptions options;
-    options.arbitratorCapacity = memoryCapacity;
-    // Avoid allocation failure in unit tests.
-    options.allocatorCapacity = memoryCapacity * 2;
-    options.arbitratorKind = "SHARED";
-    options.memoryPoolInitCapacity = memoryPoolInitCapacity;
-    options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
-    options.memoryReclaimWaitMs = maxReclaimWaitMs;
-    options.checkUsageLeak = true;
-    options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
-    memoryManager_ = std::make_unique<MemoryManager>(options);
+    memoryManager_ =
+        createMemoryManager(memoryCapacity, memoryPoolInitCapacity);
     ASSERT_EQ(memoryManager_->arbitrator()->kind(), "SHARED");
     arbitrator_ = static_cast<SharedArbitrator*>(memoryManager_->arbitrator());
     numAddedPools_ = 0;
@@ -1083,6 +1073,7 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
     const int maxNumZombieTasks = 8;
     std::vector<std::thread> queryThreads;
     queryThreads.reserve(numThreads);
+    TestScopedAbortInjection testScopedAbortInjection(10, numThreads);
     for (int i = 0; i < numThreads; ++i) {
       queryThreads.emplace_back([&, i]() {
         std::shared_ptr<Task> task;
@@ -1141,7 +1132,8 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
         } catch (const VeloxException& e) {
           if (e.errorCode() != error_code::kMemCapExceeded.c_str() &&
               e.errorCode() != error_code::kMemAborted.c_str() &&
-              e.errorCode() != error_code::kMemAllocError.c_str()) {
+              e.errorCode() != error_code::kMemAllocError.c_str() &&
+              (e.message() != "Aborted for external error")) {
             std::rethrow_exception(std::current_exception());
           }
         }
@@ -1197,4 +1189,10 @@ TEST_F(SharedArbitrationTest, reserveReleaseCounters) {
     ASSERT_EQ(arbitrator_->stats().numReleases, numRootPools);
   }
 }
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::memory
+
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  folly::Init init{&argc, &argv, false};
+  return RUN_ALL_TESTS();
+}

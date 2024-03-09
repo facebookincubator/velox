@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/SharedArbitrator.h"
+#include "velox/common/memory/SharedArbitrator.h"
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Exceptions.h"
@@ -26,7 +26,9 @@
 
 using facebook::velox::common::testutil::TestValue;
 
-namespace facebook::velox::exec {
+namespace facebook::velox::memory {
+
+using namespace facebook::velox::memory;
 
 namespace {
 
@@ -192,8 +194,8 @@ uint64_t SharedArbitrator::growCapacity(
 uint64_t SharedArbitrator::shrinkCapacity(
     MemoryPool* pool,
     uint64_t targetBytes) {
-  uint64_t freedBytes;
-  uint64_t freeCapacity;
+  uint64_t freedBytes{0};
+  uint64_t freeCapacity{0};
   {
     std::lock_guard<std::mutex> l(mutex_);
     ++numReleases_;
@@ -223,6 +225,11 @@ uint64_t SharedArbitrator::shrinkCapacity(
       nullptr, candidates, targetBytes - freedBytes);
   incrementFreeCapacity(freedBytes);
   return freedBytes;
+}
+
+void SharedArbitrator::testingFreeCapacity(uint64_t capacity) {
+  std::lock_guard<std::mutex> l(mutex_);
+  incrementFreeCapacityLocked(capacity);
 }
 
 std::vector<SharedArbitrator::Candidate> SharedArbitrator::getCandidateStats(
@@ -708,4 +715,4 @@ void SharedArbitrator::registerFactory() {
 void SharedArbitrator::unregisterFactory() {
   MemoryArbitrator::unregisterFactory(kind_);
 }
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::memory

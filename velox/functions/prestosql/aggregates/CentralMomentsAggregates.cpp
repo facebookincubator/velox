@@ -492,7 +492,9 @@ void checkAccumulatorRowType(
 
 template <typename TResultAccessor>
 exec::AggregateRegistrationResult registerCentralMoments(
-    const std::string& name) {
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> inputTypes = {
       "smallint", "integer", "bigint", "real", "double"};
@@ -552,14 +554,21 @@ exec::AggregateRegistrationResult registerCentralMoments(
           return std::make_unique<
               CentralMomentsAggregate<int64_t, TResultAccessor>>(resultType);
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace
 
-void registerCentralMomentsAggregates(const std::string& prefix) {
-  registerCentralMoments<KurtosisResultAccessor>(prefix + kKurtosis);
-  registerCentralMoments<SkewnessResultAccessor>(prefix + kSkewness);
+void registerCentralMomentsAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  registerCentralMoments<KurtosisResultAccessor>(
+      prefix + kKurtosis, withCompanionFunctions, overwrite);
+  registerCentralMoments<SkewnessResultAccessor>(
+      prefix + kSkewness, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

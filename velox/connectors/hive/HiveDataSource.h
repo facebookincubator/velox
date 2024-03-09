@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/RandomUtil.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -72,14 +73,6 @@ class HiveDataSource : public DataSource {
 
   int64_t estimatedRowSize() override;
 
-  // Internal API, made public to be accessible in unit tests.  Do not use in
-  // other places.
-  static core::TypedExprPtr extractFiltersFromRemainingFilter(
-      const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator* evaluator,
-      bool negated,
-      SubfieldFilters& filters);
-
  protected:
   virtual std::unique_ptr<SplitReader> createSplitReader();
 
@@ -126,6 +119,10 @@ class HiveDataSource : public DataSource {
 
   // The row type for the data source output, not including filter-only columns
   const RowTypePtr outputType_;
+
+  // Column handles for the Split info columns keyed on their column names.
+  std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
+      infoColumns_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   RowVectorPtr emptyOutput_;
@@ -138,6 +135,8 @@ class HiveDataSource : public DataSource {
   VectorPtr filterResult_;
   SelectivityVector filterRows_;
   exec::FilterEvalCtx filterEvalCtx_;
+
+  std::shared_ptr<random::RandomSkipTracker> randomSkip_;
 };
 
 } // namespace facebook::velox::connector::hive

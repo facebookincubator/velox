@@ -21,9 +21,7 @@
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/memory/Memory.h"
 
-using namespace facebook::velox::memory;
-
-namespace facebook::velox::exec {
+namespace facebook::velox::memory {
 
 /// Used to achieve dynamic memory sharing among running queries. When a
 /// memory pool exceeds its current memory capacity, the arbitrator tries to
@@ -71,6 +69,9 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
     std::string toString() const;
   };
+
+  /// Returns 'freeCapacity' back to the arbitrator for testing.
+  void testingFreeCapacity(uint64_t freeCapacity);
 
  private:
   // The kind string of shared arbitrator.
@@ -211,4 +212,4 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   tsan_atomic<uint64_t> numReserves_{0};
   tsan_atomic<uint64_t> numReleases_{0};
 };
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::memory

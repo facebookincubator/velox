@@ -72,7 +72,9 @@ class BitwiseAggregateBase : public SimpleNumericAggregate<T, T, T> {
 template <template <typename U> class T>
 exec::AggregateRegistrationResult registerBitwise(
     const std::string& name,
-    bool onlyPrestoSignatures) {
+    bool withCompanionFunctions,
+    bool onlyPrestoSignatures,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> typeList{"tinyint", "smallint", "integer", "bigint"};
   if (onlyPrestoSignatures) {
@@ -112,7 +114,9 @@ exec::AggregateRegistrationResult registerBitwise(
                 name,
                 inputType->kindName());
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate

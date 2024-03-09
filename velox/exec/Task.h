@@ -125,6 +125,13 @@ class Task : public std::enable_shared_from_this<Task> {
 
   bool isUngroupedExecution() const;
 
+  /// Returns true if this task has ungrouped execution split under grouped
+  /// execution mode.
+  ///
+  /// NOTE: calls this function after task has been started as the number of
+  /// ungrouped drivers is set during task startup.
+  bool hasMixedExecutionGroup() const;
+
   /// Starts executing the plan fragment specified in the constructor. If leaf
   /// nodes require splits (e.g. TableScan, Exchange, etc.), these splits can be
   /// added before or after calling start().
@@ -479,10 +486,6 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns a custom join bridge for 'planNodeId'.
   std::shared_ptr<JoinBridge> getCustomJoinBridge(
-      uint32_t splitGroupId,
-      const core::PlanNodeId& planNodeId);
-
-  std::shared_ptr<SpillOperatorGroup> getSpillOperatorGroupLocked(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
