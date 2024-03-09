@@ -77,10 +77,10 @@ TEST_F(DateTimeFunctionsTest, toUTCTimestamp) {
       util::fromTimestampString("2015-01-24 00:00:00"),
       toUTCTimestamp("2015-01-24 05:30:00", "Asia/Kolkata"));
   EXPECT_THROW(
-      fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
+      toUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
       facebook::velox::VeloxUserError);
   try {
-    fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty");
+    toUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty");
     FAIL() << "Expected Velox Exception";
   } catch (const facebook::velox::VeloxUserError& err) {
     EXPECT_TRUE(
