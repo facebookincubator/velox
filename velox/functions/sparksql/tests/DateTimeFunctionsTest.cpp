@@ -99,6 +99,28 @@ TEST_F(DateTimeFunctionsTest, fromUTCTimestamp) {
       fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
 }
 
+TEST_F(DateTimeFunctionsTest, toFromUTCTimestamp) {
+  const auto toFromUTCTimestamp = [&](const std::string_view ts,
+                                      const std::optional<std::string> tz) {
+    auto timestamp = std::make_optional<Timestamp>(
+        util::fromTimestampString(ts.data(), ts.length()));
+    return evaluateOnce<Timestamp>(
+        "to_utc_timestamp(from_utc_timestamp(c0, c1), c1)", timestamp, tz);
+  };
+  EXPECT_EQ(
+      util::fromTimestampString("2015-07-24 07:00:00"),
+      toFromUTCTimestamp("2015-07-24 07:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(
+      util::fromTimestampString("2015-01-24 08:00:00"),
+      toFromUTCTimestamp("2015-01-24 08:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(
+      util::fromTimestampString("2015-01-24 00:00:00"),
+      toFromUTCTimestamp("2015-01-24 00:00:00", "UTC"));
+  EXPECT_EQ(
+      util::fromTimestampString("2015-01-24 00:00:00"),
+      toFromUTCTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
+}
+
 TEST_F(DateTimeFunctionsTest, year) {
   const auto year = [&](std::optional<Timestamp> date) {
     return evaluateOnce<int32_t>("year(c0)", date);

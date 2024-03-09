@@ -264,28 +264,62 @@ template <typename T>
 struct ToUTCTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*input*/,
+      const arg_type<Varchar>* timezone) {
+    if (timezone != nullptr) {
+      timezone_ =
+          date::locate_zone(std::string_view(timezone.data(), timezone.size()));
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Timestamp>& timestamp,
       const arg_type<Varchar>& timezone) {
     result = timestamp;
-    result.toGMT(
-        *date::locate_zone(std::string_view(timezone.data(), timezone.size())));
+    if (timezone_ != nullptr) {
+      result.toGMT(*timezone_);
+    } else {
+      result.toGMT(*date::locate_zone(
+          std::string_view(timezone.data(), timezone.size())));
+    }
   }
+
+ private:
+  date::time_zone* timezone_{nullptr};
 };
 
 template <typename T>
 struct FromUTCTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*input*/,
+      const arg_type<Varchar>* timezone) {
+    if (timezone != nullptr) {
+      timezone_ =
+          date::locate_zone(std::string_view(timezone.data(), timezone.size()));
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Timestamp>& timestamp,
       const arg_type<Varchar>& timezone) {
     result = timestamp;
-    result.toTimezone(
-        *date::locate_zone(std::string_view(timezone.data(), timezone.size())));
+    if (timezone_ != nullptr) {
+      result.toTimezone(*timezone_);
+    } else {
+      result.toTimezone(*date::locate_zone(
+          std::string_view(timezone.data(), timezone.size())));
+    }
   }
+
+ private:
+  date::time_zone* timezone_{nullptr};
 };
 
 /// Converts date string to Timestmap type.
