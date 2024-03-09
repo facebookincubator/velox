@@ -8,9 +8,9 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
     Returns unicode code point of the first character of ``string``. Returns 0 if ``string`` is empty.
 
-.. spark:function:: bit_length(string) -> integer
+.. spark:function:: bit_length(string/binary) -> integer
 
-    Returns the bit length for the specified string column.::
+    Returns the bit length for the specified string column. ::
         SELECT bit_length('123'); -- 24
 
 .. spark:function:: chr(n) -> varchar

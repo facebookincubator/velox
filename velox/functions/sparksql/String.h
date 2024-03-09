@@ -91,6 +91,28 @@ struct AsciiFunction {
   }
 };
 
+template <typename T>
+struct BitLengthVarcharFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& input) {
+    result = input.size() * 8;
+  }
+};
+
+template <typename T>
+struct BitLengthVarbinaryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int32_t>& result,
+      const arg_type<Varbinary>& input) {
+    result = input.size() * 8;
+  }
+};
+
 /// chr function
 /// chr(n) -> string
 /// Returns the Unicode code point ``n`` as a single character string.
@@ -755,28 +777,6 @@ struct LeftFunction {
     // Generating output string
     result.setNoCopy(StringView(
         input.data() + byteRange.first, byteRange.second - byteRange.first));
-  }
-};
-
-template <typename T>
-struct BitLengthVarcharFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<int32_t>& result,
-      const arg_type<Varchar>& input) {
-    result = input.size() * 8;
-  }
-};
-
-template <typename T>
-struct BitLengthVarbinaryFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<int32_t>& result,
-      const arg_type<Varbinary>& input) {
-    result = input.size() * 8;
   }
 };
 

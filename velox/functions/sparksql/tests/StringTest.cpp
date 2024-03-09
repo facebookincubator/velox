@@ -254,6 +254,27 @@ TEST_F(StringTest, Ascii) {
   EXPECT_EQ(ascii(std::nullopt), std::nullopt);
 }
 
+TEST_F(StringTest, BitLengthVarchar) {
+  EXPECT_EQ(bit_length_varchar(""), 0);
+  EXPECT_EQ(bit_length_varchar(std::string("\0", 1)), 8);
+  EXPECT_EQ(bit_length_varchar("1"), 8);
+  EXPECT_EQ(bit_length_varchar("123"), 24);
+  EXPECT_EQ(bit_length_varchar("😋"), 32);
+  // Consists of five codepoints.
+  EXPECT_EQ(bit_length_varchar(kWomanFacepalmingLightSkinTone), 136);
+  EXPECT_EQ(bit_length_varchar("\U0001F408"), 32);
+}
+
+TEST_F(StringTest, BitLengthVarbinary) {
+  EXPECT_EQ(bit_length_varbinary(""), 0);
+  EXPECT_EQ(bit_length_varbinary(std::string("\0", 1)), 8);
+  EXPECT_EQ(bit_length_varbinary("1"), 8);
+  EXPECT_EQ(bit_length_varbinary("123"), 24);
+  EXPECT_EQ(bit_length_varbinary("😋"), 32);
+  EXPECT_EQ(bit_length_varbinary(kWomanFacepalmingLightSkinTone), 136);
+  EXPECT_EQ(bit_length_varbinary("\U0001F408"), 32);
+}
+
 TEST_F(StringTest, Chr) {
   EXPECT_EQ(chr(-16), "");
   EXPECT_EQ(chr(0), std::string("\0", 1));
@@ -306,27 +327,6 @@ TEST_F(StringTest, LengthBytes) {
   EXPECT_EQ(length_bytes("😋"), 4);
   EXPECT_EQ(length_bytes(kWomanFacepalmingLightSkinTone), 17);
   EXPECT_EQ(length_bytes("1234567890abdef"), 15);
-}
-
-TEST_F(StringTest, BitLengthVarchar) {
-  EXPECT_EQ(bit_length_varchar(""), 0);
-  EXPECT_EQ(bit_length_varchar(std::string("\0", 1)), 8);
-  EXPECT_EQ(bit_length_varchar("1"), 8);
-  EXPECT_EQ(bit_length_varchar("123"), 24);
-  EXPECT_EQ(bit_length_varchar("😋"), 32);
-  // Consists of five codepoints.
-  EXPECT_EQ(bit_length_varchar(kWomanFacepalmingLightSkinTone), 136);
-  EXPECT_EQ(bit_length_varchar("\U0001F408"), 32);
-}
-
-TEST_F(StringTest, BitLengthVarbinary) {
-  EXPECT_EQ(bit_length_varbinary(""), 0);
-  EXPECT_EQ(bit_length_varbinary(std::string("\0", 1)), 8);
-  EXPECT_EQ(bit_length_varbinary("1"), 8);
-  EXPECT_EQ(bit_length_varbinary("123"), 24);
-  EXPECT_EQ(bit_length_varbinary("😋"), 32);
-  EXPECT_EQ(bit_length_varbinary(kWomanFacepalmingLightSkinTone), 136);
-  EXPECT_EQ(bit_length_varbinary("\U0001F408"), 32);
 }
 
 TEST_F(StringTest, MD5) {
