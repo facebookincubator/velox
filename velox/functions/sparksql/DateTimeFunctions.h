@@ -269,8 +269,8 @@ struct ToUTCTimestampFunction {
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* timezone) {
     if (timezone != nullptr) {
-      timezone_ =
-          date::locate_zone(std::string_view(timezone.data(), timezone.size()));
+      timezone_ = date::locate_zone(
+          std::string_view((*timezone).data(), (*timezone).size()));
     }
   }
 
@@ -300,8 +300,8 @@ struct FromUTCTimestampFunction {
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* timezone) {
     if (timezone != nullptr) {
-      timezone_ =
-          date::locate_zone(std::string_view(timezone.data(), timezone.size()));
+      timezone_ = date::locate_zone(
+          std::string_view((*timezone).data(), (*timezone).size()));
     }
   }
 
