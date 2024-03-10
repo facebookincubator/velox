@@ -21,3 +21,11 @@ Miscellaneous Functions
     It ensures deterministic data partitioning and assigns a unique partition
     id to each task in a deterministic way. Consequently, this function is
     marked as deterministic, enabling Velox to perform constant folding on it.
+
+.. spark:function:: uuid(seed) -> string
+
+    Returns an universally unique identifier (UUID) string. The value is
+    returned as a canonical UUID 36-character string. The UUID is generated
+    from Pseudo-Random Numbers with the seed by combining user-specified
+    ``seed`` and the configuration `spark.partition_id`.
+    ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``.
