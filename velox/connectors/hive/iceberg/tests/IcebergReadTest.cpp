@@ -35,15 +35,22 @@ namespace facebook::velox::connector::hive::iceberg {
 class HiveIcebergTest : public HiveConnectorTestBase {
  public:
   void assertPositionalDeletes(
-      const std::vector<int64_t>& deleteRows,
+      const std::vector<std::vector<int64_t>>& deleteRowVectors,
       bool multipleBaseFiles = false) {
+    std::vector<int64_t> deleteRows;
+
+    for (const auto& deleteRowVector : deleteRowVectors) {
+      deleteRows.insert(
+          deleteRows.end(), deleteRowVector.begin(), deleteRowVector.end());
+    }
+
     assertPositionalDeletes(
-        deleteRows,
+        deleteRowVectors,
         "SELECT * FROM tmp WHERE c0 NOT IN (" + makeNotInList(deleteRows) + ")",
         multipleBaseFiles);
   }
   void assertPositionalDeletes(
-      const std::vector<int64_t>& deleteRows,
+      const std::vector<std::vector<int64_t>>& deleteRowVectors,
       std::string duckdbSql,
       bool multipleBaseFiles = false) {
     std::shared_ptr<TempFilePath> dataFilePath = writeDataFile(rowCount);
@@ -53,21 +60,33 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         multipleBaseFiles ? folly::Random::rand32(0, 1000, gen) : 0;
     int64_t numDeleteRowsAfter =
         multipleBaseFiles ? folly::Random::rand32(0, 1000, gen) : 0;
-    std::shared_ptr<TempFilePath> deleteFilePath = writePositionDeleteFile(
-        dataFilePath->path,
-        deleteRows,
-        numDeleteRowsBefore,
-        numDeleteRowsAfter);
 
-    IcebergDeleteFile deleteFile(
-        FileContent::kPositionalDeletes,
-        deleteFilePath->path,
-        fileFomat_,
-        deleteRows.size() + numDeleteRowsBefore + numDeleteRowsAfter,
-        testing::internal::GetFileSize(
-            std::fopen(deleteFilePath->path.c_str(), "r")));
+    std::vector<IcebergDeleteFile> deleteFiles;
+    deleteFiles.reserve(deleteRowVectors.size());
 
-    auto icebergSplit = makeIcebergSplit(dataFilePath->path, {deleteFile});
+    std::vector<std::shared_ptr<TempFilePath>> deleteFilePaths;
+    deleteFilePaths.reserve(deleteRowVectors.size());
+
+    for (const auto& deleteRowVector : deleteRowVectors) {
+      auto deleteFilePath = writePositionDeleteFile(
+          dataFilePath->path,
+          deleteRowVector,
+          numDeleteRowsBefore,
+          numDeleteRowsAfter);
+      deleteFilePaths.push_back(deleteFilePath);
+
+      IcebergDeleteFile deleteFile(
+          FileContent::kPositionalDeletes,
+          deleteFilePath->path,
+          fileFomat_,
+          deleteRowVector.size() + numDeleteRowsBefore + numDeleteRowsAfter,
+          testing::internal::GetFileSize(
+              std::fopen(deleteFilePath->path.c_str(), "r")));
+
+      deleteFiles.push_back(deleteFile);
+    }
+
+    auto icebergSplit = makeIcebergSplit(dataFilePath->path, deleteFiles);
 
     auto plan = tableScanNode();
     auto task = OperatorTestBase::assertQuery(plan, {icebergSplit}, duckdbSql);
@@ -240,20 +259,38 @@ TEST_F(HiveIcebergTest, positionalDeletesSingleBaseFile) {
   folly::SingletonVault::singleton()->registrationComplete();
 
   // Delete row 0, 1, 2, 3 from the first batch out of two.
-  assertPositionalDeletes({0, 1, 2, 3});
+  assertPositionalDeletes({{0, 1, 2, 3}});
   // Delete the first and last row in each batch (10000 rows per batch)
-  assertPositionalDeletes({0, 9999, 10000, 19999});
+  assertPositionalDeletes({{0, 9999, 10000, 19999}});
   // Delete several rows in the second batch (10000 rows per batch)
-  assertPositionalDeletes({10000, 10002, 19999});
+  assertPositionalDeletes({{10000, 10002, 19999}});
   // Delete random rows
-  assertPositionalDeletes(makeRandomDeleteRows(rowCount));
+  assertPositionalDeletes({makeRandomDeleteRows(rowCount)});
   // Delete 0 rows
-  assertPositionalDeletes({}, "SELECT * FROM tmp", false);
+  assertPositionalDeletes({{}}, "SELECT * FROM tmp", false);
   // Delete all rows
   assertPositionalDeletes(
-      makeSequenceRows(rowCount), "SELECT * FROM tmp WHERE 1 = 0", false);
+      {makeSequenceRows(rowCount)}, "SELECT * FROM tmp WHERE 1 = 0", false);
   // Delete rows that don't exist
-  assertPositionalDeletes({20000, 29999});
+  assertPositionalDeletes({{20000, 29999}});
+}
+
+TEST_F(HiveIcebergTest, positionalDeletesSingleBaseFileMultipleDeleteFiles) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  // Delete row 0, 1, 2, 3 from the first batch out of two.
+  assertPositionalDeletes({{0, 1}, {2, 3}});
+  // Delete the first and last row in each batch (10000 rows per batch)
+  assertPositionalDeletes({{0, 9999}, {10000, 19999}});
+  // Delete several rows in the second batch (10000 rows per batch)
+  assertPositionalDeletes({{10000}, {10002}, {19999}});
+  // Delete random rows
+  assertPositionalDeletes(
+      {{makeRandomDeleteRows(rowCount)}, {makeRandomDeleteRows(rowCount)}});
+  // Delete 0 rows
+  assertPositionalDeletes({{}}, "SELECT * FROM tmp", false);
+  // Delete rows that don't exist
+  assertPositionalDeletes({{20001}, {20000, 29999}});
 }
 
 // The positional delete file contains rows from multiple base files
@@ -261,20 +298,20 @@ TEST_F(HiveIcebergTest, positionalDeletesMultipleBaseFiles) {
   folly::SingletonVault::singleton()->registrationComplete();
 
   // Delete row 0, 1, 2, 3 from the first batch out of two.
-  assertPositionalDeletes({0, 1, 2, 3}, true);
+  assertPositionalDeletes({{0, 1, 2, 3}}, true);
   // Delete the first and last row in each batch (10000 rows per batch)
-  assertPositionalDeletes({0, 9999, 10000, 19999}, true);
+  assertPositionalDeletes({{0, 9999, 10000, 19999}}, true);
   // Delete several rows in the second batch (10000 rows per batch)
-  assertPositionalDeletes({10000, 10002, 19999}, true);
+  assertPositionalDeletes({{10000, 10002, 19999}}, true);
   // Delete random rows
-  assertPositionalDeletes(makeRandomDeleteRows(rowCount), true);
+  assertPositionalDeletes({makeRandomDeleteRows(rowCount)}, true);
   // Delete 0 rows
-  assertPositionalDeletes({}, "SELECT * FROM tmp", true);
+  assertPositionalDeletes({{}}, "SELECT * FROM tmp", true);
   // Delete all rows
   assertPositionalDeletes(
-      makeSequenceRows(rowCount), "SELECT * FROM tmp WHERE 1 = 0", true);
+      {makeSequenceRows(rowCount)}, "SELECT * FROM tmp WHERE 1 = 0", true);
   // Delete rows that don't exist
-  assertPositionalDeletes({20000, 29999}, true);
+  assertPositionalDeletes({{20000, 29999}}, true);
 }
 
 } // namespace facebook::velox::connector::hive::iceberg
