@@ -34,7 +34,7 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
   if (hour < 0 || hour > 24) {
     return std::nullopt;
   }
-  // Check miniute.
+  // Check minute.
   auto minute = minuteVector->valueAt<int32_t>(row);
   if (minute < 0 || minute > 60) {
     return std::nullopt;
@@ -69,6 +69,21 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
 void setTimestampOrNull(
     int32_t row,
     std::optional<Timestamp> timestamp,
+    DecodedVector* timeZoneVector,
+    FlatVector<Timestamp>* result) {
+  if (timestamp.has_value()) {
+    auto timeZone = timeZoneVector->valueAt<StringView>(row);
+    auto tzID = util::getTimeZoneID(std::string_view(timeZone));
+    (*timestamp).toGMT(tzID);
+    result->set(row, *timestamp);
+  } else {
+    result->setNull(row, true);
+  }
+}
+
+void setTimestampOrNull(
+    int32_t row,
+    std::optional<Timestamp> timestamp,
     int64_t tzID,
     FlatVector<Timestamp>* result) {
   if (timestamp.has_value()) {
@@ -93,35 +108,31 @@ class MakeTimestampFunction : public exec::VectorFunction {
     auto* resultFlatVector = result->as<FlatVector<Timestamp>>();
 
     exec::DecodedArgs decodedArgs(rows, args, context);
-    auto year = decodedArgs.at(0);
-    auto month = decodedArgs.at(1);
-    auto day = decodedArgs.at(2);
-    auto hour = decodedArgs.at(3);
-    auto minute = decodedArgs.at(4);
-    auto micros = decodedArgs.at(5);
+    auto* year = decodedArgs.at(0);
+    auto* month = decodedArgs.at(1);
+    auto* day = decodedArgs.at(2);
+    auto* hour = decodedArgs.at(3);
+    auto* minute = decodedArgs.at(4);
+    auto* micros = decodedArgs.at(5);
 
     if (args.size() == 7) {
       // If the timezone argument is specified, treat the input timestamp as the
       // time in that timezone.
       if (args[6]->isConstantEncoding()) {
-        auto constantTzID =
-            util::getTimeZoneID(args[6]
-                                    ->asUnchecked<ConstantVector<StringView>>()
-                                    ->valueAt(0)
-                                    .str());
+        auto tz =
+            args[6]->asUnchecked<ConstantVector<StringView>>()->valueAt(0);
+        auto constantTzID = util::getTimeZoneID(std::string_view(tz));
         rows.applyToSelected([&](vector_size_t row) {
           auto timestamp = makeTimeStampFromDecodedArgs(
               row, year, month, day, hour, minute, micros);
           setTimestampOrNull(row, timestamp, constantTzID, resultFlatVector);
         });
       } else {
-        auto timeZone = decodedArgs.at(6);
+        auto* timeZone = decodedArgs.at(6);
         rows.applyToSelected([&](vector_size_t row) {
           auto timestamp = makeTimeStampFromDecodedArgs(
               row, year, month, day, hour, minute, micros);
-          auto tzID =
-              util::getTimeZoneID(timeZone->valueAt<StringView>(row).str());
-          setTimestampOrNull(row, timestamp, tzID, resultFlatVector);
+          setTimestampOrNull(row, timestamp, timeZone, resultFlatVector);
         });
       }
     } else {
@@ -163,7 +174,7 @@ class MakeTimestampFunction : public exec::VectorFunction {
   }
 
  private:
-  int64_t sessionTzID_;
+  const int64_t sessionTzID_;
 };
 
 std::shared_ptr<exec::VectorFunction> createMakeTimestampFunction(
@@ -176,15 +187,17 @@ std::shared_ptr<exec::VectorFunction> createMakeTimestampFunction(
       "make_timestamp requires session time zone to be set.")
   const auto sessionTzID = util::getTimeZoneID(sessionTzName);
 
+  const auto& secondsType = inputArgs[5].type;
   VELOX_USER_CHECK(
-      inputArgs[5].type->isShortDecimal(),
+      secondsType->isShortDecimal(),
       "Seconds must be short decimal type but got {}",
-      inputArgs[5].type->toString());
-  auto microsType = inputArgs[5].type->asShortDecimal();
-  VELOX_USER_CHECK(
-      microsType.scale() == 6,
+      secondsType->toString());
+  auto secondsScale = secondsType->asShortDecimal().scale();
+  VELOX_USER_CHECK_EQ(
+      secondsScale,
+      6,
       "Seconds fraction must have 6 digits for microseconds but got {}",
-      microsType.scale());
+      secondsScale);
 
   return std::make_shared<MakeTimestampFunction>(sessionTzID);
 }

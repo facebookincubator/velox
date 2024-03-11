@@ -17,7 +17,6 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/tz/TimeZoneMap.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
@@ -821,6 +820,7 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
 }
 
 TEST_F(DateTimeFunctionsTest, makeTimestamp) {
+  const auto microsType = DECIMAL(16, 6);
   const auto testMakeTimestamp = [&](const RowVectorPtr& data,
                                      const VectorPtr& expected,
                                      bool hasTimeZone) {
@@ -829,7 +829,6 @@ TEST_F(DateTimeFunctionsTest, makeTimestamp) {
         : evaluate("make_timestamp(c0, c1, c2, c3, c4, c5)", data);
     facebook::velox::test::assertEqualVectors(expected, result);
   };
-
   const auto testConstantTimezone = [&](const RowVectorPtr& data,
                                         const std::string& timezone,
                                         const VectorPtr& expected) {
@@ -838,8 +837,6 @@ TEST_F(DateTimeFunctionsTest, makeTimestamp) {
         data);
     facebook::velox::test::assertEqualVectors(expected, result);
   };
-
-  const auto microsType = DECIMAL(16, 6);
 
   // Valid cases w/o time zone argument.
   {
@@ -895,71 +892,71 @@ TEST_F(DateTimeFunctionsTest, makeTimestamp) {
          std::nullopt});
     testMakeTimestamp(data, expected, true);
   }
+}
 
-  // Invalid cases.
-  {
-    const auto testInvalid = [&](int64_t microsec, const TypePtr& microsType) {
-      return evaluateOnce<Timestamp, int64_t>(
-          "make_timestamp(c0, c1, c2, c3, c4, c5)",
-          {1, 1, 1, 1, 1, microsec},
-          {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType});
-    };
+TEST_F(DateTimeFunctionsTest, makeTimestampInvalid) {
+  const auto microsType = DECIMAL(16, 6);
+  const auto testInvalidInputs = [&](const RowVectorPtr& data) {
+    std::vector<std::optional<Timestamp>> nullResults(
+        data->size(), std::nullopt);
+    auto expected = makeNullableFlatVector<Timestamp>(nullResults);
+    auto result = evaluate("make_timestamp(c0, c1, c2, c3, c4, c5)", data);
+    facebook::velox::test::assertEqualVectors(expected, result);
+  };
+  const auto testInvalidSeconds = [&](std::optional<int64_t> microsec) {
+    auto result = evaluateOnce<Timestamp, int64_t>(
+        "make_timestamp(c0, c1, c2, c3, c4, c5)",
+        {1, 1, 1, 1, 1, microsec},
+        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType});
+    EXPECT_EQ(result, std::nullopt);
+  };
+  const auto testInvalidArguments = [&](int64_t microsec,
+                                        const TypePtr& microsType) {
+    return evaluateOnce<Timestamp, int64_t>(
+        "make_timestamp(c0, c1, c2, c3, c4, c5)",
+        {1, 1, 1, 1, 1, microsec},
+        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType});
+  };
 
-    // No session time zone.
-    setQueryTimeZone("");
-    VELOX_ASSERT_THROW(
-        testInvalid(60007000, DECIMAL(16, 6)),
-        "make_timestamp requires session time zone to be set.");
+  setQueryTimeZone("Asia/Shanghai");
+  // Invalid input returns null.
+  const auto year = makeFlatVector<int32_t>(
+      {facebook::velox::util::kMinYear - 1,
+       facebook::velox::util::kMaxYear + 1,
+       1,
+       1,
+       1,
+       1,
+       1,
+       1});
+  const auto month = makeFlatVector<int32_t>({1, 1, 0, 13, 1, 1, 1, 1});
+  const auto day = makeFlatVector<int32_t>({1, 1, 1, 1, 0, 32, 1, 1});
+  const auto hour = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 25, 1});
+  const auto minute = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 1, 61});
+  const auto micros =
+      makeFlatVector<int64_t>({1, 1, 1, 1, 1, 1, 1, 1}, microsType);
+  auto data = makeRowVector({year, month, day, hour, minute, micros});
+  testInvalidInputs(data);
 
-    // Invalid data type for microseconds.
-    setQueryTimeZone("Asia/Shanghai");
-    VELOX_ASSERT_THROW(
-        testInvalid(1e6, DECIMAL(20, 8)),
-        "Seconds must be short decimal type but got DECIMAL(20, 8)");
-    VELOX_ASSERT_THROW(
-        testInvalid(60007000, DECIMAL(16, 8)),
-        "Seconds fraction must have 6 digits for microseconds but got 8");
+  // Seconds should be either in the range of [0,59], or 60 with zero
+  // microseconds.
+  testInvalidSeconds(61e6);
+  testInvalidSeconds(99999999);
+  testInvalidSeconds(999999999);
+  testInvalidSeconds(60007000);
 
-    // Invalid arguments returns null.
-    const auto year = makeFlatVector<int32_t>(
-        {facebook::velox::util::kMinYear - 1,
-         facebook::velox::util::kMaxYear + 1,
-         1,
-         1,
-         1,
-         1,
-         1,
-         1});
-    const auto month = makeFlatVector<int32_t>({1, 1, 0, 13, 1, 1, 1, 1});
-    const auto day = makeFlatVector<int32_t>({1, 1, 1, 1, 0, 32, 1, 1});
-    const auto hour = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 25, 1});
-    const auto minute = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 1, 61});
-    const auto micros =
-        makeFlatVector<int64_t>({1, 1, 1, 1, 1, 1, 1, 1}, microsType);
-    auto expected = makeNullableFlatVector<Timestamp>(
-        {std::nullopt,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt});
-    auto data = makeRowVector({year, month, day, hour, minute, micros});
-    testMakeTimestamp(data, expected, false);
-
-    const auto testInvalidMicros = [&](std::optional<int64_t> microsec) {
-      auto result = evaluateOnce<Timestamp, int64_t>(
-          "make_timestamp(c0, c1, c2, c3, c4, c5)",
-          {1, 1, 1, 1, 1, microsec},
-          {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType});
-      EXPECT_EQ(result, std::nullopt);
-    };
-    testInvalidMicros(61e6);
-    testInvalidMicros(99999999);
-    testInvalidMicros(999999999);
-    testInvalidMicros(60007000);
-  }
+  // Throw if data type for microseconds is invalid.
+  VELOX_ASSERT_THROW(
+      testInvalidArguments(1e6, DECIMAL(20, 6)),
+      "Seconds must be short decimal type but got DECIMAL(20, 6)");
+  VELOX_ASSERT_THROW(
+      testInvalidArguments(1e6, DECIMAL(16, 8)),
+      "Seconds fraction must have 6 digits for microseconds but got 8");
+  // Throw if no session time zone.
+  setQueryTimeZone("");
+  VELOX_ASSERT_THROW(
+      testInvalidArguments(60007000, DECIMAL(16, 6)),
+      "make_timestamp requires session time zone to be set.");
 }
 
 } // namespace
