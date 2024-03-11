@@ -32,7 +32,10 @@ struct SIMDGetJsonObjectFunction {
       const arg_type<Varchar>* /*json*/,
       const arg_type<Varchar>* jsonPath) {
     if (jsonPath != nullptr) {
-      formattedJsonPath_ = getFormattedJsonPath(*jsonPath);
+      if (jsonPath->size() > 1 && jsonPath->data()[0] == '$') {
+        formattedJsonPath_ = getJsonPointerPath(
+            std::string_view(jsonPath->data() + 1, jsonPath->size() - 1));
+      }
     }
   }
 
@@ -41,14 +44,17 @@ struct SIMDGetJsonObjectFunction {
       const arg_type<Varchar>& json,
       const arg_type<Varchar>& jsonPath) {
     // Spark requires the first char in jsonPath is '$'.
-    if (jsonPath.data()[0] != '$') {
+    if (jsonPath.size() < 2 || jsonPath.data()[0] != '$') {
       return false;
     }
     ParserContext ctx(json.data(), json.size());
     ctx.parseDocument();
     auto rawResult = formattedJsonPath_.has_value()
         ? ctx.jsonDoc.at_pointer(formattedJsonPath_.value().data())
-        : ctx.jsonDoc.at_pointer(getFormattedJsonPath(jsonPath).data());
+        : ctx.jsonDoc.at_pointer(
+              getJsonPointerPath(
+                  std::string_view(jsonPath.data() + 1, jsonPath.size() - 1))
+                  .data());
     if (rawResult.error()) {
       return false;
     }
@@ -63,28 +69,63 @@ struct SIMDGetJsonObjectFunction {
   }
 
  private:
-  // Makes a conversion from Spark's json path to json pointer, e.g., converts
-  // "$.a.b" to "/a/b".
+  // Makes a conversion from Spark's json path to json pointer path, e.g.,
+  // converts "$.a.b" to "/a/b".
   // See simdjson link:
   // https://github.com/simdjson/simdjson/blob/master/doc/dom.md#json-pointer
-  FOLLY_ALWAYS_INLINE std::string getFormattedJsonPath(
-      const arg_type<Varchar>& jsonPath) {
-    // Ignore '$'.
-    char formattedJsonPath[jsonPath.size()];
-    int j = 0;
-    for (int i = 1; i < jsonPath.size(); i++) {
-      if (jsonPath.data()[i] == ']' || jsonPath.data()[i] == '\'') {
-        continue;
-      } else if (jsonPath.data()[i] == '[' || jsonPath.data()[i] == '.') {
-        formattedJsonPath[j] = '/';
-        j++;
-      } else {
-        formattedJsonPath[j] = jsonPath.data()[i];
-        j++;
-      }
+  // Copied from:
+  // https://github.com/simdjson/simdjson/blob/master/include/simdjson/generic/ondemand/json_path_to_pointer_conversion-inl.h
+  FOLLY_ALWAYS_INLINE std::string getJsonPointerPath(
+      const std::string_view jsonPath) {
+    if (jsonPath.empty() ||
+        (jsonPath.front() != '.' && jsonPath.front() != '[')) {
+      return "-1"; // This is just a sentinel value, the caller should check for
+                   // this and return an error.
     }
-    formattedJsonPath[j] = '\0';
-    return std::string(formattedJsonPath, j + 1);
+
+    std::string result;
+    // Reserve space to reduce allocations, adjusting for potential increases
+    // due to escaping.
+    result.reserve(jsonPath.size() * 2);
+
+    size_t i = 0;
+
+    while (i < jsonPath.length()) {
+      if (jsonPath[i] == '.') {
+        result += '/';
+      } else if (jsonPath[i] == '[') {
+        result += '/';
+        ++i; // Move past the '['
+        while (i < jsonPath.length() && jsonPath[i] != ']') {
+          if (jsonPath[i] == '~') {
+            result += "~0";
+          } else if (jsonPath[i] == '/') {
+            result += "~1";
+          } else if (jsonPath[i] == '\'') {
+            ++i;
+            continue;
+          } else {
+            result += jsonPath[i];
+          }
+          ++i;
+        }
+        if (i == jsonPath.length() || jsonPath[i] != ']') {
+          return "-1"; // Using sentinel value that will be handled as an error
+                       // by the caller.
+        }
+      } else {
+        if (jsonPath[i] == '~') {
+          result += "~0";
+        } else if (jsonPath[i] == '/') {
+          result += "~1";
+        } else {
+          result += jsonPath[i];
+        }
+      }
+      ++i;
+    }
+
+    return result;
   }
 
   FOLLY_ALWAYS_INLINE simdjson::error_code extractStringResult(
