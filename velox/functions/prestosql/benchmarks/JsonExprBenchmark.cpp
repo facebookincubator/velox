@@ -357,7 +357,6 @@ BENCHMARK_RELATIVE_NAMED_PARAM(
 BENCHMARK_DRAW_LINE();
 
 BENCHMARK_DRAW_LINE();
-BENCHMARK_NAMED_PARAM(FollyJsonExtractScalar, 100_iters_10bytes_size, 100, 10);
 BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDJsonExtractScalar,
     100_iters_10bytes_size,
@@ -365,11 +364,6 @@ BENCHMARK_RELATIVE_NAMED_PARAM(
     10);
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(
-    FollyJsonExtractScalar,
-    100_iters_100bytes_size,
-    100,
-    100);
 BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDJsonExtractScalar,
     100_iters_100bytes_size,
@@ -377,11 +371,6 @@ BENCHMARK_RELATIVE_NAMED_PARAM(
     100);
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(
-    FollyJsonExtractScalar,
-    100_iters_1000bytes_size,
-    100,
-    1000);
 BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDJsonExtractScalar,
     100_iters_1000bytes_size,
@@ -389,11 +378,6 @@ BENCHMARK_RELATIVE_NAMED_PARAM(
     1000);
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(
-    FollyJsonExtractScalar,
-    100_iters_10000bytes_size,
-    100,
-    10000);
 BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDJsonExtractScalar,
     100_iters_10000bytes_size,
