@@ -100,9 +100,6 @@ TEST_F(DateTimeFunctionsTest, fromUTCTimestamp) {
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 05:30:00"),
       fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
-  EXPECT_THROW(
-      fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
-      facebook::velox::VeloxUserError);
   VELOX_ASSERT_THROW(
       fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
       "Asia/Ooty not found in timezone database");
@@ -128,9 +125,6 @@ TEST_F(DateTimeFunctionsTest, toFromUTCTimestamp) {
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
       toFromUTCTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
-  EXPECT_THROW(
-      toFromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
-      facebook::velox::VeloxUserError);
   VELOX_ASSERT_THROW(
       toFromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
       "Asia/Ooty not found in timezone database");
