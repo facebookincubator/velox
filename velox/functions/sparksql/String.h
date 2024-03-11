@@ -92,23 +92,11 @@ struct AsciiFunction {
 };
 
 template <typename T>
-struct BitLengthVarcharFunction {
+struct BitLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<int32_t>& result,
-      const arg_type<Varchar>& input) {
-    result = input.size() * 8;
-  }
-};
-
-template <typename T>
-struct BitLengthVarbinaryFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<int32_t>& result,
-      const arg_type<Varbinary>& input) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, TInput& input) {
     result = input.size() * 8;
   }
 };
