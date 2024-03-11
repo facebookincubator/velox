@@ -268,7 +268,7 @@ struct ToUTCTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* timezone) {
-    if (timezone != nullptr) {
+    if (timezone) {
       timezone_ = date::locate_zone(
           std::string_view((*timezone).data(), (*timezone).size()));
     }
@@ -279,12 +279,10 @@ struct ToUTCTimestampFunction {
       const arg_type<Timestamp>& timestamp,
       const arg_type<Varchar>& timezone) {
     result = timestamp;
-    if (timezone_ != nullptr) {
-      result.toGMT(*timezone_);
-    } else {
-      result.toGMT(*date::locate_zone(
-          std::string_view(timezone.data(), timezone.size())));
-    }
+    auto fromTimezone = timezone_
+        ? timezone_
+        : date::locate_zone(std::string_view(timezone.data(), timezone.size()));
+    result.toGMT(*fromTimezone);
   }
 
  private:
@@ -299,7 +297,7 @@ struct FromUTCTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* timezone) {
-    if (timezone != nullptr) {
+    if (timezone) {
       timezone_ = date::locate_zone(
           std::string_view((*timezone).data(), (*timezone).size()));
     }
@@ -310,12 +308,10 @@ struct FromUTCTimestampFunction {
       const arg_type<Timestamp>& timestamp,
       const arg_type<Varchar>& timezone) {
     result = timestamp;
-    if (timezone_ != nullptr) {
-      result.toTimezone(*timezone_);
-    } else {
-      result.toTimezone(*date::locate_zone(
-          std::string_view(timezone.data(), timezone.size())));
-    }
+    auto toTimezone = timezone_
+        ? timezone_
+        : date::locate_zone(std::string_view(timezone.data(), timezone.size()));
+    result.toTimezone(*toTimezone);
   }
 
  private:

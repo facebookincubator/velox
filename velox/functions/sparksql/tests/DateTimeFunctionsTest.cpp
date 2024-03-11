@@ -76,18 +76,9 @@ TEST_F(DateTimeFunctionsTest, toUTCTimestamp) {
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
       toUTCTimestamp("2015-01-24 05:30:00", "Asia/Kolkata"));
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       toUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
-      facebook::velox::VeloxUserError);
-  try {
-    toUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty");
-    FAIL() << "Expected Velox Exception";
-  } catch (const facebook::velox::VeloxUserError& err) {
-    EXPECT_TRUE(
-        std::string(err.message())
-            .find("Asia/Ooty not found in timezone database") !=
-        std::string::npos);
-  }
+      "Asia/Ooty not found in timezone database");
 }
 
 TEST_F(DateTimeFunctionsTest, fromUTCTimestamp) {
@@ -112,15 +103,9 @@ TEST_F(DateTimeFunctionsTest, fromUTCTimestamp) {
   EXPECT_THROW(
       fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
       facebook::velox::VeloxUserError);
-  try {
-    fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty");
-    FAIL() << "Expected Velox Exception";
-  } catch (const facebook::velox::VeloxUserError& err) {
-    EXPECT_TRUE(
-        std::string(err.message())
-            .find("Asia/Ooty not found in timezone database") !=
-        std::string::npos);
-  }
+  VELOX_ASSERT_THROW(
+      fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
+      "Asia/Ooty not found in timezone database");
 }
 
 TEST_F(DateTimeFunctionsTest, toFromUTCTimestamp) {
@@ -146,15 +131,9 @@ TEST_F(DateTimeFunctionsTest, toFromUTCTimestamp) {
   EXPECT_THROW(
       toFromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
       facebook::velox::VeloxUserError);
-  try {
-    toFromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty");
-    FAIL() << "Expected Velox Exception";
-  } catch (const facebook::velox::VeloxUserError& err) {
-    EXPECT_TRUE(
-        std::string(err.message())
-            .find("Asia/Ooty not found in timezone database") !=
-        std::string::npos);
-  }
+  VELOX_ASSERT_THROW(
+      toFromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
+      "Asia/Ooty not found in timezone database");
 }
 
 TEST_F(DateTimeFunctionsTest, year) {
