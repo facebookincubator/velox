@@ -26,8 +26,7 @@ class MonotonicallyIncreasingIdTest : public SparkFunctionBaseTest {
       int32_t partitionId,
       int32_t vectorSize,
       const std::vector<int64_t>& expected) {
-    queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkPartitionId, std::to_string(partitionId)}});
+    setSparkPartitionId(partitionId);
     auto result = evaluate(
         "monotonically_increasing_id()", makeRowVector(ROW({}), vectorSize));
     ASSERT_FALSE(result->isConstantEncoding());

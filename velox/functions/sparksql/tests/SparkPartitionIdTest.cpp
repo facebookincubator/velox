@@ -22,11 +22,6 @@ namespace {
 
 class SparkPartitionIdTest : public SparkFunctionBaseTest {
  protected:
-  void setSparkPartitionId(int32_t partitionId) {
-    queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkPartitionId, std::to_string(partitionId)}});
-  }
-
   void testSparkPartitionId(int32_t partitionId, int32_t vectorSize) {
     setSparkPartitionId(partitionId);
     auto result =
