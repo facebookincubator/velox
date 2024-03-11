@@ -102,13 +102,13 @@ inline constexpr auto kMemAllocError = folly::makeFixedString("MEM_ALLOC_ERROR")
 inline constexpr auto kNoCacheSpace = folly::makeFixedString("NO_CACHE_SPACE");
 
 // An error raised when spill bytes exceeds limits.
-inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
+inline constexpr auto kSpillLimitExceeded = folly::makeFixedString("SPILL_LIMIT_EXCEEDED");
 
 // Errors indicating file read corruptions.
 inline constexpr auto kFileCorruption = folly::makeFixedString("FILE_CORRUPTION");
 
 // Errors indicating file not found.
-inline constexpr auto kFileNotFound = "FILE_NOT_FOUND"_fs;
+inline constexpr auto kFileNotFound = folly::makeFixedString("FILE_NOT_FOUND");
 
 // We do not know how to classify it yet.
 inline constexpr auto kUnknown = folly::makeFixedString("UNKNOWN");

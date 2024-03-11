@@ -17,7 +17,7 @@ add_library(velox_process ProcessBase.cpp StackTrace.cpp ThreadDebugInfo.cpp
 
 target_link_libraries(
   velox_process
-  PUBLIC velox_file velox_flag_definitions Folly::folly
+  PUBLIC velox_flag_definitions Folly::folly
   PRIVATE fmt::fmt gflags::gflags glog::glog)
 
 if(${VELOX_BUILD_TESTING})

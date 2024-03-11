@@ -58,5 +58,5 @@ target_link_libraries(
 add_library(velox_status Status.cpp)
 target_link_libraries(
   velox_status
-  PUBLIC fmt::fmt Folly::folly
+  PUBLIC fmt::fmt Folly::folly gflags::gflags
   PRIVATE glog::glog)

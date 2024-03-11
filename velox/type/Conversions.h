@@ -385,17 +385,6 @@ struct Converter<TypeKind::HUGEINT> {
     return int128_t(0);
   }
 };
-
-template <>
-struct Converter<TypeKind::HUGEINT, void, true> {
-  static int128_t cast(const bool& v) {
-    return int128_t(v);
-  }
-  //TODO: davidmar implement logic to convert string to int128_t
-  static int128_t cast(const std::string& v) {
-    return int128_t(0);
-  }
-};
 template <TypeKind KIND, typename TPolicy>
 struct Converter<
     KIND,

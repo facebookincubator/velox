@@ -129,7 +129,7 @@ Status detail::parseHugeInt(
   if (decimalComponents.fractionalDigits.size() > 0) {
     const auto length = decimalComponents.fractionalDigits.size();
     bool overflow =
-        __builtin_mul_overflow(out, DecimalUtil::kPowersOfTen[length], &out);
+        type::mul_overflow(out, DecimalUtil::kPowersOfTen[length], &out);
     if (overflow) {
       return Status::UserError("Value too large.");
     }

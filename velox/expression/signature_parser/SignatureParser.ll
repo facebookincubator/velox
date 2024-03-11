@@ -8,6 +8,7 @@
 %}
 
 %option c++ noyywrap noyylineno nodefault caseless
+%option nounistd
 
 A   [A|a]
 B   [B|b]

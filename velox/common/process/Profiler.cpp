@@ -24,10 +24,11 @@
 #include <thread>
 
 #include <fcntl.h>
+#ifndef WIN32
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
+#endif
 DEFINE_string(profiler_tmp_dir, "/tmp", "Writable temp for perf.data");
 
 DEFINE_int32(

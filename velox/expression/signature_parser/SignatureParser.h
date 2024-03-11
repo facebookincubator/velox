@@ -16,6 +16,8 @@
 
 #pragma once
 
+#define SIG_PARSER
+
 #include <string>
 #include "velox/expression/TypeSignature.h"
 #include "velox/type/Type.h"

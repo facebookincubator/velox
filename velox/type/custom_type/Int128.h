@@ -27,8 +27,9 @@
 #include <folly/dynamic.h>
 #endif
 
+#ifndef SIG_PARSER
 #include <boost/multiprecision/cpp_int.hpp>
-
+#endif
 namespace facebook::velox::type {
 
 /**
@@ -450,14 +451,14 @@ class int128 {
   operator int64_t() const {
     return this->lo_;
   }
-
+#ifndef SIG_PARSER
   operator boost::multiprecision::int256_t() const {
     return boost::multiprecision::int256_t(0);
   }
   operator boost::multiprecision::int128_t() const {
     return boost::multiprecision::int128_t(0);
   }
-
+#endif
   operator uint128() const {
     return uint128(this->hi_, this->lo_);
   }

@@ -1185,7 +1185,11 @@ void MemoryPoolImpl::handleAllocationFailure(
     // hence this signal should never occur naturally. Raising a signal other
     // than SIGABRT makes it easier to distinguish an allocation failure from
     // any other crash
-    raise(SIGBUS);
+    #ifdef WIN32
+        throw std::runtime_error(failureMessage);
+    #else
+        raise(SIGBUS);
+    #endif
   }
 
   VELOX_MEM_ALLOC_ERROR(failureMessage);
