@@ -1,0 +1,43 @@
+name: linux-presto-fuzzer-run
+on:
+  workflow_dispatch:
+  pull_request:
+    paths-ignore:
+    - 'velox/expression/**test**'
+    - 'velox/exec/**test**'
+    - 'velox/common/**test**'
+    - 'velox/core/**test**'
+    - 'velox/vector/**test**'
+
+jobs:
+  linux-presto-fuzzer-run:
+    runs-on: 32-core
+    container:
+      image : ghcr.io/facebookincubator/velox-dev:circleci-avx
+    env:
+      CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
+      CXX: /opt/rh/gcc-toolset-9/root/bin/g++
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+        with:
+          submodules: recursive
+      - uses: "./.github/actions/setup-environment"
+      - uses: "./.github/actions/fuzzer-run"
+        with:
+          fuzzer-output: "/tmp/fuzzer.log"
+          fuzzer-repro: "/tmp/fuzzer_repro"
+          fuzzer-name: Expression
+          fuzzer-exe: "_build/debug/velox/expression/tests/velox_expression_fuzzer_test"
+          fuzzer-args: " --seed ${RANDOM} --lazy_vector_generation_ratio 0.2 \
+            --duration_sec 1800 --enable_variadic_signatures \
+            --velox_fuzzer_enable_complex_types \
+            --velox_fuzzer_enable_column_reuse \
+            --velox_fuzzer_enable_expression_reuse \
+            --max_expression_trees_per_step 2 \
+            --retry_with_try \
+            --enable_dereference \
+            --logtostderr=1 --minloglevel=0 \
+            --repro_persist_path=/tmp/fuzzer_repro"

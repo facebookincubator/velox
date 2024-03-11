@@ -1,0 +1,23 @@
+name: header-check
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  header-check:
+    runs-on: ubuntu-latest
+    container:
+      image : ghcr.io/facebookincubator/velox-dev:check-avx
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+      - name: Check license headers
+        run: |
+          if ! make header-check; then
+            make header-fix
+            echo -e "\n==== Apply using:"
+            echo "patch -p1 \<<EOF"
+            git --no-pager diff
+            echo "EOF"
+            false
+          fi

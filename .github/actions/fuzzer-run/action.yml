@@ -1,0 +1,42 @@
+name: fuzzer-run
+description: Fuzzer run
+inputs:
+  fuzzer-output:
+    description: Fuzzer output
+    required: true
+  fuzzer-repro:
+    description: Fuzzer repro
+    required: true
+  fuzzer-name:
+    description: Fuzzer name
+    required: true
+  fuzzer-exe:
+    description: Fuzzer command
+    required: true
+  fuzzer-args:
+    description: Fuzzer arguments
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Build
+      shell: bash
+      run: |
+        make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4
+    - name: "Run ${{ inputs.fuzzer-name }} Fuzzer"
+      shell: bash
+      run: |
+        eval ' ${{ inputs.fuzzer-exe }} ${{ inputs.fuzzer-args }} ' \
+              2>&1 | tee "${{ inputs.fuzzer-output }}" || ( \
+                tail -n 1000 "${{ inputs.fuzzer-output }}" ; \
+                echo "FAIL: ${{ inputs.fuzzer-name }} run failed"; \
+                exit 1; \
+              )
+            echo -e "\n ${{ inputs.fuzzer-name }} run finished successfully."
+    - name: "Upload artifacts"
+      uses: actions/upload-artifact@v3.1.3
+      with:
+        name: ${{ join( inputs.fuzzer-name, '-') }}fuzzer-artifacts
+        path: |
+          ${{ inputs.fuzzer-output }}
+          ${{ inputs.fuzzer-repro }}

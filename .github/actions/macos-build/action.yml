@@ -1,0 +1,49 @@
+name: macos-build
+description: MacOS build
+runs:
+  using: composite
+  steps:
+    - name: Cache dependencies
+      uses: actions/cache@v2
+      with:
+        path: ~/deps
+        key: velox-${{ runner.os }}-deps-v1-${{ hashFiles('.github/workflows/longer-fuzzer.yml') }}-${{ hashFiles('scripts/setup-macos.sh') }}
+    - name: "Calculate merge-base date for CCache"
+      run: git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
+      shell: bash
+    - name: Ccache cache
+      uses: actions/cache@v2
+      with:
+        path: .ccache
+        key: velox-ccache-${{ runner.os }}-${{ hashFiles('merge-base-date') }}
+    - name: "Install dependencies"
+      run: |
+        set -xu
+        mkdir -p ~/deps ~/deps-src
+        curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C ~/deps
+        PATH=~/deps/bin:${PATH} DEPENDENCY_DIR=~/deps-src INSTALL_PREFIX=~/deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-macos.sh
+        rm -rf ~/deps/.git ~/deps/Library/Taps/  # Reduce cache size by 70%.
+      shell: bash
+    - name: "Build on MacOS"
+      run: |
+        export PATH=~/deps/bin:~/deps/opt/bison/bin:~/deps/opt/flex/bin:${PATH}
+        mkdir -p .ccache
+        export CCACHE_DIR=$(pwd)/.ccache
+        ccache -sz -M 5Gi
+        brew install openssl@1.1
+        brew link --overwrite --force openssl@1.1
+        export PATH="/Users/distiller/deps/opt/openssl@1.1/bin:$PATH"
+        export OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1)
+        cmake \
+            -B _build/debug \
+            -GNinja \
+            -DTREAT_WARNINGS_AS_ERRORS=1 \
+            -DENABLE_ALL_WARNINGS=1 \
+            -DVELOX_ENABLE_PARQUET=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_PREFIX_PATH=~/deps \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DFLEX_INCLUDE_DIR=~/deps/opt/flex/include
+        ninja -C _build/debug
+        ccache -s
+      shell: bash

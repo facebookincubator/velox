@@ -1,0 +1,118 @@
+name: linux-build
+on:
+    workflow_dispatch:
+    pull_request:
+
+jobs:
+  linux-build:
+    runs-on: 32-core
+    container:
+      image : ghcr.io/facebookincubator/velox-dev:circleci-avx
+    env:
+      CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
+      CXX: /opt/rh/gcc-toolset-9/root/bin/g++
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+        with:
+          submodules: recursive
+      - uses: "./.github/actions/setup-environment"
+      - name: Build
+        run: |-
+          make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=5 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+      - name: Run Unit Tests
+        run: |-
+          cd _build/debug && ctest -j 16 -VV --output-on-failure
+      - name: Archive test results
+        uses: actions/upload-artifact@v3.1.3
+        with:
+          name: test-results
+          path: /tmp/test_xml_output
+      - name: Run Fuzzer Tests
+        run: |-
+          mkdir -p /tmp/fuzzer_repro/
+              chmod -R 777 /tmp/fuzzer_repro
+              _build/debug/velox/expression/tests/velox_expression_fuzzer_test \
+                  --seed ${RANDOM} \
+                  --enable_variadic_signatures \
+                  --velox_fuzzer_enable_complex_types \
+                  --lazy_vector_generation_ratio 0.2 \
+                  --velox_fuzzer_enable_column_reuse \
+                  --velox_fuzzer_enable_expression_reuse \
+                  --max_expression_trees_per_step 2 \
+                  --retry_with_try \
+                  --enable_dereference \
+                  --duration_sec 60 \
+                  --logtostderr=1 \
+                  --minloglevel=0 \
+                  --repro_persist_path=/tmp/fuzzer_repro \
+              && echo -e "\n\nFuzzer run finished successfully."
+      - name: Archive fuzzer results
+        uses: actions/upload-artifact@v3.1.3
+        with:
+          name: fuzzer-results
+          path: /tmp/fuzzer_repro
+      - name: Run Spark Fuzzer Tests
+        run: |
+          mkdir -p /tmp/spark_fuzzer_repro/
+          chmod -R 777 /tmp/spark_fuzzer_repro
+          _build/debug/velox/expression/tests/spark_expression_fuzzer_test \
+              --seed ${RANDOM} \
+              --duration_sec 60 \
+              --enable_variadic_signatures \
+              --lazy_vector_generation_ratio 0.2 \
+              --velox_fuzzer_enable_column_reuse \
+              --velox_fuzzer_enable_expression_reuse \
+              --max_expression_trees_per_step 2 \
+              --retry_with_try \
+              --logtostderr=1 \
+              --minloglevel=0 \
+              --repro_persist_path=/tmp/spark_fuzzer_repro \
+          && echo -e "\n\nSpark Fuzzer run finished successfully."
+      - name: Archive spark fuzzer results
+        uses: actions/upload-artifact@v3.1.3
+        with:
+          name: spark-fuzzer-results
+          path: /tmp/spark_fuzzer_repro
+      - name: Run Spark Aggregate Fuzzer Tests
+        run: |
+          mkdir -p /tmp/spark_aggregate_fuzzer_repro/
+          chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
+          _build/debug/velox/exec/tests/spark_aggregation_fuzzer_test \
+              --seed ${RANDOM} \
+              --duration_sec 60 \
+              --logtostderr=1 \
+              --minloglevel=0 \
+              --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro \
+          && echo -e "\n\nSpark Aggregation Fuzzer run finished successfully."
+      - name: Archive spark aggregate fuzzer results
+        uses: actions/upload-artifact@v3.1.3
+        with:
+          name: spark-aggregate-fuzzer-results
+          path: /tmp/spark_aggregate_fuzzer_repro
+      - name: Run Aggregate Fuzzer Tests
+      # Run aggregation fuzzer using the built executable.
+        run: |
+          mkdir -p /tmp/aggregate_fuzzer_repro/
+          rm -rfv /tmp/aggregate_fuzzer_repro/*
+          chmod -R 777 /tmp/aggregate_fuzzer_repro
+          _build/debug/velox/exec/tests/velox_aggregation_fuzzer_test \
+              --seed ${RANDOM} \
+              --duration_sec 60 \
+              --logtostderr=1 \
+              --minloglevel=0 \
+              --repro_persist_path=/tmp/aggregate_fuzzer_repro \
+          && echo -e "\n\nAggregation fuzzer run finished successfully."
+      - name: Archive aggregate fuzzer results
+        uses: actions/upload-artifact@v3.1.3
+        with:
+          name: aggregate-fuzzer-results
+          path: /tmp/aggregate_fuzzer_repro
+      - name: "Run Example Binaries"
+        run: |
+          find _build/debug/velox/examples/ -maxdepth 1 -type f -executable -exec "{}" \;
+      - name: Archive ninja log
+        uses: actions/upload-artifact@v3.1.3
+        with:
+          name: ninja-log
+          path: _build/debug/.ninja.log
