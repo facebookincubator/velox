@@ -249,7 +249,7 @@ TEST_F(StringTest, Ascii) {
   EXPECT_EQ(ascii(std::nullopt), std::nullopt);
 }
 
-TEST_F(StringTest, BitLength) {
+TEST_F(StringTest, bitLength) {
   EXPECT_EQ(bit_length(""), 0);
   EXPECT_EQ(bit_length(std::string("\0", 1)), 8);
   EXPECT_EQ(bit_length("1"), 8);
