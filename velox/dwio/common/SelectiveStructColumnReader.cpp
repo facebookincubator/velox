@@ -112,9 +112,9 @@ void SelectiveStructColumnReaderBase::read(
         rows.back(), rows.size() - 1, "Top level should have a dense row set");
     if (mutation_->deletedRows) {
       bits::forEachUnsetBit(
-          mutation_->deletedRows, 0, rows.back() + 1, [&](auto i) {
+          mutation_->deletedRows, offset + 0, offset + rows.back() + 1, [&](auto i) {
             if (!mutation_->randomSkip || mutation_->randomSkip->testOne()) {
-              addOutputRow(i);
+              addOutputRow(i - offset);
             }
           });
     } else {
