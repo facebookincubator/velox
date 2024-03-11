@@ -75,6 +75,8 @@ struct SIMDGetJsonObjectFunction {
   // https://github.com/simdjson/simdjson/blob/master/doc/dom.md#json-pointer
   // Copied from:
   // https://github.com/simdjson/simdjson/blob/master/include/simdjson/generic/ondemand/json_path_to_pointer_conversion-inl.h
+  // The below code can be removed and replaced by calling `at_path` API after
+  // simdjson is upgraded to 3.8.0.
   FOLLY_ALWAYS_INLINE std::string getJsonPointerPath(
       const std::string_view jsonPath) {
     if (jsonPath.empty() ||
