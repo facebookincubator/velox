@@ -28,8 +28,8 @@ class RowNumberFunction : public exec::WindowFunction {
   explicit RowNumberFunction(const TypePtr& resultType)
       : WindowFunction(resultType, nullptr, nullptr) {}
 
-  void resetPartition(const exec::WindowPartition* /*partition*/) override {
-    rowNumber_ = 1;
+  void resetPartition(const exec::WindowPartition* partition) override {
+    rowNumber_ = 1 + partition->offsetInPartition();
   }
 
   void apply(

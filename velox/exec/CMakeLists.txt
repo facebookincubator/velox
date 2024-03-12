@@ -62,6 +62,7 @@ velox_add_library(
   PlanNodeStats.cpp
   PrefixSort.cpp
   ProbeOperatorState.cpp
+  RankLikeWindowBuild.cpp
   RowContainer.cpp
   RowNumber.cpp
   SortBuffer.cpp
