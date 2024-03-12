@@ -12,9 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_gcsfile_example GCSFileSystemExample.cpp)
+add_executable(velox_gcsfile_example_read GCSFileSystemExampleRead.cpp)
 target_link_libraries(
-  velox_gcsfile_example
+  velox_gcsfile_example_read
+  Folly::folly
+  velox_file
+  velox_gcs
+  velox_core
+  velox_hive_connector
+  velox_dwio_common_exception
+  velox_exec)
+
+add_executable(velox_gcsfile_example_write GCSFileSystemExampleWrite.cpp)
+target_link_libraries(
+  velox_gcsfile_example_write
   Folly::folly
   velox_file
   velox_gcs

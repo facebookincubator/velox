@@ -543,6 +543,14 @@ Each query can override the config by setting corresponding query session proper
      - string
      -
      - The GCS service account configuration as json string.
+   * - hive.gcs.max-retry-count
+     - integer
+     -
+     - The GCS maximum retry counter of transient errors.
+   * - hive.gcs.max-retry-time
+     - integer
+     -
+     - The GCS maximum time allowed (seconds) to retry transient errors.
 
 ``Azure Blob Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

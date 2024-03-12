@@ -117,6 +117,22 @@ std::string HiveConfig::gcsCredentials() const {
   return config_->get<std::string>(kGCSCredentials, std::string(""));
 }
 
+std::optional<int> HiveConfig::gcsMaxRetryCount() const {
+  folly::Optional<int> optional = config_->get<int>(kGCSMaxRetryCount);
+  if (optional.hasValue()) {
+    return optional.value();
+  }
+  return std::nullopt;
+}
+
+std::optional<int> HiveConfig::gcsMaxRetryTime() const {
+  folly::Optional<int> optional = config_->get<int>(kGCSMaxRetryTime);
+  if (optional.hasValue()) {
+    return optional.value();
+  }
+  return std::nullopt;
+}
+
 bool HiveConfig::isOrcUseColumnNames(const Config* session) const {
   return session->get<bool>(
       kOrcUseColumnNamesSession, config_->get<bool>(kOrcUseColumnNames, false));
