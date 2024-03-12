@@ -31,7 +31,7 @@ by Velox. See details on bundling below.
 | xsimd             | 10.0.0          | Yes      |
 | re2               | 2021-04-01      | Yes      |
 | fmt               | 10.1.1          | Yes      |
-| simdjson          | 3.2.0           | Yes      |
+| simdjson          | 3.7.0           | Yes      |
 | folly             | v2024.04.01.00  | Yes      |
 | fizz              | v2024.04.01.00  | No       |
 | wangle            | v2024.04.01.00  | No       |
