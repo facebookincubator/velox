@@ -37,7 +37,7 @@ class RankFunction : public exec::WindowFunction {
       : WindowFunction(resultType, nullptr, nullptr) {}
 
   void resetPartition(const exec::WindowPartition* partition) override {
-    rank_ = 1;
+    rank_ = 1 + partition->offsetInPartition();
     currentPeerGroupStart_ = 0;
     previousPeerCount_ = 0;
     numPartitionRows_ = partition->numRows();

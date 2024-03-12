@@ -21,11 +21,13 @@ WindowPartition::WindowPartition(
     RowContainer* data,
     const folly::Range<char**>& rows,
     const std::vector<exec::RowColumn>& columns,
-    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo)
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
+    vector_size_t offsetInPartition)
     : data_(data),
       partition_(rows),
       columns_(columns),
-      sortKeyInfo_(sortKeyInfo) {}
+      sortKeyInfo_(sortKeyInfo),
+      offsetInPartition_(offsetInPartition) {}
 
 void WindowPartition::extractColumn(
     int32_t columnIndex,
