@@ -159,7 +159,7 @@ function install_cuda {
   sudo dpkg -i cuda-keyring_1.1-1_all.deb
   rm cuda-keyring_1.1-1_all.deb
   sudo apt update
-  sudo apt -y install cuda-toolkit-12-3
+  sudo apt -y install cuda-nvcc-12-3 cuda-cudart-dev-12-3
 }
 
 
