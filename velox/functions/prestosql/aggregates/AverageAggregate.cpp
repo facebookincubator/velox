@@ -58,7 +58,7 @@ void registerAverageAggregate(
                            .build());
 
   auto name = prefix + kAvg;
-  exec::registerAggregateFunction(
+  exec::registerAggregateFunctionWithMetadata(
       name,
       std::move(signatures),
       [name](
@@ -142,6 +142,7 @@ void registerAverageAggregate(
           }
         }
       },
+      {false /*orderSensitive*/},
       withCompanionFunctions,
       overwrite);
 }

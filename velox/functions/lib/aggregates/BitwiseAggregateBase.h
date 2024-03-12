@@ -88,7 +88,7 @@ exec::AggregateRegistrationResult registerBitwise(
                              .build());
   }
 
-  return exec::registerAggregateFunction(
+  return exec::registerAggregateFunctionWithMetadata(
       name,
       std::move(signatures),
       [name](
@@ -115,6 +115,7 @@ exec::AggregateRegistrationResult registerBitwise(
                 inputType->kindName());
         }
       },
+      {false /*orderSensitive*/},
       withCompanionFunctions,
       overwrite);
 }

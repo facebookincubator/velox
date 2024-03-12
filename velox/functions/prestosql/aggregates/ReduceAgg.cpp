@@ -804,7 +804,7 @@ void registerReduceAgg(
 
   const std::string name = prefix + kReduceAgg;
 
-  exec::registerAggregateFunction(
+  exec::registerAggregateFunctionWithMetadata(
       name,
       std::move(signatures),
       [name](
@@ -814,6 +814,7 @@ void registerReduceAgg(
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         return std::make_unique<ReduceAgg>(resultType);
       },
+      {false /*orderSensitive*/},
       withCompanionFunctions,
       overwrite);
 }

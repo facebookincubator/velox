@@ -366,7 +366,7 @@ void registerHistogramAggregate(
   }
 
   auto name = prefix + kHistogram;
-  exec::registerAggregateFunction(
+  exec::registerAggregateFunctionWithMetadata(
       name,
       std::move(signatures),
       [name](
@@ -409,6 +409,7 @@ void registerHistogramAggregate(
                 inputType->kindName());
         }
       },
+      {false /*orderSensitive*/},
       withCompanionFunctions,
       overwrite);
 }

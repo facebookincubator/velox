@@ -929,7 +929,7 @@ exec::AggregateRegistrationResult registerMinMax(
             .build());
   }
 
-  return exec::registerAggregateFunction(
+  return exec::registerAggregateFunctionWithMetadata(
       name,
       std::move(signatures),
       [name](
@@ -1014,6 +1014,7 @@ exec::AggregateRegistrationResult registerMinMax(
           }
         }
       },
+      {false /*orderSensitive*/},
       withCompanionFunctions,
       overwrite);
 }

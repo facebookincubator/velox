@@ -190,7 +190,7 @@ exec::AggregateRegistrationResult registerBool(
           .argumentType("boolean")
           .build()};
 
-  return exec::registerAggregateFunction(
+  return exec::registerAggregateFunctionWithMetadata(
       name,
       std::move(signatures),
       [name](
@@ -209,6 +209,7 @@ exec::AggregateRegistrationResult registerBool(
             inputType->kindName());
         return std::make_unique<T>();
       },
+      {false /*orderSensitive*/},
       withCompanionFunctions,
       overwrite);
 }

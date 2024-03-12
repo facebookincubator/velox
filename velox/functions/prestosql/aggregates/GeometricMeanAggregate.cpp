@@ -105,7 +105,7 @@ void registerGeometricMeanAggregate(
                            .argumentType("real")
                            .build());
 
-  exec::registerAggregateFunction(
+  exec::registerAggregateFunctionWithMetadata(
       name,
       std::move(signatures),
       [name](
@@ -136,6 +136,7 @@ void registerGeometricMeanAggregate(
                 inputType->toString());
         }
       },
+      {false /*orderSensitive*/},
       withCompanionFunctions,
       overwrite);
 }
