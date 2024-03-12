@@ -15,6 +15,7 @@
  */
 #include "velox/exec/Window.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/RankLikeWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/StreamingWindowBuild.h"
 #include "velox/exec/Task.h"
@@ -106,7 +107,69 @@ void checkKRangeFrameBounds(
   frameBoundCheck(frame.endValue);
 }
 
+// The RankLikeWindowBuild is designed to support 'rank', 'dense_rank', and
+// 'row_number' functions with a default frame.
+bool checkRankLikeWindowBuild(
+    const std::shared_ptr<const core::WindowNode>& windowNode) {
+  for (const auto& windowNodeFunction : windowNode->windowFunctions()) {
+    const auto& functionName = windowNodeFunction.functionCall->name();
+    const auto& frame = windowNodeFunction.frame;
+
+    bool isRankLikeFunction =
+        (functionName == "rank" || functionName == "row_number");
+    bool isDefaultFrame =
+        (frame.startType == core::WindowNode::BoundType::kUnboundedPreceding &&
+         frame.endType == core::WindowNode::BoundType::kCurrentRow);
+
+    if (!isRankLikeFunction || !isDefaultFrame) {
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
+
+Window::Window(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const std::shared_ptr<const core::WindowNode>& windowNode)
+    : Operator(
+          driverCtx,
+          windowNode->outputType(),
+          operatorId,
+          windowNode->id(),
+          "Window",
+          windowNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(operatorId)
+              : std::nullopt),
+      numInputColumns_(windowNode->inputType()->size()),
+      windowNode_(windowNode),
+      currentPartition_(nullptr),
+      stringAllocator_(pool()) {
+  auto* spillConfig =
+      spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
+  if (windowNode->inputsSorted()) {
+    if (checkRankLikeWindowBuild(windowNode)) {
+      windowBuild_ = std::make_unique<RankLikeWindowBuild>(
+          windowNode, pool(), spillConfig, &nonReclaimableSection_);
+    } else {
+      windowBuild_ = std::make_unique<StreamingWindowBuild>(
+          windowNode, pool(), spillConfig, &nonReclaimableSection_);
+    }
+  } else {
+    windowBuild_ = std::make_unique<SortWindowBuild>(
+        windowNode, pool(), spillConfig, &nonReclaimableSection_);
+  }
+}
+
+void Window::initialize() {
+  Operator::initialize();
+  VELOX_CHECK_NOT_NULL(windowNode_);
+  createWindowFunctions();
+  createPeerAndFrameBuffers();
+  windowNode_.reset();
+}
 
 Window::WindowFrame Window::createWindowFrame(
     const std::shared_ptr<const core::WindowNode>& windowNode,

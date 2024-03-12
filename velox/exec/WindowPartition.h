@@ -35,16 +35,25 @@ class WindowPartition {
   /// the columns in 'data' for use with the spiller.
   /// 'sortKeyInfo' : Order by columns used by the the Window operator. Used to
   /// get peer rows from the input partition.
+  /// 'offsetInPartition' : In RankLikeWindowBuild, record the current offset of
+  /// the partial WindowPartition within the entire Partition.
   WindowPartition(
       RowContainer* data,
       const folly::Range<char**>& rows,
       const std::vector<column_index_t>& inputMapping,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
-          sortKeyInfo);
+          sortKeyInfo,
+      vector_size_t offsetInPartition = 0);
 
   /// Returns the number of rows in the current WindowPartition.
   vector_size_t numRows() const {
     return partition_.size();
+  }
+
+  /// Returns the current offset of the partial WindowPartition within the
+  /// entire Partition.
+  vector_size_t offsetInPartition() const {
+    return offsetInPartition_;
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -189,5 +198,10 @@ class WindowPartition {
   // corresponding indexes of their input arguments into this vector.
   // They will request for column vector values at the respective index.
   std::vector<exec::RowColumn> columns_;
+
+  // ORDER BY column info for this partition.
+  const std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
+
+  vector_size_t offsetInPartition_ = 0;
 };
 } // namespace facebook::velox::exec
