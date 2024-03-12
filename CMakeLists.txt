@@ -371,6 +371,9 @@ message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
 if(${VELOX_ENABLE_GPU})
   enable_language(CUDA)
+  if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "12.2")
+    message(FATAL_ERROR "CUDA version less than 12.2 not supported")
+  endif()
   # Determine CUDA_ARCHITECTURES automatically.
   cmake_policy(SET CMP0104 NEW)
   if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
