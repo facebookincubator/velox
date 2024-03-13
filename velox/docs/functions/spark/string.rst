@@ -11,6 +11,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 .. spark:function:: bit_length(string/binary) -> integer
 
     Returns the bit length for the specified string column. ::
+        
         SELECT bit_length('123'); -- 24
 
 .. spark:function:: chr(n) -> varchar
