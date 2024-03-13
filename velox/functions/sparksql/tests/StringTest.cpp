@@ -31,15 +31,6 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<int32_t>("ascii(c0)", arg);
   }
 
-  std::optional<int32_t> bitLength(std::optional<std::string> arg) {
-    return evaluateOnce<int32_t>("bit_length(c0)", arg);
-  }
-
-  std::optional<int32_t> bitLengthVarbinary(std::optional<std::string> arg) {
-    return evaluateOnce<int32_t, std::string>(
-        "bit_length(c0)", {arg}, {VARBINARY()});
-  }
-
   std::optional<std::string> chr(std::optional<int64_t> arg) {
     return evaluateOnce<std::string>("chr(c0)", arg);
   }
@@ -54,7 +45,7 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<int32_t>("length(c0)", arg);
   }
 
-  std::optional<int32_t> lengthBytes(std::optional<std::string> arg) {
+  std::optional<int32_t> lengthVarbinary(std::optional<std::string> arg) {
     return evaluateOnce<int32_t, std::string>(
         "length(c0)", {arg}, {VARBINARY()});
   }
@@ -255,6 +246,10 @@ TEST_F(StringTest, ascii) {
 }
 
 TEST_F(StringTest, bitLength) {
+  auto bitLength = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int32_t>("bit_length(c0)", arg);
+  };
+
   EXPECT_EQ(bitLength(""), 0);
   EXPECT_EQ(bitLength(std::string("\0", 1)), 8);
   EXPECT_EQ(bitLength("1"), 8);
@@ -266,6 +261,11 @@ TEST_F(StringTest, bitLength) {
 }
 
 TEST_F(StringTest, bitLengthVarbinary) {
+  auto bitLengthVarbinary = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int32_t, std::string>(
+        "bit_length(c0)", {arg}, {VARBINARY()});
+  };
+
   EXPECT_EQ(bitLengthVarbinary(""), 0);
   EXPECT_EQ(bitLengthVarbinary(std::string("\0", 1)), 8);
   EXPECT_EQ(bitLengthVarbinary("1"), 8);
@@ -321,13 +321,13 @@ TEST_F(StringTest, lengthString) {
   EXPECT_EQ(length("1234567890abdef"), 15);
 }
 
-TEST_F(StringTest, lengthBytes) {
-  EXPECT_EQ(lengthBytes(""), 0);
-  EXPECT_EQ(lengthBytes(std::string("\0", 1)), 1);
-  EXPECT_EQ(lengthBytes("1"), 1);
-  EXPECT_EQ(lengthBytes("😋"), 4);
-  EXPECT_EQ(lengthBytes(kWomanFacepalmingLightSkinTone), 17);
-  EXPECT_EQ(lengthBytes("1234567890abdef"), 15);
+TEST_F(StringTest, lengthVarbinary) {
+  EXPECT_EQ(lengthVarbinary(""), 0);
+  EXPECT_EQ(lengthVarbinary(std::string("\0", 1)), 1);
+  EXPECT_EQ(lengthVarbinary("1"), 1);
+  EXPECT_EQ(lengthVarbinary("😋"), 4);
+  EXPECT_EQ(lengthVarbinary(kWomanFacepalmingLightSkinTone), 17);
+  EXPECT_EQ(lengthVarbinary("1234567890abdef"), 15);
 }
 
 TEST_F(StringTest, md5) {
