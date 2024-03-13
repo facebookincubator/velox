@@ -72,6 +72,13 @@ static const std::unordered_set<submatchEnum> requiresAuthority = {
 
 } // namespace
 
+struct MatchPair {
+  int submatchIndex;
+  const boost::cmatch& match;
+  MatchPair(int index, const boost::cmatch& m)
+      : submatchIndex(index), match(m) {}
+};
+
 template <typename T>
 struct ParseUrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -108,7 +115,7 @@ struct ParseUrlFunction {
       case PROTOCOL:
       case QUERY:
       case REF:
-        return singleMatch(result, int(partToExtractEnum), match);
+        return multiMatch(result, {MatchPair(partToExtractEnum, match)});
       default:
         break;
     }
@@ -128,36 +135,37 @@ struct ParseUrlFunction {
     int pathMatch = hasAuthority ? kPathHasAuth : kPathNoAuth;
     switch (partToExtractEnum) {
       case HOST:
-        return singleMatch(result, kHost, authorityMatch);
+        return multiMatch(result, {MatchPair(kHost, authorityMatch)});
       case PATH:
-        singleMatch(result, pathMatch, *matchToUse);
+        return multiMatch(result, {MatchPair(pathMatch, *matchToUse)}, true);
         return true;
       // Path[?Query].
       case FILE: {
         if (match[kQuery].matched) {
-          return doubleMatch(result, pathMatch, *matchToUse, kQuery, match);
+          return multiMatch(
+              result,
+              {MatchPair(pathMatch, *matchToUse), MatchPair(kQuery, match)});
         }
-        singleMatch(result, pathMatch, *matchToUse);
+        multiMatch(result, {MatchPair(pathMatch, *matchToUse)});
         return true;
       }
       // Username[:Password].
       case USERINFO: {
         if (authorityMatch[kPass].matched) {
-          return doubleMatch(
-              result, kUser, authorityMatch, kPass, authorityMatch);
+          return multiMatch(
+              result,
+              {MatchPair(kUser, authorityMatch),
+               MatchPair(kPass, authorityMatch)});
         }
-        return singleMatch(result, kUser, authorityMatch);
+        return multiMatch(result, {MatchPair{kUser, authorityMatch}});
       }
       // [Userinfo@]Host[:Port].
       case AUTHORITY: {
-        const char* start = authorityMatch[kUser].matched
-            ? authorityMatch[kUser].first
-            : authorityMatch[kHost].first;
-        auto* endMatch = authorityMatch[kPort].matched ? &authorityMatch[kPort]
-                                                       : &authorityMatch[kHost];
-        result.setNoCopy(StringView(
-            start, (*endMatch).first - start + (*endMatch).length()));
-        return true;
+        MatchPair start = MatchPair(
+            authorityMatch[kUser].matched ? kUser : kHost, authorityMatch);
+        MatchPair end = MatchPair(
+            authorityMatch[kPort].matched ? kPort : kHost, authorityMatch);
+        return multiMatch(result, {start, end});
       }
       default:
         return false;
@@ -213,27 +221,44 @@ struct ParseUrlFunction {
   }
 
  private:
-  bool singleMatch(
+  bool multiMatch(
       out_type<Varchar>& result,
-      int submatchIndex,
-      boost::cmatch& match) {
-    if (!match[submatchIndex].matched) {
+      std::vector<MatchPair> matches,
+      bool returnEmtpyString = false) {
+    if (matches.empty() ||
+        matches[0].match[matches[0].submatchIndex].matched == false) {
+      if (returnEmtpyString) {
+        result.setNoCopy(StringView("", 0));
+        return true;
+      }
       return false;
     }
-    result.setNoCopy(submatch(match, submatchIndex));
-    return true;
-  }
+    size_t i = 0;
+    const boost::sub_match<const char*>* firstMatch = nullptr;
+    while (i < matches.size()) {
+      if (matches[i].match[matches[i].submatchIndex].matched) {
+        firstMatch = &(matches[i].match[matches[i].submatchIndex]);
+        break;
+      }
+      i++;
+    }
+    if (firstMatch == nullptr) {
+      return false;
+    }
+    const char* start = firstMatch->first;
+    size_t totalLength = firstMatch->length();
 
-  bool doubleMatch(
-      out_type<Varchar>& result,
-      int submatchIndex1,
-      boost::cmatch& match1,
-      int submatchIndex2,
-      boost::cmatch& match2) {
-    result.setNoCopy(StringView(
-        match1[submatchIndex1].first,
-        match2[submatchIndex2].first - match1[submatchIndex1].first +
-            match2[submatchIndex2].length()));
+    if (matches.size() > 1) {
+      while (i < matches.size()) {
+        const auto& currentMatch = matches[i].match[matches[i].submatchIndex];
+        if (!currentMatch.matched) {
+          return false;
+        }
+        totalLength = (currentMatch.first - start) + currentMatch.length();
+        i++;
+      }
+    }
+    result.setNoCopy(StringView(start, totalLength));
     return true;
   }
 
