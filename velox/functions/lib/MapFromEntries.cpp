@@ -30,10 +30,10 @@ static const char* kIndeterminateKeyErrorMessage =
     "map key cannot be indeterminate";
 static const char* kErrorMessageEntryNotNull = "map entry cannot be null";
 
-// allowNullEle If true, will return null if map has
-// an entry with null as key or map is null (Spark's behavior)
-// instead of throw execeptions(Presto's behavior)
-template <bool allowNullEle>
+/// @tparam throwForNull If true, will return null if input array is null or has
+/// null entry (Spark's behavior), instead of throw execeptions(Presto's
+/// behavior).
+template <bool throwForNull>
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
   void apply(
@@ -98,7 +98,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     exec::LocalDecodedVector decodedRowVector(context);
     decodedRowVector.get()->decode(*inputValueVector);
     if (inputValueVector->typeKind() == TypeKind::UNKNOWN) {
-      if (!allowNullEle) {
+      if constexpr (throwForNull) {
         try {
           VELOX_USER_FAIL(kErrorMessageEntryNotNull);
         } catch (...) {
@@ -144,12 +144,13 @@ class MapFromEntriesFunction : public exec::VectorFunction {
         for (auto i = 0; i < size; ++i) {
           // Check nulls in the top level row vector.
           const bool isMapEntryNull = decodedRowVector->isNullAt(offset + i);
-          if (isMapEntryNull && allowNullEle) {
-            // Spark: For nulls in the top level row vector, return null.
-            bits::setNull(mutableNulls, row);
-            resetSize(row);
-            break;
-          } else if (isMapEntryNull) {
+          if (isMapEntryNull) {
+            if constexpr (!throwForNull) {
+              // Spark: For nulls in the top level row vector, return null.
+              bits::setNull(mutableNulls, row);
+              resetSize(row);
+              break;
+            }
             // Presto: Set the sizes to 0 so that the final map vector generated
             // is valid in case we are inside a try. The map vector needs to be
             // valid because its consumed by checkDuplicateKeys before try
@@ -228,34 +229,45 @@ class MapFromEntriesFunction : public exec::VectorFunction {
 
     // For Presto, need construct map vector based on input nulls for possible
     // outer expression like try(). For Spark, use the updated nulls.
-    auto mapVetorNulls = allowNullEle ? nulls : inputArray->nulls();
-    auto mapVector = std::make_shared<MapVector>(
-        context.pool(),
-        outputType,
-        mapVetorNulls,
-        rows.end(),
-        inputArray->offsets(),
-        sizes,
-        wrappedKeys,
-        wrappedValues);
-
+    std::shared_ptr<MapVector> mapVector;
+    if constexpr (throwForNull) {
+      mapVector = std::make_shared<MapVector>(
+          context.pool(),
+          outputType,
+          inputArray->nulls(),
+          rows.end(),
+          inputArray->offsets(),
+          sizes,
+          wrappedKeys,
+          wrappedValues);
+    } else {
+      mapVector = std::make_shared<MapVector>(
+          context.pool(),
+          outputType,
+          nulls,
+          rows.end(),
+          inputArray->offsets(),
+          sizes,
+          wrappedKeys,
+          wrappedValues);
+    }
     checkDuplicateKeys(mapVector, *remianingRows, context);
     return mapVector;
   }
 };
 } // namespace
 
+void registerMapFromEntriesThrowForNullFunction(const std::string& name) {
+  exec::registerVectorFunction(
+      name,
+      MapFromEntriesFunction</*ThrowForNull=*/true>::signatures(),
+      std::make_unique<MapFromEntriesFunction</*ThrowForNull=*/true>>());
+}
+
 void registerMapFromEntriesFunction(const std::string& name) {
   exec::registerVectorFunction(
       name,
-      MapFromEntriesFunction</*AllowNullEle=*/false>::signatures(),
-      std::make_unique<MapFromEntriesFunction</*AllowNullEle=*/false>>());
-}
-
-void registerMapFromEntriesAllowNullEleFunction(const std::string& name) {
-  exec::registerVectorFunction(
-      name,
-      MapFromEntriesFunction</*AllowNullEle=*/true>::signatures(),
-      std::make_unique<MapFromEntriesFunction</*AllowNullEle=*/true>>());
+      MapFromEntriesFunction</*ThrowForNull=*/false>::signatures(),
+      std::make_unique<MapFromEntriesFunction</*ThrowForNull=*/false>>());
 }
 } // namespace facebook::velox::functions
