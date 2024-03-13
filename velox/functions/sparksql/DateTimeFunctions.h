@@ -286,7 +286,7 @@ struct ToUtcTimestampFunction {
   }
 
  private:
-  date::time_zone* timezone_{nullptr};
+  const date::time_zone* timezone_{nullptr};
 };
 
 template <typename T>
@@ -315,7 +315,7 @@ struct FromUtcTimestampFunction {
   }
 
  private:
-  date::time_zone* timezone_{nullptr};
+  const date::time_zone* timezone_{nullptr};
 };
 
 /// Converts date string to Timestmap type.
