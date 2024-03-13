@@ -58,11 +58,13 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
 };
 
 TEST_F(DateTimeFunctionsTest, toUtcTimestamp) {
-  const auto toUtcTimestamp = [&](std::string_view ts,
-                                  const std::optional<std::string> tz) {
+  const auto toUtcTimestamp = [&](std::string_view ts, const std::string& tz) {
     auto timestamp = std::make_optional<Timestamp>(
         util::fromTimestampString(ts.data(), ts.length()));
-    return evaluateOnce<Timestamp>("to_utc_timestamp(c0, c1)", timestamp, tz);
+    return evaluateOnce<Timestamp>(
+        "to_utc_timestamp(c0, c1)",
+        timestamp,
+        std::make_optional<std::string>(tz));
   };
   EXPECT_EQ(
       util::fromTimestampString("2015-07-24 07:00:00"),
@@ -83,10 +85,13 @@ TEST_F(DateTimeFunctionsTest, toUtcTimestamp) {
 
 TEST_F(DateTimeFunctionsTest, fromUtcTimestamp) {
   const auto fromUtcTimestamp = [&](std::string_view ts,
-                                    const std::optional<std::string> tz) {
+                                    const std::string& tz) {
     auto timestamp = std::make_optional<Timestamp>(
         util::fromTimestampString(ts.data(), ts.length()));
-    return evaluateOnce<Timestamp>("from_utc_timestamp(c0, c1)", timestamp, tz);
+    return evaluateOnce<Timestamp>(
+        "from_utc_timestamp(c0, c1)",
+        timestamp,
+        std::make_optional<std::string>(tz));
   };
   EXPECT_EQ(
       util::fromTimestampString("2015-07-24 00:00:00"),
@@ -107,11 +112,13 @@ TEST_F(DateTimeFunctionsTest, fromUtcTimestamp) {
 
 TEST_F(DateTimeFunctionsTest, toFromUtcTimestamp) {
   const auto toFromUtcTimestamp = [&](std::string_view ts,
-                                      const std::optional<std::string> tz) {
+                                      const std::string& tz) {
     auto timestamp = std::make_optional<Timestamp>(
         util::fromTimestampString(ts.data(), ts.length()));
     return evaluateOnce<Timestamp>(
-        "to_utc_timestamp(from_utc_timestamp(c0, c1), c1)", timestamp, tz);
+        "to_utc_timestamp(from_utc_timestamp(c0, c1), c1)",
+        timestamp,
+        std::make_optional<std::string>(tz));
   };
   EXPECT_EQ(
       util::fromTimestampString("2015-07-24 07:00:00"),
