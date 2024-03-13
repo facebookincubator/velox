@@ -42,27 +42,12 @@
   <section id="miscellaneous-functions">
 <h1>Miscellaneous Functions<a class="headerlink" href="#miscellaneous-functions" title="Link to this heading">¶</a></h1>
 <dl class="spark function">
-<dt class="sig sig-object spark" id="monotonically_increasing_id">
-<span class="sig-name descname"><span class="pre">monotonically_increasing_id</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#monotonically_increasing_id" title="Link to this definition">¶</a></dt>
-<dd><p>Returns monotonically increasing 64-bit integers. The generated ID is
-guaranteed to be monotonically increasing and unique, but not consecutive.
-The current implementation puts the partition ID in the upper 31 bits, and
-the lower 33 bits represent the record number within each partition.
-The assumption is that the data frame has less than 1 billion partitions,
-and each partition has less than 8 billion records.
-The function relies on partition IDs, which are provided by the framework
-via the configuration ‘spark.partition_id’.</p>
-</dd></dl>
-
-<dl class="spark function">
 <dt class="sig sig-object spark" id="spark_partition_id">
 <span class="sig-name descname"><span class="pre">spark_partition_id</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#spark_partition_id" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the current partition id.
-The framework provides partition id through the configuration
-‘spark.partition_id’.
-It ensures deterministic data partitioning and assigns a unique partition
-id to each task in a deterministic way. Consequently, this function is
-marked as deterministic, enabling Velox to perform constant folding on it.</p>
+The framework provides partition id through the configuration ‘spark.partition_id’.
+It ensures deterministic data partitioning and assigns a unique partition id to each task in a deterministic way.
+Consequently, this function is marked as deterministic, enabling Velox to perform constant folding on it.</p>
 </dd></dl>
 
 </section>
@@ -78,7 +63,6 @@ marked as deterministic, enabling Velox to perform constant folding on it.</p>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Miscellaneous Functions</a><ul>
-<li><a class="reference internal" href="#monotonically_increasing_id"><code class="docutils literal notranslate"><span class="pre">monotonically_increasing_id()</span></code></a></li>
 <li><a class="reference internal" href="#spark_partition_id"><code class="docutils literal notranslate"><span class="pre">spark_partition_id()</span></code></a></li>
 </ul>
 </li>
