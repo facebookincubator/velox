@@ -164,6 +164,7 @@ class AggregationFuzzerBase {
   static VectorFuzzer::Options getFuzzerOptions(
       VectorFuzzer::Options::TimestampPrecision timestampPrecision) {
     VectorFuzzer::Options opts;
+    VELOX_USER_CHECK_GE(FLAGS_batch_size, 0);
     opts.vectorSize = FLAGS_batch_size;
     opts.stringVariableLength = true;
     opts.stringLength = 4'000;
