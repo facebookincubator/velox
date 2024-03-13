@@ -951,7 +951,9 @@ TEST_F(DateTimeFunctionsTest, makeTimestampInvalid) {
       "Seconds must be short decimal type but got DECIMAL(20, 6)");
   VELOX_ASSERT_THROW(
       testInvalidArguments(1e6, DECIMAL(16, 8)),
-      "Seconds fraction must have 6 digits for microseconds but got 8");
+      "Scalar function signature is not supported: "
+      "make_timestamp(INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, "
+      "DECIMAL(16, 8)).");
   // Throw if no session time zone.
   setQueryTimeZone("");
   VELOX_ASSERT_THROW(

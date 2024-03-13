@@ -149,25 +149,23 @@ class MakeTimestampFunction : public exec::VectorFunction {
     return {
         exec::FunctionSignatureBuilder()
             .integerVariable("precision")
-            .integerVariable("scale")
             .returnType("timestamp")
             .argumentType("integer")
             .argumentType("integer")
             .argumentType("integer")
             .argumentType("integer")
             .argumentType("integer")
-            .argumentType("decimal(precision, scale)")
+            .argumentType("decimal(precision, 6)")
             .build(),
         exec::FunctionSignatureBuilder()
             .integerVariable("precision")
-            .integerVariable("scale")
             .returnType("timestamp")
             .argumentType("integer")
             .argumentType("integer")
             .argumentType("integer")
             .argumentType("integer")
             .argumentType("integer")
-            .argumentType("decimal(precision, scale)")
+            .argumentType("decimal(precision, 6)")
             .argumentType("varchar")
             .build(),
     };
