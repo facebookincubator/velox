@@ -40,7 +40,6 @@ struct UuidFunction {
   FOLLY_ALWAYS_INLINE void callNullable(
       out_type<Varchar>& result,
       const int64_t* /*seedInput*/) {
-    result.resize(36);
     int64_t mostSigBits =
         (nextLong() & 0xFFFFFFFFFFFF0FFFL) | 0x0000000000004000L;
     int64_t leastSigBits =
@@ -49,7 +48,10 @@ struct UuidFunction {
       uuid_.data[i] = (mostSigBits >> ((7 - i) * 8)) & 0xFF;
       uuid_.data[i + 8] = (leastSigBits >> ((7 - i) * 8)) & 0xFF;
     }
-    boost::uuids::to_chars(uuid_, result.data(), result.data() + 36);
+    constexpr int32_t kUuidStringSize = 36;
+    result.resize(kUuidStringSize);
+    boost::uuids::to_chars(
+        uuid_, result.data(), result.data() + kUuidStringSize);
   }
 
  private:
