@@ -75,12 +75,31 @@ function install_gcs-sdk-cpp {
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DJSON_BuildTests=OFF
 
+  # Protocol buffers
+  github_checkout protocolbuffers/protobuf v25.3 --depth 1
+  cmake_install -DBUILD_SHARED_LIBS=OFF \
+    -Dprotobuf_BUILD_TESTS=OFF \
+    -Dprotobuf_ABSL_PROVIDER=package
+
+  # gRPC
+  github_checkout grpc/grpc v1.62.1 --depth 1
+  cmake_install -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DgRPC_INSTALL=ON \
+    -DgRPC_BUILD_TESTS=OFF \
+    -DgRPC_ABSL_PROVIDER=package \
+    -DgRPC_CARES_PROVIDER=package \
+    -DgRPC_PROTOBUF_PROVIDER=package \
+    -DgRPC_RE2_PROVIDER=package \
+    -DgRPC_SSL_PROVIDER=package \
+    -DgRPC_ZLIB_PROVIDER=package
+
   # google-cloud-cpp
   github_checkout googleapis/google-cloud-cpp v2.22.0 --depth 1
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_INSTALL_MESSAGE=NEVER \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
-    -DGOOGLE_CLOUD_CPP_ENABLE=storage
+    -DGOOGLE_CLOUD_CPP_ENABLE=storage,bigquery
 }
 
 function install_azure-storage-sdk-cpp {
