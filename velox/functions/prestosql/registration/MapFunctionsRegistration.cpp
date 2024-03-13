@@ -69,7 +69,7 @@ void registerMapFunctions(const std::string& prefix) {
       udf_transform_values, prefix + "transform_values");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_entries, prefix + "map_entries");
-  registerMapFromEntriesFunction(prefix + "map_from_entries");
+  registerMapFromEntriesThrowForNullFunction(prefix + "map_from_entries");
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, prefix + "map_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, prefix + "map_values");

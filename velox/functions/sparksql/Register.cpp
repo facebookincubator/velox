@@ -111,7 +111,7 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_allow_duplicates, prefix + "map_from_arrays");
-  registerMapFromEntriesAllowNullEleFunction(prefix + "map_from_entries");
+  registerMapFromEntriesFunction(prefix + "map_from_entries");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_concat_row, exec::RowConstructorCallToSpecialForm::kRowConstructor);
   // String functions.
