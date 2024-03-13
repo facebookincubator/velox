@@ -31,6 +31,15 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<int32_t>("ascii(c0)", arg);
   }
 
+  std::optional<int32_t> bitLength(std::optional<std::string> arg) {
+    return evaluateOnce<int32_t>("bit_length(c0)", arg);
+  }
+
+  std::optional<int32_t> bitLengthVarbinary(std::optional<std::string> arg) {
+    return evaluateOnce<int32_t, std::string>(
+        "bit_length(c0)", {arg}, {VARBINARY()});
+  }
+
   std::optional<std::string> chr(std::optional<int64_t> arg) {
     return evaluateOnce<std::string>("chr(c0)", arg);
   }
@@ -48,10 +57,6 @@ class StringTest : public SparkFunctionBaseTest {
   std::optional<int32_t> length_bytes(std::optional<std::string> arg) {
     return evaluateOnce<int32_t, std::string>(
         "length(c0)", {arg}, {VARBINARY()});
-  }
-
-  std::optional<int32_t> bit_length(std::optional<std::string> arg) {
-    return evaluateOnce<int32_t>("bit_length(c0)", arg);
   }
 
   std::optional<std::string> trim(std::optional<std::string> srcStr) {
@@ -250,14 +255,25 @@ TEST_F(StringTest, Ascii) {
 }
 
 TEST_F(StringTest, bitLength) {
-  EXPECT_EQ(bit_length(""), 0);
-  EXPECT_EQ(bit_length(std::string("\0", 1)), 8);
-  EXPECT_EQ(bit_length("1"), 8);
-  EXPECT_EQ(bit_length("123"), 24);
-  EXPECT_EQ(bit_length("😋"), 32);
+  EXPECT_EQ(bitLength(""), 0);
+  EXPECT_EQ(bitLength(std::string("\0", 1)), 8);
+  EXPECT_EQ(bitLength("1"), 8);
+  EXPECT_EQ(bitLength("123"), 24);
+  EXPECT_EQ(bitLength("😋"), 32);
   // Consists of five codepoints.
-  EXPECT_EQ(bit_length(kWomanFacepalmingLightSkinTone), 136);
-  EXPECT_EQ(bit_length("\U0001F408"), 32);
+  EXPECT_EQ(bitLength(kWomanFacepalmingLightSkinTone), 136);
+  EXPECT_EQ(bitLength("\U0001F408"), 32);
+}
+
+TEST_F(StringTest, bitLengthVarbinary) {
+  EXPECT_EQ(bitLengthVarbinary(""), 0);
+  EXPECT_EQ(bitLengthVarbinary(std::string("\0", 1)), 8);
+  EXPECT_EQ(bitLengthVarbinary("1"), 8);
+  EXPECT_EQ(bitLengthVarbinary("123"), 24);
+  EXPECT_EQ(bitLengthVarbinary("😋"), 32);
+  // Consists of five codepoints.
+  EXPECT_EQ(bitLengthVarbinary(kWomanFacepalmingLightSkinTone), 136);
+  EXPECT_EQ(bitLengthVarbinary("\U0001F408"), 32);
 }
 
 TEST_F(StringTest, Chr) {
