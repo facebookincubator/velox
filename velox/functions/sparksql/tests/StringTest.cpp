@@ -261,19 +261,19 @@ TEST_F(StringTest, bitLength) {
 }
 
 TEST_F(StringTest, bitLengthVarbinary) {
-  auto bitLengthVarbinary = [&](std::optional<std::string> arg) {
+  auto bitLength = [&](std::optional<std::string> arg) {
     return evaluateOnce<int32_t, std::string>(
         "bit_length(c0)", {arg}, {VARBINARY()});
   };
 
-  EXPECT_EQ(bitLengthVarbinary(""), 0);
-  EXPECT_EQ(bitLengthVarbinary(std::string("\0", 1)), 8);
-  EXPECT_EQ(bitLengthVarbinary("1"), 8);
-  EXPECT_EQ(bitLengthVarbinary("123"), 24);
-  EXPECT_EQ(bitLengthVarbinary("😋"), 32);
+  EXPECT_EQ(bitLength(""), 0);
+  EXPECT_EQ(bitLength(std::string("\0", 1)), 8);
+  EXPECT_EQ(bitLength("1"), 8);
+  EXPECT_EQ(bitLength("123"), 24);
+  EXPECT_EQ(bitLength("😋"), 32);
   // Consists of five codepoints.
-  EXPECT_EQ(bitLengthVarbinary(kWomanFacepalmingLightSkinTone), 136);
-  EXPECT_EQ(bitLengthVarbinary("\U0001F408"), 32);
+  EXPECT_EQ(bitLength(kWomanFacepalmingLightSkinTone), 136);
+  EXPECT_EQ(bitLength("\U0001F408"), 32);
 }
 
 TEST_F(StringTest, chr) {
