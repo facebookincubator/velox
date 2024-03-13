@@ -28,12 +28,6 @@ class UuidTest : public SparkFunctionBaseTest {
         fmt::format("uuid({})", seed), makeRowVector(ROW({}), 1));
   }
 
-  std::optional<std::string> uuidWithNullSeed(int32_t partitionIndex = 0) {
-    setSparkPartitionId(partitionIndex);
-    std::optional<int64_t> seed = std::nullopt;
-    return evaluateOnce<std::string>("uuid(c0)", seed);
-  }
-
   VectorPtr
   randWithBatchInput(int64_t seed, int32_t partitionIndex, int32_t batchSize) {
     setSparkPartitionId(partitionIndex);
@@ -62,8 +56,9 @@ TEST_F(UuidTest, withSeed) {
 }
 
 TEST_F(UuidTest, withoutSeed) {
-  EXPECT_EQ(uuid(0, 0), uuidWithNullSeed(0));
-  EXPECT_EQ(uuid(0, 123), uuidWithNullSeed(123));
+  setSparkPartitionId(0);
+  std::optional<int64_t> seed = std::nullopt;
+  VELOX_ASSERT_THROW(evaluateOnce<std::string>("uuid(c0)", seed), "");
 }
 
 } // namespace

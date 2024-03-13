@@ -32,14 +32,15 @@ struct UuidFunction {
   // Spark would set the seed with 'random.nextLong()' by 'ResolveRandomSeed'
   // rule.
   void initialize(const core::QueryConfig& config, const int64_t* seedInput) {
-    int64_t seed = seedInput ? *seedInput : 0L;
+    VELOX_CHECK_NOT_NULL(seedInput);
+    int64_t seed = *seedInput;
     int32_t partitionId = config.sparkPartitionId();
     generator_.seed(seed + partitionId);
   }
 
-  FOLLY_ALWAYS_INLINE void callNullable(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
-      const int64_t* /*seedInput*/) {
+      int64_t /*seedInput*/) {
     int64_t mostSigBits =
         (nextLong() & 0xFFFFFFFFFFFF0FFFL) | 0x0000000000004000L;
     int64_t leastSigBits =

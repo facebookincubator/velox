@@ -28,4 +28,4 @@ Miscellaneous Functions
     returned as a canonical UUID 36-character string. The UUID is generated
     from Pseudo-Random Numbers with the seed by combining user-specified
     ``seed`` and the configuration `spark.partition_id`.
-    ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``.
+    ``seed`` must be constant.
