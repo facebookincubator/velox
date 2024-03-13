@@ -57,8 +57,8 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(DateTimeFunctionsTest, toUTCTimestamp) {
-  const auto toUTCTimestamp = [&](const std::string_view ts,
+TEST_F(DateTimeFunctionsTest, toUtcTimestamp) {
+  const auto toUtcTimestamp = [&](std::string_view ts,
                                   const std::optional<std::string> tz) {
     auto timestamp = std::make_optional<Timestamp>(
         util::fromTimestampString(ts.data(), ts.length()));
@@ -66,23 +66,23 @@ TEST_F(DateTimeFunctionsTest, toUTCTimestamp) {
   };
   EXPECT_EQ(
       util::fromTimestampString("2015-07-24 07:00:00"),
-      toUTCTimestamp("2015-07-24 00:00:00", "America/Los_Angeles"));
+      toUtcTimestamp("2015-07-24 00:00:00", "America/Los_Angeles"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 08:00:00"),
-      toUTCTimestamp("2015-01-24 00:00:00", "America/Los_Angeles"));
+      toUtcTimestamp("2015-01-24 00:00:00", "America/Los_Angeles"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
-      toUTCTimestamp("2015-01-24 00:00:00", "UTC"));
+      toUtcTimestamp("2015-01-24 00:00:00", "UTC"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
-      toUTCTimestamp("2015-01-24 05:30:00", "Asia/Kolkata"));
+      toUtcTimestamp("2015-01-24 05:30:00", "Asia/Kolkata"));
   VELOX_ASSERT_THROW(
-      toUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
+      toUtcTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
       "Asia/Ooty not found in timezone database");
 }
 
-TEST_F(DateTimeFunctionsTest, fromUTCTimestamp) {
-  const auto fromUTCTimestamp = [&](const std::string_view ts,
+TEST_F(DateTimeFunctionsTest, fromUtcTimestamp) {
+  const auto fromUtcTimestamp = [&](std::string_view ts,
                                     const std::optional<std::string> tz) {
     auto timestamp = std::make_optional<Timestamp>(
         util::fromTimestampString(ts.data(), ts.length()));
@@ -90,23 +90,23 @@ TEST_F(DateTimeFunctionsTest, fromUTCTimestamp) {
   };
   EXPECT_EQ(
       util::fromTimestampString("2015-07-24 00:00:00"),
-      fromUTCTimestamp("2015-07-24 07:00:00", "America/Los_Angeles"));
+      fromUtcTimestamp("2015-07-24 07:00:00", "America/Los_Angeles"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
-      fromUTCTimestamp("2015-01-24 08:00:00", "America/Los_Angeles"));
+      fromUtcTimestamp("2015-01-24 08:00:00", "America/Los_Angeles"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
-      fromUTCTimestamp("2015-01-24 00:00:00", "UTC"));
+      fromUtcTimestamp("2015-01-24 00:00:00", "UTC"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 05:30:00"),
-      fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
+      fromUtcTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
   VELOX_ASSERT_THROW(
-      fromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
+      fromUtcTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
       "Asia/Ooty not found in timezone database");
 }
 
-TEST_F(DateTimeFunctionsTest, toFromUTCTimestamp) {
-  const auto toFromUTCTimestamp = [&](const std::string_view ts,
+TEST_F(DateTimeFunctionsTest, toFromUtcTimestamp) {
+  const auto toFromUtcTimestamp = [&](std::string_view ts,
                                       const std::optional<std::string> tz) {
     auto timestamp = std::make_optional<Timestamp>(
         util::fromTimestampString(ts.data(), ts.length()));
@@ -115,18 +115,18 @@ TEST_F(DateTimeFunctionsTest, toFromUTCTimestamp) {
   };
   EXPECT_EQ(
       util::fromTimestampString("2015-07-24 07:00:00"),
-      toFromUTCTimestamp("2015-07-24 07:00:00", "America/Los_Angeles"));
+      toFromUtcTimestamp("2015-07-24 07:00:00", "America/Los_Angeles"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 08:00:00"),
-      toFromUTCTimestamp("2015-01-24 08:00:00", "America/Los_Angeles"));
+      toFromUtcTimestamp("2015-01-24 08:00:00", "America/Los_Angeles"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
-      toFromUTCTimestamp("2015-01-24 00:00:00", "UTC"));
+      toFromUtcTimestamp("2015-01-24 00:00:00", "UTC"));
   EXPECT_EQ(
       util::fromTimestampString("2015-01-24 00:00:00"),
-      toFromUTCTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
+      toFromUtcTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
   VELOX_ASSERT_THROW(
-      toFromUTCTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
+      toFromUtcTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
       "Asia/Ooty not found in timezone database");
 }
 

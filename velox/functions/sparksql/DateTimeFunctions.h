@@ -261,7 +261,7 @@ struct FromUnixtimeFunction {
 };
 
 template <typename T>
-struct ToUTCTimestampFunction {
+struct ToUtcTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -290,7 +290,7 @@ struct ToUTCTimestampFunction {
 };
 
 template <typename T>
-struct FromUTCTimestampFunction {
+struct FromUtcTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void initialize(

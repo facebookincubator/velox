@@ -97,7 +97,7 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns the timestamp value from UTC timezone to the given timezone. ::
 
-        SELECT from_utc_timestamp('2015-07-24 07:00:00', "America/Los_Angeles"); -- '2015-07-24 00:00:00'
+        SELECT from_utc_timestamp('2015-07-24 07:00:00', 'America/Los_Angeles'); -- '2015-07-24 00:00:00'
 
 .. spark:function:: get_timestamp(string, dateFormat) -> timestamp
 
@@ -185,7 +185,7 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns the timestamp value from the given timezone to UTC timezone. ::
 
-        SELECT to_utc_timestamp('2015-07-24 00:00:00', "America/Los_Angeles"); -- '2015-07-24 07:00:00'
+        SELECT to_utc_timestamp('2015-07-24 00:00:00', 'America/Los_Angeles'); -- '2015-07-24 07:00:00'
 
 .. spark:function:: unix_date(date) -> integer
 
