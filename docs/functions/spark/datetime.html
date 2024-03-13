@@ -213,6 +213,43 @@ days of <code class="docutils literal notranslate"><span class="pre">year-month-
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="make_timestamp">
+<span class="sig-name descname"><span class="pre">make_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">year</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">month</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">day</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hour</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">minute</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">second</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">timezone</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#make_timestamp" title="Link to this definition">¶</a></dt>
+<dd><p>Create timestamp from <code class="docutils literal notranslate"><span class="pre">year</span></code>, <code class="docutils literal notranslate"><span class="pre">month</span></code>, <code class="docutils literal notranslate"><span class="pre">day</span></code>, <code class="docutils literal notranslate"><span class="pre">hour</span></code>, <code class="docutils literal notranslate"><span class="pre">minute</span></code> and <code class="docutils literal notranslate"><span class="pre">second</span></code> fields.
+If the <code class="docutils literal notranslate"><span class="pre">timezone</span></code> parameter is provided,
+the function interprets the input time components as being in the specified <code class="docutils literal notranslate"><span class="pre">timezone</span></code>.
+Otherwise the function assumes the inputs are in the session’s configured time zone.
+Requires <code class="docutils literal notranslate"><span class="pre">session_timezone</span></code> to be set, or an exceptions will be thrown.</p>
+<dl class="simple">
+<dt>Arguments:</dt><dd><ul class="simple">
+<li><p>year - the year to represent, within the Joda datetime</p></li>
+<li><p>month - the month-of-year to represent, from 1 (January) to 12 (December)</p></li>
+<li><p>day - the day-of-month to represent, from 1 to 31</p></li>
+<li><p>hour - the hour-of-day to represent, from 0 to 23</p></li>
+<li><p>minute - the minute-of-hour to represent, from 0 to 59</p></li>
+<li><p>second - the second-of-minute and its micro-fraction to represent, from 0 to 60.
+The value can be either an integer like 13, or a fraction like 13.123.
+The fractional part can have up to 6 digits to represent microseconds.
+If the sec argument equals to 60, the seconds field is set
+to 0 and 1 minute is added to the final timestamp.</p></li>
+<li><p>timezone - the time zone identifier. For example, CET, UTC and etc.</p></li>
+</ul>
+</dd>
+</dl>
+<p>Returns the timestamp adjusted to the GMT time zone.
+Returns NULL for invalid or NULL input.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">make_timestamp</span><span class="p">(</span><span class="mi">2014</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">28</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mf">45.887</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2014</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">28</span> <span class="mi">06</span><span class="p">:</span><span class="mi">30</span><span class="p">:</span><span class="mf">45.887</span>
+<span class="n">SELECT</span> <span class="n">make_timestamp</span><span class="p">(</span><span class="mi">2014</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">28</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mf">45.887</span><span class="p">,</span> <span class="s1">&#39;CET&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2014</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">28</span> <span class="mi">05</span><span class="p">:</span><span class="mi">30</span><span class="p">:</span><span class="mf">45.887</span>
+<span class="n">SELECT</span> <span class="n">make_timestamp</span><span class="p">(</span><span class="mi">2019</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">23</span><span class="p">,</span> <span class="mi">59</span><span class="p">,</span> <span class="mi">60</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2019</span><span class="o">-</span><span class="mi">07</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+<span class="n">SELECT</span> <span class="n">make_timestamp</span><span class="p">(</span><span class="mi">2019</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">23</span><span class="p">,</span> <span class="mi">59</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2019</span><span class="o">-</span><span class="mi">06</span><span class="o">-</span><span class="mi">30</span> <span class="mi">23</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mi">01</span>
+<span class="n">SELECT</span> <span class="n">make_timestamp</span><span class="p">(</span><span class="n">null</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">22</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">make_timestamp</span><span class="p">(</span><span class="mi">2014</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">28</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mf">60.000001</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">make_timestamp</span><span class="p">(</span><span class="mi">2014</span><span class="p">,</span> <span class="mi">13</span><span class="p">,</span> <span class="mi">28</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mf">45.887</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="month">
 <span class="sig-name descname"><span class="pre">month</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#month" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the month of <code class="docutils literal notranslate"><span class="pre">date</span></code>.</p>
@@ -354,6 +391,7 @@ A week is considered to start on a Monday and week 1 is the first week with &gt;
 <li><a class="reference internal" href="#make_date"><code class="docutils literal notranslate"><span class="pre">make_date()</span></code></a></li>
 <li><a class="reference internal" href="#minute"><code class="docutils literal notranslate"><span class="pre">minute()</span></code></a></li>
 <li><a class="reference internal" href="#quarter"><code class="docutils literal notranslate"><span class="pre">quarter()</span></code></a></li>
+<li><a class="reference internal" href="#make_timestamp"><code class="docutils literal notranslate"><span class="pre">make_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#month"><code class="docutils literal notranslate"><span class="pre">month()</span></code></a></li>
 <li><a class="reference internal" href="#next_day"><code class="docutils literal notranslate"><span class="pre">next_day()</span></code></a></li>
 <li><a class="reference internal" href="#second"><code class="docutils literal notranslate"><span class="pre">second()</span></code></a></li>
