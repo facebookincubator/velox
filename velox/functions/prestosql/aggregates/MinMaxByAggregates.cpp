@@ -634,16 +634,6 @@ class MinMaxByNAggregate : public exec::Aggregate {
     return sizeof(AccumulatorType);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (const vector_size_t i : indices) {
-      auto group = groups[i];
-      new (group + offset_) AccumulatorType(allocator_);
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto valuesArray = (*result)->as<ArrayVector>();
@@ -819,7 +809,18 @@ class MinMaxByNAggregate : public exec::Aggregate {
     });
   }
 
-  void destroy(folly::Range<char**> groups) override {
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (const vector_size_t i : indices) {
+      auto group = groups[i];
+      new (group + offset_) AccumulatorType(allocator_);
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
     destroyAccumulators<AccumulatorType>(groups);
   }
 

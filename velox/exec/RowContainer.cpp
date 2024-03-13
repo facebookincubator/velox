@@ -182,7 +182,17 @@ RowContainer::RowContainer(
   // free list next pointer below the bit at 'freeFlagOffset_'.
   offset = std::max<int32_t>(offset, sizeof(void*));
   const int32_t firstAggregateOffset = offset;
+  if (!accumulators.empty()) {
+    // This moves nullOffset to the start of the next byte.
+    // This is to guarantee the null and initialized bits for an aggregate
+    // always appear in the same byte.
+    nullOffset = (nullOffset + 7) & -8;
+  }
   for (const auto& accumulator : accumulators) {
+    // Initialized bit.  Set when the accumulator is initialized.
+    nullOffsets_.push_back(nullOffset);
+    ++nullOffset;
+    // Null bit.
     nullOffsets_.push_back(nullOffset);
     ++nullOffset;
     isVariableWidth |= !accumulator.isFixedSize();
@@ -205,12 +215,13 @@ RowContainer::RowContainer(
   nullOffsets_.push_back(nullOffset);
   freeFlagOffset_ = nullOffset + firstAggregateOffset * 8;
   ++nullOffset;
+  // Add 1 to the last null offset to get the number of bits.
+  flagBytes_ = bits::nbytes(nullOffsets_.back() + 1);
   // Fixup 'nullOffsets_' to be the bit number from the start of the row.
   for (int32_t i = 0; i < nullOffsets_.size(); ++i) {
     nullOffsets_[i] += firstAggregateOffset * 8;
   }
-  const int32_t nullBytes = bits::nbytes(nullOffsets_.size());
-  offset += nullBytes;
+  offset += flagBytes_;
   for (const auto& accumulator : accumulators) {
     // Accumulator offset must be aligned by their alignment size.
     offset = bits::roundUp(offset, accumulator.alignment());
@@ -234,23 +245,28 @@ RowContainer::RowContainer(
   // no nulls, it may be that there are no null flags.
   if (!nullOffsets_.empty()) {
     // All flags like free and probed flags and null flags for keys and non-keys
-    // start as 0.
-    initialNulls_.resize(nullBytes, 0x0);
-    // Aggregates are null on a new row.
-    const auto aggregateNullOffset = nullableKeys ? keyTypes.size() : 0;
-    for (int32_t i = 0; i < accumulators_.size(); ++i) {
-      bits::setBit(initialNulls_.data(), i + aggregateNullOffset);
-    }
+    // start as 0. This is also used to mark aggregates as uninitialized on row
+    // creation.
+    initialNulls_.resize(flagBytes_, 0x0);
   }
   originalNormalizedKeySize_ = hasNormalizedKeys_
       ? bits::roundUp(sizeof(normalized_key_t), alignment_)
       : 0;
   normalizedKeySize_ = originalNormalizedKeySize_;
+  size_t nullOffsetsPos = 0;
   for (auto i = 0; i < offsets_.size(); ++i) {
     rowColumns_.emplace_back(
         offsets_[i],
-        (nullableKeys_ || i >= keyTypes_.size()) ? nullOffsets_[i]
+        (nullableKeys_ || i >= keyTypes_.size()) ? nullOffsets_[nullOffsetsPos]
                                                  : RowColumn::kNotNullOffset);
+
+    if (!accumulators.empty() && i >= keyTypes_.size() &&
+        i < keyTypes_.size() + accumulators.size()) {
+      // Aggregates have two bits, one for null and one for initialized.
+      nullOffsetsPos += 2;
+    } else {
+      nullOffsetsPos++;
+    }
   }
 }
 
@@ -545,8 +561,6 @@ void RowContainer::extractSerializedRows(
   // bytes (see typeKindSize). Variable-width columns are serialized as 4 bytes
   // of size followed by that many bytes.
 
-  const int32_t nullBytes = bits::nbytes(nullOffsets_.size());
-
   // First, calculate total number of bytes needed to serialize all rows.
 
   size_t fixedWidthRowSize = 0;
@@ -560,7 +574,8 @@ void RowContainer::extractSerializedRows(
     }
   }
 
-  size_t totalBytes = nullBytes * rows.size() + fixedWidthRowSize * rows.size();
+  size_t totalBytes =
+      flagBytes_ * rows.size() + fixedWidthRowSize * rows.size();
   if (hasVariableWidth) {
     for (const char* row : rows) {
       for (auto i = 0; i < types_.size(); ++i) {
@@ -585,8 +600,8 @@ void RowContainer::extractSerializedRows(
     size_t offset = 0;
 
     // Copy nulls.
-    memcpy(rawBuffer + offset, row + rowColumns_[0].nullByte(), nullBytes);
-    offset += nullBytes;
+    memcpy(rawBuffer + offset, row + rowColumns_[0].nullByte(), flagBytes_);
+    offset += flagBytes_;
 
     // Copy values.
     for (auto j = 0; j < types_.size(); ++j) {
@@ -617,9 +632,8 @@ void RowContainer::storeSerializedRow(
   auto serialized = vector.valueAt(index);
   size_t offset = 0;
 
-  const int32_t nullBytes = bits::nbytes(nullOffsets_.size());
-  memcpy(row + rowColumns_[0].nullByte(), serialized.data(), nullBytes);
-  offset += nullBytes;
+  memcpy(row + rowColumns_[0].nullByte(), serialized.data(), flagBytes_);
+  offset += flagBytes_;
 
   RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
   for (auto i = 0; i < types_.size(); ++i) {

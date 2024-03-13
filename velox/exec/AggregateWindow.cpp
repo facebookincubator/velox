@@ -86,6 +86,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
         singleGroupRowSize_,
         exec::RowContainer::nullByte(kNullOffset),
         exec::RowContainer::nullMask(kNullOffset),
+        exec::RowContainer::initializedByte(kNullOffset),
+        exec::RowContainer::initializedMask(kNullOffset),
         /* needed for out of line allocations */ kRowSizeOffset);
     singleGroupRowSize_ += aggregate_->accumulatorFixedWidthSize();
 
