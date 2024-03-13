@@ -270,7 +270,11 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
     generator = findInputGenerator(signature.value());
   }
 
-  const auto size = vectorFuzzer_.getOptions().vectorSize;
+  auto size = vectorFuzzer_.getOptions().vectorSize;
+  // 40% of times test aggregation fuzzer on empty input vectors.
+  if (vectorFuzzer_.coinToss(0.4)) {
+    size = 0;
+  }
 
   auto inputType = ROW(std::move(names), std::move(types));
   std::vector<RowVectorPtr> input;
