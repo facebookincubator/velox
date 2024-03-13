@@ -54,7 +54,7 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<int32_t>("length(c0)", arg);
   }
 
-  std::optional<int32_t> length_bytes(std::optional<std::string> arg) {
+  std::optional<int32_t> lengthBytes(std::optional<std::string> arg) {
     return evaluateOnce<int32_t, std::string>(
         "length(c0)", {arg}, {VARBINARY()});
   }
@@ -322,12 +322,12 @@ TEST_F(StringTest, lengthString) {
 }
 
 TEST_F(StringTest, lengthBytes) {
-  EXPECT_EQ(length_bytes(""), 0);
-  EXPECT_EQ(length_bytes(std::string("\0", 1)), 1);
-  EXPECT_EQ(length_bytes("1"), 1);
-  EXPECT_EQ(length_bytes("😋"), 4);
-  EXPECT_EQ(length_bytes(kWomanFacepalmingLightSkinTone), 17);
-  EXPECT_EQ(length_bytes("1234567890abdef"), 15);
+  EXPECT_EQ(lengthBytes(""), 0);
+  EXPECT_EQ(lengthBytes(std::string("\0", 1)), 1);
+  EXPECT_EQ(lengthBytes("1"), 1);
+  EXPECT_EQ(lengthBytes("😋"), 4);
+  EXPECT_EQ(lengthBytes(kWomanFacepalmingLightSkinTone), 17);
+  EXPECT_EQ(lengthBytes("1234567890abdef"), 15);
 }
 
 TEST_F(StringTest, md5) {
