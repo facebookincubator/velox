@@ -49,8 +49,10 @@ function API in Velox. For more real-world API usage examples, check
 <p>A simple scalar function, e.g. a <a class="reference internal" href="../functions/presto/math.html"><span class="doc">mathematical function</span></a>,
 can be added by wrapping a C++ function in a templated class. For example, a
 ceil function can be implemented as:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExec</span><span class="o">&gt;</span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">CeilFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
+
 <span class="w">  </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span>
 <span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ceil</span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
@@ -69,18 +71,21 @@ specified.</p>
 function to be called on different input types, e.g. float and double. Note
 that template instantiation will only happen during function registration,
 described in the “Registration” section below.</p>
-<p>Please avoid using the obsolete VELOX_UDF_BEGIN/VELOX_UDF_END macros.</p>
+<p>Do not use legacy VELOX_UDF_BEGIN and VELOX_UDF_END macros.</p>
 <p>The “call” function (or one of its variations) may return (a) void indicating
 the function never returns null values, or (b) boolean indicating whether
-the result of the computation is null. True means the result is not null;
-false means the result is null. If “ceil(0)” were to return null, the function
-above could be re-written as follows:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
+the result of the computation is null. The meaning of the returned boolean is
+“result was set”, i.e. true means non-null result was populated, false means
+no (null) result. If “ceil(0)” were to return a null, the function could be
+re-written as follows:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExec</span><span class="o">&gt;</span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">NullableCeilFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
+
 <span class="w">  </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span>
 <span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ceil</span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="c1">// Return NULL if input is zero.</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">};</span>
 </pre></div>
@@ -88,9 +93,7 @@ above could be re-written as follows:</p>
 <p>The argument list must start with an output parameter “result” followed by the
 function arguments. The “result” argument must be a reference. Function
 arguments must be const references. The C++ types of the function arguments and
-the result argument must match <a class="reference internal" href="types.html"><span class="doc">Velox types</span></a>.
-Since the result argument must be a reference, some of the types listed below
-have a different result argument type:</p>
+the result argument must match <a class="reference internal" href="types.html"><span class="doc">Velox types</span></a>.</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head"><p>Velox Type</p></th>
@@ -99,35 +102,85 @@ have a different result argument type:</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>VARCHAR</p></td>
-<td><p>StringView</p></td>
+<tr class="row-even"><td><p>BOOLEAN</p></td>
+<td><p>arg_type&lt;bool&gt;</p></td>
+<td><p>out_type&lt;bool&gt;</p></td>
+</tr>
+<tr class="row-odd"><td><p>TINYINT</p></td>
+<td><p>arg_type&lt;int8_t&gt;</p></td>
+<td><p>out_type&lt;int8_t&gt;</p></td>
+</tr>
+<tr class="row-even"><td><p>SMALLINT</p></td>
+<td><p>arg_type&lt;int16_t&gt;</p></td>
+<td><p>out_type&lt;int16_t&gt;</p></td>
+</tr>
+<tr class="row-odd"><td><p>INTEGER</p></td>
+<td><p>arg_type&lt;int32_t&gt;</p></td>
+<td><p>out_type&lt;int32_t&gt;</p></td>
+</tr>
+<tr class="row-even"><td><p>BIGINT</p></td>
+<td><p>arg_type&lt;int64_t&gt;</p></td>
+<td><p>out_type&lt;int64_t&gt;</p></td>
+</tr>
+<tr class="row-odd"><td><p>REAL</p></td>
+<td><p>arg_type&lt;float&gt;</p></td>
+<td><p>out_type&lt;float&gt;</p></td>
+</tr>
+<tr class="row-even"><td><p>DOUBLE</p></td>
+<td><p>arg_type&lt;double&gt;</p></td>
+<td><p>out_type&lt;double&gt;</p></td>
+</tr>
+<tr class="row-odd"><td><p>TIMESTAMP</p></td>
+<td><p>arg_type&lt;Timestamp&gt;</p></td>
+<td><p>out_type&lt;Timestamp&gt;</p></td>
+</tr>
+<tr class="row-even"><td><p>DATE</p></td>
+<td><p>arg_type&lt;Date&gt;</p></td>
+<td><p>out_type&lt;Date&gt;</p></td>
+</tr>
+<tr class="row-odd"><td><p>VARCHAR</p></td>
+<td><p>arg_type&lt;Varchar&gt;</p></td>
 <td><p>out_type&lt;Varchar&gt;</p></td>
 </tr>
-<tr class="row-odd"><td><p>VARBINARY</p></td>
-<td><p>StringView</p></td>
+<tr class="row-even"><td><p>VARBINARY</p></td>
+<td><p>arg_type&lt;Varbinary&gt;</p></td>
 <td><p>out_type&lt;Varbinary&gt;</p></td>
 </tr>
-<tr class="row-even"><td><p>ARRAY</p></td>
+<tr class="row-odd"><td><p>ARRAY</p></td>
 <td><p>arg_type&lt;Array&lt;E&gt;&gt;</p></td>
 <td><p>out_type&lt;Array&lt;E&gt;&gt;</p></td>
 </tr>
-<tr class="row-odd"><td><p>MAP</p></td>
+<tr class="row-even"><td><p>MAP</p></td>
 <td><p>arg_type&lt;Map&lt;K,V&gt;&gt;</p></td>
 <td><p>out_type&lt;Map&lt;K, V&gt;&gt;</p></td>
 </tr>
-<tr class="row-even"><td><p>ROW</p></td>
+<tr class="row-odd"><td><p>ROW</p></td>
 <td><p>arg_type&lt;Row&lt;T1, T2, T3,…&gt;&gt;</p></td>
 <td><p>out_type&lt;Row&lt;T1, T2, T3,…&gt;&gt;</p></td>
 </tr>
 </tbody>
 </table>
-<p>arg_type and out_type templates are defined by using the
-VELOX_DEFINE_FUNCTION_TYPES(TExecParams) macro in the class definition. These
-types provide interfaces similar to std::string, std::vector, std::unordered_map
-and std::tuple. The underlying implementations are optimized to read and write
-from and to the columnar representation without extra copying. More explanaiton
-and the APIs of the arg_type and out_type for string and complex types can be
-found in <a class="reference internal" href="view-and-writer-types.html"><span class="doc">View and Writer Types</span></a>.</p>
+<p>arg_type and out_type templates are defined by the
+VELOX_DEFINE_FUNCTION_TYPES(TExec) macro in the struct definition. For
+primitive types, arg_type&lt;T&gt; is the same as out_type&lt;T&gt; and the same as T.
+This holds for boolean, integers, floating point types and timestamp.
+For DATE, arg_type&lt;Date&gt; is the same as out_type&lt;Date&gt; and is defined as int32_t.</p>
+<p>A signature of a function that takes an integer and a double and returns
+a double would look like this:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="n">arg_type</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">b</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Which is equivalent to</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">double</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int32_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">double</span><span class="o">&amp;</span><span class="w"> </span><span class="n">b</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>For strings, arg_type&lt;Varchar&gt; is defined as StringView, while out_type&lt;Varchar&gt;
+is defined as StringWriter.</p>
+<p>arg_type and out_type for Varchar, Array, Map and Row provide interfaces similar
+to std::string, std::vector, std::unordered_map and std::tuple. The underlying
+implementations are optimized to read and write from and to the columnar
+representation without extra copying. More explanation and the APIs of the arg_type
+and out_type for string and complex types can be found in <a class="reference internal" href="view-and-writer-types.html"><span class="doc">View and Writer Types</span></a>.</p>
 <p>Note: Do not pay too much attention to complex type mappings at the moment.
 They are included here for completeness.</p>
 <section id="null-behavior">
@@ -138,7 +191,7 @@ automatically produces nulls for such inputs, eliding a call to the actual
 function. If a given function has a different behavior for null inputs, it
 must define a “callNullable” function instead of a “call” function. Here is
 an artificial example of a ceil function that returns 0 for null input:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExec</span><span class="o">&gt;</span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">CeilFunction</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span>
 <span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">callNullable</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">*</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
@@ -171,9 +224,9 @@ that there are no nulls will “callNullFree” be invoked.  In this case,
 “callNullFree” can act as a fast path by avoiding any per row null checks.</p>
 <p>Here is an example of an array_min function that returns the minimum value in
 an array:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExec</span><span class="o">&gt;</span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">ArrayMinFunction</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExecParams</span><span class="p">);</span>
+<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
 
 <span class="w">  </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TInput</span><span class="o">&gt;</span>
 <span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">callNullFree</span><span class="p">(</span>
@@ -207,7 +260,7 @@ the function must define a static constexpr bool is_deterministic member:</p>
 </pre></div>
 </div>
 <p>An example of such function is rand():</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExec</span><span class="o">&gt;</span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">RandFunction</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_deterministic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
 
@@ -235,9 +288,9 @@ engine will automatically mark the result strings as all-ASCII. When these
 strings are passed as input to some other function, the engine won’t need to
 scan the strings to determine whether they are ASCII or not.</p>
 <p>Here is an example of a trim function:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExec</span><span class="o">&gt;</span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">TrimFunction</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExecParams</span><span class="p">);</span>
+<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
 
 <span class="w">  </span><span class="c1">// ASCII input always produces ASCII result.</span>
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_default_ascii_behavior</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
@@ -279,9 +332,9 @@ can be used to set the result to an empty string.</p>
 </pre></div>
 </div>
 <p>Here is an example of a zero-copy function:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExec</span><span class="o">&gt;</span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">TrimFunction</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExecParams</span><span class="p">);</span>
+<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
 
 <span class="w">  </span><span class="c1">// Results refer to strings in the first argument.</span>
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">reuse_strings_from_arg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
@@ -315,9 +368,9 @@ core::QueryConfig&amp;. The engine calls the initialize method once per query an
 thread of execution.</p>
 <p>Here is an example of an hour function extracting time zone from the session
 properties and using it when processing inputs.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExec</span><span class="o">&gt;</span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">HourFunction</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExecParams</span><span class="p">);</span>
+<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
 
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">date</span><span class="o">::</span><span class="n">time_zone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
 
@@ -342,9 +395,9 @@ properties and using it when processing inputs.</p>
 <p>Here is another example of the <a class="reference internal" href="../functions/presto/datetime.html#date_trunc" title="date_trunc"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_trunc()</span></code></a> function parsing the constant
 unit argument during initialize and re-using parsed value when processing
 individual rows.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExec</span><span class="o">&gt;</span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">DateTruncFunction</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExecParams</span><span class="p">);</span>
+<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
 
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">date</span><span class="o">::</span><span class="n">time_zone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
 <span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">DateTimeUnit</span><span class="o">&gt;</span><span class="w"> </span><span class="n">unit_</span><span class="p">;</span>
@@ -398,34 +451,89 @@ we need to call registerFunction again:</p>
 </pre></div>
 </div>
 <p>We need to call registerFunction for each signature we want to support.</p>
-</section>
-<section id="codegen">
-<h3>Codegen<a class="headerlink" href="#codegen" title="Link to this heading">¶</a></h3>
-<p>To allow the function to be used in the codegen, extract the “kernel” of the
-function into a header file and call that from the “call” or “callNullable”.
-Here is an example with ceil function.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/functions/prestosql/ArithmeticImpl.h&quot;</span>
-
-<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
-<span class="k">struct</span><span class="w"> </span><span class="nc">CeilFunction</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span>
-<span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ceil</span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
-<span class="w">  </span><span class="p">}</span>
-<span class="p">};</span>
+<p>Here is a mapping from Velox types to C++ types that should be used for
+argument and return types during registration.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Velox Type</p></th>
+<th class="head"><p>C++ Type</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>BOOLEAN</p></td>
+<td><p>bool</p></td>
+</tr>
+<tr class="row-odd"><td><p>TINYINT</p></td>
+<td><p>int8_t</p></td>
+</tr>
+<tr class="row-even"><td><p>SMALLINT</p></td>
+<td><p>int16_t</p></td>
+</tr>
+<tr class="row-odd"><td><p>INTEGER</p></td>
+<td><p>int32_t</p></td>
+</tr>
+<tr class="row-even"><td><p>BIGINT</p></td>
+<td><p>int64_t</p></td>
+</tr>
+<tr class="row-odd"><td><p>REAL</p></td>
+<td><p>float</p></td>
+</tr>
+<tr class="row-even"><td><p>DOUBLE</p></td>
+<td><p>double</p></td>
+</tr>
+<tr class="row-odd"><td><p>TIMESTAMP</p></td>
+<td><p>Timestamp</p></td>
+</tr>
+<tr class="row-even"><td><p>DATE</p></td>
+<td><p>Date</p></td>
+</tr>
+<tr class="row-odd"><td><p>VARCHAR</p></td>
+<td><p>Varchar</p></td>
+</tr>
+<tr class="row-even"><td><p>VARBINARY</p></td>
+<td><p>Varbinary</p></td>
+</tr>
+<tr class="row-odd"><td><p>ARRAY</p></td>
+<td><p>Array&lt;E&gt;</p></td>
+</tr>
+<tr class="row-even"><td><p>MAP</p></td>
+<td><p>Map&lt;K,V&gt;</p></td>
+</tr>
+<tr class="row-odd"><td><p>ROW</p></td>
+<td><p>Row&lt;T1, T2, T3,…&gt;</p></td>
+</tr>
+</tbody>
+</table>
+<p>For example, to register array_min function for string inputs:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">ArrayMinFunction</span><span class="p">,</span><span class="w"> </span><span class="n">Varchar</span><span class="p">,</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&gt;</span><span class="p">({</span><span class="s">&quot;array_min&quot;</span><span class="p">});</span>
 </pre></div>
 </div>
-<p>velox/functions/prestosql/ArithmeticImpl.h:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span>
-<span class="n">T</span><span class="w"> </span><span class="n">ceil</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">arg</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="n">T</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ceil</span><span class="p">(</span><span class="n">arg</span><span class="p">);</span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">results</span><span class="p">;</span>
-<span class="p">}</span>
+<p>To register array_min function for arrays of any type, use Generic&lt;T1&gt; for the element type:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">ArrayMinFunction</span><span class="p">,</span><span class="w"> </span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;</span><span class="p">({</span><span class="s">&quot;array_min&quot;</span><span class="p">});</span>
 </pre></div>
 </div>
-<p>Make sure the header files that define the “kernels” are free of dependencies
-as much as possible to allow for faster compilation in codegen.</p>
+<p>Since array_min needs to sort the elements to find the smallest, the element
+type needs to be orderable. You can restrict array elements to orderable types
+using Orderable&lt;T1&gt;.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">ArrayMinFunction</span><span class="p">,</span><span class="w"> </span><span class="n">Orderable</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Orderable</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;</span><span class="p">({</span><span class="s">&quot;array_min&quot;</span><span class="p">});</span>
+</pre></div>
+</div>
+<p>You can use multiple generic types in a function signature. For example, to register
+map_top_n function:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span>
+<span class="w">    </span><span class="n">MapTopNFunction</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Orderable</span><span class="o">&lt;</span><span class="n">T2</span><span class="o">&gt;&gt;</span><span class="p">,</span><span class="w">    </span><span class="c1">// result map type</span>
+<span class="w">    </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Orderable</span><span class="o">&lt;</span><span class="n">T2</span><span class="o">&gt;&gt;</span><span class="p">,</span><span class="w">    </span><span class="c1">// input map type</span>
+<span class="w">    </span><span class="kt">int64_t</span><span class="w">                             </span><span class="c1">// type of N argument</span>
+<span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;map_top_n&quot;</span><span class="p">});</span>
+</pre></div>
+</div>
+<p>Generic types must use T1, T2, T3… naming.</p>
+<p>Finally, you can specify that an argument must be constant using Constant&lt;T&gt;.
+For example, to specify rand signature with a constant seed argument:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">RandFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="n">Constant</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;&gt;</span><span class="p">({</span><span class="s">&quot;rand&quot;</span><span class="p">});</span>
+</pre></div>
+</div>
 </section>
 <section id="variadic-arguments">
 <h3>Variadic Arguments<a class="headerlink" href="#variadic-arguments" title="Link to this heading">¶</a></h3>
@@ -1042,7 +1150,6 @@ functions are listed in alphabetical order.</p>
 <li><a class="reference internal" href="#zero-copy-string-result">Zero-copy String Result</a></li>
 <li><a class="reference internal" href="#access-to-session-properties-and-constant-inputs">Access to Session Properties and Constant Inputs</a></li>
 <li><a class="reference internal" href="#registration">Registration</a></li>
-<li><a class="reference internal" href="#codegen">Codegen</a></li>
 <li><a class="reference internal" href="#variadic-arguments">Variadic Arguments</a></li>
 </ul>
 </li>
