@@ -34,7 +34,6 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
  public:
   void SetUp() override {
     SparkFunctionBaseTest::SetUp();
-    registerRegexpReplace("");
     // For parsing literal integers as INTEGER, not BIGINT,
     // required by regexp_replace because its position argument
     // is INTEGER.
@@ -176,12 +175,6 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
 // error being thrown; some unsupported character class features result in
 // different results.
 TEST_F(RegexFunctionsTest, javaRegexIncompatibilities) {
-  // Character class union is not supported; parsed as [a\[b]\].
-  EXPECT_THROW(rlike("[]", R"([a[b]])"), VeloxUserError);
-  // Character class intersection not supported; parsed as [a&\[b]\].
-  EXPECT_THROW(rlike("&]", R"([a&&[b]])"), VeloxUserError);
-  // Character class difference not supported; parsed as [\w&\[\^b]\].
-  EXPECT_THROW(rlike("^]", R"([\w&&[^b]])"), VeloxUserError);
   // Unsupported character classes.
   EXPECT_THROW(rlike(" ", "\\h"), VeloxUserError);
   EXPECT_THROW(rlike(" ", "\\H"), VeloxUserError);
@@ -227,8 +220,6 @@ TEST_F(RegexFunctionsTest, blockUnsupportedEdgeCases) {
   EXPECT_THROW(
       evaluateOnce<bool>("rlike('a', c0)", std::optional<std::string>("a*")),
       VeloxUserError);
-  // Unsupported set union syntax.
-  EXPECT_THROW(rlike("", "[a[b]]"), VeloxUserError);
 }
 
 TEST_F(RegexFunctionsTest, regexMatchRegistration) {
@@ -237,7 +228,6 @@ TEST_F(RegexFunctionsTest, regexMatchRegistration) {
           "regexp_extract('a', c0)", std::optional<std::string>("a*")),
       VeloxUserError);
   EXPECT_EQ(regexp_extract("abc", "a."), "ab");
-  EXPECT_THROW(regexp_extract("[]", "[a[b]]"), VeloxUserError);
 }
 
 TEST_F(RegexFunctionsTest, regexpReplaceRegistration) {
@@ -263,14 +253,32 @@ TEST_F(RegexFunctionsTest, regexpReplaceSimple) {
 TEST_F(RegexFunctionsTest, badUTF8) {
   std::string badUTF = "\xF0\x82\x82\xAC";
   std::string badHalf = "\xF0\x82";
+  std::string overlongA = "\xC1\x81"; // 'A' should not be encoded like this.
+  std::string invalidCodePoint =
+      "\xED\xA0\x80"; // Start of the surrogate pair range in UTF-8
+  std::string incompleteSequence = "\xC3"; // Missing the continuation byte.
+  std::string illegalContinuation =
+      "\x80"; // This is a continuation byte without a start.
+  std::string unexpectedContinuation =
+      "\xE0\x80\x80\x80"; // Too many continuation bytes.
+
   VELOX_ASSERT_THROW(
       testingRegexpReplaceRows({badUTF}, {badHalf}, {"Bad"}), "invalid UTF-8");
-  // python converts above values to below and completes regexp_replace
-  // converts.
-  badUTF = "\xc3\xb0\xc2\xac";
-  badHalf = "\xc3\xb0";
-  auto result = testRegexpReplace(badUTF, badHalf, "");
-  EXPECT_EQ(result, "\xc2\xac");
+  VELOX_ASSERT_THROW(
+      testingRegexpReplaceRows({overlongA}, {badHalf}, {"Bad"}),
+      "invalid UTF-8");
+  VELOX_ASSERT_THROW(
+      testingRegexpReplaceRows({invalidCodePoint}, {badHalf}, {"Bad"}),
+      "invalid UTF-8");
+  VELOX_ASSERT_THROW(
+      testingRegexpReplaceRows({incompleteSequence}, {badHalf}, {"Bad"}),
+      "invalid UTF-8");
+  VELOX_ASSERT_THROW(
+      testingRegexpReplaceRows({illegalContinuation}, {badHalf}, {"Bad"}),
+      "invalid UTF-8");
+  VELOX_ASSERT_THROW(
+      testingRegexpReplaceRows({unexpectedContinuation}, {badHalf}, {"Bad"}),
+      "invalid UTF-8");
 }
 
 TEST_F(RegexFunctionsTest, regexpReplaceSimplePosition) {
@@ -317,17 +325,6 @@ TEST_F(RegexFunctionsTest, regexpReplaceWithEmptyString) {
   EXPECT_EQ(result, output);
 }
 
-TEST_F(RegexFunctionsTest, regexBadJavaPattern) {
-  VELOX_ASSERT_THROW(
-      testRegexpReplace("[]", "[a[b]]", ""),
-      "regexp_replace does not support named ASCII character classes or class union, intersection, or difference ([a[b]], [a&&[b]], [a&&[^b]])");
-  VELOX_ASSERT_THROW(
-      testRegexpReplace("[]", "[a&&[b]]", ""),
-      "regexp_replace does not support named ASCII character classes or class union, intersection, or difference ([a[b]], [a&&[b]], [a&&[^b]])");
-  VELOX_ASSERT_THROW(
-      testRegexpReplace("[]", "[a&&[^b]]", ""),
-      "regexp_replace does not support named ASCII character classes or class union, intersection, or difference ([a[b]], [a&&[b]], [a&&[^b]])");
-}
 
 
 TEST_F(RegexFunctionsTest, regexpReplacePosition) {

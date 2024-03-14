@@ -46,9 +46,9 @@ int main(int argc, char** argv) {
   // The following list are the Spark UDFs that hit issues
   // For rlike you need the following combo in the only list:
   // rlike, md5 and upper
-  // regexp_replace: https://github.com/facebookincubator/velox/issues/8438
   std::unordered_set<std::string> skipFunctions = {
       "regexp_extract",
+      // https://github.com/facebookincubator/velox/issues/8438
       "regexp_replace",
       "rlike",
       "chr",

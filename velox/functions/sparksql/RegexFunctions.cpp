@@ -33,68 +33,12 @@ void checkForBadPattern(const RE2& re) {
   }
 }
 
-// Validates the provided regex pattern to ensure its compatibility with the
-// system. The function checks if the pattern uses features like character
-// class union, intersection, or difference which are not supported in C++ RE2
-// library but are supported in Java regex.
-//
-// This function should be called on the individual patterns of a decoded
-// vector. That way when a single pattern in a vector is invalid, we can still
-// operate on the remaining rows.
-//
-// @param pattern The regex pattern string to validate.
-// @param functionName (Optional) Name of the calling function to include in
-// error messages.
-//
-// @throws VELOX_USER_FAIL If the pattern is found to use unsupported features.
-// @note  Default functionName is "REGEXP_REPLACE" because it uses non-constant
-// patterns so it cannot be checked with "ensureRegexIsCompatible". No
-// other functions work with non-constant patterns, but they may in the future.
-//
-// @note Leaving functionName as an optional parameter makes room for
-// other functions to enable non-constant patterns in the future.
-void checkForCompatiblePattern(
-    const std::string& pattern,
-    const char* functionName) {
-  // If in a character class, points to the [ at the beginning of that class.
-  const char* charClassStart = nullptr;
-  // This minimal regex parser looks just for the class begin/end markers.
-  for (const char* c = pattern.data(); c < pattern.data() + pattern.size();
-       ++c) {
-    if (*c == '\\') {
-      ++c;
-    } else if (*c == '[') {
-      if (charClassStart) {
-        VELOX_USER_FAIL(
-            "{} does not support named ASCII character classes or class union, intersection, "
-            "or difference ([a[b]], [a&&[b]], [a&&[^b]])",
-            functionName);
-      }
-      charClassStart = c;
-      // A ] immediately after a [ does not end the character class, and is
-      // instead adds the character ].
-    } else if (*c == ']' && charClassStart + 1 != c) {
-      charClassStart = nullptr;
-    }
-  }
-}
-
-// Blocks patterns that contain character class union, intersection, or
-// difference because these are not understood by RE2 and will be parsed as a
-// different pattern than in java.util.regex.
-void ensureRegexIsConstantAndCompatible(
+void ensureRegexIsConstant(
     const char* functionName,
     const VectorPtr& patternVector) {
   if (!patternVector || !patternVector->isConstantEncoding()) {
     VELOX_USER_FAIL("{} requires a constant pattern.", functionName);
   }
-  if (patternVector->isNullAt(0)) {
-    return;
-  }
-  const StringView pattern =
-      patternVector->as<ConstantVector<StringView>>()->valueAt(0);
-  checkForCompatiblePattern(
-      std::string(pattern.data(), pattern.size()), functionName);
 }
 
 // REGEXP_REPLACE(string, pattern, overwrite) → string
@@ -207,8 +151,7 @@ struct RegexpReplaceFunction {
         kMaxCompiledRegexes,
         "regexp_replace hit the maximum number of unique regexes: {}",
         kMaxCompiledRegexes);
-    checkForCompatiblePattern(pattern, "regexp_replace");
-    auto patternRegex = std::make_unique<re2::RE2>(pattern);
+    auto patternRegex = std::make_unique<re2::RE2>(pattern, re2::RE2::Quiet);
     auto* rawPatternRegex = patternRegex.get();
     checkForBadPattern(*rawPatternRegex);
     cache_.emplace(pattern, std::move(patternRegex));
@@ -230,7 +173,7 @@ std::shared_ptr<exec::VectorFunction> makeRLike(
     const core::QueryConfig& config) {
   // Return any errors from re2Search() first.
   auto result = makeRe2Search(name, inputArgs, config);
-  ensureRegexIsConstantAndCompatible("RLIKE", inputArgs[1].constantValue);
+  ensureRegexIsConstant("RLIKE", inputArgs[1].constantValue);
   return result;
 }
 
@@ -239,8 +182,7 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config) {
   auto result = makeRe2Extract(name, inputArgs, config, /*emptyNoMatch=*/true);
-  ensureRegexIsConstantAndCompatible(
-      "REGEXP_EXTRACT", inputArgs[1].constantValue);
+  ensureRegexIsConstant("REGEXP_EXTRACT", inputArgs[1].constantValue);
   return result;
 }
 
