@@ -19,19 +19,20 @@
 #include <re2/re2.h>
 #include <deque>
 
+#include <folly/init/Init.h>
 #include <functional>
 #include <optional>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MallocAllocator.h"
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/core/PlanNode.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashBuild.h"
-#include "velox/exec/SharedArbitrator.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
@@ -45,7 +46,7 @@ using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::memory {
 // Custom node for the custom factory.
 class FakeMemoryNode : public core::PlanNode {
  public:
@@ -72,8 +73,10 @@ class FakeMemoryNode : public core::PlanNode {
 
 using AllocationCallback = std::function<TestAllocation(Operator* op)>;
 // If return true, the caller will terminate execution and return early.
-using ReclaimInjectionCallback = std::function<
-    bool(MemoryPool* pool, uint64_t targetByte, MemoryReclaimer::Stats& stats)>;
+using ReclaimInjectionCallback = std::function<bool(
+    memory::MemoryPool* pool,
+    uint64_t targetByte,
+    MemoryReclaimer::Stats& stats)>;
 
 // Custom operator for the custom factory.
 class FakeMemoryOperator : public Operator {
@@ -269,7 +272,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
   }
 
   static inline FakeMemoryOperatorFactory* fakeOperatorFactory_;
-  std::unique_ptr<MemoryManager> memoryManager_;
+  std::unique_ptr<memory::MemoryManager> memoryManager_;
   SharedArbitrator* arbitrator_;
   RowTypePtr rowType_;
   VectorFuzzer::Options fuzzerOpts_;
@@ -643,7 +646,7 @@ DEBUG_ONLY_TEST_F(
           return;
         }
         task = values->testingOperatorCtx()->task();
-        MemoryPool* pool = values->pool();
+        memory::MemoryPool* pool = values->pool();
         VELOX_ASSERT_THROW(
             pool->allocate(kMemoryCapacity * 2 / 3),
             "Exceeded memory pool cap");
@@ -657,7 +660,7 @@ DEBUG_ONLY_TEST_F(
   std::atomic<bool> taskAborted{false};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Operator::MemoryReclaimer::reclaim",
-      std::function<void(MemoryPool*)>(([&](MemoryPool* pool) {
+      std::function<void(memory::MemoryPool*)>(([&](memory::MemoryPool* pool) {
         const std::string re(".*Aggregation");
         if (!RE2::FullMatch(pool->name(), re)) {
           return;
@@ -787,10 +790,10 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, asyncArbitratonFromNonDriverContext) {
   std::atomic<bool> aggregationAllocationOnce{true};
   folly::EventCount aggregationAllocationUnblockWait;
   std::atomic<bool> aggregationAllocationUnblocked{false};
-  std::atomic<MemoryPool*> injectPool{nullptr};
+  std::atomic<memory::MemoryPool*> injectPool{nullptr};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::memory::MemoryPoolImpl::reserveThreadSafe",
-      std::function<void(MemoryPool*)>(([&](MemoryPool* pool) {
+      std::function<void(memory::MemoryPool*)>(([&](memory::MemoryPool* pool) {
         const std::string re(".*Aggregation");
         if (!RE2::FullMatch(pool->name(), re)) {
           return;
@@ -942,7 +945,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, arbitrateMemoryFromOtherOperator) {
     std::atomic<bool> injectAllocationOnce{true};
     const int initialBufferLen = 1 << 20;
     std::atomic<void*> buffer{nullptr};
-    std::atomic<MemoryPool*> bufferPool{nullptr};
+    std::atomic<memory::MemoryPool*> bufferPool{nullptr};
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::Values::getOutput",
         std::function<void(const exec::Values*)>(
@@ -1072,6 +1075,7 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
     const int maxNumZombieTasks = 8;
     std::vector<std::thread> queryThreads;
     queryThreads.reserve(numThreads);
+    TestScopedAbortInjection testScopedAbortInjection(10, numThreads);
     for (int i = 0; i < numThreads; ++i) {
       queryThreads.emplace_back([&, i]() {
         std::shared_ptr<Task> task;
@@ -1130,7 +1134,8 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
         } catch (const VeloxException& e) {
           if (e.errorCode() != error_code::kMemCapExceeded.c_str() &&
               e.errorCode() != error_code::kMemAborted.c_str() &&
-              e.errorCode() != error_code::kMemAllocError.c_str()) {
+              e.errorCode() != error_code::kMemAllocError.c_str() &&
+              (e.message() != "Aborted for external error")) {
             std::rethrow_exception(std::current_exception());
           }
         }
@@ -1186,4 +1191,10 @@ TEST_F(SharedArbitrationTest, reserveReleaseCounters) {
     ASSERT_EQ(arbitrator_->stats().numReleases, numRootPools);
   }
 }
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::memory
+
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  folly::Init init{&argc, &argv, false};
+  return RUN_ALL_TESTS();
+}

@@ -21,9 +21,7 @@
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/memory/Memory.h"
 
-using namespace facebook::velox::memory;
-
-namespace facebook::velox::exec {
+namespace facebook::velox::memory {
 
 /// Used to achieve dynamic memory sharing among running queries. When a
 /// memory pool exceeds its current memory capacity, the arbitrator tries to
@@ -54,7 +52,9 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   uint64_t shrinkCapacity(
       const std::vector<std::shared_ptr<MemoryPool>>& pools,
-      uint64_t targetBytes) override final;
+      uint64_t targetBytes,
+      bool allowSpill = true,
+      bool force = false) override final;
 
   Stats stats() const final;
 
@@ -67,10 +67,14 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     bool reclaimable{false};
     uint64_t reclaimableBytes{0};
     uint64_t freeBytes{0};
+    int64_t currentBytes{0};
     MemoryPool* pool;
 
     std::string toString() const;
   };
+
+  /// Returns 'freeCapacity' back to the arbitrator for testing.
+  void testingFreeCapacity(uint64_t freeCapacity);
 
  private:
   // The kind string of shared arbitrator.
@@ -109,23 +113,6 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // requestor capacity accordingly.
   bool ensureCapacity(MemoryPool* requestor, uint64_t targetBytes);
 
-  // Invoked to capture the candidate memory pools stats for arbitration.
-  static std::vector<Candidate> getCandidateStats(
-      const std::vector<std::shared_ptr<MemoryPool>>& pools);
-
-  void sortCandidatesByReclaimableMemory(
-      std::vector<Candidate>& candidates) const;
-
-  void sortCandidatesByFreeCapacity(std::vector<Candidate>& candidates) const;
-
-  // Finds the candidate with the largest capacity. For 'requestor', the
-  // capacity for comparison including its current capacity and the capacity to
-  // grow.
-  const Candidate& findCandidateWithLargestCapacity(
-      MemoryPool* requestor,
-      uint64_t targetBytes,
-      const std::vector<Candidate>& candidates) const;
-
   bool arbitrateMemory(
       MemoryPool* requestor,
       std::vector<Candidate>& candidates,
@@ -149,12 +136,18 @@ class SharedArbitrator : public memory::MemoryArbitrator {
       std::vector<Candidate>& candidates,
       uint64_t targetBytes);
 
-  // Invoked to reclaim used memory capacity from 'candidates'.
+  // Invoked to reclaim used memory capacity from 'candidates' by spilling.
   //
   // NOTE: the function might sort 'candidates' based on each candidate's
   // reclaimable memory internally.
-  uint64_t reclaimUsedMemoryFromCandidates(
+  uint64_t reclaimUsedMemoryFromCandidatesBySpill(
       MemoryPool* requestor,
+      std::vector<Candidate>& candidates,
+      uint64_t targetBytes);
+
+  // Invoded to reclaim used memroy capacity from 'candidates' by aborting the
+  // top memory users' queries.
+  uint64_t reclaimUsedMemoryFromCandidatesByAbort(
       std::vector<Candidate>& candidates,
       uint64_t targetBytes);
 
@@ -211,4 +204,4 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   tsan_atomic<uint64_t> numReserves_{0};
   tsan_atomic<uint64_t> numReleases_{0};
 };
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::memory

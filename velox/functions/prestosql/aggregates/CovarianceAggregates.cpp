@@ -728,7 +728,8 @@ template <
     typename TResultAccessor>
 exec::AggregateRegistrationResult registerCovariance(
     const std::string& name,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       // (double, double) -> double
       exec::AggregateFunctionSignatureBuilder()
@@ -778,75 +779,79 @@ exec::AggregateRegistrationResult registerCovariance(
                 rawInputType->toString())
         }
       },
-      withCompanionFunctions);
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace
 
 void registerCovarianceAggregates(
     const std::string& prefix,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerCovariance<
       CovarAccumulator,
       CovarIntermediateInput,
       CovarIntermediateResult,
-      CovarPopResultAccessor>(prefix + kCovarPop, withCompanionFunctions);
+      CovarPopResultAccessor>(
+      prefix + kCovarPop, withCompanionFunctions, overwrite);
   registerCovariance<
       CovarAccumulator,
       CovarIntermediateInput,
       CovarIntermediateResult,
-      CovarSampResultAccessor>(prefix + kCovarSamp, withCompanionFunctions);
+      CovarSampResultAccessor>(
+      prefix + kCovarSamp, withCompanionFunctions, overwrite);
   registerCovariance<
       CorrAccumulator,
       CorrIntermediateInput,
       CorrIntermediateResult,
-      CorrResultAccessor>(prefix + kCorr, withCompanionFunctions);
+      CorrResultAccessor>(prefix + kCorr, withCompanionFunctions, overwrite);
   registerCovariance<
       RegrAccumulator,
       RegrIntermediateInput,
       RegrIntermediateResult,
       RegrInterceptResultAccessor>(
-      prefix + kRegrIntercept, withCompanionFunctions);
+      prefix + kRegrIntercept, withCompanionFunctions, overwrite);
   registerCovariance<
       RegrAccumulator,
       RegrIntermediateInput,
       RegrIntermediateResult,
-      RegrSlopeResultAccessor>(prefix + kRegrSlop, withCompanionFunctions);
+      RegrSlopeResultAccessor>(prefix + kRegrSlop, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrCountResultAccessor>(prefix + kRegrCount, withCompanionFunctions);
+      RegrCountResultAccessor>(prefix + kRegrCount, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrAvgyResultAccessor>(prefix + kRegrAvgy, withCompanionFunctions);
+      RegrAvgyResultAccessor>(prefix + kRegrAvgy, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrAvgxResultAccessor>(prefix + kRegrAvgx, withCompanionFunctions);
+      RegrAvgxResultAccessor>(prefix + kRegrAvgx, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrSxyResultAccessor>(prefix + kRegrSxy, withCompanionFunctions);
+      RegrSxyResultAccessor>(prefix + kRegrSxy, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrSxxResultAccessor>(prefix + kRegrSxx, withCompanionFunctions);
+      RegrSxxResultAccessor>(prefix + kRegrSxx, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrSyyResultAccessor>(prefix + kRegrSyy, withCompanionFunctions);
+      RegrSyyResultAccessor>(prefix + kRegrSyy, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrR2ResultAccessor>(prefix + kRegrR2, withCompanionFunctions);
+      RegrR2ResultAccessor>(prefix + kRegrR2, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -230,8 +230,6 @@ class QueryConfig {
   /// value is set to 100 GB.
   static constexpr const char* kMaxSpillBytes = "max_spill_bytes";
 
-  static constexpr const char* kTestingSpillPct = "testing.spill_pct";
-
   /// The max allowed spilling level with zero being the initial spilling level.
   /// This only applies for hash build spilling which might trigger recursive
   /// spilling when the build table is too big. If it is set to -1, then there
@@ -305,6 +303,9 @@ class QueryConfig {
   /// The max number of bits to use for the bloom filter.
   static constexpr const char* kSparkBloomFilterMaxNumBits =
       "spark.bloom_filter.max_num_bits";
+
+  /// The current spark partition id.
+  static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
@@ -563,12 +564,6 @@ class QueryConfig {
     return get<bool>(kTopNRowNumberSpillEnabled, true);
   }
 
-  /// Returns a percentage of aggregation or join input batches that will be
-  /// forced to spill for testing. 0 means no extra spilling.
-  int32_t testingSpillPct() const {
-    return get<int32_t>(kTestingSpillPct, 0);
-  }
-
   int32_t maxSpillLevel() const {
     return get<int32_t>(kMaxSpillLevel, 4);
   }
@@ -671,6 +666,14 @@ class QueryConfig {
         kDefault,
         "{} cannot exceed the default value",
         kSparkBloomFilterMaxNumBits);
+    return value;
+  }
+
+  int32_t sparkPartitionId() const {
+    auto id = get<int32_t>(kSparkPartitionId);
+    VELOX_CHECK(id.has_value(), "Spark partition id is not set.");
+    auto value = id.value();
+    VELOX_CHECK_GE(value, 0, "Invalid Spark partition id.");
     return value;
   }
 

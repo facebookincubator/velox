@@ -45,7 +45,7 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<int32_t>("length(c0)", arg);
   }
 
-  std::optional<int32_t> length_bytes(std::optional<std::string> arg) {
+  std::optional<int32_t> lengthVarbinary(std::optional<std::string> arg) {
     return evaluateOnce<int32_t, std::string>(
         "length(c0)", {arg}, {VARBINARY()});
   }
@@ -227,7 +227,7 @@ class StringTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(StringTest, Ascii) {
+TEST_F(StringTest, ascii) {
   EXPECT_EQ(ascii(std::string("\0", 1)), 0);
   EXPECT_EQ(ascii(" "), 32);
   EXPECT_EQ(ascii("😋"), 128523);
@@ -245,7 +245,38 @@ TEST_F(StringTest, Ascii) {
   EXPECT_EQ(ascii(std::nullopt), std::nullopt);
 }
 
-TEST_F(StringTest, Chr) {
+TEST_F(StringTest, bitLength) {
+  auto bitLength = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int32_t>("bit_length(c0)", arg);
+  };
+
+  EXPECT_EQ(bitLength(""), 0);
+  EXPECT_EQ(bitLength(std::string("\0", 1)), 8);
+  EXPECT_EQ(bitLength("1"), 8);
+  EXPECT_EQ(bitLength("123"), 24);
+  EXPECT_EQ(bitLength("😋"), 32);
+  // Consists of five codepoints.
+  EXPECT_EQ(bitLength(kWomanFacepalmingLightSkinTone), 136);
+  EXPECT_EQ(bitLength("\U0001F408"), 32);
+}
+
+TEST_F(StringTest, bitLengthVarbinary) {
+  auto bitLength = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int32_t, std::string>(
+        "bit_length(c0)", {arg}, {VARBINARY()});
+  };
+
+  EXPECT_EQ(bitLength(""), 0);
+  EXPECT_EQ(bitLength(std::string("\0", 1)), 8);
+  EXPECT_EQ(bitLength("1"), 8);
+  EXPECT_EQ(bitLength("123"), 24);
+  EXPECT_EQ(bitLength("😋"), 32);
+  // Consists of five codepoints.
+  EXPECT_EQ(bitLength(kWomanFacepalmingLightSkinTone), 136);
+  EXPECT_EQ(bitLength("\U0001F408"), 32);
+}
+
+TEST_F(StringTest, chr) {
   EXPECT_EQ(chr(-16), "");
   EXPECT_EQ(chr(0), std::string("\0", 1));
   EXPECT_EQ(chr(0x100), std::string("\0", 1));
@@ -259,7 +290,7 @@ TEST_F(StringTest, Chr) {
   EXPECT_EQ(chr(std::nullopt), std::nullopt);
 }
 
-TEST_F(StringTest, Instr) {
+TEST_F(StringTest, instr) {
   EXPECT_EQ(instr("SparkSQL", "SQL"), 6);
   EXPECT_EQ(instr(std::nullopt, "SQL"), std::nullopt);
   EXPECT_EQ(instr("SparkSQL", std::nullopt), std::nullopt);
@@ -279,26 +310,27 @@ TEST_F(StringTest, Instr) {
       10);
 }
 
-TEST_F(StringTest, LengthString) {
+TEST_F(StringTest, lengthString) {
   EXPECT_EQ(length(""), 0);
   EXPECT_EQ(length(std::string("\0", 1)), 1);
   EXPECT_EQ(length("1"), 1);
   EXPECT_EQ(length("😋"), 1);
+  EXPECT_EQ(length("😋😋"), 2);
   // Consists of five codepoints.
   EXPECT_EQ(length(kWomanFacepalmingLightSkinTone), 5);
   EXPECT_EQ(length("1234567890abdef"), 15);
 }
 
-TEST_F(StringTest, LengthBytes) {
-  EXPECT_EQ(length_bytes(""), 0);
-  EXPECT_EQ(length_bytes(std::string("\0", 1)), 1);
-  EXPECT_EQ(length_bytes("1"), 1);
-  EXPECT_EQ(length_bytes("😋"), 4);
-  EXPECT_EQ(length_bytes(kWomanFacepalmingLightSkinTone), 17);
-  EXPECT_EQ(length_bytes("1234567890abdef"), 15);
+TEST_F(StringTest, lengthVarbinary) {
+  EXPECT_EQ(lengthVarbinary(""), 0);
+  EXPECT_EQ(lengthVarbinary(std::string("\0", 1)), 1);
+  EXPECT_EQ(lengthVarbinary("1"), 1);
+  EXPECT_EQ(lengthVarbinary("😋"), 4);
+  EXPECT_EQ(lengthVarbinary(kWomanFacepalmingLightSkinTone), 17);
+  EXPECT_EQ(lengthVarbinary("1234567890abdef"), 15);
 }
 
-TEST_F(StringTest, MD5) {
+TEST_F(StringTest, md5) {
   EXPECT_EQ(md5(std::nullopt), std::nullopt);
   EXPECT_EQ(md5(""), "d41d8cd98f00b204e9800998ecf8427e");
   EXPECT_EQ(md5("Infinity"), "eb2ac5b04180d8d6011a016aeb8f75b3");

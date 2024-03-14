@@ -1326,9 +1326,12 @@ std::optional<DateTimeResult> DateTimeFormatter::parse(
         return std::nullopt;
       }
       VELOX_USER_FAIL(
-          "Value {} for dayOfMonth must be in the range [1,{}]",
+          "Value {} for dayOfMonth must be in the range [1,{}] "
+          "for year {} and month {}.",
           date.dayOfMonthValues[i],
-          util::getMaxDayOfMonth(date.year, date.month));
+          util::getMaxDayOfMonth(date.year, date.month),
+          date.year,
+          date.month);
     }
   }
 
@@ -1339,23 +1342,34 @@ std::optional<DateTimeResult> DateTimeFormatter::parse(
         return std::nullopt;
       }
       VELOX_USER_FAIL(
-          "Value {} for dayOfMonth must be in the range [1,{}]",
+          "Value {} for dayOfMonth must be in the range [1,{}] "
+          "for year {} and month {}.",
           date.dayOfYearValues[i],
-          util::isLeapYear(date.year) ? 366 : 365);
+          util::isLeapYear(date.year) ? 366 : 365,
+          date.year,
+          date.month);
     }
   }
 
   // Convert the parsed date/time into a timestamp.
   int64_t daysSinceEpoch;
+  Status status;
   if (date.weekDateFormat) {
-    daysSinceEpoch =
-        util::daysSinceEpochFromWeekDate(date.year, date.week, date.dayOfWeek);
+    status = util::daysSinceEpochFromWeekDate(
+        date.year, date.week, date.dayOfWeek, daysSinceEpoch);
   } else if (date.dayOfYearFormat) {
-    daysSinceEpoch =
-        util::daysSinceEpochFromDayOfYear(date.year, date.dayOfYear);
+    status = util::daysSinceEpochFromDayOfYear(
+        date.year, date.dayOfYear, daysSinceEpoch);
   } else {
-    daysSinceEpoch =
-        util::daysSinceEpochFromDate(date.year, date.month, date.day);
+    status = util::daysSinceEpochFromDate(
+        date.year, date.month, date.day, daysSinceEpoch);
+  }
+  if (!status.ok()) {
+    VELOX_DCHECK(status.isUserError());
+    if (!failOnError) {
+      return std::nullopt;
+    }
+    VELOX_USER_FAIL(status.message());
   }
 
   int64_t microsSinceMidnight =

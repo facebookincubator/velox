@@ -117,7 +117,9 @@ class NoopArbitrator : public MemoryArbitrator {
   // memory pool capacity shrink.
   uint64_t shrinkCapacity(
       const std::vector<std::shared_ptr<MemoryPool>>& /* unused */,
-      uint64_t /* unused */) override {
+      uint64_t /* unused */,
+      bool /* unused */,
+      bool /* unused */) override {
     return 0;
   }
 
@@ -458,17 +460,23 @@ bool underMemoryArbitration() {
   return memoryArbitrationContext() != nullptr;
 }
 
-void testingRunArbitration(uint64_t targetBytes, MemoryManager* manager) {
+void testingRunArbitration(
+    uint64_t targetBytes,
+    bool allowSpill,
+    MemoryManager* manager) {
   if (manager == nullptr) {
     manager = memory::memoryManager();
   }
-  manager->shrinkPools(targetBytes);
+  manager->shrinkPools(targetBytes, allowSpill);
 }
 
-void testingRunArbitration(MemoryPool* pool, uint64_t targetBytes) {
+void testingRunArbitration(
+    MemoryPool* pool,
+    uint64_t targetBytes,
+    bool allowSpill) {
   pool->enterArbitration();
   static_cast<MemoryPoolImpl*>(pool)->testingManager()->shrinkPools(
-      targetBytes);
+      targetBytes, allowSpill);
   pool->leaveArbitration();
 }
 } // namespace facebook::velox::memory

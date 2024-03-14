@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
 
@@ -57,9 +59,7 @@ TEST_F(ArbitraryTest, noNulls) {
       vectors,
       {},
       aggregates,
-      "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp",
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+      "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp");
 
   // Group by aggregation.
   testAggregations(
@@ -69,9 +69,7 @@ TEST_F(ArbitraryTest, noNulls) {
       },
       {"p0"},
       aggregates,
-      "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp GROUP BY 1",
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+      "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp GROUP BY 1");
 
   // encodings: use filter to wrap aggregation inputs in a dictionary.
   testAggregations(
@@ -82,9 +80,7 @@ TEST_F(ArbitraryTest, noNulls) {
       },
       {"p0"},
       aggregates,
-      "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1",
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+      "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
 
   testAggregations(
       [&](PlanBuilder& builder) {
@@ -92,9 +88,7 @@ TEST_F(ArbitraryTest, noNulls) {
       },
       {},
       aggregates,
-      "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0",
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+      "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0");
 }
 
 TEST_F(ArbitraryTest, nulls) {
@@ -121,18 +115,14 @@ TEST_F(ArbitraryTest, nulls) {
       vectors,
       {},
       {"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"},
-      "SELECT * FROM( VALUES (4, 0.50, NULL)) AS t",
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+      "SELECT * FROM( VALUES (4, 0.50, NULL)) AS t");
 
   // Group by aggregation.
   testAggregations(
       vectors,
       {"c0"},
       {"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"},
-      "SELECT * FROM(VALUES (1, NULL, 0.50, NULL), (2, 4, NULL, NULL), (3, 5, 0.25, NULL)) AS t",
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+      "SELECT * FROM(VALUES (1, NULL, 0.50, NULL), (2, 4, NULL, NULL), (3, 5, 0.25, NULL)) AS t");
 }
 
 TEST_F(ArbitraryTest, varchar) {
@@ -148,17 +138,13 @@ TEST_F(ArbitraryTest, varchar) {
       },
       {"p0"},
       {"arbitrary(c1)"},
-      "SELECT c0 % 11, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY 1",
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+      "SELECT c0 % 11, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY 1");
 
   testAggregations(
       vectors,
       {},
       {"arbitrary(c1)"},
-      "SELECT first(c1) FROM tmp WHERE c1 IS NOT NULL",
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+      "SELECT first(c1) FROM tmp WHERE c1 IS NOT NULL");
 
   // encodings: use filter to wrap aggregation inputs in a dictionary.
   testAggregations(
@@ -167,9 +153,7 @@ TEST_F(ArbitraryTest, varchar) {
       },
       {"p0"},
       {"arbitrary(c1)"},
-      "SELECT c0 % 11, first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL GROUP BY 1",
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+      "SELECT c0 % 11, first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL GROUP BY 1");
 
   testAggregations(
       [&](PlanBuilder& builder) {
@@ -177,9 +161,7 @@ TEST_F(ArbitraryTest, varchar) {
       },
       {},
       {"arbitrary(c1)"},
-      "SELECT first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL",
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+      "SELECT first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL");
 }
 
 TEST_F(ArbitraryTest, varcharConstAndNulls) {
@@ -400,6 +382,32 @@ TEST_F(ArbitraryWindowTest, basic) {
       "partition by c2 order by c0",
       "range between unbounded preceding and current row",
       expected);
+}
+
+TEST_F(ArbitraryTest, spilling) {
+  auto data = makeRowVector(
+      {makeFlatVector<float>({0.1, 0.2, 0.3, 0.4, 0.5, 0.6}),
+       makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+       makeNullableFlatVector<float>({0.1, 0.2, 0.3, 0.4, 0.5, 0.6})});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c1"}, {"arbitrary(c0)"})
+                  .planNode();
+
+  std::shared_ptr<TempDirectoryPath> spillDirectory;
+  AssertQueryBuilder builder(plan);
+
+  exec::TestScopedSpillInjection scopedSpillInjection(100);
+  spillDirectory = exec::test::TempDirectoryPath::create();
+  builder.spillDirectory(spillDirectory->path)
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kAggregationSpillEnabled, "true");
+
+  auto result = builder.maxDrivers(2).copyResults(pool_.get());
+  ::facebook::velox::test::assertEqualVectors(expected, result);
 }
 
 } // namespace

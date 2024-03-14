@@ -235,6 +235,9 @@ const char* exportArrowFormatStr(
       if (type->isDate()) {
         return "tdD";
       }
+      if (type->isIntervalYearMonth()) {
+        return "tiM";
+      }
       return "i"; // int32
     case TypeKind::BIGINT:
       return "l"; // int64
@@ -964,6 +967,9 @@ TypePtr importFromArrowImpl(
       if (format[1] == 'd' && format[2] == 'D') {
         return DATE();
       }
+      if (format[1] == 'i' && format[2] == 'M') {
+        return INTERVAL_YEAR_MONTH();
+      }
       break;
 
     case 'd': { // decimal types.
@@ -1396,9 +1402,12 @@ VectorPtr createTimestampVector(
     int64_t nullCount) {
   BufferPtr timestamps = AlignedBuffer::allocate<Timestamp>(length, pool);
   auto* rawTimestamps = timestamps->asMutable<Timestamp>();
-  const auto* rawNulls = nulls->as<const uint64_t>();
-
-  if (length > nullCount) {
+  if (nulls == nullptr) {
+    for (size_t i = 0; i < length; ++i) {
+      rawTimestamps[i] = Timestamp::fromNanos(input[i]);
+    }
+  } else if (length > nullCount) {
+    const auto* rawNulls = nulls->as<const uint64_t>();
     for (size_t i = 0; i < length; ++i) {
       if (!bits::isBitNull(rawNulls, i)) {
         rawTimestamps[i] = Timestamp::fromNanos(input[i]);

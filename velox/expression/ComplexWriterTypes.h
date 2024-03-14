@@ -91,9 +91,8 @@ struct PrimitiveWriter {
 };
 
 template <typename V>
-bool constexpr provide_std_interface =
-    SimpleTypeTrait<V>::isPrimitiveType && !std::is_same_v<Varchar, V> &&
-    !std::is_same_v<Varbinary, V> && !std::is_same_v<Any, V>;
+bool constexpr provide_std_interface = SimpleTypeTrait<V>::isPrimitiveType &&
+    !std::is_same_v<Varchar, V> && !std::is_same_v<Varbinary, V>;
 
 // bool is an exception, it requires commit but also provides std::interface.
 template <typename V>
@@ -516,9 +515,9 @@ class ArrayWriter {
   }
 
   // Make sure user do not use those.
-  ArrayWriter<V>() = default;
-  ArrayWriter<V>(const ArrayWriter<V>&) = default;
-  ArrayWriter<V>& operator=(const ArrayWriter<V>&) = default;
+  ArrayWriter() = default;
+  ArrayWriter(const ArrayWriter<V>&) = default;
+  ArrayWriter& operator=(const ArrayWriter<V>&) = default;
 
   void commitMostRecentChildItem() {
     if constexpr (requires_commit<V>) {
@@ -715,11 +714,11 @@ class MapWriter {
 
  private:
   // Make sure user do not use those.
-  MapWriter<K, V>() = default;
+  MapWriter() = default;
 
-  MapWriter<K, V>(const MapWriter<K, V>&) = default;
+  MapWriter(const MapWriter<K, V>&) = default;
 
-  MapWriter<K, V>& operator=(const MapWriter<K, V>&) = default;
+  MapWriter& operator=(const MapWriter<K, V>&) = default;
 
   vector_size_t indexOfLast() {
     return innerOffset_ + length_ - 1;
@@ -981,9 +980,7 @@ class RowWriter {
     (
         [&]() {
           using current_t = std::tuple_element_t<Is, children_types>;
-          if constexpr (
-              !provide_std_interface<current_t> &&
-              !isOpaqueType<current_t>::value) {
+          if constexpr (!provide_std_interface<current_t>) {
             if (UNLIKELY(std::get<Is>(needCommit_))) {
               std::get<Is>(childrenWriters_).finalizeNull();
               std::get<Is>(needCommit_) = false;

@@ -59,6 +59,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "day", prefix + "day_of_month"});
   registerFunction<DayFunction, int64_t, Date>(
       {prefix + "day", prefix + "day_of_month"});
+  registerFunction<DayFromIntervalFunction, int64_t, IntervalDayTime>(
+      {prefix + "day", prefix + "day_of_month"});
   registerFunction<DateMinusInterval, Date, Date, IntervalDayTime>(
       {prefix + "minus"});
   registerFunction<DateMinusInterval, Date, Date, IntervalYearMonth>(
@@ -68,19 +70,34 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<DatePlusInterval, Date, Date, IntervalYearMonth>(
       {prefix + "plus"});
   registerFunction<
-      TimestampMinusIntervalDayTime,
+      TimestampMinusInterval,
       Timestamp,
       Timestamp,
       IntervalDayTime>({prefix + "minus"});
   registerFunction<
-      TimestampPlusIntervalDayTime,
+      TimestampMinusInterval,
+      Timestamp,
+      Timestamp,
+      IntervalYearMonth>({prefix + "minus"});
+  registerFunction<
+      TimestampPlusInterval,
       Timestamp,
       Timestamp,
       IntervalDayTime>({prefix + "plus"});
   registerFunction<
-      IntervalDayTimePlusTimestamp,
+      TimestampPlusInterval,
+      Timestamp,
+      Timestamp,
+      IntervalYearMonth>({prefix + "plus"});
+  registerFunction<
+      IntervalPlusTimestamp,
       Timestamp,
       IntervalDayTime,
+      Timestamp>({prefix + "plus"});
+  registerFunction<
+      IntervalPlusTimestamp,
+      Timestamp,
+      IntervalYearMonth,
       Timestamp>({prefix + "plus"});
   registerFunction<
       TimestampMinusFunction,

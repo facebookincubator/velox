@@ -62,9 +62,6 @@ GroupingSet::GroupingSet(
       aggregates_(std::move(aggregates)),
       masks_(extractMaskChannels(aggregates_)),
       ignoreNullKeys_(ignoreNullKeys),
-      spillMemoryThreshold_(operatorCtx->driverCtx()
-                                ->queryConfig()
-                                .aggregationSpillMemoryThreshold()),
       globalGroupingSets_(globalGroupingSets),
       groupIdChannel_(groupIdChannel),
       spillConfig_(spillConfig),
@@ -823,19 +820,12 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   const int64_t flatBytes = input->estimateFlatSize();
 
   // Test-only spill path.
-  if (spillConfig_->testSpillPct > 0 &&
-      (folly::hasher<uint64_t>()(++spillTestCounter_)) % 100 <=
-          spillConfig_->testSpillPct) {
+  if (testingTriggerSpill()) {
     spill();
     return;
   }
 
   const auto currentUsage = pool_.currentBytes();
-  if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
-    spill();
-    return;
-  }
-
   const auto minReservationBytes =
       currentUsage * spillConfig_->minSpillableReservationPct / 100;
   const auto availableReservationBytes = pool_.availableReservation();
@@ -874,7 +864,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
       incrementBytes * 2,
       currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
   {
-    ReclaimableSectionGuard guard(nonReclaimableSection_);
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
     if (pool_.maybeReserve(targetIncrementBytes)) {
       return;
     }
@@ -895,9 +885,7 @@ void GroupingSet::ensureOutputFits() {
   }
 
   // Test-only spill path.
-  if (spillConfig_->testSpillPct > 0 &&
-      (folly::hasher<uint64_t>()(++spillTestCounter_)) % 100 <=
-          spillConfig_->testSpillPct) {
+  if (testingTriggerSpill()) {
     spill(RowContainerIterator{});
     return;
   }
@@ -905,7 +893,7 @@ void GroupingSet::ensureOutputFits() {
   const uint64_t outputBufferSizeToReserve =
       queryConfig_.preferredOutputBatchBytes() * 1.2;
   {
-    ReclaimableSectionGuard guard(nonReclaimableSection_);
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
     if (pool_.maybeReserve(outputBufferSizeToReserve)) {
       return;
     }

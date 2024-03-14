@@ -1039,10 +1039,6 @@ std::vector<std::shared_ptr<Driver>> Task::createDriversLocked(
     bridgeEntry.second->start();
   }
 
-  // Start all the spill groups before we start the driver execution.
-  for (auto& coordinatorEntry : splitGroupState.spillOperatorGroups) {
-    coordinatorEntry.second->start();
-  }
   return drivers;
 }
 
@@ -1371,7 +1367,12 @@ bool Task::checkNoMoreSplitGroupsLocked() {
   // we should review the total number of drivers, which initially is set to
   // process all split groups, but in reality workers share split groups and
   // each worker processes only a part of them, meaning much less than all.
-  if (allNodesReceivedNoMoreSplitsMessageLocked()) {
+  //
+  // NOTE: we shall only do task finish check after the task has been started
+  // which initializes 'numDriversPerSplitGroup_', otherwise the task will
+  // finish early.
+  if ((numDriversPerSplitGroup_ != 0) &&
+      allNodesReceivedNoMoreSplitsMessageLocked()) {
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_ +
         numDriversUngrouped_;
     if (groupedPartitionedOutput_) {
@@ -1511,6 +1512,14 @@ bool Task::isUngroupedExecution() const {
   return not isGroupedExecution();
 }
 
+bool Task::hasMixedExecutionGroup() const {
+  if (!isGroupedExecution()) {
+    return false;
+  }
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  return numDriversUngrouped_ > 0;
+}
+
 bool Task::isRunning() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
   return isRunningLocked();
@@ -1586,7 +1595,7 @@ bool Task::checkIfFinishedLocked() {
   // TODO Add support for terminating processing early in grouped execution.
   bool allFinished = numFinishedDrivers_ == numTotalDrivers_;
   if (!allFinished && isUngroupedExecution()) {
-    auto outputPipelineId = getOutputPipelineId();
+    const auto outputPipelineId = getOutputPipelineId();
     if (splitGroupStates_[kUngroupedGroupId].numFinishedOutputDrivers ==
         numDrivers(outputPipelineId)) {
       allFinished = true;
@@ -1681,10 +1690,6 @@ void Task::addHashJoinBridgesLocked(
   for (const auto& planNodeId : planNodeIds) {
     splitGroupState.bridges.emplace(
         planNodeId, std::make_shared<HashJoinBridge>());
-    splitGroupState.spillOperatorGroups.emplace(
-        planNodeId,
-        std::make_unique<SpillOperatorGroup>(
-            taskId_, splitGroupId, planNodeId));
   }
 }
 
@@ -2619,21 +2624,6 @@ std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
     int32_t pipelineId) const {
   VELOX_CHECK_LT(pipelineId, exchangeClients_.size());
   return exchangeClients_[pipelineId];
-}
-
-std::shared_ptr<SpillOperatorGroup> Task::getSpillOperatorGroupLocked(
-    uint32_t splitGroupId,
-    const core::PlanNodeId& planNodeId) {
-  auto& groups = splitGroupStates_[splitGroupId].spillOperatorGroups;
-  auto it = groups.find(planNodeId);
-  VELOX_CHECK(it != groups.end(), "Split group is not set {}", splitGroupId);
-  auto group = it->second;
-  VELOX_CHECK_NOT_NULL(
-      group,
-      "Spill group for plan node ID {} is not set in split group {}",
-      planNodeId,
-      splitGroupId);
-  return group;
 }
 
 void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {

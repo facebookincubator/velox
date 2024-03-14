@@ -53,6 +53,7 @@ add_library(
   NestedLoopJoinProbe.cpp
   Operator.cpp
   OperatorUtils.cpp
+  PrefixSort.cpp
   OrderBy.cpp
   PartitionedOutput.cpp
   OutputBuffer.cpp
@@ -61,13 +62,11 @@ add_library(
   ProbeOperatorState.cpp
   RowContainer.cpp
   RowNumber.cpp
-  SharedArbitrator.cpp
   SortBuffer.cpp
   SortedAggregations.cpp
   SortWindowBuild.cpp
   Spill.cpp
   SpillFile.cpp
-  SpillOperatorGroup.cpp
   Spiller.cpp
   StreamingAggregation.cpp
   StreamingWindowBuild.cpp

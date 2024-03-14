@@ -66,16 +66,9 @@ HashBuild::HashBuild(
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
-      spillMemoryThreshold_(
-          operatorCtx_->driverCtx()->queryConfig().joinSpillMemoryThreshold()),
       keyChannelMap_(joinNode_->rightKeys().size()) {
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
-
-  spillGroup_ = spillEnabled()
-      ? operatorCtx_->task()->getSpillOperatorGroupLocked(
-            operatorCtx_->driverCtx()->splitGroupId, planNodeId())
-      : nullptr;
 
   joinBridge_->addBuilder();
 
@@ -208,12 +201,8 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
   HashBitRange hashBits(
       spillConfig.startPartitionBit,
       spillConfig.startPartitionBit + spillConfig.joinPartitionBits);
-  if (spillPartition == nullptr) {
-    spillGroup_->addOperator(
-        *this,
-        operatorCtx_->driver()->shared_from_this(),
-        [&](const std::vector<Operator*>& operators) { runSpill(operators); });
-  } else {
+
+  if (spillPartition != nullptr) {
     LOG(INFO) << "Setup reader to read spilled input from "
               << spillPartition->toString()
               << ", memory pool: " << pool()->name();
@@ -316,12 +305,7 @@ void HashBuild::removeInputRowsForAntiJoinFilter() {
 
 void HashBuild::addInput(RowVectorPtr input) {
   checkRunning();
-
-  if (!ensureInputFits(input)) {
-    VELOX_CHECK_NOT_NULL(input_);
-    VELOX_CHECK(future_.valid());
-    return;
-  }
+  ensureInputFits(input);
 
   TestValue::adjust("facebook::velox::exec::HashBuild::addInput", this);
 
@@ -425,36 +409,18 @@ void HashBuild::addInput(RowVectorPtr input) {
   });
 }
 
-bool HashBuild::ensureInputFits(RowVectorPtr& input) {
+void HashBuild::ensureInputFits(RowVectorPtr& input) {
   // NOTE: we don't need memory reservation if all the partitions are spilling
   // as we spill all the input rows to disk directly.
   if (!spillEnabled() || spiller_ == nullptr || spiller_->isAllSpilled()) {
-    return true;
+    return;
   }
 
   // NOTE: we simply reserve memory all inputs even though some of them are
   // spilling directly. It is okay as we will accumulate the extra reservation
   // in the operator's memory pool, and won't make any new reservation if there
   // is already sufficient reservations.
-  if (!reserveMemory(input)) {
-    if (!requestSpill(input)) {
-      return false;
-    }
-  } else {
-    // Check if any other peer operator has requested group spill.
-    if (waitSpill(input)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool HashBuild::reserveMemory(const RowVectorPtr& input) {
   VELOX_CHECK(spillEnabled());
-
-  Operator::ReclaimableSectionGuard guard(this);
-  numSpillRows_ = 0;
-  numSpillBytes_ = 0;
 
   auto* rows = table_->rows();
   const auto numRows = rows->numRows();
@@ -469,22 +435,11 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
   if (numRows != 0) {
     // Test-only spill path.
     if (testingTriggerSpill()) {
+      Operator::ReclaimableSectionGuard guard(this);
       memory::testingRunArbitration(pool());
       // NOTE: the memory arbitration should have triggered spilling on this
       // hash build operator so we return true to indicate have enough memory.
-      return true;
-    }
-
-    // We check usage from the parent pool to take peers' allocations into
-    // account.
-    const auto nodeUsage = pool()->parent()->currentBytes();
-    if (spillMemoryThreshold_ != 0 && nodeUsage > spillMemoryThreshold_) {
-      const int64_t bytesToSpill =
-          nodeUsage * spillConfig()->spillableReservationGrowthPct / 100;
-      numSpillRows_ = std::max<int64_t>(
-          1, bytesToSpill / (rows->fixedRowSize() + outOfLineBytesPerRow));
-      numSpillBytes_ = numSpillRows_ * outOfLineBytesPerRow;
-      return false;
+      return;
     }
   }
 
@@ -506,14 +461,14 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
       // Enough free rows for input rows and enough variable length free
       // space for the flat size of the whole vector. If outOfLineBytes
       // is 0 there is no need for variable length space.
-      return true;
+      return;
     }
 
     // If there is variable length data we take the flat size of the
     // input as a cap on the new variable length data needed. There must be at
     // least 2x the increments in reservation.
     if (pool()->availableReservation() > 2 * incrementBytes) {
-      return true;
+      return;
     }
   }
 
@@ -524,15 +479,17 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
       incrementBytes * 2,
       currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
 
-  if (pool()->maybeReserve(targetIncrementBytes)) {
-    return true;
+  {
+    Operator::ReclaimableSectionGuard guard(this);
+    if (!pool()->maybeReserve(targetIncrementBytes)) {
+      LOG(WARNING) << "Failed to reserve "
+                   << succinctBytes(targetIncrementBytes) << " for memory pool "
+                   << pool()->name()
+                   << ", usage: " << succinctBytes(pool()->currentBytes())
+                   << ", reservation: "
+                   << succinctBytes(pool()->reservedBytes());
+    }
   }
-
-  LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
-               << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->currentBytes())
-               << ", reservation: " << succinctBytes(pool()->reservedBytes());
-  return true;
 }
 
 void HashBuild::spillInput(const RowVectorPtr& input) {
@@ -548,17 +505,18 @@ void HashBuild::spillInput(const RowVectorPtr& input) {
   computeSpillPartitions(input);
 
   vector_size_t numSpillInputs = 0;
-  for (auto row = 0; row < numInput; ++row) {
-    const auto partition = spillPartitions_[row];
-    if (FOLLY_UNLIKELY(!activeRows_.isValid(row))) {
+  for (auto rowIdx = 0; rowIdx < numInput; ++rowIdx) {
+    const auto partition = spillPartitions_[rowIdx];
+    if (FOLLY_UNLIKELY(!activeRows_.isValid(rowIdx))) {
       continue;
     }
     if (!spiller_->isSpilled(partition)) {
       continue;
     }
-    activeRows_.setValid(row, false);
+    activeRows_.setValid(rowIdx, false);
     ++numSpillInputs;
-    rawSpillInputIndicesBuffers_[partition][numSpillInputs_[partition]++] = row;
+    rawSpillInputIndicesBuffers_[partition][numSpillInputs_[partition]++] =
+        rowIdx;
   }
   if (numSpillInputs == 0) {
     return;
@@ -623,9 +581,9 @@ void HashBuild::computeSpillPartitions(const RowVectorPtr& input) {
   }
 
   spillPartitions_.resize(input->size());
-  for (auto i = 0; i < spillPartitions_.size(); ++i) {
-    spillPartitions_[i] = spiller_->hashBits().partition(hashes_[i]);
-  }
+  activeRows_.applyToSelected([&](int32_t row) {
+    spillPartitions_[row] = spiller_->hashBits().partition(hashes_[row]);
+  });
 }
 
 void HashBuild::spillPartition(
@@ -644,70 +602,6 @@ void HashBuild::spillPartition(
   }
 }
 
-bool HashBuild::requestSpill(RowVectorPtr& input) {
-  VELOX_CHECK_GT(numSpillRows_, 0);
-  VELOX_CHECK_GT(numSpillBytes_, 0);
-
-  // If all the partitions have been spilled, then nothing to spill.
-  if (spiller_->isAllSpilled()) {
-    return true;
-  }
-
-  input_ = std::move(input);
-  if (spillGroup_->requestSpill(*this, future_)) {
-    VELOX_CHECK(future_.valid());
-    setState(State::kWaitForSpill);
-    return false;
-  }
-  input = std::move(input_);
-  return true;
-}
-
-bool HashBuild::waitSpill(RowVectorPtr& input) {
-  if (!spillGroup_->needSpill()) {
-    return false;
-  }
-
-  if (spillGroup_->waitSpill(*this, future_)) {
-    VELOX_CHECK(future_.valid());
-    input_ = std::move(input);
-    setState(State::kWaitForSpill);
-    return true;
-  }
-  return false;
-}
-
-void HashBuild::runSpill(const std::vector<Operator*>& spillOperators) {
-  VELOX_CHECK(spillEnabled());
-  VELOX_CHECK(!spiller_->state().isAllPartitionSpilled());
-
-  uint64_t targetRows = 0;
-  uint64_t targetBytes = 0;
-  for (auto& spillOp : spillOperators) {
-    HashBuild* build = dynamic_cast<HashBuild*>(spillOp);
-    VELOX_CHECK_NOT_NULL(build);
-    build->addAndClearSpillTarget(targetRows, targetBytes);
-  }
-  VELOX_CHECK_GT(targetRows, 0);
-  VELOX_CHECK_GT(targetBytes, 0);
-
-  // TODO: consider to offload the partition spill processing to an executor to
-  // run in parallel.
-  for (auto& spillOp : spillOperators) {
-    HashBuild* build = dynamic_cast<HashBuild*>(spillOp);
-    build->spiller_->spill();
-    build->table_->clear();
-    build->pool()->release();
-  }
-}
-
-void HashBuild::addAndClearSpillTarget(uint64_t& numRows, uint64_t& numBytes) {
-  numRows += numSpillRows_;
-  numSpillRows_ = 0;
-  numBytes += numSpillBytes_;
-  numSpillBytes_ = 0;
-}
-
 void HashBuild::noMoreInput() {
   checkRunning();
 
@@ -720,10 +614,6 @@ void HashBuild::noMoreInput() {
 }
 
 void HashBuild::noMoreInputInternal() {
-  if (spillEnabled()) {
-    spillGroup_->operatorStopped(*this);
-  }
-
   if (!finishHashBuild()) {
     return;
   }
@@ -844,11 +734,9 @@ bool HashBuild::finishHashBuild() {
       isInputFromSpill() ? spillConfig()->startPartitionBit
                          : BaseHashTable::kNoSpillInputStartPartitionBit);
   addRuntimeStats();
-  joinBridge_->setHashTable(
-      std::move(table_), std::move(spillPartitions), joinHasNullKeys_);
-  if (spillEnabled()) {
+  if (joinBridge_->setHashTable(
+          std::move(table_), std::move(spillPartitions), joinHasNullKeys_)) {
     intermediateStateCleared_ = true;
-    spillGroup_->restart();
   }
 
   // Release the unused memory reservation since we have finished the merged
@@ -1107,6 +995,10 @@ std::string HashBuild::stateName(State state) {
   }
 }
 
+bool HashBuild::canReclaim() const {
+  return canSpill() && !operatorCtx_->task()->hasMixedExecutionGroup();
+}
+
 void HashBuild::reclaim(
     uint64_t /*unused*/,
     memory::MemoryReclaimer::Stats& stats) {
@@ -1213,11 +1105,11 @@ void HashBuild::reclaim(
 }
 
 bool HashBuild::nonReclaimableState() const {
-  // Apart from being in the nonReclaimable section, it's also not reclaimable
-  // if:
-  // 1) the hash table has been built by the last build thread (indicated by
-  //    state_)
-  // 2) the last build operator has transferred ownership of 'this operator's
+  // Apart from being in the nonReclaimable section,
+  // its also not reclaimable if:
+  // 1) the hash table has been built by the last build thread (inidicated
+  //    by state_)
+  // 2) the last build operator has transferred ownership of 'this' operator's
   //    intermediate state (table_ and spiller_) to itself
   // 3) it has completed spilling before reaching either of the previous
   //    two states.
