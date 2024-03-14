@@ -666,7 +666,7 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
 
   options.memoryPool = writerInfo_.back()->writerPool.get();
   options.compressionKind = insertTableHandle_->compressionKind();
-  options.flushPolicy = insertTableHandle_->flushPolicy();
+  options.flushPolicyFactory = insertTableHandle_->flushPolicyFactory();
   if (canReclaim()) {
     options.spillConfig = spillConfig_;
   }

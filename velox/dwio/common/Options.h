@@ -590,7 +590,8 @@ struct WriterOptions {
   const velox::common::SpillConfig* spillConfig{nullptr};
   tsan_atomic<bool>* nonReclaimableSection{nullptr};
   std::optional<velox::common::CompressionKind> compressionKind;
-  std::shared_ptr<dwio::common::FlushPolicy> flushPolicy;
+  std::function<std::shared_ptr<dwio::common::FlushPolicy>()>
+      flushPolicyFactory;
   std::optional<uint64_t> maxStripeSize{std::nullopt};
   std::optional<uint64_t> maxDictionaryMemory{std::nullopt};
   std::map<std::string, std::string> serdeParameters;
