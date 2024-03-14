@@ -311,6 +311,7 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
     auto rows = folly::Range<char**>(&row, 1);
     freeVariableWidthFields(rows);
     freeAggregates(rows);
+    VELOX_CHECK_EQ(nextOffset_, 0);
   } else if (rowSizeOffset_ != 0) {
     // zero out string views so that clear() will not hit uninited data. The
     // fastest way is to set the whole row to 0.
@@ -325,14 +326,15 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
   if (rowSizeOffset_) {
     variableRowSize(row) = 0;
   }
+  if (nextOffset_) {
+    getNextRowVector(row) = nullptr;
+  }
   bits::clearBit(row, freeFlagOffset_);
   return row;
 }
 
 void RowContainer::eraseRows(folly::Range<char**> rows) {
-  freeVariableWidthFields(rows);
-  freeAggregates(rows);
-  numRows_ -= rows.size();
+  freeRowsExtraMemory(rows, false);
   for (auto* row : rows) {
     VELOX_CHECK(!bits::isBitSet(row, freeFlagOffset_), "Double free of row");
     bits::setBit(row, freeFlagOffset_);
@@ -385,6 +387,18 @@ int32_t RowContainer::findRows(folly::Range<char**> rows, char** result) {
   return numRows;
 }
 
+void RowContainer::appendNextRow(char* current, char* nextRow) {
+  NextRowVector*& nextRowArrayPtr = getNextRowVector(current);
+  if (!nextRowArrayPtr) {
+    nextRowArrayPtr =
+        new NextRowVector(StlAllocator<char*>(stringAllocator_.get()));
+    hasDuplicateRows_ = true;
+    nextRowArrayPtr->emplace_back(current);
+  }
+  nextRowArrayPtr->emplace_back(nextRow);
+  getNextRowVector(nextRow) = nextRowArrayPtr;
+}
+
 void RowContainer::freeVariableWidthFields(folly::Range<char**> rows) {
   for (auto i = 0; i < types_.size(); ++i) {
     switch (typeKinds_[i]) {
@@ -435,6 +449,49 @@ void RowContainer::freeAggregates(folly::Range<char**> rows) {
   for (auto& accumulator : accumulators_) {
     accumulator.destroy(rows);
   }
+}
+
+void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
+  if (!nextOffset_ || !hasDuplicateRows_) {
+    return;
+  }
+
+  if (clear) {
+    for (auto row : rows) {
+      auto& vector = getNextRowVector(row);
+      if (vector) {
+        // Clear all rows, we can clear the nextOffset_ slots and delete the
+        // next-row-vector.
+        for (auto& next : *vector) {
+          getNextRowVector(next) = nullptr;
+        }
+        delete vector;
+      }
+    }
+    return;
+  }
+
+  for (auto row : rows) {
+    auto& vector = getNextRowVector(row);
+    if (vector) {
+      // If 'clear' is false, the caller must ensure that all rows with same
+      // keys appear in the 'rows'.
+      for (auto& next : *vector) {
+        VELOX_CHECK(
+            std::find(rows.begin(), rows.end(), next) != rows.end(),
+            "All rows with the same keys must be present in 'rows'");
+        getNextRowVector(next) = nullptr;
+      }
+      delete vector;
+    }
+  }
+}
+
+void RowContainer::freeRowsExtraMemory(folly::Range<char**> rows, bool clear) {
+  freeVariableWidthFields(rows);
+  freeAggregates(rows);
+  freeNextRowVectors(rows, clear);
+  numRows_ -= rows.size();
 }
 
 void RowContainer::store(
@@ -839,7 +896,7 @@ void RowContainer::clear() {
     std::vector<char*> rows(kBatch);
     RowContainerIterator iter;
     while (auto numRows = listRows(&iter, kBatch, rows.data())) {
-      eraseRows(folly::Range<char**>(rows.data(), numRows));
+      freeRowsExtraMemory(folly::Range<char**>(rows.data(), numRows), true);
     }
   }
   rows_.clear();

@@ -399,7 +399,6 @@ void HashBuild::addInput(RowVectorPtr input) {
     }
   }
   auto rows = table_->rows();
-  auto nextOffset = rows->nextOffset();
   FlatVector<bool>* spillProbedFlagVector{nullptr};
   if (isInputFromSpill() && needProbedFlagSpill_) {
     spillProbedFlagVector =
@@ -408,9 +407,6 @@ void HashBuild::addInput(RowVectorPtr input) {
 
   activeRows_.applyToSelected([&](auto rowIndex) {
     char* newRow = rows->newRow();
-    if (nextOffset) {
-      *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
-    }
     // Store the columns for each row in sequence. At probe time
     // strings of the row will probably be in consecutive places, so
     // reading one will prime the cache for the next.
