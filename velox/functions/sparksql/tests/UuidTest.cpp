@@ -56,8 +56,8 @@ TEST_F(UuidTest, withSeed) {
 TEST_F(UuidTest, withoutSeed) {
   setSparkPartitionId(0);
   std::optional<int64_t> seed = std::nullopt;
-  VELOX_ASSERT_THROW(evaluateOnce<std::string>(
-      "uuid(c0)", seed), "seed must not be null");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<std::string>("uuid(c0)", seed), "seed must not be null");
 }
 
 } // namespace
