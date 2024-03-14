@@ -24,10 +24,14 @@ namespace {
 
 std::string timestampToString(Timestamp ts) {
   std::tm tm;
+  Timestamp::epochToUtc(ts.getSeconds(), tm);
   TimestampToStringOptions options;
   options.mode = TimestampToStringOptions::Mode::kFull;
-  Timestamp::epochToUtc(ts.getSeconds(), tm);
-  return Timestamp::tmToString(tm, 0, options);
+  std::string result;
+  result.resize(getMaxStringLength(options));
+  const auto view = Timestamp::tsToStringView(ts, options, result.data());
+  result.resize(view.size());
+  return result;
 }
 
 class DateTimeFunctionsTest : public SparkFunctionBaseTest {
