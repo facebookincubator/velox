@@ -270,7 +270,7 @@ struct ToUtcTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void initialize(
-      const core::QueryConfig& config,
+      const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* timezone) {
     if (timezone) {
@@ -299,7 +299,7 @@ struct FromUtcTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void initialize(
-      const core::QueryConfig& config,
+      const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* timezone) {
     if (timezone) {
