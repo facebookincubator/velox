@@ -76,36 +76,41 @@ ParallelFor::ParallelFor(
   owned_ = std::move(executor);
 }
 
-void ParallelFor::execute(std::function<void(size_t)> func) {
+void ParallelFor::execute(std::function<void(size_t)> func, bool waitAll) {
+  execute(
+      [func = std::move(func)](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+          func(i);
+        }
+      },
+      waitAll);
+}
+
+void ParallelFor::execute(
+    std::function<void(size_t, size_t)> func,
+    bool waitAll) {
   // Otherwise from == to
   if (ranges_.empty()) {
     return;
   }
   if (ranges_.size() == 1) {
-    for (size_t i = ranges_[0].first, end = ranges_[0].second; i < end; ++i) {
-      func(i);
-    }
+    func(ranges_[0].first, ranges_[0].second);
   } else {
     VELOX_CHECK(
         executor_,
         "Executor wasn't provided so we shouldn't have more than 1 range");
-    ExecutorBarrier barrier(*executor_);
-    const size_t last = ranges_.size() - 1;
-    // First N-1 ranges in executor threads
-    for (size_t r = 0; r < last; ++r) {
-      auto& range = ranges_[r];
-      barrier.add([begin = range.first, end = range.second, &func]() {
-        for (size_t i = begin; i < end; ++i) {
-          func(i);
-        }
-      });
+    std::optional<ExecutorBarrier> barrier;
+    folly::Executor* executor = executor_;
+    if (waitAll) {
+      barrier.emplace(*executor_);
+      executor = &barrier.value();
     }
-    // Last range in calling thread
-    auto& range = ranges_[last];
-    for (size_t i = range.first, end = range.second; i < end; ++i) {
-      func(i);
+    for (auto& range : ranges_) {
+      executor->add(std::bind(func, range.first, range.second));
     }
-    barrier.waitAll();
+    if (barrier.has_value()) {
+      barrier->waitAll();
+    }
   }
 }
 
