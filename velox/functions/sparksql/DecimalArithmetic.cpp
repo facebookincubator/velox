@@ -19,9 +19,14 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/sparksql/DecimalUtil.h"
 #include "velox/type/DecimalUtil.h"
+#include "velox/type/custom_type/Int128.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
+
+
+using int128_t = facebook::velox::type::int128;
+using uint128_t = facebook::velox::type::uint128;
 
 std::string getResultScale(std::string precision, std::string scale) {
   return fmt::format(

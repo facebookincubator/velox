@@ -24,7 +24,7 @@
   "overrides" : [
     {
       "name" : "simdjson",
-      "version" : "3.1.5"
+      "version" : "3.2.0"
     },
     {
       "name" : "xsimd",
@@ -45,6 +45,10 @@
     {
       "name" : "protobuf",
       "version" : "3.21.12"
+    },
+    {
+      "name" : "arrow",
+      "version" : "15.0.0"
     }
   ],
   "vcpkg-configuration" : {

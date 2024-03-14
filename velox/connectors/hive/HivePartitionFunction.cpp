@@ -261,7 +261,7 @@ void HivePartitionFunction::hashTyped<TypeKind::UNKNOWN>(
 }
 
 template <>
-void HivePartitionFunction::hashTyped<TypeKind::OPAQUE>(
+void HivePartitionFunction::hashTyped<TypeKind::OPAQUE_2>(
     const DecodedVector& /*values*/,
     const SelectivityVector& /*rows*/,
     bool /*mix*/,

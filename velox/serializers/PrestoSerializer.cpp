@@ -2617,7 +2617,7 @@ void serializeFlatVector<TypeKind::UNKNOWN>(
 }
 
 template <>
-void serializeFlatVector<TypeKind::OPAQUE>(
+void serializeFlatVector<TypeKind::OPAQUE_2>(
     const VectorPtr& vector,
     const folly::Range<const vector_size_t*>& ranges,
     VectorStream* stream,

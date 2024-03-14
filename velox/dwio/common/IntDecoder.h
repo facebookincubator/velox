@@ -25,9 +25,10 @@
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/StreamUtil.h"
 #include "velox/dwio/common/exception/Exception.h"
-
+#include "velox/type/custom_type/Int128.h"
 namespace facebook::velox::dwio::common {
-
+using int128_t = type::int128;
+using uint128_t = type::uint128;
 template <bool isSigned>
 class IntDecoder {
  public:

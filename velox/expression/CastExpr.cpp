@@ -111,38 +111,44 @@ Status detail::parseDecimalComponents(
             "Chars '{}' are invalid.", std::string(s + pos, size - pos));
 }
 
+//TODO: davidmar implement the detail::parseHugeInt function for int128
 Status detail::parseHugeInt(
     const DecimalComponents& decimalComponents,
     int128_t& out) {
-  // Parse the whole digits.
-  if (decimalComponents.wholeDigits.size() > 0) {
-    const auto tryValue = folly::tryTo<int128_t>(folly::StringPiece(
-        decimalComponents.wholeDigits.data(),
-        decimalComponents.wholeDigits.size()));
-    if (tryValue.hasError()) {
-      return Status::UserError("Value too large.");
-    }
-    out = tryValue.value();
-  }
-
-  // Parse the fractional digits.
-  if (decimalComponents.fractionalDigits.size() > 0) {
-    const auto length = decimalComponents.fractionalDigits.size();
-    bool overflow =
-        type::mul_overflow(out, DecimalUtil::kPowersOfTen[length], &out);
-    if (overflow) {
-      return Status::UserError("Value too large.");
-    }
-    const auto tryValue = folly::tryTo<int128_t>(
-        folly::StringPiece(decimalComponents.fractionalDigits.data(), length));
-    if (tryValue.hasError()) {
-      return Status::UserError("Value too large.");
-    }
-    overflow = __builtin_add_overflow(out, tryValue.value(), &out);
-    VELOX_DCHECK(!overflow);
-  }
   return Status::OK();
 }
+//Status detail::parseHugeInt(
+//    const DecimalComponents& decimalComponents,
+//    int128_t& out) {
+//  // Parse the whole digits.
+//  if (decimalComponents.wholeDigits.size() > 0) {
+//    const auto tryValue = type::tryTo(folly::StringPiece(
+//        decimalComponents.wholeDigits.data(),
+//        decimalComponents.wholeDigits.size()));
+//    if (tryValue.hasError()) {
+//      return Status::UserError("Value too large.");
+//    }
+//    out = tryValue.value();
+//  }
+//
+//  // Parse the fractional digits.
+//  if (decimalComponents.fractionalDigits.size() > 0) {
+//    const auto length = decimalComponents.fractionalDigits.size();
+//    bool overflow =
+//        type::mul_overflow(out, DecimalUtil::kPowersOfTen[length], &out);
+//    if (overflow) {
+//      return Status::UserError("Value too large.");
+//    }
+//    const auto tryValue = folly::tryTo<int128_t>(
+//        folly::StringPiece(decimalComponents.fractionalDigits.data(), length));
+//    if (tryValue.hasError()) {
+//      return Status::UserError("Value too large.");
+//    }
+//    overflow = __builtin_add_overflow(out, tryValue.value(), &out);
+//    VELOX_DCHECK(!overflow);
+//  }
+//  return Status::OK();
+//}
 
 VectorPtr CastExpr::castFromDate(
     const SelectivityVector& rows,

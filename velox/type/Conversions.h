@@ -595,4 +595,15 @@ struct Converter<TypeKind::TIMESTAMP, void, TPolicy> {
   }
 };
 
+template <typename T>
+struct Converter<TypeKind::HUGEINT, void, T> {
+  static int128_t cast(const bool& v) {
+    return int128_t(v);
+  }
+  // TODO: davidmar implement logic to convert string to int128_t
+  static int128_t cast(const std::string& v) {
+    return int128_t(0);
+  }
+};
+
 } // namespace facebook::velox::util

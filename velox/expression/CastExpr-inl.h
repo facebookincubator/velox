@@ -222,7 +222,7 @@ Status toDecimalValue(
   }
 
   if (roundUp) {
-    bool overflow = __builtin_add_overflow(out, 1, &out);
+    bool overflow = type::add_overflow(out, 1, &out);
     if (UNLIKELY(overflow)) {
       return Status::UserError("Value too large.");
     }
@@ -236,7 +236,7 @@ Status toDecimalValue(
       return Status::UserError("Value too large.");
     }
 
-    bool overflow = __builtin_mul_overflow(
+    bool overflow = type::mul_overflow(
         out, DecimalUtil::kPowersOfTen[-parsedScale + toScale], &out);
     if (UNLIKELY(overflow)) {
       return Status::UserError("Value too large.");

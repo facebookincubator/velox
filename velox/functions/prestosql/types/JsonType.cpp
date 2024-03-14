@@ -579,6 +579,10 @@ simdjson::simdjson_result<T> fromString(const std::string_view& s) {
   }
   return std::move(*result);
 }
+template <>
+simdjson::simdjson_result<facebook::velox::type::int128> fromString(const std::string_view& s) {
+    return simdjson::INCORRECT_TYPE;
+}
 
 // Write x to writer if x is in the range of writer type `To'.  Only the
 // following cases are supported:

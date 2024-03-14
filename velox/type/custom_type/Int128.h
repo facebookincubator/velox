@@ -26,7 +26,8 @@
 #ifndef DUCK_DB
 #include <folly/dynamic.h>
 #endif
-
+#include <folly/Range.h>
+#include <folly/Conv.h>
 #ifndef SIG_PARSER
 #include <boost/multiprecision/cpp_int.hpp>
 #endif
@@ -250,6 +251,11 @@ class int128 {
   int128 operator|(uint64_t other) const {
     int128 a(*this);
     return (a |= other);
+  }  
+  
+  int128 operator|(int32_t other) const {
+    int128 a(*this);
+    return (a |= other);
   }
 
   int128& operator&=(int128 other) {
@@ -345,6 +351,13 @@ class int128 {
     return *this + int128(other);
   }   
   constexpr int128 operator+=(const int& other) const {
+    return int128(0);
+  }   
+  
+  constexpr int128 operator-=(const int& other) const {
+    return int128(0);
+  }
+  constexpr int128 operator-=(const int128& other) const {
     return int128(0);
   } 
   //TODO
@@ -465,7 +478,9 @@ class int128 {
 
 };
 
-
+int128 tryTo(folly::StringPiece sp) {
+  return int128(0);
+}
 
 bool mul_overflow(int128 a , int128 b ,int64_t result) {
   return true;
@@ -528,14 +543,18 @@ double log(facebook::velox::type::int128 value) {
 
 
 } // namespace std
-#ifndef DUCK_DB
 namespace folly {
+#ifndef DUCK_DB
+
 template <>
 struct hasher<facebook::velox::type::int128> : detail::integral_hasher<facebook::velox::type::int128> {};
 template <>
 struct hasher<facebook::velox::type::uint128> : detail::integral_hasher<facebook::velox::type::uint128> {};
-} // namespace folly
 #endif
+
+} // namespace folly
+
+
 
 
 //namespace boost::multiprecision{
