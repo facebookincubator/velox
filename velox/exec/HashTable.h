@@ -143,6 +143,7 @@ class BaseHashTable {
       hits = &lookup.hits;
       nextHit = nullptr;
       lastRowIndex = 0;
+      lastDuplicateRowIndex = -1;
     }
 
     bool atEnd() const {
@@ -153,6 +154,7 @@ class BaseHashTable {
     const raw_vector<char*>* hits{nullptr};
     char* nextHit{nullptr};
     vector_size_t lastRowIndex{0};
+    vector_size_t lastDuplicateRowIndex{-1};
   };
 
   struct RowsIterator {
@@ -704,6 +706,13 @@ class HashTable : public BaseHashTable {
       folly::Range<vector_size_t*> inputRows,
       folly::Range<char**> hits);
 
+  // Fast path for join results of array mode table.
+  int32_t listJoinResultsArrayMode(
+      JoinResultIterator& iter,
+      bool includeMisses,
+      folly::Range<vector_size_t*> inputRows,
+      folly::Range<char**> hits);
+
   // Tries to use as many range hashers as can in a normalized key situation.
   void enableRangeWhereCan(
       const std::vector<uint64_t>& rangeSizes,
@@ -956,6 +965,9 @@ class HashTable : public BaseHashTable {
   // Owns the memory of multiple build side hash join tables that are
   // combined into a single probe hash table.
   std::vector<std::unique_ptr<HashTable<ignoreNullKeys>>> otherTables_;
+
+  std::unordered_map<char*, std::shared_ptr<std::vector<char*>>> duplicateRows_;
+
   // Statistics maintained if kTrackLoads is set.
 
   // Number of times a row is looked up or inserted.

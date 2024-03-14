@@ -1116,6 +1116,17 @@ bool HashTable<ignoreNullKeys>::arrayPushRow(char* row, int32_t index) {
     nextRow(row) = existing;
     if (existing) {
       hasDuplicates_ = true;
+      auto iter = duplicateRows_.find(existing);
+      std::shared_ptr<std::vector<char*>> list;
+      if (iter == duplicateRows_.end()) {
+        list = std::make_shared<std::vector<char*>>();
+      } else {
+        list = iter->second;
+        duplicateRows_.erase(iter);
+      }
+      list->emplace_back(existing);
+
+      duplicateRows_.emplace(row, list);
     }
   } else if (existing) {
     // Semijoin or a known unique build side ignores a repeat of a key.
@@ -1679,6 +1690,9 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
   if (!hasDuplicates_) {
     return listJoinResultsNoDuplicates(iter, includeMisses, inputRows, hits);
   }
+  if (hashMode_ == HashMode::kArray) {
+    return listJoinResultsArrayMode(iter, includeMisses, inputRows, hits);
+  }
   int numOut = 0;
   auto maxOut = inputRows.size();
   while (iter.lastRowIndex < iter.rows->size()) {
@@ -1774,6 +1788,77 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsNoDuplicates(
   }
 
   iter.lastRowIndex = i;
+  return numOut;
+}
+
+template <bool ignoreNullKeys>
+int32_t HashTable<ignoreNullKeys>::listJoinResultsArrayMode(
+    JoinResultIterator& iter,
+    bool includeMisses,
+    folly::Range<vector_size_t*> inputRows,
+    folly::Range<char**> hits) {
+  int numOut = 0;
+  auto maxOut = inputRows.size();
+  while (iter.lastRowIndex < iter.rows->size()) {
+    auto row = (*iter.rows)[iter.lastRowIndex];
+    auto hit = (*iter.hits)[row]; // NOLINT
+    if (!hit) {
+      ++iter.lastRowIndex;
+      if (includeMisses) {
+        inputRows[numOut] = row; // NOLINT
+        hits[numOut] = nullptr;
+        ++numOut;
+        if (numOut >= maxOut) {
+          return numOut;
+        }
+      }
+      continue;
+    } else if (iter.lastDuplicateRowIndex == -1) {
+      inputRows[numOut] = row; // NOLINT
+      hits[numOut] = hit;
+      ++numOut;
+    }
+    auto numRows = -1;
+    if (nextRow(hit)) {
+      if (iter.lastDuplicateRowIndex == -1) {
+        iter.lastDuplicateRowIndex = 0;
+      }
+      auto it = duplicateRows_.find(hit);
+      auto rows = it->second;
+      numRows = rows->size();
+      constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
+      constexpr int32_t kIntWidth = kWidth * 2;
+      if (numRows >= kIntWidth) {
+        auto sourceHits = reinterpret_cast<int64_t*>(rows->data());
+        auto resultHits = reinterpret_cast<int64_t*>(hits.data());
+        auto indices = reinterpret_cast<int32_t*>(inputRows.data());
+        auto indexVector = xsimd::batch<int32_t>::broadcast(row);
+        for (; iter.lastDuplicateRowIndex + kIntWidth <= numRows &&
+             numOut + kIntWidth <= maxOut;
+             iter.lastDuplicateRowIndex += kIntWidth, numOut += kIntWidth) {
+          indexVector.store_unaligned(indices + numOut);
+          xsimd::batch<int64_t>::load_unaligned(
+              sourceHits + iter.lastDuplicateRowIndex)
+              .store_unaligned(resultHits + numOut);
+          xsimd::batch<int64_t>::load_unaligned(
+              sourceHits + iter.lastDuplicateRowIndex + kWidth)
+              .store_unaligned(resultHits + numOut + kWidth);
+        }
+      }
+      for (; iter.lastDuplicateRowIndex < numRows && numOut < maxOut;
+           iter.lastDuplicateRowIndex++, numOut++) {
+        inputRows[numOut] = row; // NOLINT
+        hits[numOut] = rows->data()[iter.lastDuplicateRowIndex];
+      }
+    }
+    if (iter.lastDuplicateRowIndex >= numRows) {
+      iter.lastDuplicateRowIndex = -1;
+      iter.lastRowIndex++;
+    }
+    if (numOut >= maxOut) {
+      return numOut;
+    }
+  }
   return numOut;
 }
 
