@@ -23,8 +23,6 @@ namespace facebook::velox::functions::sparksql::test {
 namespace {
 
 std::string timestampToString(Timestamp ts) {
-  std::tm tm;
-  Timestamp::epochToUtc(ts.getSeconds(), tm);
   TimestampToStringOptions options;
   options.mode = TimestampToStringOptions::Mode::kFull;
   std::string result;
