@@ -700,6 +700,7 @@ struct SecondFunction {
   }
 };
 
+template <typename T>
 struct MakeYMIntervalFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
