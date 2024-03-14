@@ -816,42 +816,50 @@ void registerCovarianceAggregates(
       RegrAccumulator,
       RegrIntermediateInput,
       RegrIntermediateResult,
-      RegrSlopeResultAccessor>(prefix + kRegrSlop, withCompanionFunctions, overwrite);
+      RegrSlopeResultAccessor>(
+      prefix + kRegrSlop, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrCountResultAccessor>(prefix + kRegrCount, withCompanionFunctions, overwrite);
+      RegrCountResultAccessor>(
+      prefix + kRegrCount, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrAvgyResultAccessor>(prefix + kRegrAvgy, withCompanionFunctions, overwrite);
+      RegrAvgyResultAccessor>(
+      prefix + kRegrAvgy, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrAvgxResultAccessor>(prefix + kRegrAvgx, withCompanionFunctions, overwrite);
+      RegrAvgxResultAccessor>(
+      prefix + kRegrAvgx, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrSxyResultAccessor>(prefix + kRegrSxy, withCompanionFunctions, overwrite);
+      RegrSxyResultAccessor>(
+      prefix + kRegrSxy, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrSxxResultAccessor>(prefix + kRegrSxx, withCompanionFunctions, overwrite);
+      RegrSxxResultAccessor>(
+      prefix + kRegrSxx, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrSyyResultAccessor>(prefix + kRegrSyy, withCompanionFunctions, overwrite);
+      RegrSyyResultAccessor>(
+      prefix + kRegrSyy, withCompanionFunctions, overwrite);
   registerCovariance<
       ExtendedRegrAccumulator,
       ExtendedRegrIntermediateInput,
       ExtendedRegrIntermediateResult,
-      RegrR2ResultAccessor>(prefix + kRegrR2, withCompanionFunctions, overwrite);
+      RegrR2ResultAccessor>(
+      prefix + kRegrR2, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
