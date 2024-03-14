@@ -31,11 +31,10 @@ struct UuidFunction {
 
   // Spark would set the seed with 'random.nextLong()' by 'ResolveRandomSeed'
   // rule.
-  void initialize(const core::QueryConfig& config, const int64_t* seedInput) {
-    VELOX_CHECK_NOT_NULL(seedInput);
-    int64_t seed = *seedInput;
+  void initialize(const core::QueryConfig& config, const int64_t* seed) {
+    VELOX_CHECK_NOT_NULL(seed, "seed must not be null");
     int32_t partitionId = config.sparkPartitionId();
-    generator_.seed(seed + partitionId);
+    generator_.seed((*seed) + partitionId);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -57,7 +56,8 @@ struct UuidFunction {
 
  private:
   FOLLY_ALWAYS_INLINE int64_t nextLong() {
-    // Follow the org.apache.commons.math3.random.BitsStreamGenerator implement.
+    // Follow the org.apache.commons.math3.random.BitsStreamGenerator
+    // implementation.
     int64_t high = (int64_t)generator_() << 32;
     int64_t low = (int64_t)generator_() & 4294967295L;
     return high | low;

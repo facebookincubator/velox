@@ -22,14 +22,13 @@ namespace {
 
 class UuidTest : public SparkFunctionBaseTest {
  protected:
-  std::optional<std::string> uuid(int64_t seed, int32_t partitionIndex = 0) {
+  std::optional<std::string> uuidOne(int64_t seed, int32_t partitionIndex) {
     setSparkPartitionId(partitionIndex);
     return evaluateOnce<std::string>(
         fmt::format("uuid({})", seed), makeRowVector(ROW({}), 1));
   }
 
-  VectorPtr
-  randWithBatchInput(int64_t seed, int32_t partitionIndex, int32_t batchSize) {
+  VectorPtr uuidMany(int64_t seed, int32_t partitionIndex, int32_t batchSize) {
     setSparkPartitionId(partitionIndex);
     auto exprSet = compileExpression(fmt::format("uuid({})", seed), ROW({}));
     return evaluate(*exprSet, makeRowVector(ROW({}), batchSize));
@@ -37,28 +36,28 @@ class UuidTest : public SparkFunctionBaseTest {
 };
 
 TEST_F(UuidTest, withSeed) {
-  // With same default partitionIndex used, same seed always produces same
-  // result.
-  EXPECT_EQ(uuid(100, 1), uuid(100, 1));
-  EXPECT_EQ(uuid(2, 1234), uuid(2, 1234));
+  // With same partitionIndex, same seed always produces same result.
+  EXPECT_EQ(uuidOne(100, 1), uuidOne(100, 1));
+  EXPECT_EQ(uuidOne(2, 1234), uuidOne(2, 1234));
 
-  // Value below is the result of Spark implement with same seed.
-  EXPECT_EQ(uuid(0, 0), std::string("8c7f0aac-97c4-4a2f-b716-a675d821ccc0"));
+  EXPECT_NE(uuidOne(9, 1), uuidOne(100, 1));
+  EXPECT_NE(uuidOne(9, 1), uuidOne(9, 2));
+  EXPECT_NE(uuidOne(100, 1), uuidOne(99, 20));
+
+  // Expected result comes from Spark.
+  EXPECT_EQ(uuidOne(0, 0), std::string("8c7f0aac-97c4-4a2f-b716-a675d821ccc0"));
 
   velox::test::assertEqualVectors(
-      randWithBatchInput(123, 1233, 100), randWithBatchInput(123, 1233, 100));
+      uuidMany(123, 1233, 100), uuidMany(123, 1233, 100));
   velox::test::assertEqualVectors(
-      randWithBatchInput(321, 1233, 33), randWithBatchInput(321, 1233, 33));
-
-  EXPECT_NE(uuid(9, 1), uuid(100, 1));
-  EXPECT_NE(uuid(9, 1), uuid(9, 2));
-  EXPECT_NE(uuid(100, 1), uuid(99, 20));
+      uuidMany(321, 1233, 33), uuidMany(321, 1233, 33));
 }
 
 TEST_F(UuidTest, withoutSeed) {
   setSparkPartitionId(0);
   std::optional<int64_t> seed = std::nullopt;
-  VELOX_ASSERT_THROW(evaluateOnce<std::string>("uuid(c0)", seed), "");
+  VELOX_ASSERT_THROW(evaluateOnce<std::string>(
+      "uuid(c0)", seed), "seed must not be null");
 }
 
 } // namespace
