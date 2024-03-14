@@ -38,6 +38,10 @@
   [&]() {                                        \
     auto _kind = (_kindExpr);                    \
     switch (_kind) {                             \
+      case PhysicalType::kInt8:                  \
+        return _func<int8_t>(__VA_ARGS__);       \
+      case PhysicalType::kInt16:                 \
+        return _func<int16_t>(__VA_ARGS__);      \
       case PhysicalType::kInt32:                 \
         return _func<int32_t>(__VA_ARGS__);      \
       case PhysicalType::kInt64:                 \
@@ -87,14 +91,14 @@ struct BlockInfo {
 
 template <typename T>
 __device__ ErrorCode
-normalize(BlockInfo* block, void* idMap, Operand* key, int32_t& result) {
+normalize(BlockInfo* block, void* idMap, Operand* key, int32_t& result, int numKeys) {
   auto* typedIdMap = reinterpret_cast<IdMap<T>*>(idMap);
   auto id = typedIdMap->makeId(value<T>(key, block->base, block->shared));
   if (id == -1) {
     return ErrorCode::kInsuffcientMemory;
   }
-  assert(typedIdMap->cardinality() <= kNormalizationRadix);
-  result = kNormalizationRadix * result + id - 1;
+  assert((typedIdMap->cardinality() <= kNormalizationRadix) || (numKeys == 1));
+  result = kNormalizationRadix * result + id;
   return ErrorCode::kOk;
 }
 
@@ -111,7 +115,7 @@ __device__ ErrorCode setGroupKey(
 }
 
 __device__ ErrorCode run(BlockInfo* block, NormalizeKeys* normalizeKeys) {
-  auto size = normalizeKeys->inputs[0].size;
+  auto size = min( normalizeKeys->result->size, normalizeKeys->inputs[0].size );
   assert(normalizeKeys->result->size == size);
   if (threadIdx.x + block->base >= size) {
     return ErrorCode::kOk;
@@ -125,7 +129,8 @@ __device__ ErrorCode run(BlockInfo* block, NormalizeKeys* normalizeKeys) {
         block,
         container->idMaps[i],
         &normalizeKeys->inputs[i],
-        result));
+        result,
+        container->numKeys));
   }
   assert(result < container->numGroups);
   if (!atomicExch(&container->groups[result].initialized, 1)) {
@@ -172,22 +177,27 @@ __device__ ErrorCode run(BlockInfo* block, ExtractKeys* extractKeys) {
   using Scan = cub::BlockScan<int, kBlockSize>;
   auto* tmp = reinterpret_cast<Scan::TempStorage*>(block->shared);
   auto* container = extractKeys->container;
-  for (int i = threadIdx.x; i / kBlockSize * blockDim.x < container->numGroups;
+  __shared__ int outIndex;
+  outIndex = 0;
+  __syncthreads();
+  for (int i = 0; i < container->numGroups;
        i += blockDim.x) {
-    int outIndex =
-        i < container->numGroups ? container->groups[i].initialized : 0;
-    Scan(*tmp).ExclusiveSum(outIndex, outIndex);
+    int const groupIndex = i + threadIdx.x;
+    int offset =
+        groupIndex < container->numGroups ? container->groups[groupIndex].initialized : 0;
+    Scan(*tmp).ExclusiveSum(offset, offset);
     __syncthreads();
-    if (i >= container->numGroups) {
-      break;
-    }
-    if (container->groups[i].initialized) {
+    if ((groupIndex < container->numGroups) && container->groups[groupIndex].initialized) {
       KEY_TYPE_DISPATCH(
           extractKey,
           container->keyTypes[extractKeys->keyIndex].kind,
           extractKeys->result,
-          outIndex,
-          container->groups[i].keys[extractKeys->keyIndex]);
+          outIndex + offset,
+          container->groups[groupIndex].keys[extractKeys->keyIndex]);
+    }
+    __syncthreads();
+    if( threadIdx.x == (blockDim.x-1) ) {
+      outIndex += offset;
     }
   }
   return ErrorCode::kOk;
@@ -262,7 +272,7 @@ __global__ void runPrograms(
             "%s:%d: Unsupported OpCode %d\n",
             __FILE__,
             __LINE__,
-            instruction.opCode);
+            (int)instruction.opCode);
 #endif
         status.errors[threadIdx.x] = ErrorCode::kError;
     }
@@ -281,7 +291,7 @@ void AggregateFunctionRegistry::addAllBuiltInFunctions(Stream& stream) {
   // TODO: Parallelize the kernel calls.
   Entry entry;
 
-  entry.accept = [](auto&) { return true; };
+  entry.accept = [](auto const&) { return true; };
   entry.function = allocator_->allocate<AggregateFunction>();
   createFunction<Count>
       <<<1, 1, 0, stream.stream()->stream>>>(entry.function.get());
@@ -289,7 +299,28 @@ void AggregateFunctionRegistry::addAllBuiltInFunctions(Stream& stream) {
   stream.wait();
   entries_["count"].push_back(std::move(entry));
 
-  entry.accept = [](auto& argTypes) {
+  entry.accept = [](auto const& argTypes) {
+    return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kInt8;
+  };
+  entry.function = allocator_->allocate<AggregateFunction>();
+  createFunction<Sum<int8_t, int64_t>>
+      <<<1, 1, 0, stream.stream()->stream>>>(entry.function.get());
+  CUDA_CHECK(cudaGetLastError());
+  stream.wait();
+  entries_["sum"].push_back(std::move(entry));
+
+  entry.accept = [](auto const& argTypes) {
+    return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kInt16;
+  };
+  entry.function = allocator_->allocate<AggregateFunction>();
+  createFunction<Sum<int16_t, int64_t>>
+      <<<1, 1, 0, stream.stream()->stream>>>(entry.function.get());
+  CUDA_CHECK(cudaGetLastError());
+  stream.wait();
+  entries_["sum"].push_back(std::move(entry));
+
+
+  entry.accept = [](auto const& argTypes) {
     return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kInt32;
   };
   entry.function = allocator_->allocate<AggregateFunction>();
@@ -299,7 +330,7 @@ void AggregateFunctionRegistry::addAllBuiltInFunctions(Stream& stream) {
   stream.wait();
   entries_["sum"].push_back(std::move(entry));
 
-  entry.accept = [](auto& argTypes) {
+  entry.accept = [](auto const& argTypes) {
     return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kInt64;
   };
   entry.function = allocator_->allocate<AggregateFunction>();
@@ -309,7 +340,17 @@ void AggregateFunctionRegistry::addAllBuiltInFunctions(Stream& stream) {
   stream.wait();
   entries_["sum"].push_back(std::move(entry));
 
-  entry.accept = [](auto& argTypes) {
+  entry.accept = [](auto const& argTypes) {
+    return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kFloat32;
+  };
+  entry.function = allocator_->allocate<AggregateFunction>();
+  createFunction<Sum<float, double>>
+      <<<1, 1, 0, stream.stream()->stream>>>(entry.function.get());
+  CUDA_CHECK(cudaGetLastError());
+  stream.wait();
+  entries_["sum"].push_back(std::move(entry));
+
+  entry.accept = [](auto const& argTypes) {
     return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kFloat64;
   };
   entry.function = allocator_->allocate<AggregateFunction>();
@@ -319,7 +360,37 @@ void AggregateFunctionRegistry::addAllBuiltInFunctions(Stream& stream) {
   stream.wait();
   entries_["sum"].push_back(std::move(entry));
 
-  entry.accept = [](auto& argTypes) {
+  entry.accept = [](auto const& argTypes) {
+    return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kInt8;
+  };
+  entry.function = allocator_->allocate<AggregateFunction>();
+  createFunction<Avg<int8_t>>
+      <<<1, 1, 0, stream.stream()->stream>>>(entry.function.get());
+  CUDA_CHECK(cudaGetLastError());
+  stream.wait();
+  entries_["avg"].push_back(std::move(entry));
+
+  entry.accept = [](auto const& argTypes) {
+    return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kInt16;
+  };
+  entry.function = allocator_->allocate<AggregateFunction>();
+  createFunction<Avg<int16_t>>
+      <<<1, 1, 0, stream.stream()->stream>>>(entry.function.get());
+  CUDA_CHECK(cudaGetLastError());
+  stream.wait();
+  entries_["avg"].push_back(std::move(entry));
+
+  entry.accept = [](auto const& argTypes) {
+    return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kInt32;
+  };
+  entry.function = allocator_->allocate<AggregateFunction>();
+  createFunction<Avg<int32_t>>
+      <<<1, 1, 0, stream.stream()->stream>>>(entry.function.get());
+  CUDA_CHECK(cudaGetLastError());
+  stream.wait();
+  entries_["avg"].push_back(std::move(entry));
+
+  entry.accept = [](auto const& argTypes) {
     return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kInt64;
   };
   entry.function = allocator_->allocate<AggregateFunction>();
@@ -329,7 +400,7 @@ void AggregateFunctionRegistry::addAllBuiltInFunctions(Stream& stream) {
   stream.wait();
   entries_["avg"].push_back(std::move(entry));
 
-  entry.accept = [](auto& argTypes) {
+  entry.accept = [](auto const& argTypes) {
     return argTypes.size() == 1 && argTypes[0].kind == PhysicalType::kFloat64;
   };
   entry.function = allocator_->allocate<AggregateFunction>();

@@ -24,7 +24,7 @@
 namespace facebook::velox::wave::aggregation {
 
 struct Group {
-  int initialized;
+  int32_t initialized;
   void** keys;
   void** accumulators;
 };

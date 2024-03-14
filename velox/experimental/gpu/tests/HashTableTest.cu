@@ -35,7 +35,7 @@ namespace {
 
 constexpr int kBlockSize = 256;
 
-__device__ uint32_t jenkinsRevMix32(uint32_t key) {
+[[maybe_unused]] __device__ uint32_t jenkinsRevMix32(uint32_t key) {
   key += (key << 12); // key *= (1 + (1 << 12))
   key ^= (key >> 22);
   key += (key << 4); // key *= (1 + (1 << 4))
@@ -289,7 +289,7 @@ __global__ void probe<true>(
           values[i] = table->values[jj];
           goto end;
         }
-        hits &= hits - 1;
+        hits &= ~(0xFF<<(__ffs(hits)-1));
       }
       if (__vcmpeq4(*(uint32_t*)&table->tags[j], 0) & cmpMask) {
         hasValue[i] = false;
@@ -299,6 +299,7 @@ __global__ void probe<true>(
       cmpMask = 0xffffffff;
     }
   end:
+    ;
   }
 }
 
@@ -628,6 +629,7 @@ __global__ void probePartitioned<true>(
       cmpMask = 0xffffffff;
     }
   end:
+    ;
   }
 }
 

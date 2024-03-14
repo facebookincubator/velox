@@ -15,13 +15,25 @@
 add_executable(velox_wave_common_test GpuArenaTest.cpp CudaTest.cpp CudaTest.cu
                                       BlockTest.cpp BlockTest.cu)
 
-set_target_properties(velox_wave_common_test PROPERTIES CUDA_ARCHITECTURES
-                                                        native)
+add_executable(velox_wave_idmap_test IdMapTest.cu)
 
 add_test(velox_wave_common_test velox_wave_common_test)
+add_test(velox_wave_idmap_test velox_wave_common_test)
 
 target_link_libraries(
   velox_wave_common_test
+  velox_wave_common
+  velox_memory
+  velox_time
+  velox_exception
+  gtest
+  gtest_main
+  gflags::gflags
+  glog::glog
+  Folly::folly)
+
+target_link_libraries(
+  velox_wave_idmap_test
   velox_wave_common
   velox_memory
   velox_time

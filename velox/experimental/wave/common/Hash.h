@@ -113,6 +113,12 @@ struct Hasher<StringView, uint32_t> {
 };
 
 template <>
+struct Hasher<int8_t, uint32_t> : IntHasher32<int8_t> {};
+
+template <>
+struct Hasher<int16_t, uint32_t> : IntHasher32<int16_t> {};
+
+template <>
 struct Hasher<int32_t, uint32_t> : IntHasher32<int32_t> {};
 
 template <>

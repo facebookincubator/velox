@@ -16,7 +16,12 @@
 
 #pragma once
 
+#include <fmt/format.h>
 #include <cstdint>
+#include <string>
+#if FMT_VERSION >= 100100
+#include <fmt/std.h>
+#endif
 
 namespace facebook::velox {
 class Type;
@@ -40,8 +45,21 @@ struct PhysicalType {
   } kind;
   int32_t numChildren;
   PhysicalType** children;
+
+  static std::string_view kindString(Kind kind);
 };
 
 PhysicalType fromCpuType(const Type&);
 
 } // namespace facebook::velox::wave
+
+template <>
+struct fmt::formatter<facebook::velox::wave::PhysicalType::Kind>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::wave::PhysicalType::Kind s,
+      format_context& ctx) {
+    return formatter<std::string>::format(
+        facebook::velox::wave::PhysicalType::kindString(s), ctx);
+  }
+};

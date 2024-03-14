@@ -363,6 +363,8 @@ ScalarType typeKindCode(TypeKind kind) {
   switch (kind) {
     case TypeKind::BIGINT:
       return ScalarType::kInt64;
+    case TypeKind::DOUBLE:
+      return ScalarType::kDouble;
     default:
       VELOX_UNSUPPORTED("Bad TypeKind {}", kind);
   }
@@ -374,7 +376,16 @@ void Program::prepareForDevice(GpuArena& arena) {
   for (auto& instruction : instructions_)
     switch (instruction->opCode) {
       case OpCode::kPlus: {
-        auto& bin = instruction->as<AbstractBinary>();
+        auto const& bin = instruction->as<AbstractBinary>();
+        markInput(bin.left);
+        markInput(bin.right);
+        markResult(bin.result);
+        markInput(bin.predicate);
+        codeSize += sizeof(Instruction);
+        break;
+      }
+      case OpCode::kDivide: {
+        auto const& bin = instruction->as<AbstractBinary>();
         markInput(bin.left);
         markInput(bin.right);
         markResult(bin.result);
@@ -383,7 +394,7 @@ void Program::prepareForDevice(GpuArena& arena) {
         break;
       }
       default:
-        VELOX_UNSUPPORTED("OpCode {}", instruction->opCode);
+        VELOX_UNSUPPORTED("OpCode in Program::prepareForDevice");
     }
   sortSlots();
   arena_ = &arena;
@@ -402,7 +413,7 @@ void Program::prepareForDevice(GpuArena& arena) {
     ++instructionArray;
     switch (instruction->opCode) {
       case OpCode::kPlus: {
-        auto& bin = instruction->as<AbstractBinary>();
+        auto const& bin = instruction->as<AbstractBinary>();
         auto typeCode = typeKindCode(bin.left->type->kind());
         // Comstructed on host, no vtable.
         space->opCode = OP_MIX(instruction->opCode, typeCode);
@@ -413,6 +424,20 @@ void Program::prepareForDevice(GpuArena& arena) {
         ++space;
         break;
       }
+
+      case OpCode::kDivide: {
+        auto const& bin = instruction->as<AbstractBinary>();
+        auto typeCode = typeKindCode(bin.left->type->kind());
+        // Comstructed on host, no vtable.
+        space->opCode = OP_MIX(instruction->opCode, typeCode);
+        new (&space->_.binary) IBinary();
+        space->_.binary.left = operandIndex(bin.left);
+        space->_.binary.right = operandIndex(bin.right);
+        space->_.binary.result = operandIndex(bin.result);
+        ++space;
+        break;
+      }
+
       default:
         VELOX_UNSUPPORTED("Bad OpCode");
     }
