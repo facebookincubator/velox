@@ -35,7 +35,7 @@ namespace {
 
 constexpr int kBlockSize = 256;
 
-__device__ uint32_t jenkinsRevMix32(uint32_t key) {
+[[maybe_unused]] __device__ uint32_t jenkinsRevMix32(uint32_t key) {
   key += (key << 12); // key *= (1 + (1 << 12))
   key ^= (key >> 22);
   key += (key << 4); // key *= (1 + (1 << 4))
@@ -299,6 +299,7 @@ __global__ void probe<true>(
       cmpMask = 0xffffffff;
     }
   end:
+    ;
   }
 }
 
@@ -628,6 +629,7 @@ __global__ void probePartitioned<true>(
       cmpMask = 0xffffffff;
     }
   end:
+    ;
   }
 }
 

@@ -99,9 +99,9 @@ function get_cxx_flags {
         CPU_ARCH="arm64"
       fi
 
-    # On MacOs prevent the flood of translation visibility settings warnings.
-    ADDITIONAL_FLAGS="-fvisibility=hidden -fvisibility-inlines-hidden"
-    else [ "$OS" = "Linux" ];
+      # On MacOs prevent the flood of translation visibility settings warnings.
+      ADDITIONAL_FLAGS="-fvisibility=hidden -fvisibility-inlines-hidden"
+    elif [ "$OS" = "Linux" ]; then
 
       local CPU_CAPABILITIES
       CPU_CAPABILITIES=$(cat /proc/cpuinfo | grep flags | head -n 1| awk '{print tolower($0)}')
@@ -133,8 +133,11 @@ function get_cxx_flags {
     "aarch64")
       echo -n "-mcpu=neoverse-n1 -std=c++17 $ADDITIONAL_FLAGS"
     ;;
-  *)
-    echo -n "Architecture not supported!"
+
+    *)
+      echo "Architecture not supported: CPU_ARCH=$CPU_ARCH" 1>&2
+      exit 1
+    ;;
   esac
 
 }
