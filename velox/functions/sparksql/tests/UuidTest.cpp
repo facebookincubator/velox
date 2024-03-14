@@ -53,11 +53,12 @@ TEST_F(UuidTest, withSeed) {
       uuidMany(321, 1233, 33), uuidMany(321, 1233, 33));
 }
 
-TEST_F(UuidTest, withoutSeed) {
+TEST_F(UuidTest, nonConstantSeed) {
   setSparkPartitionId(0);
-  std::optional<int64_t> seed = std::nullopt;
+
   VELOX_ASSERT_THROW(
-      evaluateOnce<std::string>("uuid(c0)", seed), "seed must not be null");
+      evaluateOnce<std::string>("uuid(c0)", std::optional<int64_t>(123)),
+      "seed argument must be constant");
 }
 
 } // namespace
