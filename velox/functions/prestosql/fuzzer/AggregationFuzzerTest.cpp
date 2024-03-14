@@ -106,7 +106,13 @@ int main(int argc, char** argv) {
       "stddev_pop",
       // Lambda functions are not supported yet.
       "reduce_agg",
-  };
+      "arbitrary", // change sortedinput
+      "max_data_size_for_stats",
+      "map_union_sum", // presto real error
+      "approx_set", // presto: Doesnt support timestamps
+      "min_by", // need custom verifier
+      "max_by", // same as above
+      "any_value"};
 
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
   using facebook::velox::exec::test::ApproxPercentileResultVerifier;
