@@ -72,4 +72,5 @@ services:
       CCACHE_DIR: "/velox/.ccache"
     volumes:
       - .:/velox:delegated
-    command: /bin/bash -c "scl enable gcc-toolset-9 '/velox/scripts/docker-command.sh'"
+    working_dir: /velox
+    command: /velox/scripts/docker-command.sh
