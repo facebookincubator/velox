@@ -288,7 +288,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::HiveBucketProperty> bucketProperty,
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind) {
+    const std::optional<common::CompressionKind> compressionKind,
+    const std::string& stripSize) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -338,23 +339,22 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   VELOX_CHECK_EQ(numBucketColumns, bucketedBy.size());
   VELOX_CHECK_EQ(numSortingColumns, sortedBy.size());
 
-  std::unique_ptr<dwio::common::FlushPolicy> flushPolicy = nullptr;
+  std::function<std::shared_ptr<dwio::common::FlushPolicy>()>
+      flushPolicyFactory = nullptr;
   if (tableStorageFormat == dwio::common::FileFormat::DWRF) {
-    flushPolicy =
-        std::make_unique<velox::dwrf::LambdaFlushPolicy>([]() { return true; });
-  } else if (tableStorageFormat == dwio::common::FileFormat::PARQUET) {
-#ifdef VELOX_ENABLE_PARQUET
-    flushPolicy = std::make_unique<facebook::velox::parquet::LambdaFlushPolicy>(
-        10'000, 128 * 1'024 * 1'024, []() { return false; });
-#endif
+    flushPolicyFactory = [&stripSize]() {
+      return std::make_shared<velox::dwrf::DefaultFlushPolicy>(
+          toCapacity(stripSize, core::CapacityUnit::BYTE), 16777216);
+    };
   }
+
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       columnHandles,
       locationHandle,
       tableStorageFormat,
       bucketProperty,
       compressionKind,
-      std::move(flushPolicy));
+      std::move(flushPolicyFactory));
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>

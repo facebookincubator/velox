@@ -181,7 +181,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       std::shared_ptr<connector::hive::LocationHandle> locationHandle,
       const dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::DWRF,
-      const std::optional<common::CompressionKind> compressionKind = {});
+      const std::optional<common::CompressionKind> compressionKind = {},
+      const std::string& stripSize = "1GB");
 
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(

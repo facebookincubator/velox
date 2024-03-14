@@ -52,8 +52,3 @@ target_link_libraries(
   velox_presto_serializer
   velox_functions_prestosql
   velox_aggregates)
-
-if(VELOX_ENABLE_PARQUET)
-  target_link_libraries(velox_exec_test_lib arrow)
-  target_include_directories(velox_exec_test_lib PUBLIC ${ARROW_PREFIX}/src/)
-endif()

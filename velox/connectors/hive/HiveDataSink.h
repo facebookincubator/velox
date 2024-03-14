@@ -229,8 +229,9 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return compressionKind_;
   }
 
-  const std::shared_ptr<dwio::common::FlushPolicy>& flushPolicy() const {
-    return flushPolicy_;
+  const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>&
+  flushPolicyFactory() const {
+    return flushPolicyFactory_;
   }
 
   dwio::common::FileFormat tableStorageFormat() const {
@@ -271,7 +272,8 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const dwio::common::FileFormat tableStorageFormat_;
   const std::shared_ptr<HiveBucketProperty> bucketProperty_;
   const std::optional<common::CompressionKind> compressionKind_;
-  const std::shared_ptr<dwio::common::FlushPolicy> flushPolicy_;
+  const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>
+      flushPolicyFactory_;
   const std::unordered_map<std::string, std::string> serdeParameters_;
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
 };

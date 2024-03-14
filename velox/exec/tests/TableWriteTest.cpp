@@ -18,7 +18,6 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -37,6 +36,8 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
+
+#include "velox/connectors/hive/HiveConfig.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::core;
@@ -534,7 +535,8 @@ class TableWriteTest : public HiveConnectorTestBase {
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionedBy,
       const std::shared_ptr<HiveBucketProperty> bucketProperty,
-      const std::optional<CompressionKind> compressionKind = {}) {
+      const std::optional<CompressionKind> compressionKind = {},
+      const std::string& stripSize = "") {
     return std::make_shared<core::InsertTableHandle>(
         kHiveConnectorId,
         makeHiveInsertTableHandle(
@@ -545,7 +547,8 @@ class TableWriteTest : public HiveConnectorTestBase {
             makeLocationHandle(
                 outputDirectoryPath, std::nullopt, outputTableType),
             fileFormat_,
-            compressionKind));
+            compressionKind,
+            stripSize));
   }
 
   // Returns a table insert plan node.
@@ -561,7 +564,8 @@ class TableWriteTest : public HiveConnectorTestBase {
           connector::hive::LocationHandle::TableType::kNew,
       const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit,
       bool aggregateResult = true,
-      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr) {
+      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr,
+      const std::string& stripSize = "") {
     return createInsertPlan(
         inputPlan,
         inputPlan.planNode()->outputType(),
@@ -574,7 +578,8 @@ class TableWriteTest : public HiveConnectorTestBase {
         outputTableType,
         outputCommitStrategy,
         aggregateResult,
-        aggregationNode);
+        aggregationNode,
+        stripSize);
   }
 
   PlanNodePtr createInsertPlan(
@@ -590,7 +595,8 @@ class TableWriteTest : public HiveConnectorTestBase {
           connector::hive::LocationHandle::TableType::kNew,
       const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit,
       bool aggregateResult = true,
-      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr) {
+      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr,
+      const std::string& stripSize = "") {
     if (numTableWriters == 1) {
       auto insertPlan = inputPlan
                             .addNode(addTableWriter(
@@ -603,7 +609,8 @@ class TableWriteTest : public HiveConnectorTestBase {
                                     outputDirectoryPath,
                                     partitionedBy,
                                     bucketProperty,
-                                    compressionKind),
+                                    compressionKind,
+                                    stripSize),
                                 bucketProperty != nullptr,
                                 outputCommitStrategy))
                             .capturePlanNodeId(tableWriteNodeId_);
@@ -627,7 +634,8 @@ class TableWriteTest : public HiveConnectorTestBase {
                                     outputDirectoryPath,
                                     partitionedBy,
                                     bucketProperty,
-                                    compressionKind),
+                                    compressionKind,
+                                    stripSize),
                                 bucketProperty != nullptr,
                                 outputCommitStrategy))
                             .capturePlanNodeId(tableWriteNodeId_)
@@ -668,7 +676,8 @@ class TableWriteTest : public HiveConnectorTestBase {
                       outputDirectoryPath,
                       partitionedBy,
                       bucketProperty,
-                      compressionKind),
+                      compressionKind,
+                      stripSize),
                   bucketProperty != nullptr,
                   outputCommitStrategy))
               .capturePlanNodeId(tableWriteNodeId_)
@@ -2333,6 +2342,7 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
     createDuckDbTable(vectors);
 
     auto outputDirectory = TempDirectoryPath::create();
+
     auto plan = createInsertPlan(
         PlanBuilder().values(vectors),
         rowType,
@@ -2341,7 +2351,11 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
         nullptr,
         compressionKind_,
         1,
-        connector::hive::LocationHandle::TableType::kNew);
+        connector::hive::LocationHandle::TableType::kNew,
+        CommitStrategy::kNoCommit,
+        true,
+        nullptr,
+        testData.maxStripeSize);
     const std::shared_ptr<Task> task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(QueryConfig::kTaskWriterCount, std::to_string(1))
