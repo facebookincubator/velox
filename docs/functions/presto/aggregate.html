@@ -542,6 +542,27 @@ the following expression:</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="regr_avgx">
+<span class="sig-name descname"><span class="pre">regr_avgx</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_avgx" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the average of the independent value in a group. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
+value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="regr_avgy">
+<span class="sig-name descname"><span class="pre">regr_avgy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_avgy" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the average of the dependent value in a group. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
+value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="regr_count">
+<span class="sig-name descname"><span class="pre">regr_count</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_count" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of non-null pairs of input values. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
+value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="regr_intercept">
 <span class="sig-name descname"><span class="pre">regr_intercept</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_intercept" title="Link to this definition">¶</a></dt>
 <dd><p>Returns linear regression intercept of input values. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
@@ -549,9 +570,37 @@ value. <code class="docutils literal notranslate"><span class="pre">x</span></co
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="regr_r2">
+<span class="sig-name descname"><span class="pre">regr_r2</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_r2" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the coefficient of determination of the linear regression. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
+value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="regr_slope">
 <span class="sig-name descname"><span class="pre">regr_slope</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_slope" title="Link to this definition">¶</a></dt>
 <dd><p>Returns linear regression slope of input values. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
+value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="regr_sxx">
+<span class="sig-name descname"><span class="pre">regr_sxx</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_sxx" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the sum of the squares of the independent values in a group. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
+value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="regr_sxy">
+<span class="sig-name descname"><span class="pre">regr_sxy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_sxy" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the sum of the product of the dependent and independent values in a group. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
+value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="regr_syy">
+<span class="sig-name descname"><span class="pre">regr_syy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_syy" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the sum of the squares of the dependent values in a group. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
 value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value.</p>
 </dd></dl>
 
@@ -674,8 +723,15 @@ value. <code class="docutils literal notranslate"><span class="pre">x</span></co
 <li><a class="reference internal" href="#covar_pop"><code class="docutils literal notranslate"><span class="pre">covar_pop()</span></code></a></li>
 <li><a class="reference internal" href="#covar_samp"><code class="docutils literal notranslate"><span class="pre">covar_samp()</span></code></a></li>
 <li><a class="reference internal" href="#kurtosis"><code class="docutils literal notranslate"><span class="pre">kurtosis()</span></code></a></li>
+<li><a class="reference internal" href="#regr_avgx"><code class="docutils literal notranslate"><span class="pre">regr_avgx()</span></code></a></li>
+<li><a class="reference internal" href="#regr_avgy"><code class="docutils literal notranslate"><span class="pre">regr_avgy()</span></code></a></li>
+<li><a class="reference internal" href="#regr_count"><code class="docutils literal notranslate"><span class="pre">regr_count()</span></code></a></li>
 <li><a class="reference internal" href="#regr_intercept"><code class="docutils literal notranslate"><span class="pre">regr_intercept()</span></code></a></li>
+<li><a class="reference internal" href="#regr_r2"><code class="docutils literal notranslate"><span class="pre">regr_r2()</span></code></a></li>
 <li><a class="reference internal" href="#regr_slope"><code class="docutils literal notranslate"><span class="pre">regr_slope()</span></code></a></li>
+<li><a class="reference internal" href="#regr_sxx"><code class="docutils literal notranslate"><span class="pre">regr_sxx()</span></code></a></li>
+<li><a class="reference internal" href="#regr_sxy"><code class="docutils literal notranslate"><span class="pre">regr_sxy()</span></code></a></li>
+<li><a class="reference internal" href="#regr_syy"><code class="docutils literal notranslate"><span class="pre">regr_syy()</span></code></a></li>
 <li><a class="reference internal" href="#skewness"><code class="docutils literal notranslate"><span class="pre">skewness()</span></code></a></li>
 <li><a class="reference internal" href="#stddev"><code class="docutils literal notranslate"><span class="pre">stddev()</span></code></a></li>
 <li><a class="reference internal" href="#stddev_pop"><code class="docutils literal notranslate"><span class="pre">stddev_pop()</span></code></a></li>
