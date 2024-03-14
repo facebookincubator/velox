@@ -158,6 +158,11 @@ class QueryConfig {
   /// output rows.
   static constexpr const char* kMaxOutputBatchRows = "max_output_batch_rows";
 
+  /// Min number of rows to be returned by operators from
+  /// MergingVectorOutput::getOutput.
+  static constexpr const char* kMinMergingVectorOutputBatchRows =
+      "min_merging_vector_output_batch_rows";
+
   /// TableScan operator will exit getOutput() method after this many
   /// milliseconds even if it has no data to return yet. Zero means 'no time
   /// limit'.
@@ -448,6 +453,10 @@ class QueryConfig {
   uint64_t maxMergeExchangeBufferSize() const {
     static constexpr uint64_t kDefault = 128UL << 20;
     return get<uint64_t>(kMaxMergeExchangeBufferSize, kDefault);
+  }
+
+  uint32_t minMergingVectorOutputBatchRows() const {
+    return get<uint32_t>(kMinMergingVectorOutputBatchRows, 2);
   }
 
   uint64_t preferredOutputBatchBytes() const {

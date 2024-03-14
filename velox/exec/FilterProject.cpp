@@ -44,7 +44,8 @@ FilterProject::FilterProject(
     int32_t operatorId,
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::FilterNode>& filter,
-    const std::shared_ptr<const core::ProjectNode>& project)
+    const std::shared_ptr<const core::ProjectNode>& project,
+    bool eagerFlush)
     : Operator(
           driverCtx,
           project ? project->outputType() : filter->outputType(),
@@ -53,7 +54,13 @@ FilterProject::FilterProject(
           "FilterProject"),
       hasFilter_(filter != nullptr),
       project_(project),
-      filter_(filter) {}
+      filter_(filter),
+      mergingVectorOutput_(std::make_shared<MergingVectorOutput>(
+          operatorCtx_->pool(),
+          driverCtx->queryConfig().preferredOutputBatchBytes(),
+          driverCtx->queryConfig().preferredOutputBatchRows(),
+          hasFilter_ && !eagerFlush ? driverCtx->queryConfig().minMergingVectorOutputBatchRows()
+                                    : 0)) {}
 
 void FilterProject::initialize() {
   Operator::initialize();
@@ -122,6 +129,11 @@ bool FilterProject::isFinished() {
 }
 
 RowVectorPtr FilterProject::getOutput() {
+  auto output = mergingVectorOutput_->getOutput(noMoreInput_);
+  if (output) {
+    return output;
+  }
+
   if (allInputProcessed()) {
     return nullptr;
   }
@@ -166,10 +178,11 @@ RowVectorPtr FilterProject::getOutput() {
     results = project(*rows, evalCtx);
   }
 
-  return fillOutput(
+  mergingVectorOutput_->addVector(fillOutput(
       numOut,
       allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices,
-      results);
+      results));
+  return mergingVectorOutput_->getOutput(noMoreInput_);
 }
 
 std::vector<VectorPtr> FilterProject::project(

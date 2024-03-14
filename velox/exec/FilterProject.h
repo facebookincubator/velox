@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/MergingVectorOutput.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
@@ -27,7 +28,8 @@ class FilterProject : public Operator {
       int32_t operatorId,
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::FilterNode>& filter,
-      const std::shared_ptr<const core::ProjectNode>& project);
+      const std::shared_ptr<const core::ProjectNode>& project,
+      bool eagerFlush);
 
   bool isFilter() const override {
     return true;
@@ -99,6 +101,8 @@ class FilterProject : public Operator {
   // initialization, they will be reset, and initialized_ will be set to true.
   std::shared_ptr<const core::ProjectNode> project_;
   std::shared_ptr<const core::FilterNode> filter_;
+  std::shared_ptr<MergingVectorOutput> mergingVectorOutput_;
+
   bool initialized_{false};
 
   std::unique_ptr<ExprSet> exprs_;
