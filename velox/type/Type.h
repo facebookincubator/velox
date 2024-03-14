@@ -2128,6 +2128,10 @@ struct CppToType<Timestamp> : public CppToTypeBase<TypeKind::TIMESTAMP> {};
 template <>
 struct CppToType<Date> : public CppToTypeBase<TypeKind::INTEGER> {};
 
+template <>
+struct CppToType<IntervalYearMonthType>
+    : public CppToTypeBase<TypeKind::INTEGER> {};
+
 template <typename T>
 struct CppToType<Generic<T>> : public CppToTypeBase<TypeKind::UNKNOWN> {};
 

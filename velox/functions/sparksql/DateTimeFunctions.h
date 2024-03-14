@@ -699,4 +699,35 @@ struct SecondFunction {
     result = getDateTime(timestamp, nullptr).tm_sec;
   }
 };
+
+struct MakeYMIntervalFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(out_type<IntervalYearMonthType>& result) {
+    result = 0;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<IntervalYearMonthType>& result,
+      const int32_t year) {
+    VELOX_USER_CHECK(
+        !__builtin_mul_overflow(year, kMonthInYear, &result),
+        "Integer overflow in make_ym_interval({})",
+        year);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<IntervalYearMonthType>& result,
+      const int32_t year,
+      const int32_t month) {
+    auto totalMonths = (int64_t)year * kMonthInYear + month;
+    VELOX_USER_CHECK_EQ(
+        totalMonths,
+        (int32_t)totalMonths,
+        "Integer overflow in make_ym_interval({}, {})",
+        year,
+        month);
+    result = totalMonths;
+  }
+};
 } // namespace facebook::velox::functions::sparksql
