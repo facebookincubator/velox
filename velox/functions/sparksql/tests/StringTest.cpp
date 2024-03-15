@@ -481,44 +481,47 @@ TEST_F(StringTest, rpad) {
   const std::string invalidPadString = "\xFFΨ\xFF";
 
   auto rpad = [&](std::optional<std::string> string,
-                  std::optional<int32_t> size,
-                  std::optional<std::string> padString) {
-    return evaluateOnce<std::string>(
-        "rpad(c0, c1, c2)", string, size, padString);
-  };
-
-  auto rpad = [&](std::optional<std::string> string,
                   std::optional<int32_t> size) {
     return evaluateOnce<std::string>("rpad(c0, c1)", string, size);
   };
 
-  // ASCII strings with various values for size and padString
-  EXPECT_EQ("textx", rpad("text", 5, "x"));
-  EXPECT_EQ("text", rpad("text", 4, "x"));
-  EXPECT_EQ("textxyx", rpad("text", 7, "xy"));
+  auto rpadWithPadString = [&](std::optional<std::string> string,
+                               std::optional<int32_t> size,
+                               std::optional<std::string> padString) {
+    return evaluateOnce<std::string>(
+        "rpad(c0, c1, c2)", string, size, padString);
+  };
+
   EXPECT_EQ("text  ", rpad("text", 6));
+
+  // ASCII strings with various values for size and padString
+  EXPECT_EQ("textx", rpadWithPadString("text", 5, "x"));
+  EXPECT_EQ("text", rpadWithPadString("text", 4, "x"));
+  EXPECT_EQ("textxyx", rpadWithPadString("text", 7, "xy"));
 
   // Non-ASCII strings with various values for size and padString
   EXPECT_EQ(
       "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  \u671B\u671B",
-      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 11, "\u671B"));
+      rpadWithPadString("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 11, "\u671B"));
   EXPECT_EQ(
       "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  \u5E0C\u671B\u5E0C",
-      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 12, "\u5E0C\u671B"));
+      rpadWithPadString(
+          "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 12, "\u5E0C\u671B"));
 
   // Empty string
-  EXPECT_EQ("aaa", rpad("", 3, "a"));
+  EXPECT_EQ("aaa", rpadWithPadString("", 3, "a"));
 
   // Truncating string
-  EXPECT_EQ("", rpad("abc", 0, "e"));
-  EXPECT_EQ("tex", rpad("text", 3, "xy"));
+  EXPECT_EQ("", rpadWithPadString("abc", 0, "e"));
+  EXPECT_EQ("tex", rpadWithPadString("text", 3, "xy"));
   EXPECT_EQ(
       "\u4FE1\u5FF5 \u7231 ",
-      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 5, "\u671B"));
+      rpadWithPadString("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 5, "\u671B"));
 
   // Invalid UTF-8 chars
-  EXPECT_EQ(invalidString + "x", rpad(invalidString, 8, "x"));
-  EXPECT_EQ("abc" + invalidPadString, rpad("abc", 6, invalidPadString));
+  EXPECT_EQ(invalidString + "x", rpadWithPadString(invalidString, 8, "x"));
+  EXPECT_EQ(
+      "abc" + invalidPadString, rpadWithPadString("abc", 6, invalidPadString));
 }
 
 TEST_F(StringTest, rtrim) {
@@ -582,6 +585,7 @@ TEST_F(StringTest, sha2) {
     return evaluateOnce<std::string, std::string, int32_t>(
         "sha2(cast(c0 as varbinary), c1)", str, bitLength);
   };
+
   EXPECT_EQ(sha2("Spark", -1), std::nullopt);
   EXPECT_EQ(sha2("Spark", 1), std::nullopt);
   EXPECT_EQ(
@@ -659,31 +663,12 @@ TEST_F(StringTest, substring) {
     return evaluateOnce<std::string>("substring(c0, c1)", str, start);
   };
 
-  auto substring = [&](std::optional<std::string> str,
-                       std::optional<int32_t> start,
-                       std::optional<int32_t> length) {
+  auto substringWithLength = [&](std::optional<std::string> str,
+                                 std::optional<int32_t> start,
+                                 std::optional<int32_t> length) {
     return evaluateOnce<std::string>(
         "substring(c0, c1, c2)", str, start, length);
   };
-  EXPECT_EQ(substring("example", 0, 2), "ex");
-  EXPECT_EQ(substring("example", 1, -1), "");
-  EXPECT_EQ(substring("example", 1, 0), "");
-  EXPECT_EQ(substring("example", 1, 2), "ex");
-  EXPECT_EQ(substring("example", 1, 7), "example");
-  EXPECT_EQ(substring("example", 1, 100), "example");
-  EXPECT_EQ(substring("example", 2, 2), "xa");
-  EXPECT_EQ(substring("example", 8, 2), "");
-  EXPECT_EQ(substring("example", -2, 2), "le");
-  EXPECT_EQ(substring("example", -7, 2), "ex");
-  EXPECT_EQ(substring("example", -8, 2), "e");
-  EXPECT_EQ(substring("example", -9, 2), "");
-  EXPECT_EQ(substring("example", -7, 7), "example");
-  EXPECT_EQ(substring("example", -9, 9), "example");
-  EXPECT_EQ(substring("example", 4, 2147483645), "mple");
-  EXPECT_EQ(substring("example", 2147483645, 4), "");
-  EXPECT_EQ(substring("example", -2147483648, 1), "");
-  EXPECT_EQ(substring("da\u6570\u636Eta", 2, 4), "a\u6570\u636Et");
-  EXPECT_EQ(substring("da\u6570\u636Eta", -3, 2), "\u636Et");
 
   EXPECT_EQ(substring("example", 0), "example");
   EXPECT_EQ(substring("example", 1), "example");
@@ -697,6 +682,26 @@ TEST_F(StringTest, substring) {
   EXPECT_EQ(substring("example", -2147483647), "example");
   EXPECT_EQ(substring("da\u6570\u636Eta", 3), "\u6570\u636Eta");
   EXPECT_EQ(substring("da\u6570\u636Eta", -3), "\u636Eta");
+
+  EXPECT_EQ(substringWithLength("example", 0, 2), "ex");
+  EXPECT_EQ(substringWithLength("example", 1, -1), "");
+  EXPECT_EQ(substringWithLength("example", 1, 0), "");
+  EXPECT_EQ(substringWithLength("example", 1, 2), "ex");
+  EXPECT_EQ(substringWithLength("example", 1, 7), "example");
+  EXPECT_EQ(substringWithLength("example", 1, 100), "example");
+  EXPECT_EQ(substringWithLength("example", 2, 2), "xa");
+  EXPECT_EQ(substringWithLength("example", 8, 2), "");
+  EXPECT_EQ(substringWithLength("example", -2, 2), "le");
+  EXPECT_EQ(substringWithLength("example", -7, 2), "ex");
+  EXPECT_EQ(substringWithLength("example", -8, 2), "e");
+  EXPECT_EQ(substringWithLength("example", -9, 2), "");
+  EXPECT_EQ(substringWithLength("example", -7, 7), "example");
+  EXPECT_EQ(substringWithLength("example", -9, 9), "example");
+  EXPECT_EQ(substringWithLength("example", 4, 2147483645), "mple");
+  EXPECT_EQ(substringWithLength("example", 2147483645, 4), "");
+  EXPECT_EQ(substringWithLength("example", -2147483648, 1), "");
+  EXPECT_EQ(substringWithLength("da\u6570\u636Eta", 2, 4), "a\u6570\u636Et");
+  EXPECT_EQ(substringWithLength("da\u6570\u636Eta", -3, 2), "\u636Et");
 }
 
 TEST_F(StringTest, substringIndex) {
@@ -818,10 +823,11 @@ TEST_F(StringTest, trim) {
     return evaluateOnce<std::string>("trim(c0)", srcStr);
   };
 
-  auto trim = [&](std::optional<std::string> trimStr,
-                  std::optional<std::string> srcStr) {
+  auto trimWithTrimStr = [&](std::optional<std::string> trimStr,
+                             std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("trim(c0, c1)", trimStr, srcStr);
   };
+
   EXPECT_EQ(trim(""), "");
   EXPECT_EQ(trim("  data\t "), "data\t");
   EXPECT_EQ(trim("  data\t"), "data\t");
@@ -832,19 +838,25 @@ TEST_F(StringTest, trim) {
   EXPECT_EQ(trim("\u6570\u636E\t "), "\u6570\u636E\t");
   EXPECT_EQ(trim("\u6570\u636E\t"), "\u6570\u636E\t");
 
-  EXPECT_EQ(trim("", ""), "");
-  EXPECT_EQ(trim("", "srcStr"), "srcStr");
-  EXPECT_EQ(trim("trimStr", ""), "");
-  EXPECT_EQ(trim("data!egr< >int", "integer data!"), "");
-  EXPECT_EQ(trim("int", "integer data!"), "eger data!");
-  EXPECT_EQ(trim("!!at", "integer data!"), "integer d");
-  EXPECT_EQ(trim("a", "integer data!"), "integer data!");
+  EXPECT_EQ(trimWithTrimStr("", ""), "");
+  EXPECT_EQ(trimWithTrimStr("", "srcStr"), "srcStr");
+  EXPECT_EQ(trimWithTrimStr("trimWithTrimStrStr", ""), "");
+  EXPECT_EQ(trimWithTrimStr("data!egr< >int", "integer data!"), "");
+  EXPECT_EQ(trimWithTrimStr("int", "integer data!"), "eger data!");
+  EXPECT_EQ(trimWithTrimStr("!!at", "integer data!"), "integer d");
+  EXPECT_EQ(trimWithTrimStr("a", "integer data!"), "integer data!");
   EXPECT_EQ(
-      trim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
-  EXPECT_EQ(trim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"), "\u636E!");
-  EXPECT_EQ(trim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"), "\u6574");
+      trimWithTrimStr(
+          "\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"),
+      "");
   EXPECT_EQ(
-      trim("\u6570", "\u6574\u6570 \u6570\u636E!"),
+      trimWithTrimStr(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"),
+      "\u636E!");
+  EXPECT_EQ(
+      trimWithTrimStr("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574");
+  EXPECT_EQ(
+      trimWithTrimStr("\u6570", "\u6574\u6570 \u6570\u636E!"),
       "\u6574\u6570 \u6570\u636E!");
 }
 } // namespace
