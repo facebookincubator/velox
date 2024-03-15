@@ -249,5 +249,126 @@ struct WeibullCDFFunction {
   }
 };
 
+template <typename T>
+struct InverseNormalCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(double& result, double m, double sd, double p) {
+    VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be 0 > p > 1");
+    VELOX_USER_CHECK_GT(sd, 0, "standardDeviation must be > 0");
+
+    static const double kSqrtOfTwo = sqrt(2);
+    result = m + sd * kSqrtOfTwo * boost::math::erf_inv(2 * p - 1);
+  }
+};
+
+template <typename T>
+struct InversePoissonCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, double lambda, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK((p >= 0) && (p < 1), "p must be in the interval [0, 1)");
+    VELOX_USER_CHECK_GT(lambda, 0, "lambda must be greater than 0");
+    VELOX_USER_CHECK_NE(lambda, kInf,
+        "illegal state: Continued fraction diverged to NaN for value ∞");
+
+    boost::math::poisson_distribution<> dist(lambda);
+    result = boost::math::quantile(dist, p);
+  }
+};
+
+template <typename T>
+struct InverseBinomialCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(int64_t& result, int64_t numOfTrials, double successProb, double p) {
+    VELOX_USER_CHECK(
+        (p >= 0) && (p <= 1), "p must be in the interval [0, 1]");
+    VELOX_USER_CHECK(
+        (successProb >= 0) && (successProb <= 1),
+        "successProbability must be in the interval [0, 1]");
+    VELOX_USER_CHECK_GT(
+        numOfTrials, 0, "numberOfTrials must be greater than 0");
+
+    boost::math::binomial_distribution<> dist(numOfTrials, successProb);
+    result = boost::math::quantile(dist, p);
+  }
+};
+
+template <typename T>
+struct InverseChiSquaredCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(double& result, double df, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK(
+        (p >= 0) && (p <= 1), "p must be in the interval [0, 1]");
+    VELOX_USER_CHECK_GT(df, 0, "df must be greater than 0");
+    VELOX_USER_CHECK_NE(
+        df,
+        kInf,
+        "function values at endpoints do not have different signs, endpoints: [0, 1], values: [-{}, �]",
+        p);
+
+    boost::math::chi_squared_distribution<> dist(df);
+    result = boost::math::quantile(dist, p);
+  }
+};
+
+template <typename T>
+struct InverseFCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double df1, double df2, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be in the interval [0, 1]")
+    VELOX_USER_CHECK_GT(df1, 0, "numerator df must be greater than 0");
+    VELOX_USER_CHECK_GT(df2, 0, "denominator df must be greater than 0");
+    VELOX_USER_CHECK_NE(
+        df1,
+        kInf,
+        "function values at endpoints do not have different signs, endpoints: [0, 1], values: [-{}, �]",
+        p);
+    VELOX_USER_CHECK_NE(
+        df2,
+        kInf,
+        "illegal state: Continued fraction diverged to NaN for value 0");
+
+    boost::math::fisher_f_distribution<> dist(df1, df2);
+    result = boost::math::quantile(dist, p);
+  }
+};
+
+template <typename T>
+struct InverseGammaCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double shape, double scale, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK(
+        (p >= 0) && (p <= 1), "p must be in the interval [0, 1]");
+    VELOX_CHECK_GT(shape, 0, "shape must be greater than 0");
+    VELOX_CHECK_GT(scale, 0, "scale must be greater than 0");
+    VELOX_USER_CHECK_NE(
+        shape, kInf, "endpoints do not specify an interval: [∞, ∞]");
+    VELOX_USER_CHECK_NE(
+        scale,
+        kInf,
+        "function values at endpoints do not have different signs, endpoints: [0, 1], values: [-{}, �]",
+        p);
+
+    boost::math::gamma_distribution<> dist(shape, scale);
+    result = boost::math::quantile(dist, p);
+  }
+};
+
 } // namespace
 } // namespace facebook::velox::functions

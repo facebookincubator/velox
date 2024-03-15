@@ -455,5 +455,317 @@ TEST_F(ProbabilityTest, weibullCDF) {
       weibullCDF(kDoubleMin, kNan, kDoubleMax), "b must be greater than 0");
 }
 
+TEST_F(ProbabilityTest, inverseNormalCDF) {
+  const auto inverseNormalCDF = [&](std::optional<double> mean,
+                                    std::optional<double> sd,
+                                    std::optional<double> p) {
+    return evaluateOnce<double>("inverse_normal_cdf(c0, c1, c2)", mean, sd, p);
+  };
+
+  EXPECT_EQ(inverseNormalCDF(0, 1, 0.3), -0.52440051270804089);
+  EXPECT_EQ(inverseNormalCDF(10, 9, 0.9), 21.533964089901406);
+  EXPECT_EQ(inverseNormalCDF(0.5, 0.25, 0.65), 0.59633011660189195);
+  EXPECT_EQ(inverseNormalCDF(0, 1, 0.00001), -4.2648907939226017);
+
+  EXPECT_EQ(inverseNormalCDF(kDoubleMin, 0.25, 0.65), 0.096330116601891919);
+  EXPECT_EQ(inverseNormalCDF(kDoubleMax, 0.25, 0.65), 1.7976931348623157e+308);
+  EXPECT_EQ(inverseNormalCDF(0.5, kDoubleMin, 0.65), 0.5);
+  EXPECT_THAT(inverseNormalCDF(0.5, kDoubleMax, 0.65), IsInf());
+  EXPECT_THAT(inverseNormalCDF(kNan, 2, 0.1985), IsNan());
+
+  EXPECT_EQ(inverseNormalCDF(std::nullopt, 1, 1), std::nullopt);
+  EXPECT_EQ(inverseNormalCDF(1, 1, std::nullopt), std::nullopt);
+  EXPECT_EQ(inverseNormalCDF(std::nullopt, 1, std::nullopt), std::nullopt);
+  EXPECT_EQ(
+      inverseNormalCDF(std::nullopt, std::nullopt, std::nullopt), std::nullopt);
+
+  EXPECT_THAT(inverseNormalCDF(kInf, 1, 0.1985), IsInf());
+  EXPECT_THAT(inverseNormalCDF(0, kInf, 0.1985), IsInf());
+  EXPECT_THAT(inverseNormalCDF(-kInf, 1, 0.1985), IsInf());
+
+  // Test invalid inputs.
+  VELOX_ASSERT_THROW(
+      inverseNormalCDF(0, -kInf, 0.1985), "standardDeviation must be > 0");
+  VELOX_ASSERT_THROW(inverseNormalCDF(0, 1, kInf), "p must be 0 > p > 1");
+  VELOX_ASSERT_THROW(inverseNormalCDF(0, 1, -kInf), "p must be 0 > p > 1");
+
+  VELOX_ASSERT_THROW(
+      inverseNormalCDF(0, kNan, 0.1985), "standardDeviation must be > 0");
+  VELOX_ASSERT_THROW(inverseNormalCDF(0, 1, kNan), "p must be 0 > p > 1");
+  VELOX_ASSERT_THROW(inverseNormalCDF(kNan, kNan, kNan), "p must be 0 > p > 1");
+
+  VELOX_ASSERT_THROW(inverseNormalCDF(0, 1, kDoubleMax), "p must be 0 > p > 1");
+  VELOX_ASSERT_THROW(
+      inverseNormalCDF(0, 1, kDoubleMin),
+      "Error in function boost::math::erf_inv<double>(double, double): Overflow Error");
+
+  VELOX_ASSERT_THROW(
+      inverseNormalCDF(0, 0, 0.1985), "standardDeviation must be > 0");
+  VELOX_ASSERT_THROW(inverseNormalCDF(0, 1, 1.00001), "p must be 0 > p > 1");
+}
+
+TEST_F(ProbabilityTest, inversePoissonCDF) {
+  const auto inversePoissonCDF = [&](std::optional<double> lambda,
+                                     std::optional<double> p) {
+    return evaluateOnce<int64_t>("inverse_poisson_cdf(c0, c1)", lambda, p);
+  };
+
+  EXPECT_EQ(inversePoissonCDF(3.0, 0.0), 0);
+  EXPECT_EQ(inversePoissonCDF(3.0, 0.3), 1);
+  EXPECT_EQ(inversePoissonCDF(3.0, 0.95), 6);
+  EXPECT_EQ(inversePoissonCDF(3.0, 0.99999999), 17);
+  EXPECT_EQ(inversePoissonCDF(3.0, kDoubleMin), 0);
+  EXPECT_EQ(inversePoissonCDF(std::nullopt, 0.99999999), std::nullopt);
+  EXPECT_EQ(inversePoissonCDF(3.0, std::nullopt), std::nullopt);
+  EXPECT_EQ(inversePoissonCDF(std::nullopt, std::nullopt), std::nullopt);
+
+  // Test invalid inputs.
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(kInf, 0.99999999),
+      "illegal state: Continued fraction diverged to NaN for value ∞");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(3.0, kNan), "p must be in the interval [0, 1)");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(kNan, 0.99), "lambda must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(kNan, kNan), "p must be in the interval [0, 1)");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(3.0, 1), "p must be in the interval [0, 1)");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(-3, 0.3), "lambda must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(3.0, 1.00000000001),
+      "p must be in the interval [0, 1)");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(3.0, -0.00000000001),
+      "p must be in the interval [0, 1)");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(-0.00000000001, 1), "lambda must be greater than 0");
+}
+
+TEST_F(ProbabilityTest, inverseBinomialCDF) {
+  const auto invBinomialCDF = [&](std::optional<int64_t> numberOfTrials,
+                                  std::optional<double> successProbability,
+                                  std::optional<double> p) {
+    return evaluateOnce<int64_t>(
+        "inverse_binomial_cdf(c0, c1, c2)",
+        numberOfTrials,
+        successProbability,
+        p);
+  };
+
+  EXPECT_EQ(0, invBinomialCDF(5, 0.5, 0.03125));
+  EXPECT_EQ(41, invBinomialCDF(41, 0.2, 1.0));
+  EXPECT_EQ(3, invBinomialCDF(5, 0.5, 0.8125));
+  EXPECT_EQ(3, invBinomialCDF(3, 0.8403, 0.5));
+  EXPECT_EQ(62, invBinomialCDF(200, 0.3, 0.6));
+  EXPECT_EQ(0, invBinomialCDF(79, 0.6, 0.0));
+  EXPECT_EQ(std::nullopt, invBinomialCDF(std::nullopt, 0.6, 0.0));
+  EXPECT_EQ(std::nullopt, invBinomialCDF(11, std::nullopt, 0.22));
+  EXPECT_EQ(std::nullopt, invBinomialCDF(134, 0.6, std::nullopt));
+  EXPECT_EQ(
+      std::nullopt, invBinomialCDF(std::nullopt, std::nullopt, std::nullopt));
+
+  // Test invalid inputs for numberOfTrials.
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(0, 0.5, 0.3), "numberOfTrials must be greater than 0");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(kBigIntMin, 0.5, 0.3),
+      "numberOfTrials must be greater than 0");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(kNan, 0.5, 0.3), "numberOfTrials must be greater than 0");
+
+  // Test invalid inputs for successProbability.
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, -0.5, 0.3),
+      "successProbability must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, kDoubleMax, 0.1),
+      "successProbability must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, kNan, 0.03),
+      "successProbability must be in the interval [0, 1]");
+
+  // Test invalid inputs for p.
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, 0.3, -12.9), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, 0.3, kDoubleMax), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, 0.3, kNan), "p must be in the interval [0, 1]");
+
+  // Test invalid inputs for multiple params.
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(-3, 0.3, 10.0), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(kNan, 6, 0.2),
+      "successProbability must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(-7, 4, 22), "p must be in the interval [0, 1]");
+}
+
+TEST_F(ProbabilityTest, inverseChiSquaredCDF) {
+  const auto invChiSquaredCDF = [&](std::optional<double> df,
+                                    std::optional<double> p) {
+    return evaluateOnce<double>("inverse_chi_squared_cdf(c0, c1)", df, p);
+  };
+
+  EXPECT_EQ(0.0, invChiSquaredCDF(3, 0.0));
+  EXPECT_EQ(1.4236522430352796, invChiSquaredCDF(3, 0.3));
+  EXPECT_EQ(11.344866730144370, invChiSquaredCDF(3, 0.99));
+  EXPECT_EQ(2.8093008564672404e-123, invChiSquaredCDF(5, kDoubleMin));
+  EXPECT_EQ(1.7976931348623157e+308, invChiSquaredCDF(kDoubleMax, 0.95));
+  EXPECT_EQ(std::nullopt, invChiSquaredCDF(std::nullopt, 0.94));
+  EXPECT_EQ(std::nullopt, invChiSquaredCDF(142.345, std::nullopt));
+  EXPECT_EQ(std::nullopt, invChiSquaredCDF(std::nullopt, std::nullopt));
+
+  // Test invalid inputs for df.
+  VELOX_ASSERT_THROW(invChiSquaredCDF(-3, 0.3), "df must be greater than 0");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(kNan, 0.99), "df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kInf, 0.99),
+      "function values at endpoints do not have different signs, endpoints: [0, 1], values: [-0.99, �]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kBigIntMin, 0.15), "df must be greater than 0");
+
+  // Test invalid inputs for p.
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(3, 1.00001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(40, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(40, kInf), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(11, kDoubleMax), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(500, kBigIntMin), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(234, kBigIntMax), "p must be in the interval [0, 1]");
+
+  // Test invalid inputs for both params.
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(-3, -0.001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kNan, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kInf, kInf), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kBigIntMin, kBigIntMax),
+      "p must be in the interval [0, 1]");
+}
+
+TEST_F(ProbabilityTest, inverseFCDF) {
+  const auto inverseFCDF = [&](std::optional<double> df1,
+                               std::optional<double> df2,
+                               std::optional<double> p) {
+    return evaluateOnce<double>("inverse_f_cdf(c0, c1, c2)", df1, df2, p);
+  };
+
+  EXPECT_EQ(inverseFCDF(2.0, 5.0, 0.0), 0.0);
+  EXPECT_EQ(inverseFCDF(12.12, 4.2015, 0), 0);
+  EXPECT_EQ(inverseFCDF(2.0, 5.0, 0.9), 3.779716078773951);
+  EXPECT_EQ(inverseFCDF(2.0, 5.0, 0.5), 0.79876977693223572);
+  EXPECT_EQ(inverseFCDF(5.02, 10.0, 0.3763), 0.72002849078906817);
+  EXPECT_EQ(inverseFCDF(10.0283, 0.02, 0.062), 9.5969289856751434);
+
+  EXPECT_EQ(inverseFCDF(2.0, 5.0, std::nullopt), std::nullopt);
+  EXPECT_EQ(inverseFCDF(2.0, std::nullopt, 3.7797), std::nullopt);
+  EXPECT_EQ(inverseFCDF(std::nullopt, 5.0, 3.7797), std::nullopt);
+
+  EXPECT_EQ(inverseFCDF(kDoubleMax, 5.0, 1), kInf);
+  EXPECT_EQ(inverseFCDF(1, kDoubleMax, 1), kInf);
+  EXPECT_EQ(inverseFCDF(82.6, 901.10, 1), kInf);
+  EXPECT_EQ(inverseFCDF(kDoubleMin, 50.620, 1), kInf);
+  EXPECT_EQ(
+      inverseFCDF(kBigIntMax, 5.0, 0.93256230095450132), 3.7796999999999996);
+  EXPECT_EQ(inverseFCDF(76.901, kBigIntMax, 1), kInf);
+  EXPECT_EQ(inverseFCDF(2.0, 5.0, 1), kInf);
+
+  // Test invalid inputs for df1.
+  VELOX_ASSERT_THROW(
+      inverseFCDF(0, 3, 0.5), "numerator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(kBigIntMin, 5.0, 0.999),
+      "numerator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(kInf, 5.0, 0.9),
+      "function values at endpoints do not have different signs, endpoints: [0, 1], values: [-0.9, �]");
+
+  // Test invalid inputs for df2.
+  VELOX_ASSERT_THROW(
+      inverseFCDF(3, 0, 0.5), "denominator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(2.0, kBigIntMin, 0.0001),
+      "denominator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(2.0, kInf, 0.9),
+      "illegal state: Continued fraction diverged to NaN for value 0");
+
+  // Test invalid inputs for p.
+  VELOX_ASSERT_THROW(
+      inverseFCDF(3, 5, -0.1), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(2.0, 5.0, kBigIntMin), "p must be in the interval [0, 1]");
+
+  // Test a combination of invalid inputs.
+  VELOX_ASSERT_THROW(
+      inverseFCDF(-1.2, 0, -0.1), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(1, -kInf, -0.1), "p must be in the interval [0, 1]");
+}
+
+TEST_F(ProbabilityTest, inverseGammaCDF) {
+  const auto inverseGammaCDF = [&](std::optional<double> shape,
+                                   std::optional<double> scale,
+                                   std::optional<double> p) {
+    return evaluateOnce<double>(
+        "inverse_gamma_cdf(c0, c1, c2)", shape, scale, p);
+  };
+
+  EXPECT_EQ(inverseGammaCDF(3, 3.6, 0.0), 0.0);
+  EXPECT_EQ(inverseGammaCDF(3, 4, 0.99), 33.623787659541861);
+  EXPECT_EQ(inverseGammaCDF(3, 4, 0.50), 10.696241254894241);
+
+  // Gamma with shape 10k/2 and scale 2 is chisquare with df=10k, which is
+  // approximatly Normal with mu=10k Hence, we expect that the quantile
+  // will be close to 10k.
+  EXPECT_EQ(inverseGammaCDF(10000.0 / 2, 2.0, 0.50), 9999.333341235144);
+
+  EXPECT_EQ(inverseGammaCDF(std::nullopt, 2.0, 0.5), std::nullopt);
+  EXPECT_EQ(inverseGammaCDF(3, std::nullopt, 0.50), std::nullopt);
+  EXPECT_EQ(inverseGammaCDF(3, 4, std::nullopt), std::nullopt);
+  EXPECT_EQ(
+      inverseGammaCDF(std::nullopt, std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(inverseGammaCDF(kDoubleMax, 3.6, 0.0), 0.0);
+  EXPECT_THAT(inverseGammaCDF(3, kDoubleMax, 0.99), IsInf());
+  EXPECT_EQ(inverseGammaCDF(kDoubleMin, 3.6, 0.0), 0.0);
+  EXPECT_EQ(inverseGammaCDF(3, kDoubleMin, 0.99), 1.8703852736310908e-307);
+  EXPECT_EQ(inverseGammaCDF(kInf, 3.6, 0.0), 0.0);
+
+  // Test invalid inputs.
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(-0.00001, 3, 0.5), "shape must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, -0.00001, 0.5), "scale must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, 5, -0.00001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, 5, 1.00001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(kInf, 4, 0.50),
+      "function values at endpoints do not have different signs, endpoints: [0, 1], values: [-0.5, �]");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, kInf, 0.99),
+      "endpoints do not specify an interval: [∞, ∞]");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, 4, kInf), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(kNan, 3.6, 0.0), "shape must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, kNan, 0.99), "scale must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, 4, kNan), "p must be in the interval [0, 1]");
+}
+
 } // namespace
 } // namespace facebook::velox
