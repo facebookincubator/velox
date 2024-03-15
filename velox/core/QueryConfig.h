@@ -580,9 +580,8 @@ class QueryConfig {
     return get<uint8_t>(kSpillStartPartitionBit, kDefaultStartBit);
   }
 
-  /// Returns the number of bits used to calculate the spilling partition
-  /// number for hash join. The number of spilling partitions will be power of
-  /// two.
+  /// Returns the number of bits used to calculate the spill partition number
+  /// for hash join. The number of spill partitions will be power of two.
   ///
   /// NOTE: as for now, we only support up to 8-way spill partitioning.
   uint8_t joinSpillPartitionBits() const {
@@ -592,9 +591,8 @@ class QueryConfig {
         kMaxBits, get<uint8_t>(kJoinSpillPartitionBits, kDefaultBits));
   }
 
-  /// Returns the number of bits used to calculate the spilling partition
-  /// number for RowNumber. The number of spilling partitions will be power of
-  /// two.
+  /// Returns the number of bits used to calculate the spill partition number
+  /// for RowNumber. The number of spill partitions will be power of two.
   ///
   /// NOTE: as for now, we only support up to 8-way spill partitioning.
   uint8_t rowNumberSpillPartitionBits() const {

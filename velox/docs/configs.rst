@@ -315,8 +315,13 @@ Spilling
      - The start partition bit which is used with `spiller_partition_bits` together to calculate the spilling partition number.
    * - join_spiller_partition_bits
      - integer
-     - 2
-     - The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
+     - 3
+     - The number of bits (N) used to calculate the spilling partition number for HashJoin: 2 ^ N. At the moment the maximum
+       value is 3, meaning we only support up to 8-way spill partitioning.ing.
+   * - row_number_spiller_partition_bits
+     - integer
+     - 3
+     - The number of bits (N) used to calculate the spilling partition number for RowNumber: 2 ^ N. At the moment the maximum
        value is 3, meaning we only support up to 8-way spill partitioning.ing.
    * - testing.spill_pct
      - integer

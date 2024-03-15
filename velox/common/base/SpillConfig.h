@@ -116,7 +116,7 @@ struct SpillConfig {
   /// memory usage.
   int32_t spillableReservationGrowthPct;
 
-  /// The started partition bit offset of the top (the first level) partitions.
+  /// The start partition bit offset of the top (the first level) partitions.
   uint8_t startPartitionBit;
 
   /// Used to calculate the spill hash partition number for hash join with
