@@ -62,7 +62,7 @@ list(APPEND BOOST_INCLUDE_LIBRARIES ${BOOST_HEADER_ONLY})
 
 # The `headers` target is not created by Boost cmake and leads to a warning
 list(REMOVE_ITEM BOOST_INCLUDE_LIBRARIES headers)
-set(BUILD_SHARED_LIBS ON)
+set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(Boost)
 
 list(TRANSFORM BOOST_HEADER_ONLY PREPEND Boost::)
