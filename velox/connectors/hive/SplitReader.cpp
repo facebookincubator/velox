@@ -150,6 +150,71 @@ void SplitReader::prepareSplit(
   createRowReader(metadataFilter);
 }
 
+uint64_t SplitReader::next(uint64_t size, VectorPtr& output) {
+  if (!baseReaderOpts_.randomSkip()) {
+    return baseRowReader_->next(size, output);
+  }
+  dwio::common::Mutation mutation;
+  mutation.randomSkip = baseReaderOpts_.randomSkip().get();
+  return baseRowReader_->next(size, output, &mutation);
+}
+
+void SplitReader::resetFilterCaches() {
+  if (baseRowReader_) {
+    baseRowReader_->resetFilterCaches();
+  }
+}
+
+bool SplitReader::emptySplit() const {
+  return emptySplit_;
+}
+
+void SplitReader::resetSplit() {
+  hiveSplit_.reset();
+}
+
+int64_t SplitReader::estimatedRowSize() const {
+  if (!baseRowReader_) {
+    return DataSource::kUnknownRowSize;
+  }
+
+  auto size = baseRowReader_->estimatedRowSize();
+  if (size.has_value()) {
+    return size.value();
+  }
+  return DataSource::kUnknownRowSize;
+}
+
+void SplitReader::updateRuntimeStats(
+    dwio::common::RuntimeStatistics& stats) const {
+  if (baseRowReader_) {
+    baseRowReader_->updateRuntimeStats(stats);
+  }
+}
+
+bool SplitReader::allPrefetchIssued() const {
+  return baseRowReader_ && baseRowReader_->allPrefetchIssued();
+}
+
+std::string SplitReader::toString() const {
+  std::string partitionKeys;
+  std::for_each(
+      partitionKeys_->begin(),
+      partitionKeys_->end(),
+      [&](std::pair<
+          const std::string,
+          std::shared_ptr<facebook::velox::connector::hive::HiveColumnHandle>>
+              column) { partitionKeys += " " + column.second->toString(); });
+  return fmt::format(
+      "SplitReader: hiveSplit_{} scanSpec_{} readerOutputType_{} partitionKeys_{} reader{} rowReader{}",
+      hiveSplit_->toString(),
+      scanSpec_->toString(),
+      readerOutputType_->toString(),
+      partitionKeys,
+      static_cast<const void*>(baseReader_.get()),
+      static_cast<const void*>(baseRowReader_.get()));
+}
+
 void SplitReader::createReader() {
   VELOX_CHECK_NE(
       baseReaderOpts_.getFileFormat(), dwio::common::FileFormat::UNKNOWN);
@@ -298,52 +363,6 @@ std::vector<TypePtr> SplitReader::adaptColumns(
   return columnTypes;
 }
 
-uint64_t SplitReader::next(uint64_t size, VectorPtr& output) {
-  if (!baseReaderOpts_.randomSkip()) {
-    return baseRowReader_->next(size, output);
-  }
-  dwio::common::Mutation mutation;
-  mutation.randomSkip = baseReaderOpts_.randomSkip().get();
-  return baseRowReader_->next(size, output, &mutation);
-}
-
-void SplitReader::resetFilterCaches() {
-  if (baseRowReader_) {
-    baseRowReader_->resetFilterCaches();
-  }
-}
-
-bool SplitReader::emptySplit() const {
-  return emptySplit_;
-}
-
-void SplitReader::resetSplit() {
-  hiveSplit_.reset();
-}
-
-int64_t SplitReader::estimatedRowSize() const {
-  if (!baseRowReader_) {
-    return DataSource::kUnknownRowSize;
-  }
-
-  auto size = baseRowReader_->estimatedRowSize();
-  if (size.has_value()) {
-    return size.value();
-  }
-  return DataSource::kUnknownRowSize;
-}
-
-void SplitReader::updateRuntimeStats(
-    dwio::common::RuntimeStatistics& stats) const {
-  if (baseRowReader_) {
-    baseRowReader_->updateRuntimeStats(stats);
-  }
-}
-
-bool SplitReader::allPrefetchIssued() const {
-  return baseRowReader_ && baseRowReader_->allPrefetchIssued();
-}
-
 void SplitReader::setPartitionValue(
     common::ScanSpec* spec,
     const std::string& partitionKey,
@@ -362,25 +381,6 @@ void SplitReader::setPartitionValue(
       1,
       connectorQueryCtx_->memoryPool());
   spec->setConstantValue(constant);
-}
-
-std::string SplitReader::toString() const {
-  std::string partitionKeys;
-  std::for_each(
-      partitionKeys_->begin(),
-      partitionKeys_->end(),
-      [&](std::pair<
-          const std::string,
-          std::shared_ptr<facebook::velox::connector::hive::HiveColumnHandle>>
-              column) { partitionKeys += " " + column.second->toString(); });
-  return fmt::format(
-      "SplitReader: hiveSplit_{} scanSpec_{} readerOutputType_{} partitionKeys_{} reader{} rowReader{}",
-      hiveSplit_->toString(),
-      scanSpec_->toString(),
-      readerOutputType_->toString(),
-      partitionKeys,
-      static_cast<const void*>(baseReader_.get()),
-      static_cast<const void*>(baseRowReader_.get()));
 }
 
 } // namespace facebook::velox::connector::hive
