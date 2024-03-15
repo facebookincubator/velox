@@ -56,8 +56,7 @@ struct SpillConfig {
       int32_t _minSpillableReservationPct,
       int32_t _spillableReservationGrowthPct,
       uint8_t _startPartitionBit,
-      uint8_t _joinPartitionBits,
-      uint8_t _rowNumberPartitionBits,
+      uint8_t _numPartitionBits,
       int32_t _maxSpillLevel,
       uint64_t _maxSpillRunRows,
       uint64_t _writerFlushThresholdSize,
@@ -119,13 +118,9 @@ struct SpillConfig {
   /// The start partition bit offset of the top (the first level) partitions.
   uint8_t startPartitionBit;
 
-  /// Used to calculate the spill hash partition number for hash join with
-  /// 'startPartitionBit'.
-  uint8_t joinPartitionBits;
-
-  /// Used to calculate the spill partition number of the hash table in
+  /// Used to calculate the spill hash partition number for hash join and
   /// RowNumber with 'startPartitionBit'.
-  uint8_t rowNumberPartitionBits;
+  uint8_t numPartitionBits;
 
   /// The max allowed spilling level with zero being the initial spilling
   /// level. This only applies for hash build spilling which needs recursive
