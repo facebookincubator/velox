@@ -12,10 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Build container to be used for TorchArrow.
+add_executable(velox_wave_decode_test GpuDecoderTest.cu)
 
-FROM quay.io/pypa/manylinux2014_x86_64
-ARG cpu_target
-COPY scripts/setup-velox-torcharrow.sh /
-COPY scripts/setup-helper-functions.sh /
-RUN mkdir build && ( cd build && CPU_TARGET="$cpu_target" bash /setup-velox-torcharrow.sh ) && rm -rf build
+set_target_properties(velox_wave_decode_test PROPERTIES CUDA_ARCHITECTURES
+                                                        native)
+
+add_test(velox_wave_common_test velox_wave_common_test)
+
+target_link_libraries(
+  velox_wave_decode_test
+  velox_wave_decode
+  velox_wave_common
+  velox_memory
+  velox_time
+  velox_exception
+  gtest
+  gtest_main
+  gflags::gflags
+  glog::glog
+  Folly::folly)

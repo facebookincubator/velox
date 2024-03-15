@@ -985,11 +985,12 @@ std::string IntervalDayTimeType::valueToString(int64_t value) const {
 std::string IntervalYearMonthType::valueToString(int32_t value) const {
   std::ostringstream oss;
   auto sign = "";
-  if (value < 0) {
+  int64_t longValue = value;
+  if (longValue < 0) {
     sign = "-";
-    value = -value;
+    longValue = -longValue;
   }
-  oss << fmt::format("{}{}-{}", sign, value / 12, value % 12);
+  oss << fmt::format("{}{}-{}", sign, longValue / 12, longValue % 12);
   return oss.str();
 }
 
@@ -1004,7 +1005,12 @@ std::string DateType::toString(int32_t days) const {
       days);
   TimestampToStringOptions options;
   options.mode = TimestampToStringOptions::Mode::kDateOnly;
-  return Timestamp::tmToString(tmValue, 0, options);
+  std::string result;
+  result.resize(getMaxStringLength(options));
+  const auto view =
+      Timestamp::tmToStringView(tmValue, 0, options, result.data());
+  result.resize(view.size());
+  return result;
 }
 
 int32_t DateType::toDays(folly::StringPiece in) const {

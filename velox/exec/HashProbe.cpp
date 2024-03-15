@@ -786,9 +786,7 @@ void HashProbe::clearIdentityProjectedOutput() {
 }
 
 bool HashProbe::needLastProbe() const {
-  return !skipInput_ &&
-      (isRightJoin(joinType_) || isFullJoin(joinType_) ||
-       isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_));
+  return !skipInput_ && needRightSideJoin(joinType_);
 }
 
 bool HashProbe::skipProbeOnEmptyBuild() const {
@@ -798,7 +796,8 @@ bool HashProbe::skipProbeOnEmptyBuild() const {
 }
 
 bool HashProbe::spillEnabled() const {
-  return spillConfig_.has_value();
+  return spillConfig_.has_value() &&
+      !operatorCtx_->task()->hasMixedExecutionGroup();
 }
 
 bool HashProbe::hasMoreSpillData() const {
@@ -863,6 +862,9 @@ RowVectorPtr HashProbe::getOutput() {
         prepareForSpillRestore();
         asyncWaitForHashTable();
       } else {
+        if (lastProber_ && spillEnabled()) {
+          joinBridge_->probeFinished();
+        }
         setState(ProbeOperatorState::kFinish);
       }
       return nullptr;
@@ -1383,12 +1385,7 @@ void HashProbe::noMoreInputInternal() {
     recordSpillStats();
   }
 
-  // Setup spill partition data.
   const bool hasSpillData = hasMoreSpillData();
-  if (!needLastProbe() && !hasSpillData) {
-    return;
-  }
-
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
   // The last operator to finish processing inputs is responsible for producing

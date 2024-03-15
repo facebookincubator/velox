@@ -51,8 +51,8 @@ class PrestoVectorSerde : public VectorSerde {
         bool _useLosslessTimestamp,
         common::CompressionKind _compressionKind,
         bool _nullsFirst = false)
-        : useLosslessTimestamp(_useLosslessTimestamp),
-          compressionKind(_compressionKind),
+        : VectorSerde::Options(_compressionKind),
+          useLosslessTimestamp(_useLosslessTimestamp),
           nullsFirst(_nullsFirst) {}
 
     /// Currently presto only supports millisecond precision and the serializer
@@ -61,27 +61,29 @@ class PrestoVectorSerde : public VectorSerde {
     /// currently used for spilling. Is false by default.
     bool useLosslessTimestamp{false};
 
-    common::CompressionKind compressionKind{
-        common::CompressionKind::CompressionKind_NONE};
-
     /// Serializes nulls of structs before the columns. Used to allow
     /// single pass reading of in spilling.
     ///
     /// TODO: Make Presto also serialize nulls before columns of
     /// structs.
     bool nullsFirst{false};
+
+    /// Minimum achieved compression if compression is enabled. Compressing less
+    /// than this causes subsequent compression attempts to be skipped. The more
+    /// times compression misses the target the less frequently it is tried.
+    float minCompressionRatio{0.8};
   };
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
   void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* vector,
       const folly::Range<const IndexRange*>& ranges,
       vector_size_t** sizes,
       Scratch& scratch) override;
 
   void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* vector,
       const folly::Range<const vector_size_t*> rows,
       vector_size_t** sizes,
       Scratch& scratch) override;

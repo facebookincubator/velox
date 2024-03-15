@@ -66,6 +66,8 @@ add_executable(
   MapEntriesTest.cpp
   MapFilterTest.cpp
   MapFromEntriesTest.cpp
+  MapNormalizeTest.cpp
+  MapTopNTest.cpp
   MultimapFromEntriesTest.cpp
   MapKeysAndValuesTest.cpp
   MapMatchTest.cpp

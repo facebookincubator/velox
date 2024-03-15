@@ -17,7 +17,9 @@
 
 #include <folly/Range.h>
 #include "velox/buffer/Buffer.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/Scratch.h"
+#include "velox/common/compression/Compression.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryAllocator.h"
@@ -91,6 +93,12 @@ class IterativeVectorSerializer {
   virtual void clear() {
     VELOX_UNSUPPORTED("clear");
   }
+
+  /// Returns serializer-dependent counters, e.g. about compression, data
+  /// distribution, encoding etc.
+  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() {
+    return {};
+  }
 };
 
 /// Serializer that writes a subset of rows from a single RowVector to the
@@ -128,12 +136,20 @@ class VectorSerde {
   // Lets the caller pass options to the Serde. This can be extended to add
   // custom options by each of its extended classes.
   struct Options {
-    virtual ~Options() {}
+    Options() = default;
+
+    explicit Options(common::CompressionKind _compressionKind)
+        : compressionKind(_compressionKind) {}
+
+    virtual ~Options() = default;
+
+    common::CompressionKind compressionKind{
+        common::CompressionKind::CompressionKind_NONE};
   };
 
   /// Adds the serialized size of vector at 'rows[i]' to '*sizes[i]'.
   virtual void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* /*vector*/,
       folly::Range<const vector_size_t*> rows,
       vector_size_t** sizes,
       Scratch& scratch) {
@@ -143,7 +159,7 @@ class VectorSerde {
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
   virtual void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* /*vector*/,
       const folly::Range<const IndexRange*>& ranges,
       vector_size_t** sizes,
       Scratch& scratch) {
@@ -151,7 +167,7 @@ class VectorSerde {
   }
 
   virtual void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* vector,
       const folly::Range<const IndexRange*>& ranges,
       vector_size_t** sizes) {
     Scratch scratch;
@@ -253,19 +269,19 @@ class VectorStreamGroup : public StreamArena {
 
   /// Increments sizes[i] for each ith row in 'rows' in 'vector'.
   static void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* vector,
       folly::Range<const vector_size_t*> rows,
       vector_size_t** sizes,
       Scratch& scratch);
 
   static void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* vector,
       const folly::Range<const IndexRange*>& ranges,
       vector_size_t** sizes,
       Scratch& scratch);
 
   static inline void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* vector,
       const folly::Range<const IndexRange*>& ranges,
       vector_size_t** sizes) {
     Scratch scratch;
@@ -305,6 +321,15 @@ class VectorStreamGroup : public StreamArena {
   void clear() override {
     StreamArena::clear();
     serializer_->clear();
+  }
+
+  /// Returns serializer-dependent counters, e.g. about compression, data
+  /// distribution, encoding etc.
+  std::unordered_map<std::string, RuntimeCounter> runtimeStats() {
+    if (!serializer_) {
+      return {};
+    }
+    return serializer_->runtimeStats();
   }
 
  private:

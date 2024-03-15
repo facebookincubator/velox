@@ -46,6 +46,37 @@ TEST_F(StringTest, ascii) {
   EXPECT_EQ(ascii(std::nullopt), std::nullopt);
 }
 
+TEST_F(StringTest, bitLength) {
+  auto bitLength = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int32_t>("bit_length(c0)", arg);
+  };
+
+  EXPECT_EQ(bitLength(""), 0);
+  EXPECT_EQ(bitLength(std::string("\0", 1)), 8);
+  EXPECT_EQ(bitLength("1"), 8);
+  EXPECT_EQ(bitLength("123"), 24);
+  EXPECT_EQ(bitLength("😋"), 32);
+  // Consists of five codepoints.
+  EXPECT_EQ(bitLength(kWomanFacepalmingLightSkinTone), 136);
+  EXPECT_EQ(bitLength("\U0001F408"), 32);
+}
+
+TEST_F(StringTest, bitLengthVarbinary) {
+  auto bitLength = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int32_t, std::string>(
+        "bit_length(c0)", {arg}, {VARBINARY()});
+  };
+
+  EXPECT_EQ(bitLength(""), 0);
+  EXPECT_EQ(bitLength(std::string("\0", 1)), 8);
+  EXPECT_EQ(bitLength("1"), 8);
+  EXPECT_EQ(bitLength("123"), 24);
+  EXPECT_EQ(bitLength("😋"), 32);
+  // Consists of five codepoints.
+  EXPECT_EQ(bitLength(kWomanFacepalmingLightSkinTone), 136);
+  EXPECT_EQ(bitLength("\U0001F408"), 32);
+}
+
 TEST_F(StringTest, chr) {
   auto chr = [&](std::optional<int64_t> arg) {
     return evaluateOnce<std::string>("chr(c0)", arg);
@@ -95,6 +126,7 @@ TEST_F(StringTest, lengthString) {
   EXPECT_EQ(length(std::string("\0", 1)), 1);
   EXPECT_EQ(length("1"), 1);
   EXPECT_EQ(length("😋"), 1);
+  EXPECT_EQ(length("😋😋"), 2);
   // Consists of five codepoints.
   EXPECT_EQ(length(kWomanFacepalmingLightSkinTone), 5);
   EXPECT_EQ(length("1234567890abdef"), 15);

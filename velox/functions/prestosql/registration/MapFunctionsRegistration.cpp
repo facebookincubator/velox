@@ -17,9 +17,23 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/MapConcat.h"
+#include "velox/functions/prestosql/MapNormalize.h"
+#include "velox/functions/prestosql/MapSubset.h"
+#include "velox/functions/prestosql/MapTopN.h"
 #include "velox/functions/prestosql/MultimapFromEntries.h"
 
 namespace facebook::velox::functions {
+
+namespace {
+
+template <template <class> typename TFunc, typename T>
+void registerMapSubset(const std::string& prefix) {
+  registerFunction<TFunc, Map<T, Generic<T1>>, Map<T, Generic<T1>>, Array<T>>(
+      {prefix + "map_subset"});
+}
+
+} // namespace
+
 void registerMapFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_transform_keys, prefix + "transform_keys");
@@ -48,6 +62,27 @@ void registerMapFunctions(const std::string& prefix) {
       MultimapFromEntriesFunction,
       Map<Generic<T1>, Array<Generic<T2>>>,
       Array<Row<Generic<T1>, Generic<T2>>>>({prefix + "multimap_from_entries"});
+
+  registerFunction<
+      MapTopNFunction,
+      Map<Generic<T1>, Orderable<T2>>,
+      Map<Generic<T1>, Orderable<T2>>,
+      int64_t>({prefix + "map_top_n"});
+
+  registerMapSubset<MapSubsetIntegerFunction, int32_t>(prefix);
+  registerMapSubset<MapSubsetBigintFunction, int64_t>(prefix);
+  registerMapSubset<MapSubsetVarcharFunction, Varchar>(prefix);
+
+  registerFunction<
+      MapSubsetFunction,
+      Map<Generic<T1>, Generic<T2>>,
+      Map<Generic<T1>, Generic<T2>>,
+      Array<Generic<T1>>>({prefix + "map_subset"});
+
+  registerFunction<
+      MapNormalizeFunction,
+      Map<Varchar, double>,
+      Map<Varchar, double>>({prefix + "map_normalize"});
 }
 
 void registerMapAllowingDuplicates(
