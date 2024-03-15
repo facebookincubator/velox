@@ -351,6 +351,7 @@ void SelectiveStructColumnReaderBase::getValues(
   auto* resultRow = static_cast<RowVector*>(result->get());
   resultRow->unsafeResize(rows.size());
   if (!rows.size()) {
+    resetWhenFilterAll();
     return;
   }
   if (nullsInReadRange_) {
