@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 
 namespace facebook::velox::exec::test {
@@ -237,7 +238,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::HiveBucketProperty> bucketProperty,
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind) {
+    const std::optional<common::CompressionKind> compressionKind,
+    const std::string& stripSize) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -286,12 +288,23 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   VELOX_CHECK_EQ(numPartitionColumns, partitionedBy.size());
   VELOX_CHECK_EQ(numBucketColumns, bucketedBy.size());
   VELOX_CHECK_EQ(numSortingColumns, sortedBy.size());
+
+  std::function<std::shared_ptr<dwio::common::FlushPolicy>()>
+      flushPolicyFactory = nullptr;
+  if (tableStorageFormat == dwio::common::FileFormat::DWRF) {
+    flushPolicyFactory = [&stripSize]() {
+      return std::make_shared<velox::dwrf::DefaultFlushPolicy>(
+          toCapacity(stripSize, core::CapacityUnit::BYTE), 16777216);
+    };
+  }
+
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       columnHandles,
       locationHandle,
       tableStorageFormat,
       bucketProperty,
-      compressionKind);
+      compressionKind,
+      std::move(flushPolicyFactory));
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>

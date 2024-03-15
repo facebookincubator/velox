@@ -125,7 +125,7 @@ namespace {
 
 std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     const parquet::WriterOptions& options,
-    const std::unique_ptr<DefaultFlushPolicy>& flushPolicy) {
+    const std::shared_ptr<DefaultFlushPolicy>& flushPolicy) {
   auto builder = WriterProperties::Builder();
   WriterProperties::Builder* properties = &builder;
   if (!options.enableDictionary) {
@@ -232,7 +232,7 @@ Writer::Writer(
   if (options.flushPolicyFactory) {
     flushPolicy_ = options.flushPolicyFactory();
   } else {
-    flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
+    flushPolicy_ = std::make_shared<DefaultFlushPolicy>();
   }
   arrowContext_->properties =
       getArrowParquetWriterOptions(options, flushPolicy_);
@@ -386,6 +386,19 @@ parquet::WriterOptions getParquetOptions(
   if (options.compressionKind.has_value()) {
     parquetOptions.compression = options.compressionKind.value();
   }
+
+  if (options.flushPolicyFactory) {
+    if (auto flushPolicy = options.flushPolicyFactory()) {
+      if (auto defaultFlushPolicy =
+              std::dynamic_pointer_cast<DefaultFlushPolicy>(flushPolicy)) {
+        parquetOptions.flushPolicyFactory =
+            [defaultFlushPolicy]() -> std::shared_ptr<DefaultFlushPolicy> {
+          return defaultFlushPolicy;
+        };
+      }
+    }
+  }
+
   return parquetOptions;
 }
 

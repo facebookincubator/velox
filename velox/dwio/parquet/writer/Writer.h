@@ -98,7 +98,7 @@ struct WriterOptions {
   velox::memory::MemoryPool* memoryPool;
   // The default factory allows the writer to construct the default flush
   // policy with the configs in its ctor.
-  std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicyFactory;
+  std::function<std::shared_ptr<DefaultFlushPolicy>()> flushPolicyFactory;
   std::shared_ptr<CodecOptions> codecOptions;
   std::unordered_map<std::string, common::CompressionKind>
       columnCompressionsMap;
@@ -155,7 +155,7 @@ class Writer : public dwio::common::Writer {
 
   std::shared_ptr<ArrowContext> arrowContext_;
 
-  std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
+  std::shared_ptr<DefaultFlushPolicy> flushPolicy_;
 
   const RowTypePtr schema_;
 };
