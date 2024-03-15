@@ -18,6 +18,7 @@
 #include <folly/Conv.h>
 #include <folly/container/F14Set.h>
 #include <folly/json.h>
+#include <cstddef>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/FlatMapHelper.h"
@@ -217,7 +218,8 @@ FlatMapColumnReader<T>::FlatMapColumnReader(
     : ColumnReader(fileType, stripe, streamLabels, std::move(flatMapContext)),
       requestedType_{requestedType},
       returnFlatVector_{stripe.getRowReaderOptions().getReturnFlatVector()},
-      executor_{executor} {
+      executor_{executor},
+      decodingParallelismFactor_{decodingParallelismFactor} {
   DWIO_ENSURE_EQ(fileType_->id(), fileType->id());
 
   const auto keyPredicate = prepareKeyPredicate<T>(requestedType, stripe);
@@ -408,6 +410,13 @@ void FlatMapColumnReader<T>::next(
   vector_size_t offset = 0;
   auto* offsetsPtr = offsets->asMutable<vector_size_t>();
   auto* lengthsPtr = lengths->asMutable<vector_size_t>();
+  struct CopyOneInfo {
+    size_t srcOffset;
+    size_t dstOffset;
+    const BaseVector* batch;
+  };
+  std::vector<CopyOneInfo> indicesToCopy;
+  indicesToCopy.reserve(nodeBatches.size());
   for (uint64_t i = 0; i < numValues; ++i) {
     // case for having map on this row
     offsetsPtr[i] = offset;
@@ -417,12 +426,10 @@ void FlatMapColumnReader<T>::next(
         if (bulkInMapIter.hasValueAt(j)) {
           nodes[j]->fillKeysVector(keysVector, offset, stringKeyBuffer_.get());
           if (returnFlatVector_) {
-            copyOne(
-                mapValueType,
-                *valuesVector,
-                offset,
-                *nodeBatches[j],
-                nodeIndices[j]);
+            indicesToCopy.push_back(
+                {.srcOffset = static_cast<size_t>(offset),
+                 .dstOffset = nodeIndices[j],
+                 .batch = nodeBatches[j]});
           } else {
             indicesPtr[offset] = startIndices[j] + nodeIndices[j];
           }
@@ -434,6 +441,17 @@ void FlatMapColumnReader<T>::next(
 
     lengthsPtr[i] = offset - offsetsPtr[i];
   }
+  dwio::common::ParallelFor(
+      executor_, 0, indicesToCopy.size(), decodingParallelismFactor_)
+      .execute([&](size_t index) {
+        auto& info = indicesToCopy[index];
+        copyOne(
+            mapValueType,
+            *valuesVector,
+            info.srcOffset,
+            *info.batch,
+            info.dstOffset);
+      });
 
   DWIO_ENSURE_EQ(totalChildren, offset, "fill the same amount of items");
 
