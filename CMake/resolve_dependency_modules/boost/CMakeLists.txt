@@ -67,3 +67,4 @@ FetchContent_MakeAvailable(Boost)
 
 list(TRANSFORM BOOST_HEADER_ONLY PREPEND Boost::)
 target_link_libraries(boost_headers INTERFACE ${BOOST_HEADER_ONLY})
+add_library(Boost::headers ALIAS boost_headers)
