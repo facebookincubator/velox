@@ -298,44 +298,47 @@ TEST_F(StringTest, lpad) {
   std::string invalidPadString = "\xFFΨ\xFF";
 
   auto lpad = [&](std::optional<std::string> string,
-                  std::optional<int32_t> size,
-                  std::optional<std::string> padString) {
-    return evaluateOnce<std::string>(
-        "lpad(c0, c1, c2)", string, size, padString);
-  };
-
-  auto lpad = [&](std::optional<std::string> string,
                   std::optional<int32_t> size) {
     return evaluateOnce<std::string>("lpad(c0, c1)", string, size);
   };
 
-  // ASCII strings with various values for size and padString
-  EXPECT_EQ("xtext", lpad("text", 5, "x"));
-  EXPECT_EQ("text", lpad("text", 4, "x"));
-  EXPECT_EQ("xyxtext", lpad("text", 7, "xy"));
+  auto lpadWithPadString = [&](std::optional<std::string> string,
+                               std::optional<int32_t> size,
+                               std::optional<std::string> padString) {
+    return evaluateOnce<std::string>(
+        "lpad(c0, c1, c2)", string, size, padString);
+  };
+
   EXPECT_EQ("  text", lpad("text", 6));
+
+  // ASCII strings with various values for size and padString
+  EXPECT_EQ("xtext", lpadWithPadString("text", 5, "x"));
+  EXPECT_EQ("text", lpadWithPadString("text", 4, "x"));
+  EXPECT_EQ("xyxtext", lpadWithPadString("text", 7, "xy"));
 
   // Non-ASCII strings with various values for size and padString
   EXPECT_EQ(
       "\u671B\u671B\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
-      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 11, "\u671B"));
+      lpadWithPadString("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 11, "\u671B"));
   EXPECT_EQ(
       "\u5E0C\u671B\u5E0C\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
-      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 12, "\u5E0C\u671B"));
+      lpadWithPadString(
+          "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 12, "\u5E0C\u671B"));
 
   // Empty string
-  EXPECT_EQ("aaa", lpad("", 3, "a"));
+  EXPECT_EQ("aaa", lpadWithPadString("", 3, "a"));
 
   // Truncating string
-  EXPECT_EQ("", lpad("abc", 0, "e"));
-  EXPECT_EQ("tex", lpad("text", 3, "xy"));
+  EXPECT_EQ("", lpadWithPadString("abc", 0, "e"));
+  EXPECT_EQ("tex", lpadWithPadString("text", 3, "xy"));
   EXPECT_EQ(
       "\u4FE1\u5FF5 \u7231 ",
-      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 5, "\u671B"));
+      lpadWithPadString("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 5, "\u671B"));
 
   // Invalid UTF-8 chars
-  EXPECT_EQ("x" + invalidString, lpad(invalidString, 8, "x"));
-  EXPECT_EQ(invalidPadString + "abc", lpad("abc", 6, invalidPadString));
+  EXPECT_EQ("x" + invalidString, lpadWithPadString(invalidString, 8, "x"));
+  EXPECT_EQ(
+      invalidPadString + "abc", lpadWithPadString("abc", 6, invalidPadString));
 }
 
 TEST_F(StringTest, ltrim) {
@@ -343,8 +346,8 @@ TEST_F(StringTest, ltrim) {
     return evaluateOnce<std::string>("ltrim(c0)", srcStr);
   };
 
-  auto ltrim = [&](std::optional<std::string> trimStr,
-                   std::optional<std::string> srcStr) {
+  auto ltrimWithTrimStr = [&](std::optional<std::string> trimStr,
+                              std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("ltrim(c0, c1)", trimStr, srcStr);
   };
 
@@ -358,21 +361,25 @@ TEST_F(StringTest, ltrim) {
   EXPECT_EQ(ltrim("\u6570\u636E\t "), "\u6570\u636E\t ");
   EXPECT_EQ(ltrim("\u6570\u636E\t"), "\u6570\u636E\t");
 
-  EXPECT_EQ(ltrim("", ""), "");
-  EXPECT_EQ(ltrim("", "srcStr"), "srcStr");
-  EXPECT_EQ(ltrim("trimStr", ""), "");
-  EXPECT_EQ(ltrim("data!egr< >int", "integer data!"), "");
-  EXPECT_EQ(ltrim("int", "integer data!"), "eger data!");
-  EXPECT_EQ(ltrim("!!at", "integer data!"), "integer data!");
-  EXPECT_EQ(ltrim("a", "integer data!"), "integer data!");
+  EXPECT_EQ(ltrimWithTrimStr("", ""), "");
+  EXPECT_EQ(ltrimWithTrimStr("", "srcStr"), "srcStr");
+  EXPECT_EQ(ltrimWithTrimStr("trimStr", ""), "");
+  EXPECT_EQ(ltrimWithTrimStr("data!egr< >int", "integer data!"), "");
+  EXPECT_EQ(ltrimWithTrimStr("int", "integer data!"), "eger data!");
+  EXPECT_EQ(ltrimWithTrimStr("!!at", "integer data!"), "integer data!");
+  EXPECT_EQ(ltrimWithTrimStr("a", "integer data!"), "integer data!");
   EXPECT_EQ(
-      ltrim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
-  EXPECT_EQ(ltrim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"), "\u636E!");
+      ltrimWithTrimStr(
+          "\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"),
+      "");
   EXPECT_EQ(
-      ltrim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"),
+      ltrimWithTrimStr(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"),
+      "\u636E!");
+  EXPECT_EQ(
+      ltrimWithTrimStr("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"),
       "\u6574\u6570 \u6570\u636E!");
   EXPECT_EQ(
-      ltrim("\u6570", "\u6574\u6570 \u6570\u636E!"),
+      ltrimWithTrimStr("\u6570", "\u6574\u6570 \u6570\u636E!"),
       "\u6574\u6570 \u6570\u636E!");
 }
 
