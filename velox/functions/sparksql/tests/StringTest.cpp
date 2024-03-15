@@ -456,23 +456,23 @@ TEST_F(StringTest, replace) {
     return evaluateOnce<std::string>("replace(c0, c1)", str, replaced);
   };
 
-  auto replace = [&](std::optional<std::string> str,
-                     std::optional<std::string> replaced,
-                     std::optional<std::string> replacement) {
+  auto replaceWithReplacement = [&](std::optional<std::string> str,
+                                    std::optional<std::string> replaced,
+                                    std::optional<std::string> replacement) {
     return evaluateOnce<std::string>(
         "replace(c0, c1, c2)", str, replaced, replacement);
   };
   EXPECT_EQ(replace("aaabaac", "a"), "bc");
   EXPECT_EQ(replace("aaabaac", ""), "aaabaac");
-  EXPECT_EQ(replace("aaabaac", "a", "z"), "zzzbzzc");
-  EXPECT_EQ(replace("aaabaac", "", "z"), "aaabaac");
-  EXPECT_EQ(replace("aaabaac", "a", ""), "bc");
-  EXPECT_EQ(replace("aaabaac", "x", "z"), "aaabaac");
-  EXPECT_EQ(replace("aaabaac", "aaa", "z"), "zbaac");
-  EXPECT_EQ(replace("aaabaac", "a", "xyz"), "xyzxyzxyzbxyzxyzc");
-  EXPECT_EQ(replace("aaabaac", "aaabaac", "z"), "z");
+  EXPECT_EQ(replaceWithReplacement("aaabaac", "a", "z"), "zzzbzzc");
+  EXPECT_EQ(replaceWithReplacement("aaabaac", "", "z"), "aaabaac");
+  EXPECT_EQ(replaceWithReplacement("aaabaac", "a", ""), "bc");
+  EXPECT_EQ(replaceWithReplacement("aaabaac", "x", "z"), "aaabaac");
+  EXPECT_EQ(replaceWithReplacement("aaabaac", "aaa", "z"), "zbaac");
+  EXPECT_EQ(replaceWithReplacement("aaabaac", "a", "xyz"), "xyzxyzxyzbxyzxyzc");
+  EXPECT_EQ(replaceWithReplacement("aaabaac", "aaabaac", "z"), "z");
   EXPECT_EQ(
-      replace("123\u6570\u6570\u636E", "\u6570\u636E", "data"),
+      replaceWithReplacement("123\u6570\u6570\u636E", "\u6570\u636E", "data"),
       "123\u6570data");
 }
 
@@ -526,8 +526,8 @@ TEST_F(StringTest, rtrim) {
     return evaluateOnce<std::string>("rtrim(c0)", srcStr);
   };
 
-  auto rtrim = [&](std::optional<std::string> trimStr,
-                   std::optional<std::string> srcStr) {
+  auto rtrimWithTrimStr = [&](std::optional<std::string> trimStr,
+                              std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("rtrim(c0, c1)", trimStr, srcStr);
   };
   EXPECT_EQ(rtrim(""), "");
@@ -540,21 +540,25 @@ TEST_F(StringTest, rtrim) {
   EXPECT_EQ(rtrim("\u6570\u636E\t "), "\u6570\u636E\t");
   EXPECT_EQ(rtrim("\u6570\u636E\t"), "\u6570\u636E\t");
 
-  EXPECT_EQ(rtrim("", ""), "");
-  EXPECT_EQ(rtrim("", "srcStr"), "srcStr");
-  EXPECT_EQ(rtrim("trimStr", ""), "");
-  EXPECT_EQ(rtrim("data!egr< >int", "integer data!"), "");
-  EXPECT_EQ(rtrim("int", "integer data!"), "integer data!");
-  EXPECT_EQ(rtrim("!!at", "integer data!"), "integer d");
-  EXPECT_EQ(rtrim("a", "integer data!"), "integer data!");
+  EXPECT_EQ(rtrimWithTrimStr("", ""), "");
+  EXPECT_EQ(rtrimWithTrimStr("", "srcStr"), "srcStr");
+  EXPECT_EQ(rtrimWithTrimStr("trimStr", ""), "");
+  EXPECT_EQ(rtrimWithTrimStr("data!egr< >int", "integer data!"), "");
+  EXPECT_EQ(rtrimWithTrimStr("int", "integer data!"), "integer data!");
+  EXPECT_EQ(rtrimWithTrimStr("!!at", "integer data!"), "integer d");
+  EXPECT_EQ(rtrimWithTrimStr("a", "integer data!"), "integer data!");
   EXPECT_EQ(
-      rtrim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
+      rtrimWithTrimStr(
+          "\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"),
+      "");
   EXPECT_EQ(
-      rtrim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"),
+      rtrimWithTrimStr(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"),
       "\u6574\u6570 \u6570\u636E!");
-  EXPECT_EQ(rtrim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"), "\u6574");
   EXPECT_EQ(
-      rtrim("\u6570", "\u6574\u6570 \u6570\u636E!"),
+      rtrimWithTrimStr("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574");
+  EXPECT_EQ(
+      rtrimWithTrimStr("\u6570", "\u6574\u6570 \u6570\u636E!"),
       "\u6574\u6570 \u6570\u636E!");
 }
 
