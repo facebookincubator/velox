@@ -21,9 +21,12 @@
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
-// This is a five codepoint sequence that renders as a single emoji.
-static constexpr char kWomanFacepalmingLightSkinTone[] =
-    "\xF0\x9F\xA4\xA6\xF0\x9F\x8F\xBB\xE2\x80\x8D\xE2\x99\x80\xEF\xB8\x8F";
+class StringTest : public SparkFunctionBaseTest {
+ protected:
+  // This is a five codepoint sequence that renders as a single emoji.
+  static constexpr char kWomanFacepalmingLightSkinTone[] =
+      "\xF0\x9F\xA4\xA6\xF0\x9F\x8F\xBB\xE2\x80\x8D\xE2\x99\x80\xEF\xB8\x8F";
+};
 
 TEST_F(StringTest, ascii) {
   auto ascii = [&](std::optional<std::string> arg) {
@@ -94,6 +97,135 @@ TEST_F(StringTest, chr) {
   EXPECT_EQ(chr(std::nullopt), std::nullopt);
 }
 
+TEST_F(StringTest, contains) {
+  auto contains = [&](const std::optional<std::string>& str,
+                      const std::optional<std::string>& pattern) {
+    return evaluateOnce<bool>("contains(c0, c1)", str, pattern);
+  };
+  EXPECT_EQ(contains("hello", "ello"), true);
+  EXPECT_EQ(contains("hello", "hell"), true);
+  EXPECT_EQ(contains("hello", "hello there!"), false);
+  EXPECT_EQ(contains("hello there!", "hello"), true);
+  EXPECT_EQ(contains("hello there!", ""), true);
+  EXPECT_EQ(contains("-- hello there!", std::nullopt), std::nullopt);
+  EXPECT_EQ(contains(std::nullopt, "abc"), std::nullopt);
+}
+
+TEST_F(StringTest, conv) {
+  auto conv = [&](std::optional<std::string> str,
+                  std::optional<int32_t> fromBase,
+                  std::optional<int32_t> toBase) {
+    return evaluateOnce<std::string>("conv(c0, c1, c2)", str, fromBase, toBase);
+  };
+  EXPECT_EQ(conv("4", 10, 2), "100");
+  EXPECT_EQ(conv("110", 2, 10), "6");
+  EXPECT_EQ(conv("15", 10, 16), "F");
+  EXPECT_EQ(conv("15", 10, -16), "F");
+  EXPECT_EQ(conv("big", 36, 16), "3A48");
+  EXPECT_EQ(conv("-15", 10, -16), "-F");
+  EXPECT_EQ(conv("-10", 16, -10), "-16");
+
+  // Overflow case.
+  EXPECT_EQ(
+      conv("-9223372036854775809", 10, -2),
+      "-111111111111111111111111111111111111111111111111111111111111111");
+  EXPECT_EQ(
+      conv("-9223372036854775808", 10, -2),
+      "-1000000000000000000000000000000000000000000000000000000000000000");
+  EXPECT_EQ(
+      conv("9223372036854775808", 10, -2),
+      "-1000000000000000000000000000000000000000000000000000000000000000");
+  EXPECT_EQ(
+      conv("8000000000000000", 16, -2),
+      "-1000000000000000000000000000000000000000000000000000000000000000");
+  EXPECT_EQ(conv("-1", 10, 16), "FFFFFFFFFFFFFFFF");
+  EXPECT_EQ(conv("FFFFFFFFFFFFFFFF", 16, -10), "-1");
+  EXPECT_EQ(conv("-FFFFFFFFFFFFFFFF", 16, -10), "-1");
+  EXPECT_EQ(conv("-FFFFFFFFFFFFFFFF", 16, 10), "18446744073709551615");
+  EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
+  EXPECT_EQ(conv("9223372036854775807", 36, 16), "FFFFFFFFFFFFFFFF");
+
+  // Leading and trailing spaces.
+  EXPECT_EQ(conv("15 ", 10, 16), "F");
+  EXPECT_EQ(conv(" 15 ", 10, 16), "F");
+
+  // Invalid characters.
+  // Only converts "11".
+  EXPECT_EQ(conv("11abc", 10, 16), "B");
+  // Only converts "F".
+  EXPECT_EQ(conv("FH", 16, 10), "15");
+  // Discards followed invalid character even though converting to same base.
+  EXPECT_EQ(conv("11abc", 10, 10), "11");
+  EXPECT_EQ(conv("FH", 16, 16), "F");
+  // Begins with invalid character.
+  EXPECT_EQ(conv("HF", 16, 10), "0");
+  // All are invalid for binary base.
+  EXPECT_EQ(conv("2345", 2, 10), "0");
+
+  // Negative symbol only.
+  EXPECT_EQ(conv("-", 10, 16), "0");
+
+  // Null result.
+  EXPECT_EQ(conv("", 10, 16), std::nullopt);
+  EXPECT_EQ(conv(" ", 10, 16), std::nullopt);
+  EXPECT_EQ(conv("", std::nullopt, 16), std::nullopt);
+  EXPECT_EQ(conv("", 10, std::nullopt), std::nullopt);
+}
+
+TEST_F(StringTest, endsWith) {
+  auto endsWith = [&](const std::optional<std::string>& str,
+                      const std::optional<std::string>& pattern) {
+    return evaluateOnce<bool>("endsWith(c0, c1)", str, pattern);
+  };
+  EXPECT_EQ(endsWith("hello", "ello"), true);
+  EXPECT_EQ(endsWith("hello", "hell"), false);
+  EXPECT_EQ(endsWith("hello", "hello there!"), false);
+  EXPECT_EQ(endsWith("hello there!", "hello"), false);
+  EXPECT_EQ(endsWith("hello there!", "!"), true);
+  EXPECT_EQ(endsWith("hello there!", "there!"), true);
+  EXPECT_EQ(endsWith("hello there!", "hello there!"), true);
+  EXPECT_EQ(endsWith("hello there!", ""), true);
+  EXPECT_EQ(endsWith("hello there!", "hello there"), false);
+  EXPECT_EQ(endsWith("-- hello there!", "hello there"), false);
+  EXPECT_EQ(endsWith("-- hello there!", std::nullopt), std::nullopt);
+  EXPECT_EQ(endsWith(std::nullopt, "abc"), std::nullopt);
+}
+
+TEST_F(StringTest, findInSet) {
+  auto findInSet = [&](std::optional<std::string> str,
+                       std::optional<std::string> strArray) {
+    return evaluateOnce<int32_t>("find_in_set(c0, c1)", str, strArray);
+  };
+  EXPECT_EQ(findInSet("ab", "abc,b,ab,c,def"), 3);
+  EXPECT_EQ(findInSet("abc", "abc,b,ab,c,def"), 1);
+  EXPECT_EQ(findInSet("ab,", "abc,b,ab,c,def"), 0);
+  EXPECT_EQ(findInSet("ab", "abc,b,ab,ab,ab"), 3);
+  EXPECT_EQ(findInSet("abc", "abc,abc,abc,abc,abc"), 1);
+  EXPECT_EQ(findInSet("c", "abc,b,ab,c,def"), 4);
+  EXPECT_EQ(findInSet("dfg", "abc,b,ab,c,def"), 0);
+  EXPECT_EQ(findInSet("dfg", "dfgdsiaq"), 0);
+  EXPECT_EQ(findInSet("dfg", "dfgdsiaq, dshadad"), 0);
+  EXPECT_EQ(findInSet("", ""), 1);
+  EXPECT_EQ(findInSet("", "123"), 0);
+  EXPECT_EQ(findInSet("123", ""), 0);
+  EXPECT_EQ(findInSet("", "123,"), 2);
+  EXPECT_EQ(findInSet("", ",123"), 1);
+  EXPECT_EQ(findInSet("dfg", std::nullopt), std::nullopt);
+  EXPECT_EQ(findInSet(std::nullopt, "abc"), std::nullopt);
+  EXPECT_EQ(findInSet(std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(findInSet("\u0061\u0062", "abc,b,ab,c,def"), 3);
+  EXPECT_EQ(findInSet("\u0063", "abc,b,ab,c,def"), 4);
+  EXPECT_EQ(findInSet("", "\u002c\u0031\u0032\u0033"), 1);
+  EXPECT_EQ(findInSet("123", "\u002c\u0031\u0032\u0033"), 2);
+  EXPECT_EQ(findInSet("😊", "🌍,😊"), 2);
+  EXPECT_EQ(findInSet("😊", "😊,123"), 1);
+  EXPECT_EQ(findInSet("abåæçè", ",abåæçè"), 2);
+  EXPECT_EQ(findInSet("abåæçè", "abåæçè,"), 1);
+  EXPECT_EQ(findInSet("\u0061\u0062\u00e5\u00e6\u00e7\u00e8", ",abåæçè"), 2);
+  EXPECT_EQ(
+      findInSet("abåæçè", "\u002c\u0061\u0062\u00e5\u00e6\u00e7\u00e8"), 2);
+}
+
 TEST_F(StringTest, instr) {
   auto instr = [&](std::optional<std::string> haystack,
                    std::optional<std::string> needle) {
@@ -116,6 +248,22 @@ TEST_F(StringTest, instr) {
   EXPECT_EQ(
       instr(std::string(kWomanFacepalmingLightSkinTone) + "abc😋def", "def"),
       10);
+}
+
+TEST_F(StringTest, left) {
+  auto left = [&](std::optional<std::string> str,
+                  std::optional<int32_t> length) {
+    return evaluateOnce<std::string>("left(c0, c1)", str, length);
+  };
+  EXPECT_EQ(left("example", -2), "");
+  EXPECT_EQ(left("example", 0), "");
+  EXPECT_EQ(left("example", 2), "ex");
+  EXPECT_EQ(left("example", 7), "example");
+  EXPECT_EQ(left("example", 20), "example");
+
+  EXPECT_EQ(left("da\u6570\u636Eta", 2), "da");
+  EXPECT_EQ(left("da\u6570\u636Eta", 3), "da\u6570");
+  EXPECT_EQ(left("da\u6570\u636Eta", 30), "da\u6570\u636Eta");
 }
 
 TEST_F(StringTest, lengthString) {
@@ -145,6 +293,89 @@ TEST_F(StringTest, lengthVarbinary) {
   EXPECT_EQ(length("1234567890abdef"), 15);
 }
 
+TEST_F(StringTest, lpad) {
+  std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
+  std::string invalidPadString = "\xFFΨ\xFF";
+
+  auto lpad = [&](std::optional<std::string> string,
+                  std::optional<int32_t> size,
+                  std::optional<std::string> padString) {
+    return evaluateOnce<std::string>(
+        "lpad(c0, c1, c2)", string, size, padString);
+  };
+
+  auto lpad = [&](std::optional<std::string> string,
+                  std::optional<int32_t> size) {
+    return evaluateOnce<std::string>("lpad(c0, c1)", string, size);
+  };
+
+  // ASCII strings with various values for size and padString
+  EXPECT_EQ("xtext", lpad("text", 5, "x"));
+  EXPECT_EQ("text", lpad("text", 4, "x"));
+  EXPECT_EQ("xyxtext", lpad("text", 7, "xy"));
+  EXPECT_EQ("  text", lpad("text", 6));
+
+  // Non-ASCII strings with various values for size and padString
+  EXPECT_EQ(
+      "\u671B\u671B\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
+      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 11, "\u671B"));
+  EXPECT_EQ(
+      "\u5E0C\u671B\u5E0C\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
+      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 12, "\u5E0C\u671B"));
+
+  // Empty string
+  EXPECT_EQ("aaa", lpad("", 3, "a"));
+
+  // Truncating string
+  EXPECT_EQ("", lpad("abc", 0, "e"));
+  EXPECT_EQ("tex", lpad("text", 3, "xy"));
+  EXPECT_EQ(
+      "\u4FE1\u5FF5 \u7231 ",
+      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 5, "\u671B"));
+
+  // Invalid UTF-8 chars
+  EXPECT_EQ("x" + invalidString, lpad(invalidString, 8, "x"));
+  EXPECT_EQ(invalidPadString + "abc", lpad("abc", 6, invalidPadString));
+}
+
+TEST_F(StringTest, ltrim) {
+  auto ltrim = [&](std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("ltrim(c0)", srcStr);
+  };
+
+  auto ltrim = [&](std::optional<std::string> trimStr,
+                   std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("ltrim(c0, c1)", trimStr, srcStr);
+  };
+
+  EXPECT_EQ(ltrim(""), "");
+  EXPECT_EQ(ltrim("  data\t "), "data\t ");
+  EXPECT_EQ(ltrim("  data\t"), "data\t");
+  EXPECT_EQ(ltrim("data\t "), "data\t ");
+  EXPECT_EQ(ltrim("data\t"), "data\t");
+  EXPECT_EQ(ltrim("  \u6570\u636E\t "), "\u6570\u636E\t ");
+  EXPECT_EQ(ltrim("  \u6570\u636E\t"), "\u6570\u636E\t");
+  EXPECT_EQ(ltrim("\u6570\u636E\t "), "\u6570\u636E\t ");
+  EXPECT_EQ(ltrim("\u6570\u636E\t"), "\u6570\u636E\t");
+
+  EXPECT_EQ(ltrim("", ""), "");
+  EXPECT_EQ(ltrim("", "srcStr"), "srcStr");
+  EXPECT_EQ(ltrim("trimStr", ""), "");
+  EXPECT_EQ(ltrim("data!egr< >int", "integer data!"), "");
+  EXPECT_EQ(ltrim("int", "integer data!"), "eger data!");
+  EXPECT_EQ(ltrim("!!at", "integer data!"), "integer data!");
+  EXPECT_EQ(ltrim("a", "integer data!"), "integer data!");
+  EXPECT_EQ(
+      ltrim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
+  EXPECT_EQ(ltrim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"), "\u636E!");
+  EXPECT_EQ(
+      ltrim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574\u6570 \u6570\u636E!");
+  EXPECT_EQ(
+      ltrim("\u6570", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574\u6570 \u6570\u636E!");
+}
+
 TEST_F(StringTest, md5) {
   auto md5 = [&](std::optional<std::string> arg) {
     return evaluateOnce<std::string, std::string>(
@@ -153,6 +384,171 @@ TEST_F(StringTest, md5) {
   EXPECT_EQ(md5(std::nullopt), std::nullopt);
   EXPECT_EQ(md5(""), "d41d8cd98f00b204e9800998ecf8427e");
   EXPECT_EQ(md5("Infinity"), "eb2ac5b04180d8d6011a016aeb8f75b3");
+}
+
+TEST_F(StringTest, overlayVarchar) {
+  auto overlay = [&](std::optional<std::string> input,
+                     std::optional<std::string> replace,
+                     std::optional<int32_t> pos,
+                     std::optional<int32_t> len) {
+    // overlay is a keyword of DuckDB, use double quote avoid parse error.
+    return evaluateOnce<std::string>(
+        "\"overlay\"(c0, c1, c2, c3)", input, replace, pos, len);
+  };
+  EXPECT_EQ(overlay("Spark\u6570\u636ESQL", "_", 6, -1), "Spark_\u636ESQL");
+  EXPECT_EQ(
+      overlay("Spark\u6570\u636ESQL", "_", 6, 0), "Spark_\u6570\u636ESQL");
+  EXPECT_EQ(overlay("Spark\u6570\u636ESQL", "_", -6, 2), "_\u636ESQL");
+
+  EXPECT_EQ(overlay("Spark SQL", "_", 6, -1), "Spark_SQL");
+  EXPECT_EQ(overlay("Spark SQL", "CORE", 7, -1), "Spark CORE");
+  EXPECT_EQ(overlay("Spark SQL", "ANSI ", 7, 0), "Spark ANSI SQL");
+  EXPECT_EQ(overlay("Spark SQL", "tructured", 2, 4), "Structured SQL");
+
+  EXPECT_EQ(overlay("Spark SQL", "##", 10, -1), "Spark SQL##");
+  EXPECT_EQ(overlay("Spark SQL", "##", 10, 4), "Spark SQL##");
+  EXPECT_EQ(overlay("Spark SQL", "##", 0, -1), "##park SQL");
+  EXPECT_EQ(overlay("Spark SQL", "##", 0, 4), "##rk SQL");
+  EXPECT_EQ(overlay("Spark SQL", "##", -10, -1), "##park SQL");
+  EXPECT_EQ(overlay("Spark SQL", "##", -10, 4), "##rk SQL");
+}
+
+TEST_F(StringTest, overlayVarbinary) {
+  auto overlay = [&](std::optional<std::string> input,
+                     std::optional<std::string> replace,
+                     std::optional<int32_t> pos,
+                     std::optional<int32_t> len) {
+    // overlay is a keyword of DuckDB, use double quote avoid parse error.
+    return evaluateOnce<std::string>(
+        "\"overlay\"(cast(c0 as varbinary), cast(c1 as varbinary), c2, c3)",
+        input,
+        replace,
+        pos,
+        len);
+  };
+  EXPECT_EQ(overlay("Spark\x65\x20SQL", "_", 6, -1), "Spark_\x20SQL");
+  EXPECT_EQ(overlay("Spark\x65\x20SQL", "_", 6, 0), "Spark_\x65\x20SQL");
+  EXPECT_EQ(overlay("Spark\x65\x20SQL", "_", -6, 2), "_\x20SQL");
+
+  EXPECT_EQ(overlay("Spark SQL", "_", 6, -1), "Spark_SQL");
+  EXPECT_EQ(overlay("Spark SQL", "CORE", 7, -1), "Spark CORE");
+  EXPECT_EQ(overlay("Spark SQL", "ANSI ", 7, 0), "Spark ANSI SQL");
+  EXPECT_EQ(overlay("Spark SQL", "tructured", 2, 4), "Structured SQL");
+
+  EXPECT_EQ(overlay("Spark SQL", "##", 10, -1), "Spark SQL##");
+  EXPECT_EQ(overlay("Spark SQL", "##", 10, 4), "Spark SQL##");
+  EXPECT_EQ(overlay("Spark SQL", "##", 0, -1), "##park SQL");
+  EXPECT_EQ(overlay("Spark SQL", "##", 0, 4), "##rk SQL");
+  EXPECT_EQ(overlay("Spark SQL", "##", -10, -1), "##park SQL");
+  EXPECT_EQ(overlay("Spark SQL", "##", -10, 4), "##rk SQL");
+}
+
+TEST_F(StringTest, replace) {
+  auto replace = [&](std::optional<std::string> str,
+                     std::optional<std::string> replaced) {
+    return evaluateOnce<std::string>("replace(c0, c1)", str, replaced);
+  };
+
+  auto replace = [&](std::optional<std::string> str,
+                     std::optional<std::string> replaced,
+                     std::optional<std::string> replacement) {
+    return evaluateOnce<std::string>(
+        "replace(c0, c1, c2)", str, replaced, replacement);
+  };
+  EXPECT_EQ(replace("aaabaac", "a"), "bc");
+  EXPECT_EQ(replace("aaabaac", ""), "aaabaac");
+  EXPECT_EQ(replace("aaabaac", "a", "z"), "zzzbzzc");
+  EXPECT_EQ(replace("aaabaac", "", "z"), "aaabaac");
+  EXPECT_EQ(replace("aaabaac", "a", ""), "bc");
+  EXPECT_EQ(replace("aaabaac", "x", "z"), "aaabaac");
+  EXPECT_EQ(replace("aaabaac", "aaa", "z"), "zbaac");
+  EXPECT_EQ(replace("aaabaac", "a", "xyz"), "xyzxyzxyzbxyzxyzc");
+  EXPECT_EQ(replace("aaabaac", "aaabaac", "z"), "z");
+  EXPECT_EQ(
+      replace("123\u6570\u6570\u636E", "\u6570\u636E", "data"),
+      "123\u6570data");
+}
+
+TEST_F(StringTest, rpad) {
+  const std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
+  const std::string invalidPadString = "\xFFΨ\xFF";
+
+  auto rpad = [&](std::optional<std::string> string,
+                  std::optional<int32_t> size,
+                  std::optional<std::string> padString) {
+    return evaluateOnce<std::string>(
+        "rpad(c0, c1, c2)", string, size, padString);
+  };
+
+  auto rpad = [&](std::optional<std::string> string,
+                  std::optional<int32_t> size) {
+    return evaluateOnce<std::string>("rpad(c0, c1)", string, size);
+  };
+
+  // ASCII strings with various values for size and padString
+  EXPECT_EQ("textx", rpad("text", 5, "x"));
+  EXPECT_EQ("text", rpad("text", 4, "x"));
+  EXPECT_EQ("textxyx", rpad("text", 7, "xy"));
+  EXPECT_EQ("text  ", rpad("text", 6));
+
+  // Non-ASCII strings with various values for size and padString
+  EXPECT_EQ(
+      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  \u671B\u671B",
+      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 11, "\u671B"));
+  EXPECT_EQ(
+      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  \u5E0C\u671B\u5E0C",
+      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 12, "\u5E0C\u671B"));
+
+  // Empty string
+  EXPECT_EQ("aaa", rpad("", 3, "a"));
+
+  // Truncating string
+  EXPECT_EQ("", rpad("abc", 0, "e"));
+  EXPECT_EQ("tex", rpad("text", 3, "xy"));
+  EXPECT_EQ(
+      "\u4FE1\u5FF5 \u7231 ",
+      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 5, "\u671B"));
+
+  // Invalid UTF-8 chars
+  EXPECT_EQ(invalidString + "x", rpad(invalidString, 8, "x"));
+  EXPECT_EQ("abc" + invalidPadString, rpad("abc", 6, invalidPadString));
+}
+
+TEST_F(StringTest, rtrim) {
+  auto rtrim = [&](std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("rtrim(c0)", srcStr);
+  };
+
+  auto rtrim = [&](std::optional<std::string> trimStr,
+                   std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("rtrim(c0, c1)", trimStr, srcStr);
+  };
+  EXPECT_EQ(rtrim(""), "");
+  EXPECT_EQ(rtrim("  data\t "), "  data\t");
+  EXPECT_EQ(rtrim("  data\t"), "  data\t");
+  EXPECT_EQ(rtrim("data\t "), "data\t");
+  EXPECT_EQ(rtrim("data\t"), "data\t");
+  EXPECT_EQ(rtrim("  \u6570\u636E\t "), "  \u6570\u636E\t");
+  EXPECT_EQ(rtrim("  \u6570\u636E\t"), "  \u6570\u636E\t");
+  EXPECT_EQ(rtrim("\u6570\u636E\t "), "\u6570\u636E\t");
+  EXPECT_EQ(rtrim("\u6570\u636E\t"), "\u6570\u636E\t");
+
+  EXPECT_EQ(rtrim("", ""), "");
+  EXPECT_EQ(rtrim("", "srcStr"), "srcStr");
+  EXPECT_EQ(rtrim("trimStr", ""), "");
+  EXPECT_EQ(rtrim("data!egr< >int", "integer data!"), "");
+  EXPECT_EQ(rtrim("int", "integer data!"), "integer data!");
+  EXPECT_EQ(rtrim("!!at", "integer data!"), "integer d");
+  EXPECT_EQ(rtrim("a", "integer data!"), "integer data!");
+  EXPECT_EQ(
+      rtrim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
+  EXPECT_EQ(
+      rtrim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574\u6570 \u6570\u636E!");
+  EXPECT_EQ(rtrim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"), "\u6574");
+  EXPECT_EQ(
+      rtrim("\u6570", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574\u6570 \u6570\u636E!");
 }
 
 TEST_F(StringTest, sha1) {
@@ -246,185 +642,6 @@ TEST_F(StringTest, startsWith) {
   EXPECT_EQ(startsWith(std::nullopt, "abc"), std::nullopt);
 }
 
-TEST_F(StringTest, contains) {
-  auto contains = [&](const std::optional<std::string>& str,
-                      const std::optional<std::string>& pattern) {
-    return evaluateOnce<bool>("contains(c0, c1)", str, pattern);
-  };
-  EXPECT_EQ(contains("hello", "ello"), true);
-  EXPECT_EQ(contains("hello", "hell"), true);
-  EXPECT_EQ(contains("hello", "hello there!"), false);
-  EXPECT_EQ(contains("hello there!", "hello"), true);
-  EXPECT_EQ(contains("hello there!", ""), true);
-  EXPECT_EQ(contains("-- hello there!", std::nullopt), std::nullopt);
-  EXPECT_EQ(contains(std::nullopt, "abc"), std::nullopt);
-}
-
-TEST_F(StringTest, endsWith) {
-  auto endsWith = [&](const std::optional<std::string>& str,
-                      const std::optional<std::string>& pattern) {
-    return evaluateOnce<bool>("endsWith(c0, c1)", str, pattern);
-  };
-  EXPECT_EQ(endsWith("hello", "ello"), true);
-  EXPECT_EQ(endsWith("hello", "hell"), false);
-  EXPECT_EQ(endsWith("hello", "hello there!"), false);
-  EXPECT_EQ(endsWith("hello there!", "hello"), false);
-  EXPECT_EQ(endsWith("hello there!", "!"), true);
-  EXPECT_EQ(endsWith("hello there!", "there!"), true);
-  EXPECT_EQ(endsWith("hello there!", "hello there!"), true);
-  EXPECT_EQ(endsWith("hello there!", ""), true);
-  EXPECT_EQ(endsWith("hello there!", "hello there"), false);
-  EXPECT_EQ(endsWith("-- hello there!", "hello there"), false);
-  EXPECT_EQ(endsWith("-- hello there!", std::nullopt), std::nullopt);
-  EXPECT_EQ(endsWith(std::nullopt, "abc"), std::nullopt);
-}
-
-TEST_F(StringTest, substringIndex) {
-  auto substringIndex =
-      [&](const std::string& str, const std::string& delim, int32_t count) {
-        return evaluateOnce<std::string, std::string, std::string, int32_t>(
-            "substring_index(c0, c1, c2)", str, delim, count);
-      };
-  EXPECT_EQ(substringIndex("www.apache.org", ".", 3), "www.apache.org");
-  EXPECT_EQ(substringIndex("www.apache.org", ".", 2), "www.apache");
-  EXPECT_EQ(substringIndex("www.apache.org", ".", 1), "www");
-  EXPECT_EQ(substringIndex("www.apache.org", ".", 0), "");
-  EXPECT_EQ(substringIndex("www.apache.org", ".", -1), "org");
-  EXPECT_EQ(substringIndex("www.apache.org", ".", -2), "apache.org");
-  EXPECT_EQ(substringIndex("www.apache.org", ".", -3), "www.apache.org");
-  // Str is empty string.
-  EXPECT_EQ(substringIndex("", ".", 1), "");
-  // Empty string delim.
-  EXPECT_EQ(substringIndex("www.apache.org", "", 1), "");
-  // Delim does not exist in str.
-  EXPECT_EQ(substringIndex("www.apache.org", "#", 2), "www.apache.org");
-  EXPECT_EQ(substringIndex("www.apache.org", "WW", 1), "www.apache.org");
-  // Delim is 2 chars.
-  EXPECT_EQ(substringIndex("www||apache||org", "||", 2), "www||apache");
-  EXPECT_EQ(substringIndex("www||apache||org", "||", -2), "apache||org");
-  // Non ascii chars.
-  EXPECT_EQ(substringIndex("大千世界大千世界", "千", 2), "大千世界大");
-
-  // Overlapped delim.
-  EXPECT_EQ(substringIndex("||||||", "|||", 3), "||");
-  EXPECT_EQ(substringIndex("||||||", "|||", -4), "|||");
-  EXPECT_EQ(substringIndex("aaaaa", "aa", 2), "a");
-  EXPECT_EQ(substringIndex("aaaaa", "aa", -4), "aaa");
-  EXPECT_EQ(substringIndex("aaaaa", "aa", 0), "");
-  EXPECT_EQ(substringIndex("aaaaa", "aa", 5), "aaaaa");
-  EXPECT_EQ(substringIndex("aaaaa", "aa", -5), "aaaaa");
-}
-
-TEST_F(StringTest, trim) {
-  auto trim = [&](std::optional<std::string> srcStr) {
-    return evaluateOnce<std::string>("trim(c0)", srcStr);
-  };
-
-  auto trim = [&](std::optional<std::string> trimStr,
-                  std::optional<std::string> srcStr) {
-    return evaluateOnce<std::string>("trim(c0, c1)", trimStr, srcStr);
-  };
-  EXPECT_EQ(trim(""), "");
-  EXPECT_EQ(trim("  data\t "), "data\t");
-  EXPECT_EQ(trim("  data\t"), "data\t");
-  EXPECT_EQ(trim("data\t "), "data\t");
-  EXPECT_EQ(trim("data\t"), "data\t");
-  EXPECT_EQ(trim("  \u6570\u636E\t "), "\u6570\u636E\t");
-  EXPECT_EQ(trim("  \u6570\u636E\t"), "\u6570\u636E\t");
-  EXPECT_EQ(trim("\u6570\u636E\t "), "\u6570\u636E\t");
-  EXPECT_EQ(trim("\u6570\u636E\t"), "\u6570\u636E\t");
-
-  EXPECT_EQ(trim("", ""), "");
-  EXPECT_EQ(trim("", "srcStr"), "srcStr");
-  EXPECT_EQ(trim("trimStr", ""), "");
-  EXPECT_EQ(trim("data!egr< >int", "integer data!"), "");
-  EXPECT_EQ(trim("int", "integer data!"), "eger data!");
-  EXPECT_EQ(trim("!!at", "integer data!"), "integer d");
-  EXPECT_EQ(trim("a", "integer data!"), "integer data!");
-  EXPECT_EQ(
-      trim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
-  EXPECT_EQ(trim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"), "\u636E!");
-  EXPECT_EQ(trim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"), "\u6574");
-  EXPECT_EQ(
-      trim("\u6570", "\u6574\u6570 \u6570\u636E!"),
-      "\u6574\u6570 \u6570\u636E!");
-}
-
-TEST_F(StringTest, ltrim) {
-  auto ltrim = [&](std::optional<std::string> srcStr) {
-    return evaluateOnce<std::string>("ltrim(c0)", srcStr);
-  };
-
-  auto ltrim = [&](std::optional<std::string> trimStr,
-                   std::optional<std::string> srcStr) {
-    return evaluateOnce<std::string>("ltrim(c0, c1)", trimStr, srcStr);
-  };
-
-  EXPECT_EQ(ltrim(""), "");
-  EXPECT_EQ(ltrim("  data\t "), "data\t ");
-  EXPECT_EQ(ltrim("  data\t"), "data\t");
-  EXPECT_EQ(ltrim("data\t "), "data\t ");
-  EXPECT_EQ(ltrim("data\t"), "data\t");
-  EXPECT_EQ(ltrim("  \u6570\u636E\t "), "\u6570\u636E\t ");
-  EXPECT_EQ(ltrim("  \u6570\u636E\t"), "\u6570\u636E\t");
-  EXPECT_EQ(ltrim("\u6570\u636E\t "), "\u6570\u636E\t ");
-  EXPECT_EQ(ltrim("\u6570\u636E\t"), "\u6570\u636E\t");
-
-  EXPECT_EQ(ltrim("", ""), "");
-  EXPECT_EQ(ltrim("", "srcStr"), "srcStr");
-  EXPECT_EQ(ltrim("trimStr", ""), "");
-  EXPECT_EQ(ltrim("data!egr< >int", "integer data!"), "");
-  EXPECT_EQ(ltrim("int", "integer data!"), "eger data!");
-  EXPECT_EQ(ltrim("!!at", "integer data!"), "integer data!");
-  EXPECT_EQ(ltrim("a", "integer data!"), "integer data!");
-  EXPECT_EQ(
-      ltrim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
-  EXPECT_EQ(ltrim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"), "\u636E!");
-  EXPECT_EQ(
-      ltrim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"),
-      "\u6574\u6570 \u6570\u636E!");
-  EXPECT_EQ(
-      ltrim("\u6570", "\u6574\u6570 \u6570\u636E!"),
-      "\u6574\u6570 \u6570\u636E!");
-}
-
-TEST_F(StringTest, rtrim) {
-  auto rtrim = [&](std::optional<std::string> srcStr) {
-    return evaluateOnce<std::string>("rtrim(c0)", srcStr);
-  };
-
-  auto rtrim = [&](std::optional<std::string> trimStr,
-                   std::optional<std::string> srcStr) {
-    return evaluateOnce<std::string>("rtrim(c0, c1)", trimStr, srcStr);
-  };
-  EXPECT_EQ(rtrim(""), "");
-  EXPECT_EQ(rtrim("  data\t "), "  data\t");
-  EXPECT_EQ(rtrim("  data\t"), "  data\t");
-  EXPECT_EQ(rtrim("data\t "), "data\t");
-  EXPECT_EQ(rtrim("data\t"), "data\t");
-  EXPECT_EQ(rtrim("  \u6570\u636E\t "), "  \u6570\u636E\t");
-  EXPECT_EQ(rtrim("  \u6570\u636E\t"), "  \u6570\u636E\t");
-  EXPECT_EQ(rtrim("\u6570\u636E\t "), "\u6570\u636E\t");
-  EXPECT_EQ(rtrim("\u6570\u636E\t"), "\u6570\u636E\t");
-
-  EXPECT_EQ(rtrim("", ""), "");
-  EXPECT_EQ(rtrim("", "srcStr"), "srcStr");
-  EXPECT_EQ(rtrim("trimStr", ""), "");
-  EXPECT_EQ(rtrim("data!egr< >int", "integer data!"), "");
-  EXPECT_EQ(rtrim("int", "integer data!"), "integer data!");
-  EXPECT_EQ(rtrim("!!at", "integer data!"), "integer d");
-  EXPECT_EQ(rtrim("a", "integer data!"), "integer data!");
-  EXPECT_EQ(
-      rtrim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
-  EXPECT_EQ(
-      rtrim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"),
-      "\u6574\u6570 \u6570\u636E!");
-  EXPECT_EQ(rtrim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"), "\u6574");
-  EXPECT_EQ(
-      rtrim("\u6570", "\u6574\u6570 \u6570\u636E!"),
-      "\u6574\u6570 \u6570\u636E!");
-}
-
 TEST_F(StringTest, substring) {
   auto substring = [&](std::optional<std::string> str,
                        std::optional<int32_t> start) {
@@ -471,167 +688,40 @@ TEST_F(StringTest, substring) {
   EXPECT_EQ(substring("da\u6570\u636Eta", -3), "\u636Eta");
 }
 
-TEST_F(StringTest, overlayVarchar) {
-  auto overlay = [&](std::optional<std::string> input,
-                     std::optional<std::string> replace,
-                     std::optional<int32_t> pos,
-                     std::optional<int32_t> len) {
-    // overlay is a keyword of DuckDB, use double quote avoid parse error.
-    return evaluateOnce<std::string>(
-        "\"overlay\"(c0, c1, c2, c3)", input, replace, pos, len);
-  };
-  EXPECT_EQ(overlay("Spark\u6570\u636ESQL", "_", 6, -1), "Spark_\u636ESQL");
-  EXPECT_EQ(
-      overlay("Spark\u6570\u636ESQL", "_", 6, 0), "Spark_\u6570\u636ESQL");
-  EXPECT_EQ(overlay("Spark\u6570\u636ESQL", "_", -6, 2), "_\u636ESQL");
+TEST_F(StringTest, substringIndex) {
+  auto substringIndex =
+      [&](const std::string& str, const std::string& delim, int32_t count) {
+        return evaluateOnce<std::string, std::string, std::string, int32_t>(
+            "substring_index(c0, c1, c2)", str, delim, count);
+      };
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 3), "www.apache.org");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 2), "www.apache");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 1), "www");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 0), "");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", -1), "org");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", -2), "apache.org");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", -3), "www.apache.org");
+  // Str is empty string.
+  EXPECT_EQ(substringIndex("", ".", 1), "");
+  // Empty string delim.
+  EXPECT_EQ(substringIndex("www.apache.org", "", 1), "");
+  // Delim does not exist in str.
+  EXPECT_EQ(substringIndex("www.apache.org", "#", 2), "www.apache.org");
+  EXPECT_EQ(substringIndex("www.apache.org", "WW", 1), "www.apache.org");
+  // Delim is 2 chars.
+  EXPECT_EQ(substringIndex("www||apache||org", "||", 2), "www||apache");
+  EXPECT_EQ(substringIndex("www||apache||org", "||", -2), "apache||org");
+  // Non ascii chars.
+  EXPECT_EQ(substringIndex("大千世界大千世界", "千", 2), "大千世界大");
 
-  EXPECT_EQ(overlay("Spark SQL", "_", 6, -1), "Spark_SQL");
-  EXPECT_EQ(overlay("Spark SQL", "CORE", 7, -1), "Spark CORE");
-  EXPECT_EQ(overlay("Spark SQL", "ANSI ", 7, 0), "Spark ANSI SQL");
-  EXPECT_EQ(overlay("Spark SQL", "tructured", 2, 4), "Structured SQL");
-
-  EXPECT_EQ(overlay("Spark SQL", "##", 10, -1), "Spark SQL##");
-  EXPECT_EQ(overlay("Spark SQL", "##", 10, 4), "Spark SQL##");
-  EXPECT_EQ(overlay("Spark SQL", "##", 0, -1), "##park SQL");
-  EXPECT_EQ(overlay("Spark SQL", "##", 0, 4), "##rk SQL");
-  EXPECT_EQ(overlay("Spark SQL", "##", -10, -1), "##park SQL");
-  EXPECT_EQ(overlay("Spark SQL", "##", -10, 4), "##rk SQL");
-}
-
-TEST_F(StringTest, overlayVarbinary) {
-  auto overlay = [&](std::optional<std::string> input,
-                     std::optional<std::string> replace,
-                     std::optional<int32_t> pos,
-                     std::optional<int32_t> len) {
-    // overlay is a keyword of DuckDB, use double quote avoid parse error.
-    return evaluateOnce<std::string>(
-        "\"overlay\"(cast(c0 as varbinary), cast(c1 as varbinary), c2, c3)",
-        input,
-        replace,
-        pos,
-        len);
-  };
-  EXPECT_EQ(overlay("Spark\x65\x20SQL", "_", 6, -1), "Spark_\x20SQL");
-  EXPECT_EQ(overlay("Spark\x65\x20SQL", "_", 6, 0), "Spark_\x65\x20SQL");
-  EXPECT_EQ(overlay("Spark\x65\x20SQL", "_", -6, 2), "_\x20SQL");
-
-  EXPECT_EQ(overlay("Spark SQL", "_", 6, -1), "Spark_SQL");
-  EXPECT_EQ(overlay("Spark SQL", "CORE", 7, -1), "Spark CORE");
-  EXPECT_EQ(overlay("Spark SQL", "ANSI ", 7, 0), "Spark ANSI SQL");
-  EXPECT_EQ(overlay("Spark SQL", "tructured", 2, 4), "Structured SQL");
-
-  EXPECT_EQ(overlay("Spark SQL", "##", 10, -1), "Spark SQL##");
-  EXPECT_EQ(overlay("Spark SQL", "##", 10, 4), "Spark SQL##");
-  EXPECT_EQ(overlay("Spark SQL", "##", 0, -1), "##park SQL");
-  EXPECT_EQ(overlay("Spark SQL", "##", 0, 4), "##rk SQL");
-  EXPECT_EQ(overlay("Spark SQL", "##", -10, -1), "##park SQL");
-  EXPECT_EQ(overlay("Spark SQL", "##", -10, 4), "##rk SQL");
-}
-
-TEST_F(StringTest, rpad) {
-  const std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
-  const std::string invalidPadString = "\xFFΨ\xFF";
-
-  auto rpad = [&](std::optional<std::string> string,
-                  std::optional<int32_t> size,
-                  std::optional<std::string> padString) {
-    return evaluateOnce<std::string>(
-        "rpad(c0, c1, c2)", string, size, padString);
-  };
-
-  auto rpad = [&](std::optional<std::string> string,
-                  std::optional<int32_t> size) {
-    return evaluateOnce<std::string>("rpad(c0, c1)", string, size);
-  };
-
-  // ASCII strings with various values for size and padString
-  EXPECT_EQ("textx", rpad("text", 5, "x"));
-  EXPECT_EQ("text", rpad("text", 4, "x"));
-  EXPECT_EQ("textxyx", rpad("text", 7, "xy"));
-  EXPECT_EQ("text  ", rpad("text", 6));
-
-  // Non-ASCII strings with various values for size and padString
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  \u671B\u671B",
-      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 11, "\u671B"));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  \u5E0C\u671B\u5E0C",
-      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 12, "\u5E0C\u671B"));
-
-  // Empty string
-  EXPECT_EQ("aaa", rpad("", 3, "a"));
-
-  // Truncating string
-  EXPECT_EQ("", rpad("abc", 0, "e"));
-  EXPECT_EQ("tex", rpad("text", 3, "xy"));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 ",
-      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 5, "\u671B"));
-
-  // Invalid UTF-8 chars
-  EXPECT_EQ(invalidString + "x", rpad(invalidString, 8, "x"));
-  EXPECT_EQ("abc" + invalidPadString, rpad("abc", 6, invalidPadString));
-}
-
-TEST_F(StringTest, lpad) {
-  std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
-  std::string invalidPadString = "\xFFΨ\xFF";
-
-  auto lpad = [&](std::optional<std::string> string,
-                  std::optional<int32_t> size,
-                  std::optional<std::string> padString) {
-    return evaluateOnce<std::string>(
-        "lpad(c0, c1, c2)", string, size, padString);
-  };
-
-  auto lpad = [&](std::optional<std::string> string,
-                  std::optional<int32_t> size) {
-    return evaluateOnce<std::string>("lpad(c0, c1)", string, size);
-  };
-
-  // ASCII strings with various values for size and padString
-  EXPECT_EQ("xtext", lpad("text", 5, "x"));
-  EXPECT_EQ("text", lpad("text", 4, "x"));
-  EXPECT_EQ("xyxtext", lpad("text", 7, "xy"));
-  EXPECT_EQ("  text", lpad("text", 6));
-
-  // Non-ASCII strings with various values for size and padString
-  EXPECT_EQ(
-      "\u671B\u671B\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
-      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 11, "\u671B"));
-  EXPECT_EQ(
-      "\u5E0C\u671B\u5E0C\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
-      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 12, "\u5E0C\u671B"));
-
-  // Empty string
-  EXPECT_EQ("aaa", lpad("", 3, "a"));
-
-  // Truncating string
-  EXPECT_EQ("", lpad("abc", 0, "e"));
-  EXPECT_EQ("tex", lpad("text", 3, "xy"));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 ",
-      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 5, "\u671B"));
-
-  // Invalid UTF-8 chars
-  EXPECT_EQ("x" + invalidString, lpad(invalidString, 8, "x"));
-  EXPECT_EQ(invalidPadString + "abc", lpad("abc", 6, invalidPadString));
-}
-
-TEST_F(StringTest, left) {
-  auto left = [&](std::optional<std::string> str,
-                  std::optional<int32_t> length) {
-    return evaluateOnce<std::string>("left(c0, c1)", str, length);
-  };
-  EXPECT_EQ(left("example", -2), "");
-  EXPECT_EQ(left("example", 0), "");
-  EXPECT_EQ(left("example", 2), "ex");
-  EXPECT_EQ(left("example", 7), "example");
-  EXPECT_EQ(left("example", 20), "example");
-
-  EXPECT_EQ(left("da\u6570\u636Eta", 2), "da");
-  EXPECT_EQ(left("da\u6570\u636Eta", 3), "da\u6570");
-  EXPECT_EQ(left("da\u6570\u636Eta", 30), "da\u6570\u636Eta");
+  // Overlapped delim.
+  EXPECT_EQ(substringIndex("||||||", "|||", 3), "||");
+  EXPECT_EQ(substringIndex("||||||", "|||", -4), "|||");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", 2), "a");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", -4), "aaa");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", 0), "");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", 5), "aaaaa");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", -5), "aaaaa");
 }
 
 TEST_F(StringTest, translate) {
@@ -712,126 +802,39 @@ TEST_F(StringTest, translateNonconstantMatch) {
   testTranslate({input, match, replace}, expected);
 }
 
-TEST_F(StringTest, conv) {
-  auto conv = [&](std::optional<std::string> str,
-                  std::optional<int32_t> fromBase,
-                  std::optional<int32_t> toBase) {
-    return evaluateOnce<std::string>("conv(c0, c1, c2)", str, fromBase, toBase);
-  };
-  EXPECT_EQ(conv("4", 10, 2), "100");
-  EXPECT_EQ(conv("110", 2, 10), "6");
-  EXPECT_EQ(conv("15", 10, 16), "F");
-  EXPECT_EQ(conv("15", 10, -16), "F");
-  EXPECT_EQ(conv("big", 36, 16), "3A48");
-  EXPECT_EQ(conv("-15", 10, -16), "-F");
-  EXPECT_EQ(conv("-10", 16, -10), "-16");
-
-  // Overflow case.
-  EXPECT_EQ(
-      conv("-9223372036854775809", 10, -2),
-      "-111111111111111111111111111111111111111111111111111111111111111");
-  EXPECT_EQ(
-      conv("-9223372036854775808", 10, -2),
-      "-1000000000000000000000000000000000000000000000000000000000000000");
-  EXPECT_EQ(
-      conv("9223372036854775808", 10, -2),
-      "-1000000000000000000000000000000000000000000000000000000000000000");
-  EXPECT_EQ(
-      conv("8000000000000000", 16, -2),
-      "-1000000000000000000000000000000000000000000000000000000000000000");
-  EXPECT_EQ(conv("-1", 10, 16), "FFFFFFFFFFFFFFFF");
-  EXPECT_EQ(conv("FFFFFFFFFFFFFFFF", 16, -10), "-1");
-  EXPECT_EQ(conv("-FFFFFFFFFFFFFFFF", 16, -10), "-1");
-  EXPECT_EQ(conv("-FFFFFFFFFFFFFFFF", 16, 10), "18446744073709551615");
-  EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
-  EXPECT_EQ(conv("9223372036854775807", 36, 16), "FFFFFFFFFFFFFFFF");
-
-  // Leading and trailing spaces.
-  EXPECT_EQ(conv("15 ", 10, 16), "F");
-  EXPECT_EQ(conv(" 15 ", 10, 16), "F");
-
-  // Invalid characters.
-  // Only converts "11".
-  EXPECT_EQ(conv("11abc", 10, 16), "B");
-  // Only converts "F".
-  EXPECT_EQ(conv("FH", 16, 10), "15");
-  // Discards followed invalid character even though converting to same base.
-  EXPECT_EQ(conv("11abc", 10, 10), "11");
-  EXPECT_EQ(conv("FH", 16, 16), "F");
-  // Begins with invalid character.
-  EXPECT_EQ(conv("HF", 16, 10), "0");
-  // All are invalid for binary base.
-  EXPECT_EQ(conv("2345", 2, 10), "0");
-
-  // Negative symbol only.
-  EXPECT_EQ(conv("-", 10, 16), "0");
-
-  // Null result.
-  EXPECT_EQ(conv("", 10, 16), std::nullopt);
-  EXPECT_EQ(conv(" ", 10, 16), std::nullopt);
-  EXPECT_EQ(conv("", std::nullopt, 16), std::nullopt);
-  EXPECT_EQ(conv("", 10, std::nullopt), std::nullopt);
-}
-
-TEST_F(StringTest, replace) {
-  auto replace = [&](std::optional<std::string> str,
-                     std::optional<std::string> replaced) {
-    return evaluateOnce<std::string>("replace(c0, c1)", str, replaced);
+TEST_F(StringTest, trim) {
+  auto trim = [&](std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("trim(c0)", srcStr);
   };
 
-  auto replace = [&](std::optional<std::string> str,
-                     std::optional<std::string> replaced,
-                     std::optional<std::string> replacement) {
-    return evaluateOnce<std::string>(
-        "replace(c0, c1, c2)", str, replaced, replacement);
+  auto trim = [&](std::optional<std::string> trimStr,
+                  std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("trim(c0, c1)", trimStr, srcStr);
   };
-  EXPECT_EQ(replace("aaabaac", "a"), "bc");
-  EXPECT_EQ(replace("aaabaac", ""), "aaabaac");
-  EXPECT_EQ(replace("aaabaac", "a", "z"), "zzzbzzc");
-  EXPECT_EQ(replace("aaabaac", "", "z"), "aaabaac");
-  EXPECT_EQ(replace("aaabaac", "a", ""), "bc");
-  EXPECT_EQ(replace("aaabaac", "x", "z"), "aaabaac");
-  EXPECT_EQ(replace("aaabaac", "aaa", "z"), "zbaac");
-  EXPECT_EQ(replace("aaabaac", "a", "xyz"), "xyzxyzxyzbxyzxyzc");
-  EXPECT_EQ(replace("aaabaac", "aaabaac", "z"), "z");
-  EXPECT_EQ(
-      replace("123\u6570\u6570\u636E", "\u6570\u636E", "data"),
-      "123\u6570data");
-}
+  EXPECT_EQ(trim(""), "");
+  EXPECT_EQ(trim("  data\t "), "data\t");
+  EXPECT_EQ(trim("  data\t"), "data\t");
+  EXPECT_EQ(trim("data\t "), "data\t");
+  EXPECT_EQ(trim("data\t"), "data\t");
+  EXPECT_EQ(trim("  \u6570\u636E\t "), "\u6570\u636E\t");
+  EXPECT_EQ(trim("  \u6570\u636E\t"), "\u6570\u636E\t");
+  EXPECT_EQ(trim("\u6570\u636E\t "), "\u6570\u636E\t");
+  EXPECT_EQ(trim("\u6570\u636E\t"), "\u6570\u636E\t");
 
-TEST_F(StringTest, findInSet) {
-  auto findInSet = [&](std::optional<std::string> str,
-                       std::optional<std::string> strArray) {
-    return evaluateOnce<int32_t>("find_in_set(c0, c1)", str, strArray);
-  };
-  EXPECT_EQ(findInSet("ab", "abc,b,ab,c,def"), 3);
-  EXPECT_EQ(findInSet("abc", "abc,b,ab,c,def"), 1);
-  EXPECT_EQ(findInSet("ab,", "abc,b,ab,c,def"), 0);
-  EXPECT_EQ(findInSet("ab", "abc,b,ab,ab,ab"), 3);
-  EXPECT_EQ(findInSet("abc", "abc,abc,abc,abc,abc"), 1);
-  EXPECT_EQ(findInSet("c", "abc,b,ab,c,def"), 4);
-  EXPECT_EQ(findInSet("dfg", "abc,b,ab,c,def"), 0);
-  EXPECT_EQ(findInSet("dfg", "dfgdsiaq"), 0);
-  EXPECT_EQ(findInSet("dfg", "dfgdsiaq, dshadad"), 0);
-  EXPECT_EQ(findInSet("", ""), 1);
-  EXPECT_EQ(findInSet("", "123"), 0);
-  EXPECT_EQ(findInSet("123", ""), 0);
-  EXPECT_EQ(findInSet("", "123,"), 2);
-  EXPECT_EQ(findInSet("", ",123"), 1);
-  EXPECT_EQ(findInSet("dfg", std::nullopt), std::nullopt);
-  EXPECT_EQ(findInSet(std::nullopt, "abc"), std::nullopt);
-  EXPECT_EQ(findInSet(std::nullopt, std::nullopt), std::nullopt);
-  EXPECT_EQ(findInSet("\u0061\u0062", "abc,b,ab,c,def"), 3);
-  EXPECT_EQ(findInSet("\u0063", "abc,b,ab,c,def"), 4);
-  EXPECT_EQ(findInSet("", "\u002c\u0031\u0032\u0033"), 1);
-  EXPECT_EQ(findInSet("123", "\u002c\u0031\u0032\u0033"), 2);
-  EXPECT_EQ(findInSet("😊", "🌍,😊"), 2);
-  EXPECT_EQ(findInSet("😊", "😊,123"), 1);
-  EXPECT_EQ(findInSet("abåæçè", ",abåæçè"), 2);
-  EXPECT_EQ(findInSet("abåæçè", "abåæçè,"), 1);
-  EXPECT_EQ(findInSet("\u0061\u0062\u00e5\u00e6\u00e7\u00e8", ",abåæçè"), 2);
+  EXPECT_EQ(trim("", ""), "");
+  EXPECT_EQ(trim("", "srcStr"), "srcStr");
+  EXPECT_EQ(trim("trimStr", ""), "");
+  EXPECT_EQ(trim("data!egr< >int", "integer data!"), "");
+  EXPECT_EQ(trim("int", "integer data!"), "eger data!");
+  EXPECT_EQ(trim("!!at", "integer data!"), "integer d");
+  EXPECT_EQ(trim("a", "integer data!"), "integer data!");
   EXPECT_EQ(
-      findInSet("abåæçè", "\u002c\u0061\u0062\u00e5\u00e6\u00e7\u00e8"), 2);
+      trim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
+  EXPECT_EQ(trim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"), "\u636E!");
+  EXPECT_EQ(trim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"), "\u6574");
+  EXPECT_EQ(
+      trim("\u6570", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574\u6570 \u6570\u636E!");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
