@@ -145,6 +145,17 @@ class RowColumn {
     return packedOffsets_ & 0xff;
   }
 
+  int32_t initializedByte() const {
+    return nullByte();
+  }
+
+  int32_t initializedMask() const {
+    // We guarantee the null bits for aggregates always start at the beginning
+    // of a byte, so the null and initialized bits are always guaranteed to be
+    // on the same byte.
+    return nullMask() << 1;
+  }
+
  private:
   static uint64_t PackOffsets(int32_t offset, int32_t nullOffset) {
     if (nullOffset == kNotNullOffset) {
@@ -423,6 +434,14 @@ class RowContainer {
 
   static inline uint8_t nullMask(int32_t nullOffset) {
     return 1 << (nullOffset & 7);
+  }
+
+  static inline int32_t initializedByte(int32_t nullOffset) {
+    return nullOffset / 8;
+  }
+
+  static inline int32_t initializedMask(int32_t nullOffset) {
+    return 1 << ((nullOffset & 7) + 1);
   }
 
   /// No tsan because probed flags may have been set by a different thread.
@@ -1214,6 +1233,8 @@ class RowContainer {
   int32_t rowSizeOffset_ = 0;
 
   int32_t fixedRowSize_;
+  // How many bytes do the flags (null, probed, free) occupy.
+  int32_t flagBytes_;
   // True if normalized keys are enabled in initial state.
   const bool hasNormalizedKeys_;
   // The count of entries that have an extra normalized_key_t before the

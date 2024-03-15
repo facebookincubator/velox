@@ -62,10 +62,6 @@ class AggregateFunc : public Aggregate {
     return Aggregate::isNull(group);
   }
 
-  void initializeNewGroups(
-      char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/) override {}
-
   void addRawInput(
       char** /*groups*/,
       const SelectivityVector& /*rows*/,
@@ -99,6 +95,11 @@ class AggregateFunc : public Aggregate {
       char** /*groups*/,
       int32_t /*numGroups*/,
       VectorPtr* /*result*/) override {}
+
+ protected:
+  void initializeNewGroupsInternal(
+      char** /*groups*/,
+      folly::Range<const vector_size_t*> /*indices*/) override {}
 };
 
 void checkSpillStats(PlanNodeStats& stats, bool expectedSpill) {
@@ -679,6 +680,8 @@ TEST_F(AggregationTest, setNull) {
       0,
       RowContainer::nullByte(nullOffset),
       RowContainer::nullMask(nullOffset),
+      RowContainer::initializedByte(nullOffset),
+      RowContainer::initializedMask(nullOffset),
       0);
   char group{0};
   aggregate.clearNullTest(&group);
@@ -3559,6 +3562,121 @@ TEST_F(AggregationTest, ignoreNullKeys) {
   });
 
   AssertQueryBuilder(makePlan(true)).assertEmptyResults();
+}
+
+class TestAccumulator {
+ public:
+  ~TestAccumulator() {
+    VELOX_FAIL("Destructor should not be called.");
+  }
+};
+
+class TestAggregate : public Aggregate {
+ public:
+  explicit TestAggregate(TypePtr resultType) : Aggregate(resultType) {}
+
+  void addRawInput(
+      char** /*groups*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {
+    VELOX_UNSUPPORTED("This shouldn't get called.");
+  }
+
+  void extractValues(
+      char** /*groups*/,
+      int32_t /*numGroups*/,
+      VectorPtr* /*result*/) override {
+    VELOX_UNSUPPORTED("This shouldn't get called.");
+  }
+
+  void addIntermediateResults(
+      char** /*groups*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {
+    VELOX_UNSUPPORTED("This shouldn't get called.");
+  }
+
+  void addSingleGroupRawInput(
+      char* /*group*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {
+    VELOX_UNSUPPORTED("This shouldn't get called.");
+  }
+
+  void addSingleGroupIntermediateResults(
+      char* /*group*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {
+    VELOX_UNSUPPORTED("This shouldn't get called.");
+  }
+
+  void extractAccumulators(
+      char** /*groups*/,
+      int32_t /*numGroups*/,
+      VectorPtr* /*result*/) override {
+    VELOX_UNSUPPORTED("This shouldn't get called.");
+  }
+
+  int32_t accumulatorFixedWidthSize() const override {
+    return sizeof(TestAccumulator);
+  }
+
+  bool destroyCalled = false;
+
+ protected:
+  void initializeNewGroupsInternal(
+      char** /*groups*/,
+      folly::Range<const vector_size_t*> /*indices*/) override {
+    VELOX_UNSUPPORTED("This shouldn't get called.");
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
+    destroyCalled = true;
+    destroyAccumulators<TestAccumulator>(groups);
+  }
+};
+
+TEST_F(AggregationTest, destroyAfterPartialInitialization) {
+  TestAggregate agg(INTEGER());
+
+  Accumulator accumulator(
+      true, // isFixedSize
+      sizeof(TestAccumulator), // fixedSize
+      true, // usesExternalMemory, this is set to force RowContainer.clear() to
+            // call eraseRows.
+      1, // alignment
+      INTEGER(), // spillType,
+      [](folly::Range<char**>, VectorPtr&) {
+        VELOX_UNSUPPORTED("This shouldn't get called.");
+      },
+      [&agg](folly::Range<char**> groups) { agg.destroy(groups); });
+
+  RowContainer rows(
+      {}, // keyTypes
+      false, // nullableKeys
+      {accumulator},
+      {}, // dependentTypes
+      false, // hasNext
+      false, // isJoinBuild
+      false, // hasProbedFlag
+      false, // hasNormalizedKeys
+      pool());
+  const auto rowColumn = rows.columnAt(0);
+  agg.setOffsets(
+      rowColumn.offset(),
+      rowColumn.nullByte(),
+      rowColumn.nullMask(),
+      rowColumn.initializedByte(),
+      rowColumn.initializedMask(),
+      rows.rowSizeOffset());
+  rows.newRow();
+  rows.clear();
+
+  ASSERT_TRUE(agg.destroyCalled);
 }
 
 } // namespace facebook::velox::exec::test
