@@ -1818,7 +1818,7 @@ StructColumnReader::StructColumnReader(
       proto::ColumnEncoding_Kind_DIRECT,
       "Unknown encoding for StructColumnReader");
 
-  // Can parallelize if top level and doesn't have any flatmap children
+  // Can parallelize if top level and doesn't have any parallelized children
   bool canParallelize = fileType->parent() == nullptr; // isTopLevel ?
 
   // count the number of selected sub-columns
@@ -1839,7 +1839,7 @@ StructColumnReader::StructColumnReader(
             executor,
             decodingParallelismFactor,
             makeCopyWithNullDecoder(flatMapContext_));
-        canParallelize = canParallelize && !childColumnReader->isFlatMap();
+        canParallelize = canParallelize && !childColumnReader->isParallelized();
         children_.push_back(std::move(childColumnReader));
       } else {
         children_.push_back(

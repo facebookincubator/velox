@@ -90,10 +90,10 @@ void testParallelFor(
   if (countedExecutor) {
     const auto extraThreadsUsed = countedExecutor->getCount();
     const auto numTasks = to - from;
-    const auto expectedExtraThreads = std::min(
-        parallelismFactor > 0 ? parallelismFactor - 1 : 0,
-        numTasks > 0 ? numTasks - 1 : 0);
-    EXPECT_EQ(extraThreadsUsed, expectedExtraThreads);
+    const auto expectedExtraThreads = std::min(parallelismFactor, numTasks);
+    EXPECT_EQ(
+        extraThreadsUsed,
+        (expectedExtraThreads > 1 ? expectedExtraThreads : 0));
   }
 }
 
@@ -131,6 +131,43 @@ TEST(ParallelForTest, E2EParallel) {
       }
     }
   }
+}
+
+TEST(ParallelForTest, NoWait) {
+  bool wait = true;
+  std::mutex mutex;
+  std::condition_variable cv;
+  size_t added = 0;
+  size_t executed = 0;
+  folly::CPUThreadPoolExecutor executor(2);
+  ParallelFor pf(&executor, 0, 2, 2);
+  pf.execute(
+      [&](size_t /* unused */) {
+        std::unique_lock lock(mutex);
+        ++added;
+        cv.notify_all();
+        cv.wait(lock, [&] { return !wait; });
+        ++executed;
+        cv.notify_all();
+      },
+      false);
+  {
+    std::unique_lock lock(mutex);
+    cv.wait(lock, [&] { return added == 2; });
+  }
+  ASSERT_EQ(added, 2);
+  // Parallel for didn't wait for tasks to finish
+  ASSERT_EQ(executed, 0);
+  {
+    std::unique_lock lock(mutex);
+    wait = false;
+    cv.notify_all();
+  }
+  {
+    std::unique_lock lock(mutex);
+    cv.wait(lock, [&] { return executed == 2; });
+  }
+  EXPECT_EQ(executed, 2);
 }
 
 TEST(ParallelForTest, CanOwnExecutor) {

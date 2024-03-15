@@ -107,7 +107,7 @@ class ColumnReader {
     VELOX_NYI();
   }
 
-  virtual bool isFlatMap() const {
+  virtual bool isParallelized() const {
     return false;
   }
 
