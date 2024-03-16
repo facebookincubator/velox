@@ -16,6 +16,16 @@ name: "Fuzzer Jobs"
 
 on:
   pull_request:
+    paths:
+      - "velox/**"
+      - "!velox/docs/**"
+      - "CMakeLists.txt"
+      - "CMake/**"
+      - "third_party/**"
+      - "scripts/setup-ubuntu.sh"
+      - "scripts/setup-helper-functions.sh"
+      - ".github/workflows/linux-build.yml"
+
   schedule:
     - cron: '0 3 * * *'
 
