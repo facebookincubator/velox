@@ -16,6 +16,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/parquet/writer/arrow/Exception.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
@@ -42,6 +43,56 @@ class ParquetWriterTest : public ParquetTestBase {
         std::make_unique<dwio::common::BufferedInput>(
             std::make_shared<InMemoryReadFile>(data), opts.getMemoryPool()),
         opts);
+  };
+
+  template <bool flatten>
+  void testConstantVector() {
+    auto schema = ROW({"c0"}, {INTEGER()});
+    int32_t value = (int32_t)123'456;
+    int32_t size = 100;
+    auto data = makeRowVector({makeConstant(value, size)});
+    auto filePath =
+        fs::path(fmt::format("{}/test_constant.txt", tempPath_->path));
+    auto sink = createSink(filePath.string());
+    auto sinkPtr = sink.get();
+
+    auto parquetOptions = getWriterOpts();
+    EXPECT_TRUE(parquetOptions.flattenConstantVector);
+
+    if constexpr (!flatten) {
+      parquetOptions.flattenConstantVector = false;
+    }
+
+    auto writer = createWriter(std::move(sink), parquetOptions, schema);
+    writer->write(data);
+
+    if constexpr (!flatten) {
+      try {
+        writer->close();
+        FAIL() << "Expected a ParquetException";
+      } catch (const parquet::arrow::ParquetException& pe) {
+        EXPECT_TRUE(
+            std::string(pe.what()).find(
+                "NotImplemented: Unhandled type for Arrow to Parquet schema conversion: run_end_encoded<run_ends: int32, values: int32>") !=
+            std::string::npos);
+      }
+    } else {
+      writer->close();
+
+      dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+      auto reader = createReader(filePath.string(), readerOptions);
+
+      ASSERT_EQ(reader->numberOfRows(), size);
+      auto type = reader->typeWithId();
+      auto col0 = type->childAt(0);
+      EXPECT_EQ(type->size(), 1ULL);
+      EXPECT_EQ(col0->type()->kind(), TypeKind::INTEGER);
+
+      auto expected = makeRowVector({makeFlatVector<int32_t>(
+          size, [&value](auto row) { return value; })});
+      auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+      assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+    }
   };
 };
 
@@ -109,4 +160,12 @@ TEST_F(ParquetWriterTest, compression) {
 
   auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
-};
+}
+
+TEST_F(ParquetWriterTest, flattenConstantVector) {
+  testConstantVector<true>();
+}
+
+TEST_F(ParquetWriterTest, constantVectorReeError) {
+  testConstantVector<false>();
+}

@@ -28,13 +28,7 @@ TEST_F(SinkTest, close) {
   auto filePath = fs::path(fmt::format("{}/test_close.txt", tempPath_->path));
   auto sink = createSink(filePath.string());
   auto sinkPtr = sink.get();
-  auto writer = createWriter(
-      std::move(sink),
-      [&]() {
-        return std::make_unique<LambdaFlushPolicy>(
-            kRowsInRowGroup, kBytesInRowGroup, [&]() { return false; });
-      },
-      rowType);
+  auto writer = createWriter(std::move(sink), getWriterOpts(), rowType);
 
   for (auto& batch : batches) {
     writer->write(batch);
@@ -58,13 +52,7 @@ TEST_F(SinkTest, abort) {
   auto filePath = fs::path(fmt::format("{}/test_abort.txt", tempPath_->path));
   auto sink = createSink(filePath.string());
   auto sinkPtr = sink.get();
-  auto writer = createWriter(
-      std::move(sink),
-      [&]() {
-        return std::make_unique<LambdaFlushPolicy>(
-            kRowsInRowGroup, kBytesInRowGroup, [&]() { return false; });
-      },
-      rowType);
+  auto writer = createWriter(std::move(sink), getWriterOpts(), rowType);
 
   for (auto& batch : batches) {
     writer->write(batch);

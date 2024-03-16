@@ -102,6 +102,8 @@ struct ArrowContext {
   int64_t stagingBytes = 0;
   // columns, Arrays
   std::vector<std::vector<std::shared_ptr<::arrow::Array>>> stagingChunks;
+  // Do not attempt to use REE encoding.
+  bool flattenConstantVector = true;
 };
 
 Compression::type getArrowParquetCompression(
@@ -237,6 +239,7 @@ Writer::Writer(
   arrowContext_->properties =
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
+  arrowContext_->flattenConstantVector = options.flattenConstantVector;
 }
 
 Writer::Writer(
@@ -310,7 +313,9 @@ void Writer::write(const VectorPtr& data) {
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
 
-  ArrowOptions options{.flattenDictionary = true, .flattenConstant = true};
+  ArrowOptions options{
+      .flattenDictionary = true,
+      .flattenConstant = arrowContext_->flattenConstantVector};
   ArrowArray array;
   ArrowSchema schema;
   exportToArrow(data, array, generalPool_.get(), options);
