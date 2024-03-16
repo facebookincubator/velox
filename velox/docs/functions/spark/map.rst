@@ -29,7 +29,7 @@ Map Functions
 
 .. spark:function:: map_from_entries(array(struct(K,V))) -> map(K,V)
 
-    Converts an array of entries (key value struct types) to a map of values. All elements in keys should not be null.
+    Returns a map created from the given array of entries. Keys are not allowed to be null or to contain nulls.
     If null entry exists in the array, return null for this whole array.::
 
         SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'null'))); -- {1 -> 'a', 2 -> 'null'}

@@ -31,7 +31,7 @@ static const char* kIndeterminateKeyErrorMessage =
 static const char* kErrorMessageEntryNotNull = "map entry cannot be null";
 
 /// @tparam throwForNull If true, will return null if input array is null or has
-/// null entry (Spark's behavior), instead of throw execeptions(Presto's
+/// null entries (Spark's behavior), instead of throwing exceptions (Presto's
 /// behavior).
 template <bool throwForNull>
 class MapFromEntriesFunction : public exec::VectorFunction {
@@ -132,7 +132,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     });
 
     auto resetSize = [&](vector_size_t row) { mutableSizes[row] = 0; };
-    auto nulls = allocateNulls(decodedRowVector->size(), context.pool());
+    auto nulls = allocateNulls(rows.size(), context.pool());
     auto* mutableNulls = nulls->asMutable<uint64_t>();
 
     if (decodedRowVector->mayHaveNulls() || keyVector->mayHaveNulls() ||
@@ -146,7 +146,6 @@ class MapFromEntriesFunction : public exec::VectorFunction {
           const bool isMapEntryNull = decodedRowVector->isNullAt(offset + i);
           if (isMapEntryNull) {
             if constexpr (!throwForNull) {
-              // Spark: For nulls in the top level row vector, return null.
               bits::setNull(mutableNulls, row);
               resetSize(row);
               break;
@@ -229,28 +228,19 @@ class MapFromEntriesFunction : public exec::VectorFunction {
 
     // For Presto, need construct map vector based on input nulls for possible
     // outer expression like try(). For Spark, use the updated nulls.
-    std::shared_ptr<MapVector> mapVector;
     if constexpr (throwForNull) {
-      mapVector = std::make_shared<MapVector>(
-          context.pool(),
-          outputType,
-          inputArray->nulls(),
-          rows.end(),
-          inputArray->offsets(),
-          sizes,
-          wrappedKeys,
-          wrappedValues);
-    } else {
-      mapVector = std::make_shared<MapVector>(
-          context.pool(),
-          outputType,
-          nulls,
-          rows.end(),
-          inputArray->offsets(),
-          sizes,
-          wrappedKeys,
-          wrappedValues);
+      nulls = inputArray->nulls();
     }
+    auto mapVector = std::make_shared<MapVector>(
+        context.pool(),
+        outputType,
+        nulls,
+        rows.end(),
+        inputArray->offsets(),
+        sizes,
+        wrappedKeys,
+        wrappedValues);
+
     checkDuplicateKeys(mapVector, *remianingRows, context);
     return mapVector;
   }
