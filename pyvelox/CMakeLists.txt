@@ -35,7 +35,9 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
             velox_functions_prestosql
             velox_parse_parser
             velox_functions_prestosql
-            velox_functions_spark)
+            velox_functions_spark
+            velox_aggregates
+            velox_functions_spark_aggregates)
 
   install(TARGETS pyvelox LIBRARY DESTINATION .)
 else()
