@@ -71,7 +71,7 @@ jobs:
   compile:
     name: Build
     runs-on: 8-core
-    timeout-minutes: 120
+    timeout-minutes: 60
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
