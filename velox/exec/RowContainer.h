@@ -25,6 +25,8 @@
 
 namespace facebook::velox::exec {
 
+using DuplicateRowVector = std::vector<char*, SyncStlAllocator<char*>>;
+
 class Aggregate;
 
 class Accumulator {
@@ -600,6 +602,12 @@ class RowContainer {
   /// unique, e.g. for a group by or semijoin build.
   int32_t nextOffset() const {
     return nextOffset_;
+  }
+
+  void appendNextRow(char* existing, char* nextRow, bool isParallelBuild);
+
+  DuplicateRowVector*& getNextRowVector(char* row) const {
+    return *reinterpret_cast<DuplicateRowVector**>(row + nextOffset_);
   }
 
   /// Hashes the values of 'columnIndex' for 'rows'.  If 'mix' is true, mixes
@@ -1180,6 +1188,19 @@ class RowContainer {
   // Free any aggregates associated with the 'rows'.
   void freeAggregates(folly::Range<char**> rows);
 
+  void freeDuplicateRowVectors(folly::Range<char**> rows) {
+    if (!nextOffset_) {
+      return;
+    }
+    for (auto row : rows) {
+      auto& vector = getNextRowVector(row);
+      if (vector) {
+        delete vector;
+        vector = nullptr;
+      }
+    }
+  }
+
   const bool checkFree_ = false;
 
   const std::vector<TypePtr> keyTypes_;
@@ -1199,6 +1220,8 @@ class RowContainer {
   std::vector<TypePtr> types_;
   std::vector<TypeKind> typeKinds_;
   int32_t nextOffset_ = 0;
+  bool hasDuplicateRows_{false};
+  std::shared_ptr<std::mutex> nextRowsMutex_ = std::make_shared<std::mutex>();
   // Bit position of null bit  in the row. 0 if no null flag. Order is keys,
   // accumulators, dependent.
   std::vector<int32_t> nullOffsets_;

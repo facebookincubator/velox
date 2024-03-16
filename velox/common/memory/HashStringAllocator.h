@@ -508,6 +508,58 @@ struct StlAllocator {
   HashStringAllocator* allocator_;
 };
 
+template <class T>
+struct SyncStlAllocator {
+  using value_type = T;
+
+  explicit SyncStlAllocator(
+      HashStringAllocator* FOLLY_NONNULL allocator,
+      std::shared_ptr<std::mutex> mutex)
+      : allocator_{allocator}, mutex_{mutex} {}
+
+  template <class U>
+  explicit SyncStlAllocator(const SyncStlAllocator<U>& allocator)
+      : allocator_{allocator.allocator()}, mutex_{allocator.mutex_} {}
+
+  T* FOLLY_NONNULL allocate(std::size_t n) {
+    if (mutex_) {
+      std::lock_guard<std::mutex> lock(*mutex_);
+      return allocator_.allocate(n);
+    } else {
+      return allocator_.allocate(n);
+    }
+  }
+
+  void deallocate(T* FOLLY_NONNULL p, std::size_t n) noexcept {
+    if (mutex_) {
+      std::lock_guard<std::mutex> lock(*mutex_);
+      allocator_.deallocate(p, n);
+    } else {
+      allocator_.deallocate(p, n);
+    }
+  }
+
+  StlAllocator<T> allocator() const {
+    return allocator_;
+  }
+
+  friend bool operator==(
+      const SyncStlAllocator& lhs,
+      const SyncStlAllocator& rhs) {
+    return lhs.allocator_ == rhs.allocator_ && lhs.mutex_ == rhs.mutex_;
+  }
+
+  friend bool operator!=(
+      const SyncStlAllocator& lhs,
+      const SyncStlAllocator& rhs) {
+    return !(lhs == rhs);
+  }
+
+ private:
+  StlAllocator<T> allocator_;
+  std::shared_ptr<std::mutex> mutex_;
+};
+
 /// An allocator backed by HashStringAllocator that guaratees a configurable
 /// alignment. The alignment must be a power of 2 and not be 0. This allocator
 /// can be used with folly F14 containers that requires 16-bytes alignment.

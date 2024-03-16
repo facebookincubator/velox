@@ -141,7 +141,6 @@ class BaseHashTable {
     void reset(const HashLookup& lookup) {
       rows = &lookup.rows;
       hits = &lookup.hits;
-      nextHit = nullptr;
       lastRowIndex = 0;
       lastDuplicateRowIndex = -1;
     }
@@ -152,7 +151,6 @@ class BaseHashTable {
 
     const raw_vector<vector_size_t>* rows{nullptr};
     const raw_vector<char*>* hits{nullptr};
-    char* nextHit{nullptr};
     vector_size_t lastRowIndex{0};
     vector_size_t lastDuplicateRowIndex{-1};
   };
@@ -169,6 +167,7 @@ class BaseHashTable {
   struct NullKeyRowsIterator {
     bool initialized = false;
     char* nextHit;
+    vector_size_t lastDuplicateRowIndex{0};
   };
 
   /// Takes ownership of 'hashers'. These are used to keep key-level
@@ -691,23 +690,12 @@ class HashTable : public BaseHashTable {
   int32_t
   listRows(RowsIterator* iter, int32_t maxRows, uint64_t maxBytes, char** rows);
 
-  char*& nextRow(char* row) {
-    return *reinterpret_cast<char**>(row + nextOffset_);
-  }
-
   void arrayGroupProbe(HashLookup& lookup);
 
   void setHashMode(HashMode mode, int32_t numNew) override;
 
   // Fast path for join results when there are no duplicates in the table.
   int32_t listJoinResultsNoDuplicates(
-      JoinResultIterator& iter,
-      bool includeMisses,
-      folly::Range<vector_size_t*> inputRows,
-      folly::Range<char**> hits);
-
-  // Fast path for join results of array mode table.
-  int32_t listJoinResultsArrayMode(
       JoinResultIterator& iter,
       bool includeMisses,
       folly::Range<vector_size_t*> inputRows,
@@ -845,7 +833,7 @@ class HashTable : public BaseHashTable {
 
   // Adds a row to a hash join build side entry with multiple rows
   // with the same key.
-  void pushNext(char* row, char* next);
+  void pushNext(char* row, char* next, bool isParallelBuild);
 
   // Finishes inserting an entry into a join hash table. If 'partitionInfo' is
   // not null and the insert falls out-side of the partition range, then insert
@@ -965,8 +953,6 @@ class HashTable : public BaseHashTable {
   // Owns the memory of multiple build side hash join tables that are
   // combined into a single probe hash table.
   std::vector<std::unique_ptr<HashTable<ignoreNullKeys>>> otherTables_;
-
-  std::unordered_map<char*, std::shared_ptr<std::vector<char*>>> duplicateRows_;
 
   // Statistics maintained if kTrackLoads is set.
 

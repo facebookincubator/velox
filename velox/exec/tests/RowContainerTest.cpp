@@ -1846,3 +1846,41 @@ DEBUG_ONLY_TEST_F(RowContainerTest, eraseAfterOomStoringString) {
   // attempting to free a string the allocator doesn't own.
   rowContainer->eraseRows(folly::Range<char**>(rows.data(), numRows));
 }
+
+TEST_F(RowContainerTest, nextRowVector) {
+  constexpr int32_t kNumRows = 100;
+  auto data = makeRowContainer({SMALLINT()}, {SMALLINT()});
+
+  EXPECT_EQ(data->nextOffset(), 11);
+  std::unordered_set<char*> rowSet;
+  std::vector<char*> rows;
+  for (int i = 0; i < kNumRows; ++i) {
+    rows.push_back(data->newRow());
+    rowSet.insert(rows.back());
+    EXPECT_EQ(data->getNextRowVector(rows.back()), nullptr);
+  }
+  EXPECT_EQ(kNumRows, data->numRows());
+  std::vector<char*> rowsFromContainer(kNumRows);
+  RowContainerIterator iter;
+  EXPECT_EQ(
+      data->listRows(&iter, kNumRows, rowsFromContainer.data()), kNumRows);
+  EXPECT_EQ(0, data->listRows(&iter, kNumRows, rows.data()));
+  EXPECT_EQ(rows, rowsFromContainer);
+
+  for (int i = 0; i + 2 <= kNumRows; i += 2) {
+    data->appendNextRow(rows[i], rows[i + 1], false);
+  }
+  for (int i = 0; i < kNumRows; i++) {
+    auto vector = data->getNextRowVector(rows[i]);
+    if (vector) {
+      EXPECT_EQ(vector->size(), 1);
+      EXPECT_EQ(vector->data()[0], rows[i + 1]);
+    }
+  }
+
+  data->clear();
+  EXPECT_EQ(0, data->numRows());
+  auto free = data->freeSpace();
+  EXPECT_EQ(0, free.first);
+  EXPECT_EQ(0, free.second);
+}
