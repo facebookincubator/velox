@@ -19,6 +19,7 @@ add_executable(
   FilterTest.cpp
   FilterSerDeTest.cpp
   HugeIntTest.cpp
+  StringViewIdMapTest.cpp
   SubfieldTest.cpp
   TimestampConversionTest.cpp
   VariantTest.cpp

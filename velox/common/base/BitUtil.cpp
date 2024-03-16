@@ -179,7 +179,7 @@ uint64_t hashBytes(uint64_t seed, const char* data, size_t size) {
     auto word = loadPartialWord(begin, size);
     uint64_t crc = simd::crc32U64(seed, word);
     uint64_t crc2 = simd::crc32U64(seed, word >> 32);
-    return crc | (crc2 << 32);
+    return crc * crc2;
   }
   uint64_t a0 = seed;
   uint64_t a1 = seed << 32;

@@ -271,6 +271,8 @@ struct StringView {
     char inlined[8];
     const char* data;
   } value_;
+
+  friend class StringViewIdMap;
 };
 
 // This creates a user-defined literal for StringView. You can use it as:
