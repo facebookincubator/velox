@@ -193,10 +193,12 @@ WindowFuzzer::generateSortingKeysAndOrders(
     std::vector<TypePtr>& types) {
   auto keys = generateSortingKeys(prefix, names, types);
   std::vector<SortingKeyAndOrder> results;
-  // TODO: allow randomly generating orders.
   for (auto i = 0; i < keys.size(); ++i) {
-    std::string order = "asc";
-    std::string nullsOrder = "nulls last";
+    auto asc = boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+    auto order = (asc == 1) ? "asc" : "desc";
+    auto nullsFirst =
+        boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+    auto nullsOrder = (nullsFirst == 1) ? "nulls first" : "nulls last";
     results.push_back(SortingKeyAndOrder(keys[i], order, nullsOrder));
   }
   return results;
