@@ -22,6 +22,8 @@ on:
       - "CMakeLists.txt"
       - "CMake/**"
       - "third_party/**"
+      - "scripts/setup-ubuntu.sh"
+      - "scripts/setup-helper-functions.sh"
       - ".github/workflows/linux-build.yml"
 
   pull_request:
@@ -31,6 +33,8 @@ on:
       - "CMakeLists.txt"
       - "CMake/**"
       - "third_party/**"
+      - "scripts/setup-ubuntu.sh"
+      - "scripts/setup-helper-functions.sh"
       - ".github/workflows/linux-build.yml"
 
 permissions:
@@ -67,7 +71,7 @@ jobs:
           path: '${{ env.CCACHE_DIR }}'
           key: ccache-linux-adapters
 
-      - name: Build
+      - name: Make Release Build
         env:
           MAKEFLAGS: 'NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4'
         run: |
@@ -126,7 +130,7 @@ jobs:
         run: |
           ccache -sz
 
-      - name: Build
+      - name: Make Debug Build
         env:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
           MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
