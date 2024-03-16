@@ -697,4 +697,69 @@ TEST_F(BinaryFunctionsTest, toIEEE754Bits32) {
       hexToDec("FF7FFFFF"),
       toIEEE754Bits32(std::numeric_limits<float>::lowest()));
 }
+
+TEST_F(BinaryFunctionsTest, rpad) {
+  const auto rpad = [&](std::optional<StringView> arg,
+                        std::optional<StringView> key,
+                        std::optional<int32_t> size) {
+    return evaluateOnce<std::string>("rpad(c0, c1, c2)", makeRowVector({
+    vectorMaker_.flatVectorNullable<StringView>(
+      {arg}, VARBINARY()),
+      vectorMaker_.flatVectorNullable<StringView>(
+      {key}, VARBINARY()),
+    vectorMaker_.flatVectorNullable<int32_t>(
+      {size}, INTEGER())
+    })); 
+  };
+  EXPECT_EQ(rpad(StringView("1234"),StringView("45"), 14), ("12344545454545"));
+  EXPECT_EQ(
+      rpad(StringView("123456789012"), StringView("4444555566667777"), 24),
+      ("123456789012444455556666"));
+  EXPECT_EQ(
+      rpad(StringView("1234567890"), StringView("44445555666677778888"), 30),
+      ("123456789044445555666677778888"));
+  EXPECT_EQ(rpad(StringView("1234"), StringView("45"), 15), ("123445454545454"));
+  EXPECT_EQ(rpad(StringView("1234"), StringView("4524"), 14), ("12344524452445"));
+  EXPECT_EQ(rpad(StringView("1234"), StringView("4524"), 6), ("123445"));
+  EXPECT_EQ(rpad(StringView("23"), StringView("4524"), 0), (""));
+  EXPECT_EQ(rpad(StringView("∆"), StringView("˚"), 2), ("∆˚"));
+  EXPECT_EQ(rpad(StringView("©"), StringView("£"), 4), ("©£££"));
+  EXPECT_EQ(rpad(StringView("1234"), StringView("4524"), 2), ("12"));
+  EXPECT_EQ(rpad(std::nullopt, std::nullopt, 0), std::nullopt);
+  EXPECT_THROW(rpad(StringView("2312"), StringView("4524"), -1), VeloxUserError);
+  EXPECT_THROW(rpad(StringView("2312"), StringView(""), 1), VeloxUserError);
+}
+
+TEST_F(BinaryFunctionsTest, lpad) {
+  const auto lpad = [&](std::optional<StringView> arg,
+                        std::optional<StringView> key,
+                        std::optional<int32_t> size) {
+    return evaluateOnce<std::string>("lpad(c0, c1, c2)", makeRowVector({
+    vectorMaker_.flatVectorNullable<StringView>(
+      {arg}, VARBINARY()),
+      vectorMaker_.flatVectorNullable<StringView>(
+      {key}, VARBINARY()),
+    vectorMaker_.flatVectorNullable<int32_t>(
+      {size}, INTEGER())
+    })); 
+  };
+  EXPECT_EQ(lpad(StringView("1234"), StringView("45"), 14), ("45454545451234"));
+  EXPECT_EQ(lpad(StringView("1234"), StringView("45"), 15), ("454545454541234"));
+  EXPECT_EQ(
+      lpad(StringView("123456789012"), StringView("4444555566667777"), 24),
+      ("444455556666123456789012"));
+  EXPECT_EQ(
+      lpad(StringView("1234567890"), StringView("44445555666677778888"), 30),
+      ("444455556666777788881234567890"));
+  EXPECT_EQ(lpad(StringView("∆"), StringView("˚"), 2), ("˚∆"));
+  EXPECT_EQ(lpad(StringView("©"), StringView("£"), 4), ("£££©"));
+  EXPECT_EQ(lpad(StringView("1234"), StringView("4524"), 14), ("45244524451234"));
+  EXPECT_EQ(lpad(StringView("1234"), StringView("4524"), 6), ("451234"));
+  EXPECT_EQ(lpad(StringView("1234"), StringView("4524"), 0), (""));
+  EXPECT_EQ(lpad(StringView("1234"), StringView("4524"), 2), ("12"));
+  EXPECT_EQ(lpad(std::nullopt, std::nullopt, 0), std::nullopt);
+  EXPECT_THROW(lpad(StringView("2312"), StringView("4524"), -1), VeloxUserError);
+  EXPECT_THROW(lpad(StringView("2312"), StringView(""), 1), VeloxUserError);
+}
+
 } // namespace
