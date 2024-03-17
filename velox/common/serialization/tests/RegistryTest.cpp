@@ -18,9 +18,8 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/serialization/Registry.h"
 
-using namespace ::facebook::velox;
+namespace facebook::velox {
 
-namespace {
 TEST(Registry, SmartPointerFactoryWithNoArgument) {
   Registry<size_t, std::unique_ptr<size_t>()> registry;
 
@@ -51,4 +50,5 @@ TEST(Registry, ValueFactoryWithArguments) {
   EXPECT_TRUE(registry.Has(key));
   EXPECT_EQ(registry.Create(key, 1, 1), 2);
 }
-} // namespace
+
+} // namespace facebook::velox
