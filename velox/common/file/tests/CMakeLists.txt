@@ -13,6 +13,7 @@
 # limitations under the License.
 
 add_library(velox_file_test_utils TestUtils.cpp)
+add_library(velox_blocking_read_file BlockingReadFile.cpp)
 target_link_libraries(velox_file_test_utils PUBLIC velox_file)
 
 add_executable(velox_file_test FileTest.cpp UtilsTest.cpp)
