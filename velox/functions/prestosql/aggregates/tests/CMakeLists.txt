@@ -43,6 +43,7 @@ add_executable(
   MapAggTest.cpp
   MapUnionAggregationTest.cpp
   MapUnionSumTest.cpp
+  MapUnionMinMaxTest.cpp
   ReduceAggTest.cpp
   ValueListTest.cpp
   VarianceAggregationTest.cpp
