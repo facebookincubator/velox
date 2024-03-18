@@ -29,7 +29,7 @@ class StringTest : public SparkFunctionBaseTest {
 };
 
 TEST_F(StringTest, ascii) {
-  const auto ascii = [&](const std::string& arg) {
+  const auto ascii = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t>("ascii(c0)", arg);
   };
   EXPECT_EQ(ascii(std::string("\0", 1)), 0);
@@ -50,7 +50,7 @@ TEST_F(StringTest, ascii) {
 }
 
 TEST_F(StringTest, bitLength) {
-  const auto bitLength = [&](const std::string& arg) {
+  const auto bitLength = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t>("bit_length(c0)", arg);
   };
 
@@ -65,7 +65,7 @@ TEST_F(StringTest, bitLength) {
 }
 
 TEST_F(StringTest, bitLengthVarbinary) {
-  const auto bitLength = [&](std::optional<std::string> arg) {
+  const auto bitLength = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t, std::string>(
         "bit_length(c0)", {arg}, {VARBINARY()});
   };
@@ -112,7 +112,7 @@ TEST_F(StringTest, contains) {
 }
 
 TEST_F(StringTest, conv) {
-  const auto conv = [&](std::optional<std::string> str,
+  const auto conv = [&](const std::optional<std::string>& str,
                   std::optional<int32_t> fromBase,
                   std::optional<int32_t> toBase) {
     return evaluateOnce<std::string>("conv(c0, c1, c2)", str, fromBase, toBase);
@@ -192,8 +192,8 @@ TEST_F(StringTest, endsWith) {
 }
 
 TEST_F(StringTest, findInSet) {
-  const auto findInSet = [&](std::optional<std::string> str,
-                       std::optional<std::string> strArray) {
+  const auto findInSet = [&](const std::optional<std::string>& str,
+                       const std::optional<std::string>& strArray) {
     return evaluateOnce<int32_t>("find_in_set(c0, c1)", str, strArray);
   };
   EXPECT_EQ(findInSet("ab", "abc,b,ab,c,def"), 3);
@@ -227,8 +227,8 @@ TEST_F(StringTest, findInSet) {
 }
 
 TEST_F(StringTest, instr) {
-  const auto instr = [&](std::optional<std::string> haystack,
-                   std::optional<std::string> needle) {
+  const auto instr = [&](const std::optional<std::string>& haystack,
+                   const std::optional<std::string>& needle) {
     return evaluateOnce<int32_t>("instr(c0, c1)", haystack, needle);
   };
   EXPECT_EQ(instr("SparkSQL", "SQL"), 6);
@@ -251,7 +251,7 @@ TEST_F(StringTest, instr) {
 }
 
 TEST_F(StringTest, left) {
-  const auto left = [&](std::optional<std::string> str,
+  const auto left = [&](const std::optional<std::string>& str,
                   std::optional<int32_t> length) {
     return evaluateOnce<std::string>("left(c0, c1)", str, length);
   };
@@ -267,7 +267,7 @@ TEST_F(StringTest, left) {
 }
 
 TEST_F(StringTest, lengthString) {
-  const auto length = [&](std::optional<std::string> arg) {
+  const auto length = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t>("length(c0)", arg);
   };
   EXPECT_EQ(length(""), 0);
@@ -281,7 +281,7 @@ TEST_F(StringTest, lengthString) {
 }
 
 TEST_F(StringTest, lengthVarbinary) {
-  const auto length = [&](std::optional<std::string> arg) {
+  const auto length = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t, std::string>(
         "length(c0)", {arg}, {VARBINARY()});
   };
@@ -297,14 +297,14 @@ TEST_F(StringTest, lpad) {
   std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
   std::string invalidPadString = "\xFFΨ\xFF";
 
-  const auto lpad = [&](std::optional<std::string> string,
+  const auto lpad = [&](const std::optional<std::string>& string,
                   std::optional<int32_t> size) {
     return evaluateOnce<std::string>("lpad(c0, c1)", string, size);
   };
 
-  const auto lpadWithPadString = [&](std::optional<std::string> string,
+  const auto lpadWithPadString = [&](const std::optional<std::string>& string,
                                std::optional<int32_t> size,
-                               std::optional<std::string> padString) {
+                               const std::optional<std::string>& padString) {
     return evaluateOnce<std::string>(
         "lpad(c0, c1, c2)", string, size, padString);
   };
@@ -342,12 +342,12 @@ TEST_F(StringTest, lpad) {
 }
 
 TEST_F(StringTest, ltrim) {
-  const auto ltrim = [&](std::optional<std::string> srcStr) {
+  const auto ltrim = [&](const std::optional<std::string>& srcStr) {
     return evaluateOnce<std::string>("ltrim(c0)", srcStr);
   };
 
-  const auto ltrimWithTrimStr = [&](std::optional<std::string> trimStr,
-                              std::optional<std::string> srcStr) {
+  const auto ltrimWithTrimStr = [&](const std::optional<std::string>& trimStr,
+                              const std::optional<std::string>& srcStr) {
     return evaluateOnce<std::string>("ltrim(c0, c1)", trimStr, srcStr);
   };
 
@@ -384,7 +384,7 @@ TEST_F(StringTest, ltrim) {
 }
 
 TEST_F(StringTest, md5) {
-  const auto md5 = [&](std::optional<std::string> arg) {
+  const auto md5 = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<std::string, std::string>(
         "md5(c0)", {arg}, {VARBINARY()});
   };
@@ -394,8 +394,8 @@ TEST_F(StringTest, md5) {
 }
 
 TEST_F(StringTest, overlayVarchar) {
-  const auto overlay = [&](std::optional<std::string> input,
-                     std::optional<std::string> replace,
+  const auto overlay = [&](const std::optional<std::string>& input,
+                     const std::optional<std::string>& replace,
                      std::optional<int32_t> pos,
                      std::optional<int32_t> len) {
     // overlay is a keyword of DuckDB, use double quote avoid parse error.
@@ -421,8 +421,8 @@ TEST_F(StringTest, overlayVarchar) {
 }
 
 TEST_F(StringTest, overlayVarbinary) {
-  const auto overlay = [&](std::optional<std::string> input,
-                     std::optional<std::string> replace,
+  const auto overlay = [&](const std::optional<std::string>& input,
+                     const std::optional<std::string>& replace,
                      std::optional<int32_t> pos,
                      std::optional<int32_t> len) {
     // overlay is a keyword of DuckDB, use double quote avoid parse error.
@@ -451,14 +451,14 @@ TEST_F(StringTest, overlayVarbinary) {
 }
 
 TEST_F(StringTest, replace) {
-  const auto replace = [&](std::optional<std::string> str,
-                     std::optional<std::string> replaced) {
+  const auto replace = [&](const std::optional<std::string>& str,
+                     const std::optional<std::string>& replaced) {
     return evaluateOnce<std::string>("replace(c0, c1)", str, replaced);
   };
 
-  const auto replaceWithReplacement = [&](std::optional<std::string> str,
-                                    std::optional<std::string> replaced,
-                                    std::optional<std::string> replacement) {
+  const auto replaceWithReplacement = [&](const std::optional<std::string>& str,
+                                    const std::optional<std::string>& replaced,
+                                    const std::optional<std::string>& replacement) {
     return evaluateOnce<std::string>(
         "replace(c0, c1, c2)", str, replaced, replacement);
   };
@@ -480,14 +480,14 @@ TEST_F(StringTest, rpad) {
   const std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
   const std::string invalidPadString = "\xFFΨ\xFF";
 
-  const auto rpad = [&](std::optional<std::string> string,
+  const auto rpad = [&](const std::optional<std::string>& string,
                   std::optional<int32_t> size) {
     return evaluateOnce<std::string>("rpad(c0, c1)", string, size);
   };
 
-  const auto rpadWithPadString = [&](std::optional<std::string> string,
+  const auto rpadWithPadString = [&](const std::optional<std::string>& string,
                                std::optional<int32_t> size,
-                               std::optional<std::string> padString) {
+                               const std::optional<std::string>& padString) {
     return evaluateOnce<std::string>(
         "rpad(c0, c1, c2)", string, size, padString);
   };
@@ -525,12 +525,12 @@ TEST_F(StringTest, rpad) {
 }
 
 TEST_F(StringTest, rtrim) {
-  const auto rtrim = [&](std::optional<std::string> srcStr) {
+  const auto rtrim = [&](const std::optional<std::string>& srcStr) {
     return evaluateOnce<std::string>("rtrim(c0)", srcStr);
   };
 
-  const auto rtrimWithTrimStr = [&](std::optional<std::string> trimStr,
-                              std::optional<std::string> srcStr) {
+  const auto rtrimWithTrimStr = [&](const std::optional<std::string>& trimStr,
+                              const std::optional<std::string>& srcStr) {
     return evaluateOnce<std::string>("rtrim(c0, c1)", trimStr, srcStr);
   };
   EXPECT_EQ(rtrim(""), "");
@@ -566,7 +566,7 @@ TEST_F(StringTest, rtrim) {
 }
 
 TEST_F(StringTest, sha1) {
-  const auto sha1 = [&](std::optional<std::string> arg) {
+  const auto sha1 = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<std::string, std::string>(
         "sha1(c0)", {arg}, {VARBINARY()});
   };
@@ -580,7 +580,7 @@ TEST_F(StringTest, sha1) {
 }
 
 TEST_F(StringTest, sha2) {
-  const auto sha2 = [&](std::optional<std::string> str,
+  const auto sha2 = [&](const std::optional<std::string>& str,
                   std::optional<int32_t> bitLength) {
     return evaluateOnce<std::string, std::string, int32_t>(
         "sha2(cast(c0 as varbinary), c1)", str, bitLength);
@@ -658,12 +658,12 @@ TEST_F(StringTest, startsWith) {
 }
 
 TEST_F(StringTest, substring) {
-  const auto substring = [&](std::optional<std::string> str,
+  const auto substring = [&](const std::optional<std::string>& str,
                        std::optional<int32_t> start) {
     return evaluateOnce<std::string>("substring(c0, c1)", str, start);
   };
 
-  const auto substringWithLength = [&](std::optional<std::string> str,
+  const auto substringWithLength = [&](const std::optional<std::string>& str,
                                  std::optional<int32_t> start,
                                  std::optional<int32_t> length) {
     return evaluateOnce<std::string>(
@@ -819,12 +819,12 @@ TEST_F(StringTest, translateNonconstantMatch) {
 }
 
 TEST_F(StringTest, trim) {
-  const auto trim = [&](std::optional<std::string> srcStr) {
+  const auto trim = [&](const std::optional<std::string>& srcStr) {
     return evaluateOnce<std::string>("trim(c0)", srcStr);
   };
 
-  const auto trimWithTrimStr = [&](std::optional<std::string> trimStr,
-                             std::optional<std::string> srcStr) {
+  const auto trimWithTrimStr = [&](const std::optional<std::string>& trimStr,
+                             const std::optional<std::string>& srcStr) {
     return evaluateOnce<std::string>("trim(c0, c1)", trimStr, srcStr);
   };
 
