@@ -137,6 +137,10 @@ void WindowFuzzer::go() {
 
     const bool customVerification =
         customVerificationFunctions_.count(signature.name) != 0;
+    std::shared_ptr<ResultVerifier> customVerifier = nullptr;
+    if (customVerification) {
+      customVerifier = customVerificationFunctions_.at(signature.name);
+    }
     const bool requireSortedInput =
         orderDependentFunctions_.count(signature.name) != 0;
 
@@ -174,6 +178,7 @@ void WindowFuzzer::go() {
         call,
         input,
         customVerification,
+        customVerifier,
         FLAGS_enable_window_reference_verification);
     if (failed) {
       signatureWithStats.second.numFailed++;
@@ -209,6 +214,7 @@ void WindowFuzzer::testAlternativePlans(
     const std::string& functionCall,
     const std::vector<RowVectorPtr>& input,
     bool customVerification,
+    const std::shared_ptr<ResultVerifier>& customVerifier,
     const velox::test::ResultOrError& expected) {
   std::vector<AggregationFuzzerBase::PlanWithSplits> plans;
 
@@ -265,14 +271,23 @@ void WindowFuzzer::testAlternativePlans(
 
   for (const auto& plan : plans) {
     testPlan(
-        plan,
-        false,
-        false,
-        customVerification,
-        /*customVerifiers*/ {},
-        expected);
+        plan, false, false, customVerification, {customVerifier}, expected);
   }
 }
+
+namespace {
+void initializeVerifier(
+    const core::PlanNodePtr& plan,
+    const std::shared_ptr<ResultVerifier>& customVerifier,
+    const std::vector<RowVectorPtr>& input,
+    const std::vector<std::string>& partitionKeys,
+    const std::string& frame) {
+  const auto& windowNode =
+      std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  customVerifier->initializeWindow(
+      input, partitionKeys, windowNode->windowFunctions()[0], frame, "w0");
+}
+} // namespace
 
 bool WindowFuzzer::verifyWindow(
     const std::vector<std::string>& partitionKeys,
@@ -281,12 +296,22 @@ bool WindowFuzzer::verifyWindow(
     const std::string& functionCall,
     const std::vector<RowVectorPtr>& input,
     bool customVerification,
+    const std::shared_ptr<ResultVerifier>& customVerifier,
     bool enableWindowVerification) {
   auto frame = getFrame(partitionKeys, sortingKeysAndOrders, frameClause);
   auto plan = PlanBuilder()
                   .values(input)
                   .window({fmt::format("{} over ({})", functionCall, frame)})
                   .planNode();
+  if (customVerifier) {
+    initializeVerifier(plan, customVerifier, input, partitionKeys, frame);
+  }
+  SCOPE_EXIT {
+    if (customVerifier) {
+      customVerifier->reset();
+    }
+  };
+
   if (persistAndRunOnce_) {
     persistReproInfo({{plan, {}}}, reproPersistPath_);
   }
@@ -298,8 +323,8 @@ bool WindowFuzzer::verifyWindow(
       ++stats_.numFailed;
     }
 
-    if (!customVerification && enableWindowVerification) {
-      if (resultOrError.result) {
+    if (!customVerification) {
+      if (resultOrError.result && enableWindowVerification) {
         auto referenceResult = computeReferenceResults(plan, input);
         stats_.updateReferenceQueryStats(referenceResult.second);
         if (auto expectedResult = referenceResult.first) {
@@ -316,9 +341,15 @@ bool WindowFuzzer::verifyWindow(
         }
       }
     } else {
-      // TODO: support custom verification.
-      LOG(INFO) << "Verification skipped";
+      LOG(INFO) << "Verification through custom verifier";
       ++stats_.numVerificationSkipped;
+
+      if (customVerifier && resultOrError.result) {
+        VELOX_CHECK(
+            customVerifier->supportsVerify(),
+            "Window fuzzer only uses custom verify() methods.");
+        customVerifier->verify(resultOrError.result);
+      }
     }
 
     testAlternativePlans(
@@ -328,6 +359,7 @@ bool WindowFuzzer::verifyWindow(
         functionCall,
         input,
         customVerification,
+        customVerifier,
         resultOrError);
 
     return resultOrError.exceptionPtr != nullptr;
