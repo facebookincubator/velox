@@ -29,7 +29,7 @@ class StringTest : public SparkFunctionBaseTest {
 };
 
 TEST_F(StringTest, ascii) {
-  auto ascii = [&](std::optional<std::string> arg) {
+  const auto ascii = [&](const std::string& arg) {
     return evaluateOnce<int32_t>("ascii(c0)", arg);
   };
   EXPECT_EQ(ascii(std::string("\0", 1)), 0);
@@ -50,7 +50,7 @@ TEST_F(StringTest, ascii) {
 }
 
 TEST_F(StringTest, bitLength) {
-  auto bitLength = [&](std::optional<std::string> arg) {
+  const auto bitLength = [&](const std::string& arg) {
     return evaluateOnce<int32_t>("bit_length(c0)", arg);
   };
 
@@ -65,7 +65,7 @@ TEST_F(StringTest, bitLength) {
 }
 
 TEST_F(StringTest, bitLengthVarbinary) {
-  auto bitLength = [&](std::optional<std::string> arg) {
+  const auto bitLength = [&](std::optional<std::string> arg) {
     return evaluateOnce<int32_t, std::string>(
         "bit_length(c0)", {arg}, {VARBINARY()});
   };
@@ -81,7 +81,7 @@ TEST_F(StringTest, bitLengthVarbinary) {
 }
 
 TEST_F(StringTest, chr) {
-  auto chr = [&](std::optional<int64_t> arg) {
+  const auto chr = [&](std::optional<int64_t> arg) {
     return evaluateOnce<std::string>("chr(c0)", arg);
   };
   EXPECT_EQ(chr(-16), "");
@@ -98,7 +98,7 @@ TEST_F(StringTest, chr) {
 }
 
 TEST_F(StringTest, contains) {
-  auto contains = [&](const std::optional<std::string>& str,
+  const auto contains = [&](const std::optional<std::string>& str,
                       const std::optional<std::string>& pattern) {
     return evaluateOnce<bool>("contains(c0, c1)", str, pattern);
   };
@@ -112,7 +112,7 @@ TEST_F(StringTest, contains) {
 }
 
 TEST_F(StringTest, conv) {
-  auto conv = [&](std::optional<std::string> str,
+  const auto conv = [&](std::optional<std::string> str,
                   std::optional<int32_t> fromBase,
                   std::optional<int32_t> toBase) {
     return evaluateOnce<std::string>("conv(c0, c1, c2)", str, fromBase, toBase);
@@ -173,7 +173,7 @@ TEST_F(StringTest, conv) {
 }
 
 TEST_F(StringTest, endsWith) {
-  auto endsWith = [&](const std::optional<std::string>& str,
+  const auto endsWith = [&](const std::optional<std::string>& str,
                       const std::optional<std::string>& pattern) {
     return evaluateOnce<bool>("endsWith(c0, c1)", str, pattern);
   };
@@ -192,7 +192,7 @@ TEST_F(StringTest, endsWith) {
 }
 
 TEST_F(StringTest, findInSet) {
-  auto findInSet = [&](std::optional<std::string> str,
+  const auto findInSet = [&](std::optional<std::string> str,
                        std::optional<std::string> strArray) {
     return evaluateOnce<int32_t>("find_in_set(c0, c1)", str, strArray);
   };
@@ -227,7 +227,7 @@ TEST_F(StringTest, findInSet) {
 }
 
 TEST_F(StringTest, instr) {
-  auto instr = [&](std::optional<std::string> haystack,
+  const auto instr = [&](std::optional<std::string> haystack,
                    std::optional<std::string> needle) {
     return evaluateOnce<int32_t>("instr(c0, c1)", haystack, needle);
   };
@@ -251,7 +251,7 @@ TEST_F(StringTest, instr) {
 }
 
 TEST_F(StringTest, left) {
-  auto left = [&](std::optional<std::string> str,
+  const auto left = [&](std::optional<std::string> str,
                   std::optional<int32_t> length) {
     return evaluateOnce<std::string>("left(c0, c1)", str, length);
   };
@@ -267,7 +267,7 @@ TEST_F(StringTest, left) {
 }
 
 TEST_F(StringTest, lengthString) {
-  auto length = [&](std::optional<std::string> arg) {
+  const auto length = [&](std::optional<std::string> arg) {
     return evaluateOnce<int32_t>("length(c0)", arg);
   };
   EXPECT_EQ(length(""), 0);
@@ -281,7 +281,7 @@ TEST_F(StringTest, lengthString) {
 }
 
 TEST_F(StringTest, lengthVarbinary) {
-  auto length = [&](std::optional<std::string> arg) {
+  const auto length = [&](std::optional<std::string> arg) {
     return evaluateOnce<int32_t, std::string>(
         "length(c0)", {arg}, {VARBINARY()});
   };
@@ -297,12 +297,12 @@ TEST_F(StringTest, lpad) {
   std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
   std::string invalidPadString = "\xFFΨ\xFF";
 
-  auto lpad = [&](std::optional<std::string> string,
+  const auto lpad = [&](std::optional<std::string> string,
                   std::optional<int32_t> size) {
     return evaluateOnce<std::string>("lpad(c0, c1)", string, size);
   };
 
-  auto lpadWithPadString = [&](std::optional<std::string> string,
+  const auto lpadWithPadString = [&](std::optional<std::string> string,
                                std::optional<int32_t> size,
                                std::optional<std::string> padString) {
     return evaluateOnce<std::string>(
@@ -342,11 +342,11 @@ TEST_F(StringTest, lpad) {
 }
 
 TEST_F(StringTest, ltrim) {
-  auto ltrim = [&](std::optional<std::string> srcStr) {
+  const auto ltrim = [&](std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("ltrim(c0)", srcStr);
   };
 
-  auto ltrimWithTrimStr = [&](std::optional<std::string> trimStr,
+  const auto ltrimWithTrimStr = [&](std::optional<std::string> trimStr,
                               std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("ltrim(c0, c1)", trimStr, srcStr);
   };
@@ -384,7 +384,7 @@ TEST_F(StringTest, ltrim) {
 }
 
 TEST_F(StringTest, md5) {
-  auto md5 = [&](std::optional<std::string> arg) {
+  const auto md5 = [&](std::optional<std::string> arg) {
     return evaluateOnce<std::string, std::string>(
         "md5(c0)", {arg}, {VARBINARY()});
   };
@@ -394,7 +394,7 @@ TEST_F(StringTest, md5) {
 }
 
 TEST_F(StringTest, overlayVarchar) {
-  auto overlay = [&](std::optional<std::string> input,
+  const auto overlay = [&](std::optional<std::string> input,
                      std::optional<std::string> replace,
                      std::optional<int32_t> pos,
                      std::optional<int32_t> len) {
@@ -421,7 +421,7 @@ TEST_F(StringTest, overlayVarchar) {
 }
 
 TEST_F(StringTest, overlayVarbinary) {
-  auto overlay = [&](std::optional<std::string> input,
+  const auto overlay = [&](std::optional<std::string> input,
                      std::optional<std::string> replace,
                      std::optional<int32_t> pos,
                      std::optional<int32_t> len) {
@@ -451,12 +451,12 @@ TEST_F(StringTest, overlayVarbinary) {
 }
 
 TEST_F(StringTest, replace) {
-  auto replace = [&](std::optional<std::string> str,
+  const auto replace = [&](std::optional<std::string> str,
                      std::optional<std::string> replaced) {
     return evaluateOnce<std::string>("replace(c0, c1)", str, replaced);
   };
 
-  auto replaceWithReplacement = [&](std::optional<std::string> str,
+  const auto replaceWithReplacement = [&](std::optional<std::string> str,
                                     std::optional<std::string> replaced,
                                     std::optional<std::string> replacement) {
     return evaluateOnce<std::string>(
@@ -480,12 +480,12 @@ TEST_F(StringTest, rpad) {
   const std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
   const std::string invalidPadString = "\xFFΨ\xFF";
 
-  auto rpad = [&](std::optional<std::string> string,
+  const auto rpad = [&](std::optional<std::string> string,
                   std::optional<int32_t> size) {
     return evaluateOnce<std::string>("rpad(c0, c1)", string, size);
   };
 
-  auto rpadWithPadString = [&](std::optional<std::string> string,
+  const auto rpadWithPadString = [&](std::optional<std::string> string,
                                std::optional<int32_t> size,
                                std::optional<std::string> padString) {
     return evaluateOnce<std::string>(
@@ -525,11 +525,11 @@ TEST_F(StringTest, rpad) {
 }
 
 TEST_F(StringTest, rtrim) {
-  auto rtrim = [&](std::optional<std::string> srcStr) {
+  const auto rtrim = [&](std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("rtrim(c0)", srcStr);
   };
 
-  auto rtrimWithTrimStr = [&](std::optional<std::string> trimStr,
+  const auto rtrimWithTrimStr = [&](std::optional<std::string> trimStr,
                               std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("rtrim(c0, c1)", trimStr, srcStr);
   };
@@ -566,7 +566,7 @@ TEST_F(StringTest, rtrim) {
 }
 
 TEST_F(StringTest, sha1) {
-  auto sha1 = [&](std::optional<std::string> arg) {
+  const auto sha1 = [&](std::optional<std::string> arg) {
     return evaluateOnce<std::string, std::string>(
         "sha1(c0)", {arg}, {VARBINARY()});
   };
@@ -580,7 +580,7 @@ TEST_F(StringTest, sha1) {
 }
 
 TEST_F(StringTest, sha2) {
-  auto sha2 = [&](std::optional<std::string> str,
+  const auto sha2 = [&](std::optional<std::string> str,
                   std::optional<int32_t> bitLength) {
     return evaluateOnce<std::string, std::string, int32_t>(
         "sha2(cast(c0 as varbinary), c1)", str, bitLength);
@@ -642,7 +642,7 @@ TEST_F(StringTest, sha2) {
 }
 
 TEST_F(StringTest, startsWith) {
-  auto startsWith = [&](const std::optional<std::string>& str,
+  const auto startsWith = [&](const std::optional<std::string>& str,
                         const std::optional<std::string>& pattern) {
     return evaluateOnce<bool>("startsWith(c0, c1)", str, pattern);
   };
@@ -658,12 +658,12 @@ TEST_F(StringTest, startsWith) {
 }
 
 TEST_F(StringTest, substring) {
-  auto substring = [&](std::optional<std::string> str,
+  const auto substring = [&](std::optional<std::string> str,
                        std::optional<int32_t> start) {
     return evaluateOnce<std::string>("substring(c0, c1)", str, start);
   };
 
-  auto substringWithLength = [&](std::optional<std::string> str,
+  const auto substringWithLength = [&](std::optional<std::string> str,
                                  std::optional<int32_t> start,
                                  std::optional<int32_t> length) {
     return evaluateOnce<std::string>(
@@ -705,7 +705,7 @@ TEST_F(StringTest, substring) {
 }
 
 TEST_F(StringTest, substringIndex) {
-  auto substringIndex =
+  const auto substringIndex =
       [&](const std::string& str, const std::string& delim, int32_t count) {
         return evaluateOnce<std::string, std::string, std::string, int32_t>(
             "substring_index(c0, c1, c2)", str, delim, count);
@@ -741,7 +741,7 @@ TEST_F(StringTest, substringIndex) {
 }
 
 TEST_F(StringTest, translate) {
-  auto testTranslate =
+  const auto testTranslate =
       [&](const std::vector<std::optional<std::string>>& inputs,
           auto& expected) {
         EXPECT_EQ(
@@ -770,7 +770,7 @@ TEST_F(StringTest, translateConstantMatch) {
   auto rowType = ROW({{"c0", VARCHAR()}});
   auto exprSet = compileExpression("translate(c0, 'ab', '12')", rowType);
 
-  auto testTranslate = [&](const auto& input, const auto& expected) {
+  const auto testTranslate = [&](const auto& input, const auto& expected) {
     auto result = evaluate(*exprSet, makeRowVector({input}));
     velox::test::assertEqualVectors(expected, result);
   };
@@ -790,7 +790,7 @@ TEST_F(StringTest, translateNonconstantMatch) {
   auto rowType = ROW({{"c0", VARCHAR()}, {"c1", VARCHAR()}, {"c2", VARCHAR()}});
   auto exprSet = compileExpression("translate(c0, c1, c2)", rowType);
 
-  auto testTranslate = [&](const std::vector<VectorPtr>& inputs,
+  const auto testTranslate = [&](const std::vector<VectorPtr>& inputs,
                            const auto& expected) {
     auto result = evaluate(*exprSet, makeRowVector(inputs));
     velox::test::assertEqualVectors(expected, result);
@@ -819,11 +819,11 @@ TEST_F(StringTest, translateNonconstantMatch) {
 }
 
 TEST_F(StringTest, trim) {
-  auto trim = [&](std::optional<std::string> srcStr) {
+  const auto trim = [&](std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("trim(c0)", srcStr);
   };
 
-  auto trimWithTrimStr = [&](std::optional<std::string> trimStr,
+  const auto trimWithTrimStr = [&](std::optional<std::string> trimStr,
                              std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("trim(c0, c1)", trimStr, srcStr);
   };
