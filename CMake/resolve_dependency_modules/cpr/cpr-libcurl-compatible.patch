@@ -39,3 +39,13 @@
      return (*progress)(dltotal, dlnow, ultotal, ulnow) ? 0 : cancel_retval;
  }
  int debugUserFunction(CURL* handle, curl_infotype type, char* data, size_t size, const DebugCallback* debug);
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -84,7 +84,6 @@ endif()
+ include(GNUInstallDirs)
+ include(FetchContent)
+ include(cmake/code_coverage.cmake)
+-include(cmake/sanitizer.cmake)
+ include(cmake/clear_variable.cmake)
+
+ # So CMake can find FindMbedTLS.cmake
