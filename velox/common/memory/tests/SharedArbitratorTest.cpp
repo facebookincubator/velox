@@ -257,6 +257,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
   }
 
   void TearDown() override {
+    vector_.reset();
     HiveConnectorTestBase::TearDown();
   }
 

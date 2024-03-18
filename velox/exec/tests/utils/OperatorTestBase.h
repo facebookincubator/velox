@@ -47,6 +47,8 @@ class OperatorTestBase : public testing::Test,
 
   static void TearDownTestCase();
 
+  static void resetMemory();
+
   void createDuckDbTable(const std::vector<RowVectorPtr>& data) {
     duckDbQueryRunner_.createTable("tmp", data);
   }
