@@ -413,10 +413,10 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
         with:
-          ref: "${{ inputs.ref || 'main' }}"
+          ref: "${{ inputs.ref }}"
 
       - name: Install dependencies
-        run: sudo ./scripts/setup-ubuntu.sh
+        run: source ./scripts/setup-ubuntu.sh
 
       - name: Download exchange fuzzer
         uses: actions/download-artifact@v4
@@ -440,7 +440,7 @@ jobs:
             && echo -e "\n\Exchange fuzzer run finished successfully."
 
       - name: Archive Exchange production artifacts
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
             name: exchange-fuzzer-failure-artifacts
