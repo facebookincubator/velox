@@ -39,7 +39,6 @@ ${SUDO} apt update
 ${SUDO} apt install -y libunwind-dev
 ${SUDO} apt install -y \
   g++ \
-  cmake \
   ccache \
   ninja-build \
   checkinstall \
