@@ -294,8 +294,8 @@ TEST_F(StringTest, lengthVarbinary) {
 }
 
 TEST_F(StringTest, lpad) {
-  std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
-  std::string invalidPadString = "\xFFΨ\xFF";
+  const std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
+  const std::string invalidPadString = "\xFFΨ\xFF";
 
   const auto lpad = [&](const std::optional<std::string>& string,
                         const std::optional<int32_t>& size) {
