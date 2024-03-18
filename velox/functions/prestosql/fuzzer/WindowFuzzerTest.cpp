@@ -25,6 +25,7 @@
 #include "velox/functions/prestosql/fuzzer/ApproxDistinctInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/WindowOffsetInputGenerator.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 DEFINE_int64(
@@ -60,6 +61,10 @@ getCustomInputGenerators() {
       {"approx_distinct", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_set", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_percentile", std::make_shared<ApproxPercentileInputGenerator>()},
+      {"lead", std::make_shared<WindowOffsetInputGenerator>(1)},
+      {"lag", std::make_shared<WindowOffsetInputGenerator>(1)},
+      {"nth_value", std::make_shared<WindowOffsetInputGenerator>(1)},
+      {"ntile", std::make_shared<WindowOffsetInputGenerator>(0)},
   };
 }
 
