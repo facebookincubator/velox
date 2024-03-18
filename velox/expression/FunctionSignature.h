@@ -168,6 +168,16 @@ class FunctionSignature {
   }
 
  protected:
+  FunctionSignature(
+      std::unordered_map<std::string, SignatureVariable> variables,
+      TypeSignature returnType,
+      std::vector<TypeSignature> argumentTypes,
+      std::vector<bool> constantArguments,
+      bool variableArity,
+      const std::function<std::unordered_set<std::string>(
+          const std::unordered_map<std::string, SignatureVariable>&
+              typeVariables)>& usedVariables);
+
   // Return a string of the list of argument types.
   std::string argumentsToString() const;
 
@@ -189,14 +199,7 @@ class AggregateFunctionSignature : public FunctionSignature {
       TypeSignature intermediateType,
       std::vector<TypeSignature> argumentTypes,
       std::vector<bool> constantArguments,
-      bool variableArity)
-      : FunctionSignature(
-            std::move(variables),
-            std::move(returnType),
-            std::move(argumentTypes),
-            std::move(constantArguments),
-            variableArity),
-        intermediateType_{std::move(intermediateType)} {}
+      bool variableArity);
 
   const TypeSignature& intermediateType() const {
     return intermediateType_;

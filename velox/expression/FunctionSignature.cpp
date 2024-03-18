@@ -145,8 +145,8 @@ void validate(
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const TypeSignature& returnType,
     const std::vector<TypeSignature>& argumentTypes,
-    const std::vector<bool>& constantArguments) {
-  std::unordered_set<std::string> usedVariables;
+    const std::vector<bool>& constantArguments,
+    std::unordered_set<std::string> usedVariables) {
   // Validate the argument types.
   for (const auto& arg : argumentTypes) {
     // Is base type a type parameter or a built in type ?
@@ -212,8 +212,53 @@ FunctionSignature::FunctionSignature(
       argumentTypes_{std::move(argumentTypes)},
       constantArguments_{std::move(constantArguments)},
       variableArity_{variableArity} {
-  validate(variables_, returnType_, argumentTypes_, constantArguments_);
+  validate(variables_, returnType_, argumentTypes_, constantArguments_, {});
 }
+
+FunctionSignature::FunctionSignature(
+    std::unordered_map<std::string, SignatureVariable> variables,
+    facebook::velox::exec::TypeSignature returnType,
+    std::vector<TypeSignature> argumentTypes,
+    std::vector<bool> constantArguments,
+    bool variableArity,
+    const std::function<std::unordered_set<std::string>(
+        const std::unordered_map<std::string, SignatureVariable>&
+            typeVariables)>& usedVariables)
+    : variables_{std::move(variables)},
+      returnType_{std::move(returnType)},
+      argumentTypes_{std::move(argumentTypes)},
+      constantArguments_{std::move(constantArguments)},
+      variableArity_{variableArity} {
+  validate(
+      variables_,
+      returnType_,
+      argumentTypes_,
+      constantArguments_,
+      usedVariables(variables_));
+}
+
+AggregateFunctionSignature::AggregateFunctionSignature(
+    std::unordered_map<std::string, SignatureVariable> variables,
+    facebook::velox::exec::TypeSignature returnType,
+    facebook::velox::exec::TypeSignature intermediateType,
+    std::vector<TypeSignature> argumentTypes,
+    std::vector<bool> constantArguments,
+    bool variableArity)
+    : FunctionSignature(
+          std::move(variables),
+          std::move(returnType),
+          std::move(argumentTypes),
+          std::move(constantArguments),
+          variableArity,
+          [&intermediateType](
+              const std::unordered_map<std::string, SignatureVariable>&
+                  typeVariables) {
+            std::unordered_set<std::string> usedVariables;
+            validateBaseTypeAndCollectTypeParams(
+                typeVariables, intermediateType, usedVariables, false);
+            return usedVariables;
+          }),
+      intermediateType_{std::move(intermediateType)} {}
 
 std::string AggregateFunctionSignature::toString() const {
   std::ostringstream out;
