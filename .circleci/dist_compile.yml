@@ -297,6 +297,7 @@ jobs:
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
       DuckDB_SOURCE: SYSTEM
+      fast_float_SOURCE: BUNDLED
     steps:
       - pre-steps
       - run:
@@ -352,6 +353,7 @@ jobs:
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
       DuckDB_SOURCE: BUNDLED
+      fast_float_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/fuzzer.log"

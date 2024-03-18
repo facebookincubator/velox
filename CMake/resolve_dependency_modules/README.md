@@ -24,6 +24,7 @@ by Velox. See details on bundling below.
 | openssl           | default         | No       |
 | protobuf          | 21 (exact)      | Yes      |
 | boost             | 1.66.0          | Yes      |
+| fast_float        | 5.3.0           | Yes      |
 | flex              | 2.5.13          | No       |
 | bison             | 3.0.4           | No       |
 | cmake             | 3.14            | No       |

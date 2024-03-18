@@ -22,6 +22,7 @@ add_subdirectory(fbhive)
 add_library(
   velox_type
   Conversions.cpp
+  StringToFloatParser.cpp
   DecimalUtil.cpp
   DoubleUtil.cpp
   Filter.cpp
@@ -46,4 +47,5 @@ target_link_libraries(
   velox_status
   Boost::headers
   Folly::folly
-  re2::re2)
+  re2::re2
+  fast_float)

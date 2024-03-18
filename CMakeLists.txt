@@ -561,6 +561,9 @@ endif()
 set_source(xsimd)
 resolve_dependency(xsimd 10.0.0)
 
+set_source(fast_float)
+resolve_dependency(fast_float 5.3.0)
+
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)
   include(CTest) # include after project() but before add_subdirectory()
