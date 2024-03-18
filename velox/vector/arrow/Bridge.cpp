@@ -1011,6 +1011,34 @@ void exportToArrowImpl(
   out.release = releaseArrowArray;
 }
 
+// Parses the velox decimal format from the given arrow format.
+// The input format string should be in the form "d:precision,scale<,bitWidth>".
+// bitWidth is not required and must be 128 if provided.
+TypePtr parseDecimalFormat(const char* format) {
+  try {
+    std::string::size_type sz;
+    // Parse "d:".
+    int precision = std::stoi(&format[2], &sz);
+    // Parse ",".
+    int idx = 2 + sz + 1;
+    int scale = std::stoi(&format[idx], &sz);
+    // If bitwidth is provided, check if it is equal to 128.
+    if (format[idx + sz] == ',') {
+      int bitWidth = std::stoi(&format[idx + sz + 1], &sz);
+      VELOX_USER_CHECK_EQ(
+          bitWidth,
+          128,
+          "Conversion failed for '{}'. Velox decimal does not support custom bitwidth.",
+          format);
+    }
+    return DECIMAL(precision, scale);
+  } catch (std::invalid_argument&) {
+    VELOX_USER_FAIL(
+        "Unable to convert '{}' ArrowSchema decimal format to Velox decimal",
+        format);
+  }
+}
+
 TypePtr importFromArrowImpl(
     const char* format,
     const ArrowSchema& arrowSchema) {
@@ -1056,30 +1084,9 @@ TypePtr importFromArrowImpl(
       }
       break;
 
-    case 'd': { // decimal types.
-      try {
-        std::string::size_type sz;
-        // Parse "d:".
-        int precision = std::stoi(&format[2], &sz);
-        // Parse ",".
-        int idx = 2 + sz + 1;
-        int scale = std::stoi(&format[idx], &sz);
-        // If bitwidth is provided, check if it is equal to 128.
-        if (format[idx + sz] == ',') {
-          int bitWidth = std::stoi(&format[idx + sz + 1], &sz);
-          VELOX_USER_CHECK_EQ(
-              bitWidth,
-              128,
-              "Conversion failed for '{}'. Velox decimal does not support custom bitwidth.",
-              format);
-        }
-        return DECIMAL(precision, scale);
-      } catch (std::invalid_argument&) {
-        VELOX_USER_FAIL(
-            "Unable to convert '{}' ArrowSchema decimal format to Velox decimal",
-            format);
-      }
-    }
+    case 'd':
+      // decimal types.
+      return parseDecimalFormat(format);
 
     // Complex types.
     case '+': {

@@ -388,6 +388,15 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
   VELOX_ASSERT_THROW(
       *testSchemaImport("d:10,4,"),
       "Unable to convert 'd:10,4,' ArrowSchema decimal format to Velox decimal");
+  VELOX_ASSERT_THROW(
+      *testSchemaImport("d:10"),
+      "Unable to convert 'd:10' ArrowSchema decimal format to Velox decimal");
+  VELOX_ASSERT_THROW(
+      *testSchemaImport("d:"),
+      "Unable to convert 'd:' ArrowSchema decimal format to Velox decimal");
+  VELOX_ASSERT_THROW(
+      *testSchemaImport("d:10,"),
+      "Unable to convert 'd:10,' ArrowSchema decimal format to Velox decimal");
 }
 
 TEST_F(ArrowBridgeSchemaImportTest, complexTypes) {
