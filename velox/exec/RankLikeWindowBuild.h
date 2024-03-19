@@ -47,34 +47,37 @@ class RankLikeWindowBuild : public WindowBuild {
 
   bool hasNextPartition() override;
 
-  std::unique_ptr<WindowPartition> nextPartition() override;
+  std::shared_ptr<WindowPartition> nextPartition() override;
 
   bool needsInput() override {
     return !isFinished_;
   }
 
  private:
+  void buildNextInputOrPartition(bool isFinished);
+
   // Vector of pointers to each input row in the data_ RowContainer.
-  // Rows are erased from data_ when they are output from the
-  // Window operator.
+  // Rows are erased from data_ when they are processed in WindowPartition.
   std::vector<std::vector<char*>> sortedRows_;
 
   // Holds input rows within the current partition.
   std::vector<char*> inputRows_;
 
-  // Indices of  the start row (in sortedRows_) of each partition in
-  // the RowContainer data_. This auxiliary structure helps demarcate
-  // partitions.
-  std::vector<vector_size_t> partitionOffsets_;
-
   // Used to compare rows based on partitionKeys.
   char* previousRow_ = nullptr;
 
-  // Current partition being output. Used to construct WindowPartitions
-  // during resetPartition.
-  vector_size_t currentPartition_ = -1;
+  // Current partition being output. Used to return the WidnowPartitions.
+  vector_size_t outputCurrentPartition_ = -1;
 
   bool isFinished_ = false;
+
+  // Current partition when adding input. Used to construct WindowPartitions.
+  vector_size_t inputCurrentPartition_ = 0;
+
+  std::vector<std::shared_ptr<WindowPartition>> windowPartitions_;
+
+  // Records the total rows number in each partition.
+  vector_size_t currentPartitionNum_ = 0;
 };
 
 } // namespace facebook::velox::exec

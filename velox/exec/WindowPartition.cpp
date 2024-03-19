@@ -51,7 +51,7 @@ void WindowPartition::extractColumn(
     vector_size_t resultOffset,
     const VectorPtr& result) const {
   RowContainer::extractColumn(
-      partition_.data() + partitionOffset,
+      partition_.data() + partitionOffset - offsetInPartition_,
       numRows,
       columns_[columnIndex],
       resultOffset,
@@ -146,7 +146,28 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
   auto lastPartitionRow = numRows() - 1;
   auto peerStart = prevPeerStart;
   auto peerEnd = prevPeerEnd;
-  for (auto i = start, j = 0; i < end; i++, j++) {
+
+  auto nextStart = start;
+  if (peerGroup_) {
+    peerEnd++;
+    nextStart = start + 1;
+    while (nextStart <= lastPartitionRow) {
+      if (peerCompare(
+              partition_[start - offsetInPartition_],
+              partition_[nextStart - offsetInPartition_])) {
+        break;
+      }
+      peerEnd++;
+      nextStart++;
+    }
+
+    for (auto j = start; j < nextStart; j++) {
+      rawPeerStarts[j - offsetInPartition_] = peerStart;
+      rawPeerEnds[j - offsetInPartition_] = peerEnd;
+    }
+  }
+
+  for (auto i = nextStart, j = (nextStart - start); i < end; i++, j++) {
     // When traversing input partition rows, the peers are the rows
     // with the same values for the ORDER BY clause. These rows
     // are equal in some ways and affect the results of ranking functions.
@@ -162,7 +183,9 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
       peerStart = i;
       peerEnd = i;
       while (peerEnd <= lastPartitionRow) {
-        if (peerCompare(partition_[peerStart], partition_[peerEnd])) {
+        if (peerCompare(
+                partition_[peerStart - offsetInPartition_],
+                partition_[peerEnd - offsetInPartition_])) {
           break;
         }
         peerEnd++;
