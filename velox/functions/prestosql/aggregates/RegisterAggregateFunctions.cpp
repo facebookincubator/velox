@@ -79,6 +79,10 @@ extern void registerMapUnionSumAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
+extern void registerMapUnionMinMaxAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
 extern void registerMaxDataSizeForStatsAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
@@ -170,6 +174,7 @@ void registerAllAggregateFunctions(
   registerMapAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerMapUnionAggregate(prefix, withCompanionFunctions, overwrite);
   registerMapUnionSumAggregate(prefix, withCompanionFunctions, overwrite);
+  registerMapUnionMinMaxAggregate(prefix, withCompanionFunctions, overwrite);
   registerMaxDataSizeForStatsAggregate(
       prefix, withCompanionFunctions, overwrite);
   registerMultiMapAggAggregate(prefix, withCompanionFunctions, overwrite);
