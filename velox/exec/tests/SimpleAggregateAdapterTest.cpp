@@ -357,6 +357,8 @@ class CountNullsAggregate {
   using IntermediateType = int64_t; // Intermediate result type.
   using OutputType = int64_t; // Output vector type.
 
+  struct FunctionState {};
+
   static constexpr bool default_null_behavior_ = false;
 
   struct Accumulator {
@@ -364,13 +366,16 @@ class CountNullsAggregate {
 
     Accumulator() = delete;
 
-    explicit Accumulator(HashStringAllocator* /*allocator*/) {
+    explicit Accumulator(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/) {
       nullsCount_ = 0;
     }
 
     bool addInput(
         HashStringAllocator* /*allocator*/,
-        exec::optional_arg_type<double> data) {
+        exec::optional_arg_type<double> data,
+        const FunctionState& /*state*/) {
       if (!data.has_value()) {
         nullsCount_++;
         return true;
@@ -380,7 +385,8 @@ class CountNullsAggregate {
 
     bool combine(
         HashStringAllocator* /*allocator*/,
-        exec::optional_arg_type<int64_t> nullsCount) {
+        exec::optional_arg_type<int64_t> nullsCount,
+        const FunctionState& /*state*/) {
       if (nullsCount.has_value()) {
         nullsCount_ += nullsCount.value();
         return true;
@@ -388,13 +394,17 @@ class CountNullsAggregate {
       return false;
     }
 
-    bool writeFinalResult(bool nonNull, exec::out_type<OutputType>& out) {
+    bool writeFinalResult(
+        bool nonNull,
+        exec::out_type<OutputType>& out,
+        const FunctionState& /*state*/) {
       return writeResult<OutputType>(nonNull, out);
     }
 
     bool writeIntermediateResult(
         bool nonNull,
-        exec::out_type<IntermediateType>& out) {
+        exec::out_type<IntermediateType>& out,
+        const FunctionState& /*state*/) {
       return writeResult<IntermediateType>(nonNull, out);
     }
 

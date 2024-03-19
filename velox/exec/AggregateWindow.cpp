@@ -151,6 +151,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
         // aggregate_ function object should be initialized.
         auto singleGroup = std::vector<vector_size_t>{0};
         aggregate_->clear();
+        aggregate_->initialize(argTypes_, resultType_, argVectors_);
         aggregate_->initializeNewGroups(&rawSingleGroupRow_, singleGroup);
         aggregateInitialized_ = true;
       }
@@ -332,6 +333,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
       // the aggregation based on the frame changes with each row. This would
       // require adding new APIs to the Aggregate framework.
       aggregate_->clear();
+      aggregate_->initialize(argTypes_, resultType_, argVectors_);
       aggregate_->initializeNewGroups(&rawSingleGroupRow_, kSingleGroup);
       aggregateInitialized_ = true;
 
@@ -349,6 +351,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // This value is returned for rows with empty frames.
   void computeDefaultAggregateValue(const TypePtr& resultType) {
     aggregate_->clear();
+    aggregate_->initialize(argTypes_, resultType, argVectors_);
     aggregate_->initializeNewGroups(
         &rawSingleGroupRow_, std::vector<vector_size_t>{0});
     aggregateInitialized_ = true;

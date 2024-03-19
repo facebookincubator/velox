@@ -129,6 +129,16 @@ class Aggregate {
         rowSizeOffset);
   }
 
+  // Initialize the function-level state of the simple function interface for
+  // UDAF.
+  // @param rawInputType The raw input type of the UDAF.
+  // @param resultType The result type of the UDAF.
+  // @param constantInputs Optional constant inputs.
+  virtual void initialize(
+      const std::vector<TypePtr>& rawInputType,
+      const TypePtr& resultType,
+      const std::vector<VectorPtr>& constantInputs) {}
+
   // Initializes null flags and accumulators for newly encountered groups.  This
   // function should be called only once for each group.
   //

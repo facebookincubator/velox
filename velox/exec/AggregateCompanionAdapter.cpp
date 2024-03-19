@@ -73,6 +73,13 @@ void AggregateCompanionFunctionBase::clearInternal() {
   fn_->clear();
 }
 
+void AggregateCompanionFunctionBase::initialize(
+    const std::vector<TypePtr>& rawInputType,
+    const facebook::velox::TypePtr& resultType,
+    const std::vector<VectorPtr>& constantInputs) {
+  fn_->initialize(rawInputType, resultType, constantInputs);
+}
+
 void AggregateCompanionFunctionBase::initializeNewGroups(
     char** groups,
     folly::Range<const vector_size_t*> indices) {
@@ -229,6 +236,15 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
   // Perform per-row aggregation.
   std::vector<vector_size_t> allSelectedRange;
   rows.applyToSelected([&](auto row) { allSelectedRange.push_back(row); });
+
+  // Get the raw input types.
+  std::vector<TypePtr> rawInputTypes;
+  rawInputTypes.reserve(args.size());
+  for (const auto& arg : args) {
+    rawInputTypes.emplace_back(arg->type());
+  }
+
+  fn_->initialize(rawInputTypes, outputType, {});
   fn_->initializeNewGroups(groups, allSelectedRange);
   fn_->enableValidateIntermediateInputs();
   fn_->addIntermediateResults(groups, rows, args, false);

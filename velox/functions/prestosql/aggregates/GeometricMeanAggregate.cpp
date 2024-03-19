@@ -35,6 +35,8 @@ class GeometricMeanAggregate {
 
   using OutputType = TResult;
 
+  struct FunctionState {};
+
   static bool toIntermediate(
       exec::out_type<Row<double, int64_t>>& out,
       exec::arg_type<TInput> in) {
@@ -50,30 +52,38 @@ class GeometricMeanAggregate {
 
     AccumulatorType() = delete;
 
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {}
+    explicit AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/) {}
 
     void addInput(
         HashStringAllocator* /*allocator*/,
-        exec::arg_type<TInput> data) {
+        exec::arg_type<TInput> data,
+        const FunctionState& /*state*/) {
       logSum_ += std::log(data);
       count_ = checkedPlus<int64_t>(count_, 1);
     }
 
     void combine(
         HashStringAllocator* /*allocator*/,
-        exec::arg_type<Row<double, int64_t>> other) {
+        exec::arg_type<Row<double, int64_t>> other,
+        const FunctionState& /*state*/) {
       VELOX_CHECK(other.at<0>().has_value());
       VELOX_CHECK(other.at<1>().has_value());
       logSum_ += other.at<0>().value();
       count_ = checkedPlus<int64_t>(count_, other.at<1>().value());
     }
 
-    bool writeFinalResult(exec::out_type<OutputType>& out) {
+    bool writeFinalResult(
+        exec::out_type<OutputType>& out,
+        const FunctionState& /*state*/) {
       out = std::exp(logSum_ / count_);
       return true;
     }
 
-    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+    bool writeIntermediateResult(
+        exec::out_type<IntermediateType>& out,
+        const FunctionState& /*state*/) {
       out = std::make_tuple(logSum_, count_);
       return true;
     }

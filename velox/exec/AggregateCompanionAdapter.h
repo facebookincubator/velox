@@ -38,6 +38,11 @@ class AggregateCompanionFunctionBase : public Aggregate {
 
   void destroy(folly::Range<char**> groups) override final;
 
+  void initialize(
+      const std::vector<TypePtr>& rawInputType,
+      const TypePtr& resultType,
+      const std::vector<VectorPtr>& constantInputs) override;
+
   void initializeNewGroups(
       char** groups,
       folly::Range<const vector_size_t*> indices) override final;
