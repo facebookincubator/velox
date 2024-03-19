@@ -1015,16 +1015,28 @@ void exportToArrowImpl(
 // The input format string should be in the form "d:precision,scale<,bitWidth>".
 // bitWidth is not required and must be 128 if provided.
 TypePtr parseDecimalFormat(const char* format) {
+  std::string invalidFormatMsg =
+      "Unable to convert '{}' ArrowSchema decimal format to Velox decimal";
   try {
     std::string::size_type sz;
+    std::string formatStr(format);
+
+    auto firstCommaIdx = formatStr.find(',', 2);
+    auto secondCommaIdx = formatStr.find(',', firstCommaIdx + 1);
+
+    if (firstCommaIdx == std::string::npos ||
+        formatStr.size() == firstCommaIdx + 1 ||
+        (secondCommaIdx != std::string::npos &&
+         formatStr.size() == secondCommaIdx + 1)) {
+      VELOX_USER_FAIL(invalidFormatMsg, format);
+    }
+
     // Parse "d:".
     int precision = std::stoi(&format[2], &sz);
-    // Parse ",".
-    int idx = 2 + sz + 1;
-    int scale = std::stoi(&format[idx], &sz);
+    int scale = std::stoi(&format[firstCommaIdx + 1], &sz);
     // If bitwidth is provided, check if it is equal to 128.
-    if (format[idx + sz] == ',') {
-      int bitWidth = std::stoi(&format[idx + sz + 1], &sz);
+    if (secondCommaIdx != std::string::npos) {
+      int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
       VELOX_USER_CHECK_EQ(
           bitWidth,
           128,
@@ -1033,9 +1045,7 @@ TypePtr parseDecimalFormat(const char* format) {
     }
     return DECIMAL(precision, scale);
   } catch (std::invalid_argument&) {
-    VELOX_USER_FAIL(
-        "Unable to convert '{}' ArrowSchema decimal format to Velox decimal",
-        format);
+    VELOX_USER_FAIL(invalidFormatMsg, format);
   }
 }
 
