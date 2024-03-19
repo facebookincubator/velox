@@ -529,10 +529,19 @@ TypePtr ReaderBase::convertType(
             VELOX_FAIL(
                 "UTF8 converted type can only be set for thrift::Type::(FIXED_LEN_)BYTE_ARRAY");
         }
+
+      case thrift::ConvertedType::ENUM:
+        switch (schemaElement.type) {
+          case thrift::Type::BYTE_ARRAY:
+            return VARCHAR();
+          default:
+            VELOX_FAIL(
+                "ENUM converted type can only be set for thrift::Type::BYTE_ARRAY");
+        }
+
       case thrift::ConvertedType::MAP:
       case thrift::ConvertedType::MAP_KEY_VALUE:
       case thrift::ConvertedType::LIST:
-      case thrift::ConvertedType::ENUM:
       case thrift::ConvertedType::TIME_MILLIS:
       case thrift::ConvertedType::TIME_MICROS:
       case thrift::ConvertedType::JSON:
