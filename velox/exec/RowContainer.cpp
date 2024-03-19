@@ -284,7 +284,7 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
     freeAggregates(rows);
     freeDuplicateRowVectors(rows);
     freeDuplicateRowVectors(rows);
-  } else if (rowSizeOffset_ != 0 && checkFree_) {
+  } else if (rowSizeOffset_ != 0) {
     // zero out string views so that clear() will not hit uninited data. The
     // fastest way is to set the whole row to 0.
     ::memset(row, 0, fixedRowSize_);
