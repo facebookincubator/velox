@@ -675,6 +675,13 @@ The parameter controls the size when footer is fetched each time. Bigger value c
 <td><p>16M</p></td>
 <td><p>Maximum dictionary memory that can be used in orc writer.</p></td>
 </tr>
+<tr class="row-odd"><td><p>hive.parquet.writer.timestamp-unit</p></td>
+<td><p>hive.parquet.writer.timestamp_unit</p></td>
+<td><p>tinyint</p></td>
+<td><p>9</p></td>
+<td><p>Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
+Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).</p></td>
+</tr>
 </tbody>
 </table>
 <section id="amazon-s3-configuration">
