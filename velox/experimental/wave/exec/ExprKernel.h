@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include "velox/common/base/Exceptions.h"
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/exec/ErrorCode.h"
 #include "velox/experimental/wave/vector/Operand.h"
@@ -61,6 +62,45 @@ enum class OpCode {
   kNE,
 
 };
+
+inline std::ostream& operator<<(
+    std::ostream& out,
+    const OpCode& opcode) {
+  switch (opcode) {
+    case OpCode::kFilter:
+      return out << "Filter";
+    case OpCode::kWrap:
+      return out << "Wrap";
+    case OpCode::kPlus:
+      return out << "Plus";
+    case OpCode::kMinus:
+      return out << "Minus";
+    case OpCode::kTimes:
+      return out << "Times";
+    case OpCode::kDivide:
+      return out << "Divide";
+    case OpCode::kEquals:
+      return out << "Equals";
+    case OpCode::kLT:
+      return out << "LT";
+    case OpCode::kLTE:
+      return out << "LTE";
+    case OpCode::kGT:
+      return out << "GT";
+    case OpCode::kGTE:
+      return out << "GTE";
+    case OpCode::kNE:
+      return out << "NE";
+  }
+
+  VELOX_UNREACHABLE();
+}
+
+inline std::string mapOpCodeToName(const OpCode& opcode) {
+  std::stringstream ss;
+  ss << opcode;
+  return ss.str();
+}
 
 #define OP_MIX(op, t) \
   static_cast<OpCode>(static_cast<int32_t>(t) + 8 * static_cast<int32_t>(op))
@@ -151,3 +191,11 @@ class WaveKernelStream : public Stream {
 };
 
 } // namespace facebook::velox::wave
+
+template <>
+struct fmt::formatter<facebook::velox::wave::OpCode> : formatter<std::string> {
+  auto format(facebook::velox::wave::OpCode o, format_context& ctx) {
+    return formatter<std::string>::format(
+        facebook::velox::wave::mapOpCodeToName(o), ctx);
+  }
+};

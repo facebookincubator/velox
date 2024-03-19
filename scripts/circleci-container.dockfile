@@ -16,6 +16,7 @@
 FROM quay.io/centos/centos:stream8
 ARG cpu_target
 ENV CPU_TARGET=$cpu_target
+ENV AGGRESSIVE_CLEANUP=true
 
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-centos8.sh /
