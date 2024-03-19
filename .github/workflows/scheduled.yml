@@ -176,9 +176,9 @@ jobs:
 
       - name: Set presto specific fuzzer duration
         env:
-          # Run for 15 minutes instead of one, when files relevant to presto are touched
+          # Run for 30 minutes instead of 15, when files relevant to presto are touched
           pr_duration: "${{ steps.changes.outputs.presto == 'true' && 1800 || 900 }}"
-          # Run for 60 minutes otherwise (2x default duration)
+          # Run for 60 minutes if its a scheduled run
           other_duration: "${{ inputs.duration || 3600 }}"
           is_pr: "${{ github.event_name == 'pull_request' }}"
         run: |
