@@ -23,8 +23,30 @@ RankLikeWindowBuild::RankLikeWindowBuild(
     velox::memory::MemoryPool* pool,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection)
-    : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection) {
-  partitionOffsets_.push_back(0);
+    : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection) {}
+
+void RankLikeWindowBuild::buildNextInputOrPartition(bool isFinished) {
+  sortedRows_.push_back(inputRows_);
+  if (windowPartitions_.size() <= inputCurrentPartition_) {
+    auto partition =
+        folly::Range(sortedRows_.back().data(), sortedRows_.back().size());
+
+    windowPartitions_.push_back(std::make_shared<WindowPartition>(
+        data_.get(), partition, inputColumns_, sortKeyInfo_, true));
+  } else {
+    windowPartitions_[inputCurrentPartition_]->insertNewBatch(
+        sortedRows_.back());
+  }
+
+  if (isFinished) {
+    windowPartitions_[inputCurrentPartition_]->setTotalNum(
+        currentPartitionNum_ - 1);
+    windowPartitions_[inputCurrentPartition_]->setFinished();
+
+    inputRows_.clear();
+    inputCurrentPartition_++;
+    currentPartitionNum_ = 1;
+  }
 }
 
 void RankLikeWindowBuild::addInput(RowVectorPtr input) {
@@ -33,6 +55,7 @@ void RankLikeWindowBuild::addInput(RowVectorPtr input) {
   }
 
   for (auto row = 0; row < input->size(); ++row) {
+    currentPartitionNum_++;
     char* newRow = data_->newRow();
 
     for (auto col = 0; col < input->childrenSize(); ++col) {
@@ -41,49 +64,34 @@ void RankLikeWindowBuild::addInput(RowVectorPtr input) {
 
     if (previousRow_ != nullptr &&
         compareRowsWithKeys(previousRow_, newRow, partitionKeyInfo_)) {
-      sortedRows_.push_back(inputRows_);
-      partitionOffsets_.push_back(0);
-      inputRows_.clear();
+      buildNextInputOrPartition(true);
     }
 
     inputRows_.push_back(newRow);
     previousRow_ = newRow;
   }
-  partitionOffsets_.push_back(inputRows_.size());
-  sortedRows_.push_back(inputRows_);
+
+  buildNextInputOrPartition(false);
+
   inputRows_.clear();
 }
 
 void RankLikeWindowBuild::noMoreInput() {
   isFinished_ = true;
+  windowPartitions_[outputCurrentPartition_]->setTotalNum(
+      currentPartitionNum_ - 1);
+  windowPartitions_[outputCurrentPartition_]->setFinished();
   inputRows_.clear();
 }
 
-std::unique_ptr<WindowPartition> RankLikeWindowBuild::nextPartition() {
-  currentPartition_++;
-
-  if (currentPartition_ > 0) {
-    // Erase data_ and sortedRows;
-    data_->eraseRows(folly::Range<char**>(
-        sortedRows_[currentPartition_ - 1].data(),
-        sortedRows_[currentPartition_ - 1].size()));
-    sortedRows_[currentPartition_ - 1].clear();
-  }
-
-  auto partition = folly::Range(
-      sortedRows_[currentPartition_].data(),
-      sortedRows_[currentPartition_].size());
-
-  auto offset = 0;
-  for (auto i = currentPartition_; partitionOffsets_[i] != 0; i--) {
-    offset += partitionOffsets_[i];
-  }
-  return std::make_unique<WindowPartition>(
-      data_.get(), partition, inputColumns_, sortKeyInfo_, offset);
+std::shared_ptr<WindowPartition> RankLikeWindowBuild::nextPartition() {
+  outputCurrentPartition_++;
+  return windowPartitions_[outputCurrentPartition_];
 }
 
 bool RankLikeWindowBuild::hasNextPartition() {
-  return sortedRows_.size() > 0 && currentPartition_ != sortedRows_.size() - 1;
+  return windowPartitions_.size() > 0 &&
+      outputCurrentPartition_ != windowPartitions_.size() - 1;
 }
 
 } // namespace facebook::velox::exec

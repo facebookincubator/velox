@@ -79,6 +79,34 @@ TEST_F(WindowTest, spill) {
   ASSERT_GT(stats.spilledPartitions, 0);
 }
 
+TEST_F(WindowTest, rankLikeWithEqualValue) {
+  auto data = makeRowVector(
+      {"c1"},
+      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {"rank() over (order by c1)"};
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"c1"}, false)
+                  .streamingWindow(kClauses)
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+          .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .spillDirectory(spillDirectory->path)
+          .assertResults("SELECT *, rank() over (order by c1) FROM tmp");
+}
+
 TEST_F(WindowTest, rankLikeOptimization) {
   const vector_size_t size = 1'000;
   auto data = makeRowVector(
