@@ -842,7 +842,7 @@ TEST_F(SimpleFunctionTest, stringReuseConstant) {
   // Test reusing the strings from an argument when that argument is in a
   // ConstantVector.  Note that the other 2 arguments are FlatVectors to
   // prevent constant peeling.
-  registerFunction<Substr, Varchar, Varchar, int32_t, int32_t>({"substr"});
+  registerFunction<Substr, Varchar, Varchar, int32_t, int32_t>({"substr"}, true);
 
   auto constantVector = vectorMaker_.constantVector<StringView>(
       {"super happy fun string"_sv,
