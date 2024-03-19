@@ -272,8 +272,10 @@ std::string variant::toJson(const TypePtr& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
-      VELOX_CHECK(type->isLongDecimal()) {
+      if (type && type->isLongDecimal()) {
         return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      } else {
+        return std::to_string(value<TypeKind::HUGEINT>());
       }
     }
     case TypeKind::TINYINT:
@@ -399,8 +401,10 @@ std::string variant::toJsonUnsafe(const TypePtr& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
-      VELOX_CHECK(type && type->isLongDecimal()) {
+      if (type && type->isLongDecimal()) {
         return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      } else {
+        return std::to_string(value<TypeKind::HUGEINT>());
       }
     }
     case TypeKind::TINYINT:
