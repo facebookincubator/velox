@@ -486,6 +486,24 @@ TEST(DateTimeUtilTest, toTimezoneFromID) {
   ts = fromTimestampString("2021-03-15 00:00:00");
   ts.toTimezone(util::getTimeZoneID("America/Los_Angeles"));
   EXPECT_EQ(ts, fromTimestampString("2021-03-14 17:00:00"));
+
+  // DST
+  ts = fromTimestampString("2018-12-15 00:00:00"); // PST: UTC-8
+  ts.toTimezone(util::getTimeZoneID("America/Los_Angeles"));
+  EXPECT_EQ(ts, fromTimestampString("2018-12-14 16:00:00")); // Pass
+
+  ts = fromTimestampString("2018-06-15 00:00:00"); // PDT: UTC-7
+  ts.toTimezone(util::getTimeZoneID("America/Los_Angeles"));
+  EXPECT_EQ(ts, fromTimestampString("2018-06-14 17:00:00")); // Pass
+
+  // DST for large dates
+  ts = fromTimestampString("2118-12-15 00:00:00"); // PST: UTC-8
+  ts.toTimezone(util::getTimeZoneID("America/Los_Angeles"));
+  EXPECT_EQ(ts, fromTimestampString("2118-12-14 16:00:00")); // Pass
+
+  ts = fromTimestampString("2118-06-15 00:00:00"); // PDT: UTC-7
+  ts.toTimezone(util::getTimeZoneID("America/Los_Angeles"));
+  EXPECT_EQ(ts, fromTimestampString("2118-06-14 17:00:00")); // Fail
 }
 
 } // namespace
