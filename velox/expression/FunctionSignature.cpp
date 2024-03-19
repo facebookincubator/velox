@@ -221,44 +221,24 @@ FunctionSignature::FunctionSignature(
     std::vector<TypeSignature> argumentTypes,
     std::vector<bool> constantArguments,
     bool variableArity,
-    const std::function<std::unordered_set<std::string>(
-        const std::unordered_map<std::string, SignatureVariable>&
-            typeVariables)>& usedVariables)
+    const std::vector<TypeSignature>& additionalTypes)
     : variables_{std::move(variables)},
       returnType_{std::move(returnType)},
       argumentTypes_{std::move(argumentTypes)},
       constantArguments_{std::move(constantArguments)},
       variableArity_{variableArity} {
+  std::unordered_set<std::string> usedVariables;
+  for (const auto& type : additionalTypes) {
+    validateBaseTypeAndCollectTypeParams(
+        variables_, type, usedVariables, false);
+  }
   validate(
       variables_,
       returnType_,
       argumentTypes_,
       constantArguments_,
-      usedVariables(variables_));
+      usedVariables);
 }
-
-AggregateFunctionSignature::AggregateFunctionSignature(
-    std::unordered_map<std::string, SignatureVariable> variables,
-    facebook::velox::exec::TypeSignature returnType,
-    facebook::velox::exec::TypeSignature intermediateType,
-    std::vector<TypeSignature> argumentTypes,
-    std::vector<bool> constantArguments,
-    bool variableArity)
-    : FunctionSignature(
-          std::move(variables),
-          std::move(returnType),
-          std::move(argumentTypes),
-          std::move(constantArguments),
-          variableArity,
-          [&intermediateType](
-              const std::unordered_map<std::string, SignatureVariable>&
-                  typeVariables) {
-            std::unordered_set<std::string> usedVariables;
-            validateBaseTypeAndCollectTypeParams(
-                typeVariables, intermediateType, usedVariables, false);
-            return usedVariables;
-          }),
-      intermediateType_{std::move(intermediateType)} {}
 
 std::string AggregateFunctionSignature::toString() const {
   std::ostringstream out;

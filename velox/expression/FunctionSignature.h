@@ -168,12 +168,12 @@ class FunctionSignature {
   }
 
  protected:
-  /// @param usedVariables A lambda function that returns already-used
-  /// variables. Since FunctionSignature will compare the number of variables
-  /// used with the size of variables_, it is required that they must be the
-  /// same. If the subclass introduces a new Type variable and that Type uses
-  /// signature variables, it needs to pass the used variables to the
-  /// constructor of FunctionSignature for verification, to ensure that the
+  /// @param additionalTypes A list of additional types introduced by subclass.
+  /// Since FunctionSignature will validate that the number of used variables
+  /// and the size of variables_ must be equal. If the subclass introduces new
+  /// types, such as intermediateType in AggregateFunctionSignature, and these
+  /// types uses signature variables, it needs to pass the additional types to
+  /// the constructor of FunctionSignature for validation, to ensure that the
   /// variables used by the subclass will also be counted in the validation of
   /// FunctionSignature.
   FunctionSignature(
@@ -182,9 +182,7 @@ class FunctionSignature {
       std::vector<TypeSignature> argumentTypes,
       std::vector<bool> constantArguments,
       bool variableArity,
-      const std::function<std::unordered_set<std::string>(
-          const std::unordered_map<std::string, SignatureVariable>&
-              typeVariables)>& usedVariables);
+      const std::vector<TypeSignature>& additionalTypes);
 
   // Return a string of the list of argument types.
   std::string argumentsToString() const;
@@ -207,7 +205,15 @@ class AggregateFunctionSignature : public FunctionSignature {
       TypeSignature intermediateType,
       std::vector<TypeSignature> argumentTypes,
       std::vector<bool> constantArguments,
-      bool variableArity);
+      bool variableArity)
+      : FunctionSignature(
+            std::move(variables),
+            std::move(returnType),
+            std::move(argumentTypes),
+            std::move(constantArguments),
+            variableArity,
+            {intermediateType}),
+        intermediateType_{std::move(intermediateType)} {}
 
   const TypeSignature& intermediateType() const {
     return intermediateType_;
