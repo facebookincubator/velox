@@ -270,6 +270,8 @@ class RowVector : public BaseVector {
   // loadedVector is called, and reset to false when updateContainsLazyNotLoaded
   // is called (i.e. some children are likely updated to lazy).
   mutable bool childrenLoaded_ = false;
+
+  mutable std::mutex mutex_;
 };
 
 // Common parent class for ARRAY and MAP vectors.  Contains 'offsets' and
