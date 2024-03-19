@@ -120,6 +120,19 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<bool>("contains(c0, c1)", str, pattern);
   }
 
+  std::optional<int32_t> locate(
+      const std::optional<std::string>& substr,
+      const std::optional<std::string>& str) {
+    return evaluateOnce<int32_t>("locate(c0, c1)", substr, str);
+  }
+
+  std::optional<int32_t> locate(
+      const std::optional<std::string>& substr,
+      const std::optional<std::string>& str,
+      const std::optional<int32_t>& start) {
+    return evaluateOnce<int32_t>("locate(c0, c1, c2)", substr, str, start);
+  }
+
   std::optional<std::string> substring(
       std::optional<std::string> str,
       std::optional<int32_t> start) {
@@ -435,6 +448,27 @@ TEST_F(StringTest, endsWith) {
   EXPECT_EQ(endsWith("-- hello there!", "hello there"), false);
   EXPECT_EQ(endsWith("-- hello there!", std::nullopt), std::nullopt);
   EXPECT_EQ(endsWith(std::nullopt, "abc"), std::nullopt);
+}
+
+TEST_F(StringTest, locate) {
+  EXPECT_EQ(locate("aa", "aaads"), 1);
+  EXPECT_EQ(locate("aa", "aaads", 0), 0);
+  EXPECT_EQ(locate("aa", "aaads", 1), 1);
+  EXPECT_EQ(locate("aa", "aaads", 2), 2);
+  EXPECT_EQ(locate("aa", "aaads", 3), 0);
+  EXPECT_EQ(locate("aa", "aaads", -3), 0);
+  EXPECT_EQ(locate("de", "aaads"), 0);
+  EXPECT_EQ(locate("de", "aaads", 2), 0);
+  EXPECT_EQ(locate("", ""), 1);
+  EXPECT_EQ(locate("", "", 3), 1);
+  EXPECT_EQ(locate("", "aaads"), 1);
+  EXPECT_EQ(locate("", "aaads", 9), 1);
+  EXPECT_EQ(locate("aa", ""), 0);
+  EXPECT_EQ(locate("aa", "", 2), 0);
+  EXPECT_EQ(locate("zz", "aaads", std::nullopt), 0);
+  EXPECT_EQ(locate("aa", std::nullopt), std::nullopt);
+  EXPECT_EQ(locate(std::nullopt, "aaads"), std::nullopt);
+  EXPECT_EQ(locate(std::nullopt, std::nullopt, std::nullopt), 0);
 }
 
 TEST_F(StringTest, substringIndex) {
