@@ -127,7 +127,8 @@ class FunctionSignature {
       TypeSignature returnType,
       std::vector<TypeSignature> argumentTypes,
       std::vector<bool> constantArguments,
-      bool variableArity);
+      bool variableArity,
+      bool streaming = false);
 
   virtual ~FunctionSignature() = default;
 
@@ -152,6 +153,10 @@ class FunctionSignature {
     return variableArity_;
   }
 
+  bool streaming() const {
+    return streaming_;
+  }
+
   virtual std::string toString() const;
 
   const auto& variables() const {
@@ -164,7 +169,7 @@ class FunctionSignature {
   bool operator==(const FunctionSignature& rhs) const {
     return variables_ == rhs.variables_ && returnType_ == rhs.returnType_ &&
         argumentTypes_ == rhs.argumentTypes_ &&
-        variableArity_ == rhs.variableArity_;
+        variableArity_ == rhs.variableArity_ && streaming_ == rhs.streaming_;
   }
 
  protected:
@@ -193,6 +198,7 @@ class FunctionSignature {
   const std::vector<TypeSignature> argumentTypes_;
   const std::vector<bool> constantArguments_;
   const bool variableArity_;
+  const bool streaming_;
 };
 
 using FunctionSignaturePtr = std::shared_ptr<FunctionSignature>;
@@ -314,6 +320,11 @@ class FunctionSignatureBuilder {
     return *this;
   }
 
+  FunctionSignatureBuilder& streaming() {
+    streaming_ = true;
+    return *this;
+  }
+
   FunctionSignaturePtr build();
 
  private:
@@ -322,6 +333,7 @@ class FunctionSignatureBuilder {
   std::vector<TypeSignature> argumentTypes_;
   std::vector<bool> constantArguments_;
   bool variableArity_{false};
+  bool streaming_{false};
 };
 
 /// Convenience class for creating AggregageFunctionSignature instances.

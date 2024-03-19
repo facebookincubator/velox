@@ -35,25 +35,36 @@ class WindowPartition {
   /// the columns in 'data' for use with the spiller.
   /// 'sortKeyInfo' : Order by columns used by the the Window operator. Used to
   /// get peer rows from the input partition.
-  /// 'offsetInPartition' : In RankLikeWindowBuild, record the current offset of
-  /// the partial WindowPartition within the entire Partition.
+  /// 'streaming' : Whether support streaming in WindowPartition.
   WindowPartition(
       RowContainer* data,
       const folly::Range<char**>& rows,
       const std::vector<column_index_t>& inputMapping,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo,
-      vector_size_t offsetInPartition = 0);
+      bool streaming = false);
 
   /// Returns the number of rows in the current WindowPartition.
   vector_size_t numRows() const {
-    return partition_.size();
+    return partition_.size() + offsetInPartition_;
   }
 
-  /// Returns the current offset of the partial WindowPartition within the
-  /// entire Partition.
-  vector_size_t offsetInPartition() const {
-    return offsetInPartition_;
+  void insertNewBatch(const std::vector<char*>& inputRows) {
+    rows_.push_back(inputRows);
+  }
+
+  void setTotalNum(const vector_size_t& num) {
+    totalNum_ = num;
+  }
+
+  void buildNextBatch();
+
+  void setFinished() {
+    isFinished_ = true;
+  }
+
+  bool isFinished() {
+    return (!streaming_) || (isFinished_ && totalNum_ == processedNum_);
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -202,6 +213,29 @@ class WindowPartition {
   // ORDER BY column info for this partition.
   const std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
 
+  // The offset of every batch in partition.
   vector_size_t offsetInPartition_ = 0;
+
+  // The processed num in current partition.
+  vector_size_t processedNum_ = 0;
+
+  // Whether the last row of current batch is same with the first row of next
+  // batch.
+  bool peerGroup_ = false;
+
+  // Whether support streaming in WindowPartition.
+  bool streaming_ = false;
+
+  // Add new batch in WindowPartition.
+  std::vector<std::vector<char*>> rows_;
+
+  // The batch index in WindowPartition.
+  vector_size_t currentBatchIndex_ = -1;
+
+  // Whether all the batches added.
+  bool isFinished_ = false;
+
+  // The total num in WindowPartition.
+  vector_size_t totalNum_ = 0;
 };
 } // namespace facebook::velox::exec

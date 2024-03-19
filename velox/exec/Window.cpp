@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+#include <iostream>
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/RankLikeWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
@@ -42,8 +43,14 @@ Window::Window(
   auto* spillConfig =
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   if (windowNode->inputsSorted()) {
-    windowBuild_ = std::make_unique<StreamingWindowBuild>(
-        windowNode, pool(), spillConfig, &nonReclaimableSection_);
+    if (supportRankWindowBuild()) {
+      windowBuild_ = std::make_unique<RankLikeWindowBuild>(
+          windowNode_, pool(), spillConfig, &nonReclaimableSection_);
+    } else {
+      windowBuild_ = std::make_unique<StreamingWindowBuild>(
+          windowNode, pool(), spillConfig, &nonReclaimableSection_);
+    }
+
   } else {
     windowBuild_ = std::make_unique<SortWindowBuild>(
         windowNode, pool(), spillConfig, &nonReclaimableSection_, &spillStats_);
@@ -107,69 +114,7 @@ void checkKRangeFrameBounds(
   frameBoundCheck(frame.endValue);
 }
 
-// The RankLikeWindowBuild is designed to support 'rank', 'dense_rank', and
-// 'row_number' functions with a default frame.
-bool checkRankLikeWindowBuild(
-    const std::shared_ptr<const core::WindowNode>& windowNode) {
-  for (const auto& windowNodeFunction : windowNode->windowFunctions()) {
-    const auto& functionName = windowNodeFunction.functionCall->name();
-    const auto& frame = windowNodeFunction.frame;
-
-    bool isRankLikeFunction =
-        (functionName == "rank" || functionName == "row_number");
-    bool isDefaultFrame =
-        (frame.startType == core::WindowNode::BoundType::kUnboundedPreceding &&
-         frame.endType == core::WindowNode::BoundType::kCurrentRow);
-
-    if (!isRankLikeFunction || !isDefaultFrame) {
-      return false;
-    }
-  }
-  return true;
-}
-
 } // namespace
-
-Window::Window(
-    int32_t operatorId,
-    DriverCtx* driverCtx,
-    const std::shared_ptr<const core::WindowNode>& windowNode)
-    : Operator(
-          driverCtx,
-          windowNode->outputType(),
-          operatorId,
-          windowNode->id(),
-          "Window",
-          windowNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
-              : std::nullopt),
-      numInputColumns_(windowNode->inputType()->size()),
-      windowNode_(windowNode),
-      currentPartition_(nullptr),
-      stringAllocator_(pool()) {
-  auto* spillConfig =
-      spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
-  if (windowNode->inputsSorted()) {
-    if (checkRankLikeWindowBuild(windowNode)) {
-      windowBuild_ = std::make_unique<RankLikeWindowBuild>(
-          windowNode, pool(), spillConfig, &nonReclaimableSection_);
-    } else {
-      windowBuild_ = std::make_unique<StreamingWindowBuild>(
-          windowNode, pool(), spillConfig, &nonReclaimableSection_);
-    }
-  } else {
-    windowBuild_ = std::make_unique<SortWindowBuild>(
-        windowNode, pool(), spillConfig, &nonReclaimableSection_);
-  }
-}
-
-void Window::initialize() {
-  Operator::initialize();
-  VELOX_CHECK_NOT_NULL(windowNode_);
-  createWindowFunctions();
-  createPeerAndFrameBuffers();
-  windowNode_.reset();
-}
 
 Window::WindowFrame Window::createWindowFrame(
     const std::shared_ptr<const core::WindowNode>& windowNode,
@@ -248,6 +193,28 @@ void Window::createWindowFunctions() {
     windowFrames_.push_back(
         createWindowFrame(windowNode_, windowNodeFunction.frame, inputType));
   }
+}
+
+// The supportRankWindowBuild is designed to support 'rank' and
+// 'row_number' functions with a default frame.
+bool Window::supportRankWindowBuild() {
+  for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
+    bool isRankFunction = exec::getWindowFunctionSignatures(
+                              windowNodeFunction.functionCall->name())
+                              .value()[0]
+                              ->streaming();
+    bool isDefaultFrame =
+        (windowNodeFunction.frame.startType ==
+             core::WindowNode::BoundType::kUnboundedPreceding &&
+         windowNodeFunction.frame.endType ==
+             core::WindowNode::BoundType::kCurrentRow);
+
+    if (!(isRankFunction) || !isDefaultFrame) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void Window::addInput(RowVectorPtr input) {
@@ -643,7 +610,14 @@ vector_size_t Window::callApplyLoop(
           result);
       resultIndex += rowsForCurrentPartition;
       numOutputRowsLeft -= rowsForCurrentPartition;
-      callResetPartition();
+      if (currentPartition_->isFinished()) {
+        callResetPartition();
+      } else {
+        // Break until the next getOutput call to handle the remaining data in
+        // currentPartition_.
+        break;
+      }
+
       if (!currentPartition_) {
         // The WindowBuild doesn't have any more partitions to process right
         // now. So break until the next getOutput call.
@@ -683,6 +657,10 @@ RowVectorPtr Window::getOutput() {
       // WindowBuild doesn't have a partition to output.
       return nullptr;
     }
+  }
+
+  if (!currentPartition_->isFinished()) {
+    currentPartition_->buildNextBatch();
   }
 
   auto numOutputRows = std::min(numRowsPerOutput_, numRowsLeft);

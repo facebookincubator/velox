@@ -28,8 +28,8 @@ class RowNumberFunction : public exec::WindowFunction {
   explicit RowNumberFunction(const TypePtr& resultType)
       : WindowFunction(resultType, nullptr, nullptr) {}
 
-  void resetPartition(const exec::WindowPartition* partition) override {
-    rowNumber_ = 1 + partition->offsetInPartition();
+  void resetPartition(const exec::WindowPartition* /*partition*/) override {
+    rowNumber_ = 1;
   }
 
   void apply(
@@ -69,6 +69,7 @@ void registerRowNumber(const std::string& name, TypeKind resultTypeKind) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
           .returnType(mapTypeKindToName(resultTypeKind))
+          .streaming()
           .build(),
   };
 
