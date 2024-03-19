@@ -33,16 +33,29 @@ SimpleFunctionRegistry& mutableSimpleFunctions() {
   return simpleFunctionsInternal();
 }
 
-void SimpleFunctionRegistry::registerFunctionInternal(
+bool SimpleFunctionRegistry::registerFunctionInternal(
     const std::string& name,
     const std::shared_ptr<const Metadata>& metadata,
-    const FunctionFactory& factory) {
+    const FunctionFactory& factory,
+    bool overwrite) {
   const auto sanitizedName = sanitizeName(name);
-  registeredFunctions_.withWLock([&](auto& map) {
-    SignatureMap& signatureMap = map[sanitizedName];
-    signatureMap[*metadata->signature()] =
-        std::make_unique<const FunctionEntry>(metadata, factory);
-  });
+
+  if (overwrite) {
+    registeredFunctions_.withWLock([&](auto& map) {
+      SignatureMap& signatureMap = map[sanitizedName];
+      signatureMap[*metadata->signature()] =
+          std::make_unique<const FunctionEntry>(metadata, factory);
+    });
+    return true;
+  } else {
+    return registeredFunctions_.withWLock([&](auto& map) {
+      SignatureMap& signatureMap = map[sanitizedName];
+      auto [_, inserted] = signatureMap.emplace(
+          *metadata->signature(),
+          std::make_unique<const FunctionEntry>(metadata, factory));
+      return inserted;
+    });
+  }
 }
 
 namespace {
