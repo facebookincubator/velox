@@ -168,6 +168,14 @@ class FunctionSignature {
   }
 
  protected:
+  /// @param usedVariables A lambda function that returns already-used
+  /// variables. Since FunctionSignature will compare the number of variables
+  /// used with the size of variables_, it is required that they must be the
+  /// same. If the subclass introduces a new Type variable and that Type uses
+  /// signature variables, it needs to pass the used variables to the
+  /// constructor of FunctionSignature for verification, to ensure that the
+  /// variables used by the subclass will also be counted in the validation of
+  /// FunctionSignature.
   FunctionSignature(
       std::unordered_map<std::string, SignatureVariable> variables,
       TypeSignature returnType,
