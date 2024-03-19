@@ -752,6 +752,7 @@ class HashTable : public BaseHashTable {
   /// can't be inserted within this range, it is not inserted but rather added
   /// to the end of 'overflows' in 'partitionInfo'.
   void insertForJoin(
+      RowContainer* rows,
       char** groups,
       uint64_t* hashes,
       int32_t numGroups,
@@ -833,12 +834,13 @@ class HashTable : public BaseHashTable {
 
   // Adds a row to a hash join build side entry with multiple rows
   // with the same key.
-  void pushNext(char* row, char* next, bool isParallelBuild);
+  void pushNext(RowContainer* rows, char* row, char* next);
 
   // Finishes inserting an entry into a join hash table. If 'partitionInfo' is
   // not null and the insert falls out-side of the partition range, then insert
   // is not made but row is instead added to 'overflow' in 'partitionInfo'
   void buildFullProbe(
+      RowContainer* rows,
       ProbeState& state,
       uint64_t hash,
       char* row,

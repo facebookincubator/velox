@@ -25,7 +25,7 @@
 
 namespace facebook::velox::exec {
 
-using DuplicateRowVector = std::vector<char*, SyncStlAllocator<char*>>;
+using NextRowVector = std::vector<char*, StlAllocator<char*>>;
 
 class Aggregate;
 
@@ -604,10 +604,10 @@ class RowContainer {
     return nextOffset_;
   }
 
-  void appendNextRow(char* existing, char* nextRow, bool isParallelBuild);
+  void appendNextRow(char* existing, char* nextRow);
 
-  DuplicateRowVector*& getNextRowVector(char* row) const {
-    return *reinterpret_cast<DuplicateRowVector**>(row + nextOffset_);
+  NextRowVector*& getNextRowVector(char* row) const {
+    return *reinterpret_cast<NextRowVector**>(row + nextOffset_);
   }
 
   /// Hashes the values of 'columnIndex' for 'rows'.  If 'mix' is true, mixes
@@ -1188,7 +1188,7 @@ class RowContainer {
   // Free any aggregates associated with the 'rows'.
   void freeAggregates(folly::Range<char**> rows);
 
-  void freeDuplicateRowVectors(folly::Range<char**> rows) {
+  void freeNextRowVectors(folly::Range<char**> rows) {
     if (!nextOffset_) {
       return;
     }

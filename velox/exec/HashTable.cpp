@@ -960,8 +960,14 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
         folly::Range<char**>(overflows.data(), overflows.size()),
         false,
         hashes);
-    insertForJoin(overflows.data(), hashes.data(), overflows.size(), nullptr);
     auto table = i == 0 ? this : otherTables_[i - 1].get();
+    insertForJoin(
+        table->rows(),
+        overflows.data(),
+        hashes.data(),
+        overflows.size(),
+        nullptr);
+
     VELOX_CHECK_EQ(table->rows()->numRows(), table->numParallelBuildRows_);
   }
 }
@@ -1028,13 +1034,16 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
       buildPartitionBounds_[partition],
       buildPartitionBounds_[partition + 1],
       overflow};
+  auto rowContainer =
+      (partition == 0 ? this : otherTables_[partition - 1].get())->rows();
   for (auto i = 0; i < numPartitions; ++i) {
     auto* table = i == 0 ? this : otherTables_[i - 1].get();
     RowContainerIterator iter;
     while (const auto numRows = table->rows_->listPartitionRows(
                iter, partition, kBatch, *rowPartitions[i], rows.data())) {
       hashRows(folly::Range(rows.data(), numRows), false, hashes);
-      insertForJoin(rows.data(), hashes.data(), numRows, &partitionInfo);
+      insertForJoin(
+          rowContainer, rows.data(), hashes.data(), numRows, &partitionInfo);
       table->numParallelBuildRows_ += numRows;
     }
   }
@@ -1050,7 +1059,7 @@ bool HashTable<ignoreNullKeys>::insertBatch(
     return false;
   }
   if (isJoinBuild_) {
-    insertForJoin(groups, hashes.data(), numGroups);
+    insertForJoin(rows(), groups, hashes.data(), numGroups);
   } else {
     insertForGroupBy(groups, hashes.data(), numGroups);
   }
@@ -1115,7 +1124,7 @@ bool HashTable<ignoreNullKeys>::arrayPushRow(char* row, int32_t index) {
   if (nextOffset_) {
     if (existing) {
       hasDuplicates_ = true;
-      rows_->appendNextRow(existing, row, false);
+      rows_->appendNextRow(existing, row);
       return false;
     }
   } else if (existing) {
@@ -1128,17 +1137,18 @@ bool HashTable<ignoreNullKeys>::arrayPushRow(char* row, int32_t index) {
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::pushNext(
+    RowContainer* rows,
     char* row,
-    char* next,
-    bool isParallelBuild) {
+    char* next) {
   if (nextOffset_ > 0) {
     hasDuplicates_ = true;
-    rows_->appendNextRow(row, next, isParallelBuild);
+    rows->appendNextRow(row, next);
   }
 }
 
 template <bool ignoreNullKeys>
 FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
+    RowContainer* rows,
     ProbeState& state,
     uint64_t hash,
     char* inserted,
@@ -1161,7 +1171,7 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
           if (RowContainer::normalizedKey(group) ==
               RowContainer::normalizedKey(inserted)) {
             if (nextOffset_) {
-              pushNext(group, inserted, partitionInfo != nullptr);
+              pushNext(rows, group, inserted);
             }
             return true;
           }
@@ -1178,7 +1188,7 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
         [&](char* group, int32_t /*row*/) {
           if (compareKeys(group, inserted)) {
             if (nextOffset_ > 0) {
-              pushNext(group, inserted, partitionInfo != nullptr);
+              pushNext(rows, group, inserted);
             }
             return true;
           }
@@ -1193,6 +1203,7 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::insertForJoin(
+    RowContainer* rows,
     char** groups,
     uint64_t* hashes,
     int32_t numGroups,
@@ -1213,7 +1224,7 @@ void HashTable<ignoreNullKeys>::insertForJoin(
     state.preProbe(*this, hashes[i], i);
     state.firstProbe(*this, 0);
 
-    buildFullProbe(state, hashes[i], groups[i], i, partitionInfo);
+    buildFullProbe(rows, state, hashes[i], groups[i], i, partitionInfo);
   }
 }
 

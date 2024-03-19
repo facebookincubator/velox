@@ -162,9 +162,6 @@ struct HashTableBenchmarkRun {
   std::string toString() const {
     std::stringstream out;
     out << params.toString();
-    out << " iter=" << numIter
-        << " prepareJoinTable clocks=" << (prepareJoinTableClocks / numIter)
-        << " listJoinResult clocks=" << (listJoinResultClocks / numIter);
 
     std::string modeString = hashMode == BaseHashTable::HashMode::kArray
         ? "array"

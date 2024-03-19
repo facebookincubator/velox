@@ -1868,7 +1868,7 @@ TEST_F(RowContainerTest, nextRowVector) {
   EXPECT_EQ(rows, rowsFromContainer);
 
   for (int i = 0; i + 2 <= kNumRows; i += 2) {
-    data->appendNextRow(rows[i], rows[i + 1], false);
+    data->appendNextRow(rows[i], rows[i + 1]);
   }
   for (int i = 0; i < kNumRows; i++) {
     auto vector = data->getNextRowVector(rows[i]);
