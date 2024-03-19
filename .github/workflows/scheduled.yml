@@ -19,6 +19,7 @@ on:
     paths:
       - ".github/workflows/scheduled.yml"
       - scripts/*
+      - CMake/*
 
   schedule:
     - cron: '0 3 * * *'
