@@ -106,29 +106,6 @@ class MinMaxByAggregateBase : public exec::Aggregate {
         sizeof(bool);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (const vector_size_t i : indices) {
-      auto group = groups[i];
-      valueIsNull(group) = true;
-
-      if constexpr (!isNumeric<T>()) {
-        new (group + offset_) SingleValueAccumulator();
-      } else {
-        *value(group) = ValueAccumulatorType();
-      }
-
-      if constexpr (isNumeric<U>()) {
-        *comparisonValue(group) = ComparisonAccumulatorType();
-      } else {
-        new (group + offset_ + sizeof(ValueAccumulatorType))
-            SingleValueAccumulator();
-      }
-    }
-  }
-
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
@@ -283,17 +260,6 @@ class MinMaxByAggregateBase : public exec::Aggregate {
             i,
             rawComparisonValues,
             rawBoolComparisonValues);
-      }
-    }
-  }
-
-  void destroy(folly::Range<char**> groups) override {
-    for (auto group : groups) {
-      if constexpr (!isNumeric<T>()) {
-        value(group)->destroy(allocator_);
-      }
-      if constexpr (!isNumeric<U>()) {
-        comparisonValue(group)->destroy(allocator_);
       }
     }
   }
@@ -494,6 +460,42 @@ class MinMaxByAggregateBase : public exec::Aggregate {
             decodedValue_.isNullAt(decodedIndex),
             mayUpdate);
       });
+    }
+  }
+
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (const vector_size_t i : indices) {
+      auto group = groups[i];
+      valueIsNull(group) = true;
+
+      if constexpr (!isNumeric<T>()) {
+        new (group + offset_) SingleValueAccumulator();
+      } else {
+        *value(group) = ValueAccumulatorType();
+      }
+
+      if constexpr (isNumeric<U>()) {
+        *comparisonValue(group) = ComparisonAccumulatorType();
+      } else {
+        new (group + offset_ + sizeof(ValueAccumulatorType))
+            SingleValueAccumulator();
+      }
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
+    for (auto group : groups) {
+      if (isInitialized(group)) {
+        if constexpr (!isNumeric<T>()) {
+          value(group)->destroy(allocator_);
+        }
+        if constexpr (!isNumeric<U>()) {
+          comparisonValue(group)->destroy(allocator_);
+        }
+      }
     }
   }
 

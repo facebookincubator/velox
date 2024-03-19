@@ -319,6 +319,8 @@ void initializeAggregates(
         rowColumn.offset(),
         rowColumn.nullByte(),
         rowColumn.nullMask(),
+        rowColumn.initializedByte(),
+        rowColumn.initializedMask(),
         rows.rowSizeOffset());
     ++i;
   }
@@ -370,6 +372,8 @@ void GroupingSet::createHashTable() {
         rowColumn.offset(),
         rowColumn.nullByte(),
         rowColumn.nullMask(),
+        rowColumn.initializedByte(),
+        rowColumn.initializedMask(),
         rows.rowSizeOffset());
 
     ++numColumns;
@@ -384,6 +388,8 @@ void GroupingSet::createHashTable() {
           rowColumn.offset(),
           rowColumn.nullByte(),
           rowColumn.nullMask(),
+          rowColumn.initializedByte(),
+          rowColumn.initializedMask(),
           rows.rowSizeOffset());
       ++numColumns;
     }
@@ -430,6 +436,8 @@ void GroupingSet::initializeGlobalAggregation() {
         offset,
         RowContainer::nullByte(nullOffset),
         RowContainer::nullMask(nullOffset),
+        RowContainer::initializedByte(nullOffset),
+        RowContainer::initializedMask(nullOffset),
         rowSizeOffset);
 
     offset += accumulator.fixedWidthSize();
@@ -448,6 +456,8 @@ void GroupingSet::initializeGlobalAggregation() {
         offset,
         RowContainer::nullByte(nullOffset),
         RowContainer::nullMask(nullOffset),
+        RowContainer::initializedByte(nullOffset),
+        RowContainer::initializedMask(nullOffset),
         rowSizeOffset);
 
     offset += accumulator.fixedWidthSize();
@@ -467,6 +477,8 @@ void GroupingSet::initializeGlobalAggregation() {
           offset,
           RowContainer::nullByte(nullOffset),
           RowContainer::nullMask(nullOffset),
+          RowContainer::initializedByte(nullOffset),
+          RowContainer::initializedMask(nullOffset),
           rowSizeOffset);
 
       offset += accumulator.fixedWidthSize();
