@@ -204,6 +204,26 @@ days of <code class="docutils literal notranslate"><span class="pre">year-month-
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="make_ym_interval">
+<span class="sig-name descname"><span class="pre">make_ym_interval</span></span><span class="sig-paren">(</span><span class="optional">[</span><em class="sig-param"><span class="n"><span class="pre">years</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">months</span></span></em><span class="optional">]</span><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">interval</span> <span class="pre">year</span> <span class="pre">to</span> <span class="pre">month</span></span></span><a class="headerlink" href="#make_ym_interval" title="Link to this definition">¶</a></dt>
+<dd><p>Make year-month interval from <code class="docutils literal notranslate"><span class="pre">years</span></code> and <code class="docutils literal notranslate"><span class="pre">months</span></code> fields.
+Returns the actual year-month with month in the range of [0, 11].
+Both <code class="docutils literal notranslate"><span class="pre">years</span></code> and <code class="docutils literal notranslate"><span class="pre">months</span></code> can be zero, positive or negative.
+Throws an error when inputs lead to int overflow,
+e.g., make_ym_interval(178956970, 8).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">make_ym_interval</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span><span class="o">-</span><span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">make_ym_interval</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span><span class="o">-</span><span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">make_ym_interval</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">0</span><span class="o">-</span><span class="mi">11</span>
+<span class="n">SELECT</span> <span class="n">make_ym_interval</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">100</span><span class="p">);</span> <span class="o">--</span> <span class="mi">9</span><span class="o">-</span><span class="mi">4</span>
+<span class="n">SELECT</span> <span class="n">make_ym_interval</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">12</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span><span class="o">-</span><span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">make_ym_interval</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">12</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span><span class="o">-</span><span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">make_ym_interval</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span><span class="o">-</span><span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">make_ym_interval</span><span class="p">();</span> <span class="o">--</span> <span class="mi">0</span><span class="o">-</span><span class="mi">0</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="minute">
 <span class="sig-name descname"><span class="pre">minute</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#minute" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the minutes of <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.:</p>
@@ -408,6 +428,7 @@ A week is considered to start on a Monday and week 1 is the first week with &gt;
 <li><a class="reference internal" href="#hour"><code class="docutils literal notranslate"><span class="pre">hour()</span></code></a></li>
 <li><a class="reference internal" href="#last_day"><code class="docutils literal notranslate"><span class="pre">last_day()</span></code></a></li>
 <li><a class="reference internal" href="#make_date"><code class="docutils literal notranslate"><span class="pre">make_date()</span></code></a></li>
+<li><a class="reference internal" href="#make_ym_interval"><code class="docutils literal notranslate"><span class="pre">make_ym_interval()</span></code></a></li>
 <li><a class="reference internal" href="#minute"><code class="docutils literal notranslate"><span class="pre">minute()</span></code></a></li>
 <li><a class="reference internal" href="#quarter"><code class="docutils literal notranslate"><span class="pre">quarter()</span></code></a></li>
 <li><a class="reference internal" href="#make_timestamp"><code class="docutils literal notranslate"><span class="pre">make_timestamp()</span></code></a></li>

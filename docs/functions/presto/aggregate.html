@@ -573,7 +573,8 @@ value. <code class="docutils literal notranslate"><span class="pre">x</span></co
 <dt class="sig sig-object py" id="regr_r2">
 <span class="sig-name descname"><span class="pre">regr_r2</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_r2" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the coefficient of determination of the linear regression. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
-value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value.</p>
+value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value. If regr_sxx(y, x) is 0, result is null. If regr_syy(y, x) is 0
+and regr_sxx(y, x) isn’t 0, result is 1.</p>
 </dd></dl>
 
 <dl class="py function">
