@@ -163,7 +163,7 @@ TEST_P(CovarianceAggregationTest, allSameValue) {
   testDistinctGroupBy(aggName, data);
 }
 
-TEST_P(CovarianceAggregationTest, allSameYValue) {
+TEST_P(CovarianceAggregationTest, constantY) {
   vector_size_t size = 1'000;
   auto data = makeRowVector({
       makeFlatVector<int32_t>(size, [](auto row) { return row % 7; }),
