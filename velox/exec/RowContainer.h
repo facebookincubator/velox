@@ -1188,7 +1188,7 @@ class RowContainer {
   // Free any aggregates associated with the 'rows'.
   void freeAggregates(folly::Range<char**> rows);
 
-  // Free any next row vectors associated with the 'rows'.
+  // Free next row vectors associated with the 'rows'.
   // If 'validateNextRowVector' is true, we must ensure that all duplicate rows
   // are erased in a single call without any omissions. This check is
   // unnecessary when clearing the container and initializing new rows.
