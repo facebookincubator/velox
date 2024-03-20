@@ -167,7 +167,7 @@ TEST_P(CovarianceAggregationTest, constantY) {
   vector_size_t size = 1'000;
   auto data = makeRowVector({
       makeFlatVector<int32_t>(size, [](auto row) { return row % 7; }),
-      makeFlatVector<float>(size, [](auto row) { return 1; }),
+      makeFlatVector<float>(size, [](auto /*row*/) { return 1; }),
       makeFlatVector<float>(size, [](auto row) { return row * 0.2; }),
   });
 
