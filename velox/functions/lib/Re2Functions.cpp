@@ -217,7 +217,7 @@ class Re2MatchConstantPattern final : public exec::VectorFunction {
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
     try {
       checkForBadPattern(re_);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       context.setErrors(rows, std::current_exception());
       return;
     }
@@ -288,7 +288,7 @@ class Re2SearchAndExtractConstantPattern final : public exec::VectorFunction {
     // apply() will not be invoked if the selection is empty.
     try {
       checkForBadPattern(re_);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       context.setErrors(rows, std::current_exception());
       return;
     }
@@ -312,7 +312,7 @@ class Re2SearchAndExtractConstantPattern final : public exec::VectorFunction {
     if (const auto groupId = getIfConstant<T>(*args[2])) {
       try {
         checkForBadGroupId(*groupId, re_);
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
         context.setErrors(rows, std::current_exception());
         return;
       }
@@ -834,7 +834,7 @@ class LikeWithRe2 final : public exec::VectorFunction {
     // apply() will not be invoked if the selection is empty.
     try {
       checkForBadPattern(*re_);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       context.setErrors(rows, std::current_exception());
       return;
     }
@@ -1067,7 +1067,7 @@ class Re2ExtractAllConstantPattern final : public exec::VectorFunction {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
     try {
       checkForBadPattern(re_);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       context.setErrors(rows, std::current_exception());
       return;
     }
@@ -1092,7 +1092,7 @@ class Re2ExtractAllConstantPattern final : public exec::VectorFunction {
       //
       try {
         checkForBadGroupId(*_groupId, re_);
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
         context.setErrors(rows, std::current_exception());
         return;
       }
