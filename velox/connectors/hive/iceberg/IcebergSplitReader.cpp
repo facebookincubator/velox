@@ -19,25 +19,22 @@
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/BufferUtil.h"
-#include "velox/dwio/common/Mutation.h"
-#include "velox/dwio/common/Reader.h"
 
 using namespace facebook::velox::dwio::common;
 
 namespace facebook::velox::connector::hive::iceberg {
 
 IcebergSplitReader::IcebergSplitReader(
-    const std::shared_ptr<velox::connector::hive::HiveConnectorSplit>&
-        hiveSplit,
-    const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
+    const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const RowTypePtr& readerOutputType,
-    std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<HiveConfig>& hiveConfig,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
     std::shared_ptr<io::IoStatistics> ioStats)
     : SplitReader(
           hiveSplit,
@@ -65,8 +62,8 @@ void IcebergSplitReader::prepareSplit(
 
   createRowReader(metadataFilter);
 
-  std::shared_ptr<HiveIcebergSplit> icebergSplit =
-      std::dynamic_pointer_cast<HiveIcebergSplit>(hiveSplit_);
+  std::shared_ptr<const HiveIcebergSplit> icebergSplit =
+      std::dynamic_pointer_cast<const HiveIcebergSplit>(hiveSplit_);
   baseReadOffset_ = 0;
   splitOffset_ = baseRowReader_->nextRowNumber();
   positionalDeleteFileReaders_.clear();

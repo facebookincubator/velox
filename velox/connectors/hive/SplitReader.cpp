@@ -60,17 +60,16 @@ VectorPtr newConstantFromString(
 } // namespace
 
 std::unique_ptr<SplitReader> SplitReader::create(
-    const std::shared_ptr<velox::connector::hive::HiveConnectorSplit>&
-        hiveSplit,
-    const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
+    const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const RowTypePtr& readerOutputType,
-    std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<HiveConfig>& hiveConfig,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats) {
   //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
   if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
@@ -102,17 +101,17 @@ std::unique_ptr<SplitReader> SplitReader::create(
 }
 
 SplitReader::SplitReader(
-    const std::shared_ptr<velox::connector::hive::HiveConnectorSplit>&
-        hiveSplit,
-    const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
+    const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const RowTypePtr& readerOutputType,
-    std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
+    const std::unordered_map<
+        std::string, std::shared_ptr<HiveColumnHandle>>*
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<HiveConfig>& hiveConfig,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats)
     : hiveSplit_(hiveSplit),
       hiveTableHandle_(hiveTableHandle),
@@ -203,9 +202,7 @@ std::string SplitReader::toString() const {
   std::for_each(
       partitionKeys_->begin(),
       partitionKeys_->end(),
-      [&](std::pair<
-          const std::string,
-          std::shared_ptr<facebook::velox::connector::hive::HiveColumnHandle>>
+      [&](std::pair<const std::string, std::shared_ptr<const HiveColumnHandle>>
               column) { partitionKeys += " " + column.second->toString(); });
   return fmt::format(
       "SplitReader: hiveSplit_{} scanSpec_{} readerOutputType_{} partitionKeys_{} reader{} rowReader{}",
