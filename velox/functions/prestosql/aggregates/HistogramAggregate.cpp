@@ -366,7 +366,7 @@ void registerHistogramAggregate(
   }
 
   auto name = prefix + kHistogram;
-  exec::registerAggregateFunctionWithMetadata(
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](

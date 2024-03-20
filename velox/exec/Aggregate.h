@@ -434,7 +434,7 @@ AggregateRegistrationResult registerAggregateFunction(
     bool registerCompanionFunctions,
     bool overwrite);
 
-AggregateRegistrationResult registerAggregateFunctionWithMetadata(
+AggregateRegistrationResult registerAggregateFunction(
     const std::string& name,
     const std::vector<std::shared_ptr<AggregateFunctionSignature>>& signatures,
     const AggregateFunctionFactory& factory,
@@ -451,7 +451,7 @@ std::vector<AggregateRegistrationResult> registerAggregateFunction(
     bool registerCompanionFunctions,
     bool overwrite);
 
-std::vector<AggregateRegistrationResult> registerAggregateFunctionWithMetadata(
+std::vector<AggregateRegistrationResult> registerAggregateFunction(
     const std::vector<std::string>& names,
     const std::vector<std::shared_ptr<AggregateFunctionSignature>>& signatures,
     const AggregateFunctionFactory& factory,

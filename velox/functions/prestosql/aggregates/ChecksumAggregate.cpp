@@ -244,7 +244,7 @@ void registerChecksumAggregate(
   };
 
   auto name = prefix + kChecksum;
-  exec::registerAggregateFunctionWithMetadata(
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [&name](

@@ -190,7 +190,7 @@ exec::AggregateRegistrationResult registerBool(
           .argumentType("boolean")
           .build()};
 
-  return exec::registerAggregateFunctionWithMetadata(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](

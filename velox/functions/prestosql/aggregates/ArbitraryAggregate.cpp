@@ -275,7 +275,7 @@ void registerArbitraryAggregate(
           .build()};
 
   std::vector<std::string> names = {prefix + kArbitrary, prefix + kAnyValue};
-  exec::registerAggregateFunctionWithMetadata(
+  exec::registerAggregateFunction(
       names,
       std::move(signatures),
       [name = names.front()](

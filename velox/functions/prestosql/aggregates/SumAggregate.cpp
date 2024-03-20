@@ -56,7 +56,7 @@ exec::AggregateRegistrationResult registerSum(
                              .build());
   }
 
-  return exec::registerAggregateFunctionWithMetadata(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](

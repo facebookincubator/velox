@@ -183,7 +183,7 @@ void registerCountIfAggregate(
   };
 
   auto name = prefix + kCountIf;
-  exec::registerAggregateFunctionWithMetadata(
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](

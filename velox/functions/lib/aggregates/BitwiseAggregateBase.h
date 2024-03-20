@@ -88,7 +88,7 @@ exec::AggregateRegistrationResult registerBitwise(
                              .build());
   }
 
-  return exec::registerAggregateFunctionWithMetadata(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](

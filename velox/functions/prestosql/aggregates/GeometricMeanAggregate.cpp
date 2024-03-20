@@ -105,7 +105,7 @@ void registerGeometricMeanAggregate(
                            .argumentType("real")
                            .build());
 
-  exec::registerAggregateFunctionWithMetadata(
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](

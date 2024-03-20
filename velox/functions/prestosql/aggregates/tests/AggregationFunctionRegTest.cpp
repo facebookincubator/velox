@@ -88,10 +88,7 @@ TEST_F(AggregationFunctionRegTest, orderSensitive) {
 
   // Test some but not all order sensitive functions
   std::set<std::string> orderSensitiveFunctions = {
-      "array_agg",
-      "map_agg",
-      "map_union",
-      "set_agg"};
+      "array_agg", "map_agg", "map_union", "set_agg"};
   exec::aggregateFunctions().withRLock([&](const auto& aggrFuncMap) {
     for (const auto& entry : aggrFuncMap) {
       if (entry.second.metadata.orderSensitive) {

@@ -804,7 +804,7 @@ void registerReduceAgg(
 
   const std::string name = prefix + kReduceAgg;
 
-  exec::registerAggregateFunctionWithMetadata(
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](

@@ -3693,7 +3693,6 @@ TEST_F(AggregationTest, ignoreOrderBy) {
           .planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .assertResults(
-          "SELECT c0, sum(c1), avg(c1) FROM tmp GROUP BY 1");
+      .assertResults("SELECT c0, sum(c1), avg(c1) FROM tmp GROUP BY 1");
 }
 } // namespace facebook::velox::exec::test

@@ -53,7 +53,7 @@ getAggregateFunctionEntry(const std::string& name) {
       });
 }
 
-AggregateRegistrationResult registerAggregateFunctionWithMetadata(
+AggregateRegistrationResult registerAggregateFunction(
     const std::string& name,
     const std::vector<std::shared_ptr<AggregateFunctionSignature>>& signatures,
     const AggregateFunctionFactory& factory,
@@ -66,7 +66,7 @@ AggregateRegistrationResult registerAggregateFunctionWithMetadata(
   if (overwrite) {
     aggregateFunctions().withWLock([&](auto& aggregationFunctionMap) {
       aggregationFunctionMap[sanitizedName] = {
-          signatures, std::move(factory), std::move(metadata)};
+          signatures, std::move(factory), metadata};
     });
     registered.mainFunction = true;
   } else {
@@ -106,13 +106,8 @@ AggregateRegistrationResult registerAggregateFunction(
     const AggregateFunctionFactory& factory,
     bool registerCompanionFunctions,
     bool overwrite) {
-  return registerAggregateFunctionWithMetadata(
-      name,
-      signatures,
-      factory,
-      {},
-      registerCompanionFunctions,
-      overwrite);
+  return registerAggregateFunction(
+      name, signatures, factory, {}, registerCompanionFunctions, overwrite);
 }
 
 std::vector<AggregateRegistrationResult> registerAggregateFunction(
@@ -120,18 +115,12 @@ std::vector<AggregateRegistrationResult> registerAggregateFunction(
     const std::vector<std::shared_ptr<AggregateFunctionSignature>>& signatures,
     const AggregateFunctionFactory& factory,
     bool registerCompanionFunctions,
-    bool overwrite
-    ) {
-  return registerAggregateFunctionWithMetadata(
-      names,
-      signatures,
-      factory,
-      {},
-      registerCompanionFunctions,
-      overwrite);
+    bool overwrite) {
+  return registerAggregateFunction(
+      names, signatures, factory, {}, registerCompanionFunctions, overwrite);
 }
 
-std::vector<AggregateRegistrationResult> registerAggregateFunctionWithMetadata(
+std::vector<AggregateRegistrationResult> registerAggregateFunction(
     const std::vector<std::string>& names,
     const std::vector<std::shared_ptr<AggregateFunctionSignature>>& signatures,
     const AggregateFunctionFactory& factory,
@@ -141,7 +130,7 @@ std::vector<AggregateRegistrationResult> registerAggregateFunctionWithMetadata(
   auto size = names.size();
   std::vector<AggregateRegistrationResult> registrationResults{size};
   for (int i = 0; i < size; ++i) {
-    registrationResults[i] = registerAggregateFunctionWithMetadata(
+    registrationResults[i] = registerAggregateFunction(
         names[i],
         signatures,
         factory,
