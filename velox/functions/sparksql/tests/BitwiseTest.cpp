@@ -143,7 +143,6 @@ TEST_F(BitwiseTest, bitwiseNot) {
   EXPECT_EQ(bitwiseNot<int64_t>(kMax64), kMin64);
 }
 
-
 TEST_F(BitwiseTest, bitwiseOr) {
   EXPECT_EQ(bitwiseOr<int32_t>(0, -1), -1);
   EXPECT_EQ(bitwiseOr<int32_t>(3, 8), 11);
