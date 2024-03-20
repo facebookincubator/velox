@@ -167,7 +167,6 @@ long mk_order(DSS_HUGE index, order_t* o, DBGenContext* ctx, long upd_num) {
   RANDOM(o->lines, O_LCNT_MIN, O_LCNT_MAX, &ctx->Seed[O_LCNT_SD]);
   for (lcnt = 0; lcnt < o->lines; lcnt++) {
     o->l[lcnt].okey = o->okey;
-    ;
     o->l[lcnt].lcnt = lcnt + 1;
     RANDOM(o->l[lcnt].quantity, L_QTY_MIN, L_QTY_MAX, &ctx->Seed[L_QTY_SD]);
     RANDOM(o->l[lcnt].discount, L_DCNT_MIN, L_DCNT_MAX, &ctx->Seed[L_DCNT_SD]);
