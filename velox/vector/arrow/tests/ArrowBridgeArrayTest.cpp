@@ -1129,10 +1129,8 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
   // Vector (using vector maker). Then converts ArrowArray into Velox vector and
   // assert that both Velox vectors are semantically the same.
   template <typename TOutput, typename TInput = TOutput>
-  template <typename TOutput, typename TInput = TOutput>
   void testArrowImport(
       const char* format,
-      const std::vector<std::optional<TInput>>& inputValues) {
       const std::vector<std::optional<TInput>>& inputValues) {
     ArrowContextHolder holder;
     auto arrowArray = fillArrowArray(inputValues, holder);
@@ -1154,7 +1152,6 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     // Buffer views are not reusable. Strings might need to create an additional
     // buffer, depending on the string sizes, in which case the buffers could be
     // reusable. So we don't check them in here.
-    if constexpr (!std::is_same_v<TInput, std::string>) {
     if constexpr (!std::is_same_v<TInput, std::string>) {
       EXPECT_FALSE(BaseVector::isVectorWritable(output));
     } else {
@@ -1232,7 +1229,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
           tsString.data(), {0, std::nullopt, Timestamp::kMaxSeconds});
     }
 
-        testArrowImport<int64_t, int128_t>(
+    testArrowImport<int64_t, int128_t>(
         "d:5,2", {1, -1, 0, 12345, -12345, std::nullopt});
   }
 
