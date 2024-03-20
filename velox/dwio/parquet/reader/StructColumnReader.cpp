@@ -140,6 +140,25 @@ void StructColumnReader::enqueueRowGroup(
   }
 }
 
+bool StructColumnReader::preDecompRowGroup(uint32_t index) {
+  for (auto& child : children_) {
+    if (!needPreDecomp) {
+      return false;
+    }
+    if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
+      structChild->preDecompRowGroup(index);
+    } else if (auto listChild = dynamic_cast<ListColumnReader*>(child)) {
+      listChild->preDecompRowGroup(index);
+    } else if (auto mapChild = dynamic_cast<MapColumnReader*>(child)) {
+      mapChild->preDecompRowGroup(index);
+    } else {
+      needPreDecomp =
+          child->formatData().as<ParquetData>().preDecompRowGroup(index);
+    }
+  }
+  return needPreDecomp;
+}
+
 void StructColumnReader::seekToRowGroup(uint32_t index) {
   SelectiveStructColumnReader::seekToRowGroup(index);
   BufferPtr noBuffer;

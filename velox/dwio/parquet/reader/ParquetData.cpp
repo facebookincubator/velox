@@ -82,6 +82,30 @@ bool ParquetData::rowGroupMatches(
   return true;
 }
 
+bool ParquetData::preDecompRowGroup(uint32_t index) {
+#ifndef VELOX_ENABLE_INTEL_IAA
+  return false;
+#endif
+  auto metaData = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
+  if (metaData.compression() != common::CompressionKind::CompressionKind_GZIP ||
+      !needPreDecomp) {
+    LOG(WARNING) << "QPL Job not ready or zlib window size(" << needPreDecomp
+                 << ") is not 4KB";
+    return false;
+  }
+
+  pageReaders_.resize(fileMetaDataPtr_.numRowGroups());
+  auto iaaPageReader = std::make_unique<IAAPageReader>(
+      std::move(streams_[index]),
+      pool_,
+      type_,
+      metaData.compression(),
+      metaData.totalCompressedSize());
+  iaaPageReader->preDecompressPage(needPreDecomp, metaData.numValues());
+  pageReaders_[index] = std::move(iaaPageReader);
+  return needPreDecomp;
+}
+
 void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
@@ -114,6 +138,11 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(uint32_t index) {
   VELOX_CHECK_LT(index, streams_.size());
   VELOX_CHECK(streams_[index], "Stream not enqueued for column");
   auto metadata = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
+  if (metadata.compression() == common::CompressionKind::CompressionKind_GZIP &&
+      pageReaders_.size() > index && pageReaders_[index] != nullptr) {
+    reader_ = std::move(pageReaders_[index]);
+    return dwio::common::PositionProvider(empty);
+  }
   reader_ = std::make_unique<PageReader>(
       std::move(streams_[index]),
       pool_,
