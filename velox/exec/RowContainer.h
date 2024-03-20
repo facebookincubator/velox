@@ -250,7 +250,7 @@ class RowContainer {
 
   /// Adds 'rows' to the free rows list and frees any associated variable length
   /// data.
-  void eraseRows(folly::Range<char**> rows);
+  void eraseRows(folly::Range<char**> rows, bool validateNextRowVector = true);
 
   /// Copies elements of 'rows' where the char* points to a row inside 'this' to
   /// 'result' and returns the number copied. 'result' should have space for
@@ -604,7 +604,7 @@ class RowContainer {
     return nextOffset_;
   }
 
-  void appendNextRow(char* existing, char* nextRow);
+  void appendNextRow(char* current, char* nextRow);
 
   NextRowVector*& getNextRowVector(char* row) const {
     return *reinterpret_cast<NextRowVector**>(row + nextOffset_);
@@ -1188,13 +1188,24 @@ class RowContainer {
   // Free any aggregates associated with the 'rows'.
   void freeAggregates(folly::Range<char**> rows);
 
-  void freeNextRowVectors(folly::Range<char**> rows) {
-    if (!nextOffset_) {
+  // Free any next row vectors associated with the 'rows'.
+  // If 'validateNextRowVector' is true, we must ensure that all duplicate rows
+  // are erased in a single call without any omissions. This check is
+  // unnecessary when clearing the container and initializing new rows.
+  void freeNextRowVectors(
+      folly::Range<char**> rows,
+      bool validateNextRowVector) {
+    if (!nextOffset_ || !hasDuplicateRows_) {
       return;
     }
     for (auto row : rows) {
       auto& vector = getNextRowVector(row);
       if (vector) {
+        if (validateNextRowVector) {
+          for (auto next : *vector) {
+            VELOX_CHECK(rows.contains(next));
+          }
+        }
         delete vector;
         vector = nullptr;
       }
@@ -1221,7 +1232,6 @@ class RowContainer {
   std::vector<TypeKind> typeKinds_;
   int32_t nextOffset_ = 0;
   bool hasDuplicateRows_{false};
-  std::shared_ptr<std::mutex> nextRowsMutex_ = std::make_shared<std::mutex>();
   // Bit position of null bit  in the row. 0 if no null flag. Order is keys,
   // accumulators, dependent.
   std::vector<int32_t> nullOffsets_;

@@ -282,8 +282,7 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
     auto rows = folly::Range<char**>(&row, 1);
     freeVariableWidthFields(rows);
     freeAggregates(rows);
-    freeNextRowVectors(rows);
-    freeNextRowVectors(rows);
+    freeNextRowVectors(rows, false);
   } else if (rowSizeOffset_ != 0) {
     // zero out string views so that clear() will not hit uninited data. The
     // fastest way is to set the whole row to 0.
@@ -305,10 +304,12 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
   return row;
 }
 
-void RowContainer::eraseRows(folly::Range<char**> rows) {
+void RowContainer::eraseRows(
+    folly::Range<char**> rows,
+    bool validateNextRowVector) {
   freeVariableWidthFields(rows);
   freeAggregates(rows);
-  freeNextRowVectors(rows);
+  freeNextRowVectors(rows, validateNextRowVector);
   numRows_ -= rows.size();
   for (auto* row : rows) {
     VELOX_CHECK(!bits::isBitSet(row, freeFlagOffset_), "Double free of row");
@@ -362,8 +363,8 @@ int32_t RowContainer::findRows(folly::Range<char**> rows, char** result) {
   return numRows;
 }
 
-void RowContainer::appendNextRow(char* existing, char* nextRow) {
-  NextRowVector*& nextRowArrayPtr = getNextRowVector(existing);
+void RowContainer::appendNextRow(char* current, char* nextRow) {
+  NextRowVector*& nextRowArrayPtr = getNextRowVector(current);
   if (!nextRowArrayPtr) {
     nextRowArrayPtr =
         new NextRowVector(StlAllocator<char*>(stringAllocator_.get()));
@@ -828,7 +829,7 @@ void RowContainer::clear() {
     std::vector<char*> rows(kBatch);
     RowContainerIterator iter;
     while (auto numRows = listRows(&iter, kBatch, rows.data())) {
-      eraseRows(folly::Range<char**>(rows.data(), numRows));
+      eraseRows(folly::Range<char**>(rows.data(), numRows), false);
     }
   }
   rows_.clear();
