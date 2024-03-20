@@ -704,12 +704,12 @@ template <typename T>
 struct MakeYMIntervalFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(out_type<IntervalYearMonthType>& result) {
+  FOLLY_ALWAYS_INLINE void call(out_type<IntervalYearMonth>& result) {
     result = 0;
   }
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<IntervalYearMonthType>& result,
+      out_type<IntervalYearMonth>& result,
       const int32_t year) {
     VELOX_USER_CHECK(
         !__builtin_mul_overflow(year, kMonthInYear, &result),
@@ -718,7 +718,7 @@ struct MakeYMIntervalFunction {
   }
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<IntervalYearMonthType>& result,
+      out_type<IntervalYearMonth>& result,
       const int32_t year,
       const int32_t month) {
     auto totalMonths = (int64_t)year * kMonthInYear + month;

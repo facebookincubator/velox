@@ -914,11 +914,6 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
 }
 
 TEST_F(DateTimeFunctionsTest, makeYMInterval) {
-  const auto getYMInterval = [](const std::optional<int32_t>& ymInterval) {
-    return ymInterval.has_value()
-        ? std::make_optional(INTERVAL_YEAR_MONTH()->valueToString(*ymInterval))
-        : std::nullopt;
-  };
   const auto fromYearAndMonth = [&](const std::optional<int32_t>& year,
                                     const std::optional<std::int32_t>& month) {
     auto result = evaluateOnce<int32_t, int32_t>(
@@ -927,7 +922,8 @@ TEST_F(DateTimeFunctionsTest, makeYMInterval) {
         {INTEGER(), INTEGER()},
         std::nullopt,
         {INTERVAL_YEAR_MONTH()});
-    return getYMInterval(result);
+    VELOX_CHECK(result.has_value());
+    return INTERVAL_YEAR_MONTH()->valueToString(result.value());
   };
   const auto fromYear = [&](const std::optional<int32_t>& year) {
     auto result = evaluateOnce<int32_t, int32_t>(
@@ -936,26 +932,27 @@ TEST_F(DateTimeFunctionsTest, makeYMInterval) {
         {INTEGER()},
         std::nullopt,
         {INTERVAL_YEAR_MONTH()});
-    return getYMInterval(result);
+    VELOX_CHECK(result.has_value());
+    return INTERVAL_YEAR_MONTH()->valueToString(result.value());
   };
 
   EXPECT_EQ(fromYearAndMonth(1, 2), "1-2");
   EXPECT_EQ(fromYearAndMonth(0, 1), "0-1");
   EXPECT_EQ(fromYearAndMonth(1, 100), "9-4");
-  EXPECT_EQ(fromYearAndMonth(178956971, std::nullopt), std::nullopt);
-  EXPECT_EQ(fromYearAndMonth(std::nullopt, 1), std::nullopt);
-  EXPECT_EQ(fromYearAndMonth(std::nullopt, std::nullopt), std::nullopt);
   EXPECT_EQ(fromYear(0), "0-0");
   EXPECT_EQ(fromYear(178956970), "178956970-0");
   EXPECT_EQ(fromYear(-178956970), "-178956970-0");
-  // Test signature for no year and month.
-  EXPECT_EQ(
-      getYMInterval(evaluateOnce<int32_t>(
-          "make_ym_interval()",
-          makeRowVector(ROW({}), 1),
-          std::nullopt,
-          {INTERVAL_YEAR_MONTH()})),
-      "0-0");
+  {
+    // Test signature for no year and month.
+    auto emptySignature = evaluateOnce<int32_t>(
+        "make_ym_interval()",
+        makeRowVector(ROW({}), 1),
+        std::nullopt,
+        {INTERVAL_YEAR_MONTH()});
+    VELOX_CHECK(emptySignature.has_value());
+    EXPECT_EQ(
+        INTERVAL_YEAR_MONTH()->valueToString(emptySignature.value()), "0-0");
+  }
 
   VELOX_ASSERT_THROW(
       fromYearAndMonth(178956970, 8),

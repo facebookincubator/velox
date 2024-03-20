@@ -145,6 +145,8 @@ These functions support TIMESTAMP and DATE input types.
         SELECT make_ym_interval(1, 0); -- 1-0
         SELECT make_ym_interval(-1, 1); -- -0-11
         SELECT make_ym_interval(1, 100); -- 9-4
+        SELECT make_ym_interval(1, 12); -- 2-0
+        SELECT make_ym_interval(1, -12); -- 0-0
         SELECT make_ym_interval(2); -- 2-0
         SELECT make_ym_interval(); -- 0-0
 
