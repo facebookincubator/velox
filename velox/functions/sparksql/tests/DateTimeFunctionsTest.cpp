@@ -920,7 +920,7 @@ TEST_F(DateTimeFunctionsTest, makeYMInterval) {
         : std::nullopt;
   };
   const auto fromYearAndMonth = [&](const std::optional<int32_t>& year,
-                                  const std::optional<std::int32_t>& month) {
+                                    const std::optional<std::int32_t>& month) {
     auto result = evaluateOnce<int32_t, int32_t>(
         "make_ym_interval(c0, c1)",
         {year, month},
@@ -967,11 +967,9 @@ TEST_F(DateTimeFunctionsTest, makeYMInterval) {
       fromYearAndMonth(178956971, 0),
       "Integer overflow in make_ym_interval(178956971, 0)");
   VELOX_ASSERT_THROW(
-      fromYear(178956971),
-      "Integer overflow in make_ym_interval(178956971)");
+      fromYear(178956971), "Integer overflow in make_ym_interval(178956971)");
   VELOX_ASSERT_THROW(
-      fromYear(-178956971),
-      "Integer overflow in make_ym_interval(-178956971)");
+      fromYear(-178956971), "Integer overflow in make_ym_interval(-178956971)");
 }
 
 } // namespace
