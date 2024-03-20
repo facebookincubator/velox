@@ -27,17 +27,17 @@ class IcebergDeleteFile;
 class IcebergSplitReader : public SplitReader {
  public:
   IcebergSplitReader(
-      const std::shared_ptr<velox::connector::hive::HiveConnectorSplit>&
-          hiveSplit,
-      const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
+      const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
+      const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
       const RowTypePtr& readerOutputType,
-      std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
-          partitionKeys,
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<const HiveColumnHandle>>* partitionKeys,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<HiveConfig>& hiveConfig,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
       std::shared_ptr<io::IoStatistics> ioStats);
 
   ~IcebergSplitReader() override = default;

@@ -90,7 +90,7 @@ class HiveDataSource : public DataSource {
 
   // Column handles for the partition key columns keyed on partition key column
   // name.
-  std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
+  std::unordered_map<std::string, std::shared_ptr<const HiveColumnHandle>>
       partitionKeys_;
 
   FileHandleFactory* const fileHandleFactory_;

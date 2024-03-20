@@ -319,8 +319,9 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
         outputSubfields,
     const SubfieldFilters& filters,
     const RowTypePtr& dataColumns,
-    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
-        partitionKeys,
+    const std::unordered_map<
+        std::string,
+        std::shared_ptr<const HiveColumnHandle>>& partitionKeys,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         infoColumns,
     memory::MemoryPool* pool) {
@@ -444,10 +445,10 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
 
 void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
-    const std::shared_ptr<HiveConfig>& hiveConfig,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
     const Config* sessionProperties,
-    const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
-    const std::shared_ptr<HiveConnectorSplit>& hiveSplit) {
+    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit) {
   configureReaderOptions(
       readerOptions,
       hiveConfig,
@@ -459,10 +460,10 @@ void configureReaderOptions(
 
 void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
-    const std::shared_ptr<HiveConfig>& hiveConfig,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
     const Config* sessionProperties,
     const RowTypePtr& fileSchema,
-    const std::shared_ptr<HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const std::unordered_map<std::string, std::string>& tableParameters) {
   readerOptions.setLoadQuantum(hiveConfig->loadQuantum());
   readerOptions.setMaxCoalesceBytes(hiveConfig->maxCoalescedBytes());
@@ -495,10 +496,10 @@ void configureReaderOptions(
 void configureRowReaderOptions(
     dwio::common::RowReaderOptions& rowReaderOptions,
     const std::unordered_map<std::string, std::string>& tableParameters,
-    std::shared_ptr<common::ScanSpec> scanSpec,
-    std::shared_ptr<common::MetadataFilter> metadataFilter,
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    const std::shared_ptr<common::MetadataFilter>& metadataFilter,
     const RowTypePtr& rowType,
-    std::shared_ptr<HiveConnectorSplit> hiveSplit) {
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit) {
   auto skipRowsIt =
       tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
   if (skipRowsIt != tableParameters.end()) {
@@ -555,13 +556,14 @@ bool applyPartitionFilter(
 } // namespace
 
 bool testFilters(
-    common::ScanSpec* scanSpec,
-    dwio::common::Reader* reader,
+    const common::ScanSpec* scanSpec,
+    const dwio::common::Reader* reader,
     const std::string& filePath,
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKey,
-    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
-        partitionKeysHandle) {
+    const std::unordered_map<
+        std::string,
+        std::shared_ptr<const HiveColumnHandle>>& partitionKeysHandle) {
   VELOX_CHECK_EQ(partitionKey.size(), partitionKeysHandle.size());
 
   auto totalRows = reader->numberOfRows();
