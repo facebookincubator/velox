@@ -944,14 +944,13 @@ TEST_F(DateTimeFunctionsTest, makeYMInterval) {
   EXPECT_EQ(fromYear(-178956970), "-178956970-0");
   {
     // Test signature for no year and month.
-    auto emptySignature = evaluateOnce<int32_t>(
+    auto result = evaluateOnce<int32_t>(
         "make_ym_interval()",
         makeRowVector(ROW({}), 1),
         std::nullopt,
         {INTERVAL_YEAR_MONTH()});
-    VELOX_CHECK(emptySignature.has_value());
-    EXPECT_EQ(
-        INTERVAL_YEAR_MONTH()->valueToString(emptySignature.value()), "0-0");
+    VELOX_CHECK(result.has_value());
+    EXPECT_EQ(INTERVAL_YEAR_MONTH()->valueToString(result.value()), "0-0");
   }
 
   VELOX_ASSERT_THROW(
