@@ -25,6 +25,7 @@ add_executable(
   VectorToStringTest.cpp
   VectorEstimateFlatSizeTest.cpp
   VectorPrepareForReuseTest.cpp
+  CopyPreserveEncodingsTest.cpp
   DecodedVectorTest.cpp
   SelectivityVectorTest.cpp
   EnsureWritableVectorTest.cpp

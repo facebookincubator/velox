@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <stdexcept>
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/FlatVector.h"
 
@@ -191,6 +192,10 @@ class FunctionVector : public BaseVector {
 
   VectorPtr slice(vector_size_t, vector_size_t) const override {
     VELOX_NYI();
+  }
+
+  VectorPtr copyPreserveEncodings() const override {
+    VELOX_UNSUPPORTED("copyPreserveEncodings not defined for FunctionVector");
   }
 
  private:
