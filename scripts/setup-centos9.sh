@@ -39,6 +39,11 @@ BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 export CC=/opt/rh/gcc-toolset-12/root/bin/gcc
 export CXX=/opt/rh/gcc-toolset-12/root/bin/g++
 
+FB_OS_VERSION="v2024.05.20.00"
+FMT_VERSION="10.1.1"
+BOOST_VERSION="boost-1.84.0"
+ARROW_VERSION="15.0.0"
+
 function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
 }
@@ -98,7 +103,7 @@ function install_lzo {
 }
 
 function install_boost {
-  wget_and_untar https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.gz boost
+  wget_and_untar https://github.com/boostorg/boost/releases/download/${BOOST_VERSION}/${BOOST_VERSION}.tar.gz boost
   (
    cd boost
    ./bootstrap.sh --prefix=/usr/local
@@ -115,7 +120,7 @@ function install_snappy {
 }
 
 function install_fmt {
-  wget_and_untar https://github.com/fmtlib/fmt/archive/10.1.1.tar.gz fmt
+  wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
   (
     cd fmt
     cmake_install -DFMT_TEST=OFF
@@ -133,8 +138,6 @@ function install_protobuf {
   )
 }
 
-FB_OS_VERSION="v2024.05.20.00"
-
 function install_fizz {
   wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
   (
@@ -147,7 +150,7 @@ function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
   (
     cd folly
-    cmake_install -DFOLLY_HAVE_INT128_T=ON
+    cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
   )
 }
 
@@ -185,8 +188,6 @@ function install_duckdb {
     )
   fi
 }
-
-ARROW_VERSION=15.0.0
 
 function install_arrow {
   wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow

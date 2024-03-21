@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This script documents setting up a Centos8 host for Velox
+# This script documents setting up a Ubuntu host for Velox
 # development.  Running it should make you ready to compile.
 #
 # Environment variables:
@@ -34,14 +34,16 @@ source $SCRIPTDIR/setup-helper-functions.sh
 # are the same size.
 COMPILER_FLAGS=$(get_cxx_flags)
 export COMPILER_FLAGS
-FB_OS_VERSION=v2024.05.20.00
-FMT_VERSION=10.1.1
-BOOST_VERSION=boost-1.84.0
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 export CMAKE_BUILD_TYPE=Release
 SUDO="${SUDO:-"sudo --preserve-env"}"
+
+FB_OS_VERSION="v2024.05.20.00"
+FMT_VERSION="10.1.1"
+BOOST_VERSION="boost-1.84.0"
+ARROW_VERSION="15.0.0"
 
 # Install packages required for build.
 function install_build_prerequisites {
@@ -92,39 +94,60 @@ function install_velox_deps_from_apt {
 }
 
 function install_fmt {
-  github_checkout fmtlib/fmt "${FMT_VERSION}"
-  cmake_install -DFMT_TEST=OFF
+  wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
+  (
+    cd fmt
+    cmake_install -DFMT_TEST=OFF
+  )
 }
 
 function install_boost {
-  github_checkout boostorg/boost "${BOOST_VERSION}" --recursive
-  ./bootstrap.sh --prefix=/usr/local
-  ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi --without-python
+  wget_and_untar https://github.com/boostorg/boost/releases/download/${BOOST_VERSION}/${BOOST_VERSION}.tar.gz boost
+  (
+   cd boost
+   ./bootstrap.sh --prefix=/usr/local
+   ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi --without-python
+  )
 }
 
 function install_folly {
-  github_checkout facebook/folly "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
+  (
+    cd folly
+    cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  )
 }
 
 function install_fizz {
-  github_checkout facebookincubator/fizz "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF -S fizz
+  wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
+  (
+    cd fizz/fizz
+    cmake_install -DBUILD_TESTS=OFF -S fizz
+  )
 }
 
 function install_wangle {
-  github_checkout facebook/wangle "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF -S wangle
+  wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
+  (
+    cd wangle/wangle
+    cmake_install -DBUILD_TESTS=OFF -S wangle
+  )
 }
 
 function install_mvfst {
-  github_checkout facebook/mvfst "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF
+  wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
+  (
+   cd mvfst
+   cmake_install -DBUILD_TESTS=OFF
+  )
 }
 
 function install_fbthrift {
-  github_checkout facebook/fbthrift "${FB_OS_VERSION}"
-  cmake_install -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
+  (
+    cd fbthrift
+    cmake_install -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  )
 }
 
 function install_conda {
@@ -154,8 +177,6 @@ function install_duckdb {
     )
   fi
 }
-
-ARROW_VERSION=15.0.0
 
 function install_arrow {
   wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
