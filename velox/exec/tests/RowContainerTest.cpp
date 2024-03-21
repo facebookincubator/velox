@@ -1848,39 +1848,79 @@ DEBUG_ONLY_TEST_F(RowContainerTest, eraseAfterOomStoringString) {
 }
 
 TEST_F(RowContainerTest, nextRowVector) {
-  constexpr int32_t kNumRows = 100;
+  int32_t numRows = 100;
   auto data = makeRowContainer({SMALLINT()}, {SMALLINT()});
-
   EXPECT_EQ(data->nextOffset(), 11);
   std::unordered_set<char*> rowSet;
   std::vector<char*> rows;
-  for (int i = 0; i < kNumRows; ++i) {
-    rows.push_back(data->newRow());
-    rowSet.insert(rows.back());
-    EXPECT_EQ(data->getNextRowVector(rows.back()), nullptr);
-  }
-  EXPECT_EQ(kNumRows, data->numRows());
-  std::vector<char*> rowsFromContainer(kNumRows);
-  RowContainerIterator iter;
-  EXPECT_EQ(
-      data->listRows(&iter, kNumRows, rowsFromContainer.data()), kNumRows);
-  EXPECT_EQ(0, data->listRows(&iter, kNumRows, rows.data()));
-  EXPECT_EQ(rows, rowsFromContainer);
 
-  for (int i = 0; i + 2 <= kNumRows; i += 2) {
-    data->appendNextRow(rows[i], rows[i + 1]);
-  }
-  for (int i = 0; i < kNumRows; i++) {
-    auto vector = data->getNextRowVector(rows[i]);
-    if (vector) {
-      EXPECT_EQ(vector->size(), 1);
-      EXPECT_EQ(vector->data()[0], rows[i + 1]);
+  auto dataClear = [&]() {
+    data->clear();
+    EXPECT_EQ(0, data->numRows());
+    auto free = data->freeSpace();
+    EXPECT_EQ(0, free.first);
+    EXPECT_EQ(0, free.second);
+    rows.clear();
+    rowSet.clear();
+  };
+
+  auto validateNextRowVector = [&]() {
+    for (int i = 0; i < numRows; i++) {
+      auto vector = data->getNextRowVector(rows[i]);
+      if (vector) {
+        auto iter = std::find(vector->begin(), vector->end(), rows[i]);
+        if (iter == vector->end()) {
+          EXPECT_LE(vector->size(), 1);
+          if (vector->size() == 1) {
+            EXPECT_EQ(vector->data()[0], rows[i + 1]);
+          }
+          for (auto next : *vector) {
+            EXPECT_EQ(data->getNextRowVector(next), vector);
+            EXPECT_TRUE(
+                std::find(rows.begin(), rows.end(), next) != rows.end());
+          }
+        }
+      }
     }
-  }
+  };
 
-  data->clear();
-  EXPECT_EQ(0, data->numRows());
-  auto free = data->freeSpace();
-  EXPECT_EQ(0, free.first);
-  EXPECT_EQ(0, free.second);
+  auto nextRowVectorAppendValidation = [&]() {
+    for (int i = 0; i < numRows; ++i) {
+      rows.push_back(data->newRow());
+      rowSet.insert(rows.back());
+      EXPECT_EQ(data->getNextRowVector(rows.back()), nullptr);
+    }
+    EXPECT_EQ(numRows, data->numRows());
+    std::vector<char*> rowsFromContainer(numRows);
+    RowContainerIterator iter;
+    EXPECT_EQ(
+        data->listRows(&iter, numRows, rowsFromContainer.data()), numRows);
+    EXPECT_EQ(0, data->listRows(&iter, numRows, rows.data()));
+    EXPECT_EQ(rows, rowsFromContainer);
+
+    for (int i = 0; i + 2 <= numRows; i += 2) {
+      data->appendNextRow(rows[i], rows[i + 1]);
+    }
+    validateNextRowVector();
+  };
+
+  auto nextRowVectorEraseValidation = [&](const std::vector<int> eraseRows) {
+    dataClear();
+    nextRowVectorAppendValidation();
+    for (auto index : eraseRows) {
+      std::vector<char*> erasingRows;
+      erasingRows.emplace_back(rows[index]);
+      rows.erase(rows.begin() + index);
+      data->eraseRows(
+          folly::Range<char**>(erasingRows.data(), erasingRows.size()));
+      validateNextRowVector();
+    }
+  };
+
+  nextRowVectorAppendValidation();
+
+  nextRowVectorEraseValidation({1, 2, 4, 3});
+  nextRowVectorEraseValidation({99, 2, 50, 4, 5});
+  nextRowVectorEraseValidation({1, 3, 77, 4, 6});
+  nextRowVectorEraseValidation({1, 3, 7, 4, 67, 7, 8, 9, 67});
 }

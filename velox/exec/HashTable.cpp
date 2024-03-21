@@ -1708,18 +1708,16 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
         }
       }
       continue;
-    } else if (iter.lastDuplicateRowIndex == -1) {
-      inputRows[numOut] = row; // NOLINT
-      hits[numOut] = hit;
-      ++numOut;
     }
+
     auto numRows = -1;
     auto rows = rows_->getNextRowVector(hit);
-    if (rows) {
-      if (iter.lastDuplicateRowIndex == -1) {
-        iter.lastDuplicateRowIndex = 0;
-      }
-
+    if (!rows) {
+      inputRows[numOut] = row; // NOLINT
+      hits[numOut] = hit;
+      numOut++;
+      iter.lastRowIndex++;
+    } else {
       numRows = rows->size();
       constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
       constexpr int32_t kIntWidth = kWidth * 2;
@@ -1745,10 +1743,10 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
         inputRows[numOut] = row; // NOLINT
         hits[numOut] = rows->data()[iter.lastDuplicateRowIndex];
       }
-    }
-    if (iter.lastDuplicateRowIndex >= numRows) {
-      iter.lastDuplicateRowIndex = -1;
-      iter.lastRowIndex++;
+      if (iter.lastDuplicateRowIndex >= numRows) {
+        iter.lastDuplicateRowIndex = 0;
+        iter.lastRowIndex++;
+      }
     }
     if (numOut >= maxOut) {
       return numOut;
@@ -1895,10 +1893,6 @@ int32_t HashTable<false>::listNullKeyRows(
   }
   int32_t numRows = 0;
   if (numRows < maxRows && iter->nextHit) {
-    if (iter->lastDuplicateRowIndex == 0) {
-      rows[numRows++] = iter->nextHit;
-    }
-
     auto nextRows = rows_->getNextRowVector(iter->nextHit);
     if (nextRows) {
       for (;
@@ -1910,6 +1904,9 @@ int32_t HashTable<false>::listNullKeyRows(
         iter->nextHit = nullptr;
         iter->lastDuplicateRowIndex = 0;
       }
+    } else {
+      rows[numRows++] = iter->nextHit;
+      iter->nextHit = nullptr;
     }
   }
 

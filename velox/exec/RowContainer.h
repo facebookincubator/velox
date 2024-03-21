@@ -250,7 +250,7 @@ class RowContainer {
 
   /// Adds 'rows' to the free rows list and frees any associated variable length
   /// data.
-  void eraseRows(folly::Range<char**> rows, bool validateNextRowVector = true);
+  void eraseRows(folly::Range<char**> rows);
 
   /// Copies elements of 'rows' where the char* points to a row inside 'this' to
   /// 'result' and returns the number copied. 'result' should have space for
@@ -604,6 +604,10 @@ class RowContainer {
     return nextOffset_;
   }
 
+  // If 'current''s nextOffset is null, create the next row vector and store
+  // it's pointer to 'current''s nextOffset. Append 'nextRow' to the next row
+  // vector of 'current' and store next row vector pointer in 'nextRow''s
+  // nextOffset also.
   void appendNextRow(char* current, char* nextRow);
 
   NextRowVector*& getNextRowVector(char* row) const {
@@ -1189,28 +1193,9 @@ class RowContainer {
   void freeAggregates(folly::Range<char**> rows);
 
   // Free next row vectors associated with the 'rows'.
-  // If 'validateNextRowVector' is true, we must ensure that all duplicate rows
-  // are erased in a single call without any omissions. This check is
-  // unnecessary when clearing the container and initializing new rows.
-  void freeNextRowVectors(
-      folly::Range<char**> rows,
-      bool validateNextRowVector) {
-    if (!nextOffset_ || !hasDuplicateRows_) {
-      return;
-    }
-    for (auto row : rows) {
-      auto& vector = getNextRowVector(row);
-      if (vector) {
-        if (validateNextRowVector) {
-          for (auto next : *vector) {
-            VELOX_CHECK(rows.contains(next));
-          }
-        }
-        delete vector;
-        vector = nullptr;
-      }
-    }
-  }
+  void freeNextRowVectors(folly::Range<char**> rows, bool clear);
+
+  void freeRowsExtraMemory(folly::Range<char**> rows, bool clear);
 
   const bool checkFree_ = false;
 

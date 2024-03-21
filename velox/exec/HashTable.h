@@ -142,7 +142,7 @@ class BaseHashTable {
       rows = &lookup.rows;
       hits = &lookup.hits;
       lastRowIndex = 0;
-      lastDuplicateRowIndex = -1;
+      lastDuplicateRowIndex = 0;
     }
 
     bool atEnd() const {
@@ -152,7 +152,7 @@ class BaseHashTable {
     const raw_vector<vector_size_t>* rows{nullptr};
     const raw_vector<char*>* hits{nullptr};
     vector_size_t lastRowIndex{0};
-    vector_size_t lastDuplicateRowIndex{-1};
+    vector_size_t lastDuplicateRowIndex{0};
   };
 
   struct RowsIterator {
@@ -320,7 +320,7 @@ class BaseHashTable {
       int32_t numNew,
       bool disableRangeArrayHash = false) = 0;
 
-  // Removes 'rows'  from the hash table and its RowContainer. 'rows' must exist
+  // Removes 'rows' from the hash table and its RowContainer. 'rows' must exist
   // and be unique.
   virtual void erase(folly::Range<char**> rows) = 0;
 
