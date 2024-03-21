@@ -62,69 +62,69 @@ VectorPtr newConstantFromString(
 std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-    const std::shared_ptr<common::ScanSpec>& scanSpec,
-    const RowTypePtr& readerOutputType,
     const std::unordered_map<
         std::string,
         std::shared_ptr<const HiveColumnHandle>>* partitionKeys,
-    FileHandleFactory* fileHandleFactory,
-    folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const std::shared_ptr<io::IoStatistics>& ioStats) {
+    const RowTypePtr& readerOutputType,
+    const std::shared_ptr<io::IoStatistics>& ioStats,
+    FileHandleFactory* fileHandleFactory,
+    folly::Executor* executor,
+    const std::shared_ptr<common::ScanSpec>& scanSpec) {
   //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
   if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
       hiveSplit->customSplitInfo["table_format"] == "hive-iceberg") {
     return std::make_unique<iceberg::IcebergSplitReader>(
         hiveSplit,
         hiveTableHandle,
-        scanSpec,
-        readerOutputType,
         partitionKeys,
-        fileHandleFactory,
-        executor,
         connectorQueryCtx,
         hiveConfig,
-        ioStats);
+        readerOutputType,
+        ioStats,
+        fileHandleFactory,
+        executor,
+        scanSpec);
   } else {
     return std::make_unique<SplitReader>(
         hiveSplit,
         hiveTableHandle,
-        scanSpec,
-        readerOutputType,
         partitionKeys,
-        fileHandleFactory,
-        executor,
         connectorQueryCtx,
         hiveConfig,
-        ioStats);
+        readerOutputType,
+        ioStats,
+        fileHandleFactory,
+        executor,
+        scanSpec);
   }
 }
 
 SplitReader::SplitReader(
     const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-    const std::shared_ptr<common::ScanSpec>& scanSpec,
-    const RowTypePtr& readerOutputType,
     const std::unordered_map<
         std::string,
         std::shared_ptr<const HiveColumnHandle>>* partitionKeys,
-    FileHandleFactory* fileHandleFactory,
-    folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const std::shared_ptr<io::IoStatistics>& ioStats)
+    const RowTypePtr& readerOutputType,
+    const std::shared_ptr<io::IoStatistics>& ioStats,
+    FileHandleFactory* fileHandleFactory,
+    folly::Executor* executor,
+    const std::shared_ptr<common::ScanSpec>& scanSpec)
     : hiveSplit_(hiveSplit),
       hiveTableHandle_(hiveTableHandle),
-      scanSpec_(scanSpec),
-      readerOutputType_(readerOutputType),
       partitionKeys_(partitionKeys),
-      pool_(connectorQueryCtx->memoryPool()),
-      fileHandleFactory_(fileHandleFactory),
-      executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
+      readerOutputType_(readerOutputType),
       ioStats_(ioStats),
+      fileHandleFactory_(fileHandleFactory),
+      executor_(executor),
+      pool_(connectorQueryCtx->memoryPool()),
+      scanSpec_(scanSpec),
       baseReaderOpts_(connectorQueryCtx->memoryPool()),
       emptySplit_(false) {}
 
