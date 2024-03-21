@@ -470,6 +470,7 @@ VectorPtr RowVector::slice(vector_size_t offset, vector_size_t length) const {
 }
 
 BaseVector* RowVector::loadedVector() {
+  std::scoped_lock<std::mutex> l(mutex_);
   if (childrenLoaded_) {
     return this;
   }
