@@ -166,6 +166,7 @@ jobs:
         working-directory: velox_main
         run: |
           source .venv/bin/activate
+          python -m pip install deepdiff
           python scripts/signature.py export --spark /tmp/signatures/spark_signatures_main.json
           python scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
 
