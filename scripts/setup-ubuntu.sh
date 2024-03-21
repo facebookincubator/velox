@@ -122,7 +122,7 @@ function install_fizz {
   wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
   (
     cd fizz/fizz
-    cmake_install -DBUILD_TESTS=OFF -S fizz
+    cmake_install -DBUILD_TESTS=OFF
   )
 }
 
@@ -130,7 +130,7 @@ function install_wangle {
   wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
   (
     cd wangle/wangle
-    cmake_install -DBUILD_TESTS=OFF -S wangle
+    cmake_install -DBUILD_TESTS=OFF
   )
 }
 
