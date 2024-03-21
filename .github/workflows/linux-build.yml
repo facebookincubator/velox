@@ -111,20 +111,76 @@ jobs:
     defaults:
       run:
         shell: bash
+        working-directory: velox
     steps:
-      - uses: actions/checkout@v4
+      - name: Get Function Signature Stash
+        uses: assignUser/stash/restore@v1
+        id: get-sig
+        with:
+          path: /tmp/signatures
+          key: function-signatures
 
-      - name: Install Dependencies
-        run: |
-          source scripts/setup-ubuntu.sh
-
-      - uses: assignUser/stash/restore@v1
+      - name: Get Ccache Stash
+        uses: assignUser/stash/restore@v1
         with:
           path: '${{ env.CCACHE_DIR }}'
           key: ccache-ubuntu-debug-default
 
-      - run: |
-          mkdir -p .ccache
+      - name: Ensure Ccache dir exists
+        run: |
+          mkdir -p '${{ env.CCACHE_DIR }}'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Checkout Main
+        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          ref: 'main'
+          path: velox_main
+
+      - name: Install Dependencies
+        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        working-directory: velox_main
+        run: |
+          source scripts/setup-ubuntu.sh
+
+      - name: Build PyVelox
+        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        env:
+          VELOX_DEPENDENCY_SOURCE: BUNDLED
+          MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
+        working-directory: velox_main
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+
+          make python-build
+
+      - name: Create Baseline Signatures
+        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        working-directory: velox_main
+        run: |
+          source .venv/bin/activate
+          python scripts/signature.py export --spark /tmp/signatures/spark_signatures_main.json
+          python scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
+
+      - name: Save Function Signature Stash
+        uses: assignUser/stash/save@v1
+        with:
+          path: /tmp/signatures
+          key: function-signatures
+
+      - name: Checkout Contender
+        uses: actions/checkout@v4
+        with:
+          path: velox
+
+      - name: Install Dependencies
+        run: |
+          source scripts/setup-ubuntu.sh
 
       - name: Clear CCache Statistics
         run: |
@@ -135,7 +191,8 @@ jobs:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
           MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
         run: |
-          make debug EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+          make debug EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON \
+                                        -DVELOX_BUILD_PYTHON_PACKAGE=ON"
 
       - name: CCache after
         run: |
