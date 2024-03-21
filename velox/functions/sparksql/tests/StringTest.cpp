@@ -225,6 +225,10 @@ class StringTest : public SparkFunctionBaseTest {
       std::optional<std::string> strArray) {
     return evaluateOnce<int32_t>("find_in_set(c0, c1)", str, strArray);
   }
+
+  std::optional<std::string> initcap(std::optional<std::string> str) {
+    return evaluateOnce<std::string>("initcap(c0)", str);
+  }
 };
 
 TEST_F(StringTest, ascii) {
@@ -881,6 +885,29 @@ TEST_F(StringTest, findInSet) {
   EXPECT_EQ(findInSet("\u0061\u0062\u00e5\u00e6\u00e7\u00e8", ",abåæçè"), 2);
   EXPECT_EQ(
       findInSet("abåæçè", "\u002c\u0061\u0062\u00e5\u00e6\u00e7\u00e8"), 2);
+}
+
+TEST_F(StringTest, initCap) {
+  // unicode only
+  EXPECT_EQ(
+      initcap("àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"),
+      "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ");
+  EXPECT_EQ(initcap("αβγδεζηθικλμνξοπρςστυφχψ"), "Αβγδεζηθικλμνξοπρςστυφχψ");
+  // Mix of ascii and unicode
+  EXPECT_EQ(initcap("αβγδεζ world"), "Αβγδεζ World");
+  EXPECT_EQ(initcap("αfoo wβ"), "Αfoo Wβ");
+  // Ascii only
+  EXPECT_EQ(initcap("hello world"), "Hello World");
+  EXPECT_EQ(initcap("HELLO WORLD"), "Hello World");
+  EXPECT_EQ(initcap("1234"), "1234");
+  EXPECT_EQ(initcap("a b c d"), "A B C D");
+  EXPECT_EQ(initcap("abcd"), "Abcd");
+  // numbers
+  EXPECT_EQ(initcap("123"), "123");
+  EXPECT_EQ(initcap("1abc"), "1abc");
+  // edge cases
+  EXPECT_EQ(initcap(""), "");
+  EXPECT_EQ(initcap(std::nullopt), std::nullopt);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
