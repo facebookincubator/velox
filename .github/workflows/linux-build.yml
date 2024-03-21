@@ -127,6 +127,7 @@ jobs:
           key: ccache-ubuntu-debug-default
 
       - name: Ensure Ccache dir exists
+        working-directory: ${{ github.workspace }}
         run: |
           mkdir -p '${{ env.CCACHE_DIR }}'
 
