@@ -15,7 +15,12 @@
  */
 #pragma once
 
+#include <time.h>
+#include <chrono>
+#include <string>
 #include <string_view>
+#include "velox/external/date/date.h"
+#include "velox/external/date/tz.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -1485,6 +1490,40 @@ struct TimeZoneMinuteFunction : public TimestampWithTimezoneSupport<T> {
     // Get offset in seconds with GMT and convert to minute
     auto offset = this->getGMTOffsetSec(input);
     result = (offset / 60) % 60;
+  }
+};
+
+template <typename T>
+struct TimestampWithTimezoneAtTimezoneFunction
+    : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::string sessionTzName = "";
+  const date::time_zone* sessionTimezone = nullptr;
+  int64_t targetTimezoneID = -1;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<TimestampWithTimezone>* /*tsWithTz*/,
+      const arg_type<Varchar>* timeZone) {
+    // below statement not working in init()
+    // targetTimezoneID = util::getTimeZoneID(
+    //     std::string_view(timeZone.data(), timeZone.size()));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<TimestampWithTimezone>& tsWithTz,
+      const arg_type<Varchar>& timeZone) {
+    const auto inputMs = unpackMillisUtc(tsWithTz);
+    targetTimezoneID = util::getTimeZoneID(
+        std::string_view(timeZone.data(), timeZone.size()));
+
+    // Input and output TimestampWithTimezones should not have
+    // different millisecond values, rather solely timezone ID should differ.
+    // The millisecond offset is then resolved to the respective timezone
+    // at the time of display.
+    result = pack(inputMs, targetTimezoneID);
   }
 };
 
