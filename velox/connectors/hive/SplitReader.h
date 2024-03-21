@@ -57,30 +57,28 @@ class SplitReader {
   static std::unique_ptr<SplitReader> create(
       const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
       const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-      const std::shared_ptr<common::ScanSpec>& scanSpec,
-      const RowTypePtr& readerOutputType,
-      const std::unordered_map<
-          std::string, std::shared_ptr<HiveColumnHandle>>*
+      const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
           partitionKeys,
-      FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
-      const std::shared_ptr<io::IoStatistics>& ioStats);
+      const RowTypePtr& readerOutputType,
+      const std::shared_ptr<io::IoStatistics>& ioStats,
+      FileHandleFactory* fileHandleFactory,
+      folly::Executor* executor,
+      const std::shared_ptr<common::ScanSpec>& scanSpec);
 
   SplitReader(
       const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
       const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-      const std::shared_ptr<common::ScanSpec>& scanSpec,
-      const RowTypePtr& readerOutputType,
-      const std::unordered_map<
-          std::string, std::shared_ptr<HiveColumnHandle>>*
+      const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
           partitionKeys,
-      FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
-      const std::shared_ptr<io::IoStatistics>& ioStats);
+      const RowTypePtr& readerOutputType,
+      const std::shared_ptr<io::IoStatistics>& ioStats,
+      FileHandleFactory* fileHandleFactory,
+      folly::Executor* executor,
+      const std::shared_ptr<common::ScanSpec>& scanSpec);
 
   virtual ~SplitReader() = default;
 
@@ -141,19 +139,21 @@ class SplitReader {
 
   std::shared_ptr<const HiveConnectorSplit> hiveSplit_;
   const std::shared_ptr<const HiveTableHandle> hiveTableHandle_;
-  std::shared_ptr<common::ScanSpec> scanSpec_;
-  const RowTypePtr readerOutputType_;
   const std::unordered_map<
       std::string,
       std::shared_ptr<HiveColumnHandle>>* const partitionKeys_;
-  memory::MemoryPool* const pool_;
-  std::unique_ptr<dwio::common::Reader> baseReader_;
-  std::unique_ptr<dwio::common::RowReader> baseRowReader_;
-  FileHandleFactory* const fileHandleFactory_;
-  folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<const HiveConfig> hiveConfig_;
+
+  const RowTypePtr readerOutputType_;
   const std::shared_ptr<io::IoStatistics> ioStats_;
+  FileHandleFactory* const fileHandleFactory_;
+  folly::Executor* const executor_;
+  memory::MemoryPool* const pool_;
+
+  std::shared_ptr<common::ScanSpec> scanSpec_;
+  std::unique_ptr<dwio::common::Reader> baseReader_;
+  std::unique_ptr<dwio::common::RowReader> baseRowReader_;
   dwio::common::ReaderOptions baseReaderOpts_;
   dwio::common::RowReaderOptions baseRowReaderOpts_;
   bool emptySplit_;

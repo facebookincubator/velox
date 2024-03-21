@@ -25,28 +25,28 @@ using namespace facebook::velox::dwio::common;
 namespace facebook::velox::connector::hive::iceberg {
 
 IcebergSplitReader::IcebergSplitReader(
-    const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-    const std::shared_ptr<common::ScanSpec>& scanSpec,
-    const RowTypePtr& readerOutputType,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
         partitionKeys,
-    FileHandleFactory* fileHandleFactory,
-    folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    std::shared_ptr<io::IoStatistics> ioStats)
+    const RowTypePtr& readerOutputType,
+    const std::shared_ptr<io::IoStatistics>& ioStats,
+    FileHandleFactory* const fileHandleFactory,
+    folly::Executor* executor,
+    const std::shared_ptr<common::ScanSpec>& scanSpec)
     : SplitReader(
           hiveSplit,
           hiveTableHandle,
-          scanSpec,
-          readerOutputType,
           partitionKeys,
-          fileHandleFactory,
-          executor,
           connectorQueryCtx,
           hiveConfig,
-          ioStats),
+          readerOutputType,
+          ioStats,
+          fileHandleFactory,
+          executor,
+          scanSpec),
       baseReadOffset_(0),
       splitOffset_(0) {}
 
