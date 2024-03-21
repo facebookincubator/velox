@@ -138,7 +138,8 @@ jobs:
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
         uses: actions/checkout@v4
         with:
-          ref: 'main'
+          # hardcode ref without broken pr
+          ref: '43a552715e4c0c005cb73cfb6dca0f996de76f3a'
           path: velox_main
 
       - name: Install Dependencies
