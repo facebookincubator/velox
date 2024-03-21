@@ -126,10 +126,11 @@ jobs:
           path: '${{ env.CCACHE_DIR }}'
           key: ccache-ubuntu-debug-default
 
-      - name: Ensure Ccache dir exists
+      - name: Ensure Stash Dirs Exists
         working-directory: ${{ github.workspace }}
         run: |
           mkdir -p '${{ env.CCACHE_DIR }}'
+          mkdir -p /tmp/signatures 
 
       - uses: actions/setup-python@v5
         with:
@@ -161,6 +162,12 @@ jobs:
 
           make python-build
 
+      - name: Save Function Signature Stash
+        uses: assignUser/stash/save@v1
+        with:
+          path: /tmp/signatures
+          key: function-signatures
+
       - name: Create Baseline Signatures
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
@@ -170,11 +177,6 @@ jobs:
           python scripts/signature.py export --spark /tmp/signatures/spark_signatures_main.json
           python scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
 
-      - name: Save Function Signature Stash
-        uses: assignUser/stash/save@v1
-        with:
-          path: /tmp/signatures
-          key: function-signatures
 
       - name: Checkout Contender
         uses: actions/checkout@v4
