@@ -201,8 +201,9 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     uint64_t size,
     velox::ContinueFuture& /*future*/) {
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
+  VELOX_CHECK(splitReader_ != nullptr);
 
-  if (splitReader_ && splitReader_->emptySplit()) {
+  if (splitReader_->emptySplit()) {
     resetSplit();
     return nullptr;
   }
@@ -327,11 +328,8 @@ void HiveDataSource::setFromDataSource(
   VELOX_CHECK(source, "Bad DataSource type");
 
   split_ = std::move(source->split_);
-  if (source->splitReader_ && source->splitReader_->emptySplit()) {
-    runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
-    runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
-    return;
-  }
+  runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
+  runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
   scanSpec_ = std::move(source->scanSpec_);
   splitReader_ = std::move(source->splitReader_);
