@@ -452,6 +452,7 @@ jobs:
     runs-on: 8-core
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
+    if: "$${{ github.event_name != 'pull_request' }}"
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
@@ -459,22 +460,23 @@ jobs:
     steps:
 
       - name: "Restore ccache"
-        uses: actions/cache@v3
+        uses: assignUser/stash/restore@v1
         with:
           path: "${{ env.CCACHE_DIR }}"
-          # We are using the benchmark ccache as it has all
-          # required features enabled, so no need to create a new one
-          key: ccache-presto-${{ github.sha }}
-          restore-keys: |
-            ccache-presto-
+          key: ccache-fuzzer
 
       - name: "Checkout Repo"
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           path: velox
           submodules: 'recursive'
-          ref: "${{ inputs.ref || 'main' }}"
+          ref: "${{ inputs.ref }}"
 
+      - name: "Install dependencies"
+        run: |
+          cd  velox
+          source ./scripts/setup-ubuntu.sh
+          ccache -vsz
 
       - name: "Build"
         run: |
@@ -497,7 +499,7 @@ jobs:
           chmod -R 777 /tmp/aggregate_fuzzer_repro
           _build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
-                --duration_sec 3600 \
+                --duration_sec $DURATION \
                 --logtostderr=1 \
                 --minloglevel=0 \
                 --repro_persist_path=/tmp/aggregate_fuzzer_repro \
@@ -506,10 +508,10 @@ jobs:
           && echo -e "\n\nAggregation fuzzer run finished successfully."
 
       - name: Archive aggregate production artifacts
-        if: always()
-        uses: actions/upload-artifact@v3
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
         with:
-          name: aggregate-fuzzer-failure-artifacts
+          name: presto-sot-aggregate-fuzzer-failure-artifacts
           path: |
             /tmp/aggregate_fuzzer_repro
             /tmp/server.log
