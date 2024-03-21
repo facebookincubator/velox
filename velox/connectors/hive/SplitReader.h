@@ -139,21 +139,23 @@ class SplitReader {
       const std::string& partitionKey,
       const std::optional<std::string>& value) const;
 
-  std::shared_ptr<const HiveConnectorSplit> hiveSplit_;
   const std::shared_ptr<const HiveTableHandle> hiveTableHandle_;
-  std::shared_ptr<common::ScanSpec> scanSpec_;
-  const RowTypePtr readerOutputType_;
   const std::unordered_map<
       std::string,
       std::shared_ptr<const HiveColumnHandle>>* const partitionKeys_;
-  memory::MemoryPool* const pool_;
-  std::unique_ptr<dwio::common::Reader> baseReader_;
-  std::unique_ptr<dwio::common::RowReader> baseRowReader_;
-  FileHandleFactory* const fileHandleFactory_;
-  folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<const HiveConfig> hiveConfig_;
+
+  std::shared_ptr<const HiveConnectorSplit> hiveSplit_;
+  const RowTypePtr readerOutputType_;
   const std::shared_ptr<io::IoStatistics> ioStats_;
+  memory::MemoryPool* const pool_;
+  FileHandleFactory* const fileHandleFactory_;
+  folly::Executor* const executor_;
+
+  std::shared_ptr<common::ScanSpec> scanSpec_;
+  std::unique_ptr<dwio::common::Reader> baseReader_;
+  std::unique_ptr<dwio::common::RowReader> baseRowReader_;
   dwio::common::ReaderOptions baseReaderOpts_;
   dwio::common::RowReaderOptions baseRowReaderOpts_;
   bool emptySplit_;
