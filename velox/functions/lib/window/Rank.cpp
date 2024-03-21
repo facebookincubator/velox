@@ -93,16 +93,9 @@ template <RankType TRank, typename TResult>
 void registerRankInternal(
     const std::string& name,
     const std::string& returnType) {
-  std::vector<exec::FunctionSignaturePtr> signatures;
-  if constexpr (TRank == RankType::kRank) {
-    signatures.push_back(exec::FunctionSignatureBuilder()
-                             .returnType(returnType)
-                             .streaming()
-                             .build());
-  } else {
-    signatures.push_back(
-        exec::FunctionSignatureBuilder().returnType(returnType).build());
-  }
+  std::vector<exec::FunctionSignaturePtr> signatures{
+      exec::FunctionSignatureBuilder().returnType(returnType).build(),
+  };
 
   exec::registerWindowFunction(
       name,
@@ -116,7 +109,8 @@ void registerRankInternal(
           const core::QueryConfig& /*queryConfig*/)
           -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<RankFunction<TRank, TResult>>(resultType);
-      });
+      },
+      {true});
 }
 
 void registerRankBigint(const std::string& name) {
