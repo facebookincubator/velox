@@ -69,7 +69,6 @@ void registerRowNumber(const std::string& name, TypeKind resultTypeKind) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
           .returnType(mapTypeKindToName(resultTypeKind))
-          .streaming()
           .build(),
   };
 
@@ -85,7 +84,8 @@ void registerRowNumber(const std::string& name, TypeKind resultTypeKind) {
           const core::QueryConfig& /*queryConfig*/)
           -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<RowNumberFunction>(resultType);
-      });
+      },
+      {true});
 }
 
 void registerRowNumberInteger(const std::string& name) {

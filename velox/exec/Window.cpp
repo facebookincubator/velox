@@ -199,10 +199,10 @@ void Window::createWindowFunctions() {
 // 'row_number' functions with a default frame.
 bool Window::supportRankWindowBuild() {
   for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
-    bool isRankFunction = exec::getWindowFunctionSignatures(
-                              windowNodeFunction.functionCall->name())
-                              .value()[0]
-                              ->streaming();
+    bool isRankFunction =
+        exec::getWindowFunctionEntry(windowNodeFunction.functionCall->name())
+            .value()
+            ->metadata.streaming;
     bool isDefaultFrame =
         (windowNodeFunction.frame.startType ==
              core::WindowNode::BoundType::kUnboundedPreceding &&

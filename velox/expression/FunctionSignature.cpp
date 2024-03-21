@@ -211,14 +211,12 @@ FunctionSignature::FunctionSignature(
     TypeSignature returnType,
     std::vector<TypeSignature> argumentTypes,
     std::vector<bool> constantArguments,
-    bool variableArity,
-    bool streaming)
+    bool variableArity)
     : variables_{std::move(variables)},
       returnType_{std::move(returnType)},
       argumentTypes_{std::move(argumentTypes)},
       constantArguments_{std::move(constantArguments)},
-      variableArity_{variableArity},
-      streaming_{streaming} {
+      variableArity_{variableArity} {
   validate(variables_, returnType_, argumentTypes_, constantArguments_);
 }
 
@@ -256,8 +254,7 @@ FunctionSignaturePtr FunctionSignatureBuilder::build() {
       returnType_.value(),
       std::move(argumentTypes_),
       std::move(constantArguments_),
-      variableArity_,
-      streaming_);
+      variableArity_);
 }
 
 FunctionSignatureBuilder& FunctionSignatureBuilder::knownTypeVariable(

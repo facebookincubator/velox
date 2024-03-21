@@ -129,6 +129,12 @@ class WindowFunction {
   SelectivityVector invalidRows_;
 };
 
+struct WindowFunctionMetadata {
+  /// True if the WindowFunction support streaming calculation. For
+  /// example, rank() and row_number().
+  bool streaming{false};
+};
+
 /// Information from the Window operator that is useful for the function logic.
 /// @param args  Vector of the input arguments to the function. These could be
 /// constants or positions of the input argument column in the input row of the
@@ -151,6 +157,12 @@ bool registerWindowFunction(
     std::vector<FunctionSignaturePtr> signatures,
     WindowFunctionFactory factory);
 
+bool registerWindowFunction(
+    const std::string& name,
+    const std::vector<FunctionSignaturePtr>& signatures,
+    const WindowFunctionFactory& factory,
+    const WindowFunctionMetadata& metadata);
+
 /// Returns signatures of the window function with the specified name.
 /// Returns empty std::optional if function with that name is not found.
 std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(
@@ -159,7 +171,11 @@ std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(
 struct WindowFunctionEntry {
   std::vector<FunctionSignaturePtr> signatures;
   WindowFunctionFactory factory;
+  WindowFunctionMetadata metadata;
 };
+
+std::optional<const WindowFunctionEntry*> getWindowFunctionEntry(
+    const std::string& name);
 
 using WindowFunctionMap = std::unordered_map<std::string, WindowFunctionEntry>;
 
