@@ -61,7 +61,7 @@ void serialize(
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
 
-  if (argc < 3) {
+  if (argc != 2 && argc != 3) {
     std::cerr << "Expected 2 arguments: <parquet file> <output file>"
               << std::endl;
     return 1;
@@ -90,10 +90,19 @@ int main(int argc, char** argv) {
   rowReaderOpts.setScanSpec(scanSpec);
 
   auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr result = BaseVector::create(outputType, 0, pool.get());
 
+  if (argc == 2) {
+    while (rowReader->next(500, result)) {
+      // print result
+      for (int i = 0; i < result->size(); i++) {
+        std::cout << result->toString(i) << std::endl;
+      }
+    }
+    return 0;
+  }
   std::ofstream ostrm(argv[2], std::ios::binary);
   auto serde = std::make_unique<serializer::presto::PrestoVectorSerde>();
-  VectorPtr result = BaseVector::create(outputType, 0, pool.get());
 
   // Hack: convert VectorPtr to RowVectorPtr
   RowVectorPtr ptr(result->as<RowVector>(), [](RowVector*) {});
