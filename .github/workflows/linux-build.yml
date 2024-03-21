@@ -162,12 +162,6 @@ jobs:
 
           make python-build
 
-      - name: Save Function Signature Stash
-        uses: assignUser/stash/save@v1
-        with:
-          path: /tmp/signatures
-          key: function-signatures
-
       - name: Create Baseline Signatures
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
@@ -177,6 +171,11 @@ jobs:
           python scripts/signature.py export --spark /tmp/signatures/spark_signatures_main.json
           python scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
 
+      - name: Save Function Signature Stash
+        uses: assignUser/stash/save@v1
+        with:
+          path: /tmp/signatures
+          key: function-signatures
 
       - name: Checkout Contender
         uses: actions/checkout@v4
