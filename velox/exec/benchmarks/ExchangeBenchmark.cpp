@@ -457,6 +457,15 @@ int main(int argc, char** argv) {
             << "deep10k: " << deep10kCounters.toString() << std::endl
             << "deep50: " << deep50Counters.toString() << std::endl
             << "struct1k: " << struct1kCounters.toString() << std::endl;
-  return 0;
+
+  // Deallocate ExchangeBenchmark and vectors before MemoryManager destruction
+  // to avoid leaks.
+  struct1k.clear();
+  deep50.clear();
+  flat50.clear();
+  deep10k.clear();
+  flat10k.clear();
+  bm.reset();
+
   return 0;
 }
