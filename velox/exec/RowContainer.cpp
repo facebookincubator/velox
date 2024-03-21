@@ -431,6 +431,8 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
     auto& vector = getNextRowVector(row);
     if (vector) {
       if (clear) {
+        // Clear all rows, we can clear the nextOffset_ slots and delete the
+        // next-row-vector.
         for (auto& next : *vector) {
           getNextRowVector(next) = nullptr;
         }

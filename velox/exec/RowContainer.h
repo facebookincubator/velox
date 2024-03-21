@@ -604,10 +604,9 @@ class RowContainer {
     return nextOffset_;
   }
 
-  // If 'current''s nextOffset is null, create the next row vector and store
-  // it's pointer to 'current''s nextOffset. Append 'nextRow' to the next row
-  // vector of 'current' and store next row vector pointer in 'nextRow''s
-  // nextOffset also.
+  // Create a next-row-vector if it doesn't exist. Append the row address to
+  // the next-row-vector, and store the address of the next-row-vector in the
+  // nextOffset_ slot for all duplicate rows.
   void appendNextRow(char* current, char* nextRow);
 
   NextRowVector*& getNextRowVector(char* row) const {
