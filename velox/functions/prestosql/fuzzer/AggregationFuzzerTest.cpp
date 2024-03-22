@@ -31,6 +31,7 @@
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/ArbitraryResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MapUnionSumInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/MinMaxByResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
@@ -96,6 +97,7 @@ int main(int argc, char** argv) {
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
   facebook::velox::window::prestosql::registerAllWindowFunctions();
   facebook::velox::functions::prestosql::registerInternalFunctions();
+  facebook::velox::aggregate::prestosql::registerInternalAggregateFunctions();
   facebook::velox::memory::MemoryManager::initialize({});
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
@@ -104,6 +106,7 @@ int main(int argc, char** argv) {
   static const std::unordered_set<std::string> skipFunctions = {
       // Skip internal functions used only for result verifications.
       "$internal$count_distinct",
+      "$internal$array_agg",
       // https://github.com/facebookincubator/velox/issues/3493
       "stddev_pop",
       // Lambda functions are not supported yet.
@@ -119,6 +122,7 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
   using facebook::velox::exec::test::ApproxPercentileResultVerifier;
   using facebook::velox::exec::test::ArbitraryResultVerifier;
+  using facebook::velox::exec::test::MinMaxByResultVerifier;
   using facebook::velox::exec::test::setupReferenceQueryRunner;
   using facebook::velox::exec::test::TransformResultVerifier;
 
@@ -155,8 +159,8 @@ int main(int argc, char** argv) {
           {"map_agg", makeMapVerifier()},
           {"map_union", makeMapVerifier()},
           {"map_union_sum", makeMapVerifier()},
-          {"max_by", nullptr},
-          {"min_by", nullptr},
+          {"max_by", std::make_shared<MinMaxByResultVerifier>(false)},
+          {"min_by", std::make_shared<MinMaxByResultVerifier>(true)},
           {"multimap_agg",
            TransformResultVerifier::create(
                "transform_values({}, (k, v) -> \"$internal$canonicalize\"(v))")},
