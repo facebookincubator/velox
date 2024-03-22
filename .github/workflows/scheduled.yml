@@ -25,6 +25,7 @@ on:
       - "scripts/setup-ubuntu.sh"
       - "scripts/setup-helper-functions.sh"
       - ".github/workflows/linux-build.yml"
+      - ".github/workflows/scheduled.yml"
 
   schedule:
     - cron: '0 3 * * *'
@@ -449,10 +450,11 @@ jobs:
 
 
   presto-java-aggregation-fuzzer-run:
+    name: Aggregation Fuzzer with Presto as source of truth
     runs-on: 8-core
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
-    if: "$${{ github.event_name != 'pull_request' }}"
+    if: ${{ github.event_name != 'pull_request' }}
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
@@ -463,7 +465,7 @@ jobs:
         uses: assignUser/stash/restore@v1
         with:
           path: "${{ env.CCACHE_DIR }}"
-          key: ccache-fuzzer
+          key: ccache-presto-java-fuzzer
 
       - name: "Checkout Repo"
         uses: actions/checkout@v4
@@ -472,18 +474,28 @@ jobs:
           submodules: 'recursive'
           ref: "${{ inputs.ref }}"
 
-      - name: "Install dependencies"
-        run: |
-          cd  velox
-          source ./scripts/setup-ubuntu.sh
-          ccache -vsz
+      - name: Fix git permissions
+          # Usually actions/checkout does this but as we run in a container
+          # it doesn't work
+        run: git config --global --add safe.directory /__w/velox/velox/velox
+
+      - name: Zero Ccache Statistics
+        run: ccache -sz
+
 
       - name: "Build"
+        env:
+          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }}"
         run: |
           cd velox
-          source /opt/rh/gcc-toolset-9/enable
           make debug NUM_THREADS="${{ inputs.numThreads || 8 }}" MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 8 }}" MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 4 }}" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }}"
           ccache -s
+
+      - name: "Save ccache"
+        uses: assignUser/stash/save@v1
+        with:
+          path: "${{ env.CCACHE_DIR }}"
+          key: ccache-presto-java-fuzzer
 
       - name: "Run Aggregate Fuzzer"
         run: |
