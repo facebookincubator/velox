@@ -165,13 +165,12 @@ jobs:
           ccache -vsz
 
       - name: Build
+        env:
+          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"
         run: |
           make debug NUM_THREADS="${{ inputs.numThreads || 8 }}" \ 
                      MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 4 }}" \
-                     MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 4 }}" \
-                     EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON \
-                                        -DVELOX_BUILD_PYTHON_PACKAGE=ON \
-                                        ${{ inputs.extraCMakeFlags }}"
+                     MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 4 }}"
 
       - name: Ccache after
         run: ccache -vs
