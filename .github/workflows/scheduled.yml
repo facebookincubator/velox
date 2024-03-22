@@ -71,12 +71,14 @@ env:
 jobs:
   compile:
     name: Build
-    runs-on: 8-core
+    runs-on: 16-core
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
       LINUX_DISTRO: "ubuntu"
+      MAKEFLAGS: "NUM_THREADS=${{ inputs.numThreads || 16 }} MAX_HIGH_MEM_JOBS=${{ inputs.maxHighMemJobs || 6 }} MAX_LINK_JOBS=${{ inputs.maxLinkJobs || 6 }}"
+
     defaults:
       run:
         shell: bash
@@ -126,9 +128,6 @@ jobs:
 
       - name: Build PyVelox
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
-        env:
-          VELOX_DEPENDENCY_SOURCE: BUNDLED
-          MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
         working-directory: velox_main
         run: |
           python -m venv .venv
@@ -162,18 +161,15 @@ jobs:
       - name: "Install dependencies"
         run: |
           source ./scripts/setup-ubuntu.sh
-          ccache -vsz
+          ccache -sz
 
       - name: Build
         env:
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"
         run: |
-          make debug NUM_THREADS="${{ inputs.numThreads || 8 }}" \ 
-                     MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 4 }}" \
-                     MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 4 }}"
-
+          make debug
       - name: Ccache after
-        run: ccache -vs
+        run: ccache -s
 
       - name: "Save ccache"
         uses: assignUser/stash/save@v1
