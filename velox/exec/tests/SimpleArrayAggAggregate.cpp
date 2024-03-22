@@ -25,26 +25,6 @@ using namespace facebook::velox::exec;
 namespace facebook::velox::aggregate {
 
 namespace {
-
-// Write ValueList accumulators to Array-typed intermediate or final result
-// vectors.
-// TODO: This API only works if it is the only logic writing to `writer`.
-template <typename T>
-void copyValueListToArrayWriter(ArrayWriter<T>& writer, ValueList& elements) {
-  writer.resetLength();
-  auto size = elements.size();
-  if (size == 0) {
-    return;
-  }
-  writer.reserve(size);
-
-  ValueListReader reader(elements);
-  for (vector_size_t i = 0; i < size; ++i) {
-    reader.next(*writer.elementsVector(), writer.valuesOffset() + i);
-  }
-  writer.resize(size);
-}
-
 class ArrayAggAggregate {
  public:
   // Type(s) of input vector(s) wrapped in Row.
