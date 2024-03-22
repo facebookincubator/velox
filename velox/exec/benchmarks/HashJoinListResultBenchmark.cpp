@@ -14,20 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/SelectivityInfo.h"
-#include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/memory/MmapAllocator.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/VectorHasher.h"
-#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <folly/Benchmark.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/init/Init.h>
-#include <gtest/gtest.h>
-#include <memory>
+#include <iostream>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -37,6 +31,12 @@ namespace {
 struct HashTableBenchmarkParams {
   HashTableBenchmarkParams() = default;
 
+  // Benchmark params, we need to provide:
+  //  -the expect hash mode, 
+  //  -the build & probe row schema,
+  //  -the expected hash table size,
+  //  -number of probing rows,
+  //  -build key repetition distribution.
   HashTableBenchmarkParams(
       BaseHashTable::HashMode mode,
       TypePtr buildType,
@@ -44,11 +44,11 @@ struct HashTableBenchmarkParams {
       int64_t probeSize,
       const std::vector<std::pair<int32_t, int32_t>>&
           keyRepeatTimesDistribution)
-      : mode(mode),
-        buildType(buildType),
-        hashTableSize(hashTableSize),
-        probeSize(probeSize),
-        keyRepeatTimesDistribution(std::move(keyRepeatTimesDistribution)) {
+      : mode{mode},
+        buildType{buildType},
+        hashTableSize{hashTableSize},
+        probeSize{probeSize},
+        keyRepeatTimesDistribution{keyRepeatTimesDistribution} {
     int32_t distSum = 0;
     buildSize = 0;
     buildKeyRepeat.reserve(keyRepeatTimesDistribution.size());
@@ -73,7 +73,7 @@ struct HashTableBenchmarkParams {
 
     numDependentFields = buildType->size() - 1;
     if (mode == BaseHashTable::HashMode::kNormalizedKey) {
-      extraValue = (2L << 20) + 100;
+      extraValue = BaseHashTable::kArrayHashMaxSize + 100;
     } else if (mode == BaseHashTable::HashMode::kHash) {
       extraValue = std::numeric_limits<int64_t>::max() - 1;
     } else {
@@ -90,14 +90,11 @@ struct HashTableBenchmarkParams {
         "{}_{}_{}", modeString, numDependentFields + 1, distStr.str());
   }
 
-  // Title for reporting
-  std::string title;
-
   // Expected mode.
   BaseHashTable::HashMode mode;
 
   // Type of build & probe row.
-  TypePtr buildType{ROW({"k1"}, {BIGINT()})};
+  TypePtr buildType;
 
   // Distinct rows in the table.
   int64_t hashTableSize;
@@ -105,24 +102,33 @@ struct HashTableBenchmarkParams {
   // Number of probe rows.
   int64_t probeSize;
 
+  // Key repeation distribution: {{80, 1}, {20, 0}}: 80% keys have 1
+  // duplication, 20$ keys have no duplication.
+  std::vector<std::pair<int32_t, int32_t>> keyRepeatTimesDistribution;
+
+  // Title for reporting
+  std::string title;
+
   // Number of build rows.
   int64_t buildSize;
 
-  // This is used to control the hash mode.
+  // This parameter controls the hashing mode. It is incorporated into the keys
+  // on the build side. If the expected mode is an array, its value is 0. If
+  // the expected mode is a normalized key, its value is 'kArrayHashMaxSize' +
+  // 100 to make the key range > 'kArrayHashMaxSize'. If the expected mode is a
+  // hash, its value is the maximum value of int64_t minus 1 to make the key
+  // range  == 'kRangeTooLarge'.
   int64_t extraValue;
-
-  std::vector<std::pair<int32_t, int32_t>> keyRepeatTimesDistribution;
 
   std::vector<std::pair<int32_t, int32_t>> buildKeyRepeat;
 
+  // Number of dependent fields.
   int32_t numDependentFields;
 
-  int32_t numTables{7};
+  // Number of the tables: 1 top talbe + 7 other tables.
+  int32_t numTables{8};
 
   std::string toString() const {
-    std::string modeString = mode == BaseHashTable::HashMode::kArray ? "array"
-        : mode == BaseHashTable::HashMode::kHash                     ? "hash"
-                                                 : "normalized key";
     std::stringstream distStr;
     for (auto dist : keyRepeatTimesDistribution) {
       distStr << fmt::format("{}%:{}; ", dist.first, dist.second);
@@ -132,14 +138,15 @@ struct HashTableBenchmarkParams {
         hashTableSize,
         buildSize,
         probeSize,
-        modeString,
+        BaseHashTable::modeString(mode),
         distStr.str());
   }
 };
 
-struct HashTableBenchmarkRun {
+struct HashTableBenchmarkResult {
   HashTableBenchmarkParams params;
 
+  // Number of output rows after 'listJoinResult'.
   int64_t numOutput;
 
   int32_t numIter{1};
@@ -147,25 +154,35 @@ struct HashTableBenchmarkRun {
   // The mode of the table.
   BaseHashTable::HashMode hashMode;
 
-  void merge(HashTableBenchmarkRun other) {
+  void merge(HashTableBenchmarkResult other) {
     numIter++;
   }
 
   std::string toString() const {
     std::stringstream out;
     out << params.toString();
-
-    std::string modeString = hashMode == BaseHashTable::HashMode::kArray
-        ? "array"
-        : hashMode == BaseHashTable::HashMode::kHash ? "hash"
-                                                     : "normalized key";
-    out << std::endl << " mode=" << modeString << " numOutput=" << numOutput;
+    out << std::endl << " mode=" << BaseHashTable::modeString(hashMode)
+        << " numOutput=" << numOutput;
     return out.str();
   }
 };
 
 class HashTableListJoinResultBenchmark : public VectorTestBase {
  public:
+  HashTableBenchmarkResult run(HashTableBenchmarkParams params) {
+    params_ = params;
+    buildTable();
+    HashTableBenchmarkResult result;
+    result.params = params_;
+    result.numOutput = probeTableAndListResult();
+    result.hashMode = topTable_->hashMode();
+    VELOX_CHECK_EQ(result.hashMode, params_.mode);
+    topTable_.reset();
+    return result;
+  }
+
+ private:
+  // Generate buiild key based on current key and key repetition distribution. 
   int64_t getBuildKey(int64_t& buildKey, int32_t& iterTimes, int32_t& repeat) {
     if (iterTimes >= repeat) {
       iterTimes = 0;
@@ -182,7 +199,14 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     return buildKey;
   }
 
-  RowVectorPtr makeBuildVector(
+  // Create the row vector for the build side, where the first column is used
+  // as the join key, and the remaining columns are dependent fields.
+  // If expect mode is array, the key is within the range [0, hashTableSize];
+  // If expect mode is normalized key, the key is within the range
+  // [0, hashTableSize] + extraValue(kArrayHashMaxSize + 100);
+  // If expect mode is hash, the key is within the range [0, hashTableSize] +
+  // extraValue(max_int64 -1);
+  RowVectorPtr makeBuildRows(
       int32_t size,
       int64_t& buildKey,
       int32_t& iterTimes,
@@ -195,37 +219,44 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     data[0] = params_.extraValue;
     std::random_shuffle(data.begin(), data.end());
     std::vector<VectorPtr> children;
-    children.push_back(vectorMaker_->flatVector<int64_t>(data));
+    children.push_back(makeFlatVector<int64_t>(data));
     for (int32_t i = 0; i < params_.numDependentFields; ++i) {
-      children.push_back(vectorMaker_->flatVector<int64_t>(
+      children.push_back(makeFlatVector<int64_t>(
           size, [&](vector_size_t row) { return row + size; }, nullptr));
     }
-    return vectorMaker_->rowVector(children);
+    return makeRowVector(children);
   }
 
-  void makeBuildRows(std::vector<RowVectorPtr>& batches) {
+  // Generate the build side data batches, one batch pre table.
+  void makeBuildBatches(std::vector<RowVectorPtr>& batches) {
     int64_t buildKey = -1;
     int32_t iterTimes = 0;
     int32_t repeat = 0;
     int32_t size = params_.buildSize / params_.numTables;
     for (auto i = 0; i < params_.numTables; ++i) {
-      batches.push_back(makeBuildVector(size, buildKey, iterTimes, repeat));
+      if (i == params_.numTables - 1) {
+        size += params_.buildSize % params_.numTables;
+      }
+      batches.push_back(makeBuildRows(size, buildKey, iterTimes, repeat));
     }
   }
 
+  // Create the row vector for the probe side, where the first column is used
+  // as the join key, and the remaining columns are dependent fields.
+  // Probe key is within the range [0, hashTableSize].
   RowVectorPtr
   makeProbeVector(int32_t size, int64_t hashTableSize, int64_t& sequence) {
     std::vector<VectorPtr> children;
-    children.push_back(vectorMaker_->flatVector<int64_t>(
+    children.push_back(makeFlatVector<int64_t>(
         size,
         [&](vector_size_t row) { return (sequence + row) % hashTableSize; },
         nullptr));
     sequence += size;
     for (int32_t i = 0; i < params_.numDependentFields; ++i) {
-      children.push_back(vectorMaker_->flatVector<int64_t>(
+      children.push_back(makeFlatVector<int64_t>(
           size, [&](vector_size_t row) { return row + size; }, nullptr));
     }
-    return vectorMaker_->rowVector(children);
+    return makeRowVector(children);
   }
 
   void copyVectorsToTable(RowVectorPtr batch, BaseHashTable* table) {
@@ -264,20 +295,12 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     });
   }
 
-  void setParams(HashTableBenchmarkParams params) {
-    params_ = params;
-    topTable_.reset();
-    vectorMaker_.reset();
-    pool_.reset();
-    pool_ = memory::memoryManager()->addLeafPool();
-    vectorMaker_ = std::make_unique<VectorMaker>(pool_.get());
-  }
-
+  // Prepare join table.
   void buildTable() {
     std::vector<TypePtr> dependentTypes;
     std::vector<std::unique_ptr<BaseHashTable>> otherTables;
     std::vector<RowVectorPtr> batches;
-    makeBuildRows(batches);
+    makeBuildBatches(batches);
     for (auto i = 0; i < params_.numTables; ++i) {
       std::vector<std::unique_ptr<VectorHasher>> keyHashers;
       keyHashers.emplace_back(
@@ -305,6 +328,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     buildTime_ += (buildTime.timeToDropValue() / params_.buildSize);
   }
 
+  // Hash probe andd list join result.
   int64_t probeTableAndListResult() {
     auto lookup = std::make_unique<HashLookup>(topTable_->hashers());
     auto numBatch = params_.probeSize / params_.hashTableSize;
@@ -363,21 +387,6 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     return numJoinListResult;
   }
 
-  HashTableBenchmarkRun run() {
-    HashTableBenchmarkRun result;
-    result.params = params_;
-    result.numOutput = probeTableAndListResult();
-    result.hashMode = topTable_->hashMode();
-    VELOX_CHECK_EQ(result.hashMode, params_.mode);
-    return result;
-  }
-
-  std::shared_ptr<memory::MemoryPool> pool_{
-      memory::memoryManager()->addLeafPool()};
-
-  std::unique_ptr<VectorMaker> vectorMaker_{
-      std::make_unique<VectorMaker>(pool_.get())};
-
   std::unique_ptr<HashTable<true>> topTable_;
   HashTableBenchmarkParams params_;
 
@@ -386,8 +395,8 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
 };
 
 void combineResults(
-    std::vector<HashTableBenchmarkRun>& results,
-    HashTableBenchmarkRun run) {
+    std::vector<HashTableBenchmarkResult>& results,
+    HashTableBenchmarkResult run) {
   if (!results.empty() && results.back().params.title == run.params.title) {
     results.back().merge(run);
     return;
@@ -406,7 +415,7 @@ int main(int argc, char** argv) {
   memory::MemoryManager::initialize(options);
 
   auto bm = std::make_unique<HashTableListJoinResultBenchmark>();
-  std::vector<HashTableBenchmarkRun> results;
+  std::vector<HashTableBenchmarkResult> results;
 
   auto hashTableSize = (2L << 20) - 1;
   auto probeRowSize = 100000000L;
@@ -447,12 +456,7 @@ int main(int argc, char** argv) {
 
   for (auto& param : params) {
     folly::addBenchmark(__FILE__, param.title, [param, &bm, &results]() {
-      {
-        folly::BenchmarkSuspender suspender;
-        bm->setParams(param);
-        bm->buildTable();
-      }
-      combineResults(results, bm->run());
+      combineResults(results, bm->run(param));
       return 1;
     });
   }
