@@ -104,6 +104,7 @@ jobs:
           key: ccache-fuzzer-centos
 
       - name: Fix git permissions
+        working-directory: ${{ github.workspace }}
           # Usually actions/checkout does this but as we run in a container
           # it doesn't work
         run: |
