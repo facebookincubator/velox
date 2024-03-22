@@ -71,13 +71,28 @@ env:
 jobs:
   compile:
     name: Build
-    runs-on: 8-core
+    runs-on: 16-core
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
       LINUX_DISTRO: "ubuntu"
+    defaults:
+      run:
+        shell: bash
+        working-directory: velox
+    outputs:
+      bias_presto: ${{ steps.sig-check.outputs.presto }}
+      bias_spark: ${{ steps.sig-check.outputs.spark }}
+
     steps:
+
+      - name: Get Function Signature Stash
+        uses: assignUser/stash/restore@v1
+        id: get-sig
+        with:
+          path: /tmp/signatures
+          key: function-signatures
 
       - name: "Restore ccache"
         uses: assignUser/stash/restore@v1
@@ -85,7 +100,59 @@ jobs:
           path: "${{ env.CCACHE_DIR }}"
           key: ccache-fuzzer
 
-      - name: "Checkout Repo"
+      - name: Ensure Stash Dirs Exists
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p '${{ env.CCACHE_DIR }}'
+          mkdir -p /tmp/signatures 
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Checkout Main
+        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          # hardcode ref without broken pr
+          ref: '43a552715e4c0c005cb73cfb6dca0f996de76f3a'
+          path: velox_main
+
+      - name: Install Dependencies
+        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        working-directory: velox_main
+        run: |
+          source scripts/setup-ubuntu.sh
+
+      - name: Build PyVelox
+        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        env:
+          VELOX_DEPENDENCY_SOURCE: BUNDLED
+          MAKEFLAGS: "NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8"
+        working-directory: velox_main
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+
+          make python-build
+
+      - name: Create Baseline Signatures
+        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        working-directory: velox_main
+        run: |
+          source .venv/bin/activate
+          python -m pip install deepdiff
+          python scripts/signature.py export --spark /tmp/signatures/spark_signatures_main.json
+          python scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
+
+      - name: Save Function Signature Stash
+        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        uses: assignUser/stash/save@v1
+        with:
+          path: /tmp/signatures
+          key: function-signatures
+
+      - name: "Checkout Contender"
         uses: actions/checkout@v4
         with:
           path: velox
@@ -94,14 +161,17 @@ jobs:
 
       - name: "Install dependencies"
         run: |
-          cd  velox
           source ./scripts/setup-ubuntu.sh
           ccache -vsz
 
       - name: Build
         run: |
-          cd velox
-          make debug NUM_THREADS="${{ inputs.numThreads || 8 }}" MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 8 }}" MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 4 }}" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }}"
+          make debug NUM_THREADS="${{ inputs.numThreads || 16 }}" \ 
+                     MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 8 }}" \
+                     MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 8 }}" \
+                     EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON \
+                                        -DVELOX_BUILD_PYTHON_PACKAGE=ON \
+                                        ${{ inputs.extraCMakeFlags }}"
 
       - name: Ccache after
         run: ccache -vs
@@ -111,6 +181,52 @@ jobs:
         with:
           path: "${{ env.CCACHE_DIR }}"
           key: ccache-fuzzer
+          retention-days: "${{ env.RETENTION }}"
+      
+      - name: Build PyVelox
+        env:
+          VELOX_BUILD_DIR: "_build/debug"
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install -e .
+
+      - name: Create and test new function signatures 
+        id: sig-check
+        run: |
+          source .venv/bin/activate
+          python -m pip install deepdiff
+          python scripts/signature.py export --spark /tmp/signatures/spark_signatures_contender.json
+          python scripts/signature.py export --presto /tmp/signatures/presto_signatures_contender.json
+          
+          python scripts/signature.py bias /tmp/signatures/presto_signatures_main.json \
+                                           /tmp/signatures/presto_signatures_contender.json \
+                                           /tmp/signatures/presto_bias_functions 2>&1 > /tmp/signatures/presto-err-message \
+                                           || echo "::notice ::Presto Signature check failed" \
+                                           | tee /tmp/signatures/presto-err-code
+          if [ -f "/tmp/signatures/presto_bias_functions" ]; then
+            echo "presto=true" >> $GITHUB_OUTPUT
+          else
+            echo "presto=false" >> $GITHUB_OUTPUT
+          fi
+           
+          python scripts/signature.py bias /tmp/signatures/spark_signatures_main.json \
+                                           /tmp/signatures/spark_signatures_contender.json \
+                                           /tmp/signatures/spark_bias_functions \
+                                           || echo "::notice ::Spark Signature check failed" \
+                                           | tee /tmp/signatures/spark-err-code
+
+          if [ -f "/tmp/signatures/spark_bias_functions" ]; then
+            echo "spark=true" >> $GITHUB_OUTPUT
+          else
+            echo "spark=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload Signature Artifacts 
+        uses: actions/upload-artifact@v4
+        with:
+          name: signatures
+          path: /tmp/signatures 
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload presto fuzzer
@@ -274,7 +390,57 @@ jobs:
           path: |
             /tmp/spark_aggregate_fuzzer_repro
 
-  linux-spark-fuzzer-run:
+  spark-bias-fuzzer:
+    name: "Spark Fuzzer"
+    runs-on: ubuntu-latest
+    needs: compile
+    if: ${{ needs.compile.outputs.spark  == 'true' }}
+    timeout-minutes: 120
+    steps:
+
+      - name: "Checkout Repo"
+        uses: actions/checkout@v4
+        with:
+          ref: "${{ inputs.ref }}"
+
+      - name: "Install dependencies"
+        run: source ./scripts/setup-ubuntu.sh
+
+      - name: Download spark expression fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: spark_expression_fuzzer
+
+      - name: Download Signatures
+        uses: actions/download-artifact@v4
+        with:
+          name: signatures 
+          path: /tmp/signatures
+
+      - name: "Run Spark Expression Fuzzer"
+        run: |
+          ls /tmp/signatures 
+          mkdir -p /tmp/spark_fuzzer_repro/
+            chmod -R 777 /tmp/spark_fuzzer_repro
+            chmod +x spark_expression_fuzzer_test
+            ./spark_expression_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec $DURATION \
+                --logtostderr=1 \
+                --minloglevel=0 \
+                --assign_function_tickets  $(cat /tmp/signatures/spark_bias_functions) \
+                --repro_persist_path=/tmp/spark_fuzzer_repro \
+            && echo -e "\n\nSpark Fuzzer run finished successfully."
+
+      - name: Archive Spark expression production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark-fuzzer-failure-artifacts
+          path: |
+            /tmp/spark_bias_fuzzer_repro
+
+  spark-fuzzer:
     name: "Spark Fuzzer"
     runs-on: ubuntu-latest
     needs: compile
