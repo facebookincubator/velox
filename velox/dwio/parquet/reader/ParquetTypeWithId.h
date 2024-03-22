@@ -45,6 +45,8 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
       std::optional<thrift::LogicalType> logicalType,
       uint32_t maxRepeat,
       uint32_t maxDefine,
+      bool isOptional,
+      bool isRepeated,
       int32_t precision = 0,
       int32_t scale = 0,
       int32_t typeLength = 0)
@@ -54,9 +56,11 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
         logicalType_(std::move(logicalType)),
         maxRepeat_(maxRepeat),
         maxDefine_(maxDefine),
+        isOptional_(isOptional),
+        isRepeated_(isRepeated),
         precision_(precision),
         scale_(scale),
-        typeLength_(typeLength) {}
+        typeLength_(typeLength){}
 
   bool isLeaf() const {
     // Negative column ordinal means non-leaf column.
@@ -82,7 +86,8 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
   const int32_t precision_;
   const int32_t scale_;
   const int32_t typeLength_;
-
+  const bool isOptional_;
+  const bool isRepeated_;
   // True if this is or has a non-repeated leaf.
   bool hasNonRepeatedLeaf() const;
 };

@@ -303,7 +303,7 @@ TEST_F(ParquetTableScanTest, singleRowStruct) {
 }
 
 // Core dump and incorrect result are fixed.
-TEST_F(ParquetTableScanTest, DISABLED_array) {
+TEST_F(ParquetTableScanTest, array) {
   auto vector = makeArrayVector<int32_t>({{1, 2, 3}});
 
   loadData(
@@ -321,7 +321,7 @@ TEST_F(ParquetTableScanTest, DISABLED_array) {
 
 // Optional array with required elements.
 // Incorrect result.
-TEST_F(ParquetTableScanTest, DISABLED_optArrayReqEle) {
+TEST_F(ParquetTableScanTest, optArrayReqEle) {
   auto vector = makeArrayVector<StringView>({});
 
   loadData(
@@ -342,11 +342,30 @@ TEST_F(ParquetTableScanTest, DISABLED_optArrayReqEle) {
 
 // Required array with required elements.
 // Core dump is fixed, but the result is incorrect.
-TEST_F(ParquetTableScanTest, DISABLED_reqArrayReqEle) {
+TEST_F(ParquetTableScanTest, test2) {
   auto vector = makeArrayVector<StringView>({});
 
   loadData(
-      getExampleFilePath("array_1.parquet"),
+      getExampleFilePath("luTest1.parquet"),
+      ROW({"test"}, {ARRAY(INTEGER())}),
+      makeRowVector(
+          {"test"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter(
+      {"test"},
+      {},
+      "",
+      "SELECT UNNEST(array[array[], array[4, 5]])");
+}
+
+TEST_F(ParquetTableScanTest, test3) {
+  auto vector = makeArrayVector<StringView>({});
+
+  loadData(
+      getExampleFilePath("array_2.parquet"),
       ROW({"_1"}, {ARRAY(VARCHAR())}),
       makeRowVector(
           {"_1"},
@@ -358,12 +377,13 @@ TEST_F(ParquetTableScanTest, DISABLED_reqArrayReqEle) {
       {"_1"},
       {},
       "",
-      "SELECT UNNEST(array[array['a', 'b'], array['c', 'd'], array[]])");
+      "SELECT UNNEST(array[array['a', null], array[], array[null, 'b']])");
 }
+
 
 // Required array with optional elements.
 // Incorrect result.
-TEST_F(ParquetTableScanTest, DISABLED_reqArrayOptEle) {
+TEST_F(ParquetTableScanTest, reqArrayOptEle) {
   auto vector = makeArrayVector<StringView>({});
 
   loadData(

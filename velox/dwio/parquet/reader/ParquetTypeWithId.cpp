@@ -51,19 +51,19 @@ bool ParquetTypeWithId::hasNonRepeatedLeaf() const {
 }
 
 LevelMode ParquetTypeWithId::makeLevelInfo(LevelInfo& info) const {
-  int16_t repeatedAncestor = 0;
-  for (auto parent = parquetParent(); parent;
-       parent = parent->parquetParent()) {
-    if (parent->type()->kind() == TypeKind::ARRAY ||
-        parent->type()->kind() == TypeKind::MAP) {
-      repeatedAncestor = parent->maxDefine_;
-      break;
-    }
-  }
+
   bool isList = type()->kind() == TypeKind::ARRAY;
   bool isStruct = type()->kind() == TypeKind::ROW;
   bool isMap = type()->kind() == TypeKind::MAP;
   bool hasList = false;
+  int16_t repeatedAncestor = maxDefine_;
+  auto node = this;
+  do {
+    if (node->isOptional_) {
+      repeatedAncestor--;
+    }
+    node = node->parquetParent();
+  } while (node && !node->isRepeated_);
   if (isStruct) {
     bool isAllLists = true;
     for (auto i = 0; i < getChildren().size(); ++i) {
