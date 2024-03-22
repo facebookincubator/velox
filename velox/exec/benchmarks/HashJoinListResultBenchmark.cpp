@@ -44,7 +44,7 @@ struct HashTableBenchmarkParams {
   //  -build key repetition distribution.
   HashTableBenchmarkParams(
       BaseHashTable::HashMode mode,
-      TypePtr buildType,
+      const TypePtr& buildType,
       int64_t hashTableSize,
       int64_t probeSize,
       const std::vector<std::pair<int32_t, int32_t>>&
@@ -156,23 +156,23 @@ struct HashTableBenchmarkResult {
 
   int32_t numIter{1};
 
-  double buildTime{0};
+  double buildClocks{0};
 
-  double listJoinResultTime{0};
+  double listJoinResultClocks{0};
 
-  double totalTime{0};
+  double totalClock{0};
 
-  double eraseTime{0};
+  double eraseClock{0};
 
   // The mode of the table.
   BaseHashTable::HashMode hashMode;
 
   void merge(HashTableBenchmarkResult other) {
     numIter++;
-    buildTime += other.buildTime;
-    listJoinResultTime += other.listJoinResultTime;
-    totalTime += other.totalTime;
-    eraseTime += other.eraseTime;
+    buildClocks += other.buildClocks;
+    listJoinResultClocks += other.listJoinResultClocks;
+    totalClock += other.totalClock;
+    eraseClock += other.eraseClock;
   }
 
   std::string toString() const {
@@ -180,11 +180,14 @@ struct HashTableBenchmarkResult {
     out << params.toString();
     out << std::endl
         << " mode=" << BaseHashTable::modeString(hashMode)
-        << " numOutput=" << numOutput << " totalTime=" << totalTime
-        << " listJoinResultTime%=" << (listJoinResultTime / totalTime * 100)
-        << "% buildTime%=" << (buildTime / totalTime * 100) << "%";
+        << " numOutput=" << numOutput << " totalClock=" << totalClock
+        << " listJoinResultClocks=" << listJoinResultClocks << "("
+        << (listJoinResultClocks / totalClock * 100)
+        << "%) buildClocks=" << buildClocks << "("
+        << (buildClocks / totalClock * 100) << "%)";
     if (FLAGS_include_rows_erase_function) {
-      out << " eraseTime=" << eraseTime;
+      out << " eraseClock=" << eraseClock << "("
+          << (eraseClock / totalClock * 100) << "%)";
     }
     return out.str();
   }
@@ -196,34 +199,34 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     params_ = params;
     HashTableBenchmarkResult result;
     result.params = params_;
-    SelectivityInfo totalTime;
+    SelectivityInfo totalClock;
     {
-      SelectivityTimer timer(totalTime, 0);
+      SelectivityTimer timer(totalClock, 0);
       buildTable();
       result.numOutput = probeTableAndListResult();
       result.hashMode = topTable_->hashMode();
-    }
-    result.buildTime += buildTime_;
-    result.listJoinResultTime += listJoinResultTime_;
-    result.totalTime += totalTime.timeToDropValue();
-
-    if (FLAGS_include_rows_erase_function) {
-      SelectivityInfo eraseTime;
-      {
-        SelectivityTimer timer(eraseTime, 0);
-        constexpr int32_t kBatch = 1024;
-        raw_vector<char*> rows(kBatch);
-        RowContainerIterator iter;
-        while (auto numRows = topTable_->rows()->listRows(
-                   &iter, kBatch, RowContainer::kUnlimited, rows.data())) {
-          topTable_->rows()->eraseRows(
-              folly::Range<char**>(rows.data(), numRows));
+      VELOX_CHECK_EQ(result.hashMode, params_.mode);
+      if (FLAGS_include_rows_erase_function) {
+        SelectivityInfo eraseClock;
+        {
+          SelectivityTimer timer(eraseClock, 0);
+          constexpr int32_t kBatch = 1024;
+          raw_vector<char*> rows(kBatch);
+          RowContainerIterator iter;
+          while (auto numRows = topTable_->rows()->listRows(
+                     &iter, kBatch, RowContainer::kUnlimited, rows.data())) {
+            topTable_->rows()->eraseRows(
+                folly::Range<char**>(rows.data(), numRows));
+          }
         }
+        result.eraseClock += eraseClock.timeToDropValue();
       }
-      result.eraseTime += eraseTime.timeToDropValue();
+      topTable_.reset();
     }
-    topTable_.reset();
-    VELOX_CHECK_EQ(result.hashMode, params_.mode);
+    result.buildClocks += buildTime_;
+    result.listJoinResultClocks += listJoinResultTime_;
+    result.totalClock += totalClock.timeToDropValue();
+
     return result;
   }
 
@@ -366,12 +369,12 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
         otherTables.push_back(std::move(table));
       }
     }
-    SelectivityInfo buildTime;
+    SelectivityInfo buildClocks;
     {
-      SelectivityTimer timer(buildTime, 0);
+      SelectivityTimer timer(buildClocks, 0);
       topTable_->prepareJoinTable(std::move(otherTables), executor_.get());
     }
-    buildTime_ = buildTime.timeToDropValue();
+    buildTime_ = buildClocks.timeToDropValue();
   }
 
   // Hash probe andd list join result.
@@ -381,7 +384,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     auto batchSize = params_.hashTableSize;
     SelectivityVector rows(batchSize);
     auto mode = topTable_->hashMode();
-    SelectivityInfo listJoinResultTime;
+    SelectivityInfo listJoinResultClocks;
 
     auto& hashers = topTable_->hashers();
     VectorHasher::ScratchMemory scratchMemory;
@@ -418,7 +421,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
           outputRowMapping, outputBatchSize, pool_.get());
       outputTableRows.resize(outputBatchSize);
       {
-        SelectivityTimer timer(listJoinResultTime, 0);
+        SelectivityTimer timer(listJoinResultClocks, 0);
         while (!results.atEnd()) {
           numJoinListResult += topTable_->listJoinResults(
               results,
@@ -428,7 +431,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
         }
       }
     }
-    listJoinResultTime_ = listJoinResultTime.timeToDropValue();
+    listJoinResultTime_ = listJoinResultClocks.timeToDropValue();
     return numJoinListResult;
   }
 
