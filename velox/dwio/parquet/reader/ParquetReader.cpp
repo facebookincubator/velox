@@ -418,7 +418,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           std::move(children),
           curSchemaIdx,
           maxSchemaElementIdx,
-          columnIdx++,
+          columnIdx - 1, // was already incremented for leafTypePtr
           std::move(name),
           std::nullopt,
           std::nullopt,
@@ -612,6 +612,8 @@ int64_t ReaderBase::rowGroupUncompressedSize(
     int32_t rowGroupIndex,
     const dwio::common::TypeWithId& type) const {
   if (type.column() != ParquetTypeWithId::kNonLeaf) {
+    VELOX_CHECK_LT(rowGroupIndex, fileMetaData_->row_groups.size());
+    VELOX_CHECK_LT(type.column(), fileMetaData_->row_groups[rowGroupIndex].columns.size());
     return fileMetaData_->row_groups[rowGroupIndex]
         .columns[type.column()]
         .meta_data.total_uncompressed_size;
