@@ -277,7 +277,8 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     if (task_->error()) {
       // Wait for the task to finish (there's' a small period of time between
       // when the error is set on the Task and terminate is called).
-      task_->taskCompletionFuture(1'000'000);
+      auto& inlineExecutor = folly::QueuedImmediateExecutor::instance();
+      task_->taskCompletionFuture(1'000'000).via(&inlineExecutor).wait();
 
       // Wait for all task drivers to finish to avoid destroying the executor_
       // before task_ finished using it and causing a crash.
