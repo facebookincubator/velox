@@ -71,7 +71,7 @@ env:
 jobs:
   compile:
     name: Build
-    runs-on: 16-core
+    runs-on: 8-core
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
@@ -128,7 +128,7 @@ jobs:
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
         env:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
-          MAKEFLAGS: "NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8"
+          MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
         working-directory: velox_main
         run: |
           python -m venv .venv
@@ -166,9 +166,9 @@ jobs:
 
       - name: Build
         run: |
-          make debug NUM_THREADS="${{ inputs.numThreads || 16 }}" \ 
-                     MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 8 }}" \
-                     MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 8 }}" \
+          make debug NUM_THREADS="${{ inputs.numThreads || 8 }}" \ 
+                     MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 4 }}" \
+                     MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 4 }}" \
                      EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON \
                                         -DVELOX_BUILD_PYTHON_PACKAGE=ON \
                                         ${{ inputs.extraCMakeFlags }}"
