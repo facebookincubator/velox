@@ -72,12 +72,13 @@ jobs:
   compile:
     name: Build
     runs-on: 16-core
+    container: ghcr.io/facebookincubator/velox-dev:centos8
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
       LINUX_DISTRO: "ubuntu"
-      MAKEFLAGS: "NUM_THREADS=${{ inputs.numThreads || 16 }} MAX_HIGH_MEM_JOBS=${{ inputs.maxHighMemJobs || 6 }} MAX_LINK_JOBS=${{ inputs.maxLinkJobs || 6 }}"
+      MAKEFLAGS: "NUM_THREADS=${{ inputs.numThreads || 16 }} MAX_HIGH_MEM_JOBS=${{ inputs.maxHighMemJobs || 8 }} MAX_LINK_JOBS=${{ inputs.maxLinkJobs || 4 }}"
 
     defaults:
       run:
@@ -100,7 +101,14 @@ jobs:
         uses: assignUser/stash/restore@v1
         with:
           path: "${{ env.CCACHE_DIR }}"
-          key: ccache-fuzzer
+          key: ccache-fuzzer-centos
+
+      - name: Fix git permissions
+          # Usually actions/checkout does this but as we run in a container
+          # it doesn't work
+        run: |
+          git config --global --add safe.directory /__w/velox/velox/velox
+          git config --global --add safe.directory /__w/velox/velox/velox_main
 
       - name: Ensure Stash Dirs Exists
         working-directory: ${{ github.workspace }}
@@ -108,23 +116,13 @@ jobs:
           mkdir -p '${{ env.CCACHE_DIR }}'
           mkdir -p /tmp/signatures 
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
       - name: Checkout Main
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
         uses: actions/checkout@v4
         with:
           # hardcode ref without broken pr
-          ref: '43a552715e4c0c005cb73cfb6dca0f996de76f3a'
+          ref: 'main'
           path: velox_main
-
-      - name: Install Dependencies
-        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
-        working-directory: velox_main
-        run: |
-          source scripts/setup-ubuntu.sh
 
       - name: Build PyVelox
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
@@ -158,9 +156,8 @@ jobs:
           submodules: 'recursive'
           ref: "${{ inputs.ref }}"
 
-      - name: "Install dependencies"
+      - name: "Zero Ccache Statistics"
         run: |
-          source ./scripts/setup-ubuntu.sh
           ccache -sz
 
       - name: Build
@@ -168,6 +165,7 @@ jobs:
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"
         run: |
           make debug
+
       - name: Ccache after
         run: ccache -s
 
@@ -175,7 +173,7 @@ jobs:
         uses: assignUser/stash/save@v1
         with:
           path: "${{ env.CCACHE_DIR }}"
-          key: ccache-fuzzer
+          key: ccache-fuzzer-centos
           retention-days: "${{ env.RETENTION }}"
       
       - name: Build PyVelox
