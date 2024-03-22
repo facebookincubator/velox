@@ -23,8 +23,6 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 
-using namespace facebook::velox::exec;
-
 namespace facebook::velox::aggregate {
 
 // Represents a list of values, including nulls, for an array/map/distinct value
@@ -139,7 +137,9 @@ class ValueListReader {
 // vectors.
 // TODO: This API only works if it is the only logic writing to `writer`.
 template <typename T>
-void copyValueListToArrayWriter(ArrayWriter<T>& writer, ValueList& elements) {
+void copyValueListToArrayWriter(
+    facebook::velox::exec::ArrayWriter<T>& writer,
+    ValueList& elements) {
   writer.resetLength();
   auto size = elements.size();
   if (size == 0) {
