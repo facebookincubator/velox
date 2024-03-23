@@ -131,7 +131,7 @@ jobs:
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
         run: |
-          python -m venv .venv
+          python3 -m venv .venv
           source .venv/bin/activate
 
           make python-build
@@ -141,9 +141,9 @@ jobs:
         working-directory: velox_main
         run: |
           source .venv/bin/activate
-          python -m pip install deepdiff
-          python scripts/signature.py export --spark /tmp/signatures/spark_signatures_main.json
-          python scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
+          python3 -m pip install deepdiff
+          python3 scripts/signature.py export --spark /tmp/signatures/spark_signatures_main.json
+          python3 scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
 
       - name: Save Function Signature Stash
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
@@ -167,7 +167,7 @@ jobs:
         env:
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"
         run: |
-          EXTRA_CMAKE_FLAGS="-DPYTHON_EXECUTABLE=$(python3 -c "import sys; print(sys.executable)")"
+          EXTRA_CMAKE_FLAGS="-DPYTHON_EXECUTABLE=$(python3 -c "import sys; print(sys.executable)") $EXTRA_CMAKE_FLAGS"
           make debug
 
       - name: Ccache after
@@ -184,19 +184,19 @@ jobs:
         env:
           VELOX_BUILD_DIR: "_build/debug"
         run: |
-          python -m venv .venv
+          python3 -m venv .venv
           source .venv/bin/activate
-          python -m pip install -e .
+          python3 -m pip install -e .
 
       - name: Create and test new function signatures 
         id: sig-check
         run: |
           source .venv/bin/activate
-          python -m pip install deepdiff
-          python scripts/signature.py export --spark /tmp/signatures/spark_signatures_contender.json
-          python scripts/signature.py export --presto /tmp/signatures/presto_signatures_contender.json
+          python3 -m pip install deepdiff
+          python3 scripts/signature.py export --spark /tmp/signatures/spark_signatures_contender.json
+          python3 scripts/signature.py export --presto /tmp/signatures/presto_signatures_contender.json
           
-          python scripts/signature.py bias /tmp/signatures/presto_signatures_main.json \
+          python3 scripts/signature.py bias /tmp/signatures/presto_signatures_main.json \
                                            /tmp/signatures/presto_signatures_contender.json \
                                            /tmp/signatures/presto_bias_functions 2>&1 > /tmp/signatures/presto-err-message \
                                            || echo "::notice ::Presto Signature check failed" \
@@ -207,7 +207,7 @@ jobs:
             echo "presto=false" >> $GITHUB_OUTPUT
           fi
            
-          python scripts/signature.py bias /tmp/signatures/spark_signatures_main.json \
+          python3 scripts/signature.py bias /tmp/signatures/spark_signatures_main.json \
                                            /tmp/signatures/spark_signatures_contender.json \
                                            /tmp/signatures/spark_bias_functions \
                                            || echo "::notice ::Spark Signature check failed" \
