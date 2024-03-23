@@ -116,6 +116,8 @@ jobs:
         run: |
           mkdir -p '${{ env.CCACHE_DIR }}'
           mkdir -p /tmp/signatures 
+          # this can be removed after #8917
+          dnf install -q -y python39-devel
 
       - name: Checkout Main
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
