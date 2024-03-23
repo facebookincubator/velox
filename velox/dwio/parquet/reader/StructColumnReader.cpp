@@ -40,11 +40,8 @@ StructColumnReader::StructColumnReader(
       continue;
     }
     const auto& fieldName = childSpec->fieldName();
-    if (!fileType_->containsChild(fieldName) &&
-        fieldName == "_tmp_metadata_row_index") {
-      auto child = std::make_unique<RowIndexColumnReader>(
-          requestedType, params, scanSpec);
-      addChild(std::move(child));
+    if (!fileType_->containsChild(fieldName)) {
+      continue;
     } else {
       auto childFileType = fileType_->childByName(fieldName);
       auto childRequestedType =

@@ -117,6 +117,14 @@ class ScanSpec {
     return constantValue_ != nullptr;
   }
 
+  void setIsRowIndexCol(bool isRowIndexCol) {
+    isRowIndexCol_ = isRowIndexCol;
+  }
+
+  bool isRowIndexCol() const {
+    return isRowIndexCol_;
+  }
+
   // Name of the value in its container, i.e. field name in struct or
   // string key in map. Not all fields of 'this' apply in list/map
   // value cases but the overhead is manageable, the space taken is
@@ -358,6 +366,7 @@ class ScanSpec {
 
   VectorPtr constantValue_;
   bool projectOut_ = false;
+  bool isRowIndexCol_ = false;
   bool extractValues_ = false;
   // True if a string dictionary or flat map in this field should be
   // returned as flat.

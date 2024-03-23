@@ -19,6 +19,7 @@
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/RowIndexColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
@@ -653,7 +654,7 @@ class ParquetRowReader::Impl {
           "Input Table Schema (with partition columns): {}\n",
           readerBase_->bufferedInput().getReadFile()->getName(),
           readerBase_->schema()->toString(),
-          requestedType_->toString());
+          requestedType_->type()->toString());
       return exceptionMessageContext;
     };
 
@@ -664,8 +665,9 @@ class ParquetRowReader::Impl {
         pool_, columnReaderStats_, readerBase_->fileMetaData());
     auto columnSelector = std::make_shared<ColumnSelector>(
         ColumnSelector::apply(options_.getSelector(), readerBase_->schema()));
+    requestedType_ = columnSelector->getSchemaWithId();
     columnReader_ = ParquetColumnReader::build(
-        columnSelector->getSchemaWithId(),
+        requestedType_,
         readerBase_->schemaWithId(), // Id is schema id
         params,
         *options_.getScanSpec());
@@ -742,9 +744,45 @@ class ParquetRowReader::Impl {
       return 0;
     }
     VELOX_DCHECK_GT(rowsToRead, 0);
-    columnReader_->next(rowsToRead, result, mutation);
+    if (!options_.getAppendRowNumberColumn()) {
+      columnReader_->next(rowsToRead, result, mutation);
+    } else {
+      readWithRowNumber(rowsToRead, result, mutation);
+    }
+
     currentRowInGroup_ += rowsToRead;
     return rowsToRead;
+  }
+
+  void readWithRowNumber(
+      uint64_t rowsToRead,
+      VectorPtr& result,
+      const dwio::common::Mutation* mutation) {
+    auto fileType = readerBase_->schemaWithId();
+    auto& childSpecs = options_.getScanSpec()->stableChildren();
+    auto& columnReader = static_cast<StructColumnReader&>(*columnReader_);
+    facebook::velox::common::ScanSpec* rowIndexScanSpec = nullptr;
+    for (auto i = 0; i < childSpecs.size(); ++i) {
+      auto scanSpec = childSpecs[i];
+      if (scanSpec->isRowIndexCol()) {
+        rowIndexScanSpec = scanSpec;
+        break;
+      }
+    }
+    if (rowIndexScanSpec) {
+      if (!dynamic_cast<RowIndexColumnReader*>(
+              columnReader.children().back())) {
+        ParquetParams params(
+            pool_, columnReaderStats_, readerBase_->fileMetaData());
+        auto type = requestedType_->childByName(rowIndexScanSpec->fieldName());
+        auto child = std::make_unique<RowIndexColumnReader>(
+            type, params, *rowIndexScanSpec);
+        columnReader.addChild(std::move(child));
+        rowIndexScanSpec->setSubscript(columnReader.children().size() - 1);
+      }
+    }
+    columnReader.next(rowsToRead, result, mutation);
+    return;
   }
 
   std::optional<size_t> estimatedRowSize() const {
@@ -802,7 +840,7 @@ class ParquetRowReader::Impl {
 
   std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
 
-  RowTypePtr requestedType_;
+  std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
 
   dwio::common::ColumnReaderStatistics columnReaderStats_;
 };

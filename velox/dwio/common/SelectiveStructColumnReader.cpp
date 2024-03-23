@@ -244,7 +244,7 @@ bool SelectiveStructColumnReaderBase::isChildConstant(
            TypeKind::MAP && // If this is the case it means this is a flat map,
                             // so it can't have "missing" fields.
        childSpec.channel() >= fileType_->size() &&
-       childSpec.fieldName() != "_tmp_metadata_row_index");
+       !childSpec.isRowIndexCol());
 }
 
 namespace {
