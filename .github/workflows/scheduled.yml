@@ -587,6 +587,7 @@ jobs:
 
   exchange-fuzzer-run:
     runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
     timeout-minutes: 120
     steps:
@@ -596,24 +597,19 @@ jobs:
         with:
           name: exchange
 
-      - run: sudo sysctl -w vm.max_map_count=67108864
-
       - name: Run exchange Fuzzer
-        # max_map_count can only be set on the host so we
-        # have to work around it like this.
-        shell: docker run --rm -v ${{ github.workspace }}:/velox -w /velox ghcr.io/facebookincubator/velox-dev:centos8 /bin/bash -e {0}
         run: |
           cat /proc/sys/vm/max_map_count
-          mkdir -p /velox/exchange_fuzzer_repro/
-          rm -rfv /velox/exchange_fuzzer_repro/*
-          chmod -R 777 /velox/exchange_fuzzer_repro
+          mkdir -p /tmp/exchange_fuzzer_repro/
+          rm -rfv /tmp/exchange_fuzzer_repro/*
+          chmod -R 777 /tmp/exchange_fuzzer_repro
           chmod +x velox_exchange_fuzzer_test
           ./velox_exchange_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec ${{ env.DURATION }} \
                 --logtostderr=1 \
                 --minloglevel=0 \
-                --repro_path=/velox/exchange_fuzzer_repro \
+                --repro_path=/tmp/exchange_fuzzer_repro \
             && echo -e "\n\Exchange fuzzer run finished successfully."
 
       - name: Archive Exchange production artifacts
@@ -622,7 +618,7 @@ jobs:
         with:
             name: exchange-fuzzer-failure-artifacts
             path: |
-              exchange_fuzzer_repro
+              /tmp/exchange_fuzzer_repro
 
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
