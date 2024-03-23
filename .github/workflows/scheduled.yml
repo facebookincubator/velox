@@ -271,17 +271,10 @@ jobs:
   linux-presto-fuzzer-run:
     name: "Presto Fuzzer"
     runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
     timeout-minutes: 120
     steps:
-
-      - name: "Checkout Repo"
-        uses: actions/checkout@v4
-        with:
-          ref: "${{ inputs.ref }}"
-
-      - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
 
       - uses: dorny/paths-filter@v3
         if: github.event_name == 'pull_request'
@@ -349,17 +342,10 @@ jobs:
   linux-spark-aggregate-fuzzer-run:
     name: "Spark Aggregate Fuzzer"
     runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
     timeout-minutes: 60
     steps:
-
-      - name: "Checkout Repo"
-        uses: actions/checkout@v4
-        with:
-          ref: "${{ inputs.ref }}"
-
-      - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
 
       - name: Download spark aggregation fuzzer
         uses: actions/download-artifact@v4
@@ -390,18 +376,11 @@ jobs:
   spark-bias-fuzzer:
     name: "Spark Fuzzer"
     runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
     if: ${{ needs.compile.outputs.spark  == 'true' }}
     timeout-minutes: 120
     steps:
-
-      - name: "Checkout Repo"
-        uses: actions/checkout@v4
-        with:
-          ref: "${{ inputs.ref }}"
-
-      - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
 
       - name: Download spark expression fuzzer
         uses: actions/download-artifact@v4
@@ -440,17 +419,10 @@ jobs:
   spark-fuzzer:
     name: "Spark Fuzzer"
     runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
     timeout-minutes: 120
     steps:
-
-      - name: "Checkout Repo"
-        uses: actions/checkout@v4
-        with:
-          ref: "${{ inputs.ref }}"
-
-      - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
 
       - name: Download spark expression fuzzer
         uses: actions/download-artifact@v4
@@ -488,17 +460,10 @@ jobs:
   linux-aggregate-fuzzer-run:
     name: "Aggregate Fuzzer"
     runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
     timeout-minutes: 120
     steps:
-
-      - name: "Checkout Repo"
-        uses: actions/checkout@v4
-        with:
-          ref: "${{ inputs.ref }}"
-
-      - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
 
       - name: Download aggregation fuzzer
         uses: actions/download-artifact@v4
@@ -530,17 +495,10 @@ jobs:
   linux-join-fuzzer-run:
     name: "Join Fuzzer"
     runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
     timeout-minutes: 120
     steps:
-
-      - name: "Checkout Repo"
-        uses: actions/checkout@v4
-        with:
-          ref: "${{ inputs.ref }}"
-
-      - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
 
       - name: Download join fuzzer
         uses: actions/download-artifact@v4
