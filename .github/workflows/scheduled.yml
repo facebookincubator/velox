@@ -115,7 +115,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           mkdir -p '${{ env.CCACHE_DIR }}'
-          mkdir -p /tmp/signatures 
+          mkdir -p /tmp/signatures
           # this can be removed after #8917
           dnf install -q -y python39-devel
 
@@ -179,7 +179,7 @@ jobs:
           path: "${{ env.CCACHE_DIR }}"
           key: ccache-fuzzer-centos
           retention-days: "${{ env.RETENTION }}"
-      
+
       - name: Build PyVelox
         env:
           VELOX_BUILD_DIR: "_build/debug"
@@ -188,14 +188,14 @@ jobs:
           source .venv/bin/activate
           python3 -m pip install -e .
 
-      - name: Create and test new function signatures 
+      - name: Create and test new function signatures
         id: sig-check
         run: |
           source .venv/bin/activate
           python3 -m pip install deepdiff
           python3 scripts/signature.py export --spark /tmp/signatures/spark_signatures_contender.json
           python3 scripts/signature.py export --presto /tmp/signatures/presto_signatures_contender.json
-          
+
           python3 scripts/signature.py bias /tmp/signatures/presto_signatures_main.json \
                                            /tmp/signatures/presto_signatures_contender.json \
                                            /tmp/signatures/presto_bias_functions 2>&1 > /tmp/signatures/presto-err-message \
@@ -206,7 +206,7 @@ jobs:
           else
             echo "presto=false" >> $GITHUB_OUTPUT
           fi
-           
+
           python3 scripts/signature.py bias /tmp/signatures/spark_signatures_main.json \
                                            /tmp/signatures/spark_signatures_contender.json \
                                            /tmp/signatures/spark_bias_functions \
@@ -219,11 +219,11 @@ jobs:
             echo "spark=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Upload Signature Artifacts 
+      - name: Upload Signature Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: signatures
-          path: /tmp/signatures 
+          path: /tmp/signatures
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload presto fuzzer
@@ -268,7 +268,7 @@ jobs:
           path: velox/_build/debug//velox/exec/tests/velox_exchange_fuzzer_test
           retention-days: "${{ env.RETENTION }}"
 
-  linux-presto-fuzzer-run:
+  presto-fuzzer-run:
     name: "Presto Fuzzer"
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
@@ -339,7 +339,66 @@ jobs:
           path: |
             /tmp/fuzzer_repro
 
-  linux-spark-aggregate-fuzzer-run:
+  presto-bias-fuzzer:
+    name: "Presto Bias Fuzzer"
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos8
+    needs: compile
+    if: ${{ needs.compile.outputs.spark  == 'true' }}
+    timeout-minutes: 120
+    steps:
+
+      - name: Download presto expression fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: presto
+
+      - name: Download Signatures
+        uses: actions/download-artifact@v4
+        with:
+          name: signatures
+          path: /tmp/signatures
+
+      - name: "Run Spark Expression Fuzzer"
+        run: |
+          ls /tmp/signatures
+          mkdir -p /tmp/presto_fuzzer_repro/
+            chmod -R 777 /tmp/presto_fuzzer_repro
+            chmod +x velox_expression_fuzzer_test
+            ./velox_expression_fuzzer_test \
+                --seed ${RANDOM} \
+                --lazy_vector_generation_ratio 0.2 \
+                --assign_function_tickets  $(cat /tmp/signatures/presto_bias_functions) \
+                --duration_sec 3600 \
+                --enable_variadic_signatures \
+                --velox_fuzzer_enable_complex_types \
+                --velox_fuzzer_enable_column_reuse \
+                --velox_fuzzer_enable_expression_reuse \
+                --max_expression_trees_per_step 2 \
+                --retry_with_try \
+                --enable_dereference \
+                --logtostderr=1 \
+                --minloglevel=0 \
+                --repro_persist_path=/tmp/presto_fuzzer_repro \
+            && echo -e "\n\nPresto Fuzzer run finished successfully."
+
+      - name: Surface fpresto function signature errors
+        run: |
+          if [ -f /tmp/signatures/presto-signature-error-code ]; then
+            echo "Incompatible changes have been made to function signatures:\n"
+            cat /tmp/signatures/presto-err-message
+            exit 1
+          fi
+
+      - name: Archive Spark expression production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: presto-bias-fuzzer-failure-artifacts
+          path: |
+            /tmp/presto_bias_fuzzer_repro
+
+  spark-aggregate-fuzzer-run:
     name: "Spark Aggregate Fuzzer"
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
@@ -374,7 +433,7 @@ jobs:
             /tmp/spark_aggregate_fuzzer_repro
 
   spark-bias-fuzzer:
-    name: "Spark Fuzzer"
+    name: "Spark Bias Fuzzer"
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
@@ -390,12 +449,12 @@ jobs:
       - name: Download Signatures
         uses: actions/download-artifact@v4
         with:
-          name: signatures 
+          name: signatures
           path: /tmp/signatures
 
       - name: "Run Spark Expression Fuzzer"
         run: |
-          ls /tmp/signatures 
+          ls /tmp/signatures
           mkdir -p /tmp/spark_fuzzer_repro/
             chmod -R 777 /tmp/spark_fuzzer_repro
             chmod +x spark_expression_fuzzer_test
@@ -457,7 +516,7 @@ jobs:
           path: |
             /tmp/spark_fuzzer_repro
 
-  linux-aggregate-fuzzer-run:
+  aggregate-fuzzer-run:
     name: "Aggregate Fuzzer"
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
@@ -492,7 +551,7 @@ jobs:
           path: |
             /tmp/aggregate_fuzzer_repro
 
-  linux-join-fuzzer-run:
+  join-fuzzer-run:
     name: "Join Fuzzer"
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
