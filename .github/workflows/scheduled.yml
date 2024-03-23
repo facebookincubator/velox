@@ -167,6 +167,7 @@ jobs:
         env:
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"
         run: |
+          EXTRA_CMAKE_FLAGS="-DPYTHON_EXECUTABLE=$(python3 -c "import sys; print(sys.executable)")"
           make debug
 
       - name: Ccache after
