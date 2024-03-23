@@ -585,39 +585,35 @@ jobs:
           path: |
             /tmp/join_fuzzer_repro
 
-  linux-exchange-fuzzer-run:
+  exchange-fuzzer-run:
     runs-on: ubuntu-latest
     needs: compile
     timeout-minutes: 120
     steps:
-
-      - name: Checkout Repo
-        uses: actions/checkout@v4
-        with:
-          ref: "${{ inputs.ref }}"
-
-      - name: Install dependencies
-        run: source ./scripts/setup-ubuntu.sh
 
       - name: Download exchange fuzzer
         uses: actions/download-artifact@v4
         with:
           name: exchange
 
+      - run: sudo sysctl -w vm.max_map_count=67108864
+
       - name: Run exchange Fuzzer
+        # max_map_count can only be set on the host so we
+        # have to work around it like this.
+        shell: docker run --rm -v ${{ github.workspace }}:/velox -w /velox ghcr.io/facebookincubator/velox-dev:centos8 /bin/bash -e {0}
         run: |
-          sudo sysctl -w vm.max_map_count=67108864
           cat /proc/sys/vm/max_map_count
-          mkdir -p /tmp/exchange_fuzzer_repro/
-          rm -rfv /tmp/exchange_fuzzer_repro/*
-          chmod -R 777 /tmp/exchange_fuzzer_repro
+          mkdir -p /velox/exchange_fuzzer_repro/
+          rm -rfv /velox/exchange_fuzzer_repro/*
+          chmod -R 777 /velox/exchange_fuzzer_repro
           chmod +x velox_exchange_fuzzer_test
           ./velox_exchange_fuzzer_test \
                 --seed ${RANDOM} \
-                --duration_sec $DURATION \
+                --duration_sec ${{ env.DURATION }} \
                 --logtostderr=1 \
                 --minloglevel=0 \
-                --repro_path=/tmp/exchange_fuzzer_repro \
+                --repro_path=/velox/exchange_fuzzer_repro \
             && echo -e "\n\Exchange fuzzer run finished successfully."
 
       - name: Archive Exchange production artifacts
@@ -626,8 +622,7 @@ jobs:
         with:
             name: exchange-fuzzer-failure-artifacts
             path: |
-              /tmp/exchange_fuzzer_repro
-
+              exchange_fuzzer_repro
 
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
@@ -684,7 +679,7 @@ jobs:
           ls -lR $PRESTO_HOME/etc
           $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
-          sleep 60          
+          sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
           mkdir -p /tmp/aggregate_fuzzer_repro/
           rm -rfv /tmp/aggregate_fuzzer_repro/*
