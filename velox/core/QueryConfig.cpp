@@ -19,7 +19,7 @@
 #include "velox/core/QueryConfig.h"
 
 namespace facebook::velox::core {
-
+thread_local std::string inputFileName = "";
 double toBytesPerCapacityUnit(CapacityUnit unit) {
   switch (unit) {
     case CapacityUnit::BYTE:

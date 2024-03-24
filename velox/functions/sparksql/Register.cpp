@@ -31,6 +31,7 @@
 #include "velox/functions/sparksql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
+#include "velox/functions/sparksql/InputFileName.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
 #include "velox/functions/sparksql/MightContain.h"
 #include "velox/functions/sparksql/MonotonicallyIncreasingId.h"
@@ -361,6 +362,9 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "monotonically_increasing_id"});
 
   registerFunction<UuidFunction, Varchar, Constant<int64_t>>({prefix + "uuid"});
+
+  registerFunction<InputFileNameFunction, Varchar>(
+      {prefix + "input_file_name"});
 }
 
 } // namespace sparksql
