@@ -180,6 +180,8 @@ class RowVector : public BaseVector {
 
   uint64_t estimateFlatSize() const override;
 
+  uint64_t estimateCompactSize() const override;
+
   using BaseVector::toString;
 
   std::string toString(vector_size_t index) const override;
@@ -449,6 +451,8 @@ class ArrayVector : public ArrayVectorBase {
 
   uint64_t estimateFlatSize() const override;
 
+  uint64_t estimateCompactSize() const override;
+
   using BaseVector::toString;
 
   std::string toString(vector_size_t index) const override;
@@ -577,6 +581,8 @@ class MapVector : public ArrayVectorBase {
   }
 
   uint64_t estimateFlatSize() const override;
+
+  uint64_t estimateCompactSize() const override;
 
   using BaseVector::toString;
 

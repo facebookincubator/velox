@@ -363,6 +363,10 @@ class ConstantVector final : public SimpleVector<T> {
   }
 
  private:
+  vector_size_t compactLength() const override {
+    return valueVector_ ? 1 : BaseVector::length_;
+  }
+
   void setInternalState() {
     if (isLazyNotLoaded(*valueVector_)) {
       VELOX_CHECK(

@@ -217,6 +217,10 @@ class DictionaryVector : public SimpleVector<T> {
   void validate(const VectorValidateOptions& options) const override;
 
  private:
+  vector_size_t compactLength() const override {
+    return distinctIndexCount_;
+  }
+
   // return the dictionary index for the specified vector index.
   inline vector_size_t getDictionaryIndex(vector_size_t idx) const {
     return rawIndices_[idx];
@@ -225,6 +229,7 @@ class DictionaryVector : public SimpleVector<T> {
   void setInternalState();
 
   BufferPtr indices_;
+  vector_size_t distinctIndexCount_ = 0;
   const vector_size_t* rawIndices_ = nullptr;
 
   VectorPtr dictionaryValues_;

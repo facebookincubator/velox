@@ -24,7 +24,7 @@ add_executable(
   SelectivityVectorTest.cpp
   VariantToVectorTest.cpp
   VectorCompareTest.cpp
-  VectorEstimateFlatSizeTest.cpp
+  VectorEstimateSizeTest.cpp
   VectorMakerTest.cpp
   VectorPoolTest.cpp
   VectorPrepareForReuseTest.cpp

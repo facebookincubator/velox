@@ -196,6 +196,10 @@ class SequenceVector : public SimpleVector<T> {
   }
 
  private:
+  vector_size_t compactLength() const override {
+    return *lengths_;
+  }
+
   // Prepares for use after construction.
   void setInternalState();
 
