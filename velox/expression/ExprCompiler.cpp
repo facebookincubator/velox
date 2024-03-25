@@ -412,7 +412,7 @@ ExprPtr compileRewrittenExpression(
             trackCpuUsage)) {
       result = specialForm;
     } else if (
-        auto func = getVectorFunction(
+        auto functionWithMetadata = getVectorFunctionWithMetadata(
             call->name(),
             inputTypes,
             getConstantInputs(compiledInputs),
@@ -420,7 +420,8 @@ ExprPtr compileRewrittenExpression(
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
-          func,
+          functionWithMetadata->first,
+          functionWithMetadata->second,
           call->name(),
           trackCpuUsage);
     } else if (
@@ -434,12 +435,14 @@ ExprPtr compileRewrittenExpression(
           simpleFunctionEntry->type(),
           resultType,
           folly::join(", ", inputTypes));
+
       auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
           inputTypes, getConstantInputs(compiledInputs), config);
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
           std::move(func),
+          simpleFunctionEntry->metadata(),
           call->name(),
           trackCpuUsage);
     } else {
