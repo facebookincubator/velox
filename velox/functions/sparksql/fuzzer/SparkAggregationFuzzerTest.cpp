@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
       // https://github.com/facebookincubator/velox/issues/4845
       "skewness",
       // Spark's kurtosis uses Pearson's formula for calculating the kurtosis
-      // coefficient. Meanwhile, Presto employs the sample kurtosis calculation
+      // coefficient. Meanwhile, DuckDB employs the sample kurtosis calculation
       // formula. The results from the two methods are completely different.
       "kurtosis",
   });
