@@ -594,15 +594,14 @@ struct MinMaxByNComplexCompareTypeAccumulator {
   /// Extract all values from 'heapValues' into 'rawValues' and 'rawValueNulls'
   /// buffers. The heap remains unchanged after the call.
   void extractValues(
-      TRawValue* rawValues,
-      uint64_t* rawValueNulls,
+      FlatVector<V>& values,
       vector_size_t offset,
       Compare& comparator) {
     std::sort_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
     // Add heap elements to rawValues in ascending order.
     for (int64_t i = 0; i < base.heapValues.size(); ++i) {
       const auto& pair = base.heapValues[i];
-      extractValue(pair, rawValues, rawValueNulls, offset + i);
+      extractValue(pair, values, offset + i);
     }
     std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
   }
@@ -612,8 +611,7 @@ struct MinMaxByNComplexCompareTypeAccumulator {
   /// remains unchanged after the call.
   void extractPairs(
       BaseVector& compares,
-      TRawValue* rawValues,
-      uint64_t* rawValueNulls,
+      FlatVector<V>& values,
       vector_size_t offset,
       Compare& comparator) {
     std::sort_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
@@ -621,7 +619,7 @@ struct MinMaxByNComplexCompareTypeAccumulator {
     for (int64_t i = 0; i < base.heapValues.size(); ++i) {
       const auto& pair = base.heapValues[i];
       extractCompare(pair, compares, offset + i);
-      extractValue(pair, rawValues, rawValueNulls, offset + i);
+      extractValue(pair, values, offset + i);
     }
     std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
   }
@@ -632,7 +630,7 @@ struct MinMaxByNComplexCompareTypeAccumulator {
 
   void addToAccumulator(
       C comparePosition,
-      std::optional<V> value,
+      const std::optional<V>& value,
       Compare& comparator) {
     base.heapValues.push_back(std::make_pair(comparePosition, value));
     std::push_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
@@ -650,15 +648,12 @@ struct MinMaxByNComplexCompareTypeAccumulator {
     valueSet.free(pair.first.header);
   }
 
-  void extractValue(
-      const Pair& pair,
-      TRawValue* rawValues,
-      uint64_t* rawValueNulls,
-      vector_size_t index) {
+  void
+  extractValue(const Pair& pair, FlatVector<V>& values, vector_size_t index) {
     const bool valueIsNull = !pair.second.has_value();
-    bits::setNull(rawValueNulls, index, valueIsNull);
+    values.setNull(index, valueIsNull);
     if (!valueIsNull) {
-      RawValueExtractor<V>::extract(rawValues, index, pair.second.value());
+      values.set(index, pair.second.value());
     }
   }
 
@@ -673,22 +668,17 @@ struct MinMaxByNComplexCompareTypeAccumulator {
 
 template <typename V, typename Compare>
 struct ComplexCompareTypeExtractor {
-  using TRawValue = typename RawValueExtractor<V>::TRawValue;
-  TRawValue* rawValues;
-  uint64_t* rawValueNulls;
+  FlatVector<V>& values;
   BaseVector* compares;
 
-  ComplexCompareTypeExtractor(VectorPtr& values, BaseVector* _compares)
-      : compares{_compares} {
-    rawValues = RawValueExtractor<V>::mutableRawValues(values);
-    rawValueNulls = values->mutableRawNulls();
-  }
+  ComplexCompareTypeExtractor(VectorPtr& _values, BaseVector* _compares)
+      : values{*_values->asFlatVector<V>()}, compares{_compares} {}
 
   void extractValues(
       MinMaxByNComplexCompareTypeAccumulator<V, Compare>* accumulator,
       vector_size_t offset,
       Compare& comparator) {
-    accumulator->extractValues(rawValues, rawValueNulls, offset, comparator);
+    accumulator->extractValues(values, offset, comparator);
   }
 
   void extractPairs(
@@ -696,8 +686,7 @@ struct ComplexCompareTypeExtractor {
       vector_size_t offset,
       Compare& comparator) {
     VELOX_DCHECK_NOT_NULL(compares);
-    accumulator->extractPairs(
-        *compares, rawValues, rawValueNulls, offset, comparator);
+    accumulator->extractPairs(*compares, values, offset, comparator);
   }
 };
 
@@ -804,7 +793,7 @@ struct MinMaxByNStringViewValueTypeComplexCompareTypeAccumulator {
 
   void addToAccumulator(
       C comparePosition,
-      std::optional<V> value,
+      const std::optional<V>& value,
       Compare& comparator) {
     base.heapValues.push_back(
         std::make_pair(comparePosition, writeString(value)));
@@ -945,13 +934,12 @@ struct MinMaxByNBothComplexTypeAccumulator {
   }
 
  private:
-  using V = HashStringAllocator::Position;
-  using C = HashStringAllocator::Position;
-  using Pair = typename MinMaxByNAccumulator<V, C, Compare>::Pair;
+  using P = HashStringAllocator::Position;
+  using Pair = typename MinMaxByNAccumulator<P, P, Compare>::Pair;
 
   void addToAccumulator(
-      C comparePosition,
-      const std::optional<V>& valuePosition,
+      P comparePosition,
+      const std::optional<P>& valuePosition,
       Compare& comparator) {
     base.heapValues.push_back(std::make_pair(comparePosition, valuePosition));
     std::push_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
@@ -1066,7 +1054,7 @@ struct ComplexLess {
     ByteInputStream rStream =
         HashStringAllocator::prepareRead(rhs.first.header);
     // Returns < 0 if 'left' is less than 'right' at 'index'.
-    std::optional<int32_t> res = exec::ContainerRowSerde::compare(
+    std::optional<int32_t> res = exec::ContainerRowSerde::compareWithNulls(
         lStream, rStream, compareType.get(), kCompareFlags);
     return res.value() < 0;
   }
@@ -1080,7 +1068,7 @@ struct ComplexLess {
         HashStringAllocator::prepareRead(topPair.first.header);
     // Returns > 0 if 'topPair' greater than 'vector' at 'index', means it needs
     // to be pushed into the heap.
-    std::optional<int32_t> res = exec::ContainerRowSerde::compare(
+    std::optional<int32_t> res = exec::ContainerRowSerde::compareWithNulls(
         stream, decodedCompare, compareIndex, kCompareFlags);
     return res.value() > 0;
   }
@@ -1091,7 +1079,7 @@ CompareFlags ComplexLess<V>::kCompareFlags{
     true, // nullsFirst
     true, // ascending
     false, // equalsOnly
-    CompareFlags::NullHandlingMode::kNullAsValue};
+    CompareFlags::NullHandlingMode::kNullAsIndeterminate};
 
 template <typename V>
 struct ComplexGreater {
@@ -1109,7 +1097,7 @@ struct ComplexGreater {
     ByteInputStream rStream =
         HashStringAllocator::prepareRead(rhs.first.header);
     // Returns < 0 if 'left' is greater than 'right' at 'index'.
-    std::optional<int32_t> res = exec::ContainerRowSerde::compare(
+    std::optional<int32_t> res = exec::ContainerRowSerde::compareWithNulls(
         lStream, rStream, compareType.get(), kCompareFlags);
     return res.value() > 0;
   }
@@ -1123,7 +1111,7 @@ struct ComplexGreater {
         HashStringAllocator::prepareRead(topPair.first.header);
     // Returns < 0 if 'topPair' less than 'vector' at 'index', means it needs
     // to be pushed into the heap.
-    std::optional<int32_t> res = exec::ContainerRowSerde::compare(
+    std::optional<int32_t> res = exec::ContainerRowSerde::compareWithNulls(
         stream, decodedCompare, compareIndex, kCompareFlags);
     return res.value() < 0;
   }
@@ -1134,7 +1122,7 @@ CompareFlags ComplexGreater<V>::kCompareFlags{
     true, // nullsFirst
     true, // ascending
     false, // equalsOnly
-    CompareFlags::NullHandlingMode::kNullAsValue};
+    CompareFlags::NullHandlingMode::kNullAsIndeterminate};
 
 template <typename V, typename C, typename Compare>
 struct MinMaxByNAccumulatorTypeTraits {
@@ -1775,9 +1763,9 @@ std::unique_ptr<exec::Aggregate> createNArg(
     case TypeKind::TIMESTAMP:
       return createNArg<NAggregate, Timestamp>(
           resultType, compareType, errorMessage);
+    // Map is not order-able in Presto. So it is not supported in minmaxBy
+    // aggregation.
     case TypeKind::ARRAY:
-      [[fallthrough]];
-    case TypeKind::MAP:
       [[fallthrough]];
     case TypeKind::ROW:
       return createNArg<NAggregate, ComplexType>(

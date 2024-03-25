@@ -2228,68 +2228,39 @@ TEST_F(MinMaxByComplexTypes, arrayTypeCompare) {
        makeArrayVector<int64_t>({{8, 4}, {3, 5}})});
 
   testAggregations({data}, {"c0"}, {"max_by(c1, c2, 2)"}, {expected});
-}
 
-TEST_F(MinMaxByComplexTypes, mapTypeCompare) {
-  // The data consists of four rows, and both the comparison key and the value
-  // key are mapType. The first compare row has three elements.
-  auto data = makeRowVector({
-      makeMapVector<int64_t, int64_t>({
-          {{1, 10}, {2, 20}, {3, 30}},
-          {{4, 40}, {5, 50}},
-          {{2, 1}},
-          {{6, 60}, {7, 70}, {8, 80}},
-      }),
-      makeMapVector<int64_t, int64_t>({
-          {{50, 5}, {10, 1}, {20, 2}},
-          {{20, 2}},
-          {{40, 4}, {0, 0}},
-          {{40, 4}, {30, 6}},
-      }),
-  });
-
-  // When comparing a map, it is sorted by key in ascending order, then compare
-  // keys one by one. If all the keys are the same, then the values are
-  // compared. So the second row and the forth row are chosen.
-  auto expected = makeRowVector({makeArrayVector(
-      {0},
-      makeMapVector(
-          {0, 3},
-          makeFlatVector<int64_t>({6, 7, 8, 4, 5}),
-          makeFlatVector<int64_t>({60, 70, 80, 40, 50})))});
-
-  testAggregations({data}, {}, {"max_by(c0, c1, 2)"}, {expected});
-
-  // The data consists of four rows, and both the comparison key and the value
-  // key are mapType. The first compare row has two elements.
+  // Test StringView type (both as value and comparison).
   data = makeRowVector({
-      makeFlatVector<int16_t>({1, 2, 1, 2}),
-      makeMapVector<int64_t, int64_t>({
-          {{1, 10}, {2, 20}, {3, 30}},
-          {{4, 40}, {5, 50}},
-          {{2, 1}},
-          {{6, 60}, {7, 70}, {8, 80}},
-      }),
-      makeMapVector<int64_t, int64_t>({
-          {{40, 4}, {0, 0}},
-          {{40, 4}},
-          {{40, 4}, {0, 2}},
-          {{50, 5}, {30, 6}},
-      }),
+      makeFlatVector<StringView>({"1"_sv, "2"_sv, "3"_sv, "4"_sv}),
+      makeArrayVector<StringView>(
+          {{"1"_sv, "8"_sv},
+           {"2"_sv, "7"_sv},
+           {"3"_sv, "6"_sv},
+           {"4"_sv, "5"_sv}}),
   });
 
-  // For the same reason as above. The first row are chosen in first group and
-  // the second row are chosen in second group.
+  expected = makeRowVector({makeArrayVector<StringView>({
+      {"1"_sv, "2"_sv},
+  })});
+
+  testAggregations({data}, {}, {"min_by(c0, c1, 2)"}, {expected});
+
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2, 1}),
+      makeFlatVector<StringView>({"1"_sv, "2"_sv, "3"_sv, "4"_sv, "5"_sv}),
+      makeArrayVector<StringView>(
+          {{"1"_sv, "8"_sv},
+           {"2"_sv, "7"_sv},
+           {"3"_sv, "6"_sv},
+           {"4"_sv, "5"_sv},
+           {"1"_sv, "9"_sv}}),
+  });
+
   expected = makeRowVector(
       {makeFlatVector<int16_t>({1, 2}),
-       makeArrayVector(
-           {0, 1},
-           makeMapVector(
-               {0, 3},
-               makeFlatVector<int64_t>({1, 2, 3, 6, 7, 8}),
-               makeFlatVector<int64_t>({10, 20, 30, 60, 70, 80})))});
+       makeArrayVector<StringView>({{"3"_sv, "5"_sv}, {"4"_sv, "2"_sv}})});
 
-  testAggregations({data}, {"c0"}, {"min_by(c1, c2, 1)"}, {expected});
+  testAggregations({data}, {"c0"}, {"max_by(c1, c2, 2)"}, {expected});
 }
 
 TEST_F(MinMaxByComplexTypes, rowTypeCompare) {
@@ -2303,8 +2274,8 @@ TEST_F(MinMaxByComplexTypes, rowTypeCompare) {
           {9, 10},
       }),
       makeRowVector(
-          {makeFlatVector<int32_t>({10, 10, 30, 20}),
-           makeFlatVector<int32_t>({3, 2, 1, 4})}),
+          {makeFlatVector<int32_t>({10, 0, 30, 20}),
+           makeNullableFlatVector<int32_t>({3, std::nullopt, 1, 4})}),
   });
 
   auto expected = makeRowVector({makeArrayVector(
@@ -2336,6 +2307,36 @@ TEST_F(MinMaxByComplexTypes, rowTypeCompare) {
            makeArrayVector({0, 3}, makeFlatVector<int64_t>({1, 2, 3, 4, 5})))});
 
   testAggregations({data}, {"c0"}, {"min_by(c1, c2, 1)"}, {expected});
+
+  // The data consists of four rows, and the comparison key is
+  // RowType(1.array 2.int32_t) and the value key are ArrayType. Each
+  // comparison key has two attributes.
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2}),
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+          {9, 10},
+      }),
+      makeRowVector(
+          {makeNullableArrayVector<int64_t>({
+               {1, 2},
+               {3, 4, 5},
+               {6, 7},
+               {8, 9, std::nullopt},
+           }),
+           makeNullableFlatVector<int32_t>({3, std::nullopt, 1, 4})}),
+  });
+
+  expected = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2}),
+       makeArrayVector(
+           {0, 1},
+           makeArrayVector(
+               {0, 3}, makeFlatVector<int64_t>({6, 7, 8, 9, 10})))});
+
+  testAggregations({data}, {"c0"}, {"max_by(c1, c2, 1)"}, {expected});
 }
 
 } // namespace
