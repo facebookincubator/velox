@@ -14,25 +14,29 @@
  * limitations under the License.
  */
 
-#include "velox/exec/RankLikeWindowBuild.h"
+#include "velox/exec/RowLevelStreamingWindowBuild.h"
 
 namespace facebook::velox::exec {
 
-RankLikeWindowBuild::RankLikeWindowBuild(
+RowLevelStreamingWindowBuild::RowLevelStreamingWindowBuild(
     const std::shared_ptr<const core::WindowNode>& windowNode,
     velox::memory::MemoryPool* pool,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection)
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection) {}
 
-void RankLikeWindowBuild::buildNextInputOrPartition(bool isFinished) {
+void RowLevelStreamingWindowBuild::buildNextInputOrPartition(bool isFinished) {
   sortedRows_.push_back(inputRows_);
   if (windowPartitions_.size() <= inputCurrentPartition_) {
     auto partition =
         folly::Range(sortedRows_.back().data(), sortedRows_.back().size());
 
     windowPartitions_.push_back(std::make_shared<WindowPartition>(
-        data_.get(), partition, inputColumns_, sortKeyInfo_, true));
+        data_.get(),
+        partition,
+        inputColumns_,
+        sortKeyInfo_,
+        ProcessingUnit::kRow));
   } else {
     windowPartitions_[inputCurrentPartition_]->insertNewBatch(
         sortedRows_.back());
@@ -41,7 +45,6 @@ void RankLikeWindowBuild::buildNextInputOrPartition(bool isFinished) {
   if (isFinished) {
     windowPartitions_[inputCurrentPartition_]->setTotalNum(
         currentPartitionNum_ - 1);
-    windowPartitions_[inputCurrentPartition_]->setFinished();
 
     inputRows_.clear();
     inputCurrentPartition_++;
@@ -49,7 +52,7 @@ void RankLikeWindowBuild::buildNextInputOrPartition(bool isFinished) {
   }
 }
 
-void RankLikeWindowBuild::addInput(RowVectorPtr input) {
+void RowLevelStreamingWindowBuild::addInput(RowVectorPtr input) {
   for (auto i = 0; i < inputChannels_.size(); ++i) {
     decodedInputVectors_[i].decode(*input->childAt(inputChannels_[i]));
   }
@@ -76,22 +79,20 @@ void RankLikeWindowBuild::addInput(RowVectorPtr input) {
   inputRows_.clear();
 }
 
-void RankLikeWindowBuild::noMoreInput() {
+void RowLevelStreamingWindowBuild::noMoreInput() {
   isFinished_ = true;
   windowPartitions_[outputCurrentPartition_]->setTotalNum(
       currentPartitionNum_ - 1);
-  windowPartitions_[outputCurrentPartition_]->setFinished();
   inputRows_.clear();
 }
 
-std::shared_ptr<WindowPartition> RankLikeWindowBuild::nextPartition() {
-  outputCurrentPartition_++;
-  return windowPartitions_[outputCurrentPartition_];
+std::shared_ptr<WindowPartition> RowLevelStreamingWindowBuild::nextPartition() {
+  return windowPartitions_[++outputCurrentPartition_];
 }
 
-bool RankLikeWindowBuild::hasNextPartition() {
+bool RowLevelStreamingWindowBuild::hasNextPartition() {
   return windowPartitions_.size() > 0 &&
-      outputCurrentPartition_ != windowPartitions_.size() - 1;
+      outputCurrentPartition_ < int(windowPartitions_.size() - 1);
 }
 
 } // namespace facebook::velox::exec
