@@ -109,6 +109,12 @@ General Aggregate Functions
     a non-null output will be generated. When the value of `m2` in the accumulator is 0, a null
     output will be generated.
 
+.. spark:function:: kurtosis(x) -> double
+
+    Returns the Pearson's kurtosis of all input values. When the count of `x` is greater than or equal to 1,
+    a non-null output will be generated. When the value of `m2` in the accumulator is 0, a null
+    output will be generated.
+
 .. spark:function:: sum(x) -> bigint|double|real
 
     Returns the sum of `x`.
