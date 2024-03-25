@@ -441,6 +441,9 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
         auto iter = std::find(vector->begin(), vector->end(), row);
         VELOX_CHECK(iter != vector->end());
         vector->erase(iter);
+        if (vector->empty()) {
+          delete vector;
+        }
         vector = nullptr;
       }
     }

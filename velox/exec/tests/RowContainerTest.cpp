@@ -1865,20 +1865,15 @@ TEST_F(RowContainerTest, nextRowVector) {
   };
 
   auto validateNextRowVector = [&]() {
-    for (int i = 0; i < numRows; i++) {
+    for (int i = 0; i < rows.size(); i++) {
       auto vector = data->getNextRowVector(rows[i]);
       if (vector) {
         auto iter = std::find(vector->begin(), vector->end(), rows[i]);
-        if (iter == vector->end()) {
-          EXPECT_LE(vector->size(), 1);
-          if (vector->size() == 1) {
-            EXPECT_EQ(vector->data()[0], rows[i + 1]);
-          }
-          for (auto next : *vector) {
-            EXPECT_EQ(data->getNextRowVector(next), vector);
-            EXPECT_TRUE(
-                std::find(rows.begin(), rows.end(), next) != rows.end());
-          }
+        EXPECT_NE(iter, vector->end());
+        EXPECT_TRUE(vector->size() <= 2 && vector->size() > 0);
+        for (auto next : *vector) {
+          EXPECT_EQ(data->getNextRowVector(next), vector);
+          EXPECT_TRUE(std::find(rows.begin(), rows.end(), next) != rows.end());
         }
       }
     }
@@ -1907,20 +1902,29 @@ TEST_F(RowContainerTest, nextRowVector) {
   auto nextRowVectorEraseValidation = [&](const std::vector<int> eraseRows) {
     dataClear();
     nextRowVectorAppendValidation();
+    std::vector<char*> erasingRows;
     for (auto index : eraseRows) {
-      std::vector<char*> erasingRows;
       erasingRows.emplace_back(rows[index]);
-      rows.erase(rows.begin() + index);
-      data->eraseRows(
-          folly::Range<char**>(erasingRows.data(), erasingRows.size()));
-      validateNextRowVector();
     }
+    for (auto row : erasingRows) {
+      rows.erase(std::remove(rows.begin(), rows.end(), row), rows.end());
+    }
+    data->eraseRows(
+        folly::Range<char**>(erasingRows.data(), erasingRows.size()));
+    validateNextRowVector();
+    data->checkConsistency();
   };
 
   nextRowVectorAppendValidation();
-
-  nextRowVectorEraseValidation({1, 2, 4, 3});
+  nextRowVectorEraseValidation({1});
+  nextRowVectorEraseValidation({98, 99});
+  nextRowVectorEraseValidation({1, 2, 3});
+  nextRowVectorEraseValidation({1, 3, 77, 6});
   nextRowVectorEraseValidation({99, 2, 50, 4, 5});
-  nextRowVectorEraseValidation({1, 3, 77, 4, 6});
-  nextRowVectorEraseValidation({1, 3, 7, 4, 67, 7, 8, 9, 67});
+  nextRowVectorEraseValidation({1, 3, 24, 44, 87, 72, 58, 39, 62});
+  std::vector<int> eraseRows(numRows);
+  std::iota(eraseRows.begin(), eraseRows.end(), 0);
+  nextRowVectorEraseValidation(eraseRows);
+
+  dataClear();
 }
