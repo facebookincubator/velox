@@ -23,6 +23,17 @@
 /// TODO: This implementation will be revised for Spill to disk semantics.
 
 namespace facebook::velox::exec {
+
+/// The processing unit for calculating the window function in a streaming
+/// manner. kRow indicates that the calculation begins as soon as rows are
+/// available within a single partition, without waiting for all data in the
+/// partition to be ready. kPartition indicates that the calculation begins only
+/// when all rows in a partition are ready.
+enum class ProcessingUnit {
+  kPartition,
+  kRow,
+};
+
 class WindowPartition {
  public:
   /// The WindowPartition is used by the Window operator and WindowFunction
@@ -42,7 +53,7 @@ class WindowPartition {
       const std::vector<column_index_t>& inputMapping,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo,
-      bool streaming = false);
+      ProcessingUnit processingUnit = ProcessingUnit::kPartition);
 
   /// Returns the number of rows in the current WindowPartition.
   vector_size_t numRows() const {
@@ -59,12 +70,8 @@ class WindowPartition {
 
   void buildNextBatch();
 
-  void setFinished() {
-    isFinished_ = true;
-  }
-
   bool isFinished() {
-    return (!streaming_) || (isFinished_ && totalNum_ == processedNum_);
+    return (!rowLevelStreaming_) || (totalNum_ == processedNum_);
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -219,21 +226,18 @@ class WindowPartition {
   // The processed num in current partition.
   vector_size_t processedNum_ = 0;
 
-  // Whether the last row of current batch is same with the first row of next
-  // batch.
+  /// Whether the last row of current batch is same with the first row of next
+  /// batch.
   bool peerGroup_ = false;
 
   // Whether support streaming in WindowPartition.
-  bool streaming_ = false;
+  bool rowLevelStreaming_ = false;
 
   // Add new batch in WindowPartition.
   std::vector<std::vector<char*>> rows_;
 
   // The batch index in WindowPartition.
   vector_size_t currentBatchIndex_ = -1;
-
-  // Whether all the batches added.
-  bool isFinished_ = false;
 
   // The total num in WindowPartition.
   vector_size_t totalNum_ = 0;
