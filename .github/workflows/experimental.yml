@@ -186,7 +186,7 @@ jobs:
         run: source ./scripts/setup-ubuntu.sh
 
       - name: Download spark aggregation fuzzer
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: spark_aggregation_fuzzer
 
@@ -227,7 +227,7 @@ jobs:
         run: source ./scripts/setup-ubuntu.sh
 
       - name: Download join fuzzer
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: join
 
