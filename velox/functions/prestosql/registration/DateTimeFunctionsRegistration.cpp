@@ -198,6 +198,16 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<FromIso8601Date, Date, Varchar>(
       {prefix + "from_iso8601_date"});
   registerFunction<CurrentDateFunction, Date>({prefix + "current_date"});
+  registerFunction<
+      TimestampAtTimezoneFunction,
+      TimestampWithTimezone,
+      Timestamp,
+      Varchar>({prefix + "at_timezone"});
+  registerFunction<
+      TimestampAtTimezoneFunction,
+      TimestampWithTimezone,
+      TimestampWithTimezone,
+      Varchar>({prefix + "at_timezone"});
 }
 } // namespace
 

@@ -15,7 +15,12 @@
  */
 #pragma once
 
+#include <time.h>
+#include <chrono>
+#include <string>
 #include <string_view>
+#include "velox/external/date/date.h"
+#include "velox/external/date/tz.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -533,6 +538,89 @@ struct TimestampMinusInterval {
       const arg_type<Timestamp>& timestamp,
       const arg_type<IntervalYearMonth>& interval) {
     result = addToTimestamp(timestamp, DateTimeUnit::kMonth, -interval);
+  }
+};
+
+template <typename T>
+struct TimestampAtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::string sessionTzName = "";
+  const date::time_zone* sessionTimezone = nullptr;
+  int64_t targetTimezoneID = -1;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*ts*/,
+      const arg_type<Varchar>* timeZone) {
+    sessionTimezone = getTimeZoneFromConfig(config);
+    sessionTzName =
+        (sessionTimezone != NULL ? sessionTimezone->name() : "Africa/Abidjan");
+
+    // below statements causing issue - timeZone is NULL here,
+    // are args not processed in init()?
+
+    // auto timeZoneStr = std::string_view(timeZone->data(), timeZone->size());
+    // targetTimezoneID = util::getTimeZoneID(timeZoneStr);
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<TimestampWithTimezone>* /*tsWithTz*/,
+      const arg_type<Varchar>* timeZone) {
+    // auto timeZoneStr = std::string_view(timeZone->data(), timeZone->size());
+    // targetTimezoneID = util::getTimeZoneID(timeZoneStr);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<Timestamp>& ts,
+      const arg_type<Varchar>& timeZone) {
+    std::chrono::system_clock::time_point tp{
+        std::chrono::seconds{ts.getSeconds()}};
+
+    // We are to interpret the input timestamp as being at session timezone;
+    // date::make_zoned() returns a zoned_time type that is constructed
+    // similarly to TimestampWithTimezone, containing a sys_time<duration> to
+    // represent a UTC timestamp, as well as a TimeZonePtr to hold the timezone
+    // said timestamp must be resolved to.
+
+    // date::make_zoned() converts the input timestamp, interpreted relative to
+    // the input timezone (in this case, session timezone) to a UTC-relative
+    // system time, stored in the returned zoned_time object.
+
+    auto starting_timepoint = date::make_zoned(
+        sessionTzName,
+        date::local_seconds{(std::chrono::seconds)(ts.getSeconds())});
+
+    auto UTC_time = starting_timepoint.get_sys_time();
+    auto UTC_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                           UTC_time.time_since_epoch())
+                           .count();
+
+    auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
+    targetTimezoneID = util::getTimeZoneID(timeZoneStr);
+
+    result.template get_writer_at<0>() = UTC_seconds;
+    result.template get_writer_at<1>() = targetTimezoneID;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<TimestampWithTimezone>& tsWithTz,
+      const arg_type<Varchar>& timeZone) {
+    const auto inputMs = *tsWithTz.template at<0>();
+
+    auto timeZoneStr = std::string_view(timeZone.data(), timeZone.size());
+    targetTimezoneID = util::getTimeZoneID(timeZoneStr);
+
+    // <0> of a TimestampWithTimezone tuple always represents
+    // milliseconds relative to GMT - so the input and output
+    // TimestampWithTimezones should not have different millisecond values
+    // (<0>), rather solely timezone <1> should differ. The millisecond offset
+    // is then resolved to the respective timezone at the time of display.
+    result.template get_writer_at<0>() = inputMs;
+    result.template get_writer_at<1>() = targetTimezoneID;
   }
 };
 
