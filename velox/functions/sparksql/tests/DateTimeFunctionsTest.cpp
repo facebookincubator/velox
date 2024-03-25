@@ -15,22 +15,13 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/external/date/tz.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
-
-std::string timestampToString(Timestamp ts) {
-  TimestampToStringOptions options;
-  options.mode = TimestampToStringOptions::Mode::kFull;
-  std::string result;
-  result.resize(getMaxStringLength(options));
-  const auto view = Timestamp::tsToStringView(ts, options, result.data());
-  result.resize(view.size());
-  return result;
-}
 
 class DateTimeFunctionsTest : public SparkFunctionBaseTest {
  public:
@@ -40,6 +31,25 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   static constexpr int16_t kMaxSmallint = std::numeric_limits<int16_t>::max();
   static constexpr int8_t kMinTinyint = std::numeric_limits<int8_t>::min();
   static constexpr int8_t kMaxTinyint = std::numeric_limits<int8_t>::max();
+
+  std::string timestampToString(Timestamp ts) {
+    TimestampToStringOptions options;
+    options.mode = TimestampToStringOptions::Mode::kFull;
+    std::string result;
+    result.resize(getMaxStringLength(options));
+    const auto view = Timestamp::tsToStringView(ts, options, result.data());
+    result.resize(view.size());
+    return result;
+  }
+
+  int32_t getCurrentDate(const std::optional<std::string>& timeZone) {
+    return parseDate(date::format(
+        "%Y-%m-%d",
+        timeZone.has_value()
+            ? date::make_zoned(
+                  timeZone.value(), std::chrono::system_clock::now())
+            : std::chrono::system_clock::now()));
+  }
 
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
@@ -206,6 +216,40 @@ TEST_F(DateTimeFunctionsTest, weekOfYear) {
   EXPECT_EQ(8, weekOfYear("2008-02-20"));
   EXPECT_EQ(15, weekOfYear("2015-04-08"));
   EXPECT_EQ(15, weekOfYear("2013-04-08"));
+}
+
+TEST_F(DateTimeFunctionsTest, currentDate) {
+  // Since the execution of the code is slightly delayed, it is difficult for us
+  // to get the correct value of current_date. If you compare directly based on
+  // the current time, you may get wrong result at the last second of the day,
+  // and current_date may be the next day of the comparison value. In order to
+  // avoid this situation, we compute a new comparison value after the execution
+  // of current_date, so that the result of current_date is either consistent
+  // with the first comparison value or the second comparison value, and the
+  // difference between the two comparison values is at most one day.
+  auto emptyRowVector = makeRowVector(ROW({}), 1);
+
+  // Do not set the timezone, so the timezone obtained from QueryConfig
+  // will be nullptr.
+  auto dateBefore = getCurrentDate(std::nullopt);
+  auto result = evaluateOnce<int32_t>("current_date()", emptyRowVector);
+  auto dateAfter = getCurrentDate(std::nullopt);
+
+  EXPECT_TRUE(result.has_value());
+  EXPECT_LE(dateBefore, result);
+  EXPECT_LE(result, dateAfter);
+  EXPECT_LE(dateAfter - dateBefore, 1);
+
+  auto tz = "America/Los_Angeles";
+  setQueryTimeZone(tz);
+  dateBefore = getCurrentDate(tz);
+  result = evaluateOnce<int32_t>("current_date()", emptyRowVector);
+  dateAfter = getCurrentDate(tz);
+
+  EXPECT_TRUE(result.has_value());
+  EXPECT_LE(dateBefore, result);
+  EXPECT_LE(result, dateAfter);
+  EXPECT_LE(dateAfter - dateBefore, 1);
 }
 
 TEST_F(DateTimeFunctionsTest, unixDate) {
