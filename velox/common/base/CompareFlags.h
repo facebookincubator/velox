@@ -35,22 +35,22 @@ struct CompareFlags {
 
   enum class NullHandlingMode {
 
-    /// This is the default null handling mode, in this mode nulls are treated
-    /// as values such that:
+    /// The default null handling mode where nulls are treated as values such
+    /// that:
     ///    - null == null is true,
     ///    - null == value is false.
     ///    - when equalsOnly=false null ordering is determined using the
     ///    nullsFirst flag.
     kNullAsValue,
 
-    /// This mode implements Presto semantics for handling nulls. It matches the
-    /// behavior of ==, >, < functions and many other Presto functions such as
-    /// array_remove and array_contains.
+    /// Presto semantics for handling nulls.
+    /// It matches the behavior of ==, >, < functions and many other Presto
+    /// functions such as array_remove and array_contains.
     ///
-    /// Under this mode, result of comparison can be indeterminate;
-    /// indeterminate result is represented as std::nullopt, and means that the
+    /// Under this mode, result of comparison can be indeterminate.
+    /// Such result is represented as std::nullopt and means that the
     /// function can not decide on the result of the comparison due to some
-    /// existing nulls. But not every null results in indeterminate result.
+    /// existing nulls. Not every null results in indeterminate result.
     ///
     /// ## When equalsOnly=true:
     /// The compare can return kIndeterminate, or a value according to the
