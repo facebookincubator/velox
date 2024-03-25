@@ -88,11 +88,11 @@ if(VELOX_ENABLE_ARROW)
   else() # NOT Arrow_FOUND
     find_package(Thrift)
     if(NOT Thrift_FOUND)
-      set(ARROW_THRIFT_BUILD_VERSION 0.19.0)
+      set(ARROW_THRIFT_BUILD_VERSION 0.20.0)
       set(THRIFT_SOURCE_URL
           "https://downloads.apache.org/thrift/${ARROW_THRIFT_BUILD_VERSION}/thrift-${ARROW_THRIFT_BUILD_VERSION}.tar.gz"
       )
-      set(ARROW_THRIFT_BUILD_SHA256_CHECKSUM d49c896c2724a78701e05cfccf6cf70b5db312d82a17efe951b441d300ccf275)
+      set(ARROW_THRIFT_BUILD_SHA256_CHECKSUM b5d8311a779470e1502c027f428a1db542f5c051c8e1280ccd2163fa935ff2d6)
       set(THRIFT_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/thrift_ep-install")
       set(THRIFT_INCLUDE_DIR ${THRIFT_PREFIX}/include)
       file(MAKE_DIRECTORY ${THRIFT_INCLUDE_DIR})
