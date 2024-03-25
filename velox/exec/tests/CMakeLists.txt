@@ -65,7 +65,9 @@ add_executable(
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp
   RowNumberTest.cpp
+  SetAccumulatorTest.cpp
   SortBufferTest.cpp
+  SpillTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
   SplitToStringTest.cpp
