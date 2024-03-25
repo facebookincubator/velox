@@ -110,7 +110,7 @@ void registerRankInternal(
           -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<RankFunction<TRank, TResult>>(resultType);
       },
-      {true});
+      {exec::ProcessingUnit::kRow});
 }
 
 void registerRankBigint(const std::string& name) {

@@ -22,13 +22,16 @@ WindowPartition::WindowPartition(
     const folly::Range<char**>& rows,
     const std::vector<exec::RowColumn>& columns,
     const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
-    bool streaming)
+    ProcessingUnit processingUnit)
     : data_(data),
       partition_(rows),
       columns_(columns),
-      sortKeyInfo_(sortKeyInfo),
-      streaming_(streaming) {
+      sortKeyInfo_(sortKeyInfo) {
   processedNum_ = partition_.size();
+
+  if (processingUnit == ProcessingUnit::kRow) {
+    rowLevelStreaming_ = true;
+  }
 }
 
 void WindowPartition::buildNextBatch() {

@@ -20,14 +20,16 @@
 
 namespace facebook::velox::exec {
 
-/// If the data has already been sorted according to the partition key and sort
-/// key, there is no need to hold all the data of a partition in memory for Rank
-/// and row_number functions. RankWindowBuild adopts a streaming method to
-/// construct WindowPartition, which can reduce the occurrence of Out Of Memory
-/// (OOM).
-class RankLikeWindowBuild : public WindowBuild {
+/// Unlike StreamingWindowBuild, RowLevelStreamingWindowBuild is capable of
+/// processing window functions as rows arrive within a single partition,
+/// without the need to wait for the entire partition to be ready. This approach
+/// can significantly reduce memory usage, especially when a single partition
+/// contains a large amount of data. It is particularly suited for optimizing
+/// rank and row_number functions, as well as aggregate window functions with a
+/// default frame.
+class RowLevelStreamingWindowBuild : public WindowBuild {
  public:
-  RankLikeWindowBuild(
+  RowLevelStreamingWindowBuild(
       const std::shared_ptr<const core::WindowNode>& windowNode,
       velox::memory::MemoryPool* pool,
       const common::SpillConfig* spillConfig,
@@ -56,8 +58,8 @@ class RankLikeWindowBuild : public WindowBuild {
  private:
   void buildNextInputOrPartition(bool isFinished);
 
-  // Vector of pointers to each input row in the data_ RowContainer.
-  // Rows are erased from data_ when they are processed in WindowPartition.
+  /// Vector of pointers to each input row in the data_ RowContainer.
+  /// Rows are erased from data_ when they are processed in WindowPartition.
   std::vector<std::vector<char*>> sortedRows_;
 
   // Holds input rows within the current partition.

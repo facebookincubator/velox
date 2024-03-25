@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
-#include <iostream>
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/RankLikeWindowBuild.h"
+#include "velox/exec/RowLevelStreamingWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/StreamingWindowBuild.h"
 #include "velox/exec/Task.h"
@@ -43,8 +42,8 @@ Window::Window(
   auto* spillConfig =
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   if (windowNode->inputsSorted()) {
-    if (supportRankWindowBuild()) {
-      windowBuild_ = std::make_unique<RankLikeWindowBuild>(
+    if (supportRowLevelStreaming()) {
+      windowBuild_ = std::make_unique<RowLevelStreamingWindowBuild>(
           windowNode_, pool(), spillConfig, &nonReclaimableSection_);
     } else {
       windowBuild_ = std::make_unique<StreamingWindowBuild>(
@@ -195,21 +194,13 @@ void Window::createWindowFunctions() {
   }
 }
 
-// The supportRankWindowBuild is designed to support 'rank' and
-// 'row_number' functions with a default frame.
-bool Window::supportRankWindowBuild() {
+// The supportRowLevelStreaming is designed to support 'rank' and
+// 'row_number' functions.
+bool Window::supportRowLevelStreaming() {
   for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
-    bool isRankFunction =
-        exec::getWindowFunctionEntry(windowNodeFunction.functionCall->name())
+    if (exec::getWindowFunctionEntry(windowNodeFunction.functionCall->name())
             .value()
-            ->metadata.streaming;
-    bool isDefaultFrame =
-        (windowNodeFunction.frame.startType ==
-             core::WindowNode::BoundType::kUnboundedPreceding &&
-         windowNodeFunction.frame.endType ==
-             core::WindowNode::BoundType::kCurrentRow);
-
-    if (!(isRankFunction) || !isDefaultFrame) {
+            ->processingUnit == ProcessingUnit::kPartition) {
       return false;
     }
   }
