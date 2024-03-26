@@ -447,12 +447,11 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
     auto& vector = getNextRowVector(row);
     if (vector) {
       // If 'clear' is false, the caller must ensure that all rows with same
-      // keys appear in the 'rows' and are contiguous.
-      VELOX_CHECK_LE(
-          rowIndex + vector->size(),
-          rows.size(),
-          "All rows with the same keys must be present in 'rows'");
+      // keys appear in the 'rows'.
       for (auto& next : *vector) {
+        VELOX_CHECK(
+            std::find(rows.begin(), rows.end(), next) != rows.end(),
+            "All rows with the same keys must be present in 'rows'");
         getNextRowVector(next) = nullptr;
       }
       delete vector;
