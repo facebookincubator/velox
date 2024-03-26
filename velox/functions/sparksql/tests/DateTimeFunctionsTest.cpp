@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/external/date/tz.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -40,6 +41,17 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   static constexpr int16_t kMaxSmallint = std::numeric_limits<int16_t>::max();
   static constexpr int8_t kMinTinyint = std::numeric_limits<int8_t>::min();
   static constexpr int8_t kMaxTinyint = std::numeric_limits<int8_t>::max();
+
+int64_t getCurrentTimestamp(const std::optional<std::string>& timeZone) {
+    auto now = std::chrono::system_clock::now();
+    auto tp = timeZone.has_value()
+            ? date::make_zoned(
+                  timeZone.value(), now).get_local_time().time_since_epoch()
+            : now.time_since_epoch();
+    auto since_epoch = std::chrono::duration_cast<std::chrono::microseconds>(tp);
+    LOG(INFO) << since_epoch.count();
+    return since_epoch.count();
+}
 
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
@@ -226,6 +238,32 @@ TEST_F(DateTimeFunctionsTest, unixDate) {
   EXPECT_EQ(unixDate("1971-03-01"), 365 + 30 + 28 + 1);
   EXPECT_EQ(unixDate("5881580-07-11"), kMax);
   EXPECT_EQ(unixDate("-5877641-06-23"), kMin);
+}
+
+TEST_F(DateTimeFunctionsTest, currentTimestamp) {
+  auto emptyRowVector = makeRowVector(ROW({}), 1);
+
+  auto timestampBefore = getCurrentTimestamp(std::nullopt);
+  auto result = evaluateOnce<Timestamp>("current_timestamp()", emptyRowVector);
+  auto timestampAfter = getCurrentTimestamp(std::nullopt);
+
+  EXPECT_TRUE(result.has_value());
+  auto resultInInt = result.value().toMicros();
+  EXPECT_LE(timestampBefore, resultInInt);
+  EXPECT_LE(resultInInt, timestampAfter);
+  EXPECT_LE(timestampAfter - timestampBefore, 300);
+
+  auto tz = "America/Los_Angeles";
+  setQueryTimeZone(tz);
+  timestampBefore = getCurrentTimestamp(tz);
+  result = evaluateOnce<Timestamp>("current_timestamp()", emptyRowVector);
+  timestampAfter = getCurrentTimestamp(tz);
+
+  EXPECT_TRUE(result.has_value());
+  resultInInt = result.value().toMicros();
+  EXPECT_LE(timestampBefore, resultInInt);
+  EXPECT_LE(resultInInt, timestampAfter);
+  EXPECT_LE(timestampAfter - timestampBefore, 300);
 }
 
 TEST_F(DateTimeFunctionsTest, unixTimestamp) {
