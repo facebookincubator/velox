@@ -23,6 +23,10 @@ These functions support TIMESTAMP and DATE input types.
         SELECT add_months('2015-01-30', -2); -- '2014-11-30'
         SELECT add_months('2015-03-31', -1); -- '2015-02-28'
 
+.. spark:function:: current_timestamp() -> timestamp
+
+    Returns the current timestamp at the start of query evaluation as a timestamp. If session timezone is set then returns timestamp in that timezone.
+
 .. spark:function:: date_add(start_date, num_days) -> date
 
     Returns the date that is ``num_days`` after ``start_date``. According to the inputs,
@@ -214,6 +218,10 @@ These functions support TIMESTAMP and DATE input types.
         SELECT next_day('2015-07-23', "Tue"); -- '2015-07-28'
         SELECT next_day('2015-07-23', "tu"); -- '2015-07-28'
         SELECT next_day('2015-07-23', "we"); -- '2015-07-29'
+
+.. spark:function:: now() -> timestamp
+
+    Alias for ``current_timestamp() -> timestamp``.
 
 .. spark:function:: second(timestamp) -> integer
 

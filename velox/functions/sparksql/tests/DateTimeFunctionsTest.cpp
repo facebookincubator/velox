@@ -42,16 +42,17 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   static constexpr int8_t kMinTinyint = std::numeric_limits<int8_t>::min();
   static constexpr int8_t kMaxTinyint = std::numeric_limits<int8_t>::max();
 
-int64_t getCurrentTimestamp(const std::optional<std::string>& timeZone) {
+  int64_t getCurrentTimestamp(const std::optional<std::string>& timeZone) {
     auto now = std::chrono::system_clock::now();
-    auto tp = timeZone.has_value()
-            ? date::make_zoned(
-                  timeZone.value(), now).get_local_time().time_since_epoch()
-            : now.time_since_epoch();
-    auto since_epoch = std::chrono::duration_cast<std::chrono::microseconds>(tp);
+    auto tp = timeZone.has_value() ? date::make_zoned(timeZone.value(), now)
+                                         .get_local_time()
+                                         .time_since_epoch()
+                                   : now.time_since_epoch();
+    auto since_epoch =
+        std::chrono::duration_cast<std::chrono::microseconds>(tp);
     LOG(INFO) << since_epoch.count();
     return since_epoch.count();
-}
+  }
 
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
