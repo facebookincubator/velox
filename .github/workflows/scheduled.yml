@@ -24,7 +24,6 @@ on:
       - "third_party/**"
       - "scripts/setup-ubuntu.sh"
       - "scripts/setup-helper-functions.sh"
-      - ".github/workflows/linux-build.yml"
       - ".github/workflows/scheduled.yml"
 
   schedule:
@@ -96,7 +95,7 @@ jobs:
           path: /tmp/signatures
           key: function-signatures
 
-      - name: "Restore ccache"
+      - name: Restore ccache
         uses: assignUser/stash/restore@v1
         with:
           path: "${{ env.CCACHE_DIR }}"
@@ -153,14 +152,14 @@ jobs:
           path: /tmp/signatures
           key: function-signatures
 
-      - name: "Checkout Contender"
+      - name: Checkout Contender
         uses: actions/checkout@v4
         with:
           path: velox
           submodules: 'recursive'
           ref: "${{ inputs.ref }}"
 
-      - name: "Zero Ccache Statistics"
+      - name: Zero Ccache Statistics
         run: |
           ccache -sz
 
@@ -175,7 +174,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - name: "Save ccache"
+      - name: Save ccache
         uses: assignUser/stash/save@v1
         with:
           path: "${{ env.CCACHE_DIR }}"
@@ -271,7 +270,7 @@ jobs:
           retention-days: "${{ env.RETENTION }}"
 
   presto-fuzzer-run:
-    name: "Presto Fuzzer"
+    name: Presto Fuzzer
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
@@ -312,7 +311,7 @@ jobs:
         with:
           name: presto
 
-      - name: "Run Presto Fuzzer"
+      - name: Run Presto Fuzzer
         run: |
           mkdir -p /tmp/fuzzer_repro/
           chmod -R 777 /tmp/fuzzer_repro
@@ -342,7 +341,7 @@ jobs:
             /tmp/fuzzer_repro
 
   presto-bias-fuzzer:
-    name: "Presto Bias Fuzzer"
+    name: Presto Bias Fuzzer
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
@@ -361,7 +360,7 @@ jobs:
           name: signatures
           path: /tmp/signatures
 
-      - name: "Run Spark Expression Fuzzer"
+      - name: Run Spark Expression Fuzzer
         run: |
           ls /tmp/signatures
           mkdir -p /tmp/presto_fuzzer_repro/
@@ -401,7 +400,7 @@ jobs:
             /tmp/presto_bias_fuzzer_repro
 
   spark-aggregate-fuzzer-run:
-    name: "Spark Aggregate Fuzzer"
+    name: Spark Aggregate Fuzzer
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
@@ -413,7 +412,7 @@ jobs:
         with:
           name: spark_aggregation_fuzzer
 
-      - name: "Run Spark Aggregate Fuzzer"
+      - name: Run Spark Aggregate Fuzzer
         run: |
           mkdir -p /tmp/spark_aggregate_fuzzer_repro/
           chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
@@ -435,7 +434,7 @@ jobs:
             /tmp/spark_aggregate_fuzzer_repro
 
   spark-bias-fuzzer:
-    name: "Spark Bias Fuzzer"
+    name: Spark Bias Fuzzer
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
@@ -454,7 +453,7 @@ jobs:
           name: signatures
           path: /tmp/signatures
 
-      - name: "Run Spark Expression Fuzzer"
+      - name: Run Spark Expression Fuzzer
         run: |
           ls /tmp/signatures
           mkdir -p /tmp/spark_fuzzer_repro/
@@ -478,7 +477,7 @@ jobs:
             /tmp/spark_bias_fuzzer_repro
 
   spark-fuzzer:
-    name: "Spark Fuzzer"
+    name: Spark Fuzzer
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
@@ -490,7 +489,7 @@ jobs:
         with:
           name: spark_expression_fuzzer
 
-      - name: "Run Spark Expression Fuzzer"
+      - name: Run Spark Expression Fuzzer
         run: |
           mkdir -p /tmp/spark_fuzzer_repro/
             chmod -R 777 /tmp/spark_fuzzer_repro
@@ -519,7 +518,7 @@ jobs:
             /tmp/spark_fuzzer_repro
 
   aggregate-fuzzer-run:
-    name: "Aggregate Fuzzer"
+    name: Aggregate Fuzzer
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
@@ -531,7 +530,7 @@ jobs:
         with:
           name: aggregation
 
-      - name: "Run Aggregate Fuzzer"
+      - name: Run Aggregate Fuzzer
         run: |
           mkdir -p /tmp/aggregate_fuzzer_repro/
             rm -rfv /tmp/aggregate_fuzzer_repro/*
@@ -554,7 +553,7 @@ jobs:
             /tmp/aggregate_fuzzer_repro
 
   join-fuzzer-run:
-    name: "Join Fuzzer"
+    name: Join Fuzzer
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
@@ -566,7 +565,7 @@ jobs:
         with:
           name: join
 
-      - name: "Run Join Fuzzer"
+      - name: Run Join Fuzzer
         run: |
           mkdir -p /tmp/join_fuzzer_repro/
           rm -rfv /tmp/join_fuzzer_repro/*
@@ -588,6 +587,7 @@ jobs:
             /tmp/join_fuzzer_repro
 
   exchange-fuzzer-run:
+    name: Exchange Fuzzer
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
@@ -624,6 +624,7 @@ jobs:
 
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
+    needs: compile
     runs-on: 8-core
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
@@ -634,41 +635,10 @@ jobs:
       LINUX_DISTRO: "centos"
     steps:
 
-      - name: "Restore ccache"
-        uses: assignUser/stash/restore@v1
+      - name: Download aggregation fuzzer
+        uses: actions/download-artifact@v4
         with:
-          path: "${{ env.CCACHE_DIR }}"
-          key: ccache-presto-java-fuzzer
-
-      - name: "Checkout Repo"
-        uses: actions/checkout@v4
-        with:
-          path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref }}"
-
-      - name: Fix git permissions
-          # Usually actions/checkout does this but as we run in a container
-          # it doesn't work
-        run: git config --global --add safe.directory /__w/velox/velox/velox
-
-      - name: Zero Ccache Statistics
-        run: ccache -sz
-
-
-      - name: "Build"
-        env:
-          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }}"
-        run: |
-          cd velox
-          make debug NUM_THREADS="${{ inputs.numThreads || 8 }}" MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 8 }}" MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 4 }}" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }}"
-          ccache -s
-
-      - name: "Save ccache"
-        uses: assignUser/stash/save@v1
-        with:
-          path: "${{ env.CCACHE_DIR }}"
-          key: ccache-presto-java-fuzzer
+          name: aggregation
 
       - name: "Run Aggregate Fuzzer"
         run: |
@@ -682,7 +652,7 @@ jobs:
           mkdir -p /tmp/aggregate_fuzzer_repro/
           rm -rfv /tmp/aggregate_fuzzer_repro/*
           chmod -R 777 /tmp/aggregate_fuzzer_repro
-          _build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test \
+          velox_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec $DURATION \
                 --logtostderr=1 \
