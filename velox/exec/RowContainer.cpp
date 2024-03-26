@@ -427,33 +427,37 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
     return;
   }
 
-  for (auto index = 0; index < rows.size();) {
-    auto& vector = getNextRowVector(rows[index]);
-    if (vector) {
-      if (clear) {
+  if (clear) {
+    for (auto row : rows) {
+      auto& vector = getNextRowVector(row);
+      if (vector) {
         // Clear all rows, we can clear the nextOffset_ slots and delete the
         // next-row-vector.
         for (auto& next : *vector) {
           getNextRowVector(next) = nullptr;
         }
-        index++;
-      } else {
-        // If 'clear' is false, the caller must ensure that all rows with same
-        // keys appear in the rows array and are contiguous.
-        VELOX_CHECK_LE(
-            index + vector->size(),
-            rows.size(),
-            "All rows with the same keys must be present in 'rows'");
-        for (auto& next : *vector) {
-          getNextRowVector(next) = nullptr;
-          VELOX_CHECK_EQ(
-              next,
-              rows[index++],
-              "All rows with the same keys must be present in 'rows' and contiguous");
-        }
+        delete vector;
+      }
+    }
+    return;
+  }
+
+  int32_t rowIndex = 0;
+  for (auto row : rows) {
+    auto& vector = getNextRowVector(row);
+    if (vector) {
+      // If 'clear' is false, the caller must ensure that all rows with same
+      // keys appear in the 'rows' and are contiguous.
+      VELOX_CHECK_LE(
+          rowIndex + vector->size(),
+          rows.size(),
+          "All rows with the same keys must be present in 'rows'");
+      for (auto& next : *vector) {
+        getNextRowVector(next) = nullptr;
       }
       delete vector;
     }
+    rowIndex++;
   }
 }
 
