@@ -93,11 +93,11 @@ size. When the free() method is called on the first block in a multi-part
 non-contiguous allocation, it frees all the blocks in that allocation.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Allocates &#39;size&#39; contiguous bytes preceded by a Header. Returns</span>
 <span class="c1">// the address of Header.</span>
-<span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">allocate</span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">size</span><span class="p">);</span>
+<span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">size</span><span class="p">);</span>
 
 <span class="c1">// Adds the allocation of &#39;header&#39; and any extensions (if header has</span>
 <span class="c1">// kContinued set) to the free list.</span>
-<span class="kt">void</span><span class="w"> </span><span class="nf">free</span><span class="p">(</span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">header</span><span class="p">);</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">free</span><span class="p">(</span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">header</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>StlAllocator, an allocator backed by HashStringAllocator that can be used with
@@ -129,7 +129,7 @@ calling HashStringAllocator::newRange() method.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets &#39;stream&#39; to range over the data in the range of &#39;header&#39; and</span>
 <span class="c1">// possible continuation ranges.</span>
 <span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">prepareRead</span><span class="p">(</span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">header</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">header</span><span class="p">,</span>
 <span class="w">    </span><span class="n">ByteInputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span>
 </pre></div>
 </div>
