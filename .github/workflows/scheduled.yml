@@ -625,7 +625,7 @@ jobs:
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
     needs: compile
-    runs-on: 8-core
+    runs-on: ubuntu-latest 
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     if: ${{ github.event_name != 'pull_request' }}
