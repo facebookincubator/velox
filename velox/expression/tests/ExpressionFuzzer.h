@@ -254,6 +254,11 @@ class ExpressionFuzzer {
   std::vector<core::TypedExprPtr> generateRegexpReplaceArgs(
       const CallableSignature& input);
 
+  // Specialization for the "regexp_split" function: second parameter always
+  // need to be constant.
+  std::vector<core::TypedExprPtr> generateRegexpSplitArgs(
+      const CallableSignature& input);
+
   // Return a vector of expressions for each argument of callable in order.
   std::vector<core::TypedExprPtr> getArgsForCallable(
       const CallableSignature& callable);
