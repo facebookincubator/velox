@@ -25,7 +25,7 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: current_timestamp() -> timestamp
 
-    Returns the current timestamp at the start of query evaluation as a timestamp. If session timezone is set then returns timestamp in that timezone.
+    Returns the current timestamp at the start of query evaluation as a timestamp.
 
 .. spark:function:: date_add(start_date, num_days) -> date
 
