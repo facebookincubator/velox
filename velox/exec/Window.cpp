@@ -388,7 +388,7 @@ void Window::updateFrameBounds(
         currentPartition_->computeKRangeFrameBounds(
             isStartBound,
             true,
-            windowBuild_->inputChannelOf(frameArg.value().index),
+            frameArg.value().index,
             startRow,
             numRows,
             rawPeerBuffer,
@@ -404,7 +404,7 @@ void Window::updateFrameBounds(
         currentPartition_->computeKRangeFrameBounds(
             isStartBound,
             false,
-            windowBuild_->inputChannelOf(frameArg.value().index),
+            frameArg.value().index,
             startRow,
             numRows,
             rawPeerBuffer,
