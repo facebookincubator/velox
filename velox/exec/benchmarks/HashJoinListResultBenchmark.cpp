@@ -210,7 +210,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
         SelectivityInfo eraseClock;
         {
           SelectivityTimer timer(eraseClock, 0);
-          constexpr int32_t kBatch = 1024;
+          int64_t kBatch = topTable_->rows()->numRows();
           raw_vector<char*> rows(kBatch);
           RowContainerIterator iter;
           while (auto numRows = topTable_->rows()->listRows(
@@ -256,12 +256,12 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
   // If expect mode is hash, the key is within the range [0, hashTableSize] +
   // extraValue(max_int64 -1);
   RowVectorPtr makeBuildRows(
-      int32_t size,
+      int64_t maxKey,
       int64_t& buildKey,
       int32_t& iterTimes,
       int32_t& repeat) {
     std::vector<int64_t> data;
-    for (int32_t i = 0; i < size; ++i) {
+    while (buildKey < maxKey) {
       auto key = getBuildKey(buildKey, iterTimes, repeat);
       data.emplace_back(key);
     }
@@ -271,7 +271,9 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     children.push_back(makeFlatVector<int64_t>(data));
     for (int32_t i = 0; i < params_.numDependentFields; ++i) {
       children.push_back(makeFlatVector<int64_t>(
-          size, [&](vector_size_t row) { return row + size; }, nullptr));
+          data.size(),
+          [&](vector_size_t row) { return row + maxKey; },
+          nullptr));
     }
     return makeRowVector(children);
   }
@@ -281,12 +283,14 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     int64_t buildKey = -1;
     int32_t iterTimes = 0;
     int32_t repeat = 0;
-    int32_t size = params_.buildSize / params_.numTables;
+    int64_t maxKey = 0;
     for (auto i = 0; i < params_.numTables; ++i) {
       if (i == params_.numTables - 1) {
-        size += params_.buildSize % params_.numTables;
+        maxKey = params_.hashTableSize;
+      } else {
+        maxKey += params_.hashTableSize / params_.numTables;
       }
-      batches.push_back(makeBuildRows(size, buildKey, iterTimes, repeat));
+      batches.push_back(makeBuildRows(maxKey, buildKey, iterTimes, repeat));
     }
   }
 
@@ -465,7 +469,7 @@ int main(int argc, char** argv) {
   auto bm = std::make_unique<HashTableListJoinResultBenchmark>();
   std::vector<HashTableBenchmarkResult> results;
 
-  auto hashTableSize = (2L << 20) - 1;
+  auto hashTableSize = (2L << 20) - 3;
   auto probeRowSize = 100000000L;
 
   TypePtr onlyKeyType{ROW({"k1"}, {BIGINT()})};
