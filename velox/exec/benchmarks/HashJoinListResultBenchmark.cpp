@@ -207,19 +207,8 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
       result.hashMode = topTable_->hashMode();
       VELOX_CHECK_EQ(result.hashMode, params_.mode);
       if (FLAGS_include_rows_erase_function) {
-        SelectivityInfo eraseClock;
-        {
-          SelectivityTimer timer(eraseClock, 0);
-          int64_t kBatch = topTable_->rows()->numRows();
-          raw_vector<char*> rows(kBatch);
-          RowContainerIterator iter;
-          while (auto numRows = topTable_->rows()->listRows(
-                     &iter, kBatch, RowContainer::kUnlimited, rows.data())) {
-            topTable_->rows()->eraseRows(
-                folly::Range<char**>(rows.data(), numRows));
-          }
-        }
-        result.eraseClock += eraseClock.timeToDropValue();
+        eraseTable();
+        result.eraseClock += eraseTime_;
       }
       topTable_.reset();
     }
@@ -257,6 +246,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
   // extraValue(max_int64 -1);
   RowVectorPtr makeBuildRows(
       int64_t maxKey,
+      bool addExtraValue,
       int64_t& buildKey,
       int32_t& iterTimes,
       int32_t& repeat) {
@@ -265,7 +255,9 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
       auto key = getBuildKey(buildKey, iterTimes, repeat);
       data.emplace_back(key);
     }
-    data[0] = params_.extraValue;
+    if (addExtraValue) {
+      data[0] = params_.extraValue;
+    }
     std::random_shuffle(data.begin(), data.end());
     std::vector<VectorPtr> children;
     children.push_back(makeFlatVector<int64_t>(data));
@@ -290,7 +282,8 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
       } else {
         maxKey += params_.hashTableSize / params_.numTables;
       }
-      batches.push_back(makeBuildRows(maxKey, buildKey, iterTimes, repeat));
+      batches.push_back(makeBuildRows(
+          maxKey, i == params_.numTables - 1, buildKey, iterTimes, repeat));
     }
   }
 
@@ -381,17 +374,35 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     buildTime_ = buildClocks.timeToDropValue();
   }
 
+  void probeTable(
+      HashLookup& lookup,
+      const RowVectorPtr& batch,
+      const int64_t batchSize) {
+    auto& hashers = topTable_->hashers();
+    auto mode = topTable_->hashMode();
+    SelectivityVector rows(batchSize);
+    VectorHasher::ScratchMemory scratchMemory;
+    lookup.reset(batch->size());
+    for (auto i = 0; i < hashers.size(); ++i) {
+      auto key = batch->childAt(i);
+      if (mode != BaseHashTable::HashMode::kHash) {
+        hashers[i]->lookupValueIds(*key, rows, scratchMemory, lookup.hashes);
+      } else {
+        hashers[i]->decode(*key, rows);
+        hashers[i]->hash(rows, i > 0, lookup.hashes);
+      }
+    }
+    lookup.rows.resize(rows.size());
+    std::iota(lookup.rows.begin(), lookup.rows.end(), 0);
+    topTable_->joinProbe(lookup);
+  }
+
   // Hash probe andd list join result.
   int64_t probeTableAndListResult() {
     auto lookup = std::make_unique<HashLookup>(topTable_->hashers());
     auto numBatch = params_.probeSize / params_.hashTableSize;
     auto batchSize = params_.hashTableSize;
-    SelectivityVector rows(batchSize);
-    auto mode = topTable_->hashMode();
     SelectivityInfo listJoinResultClocks;
-
-    auto& hashers = topTable_->hashers();
-    VectorHasher::ScratchMemory scratchMemory;
     BaseHashTable::JoinResultIterator results;
     BufferPtr outputRowMapping;
     auto outputBatchSize = batchSize;
@@ -400,26 +411,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     int64_t numJoinListResult = 0;
     for (auto i = 0; i < numBatch; ++i) {
       auto batch = makeProbeVector(batchSize, params_.hashTableSize, sequence);
-      lookup->reset(batch->size());
-      rows.setAll();
-      for (auto i = 0; i < hashers.size(); ++i) {
-        auto key = batch->childAt(i);
-        if (mode != BaseHashTable::HashMode::kHash) {
-          hashers[i]->lookupValueIds(*key, rows, scratchMemory, lookup->hashes);
-        } else {
-          hashers[i]->decode(*key, rows);
-          hashers[i]->hash(rows, i > 0, lookup->hashes);
-        }
-      }
-      lookup->rows.resize(rows.size());
-      std::iota(lookup->rows.begin(), lookup->rows.end(), 0);
-      topTable_->joinProbe(*lookup);
-      int32_t numHit = 0;
-      for (auto i = 0; i < lookup->rows.size(); ++i) {
-        auto key = lookup->rows[i];
-        numHit += lookup->hits[key] != nullptr;
-      }
-      // VELOX_CHECK_EQ(numHit, lookup->rows.size());
+      probeTable(*lookup, batch, batchSize);
       results.reset(*lookup);
       auto mapping = initializeRowNumberMapping(
           outputRowMapping, outputBatchSize, pool_.get());
@@ -439,10 +431,40 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     return numJoinListResult;
   }
 
+  void eraseTable() {
+    auto lookup = std::make_unique<HashLookup>(topTable_->hashers());
+    auto batchSize = 10000;
+    auto mode = topTable_->hashMode();
+    SelectivityInfo eraseClock;
+    BaseHashTable::JoinResultIterator results;
+    BufferPtr outputRowMapping;
+    auto outputBatchSize = topTable_->rows()->numRows() + 2;
+    std::vector<char*> outputTableRows;
+    int64_t sequence = 0;
+    auto batch = makeProbeVector(batchSize, batchSize, sequence);
+    probeTable(*lookup, batch, batchSize);
+    results.reset(*lookup);
+    auto mapping = initializeRowNumberMapping(
+        outputRowMapping, outputBatchSize, pool_.get());
+    outputTableRows.resize(outputBatchSize);
+    auto num = topTable_->listJoinResults(
+        results,
+        false,
+        mapping,
+        folly::Range(outputTableRows.data(), outputTableRows.size()));
+    {
+      SelectivityTimer timer(eraseClock, 0);
+      topTable_->rows()->eraseRows(
+          folly::Range<char**>(outputTableRows.data(), num));
+    }
+    eraseTime_ += eraseClock.timeToDropValue();
+  }
+
   std::unique_ptr<HashTable<true>> topTable_;
   HashTableBenchmarkParams params_;
 
   double buildTime_{0};
+  double eraseTime_{0};
   double listJoinResultTime_{0};
 };
 
