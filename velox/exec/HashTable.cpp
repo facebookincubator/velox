@@ -1710,7 +1710,6 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       continue;
     }
 
-    auto numRows = -1;
     auto rows = rows_->getNextRowVector(hit);
     if (!rows) {
       inputRows[numOut] = row; // NOLINT
@@ -1718,31 +1717,18 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       numOut++;
       iter.lastRowIndex++;
     } else {
-      numRows = rows->size();
-      constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
-      constexpr int32_t kIntWidth = kWidth * 2;
-      if (numRows >= kIntWidth) {
-        auto sourceHits = reinterpret_cast<int64_t*>(rows->data());
-        auto resultHits = reinterpret_cast<int64_t*>(hits.data());
-        auto indices = reinterpret_cast<int32_t*>(inputRows.data());
-        auto indexVector = xsimd::batch<int32_t>::broadcast(row);
-        for (; iter.lastDuplicateRowIndex + kIntWidth <= numRows &&
-             numOut + kIntWidth <= maxOut;
-             iter.lastDuplicateRowIndex += kIntWidth, numOut += kIntWidth) {
-          indexVector.store_unaligned(indices + numOut);
-          xsimd::batch<int64_t>::load_unaligned(
-              sourceHits + iter.lastDuplicateRowIndex)
-              .store_unaligned(resultHits + numOut);
-          xsimd::batch<int64_t>::load_unaligned(
-              sourceHits + iter.lastDuplicateRowIndex + kWidth)
-              .store_unaligned(resultHits + numOut + kWidth);
-        }
+      auto numRows = rows->size();
+      auto num = numRows - iter.lastDuplicateRowIndex;
+      if (num > maxOut - numOut) {
+        num = maxOut - numOut;
       }
-      for (; iter.lastDuplicateRowIndex < numRows && numOut < maxOut;
-           iter.lastDuplicateRowIndex++, numOut++) {
-        inputRows[numOut] = row; // NOLINT
-        hits[numOut] = rows->data()[iter.lastDuplicateRowIndex];
-      }
+      std::fill_n(inputRows.begin() + numOut, num, row);
+      std::memcpy(
+          hits.data() + numOut,
+          rows->data() + iter.lastDuplicateRowIndex,
+          num * sizeof(char*));
+      iter.lastDuplicateRowIndex += num;
+      numOut += num;
       if (iter.lastDuplicateRowIndex >= numRows) {
         iter.lastDuplicateRowIndex = 0;
         iter.lastRowIndex++;
@@ -1895,11 +1881,16 @@ int32_t HashTable<false>::listNullKeyRows(
   if (numRows < maxRows && iter->nextHit) {
     auto nextRows = rows_->getNextRowVector(iter->nextHit);
     if (nextRows) {
-      for (;
-           iter->lastDuplicateRowIndex < nextRows->size() && numRows < maxRows;
-           ++iter->lastDuplicateRowIndex) {
-        rows[numRows++] = nextRows->data()[iter->lastDuplicateRowIndex];
+      auto num = nextRows->size() - iter->lastDuplicateRowIndex;
+      if (num > maxRows - numRows) {
+        num = maxRows - numRows;
       }
+      std::memcpy(
+          rows + numRows,
+          nextRows->data() + iter->lastDuplicateRowIndex,
+          num * sizeof(char*));
+      iter->lastDuplicateRowIndex += num;
+      numRows += num;
       if (iter->lastDuplicateRowIndex >= nextRows->size()) {
         iter->nextHit = nullptr;
         iter->lastDuplicateRowIndex = 0;
