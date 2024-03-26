@@ -28,6 +28,7 @@ add_library(
   DateTimeFormatterBuilder.cpp
   KllSketch.cpp
   MapConcat.cpp
+  MapFromEntries.cpp
   Re2Functions.cpp
   Repeat.cpp
   StringEncodingUtils.cpp

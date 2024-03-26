@@ -27,6 +27,15 @@ Map Functions
 
         SELECT map_from_arrays(array(1.0, 3.0), array('2', '4')); -- {1.0 -> 2, 3.0 -> 4}
 
+.. spark:function:: map_from_entries(array(struct(K,V))) -> map(K,V)
+
+    Returns a map created from the given array of entries. Keys are not allowed to be null or to contain nulls.
+    If null entry exists in the array, return null for this whole array.::
+
+        SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'null'))); -- {1 -> 'a', 2 -> 'null'}
+        SELECT map_from_entries(array(struct(1, 'a'), null)); -- {null}
+
+
 .. spark:function:: size(map(K,V)) -> bigint
    :noindex:
 
