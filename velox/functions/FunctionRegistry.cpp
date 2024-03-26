@@ -22,6 +22,7 @@
 #include <sstream>
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/SimpleFunctionMetadata.h"
+#include "velox/exec/WindowFunction.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
@@ -158,6 +159,79 @@ resolveVectorFunctionWithMetadata(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   return exec::resolveVectorFunctionWithMetadata(functionName, argTypes);
+}
+
+bool isCompanionFunctionName(
+    const std::string& name,
+    const std::unordered_map<std::string, exec::AggregateFunctionEntry>&
+        aggregateFunctions) {
+  static const std::vector<std::string> kCompanionFunctionSuffixList = {
+      "_partial", "_merge_extract", "_merge", "_extract"};
+  for (const auto& companionFunctionSuffix : kCompanionFunctionSuffixList) {
+    auto suffixOffset = name.rfind(companionFunctionSuffix);
+    if (suffixOffset != std::string::npos) {
+      return aggregateFunctions.count(name.substr(0, suffixOffset)) > 0;
+    }
+  }
+  return false;
+}
+
+const std::vector<std::string> getScalarNames(bool sortResult) {
+  // Do not print "internal" functions.
+  static const std::unordered_set<std::string> kBlockList = {
+      "row_constructor", "in", "is_null"};
+
+  auto functions = getFunctionSignatures();
+  std::vector<std::string> names;
+  names.reserve(functions.size());
+  exec::aggregateFunctions().withRLock([&](const auto& aggregateFunctions) {
+    for (const auto& func : functions) {
+      const auto& name = func.first;
+      if (!isCompanionFunctionName(name, aggregateFunctions) &&
+          kBlockList.count(name) == 0) {
+        names.emplace_back(name);
+      }
+    }
+  });
+  if (sortResult) {
+    std::sort(names.begin(), names.end());
+  }
+  return names;
+}
+
+const std::vector<std::string> getAggregateNames(bool sortResult) {
+  std::vector<std::string> names;
+  exec::aggregateFunctions().withRLock([&](const auto& functions) {
+    names.reserve(functions.size());
+    for (const auto& entry : functions) {
+      if (!isCompanionFunctionName(entry.first, functions)) {
+        names.emplace_back(entry.first);
+      }
+    }
+  });
+  if (sortResult) {
+    std::sort(names.begin(), names.end());
+  }
+  return names;
+}
+
+const std::vector<std::string> getWindowNames(bool sortResult) {
+  const auto& functions = exec::windowFunctions();
+  std::vector<std::string> names;
+  names.reserve(functions.size());
+  // Removing all aggregates from the window functions list.
+  exec::aggregateFunctions().withRLock([&](const auto& aggregateFunctions) {
+    for (const auto& entry : functions) {
+      if (aggregateFunctions.count(entry.first) == 0) {
+        names.emplace_back(entry.first);
+      }
+    }
+  });
+
+  if (sortResult) {
+    std::sort(names.begin(), names.end());
+  }
+  return names;
 }
 
 } // namespace facebook::velox

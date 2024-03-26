@@ -270,86 +270,6 @@ void printCoverageMap(
   std::cout << out.str() << std::endl;
 }
 
-// A function name is a companion function's if the name is an existing
-// aggregation functio name followed by a specific suffixes.
-bool isCompanionFunctionName(
-    const std::string& name,
-    const std::unordered_map<std::string, exec::AggregateFunctionEntry>&
-        aggregateFunctions) {
-  auto suffixOffset = name.rfind("_partial");
-  if (suffixOffset == std::string::npos) {
-    suffixOffset = name.rfind("_merge_extract");
-  }
-  if (suffixOffset == std::string::npos) {
-    suffixOffset = name.rfind("_merge");
-  }
-  if (suffixOffset == std::string::npos) {
-    suffixOffset = name.rfind("_extract");
-  }
-  if (suffixOffset == std::string::npos) {
-    return false;
-  }
-  return aggregateFunctions.count(name.substr(0, suffixOffset)) > 0;
-}
-
-/// Returns alphabetically sorted list of scalar functions available in Velox,
-/// excluding companion functions.
-std::vector<std::string> getSortedScalarNames() {
-  // Do not print "internal" functions.
-  static const std::unordered_set<std::string> kBlockList = {"row_constructor"};
-
-  auto functions = getFunctionSignatures();
-
-  std::vector<std::string> names;
-  names.reserve(functions.size());
-  exec::aggregateFunctions().withRLock([&](const auto& aggregateFunctions) {
-    for (const auto& func : functions) {
-      const auto& name = func.first;
-      if (!isCompanionFunctionName(name, aggregateFunctions) &&
-          kBlockList.count(name) == 0) {
-        names.emplace_back(name);
-      }
-    }
-  });
-  std::sort(names.begin(), names.end());
-  return names;
-}
-
-/// Returns alphabetically sorted list of aggregate functions available in
-/// Velox, excluding compaion functions.
-std::vector<std::string> getSortedAggregateNames() {
-  std::vector<std::string> names;
-  exec::aggregateFunctions().withRLock([&](const auto& functions) {
-    names.reserve(functions.size());
-    for (const auto& entry : functions) {
-      if (!isCompanionFunctionName(entry.first, functions)) {
-        names.push_back(entry.first);
-      }
-    }
-  });
-  std::sort(names.begin(), names.end());
-  return names;
-}
-
-/// Returns alphabetically sorted list of window functions available in Velox,
-/// excluding companion functions.
-std::vector<std::string> getSortedWindowNames() {
-  const auto& functions = exec::windowFunctions();
-
-  std::vector<std::string> names;
-  names.reserve(functions.size());
-  exec::aggregateFunctions().withRLock([&](const auto& aggregateFunctions) {
-    for (const auto& entry : functions) {
-      if (!isCompanionFunctionName(entry.first, aggregateFunctions) &&
-          aggregateFunctions.count(entry.first) == 0) {
-        names.emplace_back(entry.first);
-      }
-    }
-  });
-  std::sort(names.begin(), names.end());
-  return names;
-}
-
 /// Takes a super-set of simple, vector and aggregate function names and prints
 /// coverage map showing which of these functions are available in Velox.
 /// Companion functions are excluded.
@@ -411,9 +331,9 @@ void printCoverageMapForAll(const std::string& domain) {
 void printVeloxFunctions(
     const std::unordered_set<std::string>& linkBlockList,
     const std::string& domain) {
-  auto scalarNames = getSortedScalarNames();
-  auto aggNames = getSortedAggregateNames();
-  auto windowNames = getSortedWindowNames();
+  auto scalarNames = getScalarNames(true);
+  auto aggNames = getAggregateNames(true);
+  auto windowNames = getWindowNames(true);
 
   const int columnSize = std::max(
                              {maxLength(scalarNames),

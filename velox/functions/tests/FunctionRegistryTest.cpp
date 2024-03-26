@@ -24,8 +24,10 @@
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -633,6 +635,55 @@ TEST_F(FunctionRegistryTest, resolveWithMetadata) {
 
   result = resolveFunctionWithMetadata("non-existent-function", {VARCHAR()});
   EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(FunctionRegistryTest, getScalarFunctions) {
+  functions::prestosql::registerAllScalarFunctions();
+  const auto scalars = getScalarNames();
+  const auto expectedScalars = {
+      "date_parse", "array_sort", "map_filter", "split_to_map"};
+  for (const auto& name : expectedScalars) {
+    ASSERT_TRUE(
+        std::find(scalars.begin(), scalars.end(), name) != scalars.end());
+  }
+}
+
+TEST_F(FunctionRegistryTest, getAggregateFunctions) {
+  aggregate::prestosql::registerAllAggregateFunctions();
+  const auto aggregates = getAggregateNames();
+  const auto expectedAggregates = {
+      "approx_distinct", "covar_pop", "count", "map_union_sum"};
+  const auto aggregateCompanions = {
+      "approx_distinct_merge_extract", "approx_percentile_merge"};
+  for (const auto& name : expectedAggregates) {
+    ASSERT_TRUE(
+        std::find(aggregates.begin(), aggregates.end(), name) !=
+        aggregates.end());
+  }
+  // Verify getAggregateNames does not return companion functions.
+  for (const auto& companion : aggregateCompanions) {
+    ASSERT_TRUE(
+        std::find(aggregates.begin(), aggregates.end(), companion) ==
+        aggregates.end());
+  }
+}
+
+TEST_F(FunctionRegistryTest, getWindowFunctions) {
+  window::prestosql::registerAllWindowFunctions();
+  auto windows = getWindowNames();
+  auto expectedWindow = {"lead", "ntile", "nth_value", "first_value"};
+  for (const auto& name : expectedWindow) {
+    ASSERT_TRUE(
+        std::find(windows.begin(), windows.end(), name) != windows.end());
+  }
+
+  // Verify getWindowNames does not return aggregate functions.
+  const auto aggregates = {
+      "approx_distinct", "covar_pop", "count", "map_union_sum"};
+  for (const auto& name : aggregates) {
+    ASSERT_TRUE(
+        std::find(windows.begin(), windows.end(), name) == windows.end());
+  }
 }
 
 class FunctionRegistryOverwriteTest : public functions::test::FunctionBaseTest {

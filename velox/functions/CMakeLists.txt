@@ -16,6 +16,7 @@ velox_add_library(velox_coverage_util CoverageUtil.cpp)
 
 velox_link_libraries(
   velox_function_registry
+  velox_exec
   velox_expression
   velox_type
   velox_core
