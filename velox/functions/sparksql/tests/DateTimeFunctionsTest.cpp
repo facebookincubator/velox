@@ -43,8 +43,9 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   static constexpr int8_t kMaxTinyint = std::numeric_limits<int8_t>::max();
 
   int64_t getCurrentTimestamp() {
-    return 
-    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
   }
 
  protected:
@@ -256,8 +257,6 @@ TEST_F(DateTimeFunctionsTest, currentTimestamp) {
   EXPECT_LE(timestampBefore, resultInInt);
   EXPECT_LE(resultInInt, timestampAfter);
   EXPECT_LE(timestampAfter - timestampBefore, 300);
-
-
 }
 
 TEST_F(DateTimeFunctionsTest, unixTimestamp) {
