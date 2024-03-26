@@ -70,6 +70,13 @@ std::optional<std::vector<FunctionSignaturePtr>> getVectorFunctionSignatures(
       });
 }
 
+std::optional<VectorFunctionMetadata> getVectorFunctionMetadata(
+    const std::string& name) {
+  return applyToVectorFunctionEntry<VectorFunctionMetadata>(
+      name,
+      [&](const auto& /*name*/, const auto& entry) { return entry.metadata; });
+}
+
 TypePtr resolveVectorFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {

@@ -17,8 +17,18 @@
 
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace facebook::velox::functions {
+
+// Returns sorted list of scalar function names available in Velox.
+std::vector<std::string> getSortedScalarNames();
+
+// Returns sorted list of aggregate function names available in Velox.
+std::vector<std::string> getSortedAggregateNames();
+
+// Returns sorted list of window function names available in Velox.
+std::vector<std::string> getSortedWindowNames();
 
 // Print a rst format string which contains all Presto/Spark scalar
 // functions and aggragate functions. This function will read
