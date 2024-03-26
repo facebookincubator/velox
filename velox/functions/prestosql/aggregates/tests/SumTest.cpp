@@ -462,5 +462,44 @@ TEST_F(SumTest, distinct) {
       .assertResults("SELECT c0, sum(distinct c1) FROM tmp GROUP BY 1");
 }
 
+TEST_F(SumTest, aaa) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({49, 52, 55}),
+      makeFlatVector<int64_t>({46, 49, 52}),
+      makeFlatVector<int64_t>({4, 9, 7}),
+      makeFlatVector<bool>({true, true, true}),
+  });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window(
+              {"sum(c2) over (partition by c3 order by c0 range between c1 preceding and current row)"})
+          .planNode();
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({49, 52, 55}),
+      makeFlatVector<int64_t>({46, 49, 52}),
+      makeFlatVector<int64_t>({4, 9, 7}),
+      makeFlatVector<bool>({true, true, true}),
+      makeFlatVector<int64_t>({4, 13, 16}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  plan =
+      PlanBuilder()
+          .values({data})
+          .window(
+              {"sum(c2) over (partition by c3 order by c0 desc range between current row and c1 following)"})
+          .planNode();
+  expected = makeRowVector({
+      makeFlatVector<int64_t>({49, 52, 55}),
+      makeFlatVector<int64_t>({46, 49, 52}),
+      makeFlatVector<int64_t>({4, 9, 7}),
+      makeFlatVector<bool>({true, true, true}),
+      makeFlatVector<int64_t>({4, 13, 16}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test
