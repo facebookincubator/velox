@@ -59,7 +59,6 @@ TEST_F(CentralMomentsAggregationTest, skewnessHasResult) {
 TEST_F(CentralMomentsAggregationTest, pearsonKurtosis) {
   auto agg = "kurtosis";
   auto input = makeRowVector({makeFlatVector<int32_t>({1, 10, 100, 10, 1})});
-  // Even when the count is 2, Spark still produces output.
   auto expected = makeRowVector(
       {makeFlatVector<double>(std::vector<double>{0.19432323191699075})});
   testCenteralMomentsAggResult(agg, input, expected);
@@ -69,7 +68,7 @@ TEST_F(CentralMomentsAggregationTest, pearsonKurtosis) {
       {makeFlatVector<double>(std::vector<double>{-0.7014368047529627})});
   testCenteralMomentsAggResult(agg, input, expected);
 
-  // Even when the count is 2, Spark still produce output.
+  // Even when the count is 2, Spark still produces non-null result.
   input = makeRowVector({makeFlatVector<int32_t>({1, 2})});
   expected = makeRowVector({makeFlatVector<double>(std::vector<double>{-2.0})});
   testCenteralMomentsAggResult(agg, input, expected);
