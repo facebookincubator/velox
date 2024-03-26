@@ -18,7 +18,7 @@
 
 using namespace facebook::velox;
 
-class VectorEstimateFlatSizeTest : public testing::Test,
+class VectorEstimateSizeTest : public testing::Test,
                                    public test::VectorTestBase {
  protected:
   using test::VectorTestBase::makeArrayVector;
@@ -71,61 +71,73 @@ StringView shortStringAt(vector_size_t row) {
 };
 } // namespace
 
-TEST_F(VectorEstimateFlatSizeTest, fixedWidthNoNulls) {
+TEST_F(VectorEstimateSizeTest, fixedWidthNoNulls) {
   // Fixed width vectors without nulls.
   VectorPtr flat = makeFlatVector<int16_t>(1'000, int16At);
   EXPECT_EQ(2976, flat->retainedSize());
   EXPECT_EQ(2976, flat->estimateFlatSize());
+  EXPECT_EQ(2976, flat->estimateCompactSize());
 
   flat = makeFlatVector<int32_t>(1'000, int32At);
   EXPECT_EQ(4000, flat->retainedSize());
   EXPECT_EQ(4000, flat->estimateFlatSize());
+  EXPECT_EQ(4000, flat->estimateCompactSize());
 
   flat = makeFlatVector<int64_t>(1'000, int64At);
   EXPECT_EQ(8096, flat->retainedSize());
   EXPECT_EQ(8096, flat->estimateFlatSize());
+  EXPECT_EQ(8096, flat->estimateCompactSize());
 
   flat = makeFlatVector<float>(1'000, floatAt);
   EXPECT_EQ(4000, flat->retainedSize());
   EXPECT_EQ(4000, flat->estimateFlatSize());
+  EXPECT_EQ(4000, flat->estimateCompactSize());
 
   flat = makeFlatVector<double>(1'000, doubleAt);
   EXPECT_EQ(8096, flat->retainedSize());
   EXPECT_EQ(8096, flat->estimateFlatSize());
+  EXPECT_EQ(8096, flat->estimateCompactSize());
 
   flat = makeFlatVector<bool>(1'000, boolAt);
   EXPECT_EQ(160, flat->retainedSize());
   EXPECT_EQ(160, flat->estimateFlatSize());
+  EXPECT_EQ(160, flat->estimateCompactSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, fixedWidthWithNulls) {
+TEST_F(VectorEstimateSizeTest, fixedWidthWithNulls) {
   // Fixed width vectors with nulls. Nulls buffer adds a few bytes.
   VectorPtr flat = makeFlatVector<int16_t>(1'000, int16At, nullEvery(5));
   EXPECT_EQ(3136, flat->retainedSize());
   EXPECT_EQ(3136, flat->estimateFlatSize());
+  EXPECT_EQ(3136, flat->estimateCompactSize());
 
   flat = makeFlatVector<int32_t>(1'000, int32At, nullEvery(5));
   EXPECT_EQ(4160, flat->retainedSize());
   EXPECT_EQ(4160, flat->estimateFlatSize());
+  EXPECT_EQ(4160, flat->estimateCompactSize());
 
   flat = makeFlatVector<int64_t>(1'000, int64At, nullEvery(5));
   EXPECT_EQ(8256, flat->retainedSize());
   EXPECT_EQ(8256, flat->estimateFlatSize());
+  EXPECT_EQ(8256, flat->estimateCompactSize());
 
   flat = makeFlatVector<float>(1'000, floatAt, nullEvery(5));
   EXPECT_EQ(4160, flat->retainedSize());
   EXPECT_EQ(4160, flat->estimateFlatSize());
+  EXPECT_EQ(4160, flat->estimateCompactSize());
 
   flat = makeFlatVector<double>(1'000, doubleAt, nullEvery(5));
   EXPECT_EQ(8256, flat->retainedSize());
   EXPECT_EQ(8256, flat->estimateFlatSize());
+  EXPECT_EQ(8256, flat->estimateCompactSize());
 
   flat = makeFlatVector<bool>(1'000, boolAt, nullEvery(5));
   EXPECT_EQ(320, flat->retainedSize());
   EXPECT_EQ(320, flat->estimateFlatSize());
+  EXPECT_EQ(320, flat->estimateCompactSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, dictionaryFixedWidthNoExtraNulls) {
+TEST_F(VectorEstimateSizeTest, dictionaryFixedWidthNoExtraNulls) {
   // Dictionary vector. Indices buffer adds a few bytes.
   auto indices = makeIndices(100, [](auto row) { return row * 2; });
 
@@ -133,37 +145,44 @@ TEST_F(VectorEstimateFlatSizeTest, dictionaryFixedWidthNoExtraNulls) {
     return wrapInDictionary(indices, 100, base);
   };
 
+  // Distinct indices
   auto dict = makeDict(makeFlatVector<int16_t>(1'000, int16At));
   EXPECT_EQ(3392, dict->retainedSize());
   EXPECT_EQ(297, dict->estimateFlatSize());
   EXPECT_EQ(288, flatten(dict)->retainedSize());
+  EXPECT_EQ(297, dict->estimateCompactSize());
 
   dict = makeDict(makeFlatVector<int32_t>(1'000, int32At));
   EXPECT_EQ(4416, dict->retainedSize());
   EXPECT_EQ(400, dict->estimateFlatSize());
   EXPECT_EQ(416, flatten(dict)->retainedSize());
+  EXPECT_EQ(400, dict->estimateCompactSize());
 
   dict = makeDict(makeFlatVector<int64_t>(1'000, int64At));
   EXPECT_EQ(8512, dict->retainedSize());
   EXPECT_EQ(809, dict->estimateFlatSize());
   EXPECT_EQ(928, flatten(dict)->retainedSize());
+  EXPECT_EQ(809, dict->estimateCompactSize());
 
   dict = makeDict(makeFlatVector<float>(1'000, floatAt));
   EXPECT_EQ(4416, dict->retainedSize());
   EXPECT_EQ(400, dict->estimateFlatSize());
   EXPECT_EQ(416, flatten(dict)->retainedSize());
+  EXPECT_EQ(400, dict->estimateCompactSize());
 
   dict = makeDict(makeFlatVector<double>(1'000, doubleAt));
   EXPECT_EQ(8512, dict->retainedSize());
   EXPECT_EQ(809, dict->estimateFlatSize());
   EXPECT_EQ(928, flatten(dict)->retainedSize());
+  EXPECT_EQ(809, dict->estimateCompactSize());
 
   dict = makeDict(makeFlatVector<bool>(1'000, boolAt));
   EXPECT_EQ(576, dict->retainedSize());
   EXPECT_EQ(16, dict->estimateFlatSize());
   EXPECT_EQ(32, flatten(dict)->retainedSize());
+  EXPECT_EQ(16, dict->estimateCompactSize());
 
-  // 2 levels of dictionary encoding.
+  // 2 levels of dictionary encoding with distinct indices.
   auto makeDoubleDict = [&](auto base) {
     return wrapInDictionary(indices, 50, wrapInDictionary(indices, 100, base));
   };
@@ -172,34 +191,59 @@ TEST_F(VectorEstimateFlatSizeTest, dictionaryFixedWidthNoExtraNulls) {
   EXPECT_EQ(3808, dict->retainedSize());
   EXPECT_EQ(148, dict->estimateFlatSize());
   EXPECT_EQ(160, flatten(dict)->retainedSize());
+  EXPECT_EQ(148, dict->estimateCompactSize());
 
   dict = makeDoubleDict(makeFlatVector<int32_t>(1'000, int32At));
   EXPECT_EQ(4832, dict->retainedSize());
   EXPECT_EQ(200, dict->estimateFlatSize());
   EXPECT_EQ(288, flatten(dict)->retainedSize());
+  EXPECT_EQ(200, dict->estimateCompactSize());
 
   dict = makeDoubleDict(makeFlatVector<int64_t>(1'000, int64At));
   EXPECT_EQ(8928, dict->retainedSize());
   EXPECT_EQ(404, dict->estimateFlatSize());
   EXPECT_EQ(416, flatten(dict)->retainedSize());
+  EXPECT_EQ(404, dict->estimateCompactSize());
 
   dict = makeDoubleDict(makeFlatVector<float>(1'000, floatAt));
   EXPECT_EQ(4832, dict->retainedSize());
   EXPECT_EQ(200, dict->estimateFlatSize());
   EXPECT_EQ(288, flatten(dict)->retainedSize());
+  EXPECT_EQ(200, dict->estimateCompactSize());
 
   dict = makeDoubleDict(makeFlatVector<double>(1'000, doubleAt));
   EXPECT_EQ(8928, dict->retainedSize());
   EXPECT_EQ(404, dict->estimateFlatSize());
   EXPECT_EQ(416, flatten(dict)->retainedSize());
+  EXPECT_EQ(404, dict->estimateCompactSize());
 
   dict = makeDoubleDict(makeFlatVector<bool>(1'000, boolAt));
   EXPECT_EQ(992, dict->retainedSize());
   EXPECT_EQ(8, dict->estimateFlatSize());
   EXPECT_EQ(32, flatten(dict)->retainedSize());
+  EXPECT_EQ(8, dict->estimateCompactSize());
+
+  // duplicate indices
+  indices = makeIndices(100, [](auto row) { return 1; });
+  dict = makeDict(makeFlatVector<int16_t>(1'000, int16At));
+  EXPECT_EQ(3392, dict->retainedSize());
+  EXPECT_EQ(297, dict->estimateFlatSize());
+  EXPECT_EQ(288, flatten(dict)->retainedSize());
+  EXPECT_EQ(2, dict->estimateCompactSize());
+
+  // 2 levels of dictionary encoding with duplicate indices.
+  auto makeDoubleDict2 = [&](auto base) {
+     return wrapInDictionary(indices, 50, wrapInDictionary(indices, 100, base));
+  };
+
+  dict = makeDoubleDict2(makeFlatVector<int16_t>(1'000, int16At));
+  EXPECT_EQ(3808, dict->retainedSize());
+  EXPECT_EQ(148, dict->estimateFlatSize());
+  EXPECT_EQ(160, flatten(dict)->retainedSize());
+  EXPECT_EQ(2, dict->estimateCompactSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, dictionaryFixedWidthExtraNulls) {
+TEST_F(VectorEstimateSizeTest, dictionaryFixedWidthExtraNulls) {
   // Dictionary vector with extra nulls.
   auto indices = makeIndices(100, [](auto row) { return row * 2; });
 
@@ -217,31 +261,37 @@ TEST_F(VectorEstimateFlatSizeTest, dictionaryFixedWidthExtraNulls) {
   EXPECT_EQ(3424, dict->retainedSize());
   EXPECT_EQ(297, dict->estimateFlatSize());
   EXPECT_EQ(320, flatten(dict)->retainedSize());
+  EXPECT_EQ(297, dict->estimateCompactSize());
 
   dict = makeDict(makeFlatVector<int32_t>(1'000, int32At));
   EXPECT_EQ(4448, dict->retainedSize());
   EXPECT_EQ(400, dict->estimateFlatSize());
   EXPECT_EQ(448, flatten(dict)->retainedSize());
+  EXPECT_EQ(400, dict->estimateCompactSize());
 
   dict = makeDict(makeFlatVector<int64_t>(1'000, int64At));
   EXPECT_EQ(8544, dict->retainedSize());
   EXPECT_EQ(809, dict->estimateFlatSize());
   EXPECT_EQ(960, flatten(dict)->retainedSize());
+  EXPECT_EQ(809, dict->estimateCompactSize());
 
   dict = makeDict(makeFlatVector<float>(1'000, floatAt));
   EXPECT_EQ(4448, dict->retainedSize());
   EXPECT_EQ(400, dict->estimateFlatSize());
   EXPECT_EQ(448, flatten(dict)->retainedSize());
+  EXPECT_EQ(400, dict->estimateCompactSize());
 
   dict = makeDict(makeFlatVector<double>(1'000, doubleAt));
   EXPECT_EQ(8544, dict->retainedSize());
   EXPECT_EQ(809, dict->estimateFlatSize());
   EXPECT_EQ(960, flatten(dict)->retainedSize());
+  EXPECT_EQ(809, dict->estimateCompactSize());
 
   dict = makeDict(makeFlatVector<bool>(1'000, boolAt));
   EXPECT_EQ(608, dict->retainedSize());
   EXPECT_EQ(16, dict->estimateFlatSize());
   EXPECT_EQ(64, flatten(dict)->retainedSize());
+  EXPECT_EQ(16, dict->estimateCompactSize());
 
   // Dictionary vector with all nulls over an empty flat vector.
   auto indicesAllZero = makeIndices(100, [](auto /*row*/) { return 0; });
@@ -261,23 +311,27 @@ TEST_F(VectorEstimateFlatSizeTest, dictionaryFixedWidthExtraNulls) {
   EXPECT_EQ(448, dict->retainedSize());
   EXPECT_EQ(232, dict->estimateFlatSize());
   EXPECT_EQ(320, flatten(dict)->retainedSize());
+  EXPECT_EQ(34, dict->estimateCompactSize());
 
   dict = makeDictOverEmpty(makeFlatVector<double>(0, doubleAt));
   EXPECT_EQ(448, dict->retainedSize());
   EXPECT_EQ(832, dict->estimateFlatSize());
   EXPECT_EQ(960, flatten(dict)->retainedSize());
+  EXPECT_EQ(40, dict->estimateCompactSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, flatStrings) {
+TEST_F(VectorEstimateSizeTest, flatStrings) {
   // Inlined strings.
   auto flat = makeFlatVector<StringView>(1'000, shortStringAt);
   EXPECT_EQ(16288, flat->retainedSize());
   EXPECT_EQ(16288, flat->estimateFlatSize());
+  EXPECT_EQ(16288, flat->estimateCompactSize());
 
   // Inlined strings with nulls.
   flat = makeFlatVector<StringView>(1'000, shortStringAt, nullEvery(5));
   EXPECT_EQ(16448, flat->retainedSize());
   EXPECT_EQ(16448, flat->estimateFlatSize());
+  EXPECT_EQ(16448, flat->estimateCompactSize());
 
   // Non-inlined strings.
   auto longStringAt = [&](auto row) {
@@ -286,13 +340,15 @@ TEST_F(VectorEstimateFlatSizeTest, flatStrings) {
   flat = makeFlatVector<StringView>(1'000, longStringAt);
   EXPECT_EQ(65344, flat->retainedSize());
   EXPECT_EQ(65343, flat->estimateFlatSize());
+  EXPECT_EQ(65343, flat->estimateCompactSize());
 
   flat = makeFlatVector<StringView>(1'000, longStringAt, nullEvery(5));
   EXPECT_EQ(65504, flat->retainedSize());
   EXPECT_EQ(65504, flat->estimateFlatSize());
+  EXPECT_EQ(65504, flat->estimateCompactSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, dictionaryShortStrings) {
+TEST_F(VectorEstimateSizeTest, dictionaryShortStrings) {
   // Inlined strings.
   auto indices = makeIndices(100, [](auto row) { return row * 2; });
 
@@ -303,6 +359,7 @@ TEST_F(VectorEstimateFlatSizeTest, dictionaryShortStrings) {
   auto dict = makeDict(makeFlatVector<StringView>(1'000, shortStringAt));
   EXPECT_EQ(16704, dict->retainedSize());
   EXPECT_EQ(1628, dict->estimateFlatSize());
+  EXPECT_EQ(1628, dict->estimateCompactSize());
   EXPECT_EQ(1952, flatten(dict)->retainedSize());
 
   // Inlined strings with nulls.
@@ -310,10 +367,11 @@ TEST_F(VectorEstimateFlatSizeTest, dictionaryShortStrings) {
       makeDict(makeFlatVector<StringView>(1'000, shortStringAt, nullEvery(5)));
   EXPECT_EQ(16864, dict->retainedSize());
   EXPECT_EQ(1644, dict->estimateFlatSize());
+  EXPECT_EQ(1644, dict->estimateCompactSize());
   EXPECT_EQ(1984, flatten(dict)->retainedSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, dictionaryLongStrings) {
+TEST_F(VectorEstimateSizeTest, dictionaryLongStrings) {
   // Non-inlined strings.
   auto indices = makeIndices(100, [](auto row) { return row * 2; });
 
@@ -328,6 +386,7 @@ TEST_F(VectorEstimateFlatSizeTest, dictionaryLongStrings) {
   auto dict = makeDict(makeFlatVector<StringView>(1'000, longStringAt));
   EXPECT_EQ(65760, dict->retainedSize());
   EXPECT_EQ(6534, dict->estimateFlatSize());
+  EXPECT_EQ(6534, dict->estimateCompactSize());
   // Flatten() method uses BaseVector::copy() which doesn't copy the strings,
   // but rather copies the shared pointer to the string buffers of the source
   // vector. Hence, the size of the "flattened" vector includes the size of the
@@ -339,6 +398,7 @@ TEST_F(VectorEstimateFlatSizeTest, dictionaryLongStrings) {
       makeDict(makeFlatVector<StringView>(1'000, longStringAt, nullEvery(5)));
   EXPECT_EQ(65920, dict->retainedSize());
   EXPECT_EQ(6550, dict->estimateFlatSize());
+  EXPECT_EQ(6550, dict->estimateCompactSize());
   // Flatten() method uses BaseVector::copy() which doesn't copy the strings,
   // but rather copies the shared pointer to the string buffers of the source
   // vector. Hence, the size of the "flattened" vector includes the size of the
@@ -346,7 +406,7 @@ TEST_F(VectorEstimateFlatSizeTest, dictionaryLongStrings) {
   EXPECT_EQ(51040, flatten(dict)->retainedSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, arrayOfInts) {
+TEST_F(VectorEstimateSizeTest, arrayOfInts) {
   // Flat array.
   auto array = makeArrayVector<int32_t>(
       1'000,
@@ -358,6 +418,7 @@ TEST_F(VectorEstimateFlatSizeTest, arrayOfInts) {
   EXPECT_EQ(4000, elements->retainedSize());
   EXPECT_EQ(12000, array->retainedSize());
   EXPECT_EQ(12000, array->estimateFlatSize());
+  EXPECT_EQ(12000, array->estimateCompactSize());
 
   // Dictionary-encoded array.
   auto indices = makeIndices(100, [](auto row) { return row * 2; });
@@ -368,6 +429,7 @@ TEST_F(VectorEstimateFlatSizeTest, arrayOfInts) {
 
   EXPECT_EQ(12416, makeDict(array)->retainedSize());
   EXPECT_EQ(1200, makeDict(array)->estimateFlatSize());
+  EXPECT_EQ(1200, makeDict(array)->estimateCompactSize());
   EXPECT_EQ(1248, flatten(makeDict(array))->estimateFlatSize());
 
   // Flat array with dictionary encoded elements.
@@ -378,10 +440,11 @@ TEST_F(VectorEstimateFlatSizeTest, arrayOfInts) {
       ARRAY(INTEGER()), 100, offsets, lengths, makeDict(elements));
   EXPECT_EQ(5248, array->retainedSize());
   EXPECT_EQ(1232, array->estimateFlatSize());
+  EXPECT_EQ(1232, array->estimateCompactSize());
   EXPECT_EQ(1248, flatten(array)->estimateFlatSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, arrayOfShortStrings) {
+TEST_F(VectorEstimateSizeTest, arrayOfShortStrings) {
   // Flat array.
   auto array = makeArrayVector<StringView>(
       1'000,
@@ -393,6 +456,7 @@ TEST_F(VectorEstimateFlatSizeTest, arrayOfShortStrings) {
   EXPECT_EQ(16288, elements->retainedSize());
   EXPECT_EQ(24288, array->retainedSize());
   EXPECT_EQ(24288, array->estimateFlatSize());
+  EXPECT_EQ(24288, array->estimateCompactSize());
 
   // Dictionary-encoded array.
   auto indices = makeIndices(100, [](auto row) { return row * 2; });
@@ -413,10 +477,11 @@ TEST_F(VectorEstimateFlatSizeTest, arrayOfShortStrings) {
       ARRAY(VARCHAR()), 100, offsets, lengths, makeDict(elements));
   EXPECT_EQ(17536, array->retainedSize());
   EXPECT_EQ(2460, array->estimateFlatSize());
+  EXPECT_EQ(2460, array->estimateCompactSize());
   EXPECT_EQ(2784, flatten(array)->estimateFlatSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, arrayOfLongStrings) {
+TEST_F(VectorEstimateSizeTest, arrayOfLongStrings) {
   // Flat array.
   auto longStringAt = [&](auto row, auto index) {
     return StringView(longStrings_[(row + index) % 3]);
@@ -429,6 +494,7 @@ TEST_F(VectorEstimateFlatSizeTest, arrayOfLongStrings) {
   EXPECT_EQ(65344, elements->retainedSize());
   EXPECT_EQ(73344, array->retainedSize());
   EXPECT_EQ(73343, array->estimateFlatSize());
+  EXPECT_EQ(73343, array->estimateCompactSize());
 
   // Dictionary-encoded array.
   auto indices = makeIndices(100, [](auto row) { return row * 2; });
@@ -454,7 +520,7 @@ TEST_F(VectorEstimateFlatSizeTest, arrayOfLongStrings) {
   EXPECT_EQ(51840, flatten(array)->estimateFlatSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, mapOfInts) {
+TEST_F(VectorEstimateSizeTest, mapOfInts) {
   // Flat map.
   auto map = makeMapVector<int32_t, double>(
       1'000,
@@ -469,8 +535,10 @@ TEST_F(VectorEstimateFlatSizeTest, mapOfInts) {
   EXPECT_EQ(8096, values->retainedSize());
   EXPECT_EQ(20096, map->retainedSize());
   EXPECT_EQ(20096, map->estimateFlatSize());
+  EXPECT_EQ(20096, map->estimateCompactSize());
 
   // Dictionary-encoded map.
+  // TODO: add test for dictionary-encoded with duplicate indices
   auto indices = makeIndices(100, [](auto row) { return row * 2; });
 
   auto makeDict = [&](auto base) {
@@ -479,6 +547,7 @@ TEST_F(VectorEstimateFlatSizeTest, mapOfInts) {
 
   EXPECT_EQ(20512, makeDict(map)->retainedSize());
   EXPECT_EQ(2009, makeDict(map)->estimateFlatSize());
+  EXPECT_EQ(2009, makeDict(map)->estimateCompactSize());
   EXPECT_EQ(2175, flatten(makeDict(map))->estimateFlatSize());
 
   // Flat map with dictionary encoded keys and values.
@@ -499,7 +568,7 @@ TEST_F(VectorEstimateFlatSizeTest, mapOfInts) {
   EXPECT_EQ(2175, flatten(map)->estimateFlatSize());
 }
 
-TEST_F(VectorEstimateFlatSizeTest, structs) {
+TEST_F(VectorEstimateSizeTest, structs) {
   // Flat struct.
   auto row = makeRowVector({
       makeFlatVector<int32_t>(1'000, int32At),
@@ -512,8 +581,10 @@ TEST_F(VectorEstimateFlatSizeTest, structs) {
   EXPECT_EQ(16288, row->childAt(2)->retainedSize());
   EXPECT_EQ(28384, row->retainedSize());
   EXPECT_EQ(28384, row->estimateFlatSize());
+  EXPECT_EQ(28384, row->estimateCompactSize());
 
   // Dictionary-encoded struct.
+  // TODO: add test for dictionary-encoded with duplicate indices
   auto indices = makeIndices(100, [](auto row) { return row * 2; });
 
   auto makeDict = [&](auto base) {
@@ -522,6 +593,7 @@ TEST_F(VectorEstimateFlatSizeTest, structs) {
 
   EXPECT_EQ(28800, makeDict(row)->retainedSize());
   EXPECT_EQ(2838, makeDict(row)->estimateFlatSize());
+  EXPECT_EQ(2838, makeDict(row)->estimateCompactSize());
   EXPECT_EQ(3295, flatten(makeDict(row))->estimateFlatSize());
 
   // Flat struct with dictionary encoded fields.
@@ -533,3 +605,5 @@ TEST_F(VectorEstimateFlatSizeTest, structs) {
   EXPECT_EQ(2837, row->estimateFlatSize());
   EXPECT_EQ(3295, flatten(row)->estimateFlatSize());
 }
+
+// TODO: add test for sequenceVector

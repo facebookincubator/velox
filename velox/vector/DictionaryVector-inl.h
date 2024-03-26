@@ -95,6 +95,14 @@ DictionaryVector<T>::DictionaryVector(
       "Malformed dictionary, index array is shorter than DictionaryVector");
   dictionaryValues_ = dictionaryValues;
   indices_ = dictionaryIndices;
+  if (indices_ != nullptr) {
+    std::unordered_set<int32_t> distinctCount;
+    const int32_t* rawIndices = indices_->as<int32_t>();
+    for (int i = 0; i < BaseVector::length_; i++) {
+      distinctCount.insert(rawIndices[i]);
+    }
+    distinctIndexCount_ = distinctCount.size();
+  }
   setInternalState();
 }
 

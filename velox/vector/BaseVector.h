@@ -723,6 +723,13 @@ class BaseVector {
   /// hasn't been loaded yet.
   virtual uint64_t estimateFlatSize() const;
 
+  /// Returns an estimate size of the vector as if it was compacted, ignoring any over-allocations.
+  /// (1) For example, in dictionary vector, this only counts each dictionary entry once,
+  /// rather than each time a value is referenced.
+  /// (2) For flat vector, returns its retained size.
+  /// (3) For lazy vector that hasn't been loaded, returns zero.
+  virtual uint64_t estimateCompactSize() const;
+
   /// To safely reuse a vector one needs to (1) ensure that the vector as well
   /// as all its buffers and child vectors are singly-referenced and mutable
   /// (for buffers); (2) clear append-only string buffers and child vectors
@@ -919,6 +926,10 @@ class BaseVector {
   ByteCount inMemoryBytes_ = 0;
 
  private:
+  virtual vector_size_t compactLength() const {
+    return length_;
+  }
+
   static VectorPtr createInternal(
       const TypePtr& type,
       vector_size_t size,
