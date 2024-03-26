@@ -88,6 +88,11 @@ void registerSimpleFunctions(const std::string& prefix) {
       Varchar,
       Constant<Varchar>,
       Constant<Varchar>>({prefix + "regexp_replace"});
+  registerFunction<
+      Re2RegexpSplit,
+      Array<Varchar>,
+      Varchar,
+      Varchar>({prefix + "regexp_split"});
 }
 } // namespace
 

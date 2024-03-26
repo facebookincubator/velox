@@ -304,6 +304,66 @@ struct Re2RegexpReplace {
   }
 };
 
+/// regexp_split(string, pattern) -> array<string>
+///
+/// Splits string using the regular expression pattern to find the split
+/// points. Returns an array with all the pieces, preserving empty strings.
+/// Pattern will be parsed using the RE2 pattern syntax, a subset of PCRE.
+/// If pattern is invalid for RE2, this function throws an exception.
+template <typename T>
+struct Re2RegexpSplit {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::string result_;
+  std::optional<RE2> re_;
+
+  FOLLY_ALWAYS_INLINE std::string preparePrestoRegexpPattern(
+      const StringView& pattern) {
+    static const RE2 kRegex("[(][?]<([^>]*)>");
+
+    std::string newPattern = pattern.getString();
+    RE2::GlobalReplace(&newPattern, kRegex, R"((?P<\1>)");
+
+    return newPattern;
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*string*/,
+      const arg_type<Varchar>* pattern) {
+    VELOX_USER_CHECK(
+        pattern != nullptr, "Pattern of regexp_split must be constant.");
+
+    auto processedPattern = preparePrestoRegexpPattern(*pattern);
+    re_.emplace(processedPattern, RE2::Quiet);
+    if (UNLIKELY(!re_->ok())) {
+      VELOX_USER_FAIL(
+        "Invalid regular expression {}: {}.", processedPattern, re_->error());
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<velox::Array<Varchar>>& out,
+      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& pattern) {
+    re2::StringPiece input_piece{string};
+    re2::StringPiece token{};
+    uint32_t total_len = input_piece.length();
+    uint32_t start = 0;
+
+    while (re_->Match(
+        input_piece, start, total_len, re2::RE2::UNANCHORED, &token, 1)) {
+      out.add_item().copy_from(
+          StringView(input_piece.data() + start,
+              token.data() - input_piece.data() - start));
+      start = token.data() - input_piece.data() + token.size();
+    }
+    out.add_item().copy_from(
+        StringView(input_piece.data() + start, total_len - start));
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions
 
 template <>

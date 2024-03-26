@@ -983,6 +983,13 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateRegexpReplaceArgs(
   return inputExpressions;
 }
 
+// Specialization for the "regexp_split" function: second parameter always
+// needs to be constant.
+std::vector<core::TypedExprPtr> ExpressionFuzzer::generateRegexpSplitArgs(
+    const CallableSignature& input) {
+  return {generateArg(input.args[0]), generateArgConstant(input.args[1])};
+}
+
 std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSwitchArgs(
     const CallableSignature& input) {
   VELOX_CHECK_EQ(
