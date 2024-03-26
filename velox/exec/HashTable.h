@@ -955,7 +955,6 @@ class HashTable : public BaseHashTable {
   // Owns the memory of multiple build side hash join tables that are
   // combined into a single probe hash table.
   std::vector<std::unique_ptr<HashTable<ignoreNullKeys>>> otherTables_;
-
   // Statistics maintained if kTrackLoads is set.
 
   // Number of times a row is looked up or inserted.

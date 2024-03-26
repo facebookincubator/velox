@@ -1692,7 +1692,7 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
   if (!hasDuplicates_) {
     return listJoinResultsNoDuplicates(iter, includeMisses, inputRows, hits);
   }
-  int numOut = 0;
+  size_t numOut = 0;
   auto maxOut = inputRows.size();
   while (iter.lastRowIndex < iter.rows->size()) {
     auto row = (*iter.rows)[iter.lastRowIndex];
@@ -1718,10 +1718,8 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       iter.lastRowIndex++;
     } else {
       auto numRows = rows->size();
-      auto num = numRows - iter.lastDuplicateRowIndex;
-      if (num > maxOut - numOut) {
-        num = maxOut - numOut;
-      }
+      auto num =
+          std::min(numRows - iter.lastDuplicateRowIndex, maxOut - numOut);
       std::fill_n(inputRows.begin() + numOut, num, row);
       std::memcpy(
           hits.data() + numOut,
@@ -1877,14 +1875,12 @@ int32_t HashTable<false>::listNullKeyRows(
     iter->nextHit = lookup.hits[0];
     iter->initialized = true;
   }
-  int32_t numRows = 0;
+  size_t numRows = 0;
   if (numRows < maxRows && iter->nextHit) {
     auto nextRows = rows_->getNextRowVector(iter->nextHit);
     if (nextRows) {
-      auto num = nextRows->size() - iter->lastDuplicateRowIndex;
-      if (num > maxRows - numRows) {
-        num = maxRows - numRows;
-      }
+      auto num = std::min(
+          nextRows->size() - iter->lastDuplicateRowIndex, maxRows - numRows);
       std::memcpy(
           rows + numRows,
           nextRows->data() + iter->lastDuplicateRowIndex,
