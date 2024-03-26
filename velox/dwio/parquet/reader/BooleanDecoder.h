@@ -20,7 +20,7 @@ namespace facebook::velox::parquet {
 
 class BooleanDecoder {
  public:
-  BooleanDecoder(const char* FOLLY_NONNULL start, const char* FOLLY_NONNULL end)
+  BooleanDecoder(const char* start, const char* end)
       : bufferStart_(start), bufferEnd_(end) {}
 
   void skip(uint64_t numValues) {
@@ -99,8 +99,8 @@ class BooleanDecoder {
 
   size_t remainingBits_{0};
   uint8_t reversedLastByte_{0};
-  const char* FOLLY_NONNULL bufferStart_{nullptr};
-  const char* FOLLY_NONNULL bufferEnd_{nullptr};
+  const char* bufferStart_{nullptr};
+  const char* bufferEnd_{nullptr};
 };
 
 } // namespace facebook::velox::parquet

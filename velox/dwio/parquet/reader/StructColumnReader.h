@@ -52,7 +52,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   // No-op in Parquet. All readers switch row groups at the same time, there is
   // no on-demand skipping to a new row group.
   void advanceFieldReader(
-      dwio::common::SelectiveColumnReader* FOLLY_NONNULL /*reader*/,
+      dwio::common::SelectiveColumnReader* /*reader*/,
       vector_size_t /*offset*/) override {}
 
   void setNullsFromRepDefs(PageReader& pageReader);

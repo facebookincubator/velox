@@ -36,7 +36,7 @@ class OrderBy : public Operator {
  public:
   OrderBy(
       int32_t operatorId,
-      DriverCtx* FOLLY_NONNULL driverCtx,
+      DriverCtx* driverCtx,
       const std::shared_ptr<const core::OrderByNode>& orderByNode);
 
   bool needsInput() const override {

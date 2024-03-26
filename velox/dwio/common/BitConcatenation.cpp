@@ -46,7 +46,7 @@ void BitConcatenation::appendOnes(int32_t numOnes) {
   }
 }
 
-uint64_t* FOLLY_NONNULL BitConcatenation::ensureSpace(int32_t numBits) {
+uint64_t* BitConcatenation::ensureSpace(int32_t numBits) {
   if (!*buffer_) {
     *buffer_ = AlignedBuffer::allocate<bool>(numBits_ + numBits, &pool_, true);
   } else if (numBits_ + numBits > (*buffer_)->capacity() * 8) {

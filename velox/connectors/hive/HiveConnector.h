@@ -82,13 +82,12 @@ class HiveConnector : public Connector {
 
 class HiveConnectorFactory : public ConnectorFactory {
  public:
-  static constexpr const char* FOLLY_NONNULL kHiveConnectorName = "hive";
-  static constexpr const char* FOLLY_NONNULL kHiveHadoop2ConnectorName =
-      "hive-hadoop2";
+  static constexpr const char* kHiveConnectorName = "hive";
+  static constexpr const char* kHiveHadoop2ConnectorName = "hive-hadoop2";
 
   HiveConnectorFactory() : ConnectorFactory(kHiveConnectorName) {}
 
-  explicit HiveConnectorFactory(const char* FOLLY_NONNULL connectorName)
+  explicit HiveConnectorFactory(const char* connectorName)
       : ConnectorFactory(connectorName) {}
 
   /// Register HiveConnector components such as Dwrf, Parquet readers and

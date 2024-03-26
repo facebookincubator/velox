@@ -38,7 +38,7 @@ class RepeatedLengths {
     return nextLengthIndex_;
   }
 
-  void readLengths(int32_t* FOLLY_NONNULL lengths, int32_t numLengths) {
+  void readLengths(int32_t* lengths, int32_t numLengths) {
     VELOX_CHECK_LE(
         nextLengthIndex_ + numLengths, lengths_->size() / sizeof(int32_t));
     memcpy(
@@ -81,7 +81,7 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
     lengths_.setLengths(lengths);
   }
   void readLengths(
-      int32_t* FOLLY_NONNULL lengths,
+      int32_t* lengths,
       int32_t numLengths,
       const uint64_t* /*nulls*/) override {
     lengths_.readLengths(lengths, numLengths);
@@ -137,7 +137,7 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
     lengths_.setLengths(lengths);
   }
   void readLengths(
-      int32_t* FOLLY_NONNULL lengths,
+      int32_t* lengths,
       int32_t numLengths,
       const uint64_t* /*nulls*/) override {
     lengths_.readLengths(lengths, numLengths);

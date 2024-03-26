@@ -73,7 +73,7 @@ class ParquetData : public dwio::common::FormatData {
       const dwio::common::StatsContext& writerContext,
       FilterRowGroupsResult&) override;
 
-  PageReader* FOLLY_NONNULL reader() const {
+  PageReader* reader() const {
     return reader_.get();
   }
 

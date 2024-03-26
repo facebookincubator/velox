@@ -201,13 +201,13 @@ class PageReader {
   // Returns a pointer to contiguous space for the next 'size' bytes
   // from current position. Copies data into 'copy' if the range
   // straddles buffers. Allocates or resizes 'copy' as needed.
-  const char* FOLLY_NONNULL readBytes(int32_t size, BufferPtr& copy);
+  const char* readBytes(int32_t size, BufferPtr& copy);
 
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
   // producing up to 'uncompressedSize' bytes. The start of the decoding
   // result is returned. an intermediate copy may be made in 'decompresseddata_'
-  const char* FOLLY_NONNULL decompressData(
-      const char* FOLLY_NONNULL pageData,
+  const char* decompressData(
+      const char* pageData,
       uint32_t compressedSize,
       uint32_t uncompressedSize);
 

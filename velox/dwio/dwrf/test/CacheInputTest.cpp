@@ -597,7 +597,7 @@ class FileWithReadAhead {
   static constexpr int64_t kLoadQuantum = 6 << 20;
   FileWithReadAhead(
       const std::string& name,
-      cache::AsyncDataCache* FOLLY_NONNULL cache,
+      cache::AsyncDataCache* cache,
       IoStatisticsPtr stats,
       memory::MemoryPool& pool,
       folly::Executor* executor)

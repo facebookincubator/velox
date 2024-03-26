@@ -24,7 +24,7 @@ class ParquetTypeWithId;
 
 namespace {
 PageReader* readLeafRepDefs(
-    dwio::common::SelectiveColumnReader* FOLLY_NONNULL reader,
+    dwio::common::SelectiveColumnReader* reader,
     int32_t numTop,
     bool mustRead) {
   auto children = reader->children();

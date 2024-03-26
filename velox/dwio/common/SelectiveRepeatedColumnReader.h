@@ -52,10 +52,8 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
   /// be inserted at the corresponding position in the result. 'nulls'
   /// is expected to be null flags for 'numRows' next rows at the
   /// level of this reader.
-  virtual void readLengths(
-      int32_t* FOLLY_NONNULL lengths,
-      int32_t numLengths,
-      const uint64_t* nulls) = 0;
+  virtual void
+  readLengths(int32_t* lengths, int32_t numLengths, const uint64_t* nulls) = 0;
 
   // Create row set for child columns based on the row set of parent column.
   void makeNestedRowSet(RowSet rows, int32_t maxRow);

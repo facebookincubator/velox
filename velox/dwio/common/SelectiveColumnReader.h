@@ -168,7 +168,7 @@ class SelectiveColumnReader {
   // Extracts the values at 'rows' into '*result'. May rewrite or
   // reallocate '*result'. 'rows' must be the same set or a subset of
   // 'rows' passed to the last 'read().
-  virtual void getValues(RowSet rows, VectorPtr* FOLLY_NONNULL result) = 0;
+  virtual void getValues(RowSet rows, VectorPtr* result) = 0;
 
   // Returns the rows that were selected/visited by the last
   // read(). If 'this' has no filter, returns 'rows' passed to last
@@ -208,14 +208,14 @@ class SelectiveColumnReader {
   }
 
   // Returns a pointer to output rows  with at least 'size' elements available.
-  vector_size_t* FOLLY_NONNULL mutableOutputRows(int32_t size) {
+  vector_size_t* mutableOutputRows(int32_t size) {
     numOutConfirmed_ = outputRows_.size();
     outputRows_.resize(numOutConfirmed_ + size);
     return outputRows_.data() + numOutConfirmed_;
   }
 
   template <typename T>
-  T* FOLLY_NONNULL mutableValues(int32_t size) {
+  T* mutableValues(int32_t size) {
     DCHECK(values_->capacity() >= (numValues_ + size) * sizeof(T));
     return reinterpret_cast<T*>(rawValues_) + numValues_;
   }
@@ -224,7 +224,7 @@ class SelectiveColumnReader {
   // bitmap. Ensures that this has at least 'numValues_' + 'size'
   // capacity and is unique. If extending existing buffer, preserves
   // previous contents.
-  uint64_t* FOLLY_NONNULL mutableNulls(int32_t size) {
+  uint64_t* mutableNulls(int32_t size) {
     if (!resultNulls_->unique()) {
       resultNulls_ = AlignedBuffer::allocate<bool>(
           numValues_ + size, &memoryPool_, bits::kNotNull);
@@ -325,7 +325,7 @@ class SelectiveColumnReader {
     numValues_ -= count;
   }
 
-  velox::common::ScanSpec* FOLLY_NONNULL scanSpec() const {
+  velox::common::ScanSpec* scanSpec() const {
     return scanSpec_;
   }
 
@@ -462,10 +462,8 @@ class SelectiveColumnReader {
 
   // Returns integer values for 'rows' cast to the width of
   // 'requestedType' in '*result'.
-  void getIntValues(
-      RowSet rows,
-      const TypePtr& requestedType,
-      VectorPtr* FOLLY_NONNULL result);
+  void
+  getIntValues(RowSet rows, const TypePtr& requestedType, VectorPtr* result);
 
   // Returns integer values for 'rows' cast to the width of
   // 'requestedType' in '*result', the related fileDataType is unsigned int
@@ -473,7 +471,7 @@ class SelectiveColumnReader {
   void getUnsignedIntValues(
       RowSet rows,
       const TypePtr& requestedType,
-      VectorPtr* FOLLY_NONNULL result);
+      VectorPtr* result);
 
   // Returns read values for 'rows' in 'vector'. This can be called
   // multiple times for consecutive subsets of 'rows'. If 'isFinal' is
@@ -482,7 +480,7 @@ class SelectiveColumnReader {
   template <typename T, typename TVector>
   void getFlatValues(
       RowSet rows,
-      VectorPtr* FOLLY_NONNULL result,
+      VectorPtr* result,
       const TypePtr& type,
       bool isFinal = false);
 
@@ -509,7 +507,7 @@ class SelectiveColumnReader {
 
   // Copies 'value' to buffers owned by 'this' and returns the start of the
   // copy.
-  char* FOLLY_NONNULL copyStringValue(folly::StringPiece value);
+  char* copyStringValue(folly::StringPiece value);
 
   virtual bool hasMutation() const {
     return false;
@@ -554,7 +552,7 @@ class SelectiveColumnReader {
   // Specification of filters, value extraction, pruning etc. The
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
-  velox::common::ScanSpec* FOLLY_NONNULL scanSpec_;
+  velox::common::ScanSpec* scanSpec_;
 
   // Row number after last read row, relative to the ORC stripe or Parquet
   // Rowgroup start.

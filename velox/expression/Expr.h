@@ -670,7 +670,7 @@ class ExprSet {
  public:
   explicit ExprSet(
       const std::vector<core::TypedExprPtr>& source,
-      core::ExecCtx* FOLLY_NONNULL execCtx,
+      core::ExecCtx* execCtx,
       bool enableConstantFolding = true);
 
   virtual ~ExprSet();
@@ -721,7 +721,7 @@ class ExprSet {
   }
 
   // Flags an expression that remembers the results for a dictionary.
-  void addToMemo(Expr* FOLLY_NONNULL expr) {
+  void addToMemo(Expr* expr) {
     memoizingExprs_.insert(expr);
   }
 
@@ -754,14 +754,14 @@ class ExprSet {
 
   // Exprs which retain memoized state, e.g. from running over dictionaries.
   std::unordered_set<Expr*> memoizingExprs_;
-  core::ExecCtx* FOLLY_NONNULL const execCtx_;
+  core::ExecCtx* const execCtx_;
 };
 
 class ExprSetSimplified : public ExprSet {
  public:
   ExprSetSimplified(
       const std::vector<core::TypedExprPtr>& source,
-      core::ExecCtx* FOLLY_NONNULL execCtx)
+      core::ExecCtx* execCtx)
       : ExprSet(source, execCtx, /*enableConstantFolding*/ false) {}
 
   virtual ~ExprSetSimplified() override {}
@@ -787,7 +787,7 @@ class ExprSetSimplified : public ExprSet {
 // account and instantiates the correct ExprSet class.
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<core::TypedExprPtr>&& source,
-    core::ExecCtx* FOLLY_NONNULL execCtx);
+    core::ExecCtx* execCtx);
 
 /// Returns a string representation of the expression trees annotated with
 /// runtime statistics. Expected to be called after calling ExprSet::eval one or
