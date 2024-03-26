@@ -111,25 +111,13 @@ template <typename T>
 struct CurrentTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config) {
-    timeZone_ = getTimeZoneFromConfig(config);
-  }
-
   FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result) {
     auto now = std::chrono::system_clock::now();
     auto epoch = std::chrono::duration_cast<std::chrono::microseconds>(
                      now.time_since_epoch())
                      .count();
     result = Timestamp::fromMicros(epoch);
-    if (timeZone_ != nullptr) {
-      result.toTimezone(*timeZone_);
-    }
   }
-
- private:
-  const date::time_zone* timeZone_ = nullptr;
 };
 
 template <typename T>
