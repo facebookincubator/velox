@@ -74,6 +74,7 @@ SpillState::SpillState(
     uint64_t targetFileSize,
     uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
+    folly::Executor* executor,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats,
     const std::string& fileCreateConfig)
@@ -87,6 +88,7 @@ SpillState::SpillState(
       writeBufferSize_(writeBufferSize),
       compressionKind_(compressionKind),
       fileCreateConfig_(fileCreateConfig),
+      executor_(executor),
       pool_(pool),
       stats_(stats),
       partitionWriters_(maxPartitions_) {}
@@ -109,6 +111,10 @@ void SpillState::updateSpilledInputBytes(uint64_t bytes) {
 uint64_t SpillState::appendToPartition(
     uint32_t partition,
     const RowVectorPtr& rows) {
+  if (!isPartitionSpilled(partition)) {
+    VELOX_CHECK(
+        isPartitionSpilled(partition), "Partition {} is not spilled", partition);
+  }
   VELOX_CHECK(
       isPartitionSpilled(partition), "Partition {} is not spilled", partition);
 
@@ -131,6 +137,7 @@ uint64_t SpillState::appendToPartition(
         writeBufferSize_,
         fileCreateConfig_,
         updateAndCheckSpillLimitCb_,
+        executor_,
         pool_,
         stats_);
   }

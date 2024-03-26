@@ -353,6 +353,15 @@ void Operator::recordSpillStats() {
                 Timestamp::kNanosecondsInMicrosecond),
             RuntimeCounter::Unit::kNanos});
   }
+  if (lockedSpillStats->spillAsyncIOBlockTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillAsyncIOBlockTimeUs",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                lockedSpillStats->spillAsyncIOBlockTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
   if (lockedSpillStats->spillRuns != 0) {
     lockedStats->addRuntimeStat(
         "spillRuns",

@@ -224,6 +224,7 @@ Spiller::Spiller(
           targetFileSize,
           writeBufferSize,
           compressionKind,
+          executor_,
           memory::spillMemoryPool(),
           spillStats,
           fileCreateConfig) {

@@ -52,6 +52,9 @@ struct SpillStats {
   uint64_t spillFlushTimeUs{0};
   /// The time spent on writing spilled rows to disk.
   uint64_t spillWriteTimeUs{0};
+  /// The time spent on waiting for async write of previous batch to finish
+  /// before sending the next batch for write.
+  uint64_t spillAsyncIOBlockTimeUs{0};
   /// The number of times that an hash build operator exceeds the max spill
   /// limit.
   uint64_t spillMaxLevelExceededCount{0};
