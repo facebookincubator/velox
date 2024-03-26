@@ -21,7 +21,7 @@
 namespace facebook::velox {
 
 namespace {
-constexpr const char* kSep{"/"};
+constexpr std::string_view kGCSSep{"/"};
 constexpr std::string_view kGCSScheme{"gs://"};
 
 } // namespace
@@ -36,7 +36,7 @@ inline void setBucketAndKeyFromGCSPath(
     const std::string& path,
     std::string& bucket,
     std::string& key) {
-  auto firstSep = path.find_first_of(kSep);
+  auto firstSep = path.find_first_of(kGCSSep);
   bucket = path.substr(0, firstSep);
   key = path.substr(firstSep + 1);
 }
@@ -45,7 +45,7 @@ inline std::string gcsURI(const std::string& bucket) {
 }
 
 inline std::string gcsURI(const std::string& bucket, const std::string& key) {
-  return gcsURI(bucket) + kSep + key;
+  return gcsURI(bucket) + std::string(kGCSSep) + key;
 }
 
 inline std::string gcsPath(const std::string_view& path) {
