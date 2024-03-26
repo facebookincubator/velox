@@ -330,6 +330,7 @@ class SpillState {
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
+      folly::Executor* executor,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats,
       const std::string& fileCreateConfig = {});
@@ -427,6 +428,8 @@ class SpillState {
   const uint64_t writeBufferSize_;
   const common::CompressionKind compressionKind_;
   const std::string fileCreateConfig_;
+
+  folly::Executor* const executor_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
 
