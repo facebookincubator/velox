@@ -31,10 +31,7 @@ class StringDecoder {
   }
 
   template <bool hasNulls>
-  inline void skip(
-      int32_t numValues,
-      int32_t current,
-      const uint64_t* FOLLY_NULLABLE nulls) {
+  inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
@@ -44,7 +41,7 @@ class StringDecoder {
   }
 
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* FOLLY_NULLABLE nulls, Visitor visitor) {
+  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
     int32_t current = visitor.start();
     skip<hasNulls>(current, 0, nulls);
     int32_t toSkip;

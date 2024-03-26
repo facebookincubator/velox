@@ -182,7 +182,7 @@ class Expr {
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result,
-      const ExprSet* FOLLY_NULLABLE parentExprSet = nullptr);
+      const ExprSet* parentExprSet = nullptr);
 
   /// Evaluates the expression using fast path that assumes all inputs and
   /// intermediate results are flat or constant and have no nulls.
@@ -201,13 +201,13 @@ class Expr {
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result,
-      const ExprSet* FOLLY_NULLABLE parentExprSet = nullptr);
+      const ExprSet* parentExprSet = nullptr);
 
   void evalFlatNoNullsImpl(
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result,
-      const ExprSet* FOLLY_NULLABLE parentExprSet);
+      const ExprSet* parentExprSet);
 
   // Simplified path for expression evaluation (flattens all vectors).
   void evalSimplified(
@@ -353,7 +353,7 @@ class Expr {
   /// expressable as sql. If not given, they will be converted to
   /// SQL-expressable simple constants.
   virtual std::string toSql(
-      std::vector<VectorPtr>* FOLLY_NULLABLE complexConstants = nullptr) const;
+      std::vector<VectorPtr>* complexConstants = nullptr) const;
 
   const ExprStats& stats() const {
     return stats_;
@@ -361,7 +361,7 @@ class Expr {
 
   void addNulls(
       const SelectivityVector& rows,
-      const uint64_t* FOLLY_NULLABLE rawNulls,
+      const uint64_t* rawNulls,
       EvalCtx& context,
       VectorPtr& result) const;
 
@@ -401,8 +401,8 @@ class Expr {
 
  private:
   struct PeelEncodingsResult {
-    SelectivityVector* FOLLY_NULLABLE newRows;
-    SelectivityVector* FOLLY_NULLABLE newFinalSelection;
+    SelectivityVector* newRows;
+    SelectivityVector* newFinalSelection;
     bool mayCache;
 
     static PeelEncodingsResult empty() {
@@ -505,7 +505,7 @@ class Expr {
 
   void appendInputsSql(
       std::stringstream& stream,
-      std::vector<VectorPtr>* FOLLY_NULLABLE complexConstants) const;
+      std::vector<VectorPtr>* complexConstants) const;
 
   /// Release 'inputValues_' back to vector pool in 'evalCtx' so they can be
   /// reused.
@@ -694,7 +694,7 @@ class ExprSet {
 
   void clear();
 
-  core::ExecCtx* FOLLY_NULLABLE execCtx() const {
+  core::ExecCtx* execCtx() const {
     return execCtx_;
   }
 

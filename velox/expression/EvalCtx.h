@@ -38,8 +38,8 @@ class EvalCtx {
  public:
   EvalCtx(
       core::ExecCtx* FOLLY_NONNULL execCtx,
-      ExprSet* FOLLY_NULLABLE exprSet,
-      const RowVector* FOLLY_NULLABLE row);
+      ExprSet* exprSet,
+      const RowVector* row);
 
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* FOLLY_NONNULL execCtx);
@@ -160,7 +160,7 @@ class EvalCtx {
   // Returns the vector of errors or nullptr if no errors. This is
   // intentionally a raw pointer to signify that the caller may not
   // retain references to this.
-  ErrorVector* FOLLY_NULLABLE errors() const {
+  ErrorVector* errors() const {
     return errors_.get();
   }
 
@@ -229,7 +229,7 @@ class EvalCtx {
     return &finalSelection_;
   }
 
-  const SelectivityVector* FOLLY_NULLABLE finalSelection() const {
+  const SelectivityVector* finalSelection() const {
     return finalSelection_;
   }
 
@@ -237,7 +237,7 @@ class EvalCtx {
     return execCtx_;
   }
 
-  ExprSet* FOLLY_NULLABLE exprSet() const {
+  ExprSet* exprSet() const {
     return exprSet_;
   }
 
@@ -279,7 +279,7 @@ class EvalCtx {
   /// appropriate.
   static void addNulls(
       const SelectivityVector& rows,
-      const uint64_t* FOLLY_NULLABLE rawNulls,
+      const uint64_t* rawNulls,
       EvalCtx& context,
       const TypePtr& type,
       VectorPtr& result);
@@ -335,8 +335,8 @@ class EvalCtx {
 
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
-  ExprSet* FOLLY_NULLABLE const exprSet_;
-  const RowVector* FOLLY_NULLABLE row_;
+  ExprSet* const exprSet_;
+  const RowVector* row_;
   const bool cacheEnabled_;
   const uint32_t maxSharedSubexprResultsCached_;
   bool inputFlatNoNulls_;
@@ -360,7 +360,7 @@ class EvalCtx {
 
   // If isFinalSelection_ is false, the set of rows for the upper-most IF or
   // OR. Used to determine the set of rows for loading lazy vectors.
-  const SelectivityVector* FOLLY_NULLABLE finalSelection_;
+  const SelectivityVector* finalSelection_;
 
   // Stores exception found during expression evaluation. Exceptions are stored
   // in a opaque flat vector, which will translate to a
@@ -374,13 +374,13 @@ class EvalCtx {
 /// run or call EvalContext::restore to do it manually.
 struct ContextSaver {
   // The context to restore. nullptr if nothing to restore.
-  EvalCtx* FOLLY_NULLABLE context = nullptr;
+  EvalCtx* context = nullptr;
   std::vector<VectorPtr> peeled;
   std::shared_ptr<PeeledEncoding> peeledEncoding;
   bool nullsPruned = false;
   // The selection of the context being saved.
   const SelectivityVector* FOLLY_NONNULL rows;
-  const SelectivityVector* FOLLY_NULLABLE finalSelection;
+  const SelectivityVector* finalSelection;
   ErrorVectorPtr errors;
 };
 
@@ -487,7 +487,7 @@ class LocalSelectivityVector {
     return *vector_;
   }
 
-  SelectivityVector* FOLLY_NULLABLE get() {
+  SelectivityVector* get() {
     return vector_.get();
   }
 
@@ -526,7 +526,7 @@ class LocalSelectivityVector {
     return *vector_;
   }
 
-  SelectivityVector* FOLLY_NULLABLE operator->() {
+  SelectivityVector* operator->() {
     VELOX_DCHECK_NOT_NULL(vector_, "get(size) must be called.");
     return vector_.get();
   }
@@ -616,14 +616,14 @@ class ScopedFinalSelectionSetter {
  public:
   ScopedFinalSelectionSetter(
       EvalCtx& evalCtx,
-      const SelectivityVector* FOLLY_NULLABLE finalSelection,
+      const SelectivityVector* finalSelection,
       bool checkCondition = true,
       bool override = false);
   ~ScopedFinalSelectionSetter();
 
  private:
   EvalCtx& evalCtx_;
-  const SelectivityVector* FOLLY_NULLABLE oldFinalSelection_;
+  const SelectivityVector* oldFinalSelection_;
   bool oldIsFinalSelection_;
 };
 

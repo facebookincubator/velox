@@ -79,12 +79,10 @@ class IntDecoder {
   virtual void next(
       int64_t* FOLLY_NONNULL data,
       uint64_t numValues,
-      const uint64_t* FOLLY_NULLABLE nulls) = 0;
+      const uint64_t* nulls) = 0;
 
-  virtual void next(
-      int32_t* FOLLY_NONNULL data,
-      uint64_t numValues,
-      const uint64_t* FOLLY_NULLABLE nulls) {
+  virtual void
+  next(int32_t* FOLLY_NONNULL data, uint64_t numValues, const uint64_t* nulls) {
     if (numValues <= 4) {
       int64_t temp[4];
       next(temp, numValues, nulls);
@@ -103,14 +101,14 @@ class IntDecoder {
   virtual void nextInts(
       int32_t* FOLLY_NONNULL data,
       uint64_t numValues,
-      const uint64_t* FOLLY_NULLABLE nulls) {
+      const uint64_t* nulls) {
     narrow(data, numValues, nulls);
   }
 
   virtual void nextShorts(
       int16_t* FOLLY_NONNULL data,
       uint64_t numValues,
-      const uint64_t* FOLLY_NULLABLE nulls) {
+      const uint64_t* nulls) {
     narrow(data, numValues, nulls);
   }
 
@@ -191,7 +189,7 @@ class IntDecoder {
   void narrow(
       T* FOLLY_NONNULL const data,
       const uint64_t numValues,
-      const uint64_t* FOLLY_NULLABLE const nulls) {
+      const uint64_t* const nulls) {
     DWIO_ENSURE_LE(numBytes, sizeof(T))
     std::array<int64_t, 64> buf;
     uint64_t remain = numValues;
@@ -213,8 +211,8 @@ class IntDecoder {
 
  protected:
   const std::unique_ptr<dwio::common::SeekableInputStream> inputStream;
-  const char* FOLLY_NULLABLE bufferStart;
-  const char* FOLLY_NULLABLE bufferEnd;
+  const char* bufferStart;
+  const char* bufferEnd;
   const bool useVInts;
   const uint32_t numBytes;
   bool bigEndian;

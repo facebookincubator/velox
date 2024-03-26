@@ -64,7 +64,7 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<cache::ScanTracker> tracker,
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
-      folly::Executor* FOLLY_NULLABLE executor,
+      folly::Executor* executor,
       const io::ReaderOptions& readerOptions)
       : BufferedInput(
             std::move(readFile),
@@ -86,7 +86,7 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<cache::ScanTracker> tracker,
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
-      folly::Executor* FOLLY_NULLABLE executor,
+      folly::Executor* executor,
       const io::ReaderOptions& readerOptions)
       : BufferedInput(std::move(input), readerOptions.getMemoryPool()),
         cache_(cache),
@@ -106,7 +106,7 @@ class CachedBufferedInput : public BufferedInput {
 
   std::unique_ptr<SeekableInputStream> enqueue(
       velox::common::Region region,
-      const StreamIdentifier* FOLLY_NULLABLE si) override;
+      const StreamIdentifier* si) override;
 
   void load(const LogType) override;
 
@@ -155,7 +155,7 @@ class CachedBufferedInput : public BufferedInput {
   std::shared_ptr<cache::CoalescedLoad> coalescedLoad(
       const SeekableInputStream* FOLLY_NONNULL stream);
 
-  folly::Executor* FOLLY_NULLABLE executor() const override {
+  folly::Executor* executor() const override {
     return executor_;
   }
 
@@ -180,7 +180,7 @@ class CachedBufferedInput : public BufferedInput {
   std::shared_ptr<cache::ScanTracker> tracker_;
   const uint64_t groupId_;
   std::shared_ptr<IoStatistics> ioStats_;
-  folly::Executor* const FOLLY_NULLABLE executor_;
+  folly::Executor* const executor_;
 
   // Regions that are candidates for loading.
   std::vector<CacheRequest> requests_;

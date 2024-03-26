@@ -104,7 +104,7 @@ class FuzzerConnector final : public Connector {
   FuzzerConnector(
       const std::string& id,
       std::shared_ptr<const Config> config,
-      folly::Executor* FOLLY_NULLABLE /*executor*/)
+      folly::Executor* /*executor*/)
       : Connector(id) {}
 
   std::unique_ptr<DataSource> createDataSource(
@@ -140,7 +140,7 @@ class FuzzerConnectorFactory : public ConnectorFactory {
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
       std::shared_ptr<const Config> config,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr) override {
+      folly::Executor* executor = nullptr) override {
     return std::make_shared<FuzzerConnector>(id, config, executor);
   }
 };

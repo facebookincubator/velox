@@ -556,7 +556,7 @@ class ExprExceptionContext {
   ExprExceptionContext(
       const Expr* FOLLY_NONNULL expr,
       const RowVector* FOLLY_NONNULL vector,
-      const ExprSet* FOLLY_NULLABLE parentExprSet)
+      const ExprSet* parentExprSet)
       : expr_(expr), vector_(vector), parentExprSet_(parentExprSet) {}
 
   /// Persist data and sql on disk. Data will be persisted in $basePath/vector
@@ -652,7 +652,7 @@ class ExprExceptionContext {
   const RowVector* FOLLY_NONNULL vector_;
 
   // The parent ExprSet that is executing this expression.
-  const ExprSet* FOLLY_NULLABLE parentExprSet_;
+  const ExprSet* parentExprSet_;
 
   /// Path of the file storing the serialized 'vector'. Used to avoid
   /// serializing vector repeatedly in cases when multiple rows generate
@@ -1131,7 +1131,7 @@ bool Expr::removeSureNulls(
 
 void Expr::addNulls(
     const SelectivityVector& rows,
-    const uint64_t* FOLLY_NULLABLE rawNulls,
+    const uint64_t* rawNulls,
     EvalCtx& context,
     VectorPtr& result) const {
   EvalCtx::addNulls(rows, rawNulls, context, type(), result);

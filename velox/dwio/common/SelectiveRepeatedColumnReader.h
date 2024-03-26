@@ -55,7 +55,7 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
   virtual void readLengths(
       int32_t* FOLLY_NONNULL lengths,
       int32_t numLengths,
-      const uint64_t* FOLLY_NULLABLE nulls) = 0;
+      const uint64_t* nulls) = 0;
 
   // Create row set for child columns based on the row set of parent column.
   void makeNestedRowSet(RowSet rows, int32_t maxRow);
@@ -65,9 +65,7 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
   void makeOffsetsAndSizes(RowSet rows, ArrayVectorBase&);
 
   // Creates a struct if '*result' is empty and 'type' is a row.
-  void prepareStructResult(
-      const TypePtr& type,
-      VectorPtr* FOLLY_NULLABLE result) {
+  void prepareStructResult(const TypePtr& type, VectorPtr* result) {
     if (!*result && type->kind() == TypeKind::ROW) {
       *result = BaseVector::create(type, 0, &memoryPool_);
     }
@@ -106,12 +104,10 @@ class SelectiveListColumnReader : public SelectiveRepeatedColumnReader {
 
   uint64_t skip(uint64_t numValues) override;
 
-  void read(
-      vector_size_t offset,
-      RowSet rows,
-      const uint64_t* FOLLY_NULLABLE incomingNulls) override;
+  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+      override;
 
-  void getValues(RowSet rows, VectorPtr* FOLLY_NULLABLE result) override;
+  void getValues(RowSet rows, VectorPtr* result) override;
 
  protected:
   std::unique_ptr<SelectiveColumnReader> child_;
@@ -133,12 +129,10 @@ class SelectiveMapColumnReader : public SelectiveRepeatedColumnReader {
 
   uint64_t skip(uint64_t numValues) override;
 
-  void read(
-      vector_size_t offset,
-      RowSet rows,
-      const uint64_t* FOLLY_NULLABLE incomingNulls) override;
+  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+      override;
 
-  void getValues(RowSet rows, VectorPtr* FOLLY_NULLABLE result) override;
+  void getValues(RowSet rows, VectorPtr* result) override;
 
   std::unique_ptr<SelectiveColumnReader> keyReader_;
   std::unique_ptr<SelectiveColumnReader> elementReader_;

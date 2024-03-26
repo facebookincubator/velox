@@ -44,21 +44,19 @@ class DirectDecoder : public IntDecoder<isSigned> {
   }
 
   template <typename T>
-  void nextValues(
-      T* FOLLY_NONNULL data,
-      uint64_t numValues,
-      const uint64_t* FOLLY_NULLABLE nulls);
+  void
+  nextValues(T* FOLLY_NONNULL data, uint64_t numValues, const uint64_t* nulls);
 
   void next(
       int64_t* FOLLY_NONNULL data,
       uint64_t numValues,
-      const uint64_t* FOLLY_NULLABLE nulls) override {
+      const uint64_t* nulls) override {
     nextValues<int64_t>(data, numValues, nulls);
   }
 
   template <bool hasNulls, typename Visitor>
   void readWithVisitor(
-      const uint64_t* FOLLY_NULLABLE nulls,
+      const uint64_t* nulls,
       Visitor visitor,
       bool useFastPath = true) {
     skipPending();
@@ -149,7 +147,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
   }
 
   template <bool hasNulls, typename Visitor>
-  void fastPath(const uint64_t* FOLLY_NULLABLE nulls, Visitor& visitor) {
+  void fastPath(const uint64_t* nulls, Visitor& visitor) {
     using T = typename Visitor::DataType;
     constexpr bool hasFilter =
         !std::

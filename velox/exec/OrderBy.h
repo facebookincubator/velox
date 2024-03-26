@@ -49,7 +49,7 @@ class OrderBy : public Operator {
 
   RowVectorPtr getOutput() override;
 
-  BlockingReason isBlocked(ContinueFuture* FOLLY_NULLABLE /*future*/) override {
+  BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return BlockingReason::kNotBlocked;
   }
 

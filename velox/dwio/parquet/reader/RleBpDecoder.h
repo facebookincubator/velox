@@ -101,7 +101,7 @@ class RleBpDecoder {
   void readBits(
       int32_t numValues,
       uint64_t* FOLLY_NONNULL outputBuffer,
-      bool* FOLLY_NULLABLE allOnes = nullptr);
+      bool* allOnes = nullptr);
 
  protected:
   void readHeader();
@@ -123,8 +123,8 @@ class RleBpDecoder {
     remainingUnpackedValuesOffset_ += numValues;
   }
 
-  const char* FOLLY_NULLABLE bufferStart_;
-  const char* FOLLY_NULLABLE bufferEnd_;
+  const char* bufferStart_;
+  const char* bufferEnd_;
   const int8_t bitWidth_;
   const int8_t byteWidth_;
   const uint64_t bitMask_;

@@ -57,7 +57,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
 
   void setNullsFromRepDefs(PageReader& pageReader);
 
-  dwio::common::SelectiveColumnReader* FOLLY_NULLABLE childForRepDefs() const {
+  dwio::common::SelectiveColumnReader* childForRepDefs() const {
     return childForRepDefs_;
   }
 
@@ -84,7 +84,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
 
   // Leaf column reader used for getting nullability information for
   // 'this'. This is nullptr for the root of a table.
-  dwio::common::SelectiveColumnReader* FOLLY_NULLABLE childForRepDefs_{nullptr};
+  dwio::common::SelectiveColumnReader* childForRepDefs_{nullptr};
 
   // Mode for getting nulls from repdefs. kStructOverLists if 'this'
   // only has list children.

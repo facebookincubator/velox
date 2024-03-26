@@ -53,7 +53,7 @@ struct DictionaryValues {
 };
 
 struct RawDictionaryState {
-  const void* FOLLY_NULLABLE values{nullptr};
+  const void* values{nullptr};
   int32_t numValues{0};
 };
 
@@ -64,8 +64,8 @@ struct RawScanState {
 
   // See comment in  ScanState below.
   RawDictionaryState dictionary2;
-  const uint64_t* __restrict FOLLY_NULLABLE inDictionary{nullptr};
-  uint8_t* __restrict FOLLY_NULLABLE filterCache;
+  const uint64_t* __restrict inDictionary{nullptr};
+  uint8_t* __restrict filterCache;
 };
 
 // Maintains state for encoding between calls to readWithVisitor of
@@ -158,10 +158,8 @@ class SelectiveColumnReader {
   // relative to 'offset', so that row 0 is the 'offset'th row from
   // start of stripe. 'rows' is expected to stay constant
   // between this and the next call to read.
-  virtual void read(
-      vector_size_t offset,
-      RowSet rows,
-      const uint64_t* FOLLY_NULLABLE incomingNulls) = 0;
+  virtual void
+  read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls) = 0;
 
   virtual uint64_t skip(uint64_t numValues) {
     return formatData_->skip(numValues);
@@ -419,10 +417,8 @@ class SelectiveColumnReader {
   // 'nulls'. 'nulls' is in terms of top level rows and represents all
   // null parents at any enclosing level. 'nulls' is nullptr if there are no
   // parent nulls.
-  void addParentNulls(
-      int32_t firstRowInNulls,
-      const uint64_t* FOLLY_NULLABLE nulls,
-      RowSet rows);
+  void
+  addParentNulls(int32_t firstRowInNulls, const uint64_t* nulls, RowSet rows);
 
   // When skipping rows in a struct, records how many parent nulls at
   // any level there are between top level row 'from' and 'to'. If
@@ -453,10 +449,8 @@ class SelectiveColumnReader {
   void filterNulls(RowSet rows, bool isNull, bool extractValues);
 
   template <typename T>
-  void prepareRead(
-      vector_size_t offset,
-      RowSet rows,
-      const uint64_t* FOLLY_NULLABLE incomingNulls);
+  void
+  prepareRead(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls);
 
   void setOutputRows(RowSet rows) {
     outputRows_.resize(rows.size());
@@ -594,11 +588,11 @@ class SelectiveColumnReader {
   // Nulls buffer for readWithVisitor. Not set if no nulls. 'numValues'
   // is the index of the first non-set bit.
   BufferPtr resultNulls_;
-  uint64_t* FOLLY_NULLABLE rawResultNulls_ = nullptr;
+  uint64_t* rawResultNulls_ = nullptr;
   // Buffer for gathering scalar values in readWithVisitor.
   BufferPtr values_;
   // Writable content in 'values'
-  void* FOLLY_NULLABLE rawValues_ = nullptr;
+  void* rawValues_ = nullptr;
   vector_size_t numValues_ = 0;
   // Size of fixed width value in 'rawValues'. For integers, values
   // are read at 64 bit width and can be compacted or extracted at a
@@ -624,7 +618,7 @@ class SelectiveColumnReader {
   // Buffers backing the StringViews in 'values' when reading strings.
   std::vector<BufferPtr> stringBuffers_;
   // Writable contents of 'stringBuffers_.back()'.
-  char* FOLLY_NULLABLE rawStringBuffer_ = nullptr;
+  char* rawStringBuffer_ = nullptr;
   // True if a vector can acquire a pin to a stream's buffer and refer
   // to that as its values.
   bool mayUseStreamBuffer_ = false;
@@ -672,8 +666,7 @@ namespace facebook::velox::dwio::common {
 // Template parameter to indicate no hook in fast scan path. This is
 // referenced in decoders, thus needs to be declared in a header.
 struct NoHook : public ValueHook {
-  void addValue(vector_size_t /*row*/, const void* FOLLY_NULLABLE /*value*/)
-      override {}
+  void addValue(vector_size_t /*row*/, const void* /*value*/) override {}
 };
 
 } // namespace facebook::velox::dwio::common

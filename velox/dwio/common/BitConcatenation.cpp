@@ -19,7 +19,7 @@
 namespace facebook::velox::dwio::common {
 
 void BitConcatenation::append(
-    const uint64_t* FOLLY_NULLABLE bits,
+    const uint64_t* bits,
     int32_t begin,
     int32_t end) {
   int32_t numBits = end - begin;

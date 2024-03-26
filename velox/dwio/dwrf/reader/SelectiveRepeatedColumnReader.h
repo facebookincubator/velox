@@ -52,7 +52,7 @@ class SelectiveListColumnReader
   void readLengths(
       int32_t* FOLLY_NONNULL lengths,
       int32_t numLengths,
-      const uint64_t* FOLLY_NULLABLE nulls) override {
+      const uint64_t* nulls) override {
     length_->next(lengths, numLengths, nulls);
   }
 
@@ -91,7 +91,7 @@ class SelectiveMapColumnReader : public dwio::common::SelectiveMapColumnReader {
   void readLengths(
       int32_t* FOLLY_NONNULL lengths,
       int32_t numLengths,
-      const uint64_t* FOLLY_NULLABLE nulls) override {
+      const uint64_t* nulls) override {
     length_->next(lengths, numLengths, nulls);
   }
 

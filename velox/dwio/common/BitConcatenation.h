@@ -38,7 +38,7 @@ class BitConcatenation {
 
   /// Appends  'bits' between bit offset 'begin' and 'end' to the result.
   /// A nullptr 'bits' is treated as a bit range with all bits set.
-  void append(const uint64_t* FOLLY_NULLABLE bits, int32_t begin, int32_t end);
+  void append(const uint64_t* bits, int32_t begin, int32_t end);
 
   /// Appends 'numOnes' ones.
   void appendOnes(int32_t numOnes);
@@ -64,7 +64,7 @@ class BitConcatenation {
   }
 
   memory::MemoryPool& pool_;
-  BufferPtr* FOLLY_NULLABLE buffer_{nullptr};
+  BufferPtr* buffer_{nullptr};
   int32_t numBits_{0};
   bool hasZeros_{false};
 };

@@ -39,7 +39,7 @@ void RleBpDecoder::skip(uint64_t numValues) {
 void RleBpDecoder::readBits(
     int32_t numValues,
     uint64_t* FOLLY_NONNULL outputBuffer,
-    bool* FOLLY_NULLABLE allOnes) {
+    bool* allOnes) {
   VELOX_CHECK_EQ(1, bitWidth_);
   auto toRead = numValues;
   int32_t numWritten = 0;

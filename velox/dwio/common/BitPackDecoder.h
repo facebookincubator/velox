@@ -90,12 +90,12 @@ static const uint32_t BITPACK_MASKS[] = {
 /// stay under 'bufferEnd'.
 template <typename T>
 void unpack(
-    const uint64_t* FOLLY_NULLABLE bits,
+    const uint64_t* bits,
     int32_t bitOffset,
     RowSet rows,
     int32_t rowBias,
     uint8_t bitWidth,
-    const char* FOLLY_NULLABLE bufferEnd,
+    const char* bufferEnd,
     T* FOLLY_NONNULL result);
 
 /// Unpack numValues number of input values from inputBuffer. The results

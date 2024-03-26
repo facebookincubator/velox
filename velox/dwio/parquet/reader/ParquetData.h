@@ -104,7 +104,7 @@ class ParquetData : public dwio::common::FormatData {
 
   void readNulls(
       vector_size_t numValues,
-      const uint64_t* FOLLY_NULLABLE incomingNulls,
+      const uint64_t* incomingNulls,
       BufferPtr& nulls,
       bool nullsOnly = false) override {
     // If the query accesses only nulls, read the nulls from the pages in range.
