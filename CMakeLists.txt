@@ -26,6 +26,7 @@ if(POLICY CMP0135)
   set(CMAKE_POLICY_DEFAULT_CMP0135 NEW)
 endif()
 
+message(FATAL_ERROR, "This is a test to test out the export- merge process. Do not merge to main ! ")
 # Set the project name.
 project(velox)
 
