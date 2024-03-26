@@ -1916,15 +1916,16 @@ TEST_F(RowContainerTest, nextRowVector) {
   };
 
   nextRowVectorAppendValidation();
-  nextRowVectorEraseValidation({1});
-  nextRowVectorEraseValidation({98, 99});
-  nextRowVectorEraseValidation({1, 2, 3});
-  nextRowVectorEraseValidation({1, 3, 77, 6});
-  nextRowVectorEraseValidation({99, 2, 50, 4, 5});
-  nextRowVectorEraseValidation({1, 3, 24, 44, 87, 72, 58, 39, 62});
+  nextRowVectorEraseValidation({0, 1});
+  nextRowVectorEraseValidation({34, 35, 98, 99});
+  nextRowVectorEraseValidation({2, 3, 22, 23, 88, 89, 58, 59});
   std::vector<int> eraseRows(numRows);
   std::iota(eraseRows.begin(), eraseRows.end(), 0);
   nextRowVectorEraseValidation(eraseRows);
+
+  VELOX_ASSERT_THROW(
+      nextRowVectorEraseValidation({1}),
+      "All rows with the same keys must be present in 'rows'");
 
   dataClear();
 }

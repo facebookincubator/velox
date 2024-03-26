@@ -427,8 +427,8 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
     return;
   }
 
-  for (auto row : rows) {
-    auto& vector = getNextRowVector(row);
+  for (auto index = 0; index < rows.size();) {
+    auto& vector = getNextRowVector(rows[index]);
     if (vector) {
       if (clear) {
         // Clear all rows, we can clear the nextOffset_ slots and delete the
@@ -436,16 +436,23 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
         for (auto& next : *vector) {
           getNextRowVector(next) = nullptr;
         }
-        delete vector;
+        index++;
       } else {
-        auto iter = std::find(vector->begin(), vector->end(), row);
-        VELOX_CHECK(iter != vector->end());
-        vector->erase(iter);
-        if (vector->empty()) {
-          delete vector;
+        // If 'clear' is false, the caller must ensure that all rows with same
+        // keys appear in the rows array and are contiguous.
+        VELOX_CHECK_LE(
+            index + vector->size(),
+            rows.size(),
+            "All rows with the same keys must be present in 'rows'");
+        for (auto& next : *vector) {
+          getNextRowVector(next) = nullptr;
+          VELOX_CHECK_EQ(
+              next,
+              rows[index++],
+              "All rows with the same keys must be present in 'rows' and contiguous");
         }
-        vector = nullptr;
       }
+      delete vector;
     }
   }
 }
