@@ -75,7 +75,7 @@ void registerRowNumber(const std::string& name, TypeKind resultTypeKind) {
   exec::registerWindowFunction(
       name,
       std::move(signatures),
-      {exec::WindowFunction::ProcessMode::kRows, false},
+      {exec::WindowFunction::ProcessMode::kRows, false, false},
       [name](
           const std::vector<exec::WindowFunctionArg>& /*args*/,
           const TypePtr& resultType,

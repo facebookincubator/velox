@@ -114,7 +114,7 @@ exec::AggregateRegistrationResult registerBitwise(
                 inputType->kindName());
         }
       },
-      {false /*orderSensitive*/},
+      {false /*orderSensitive*/, false /*isCompanionFunction*/},
       withCompanionFunctions,
       overwrite);
 }

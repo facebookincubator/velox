@@ -544,7 +544,7 @@ void registerHistogramAggregate(
                 inputType->toString());
         }
       },
-      {false /*orderSensitive*/},
+      {false /*orderSensitive*/, false /*isCompanionFunction*/},
       withCompanionFunctions,
       overwrite);
 }

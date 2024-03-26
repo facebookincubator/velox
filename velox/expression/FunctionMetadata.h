@@ -40,6 +40,9 @@ struct VectorFunctionMetadata {
   /// In this case, 'rows' in VectorFunction::apply will point only to positions
   /// for which all arguments are not null.
   bool defaultNullBehavior{true};
+
+  /// Indicates if this is a companion function.
+  bool isCompanionFunction{false};
 };
 
 class VectorFunctionMetadataBuilder {
@@ -56,6 +59,11 @@ class VectorFunctionMetadataBuilder {
 
   VectorFunctionMetadataBuilder& defaultNullBehavior(bool defaultNullBehavior) {
     metadata_.defaultNullBehavior = defaultNullBehavior;
+    return *this;
+  }
+
+  VectorFunctionMetadataBuilder& isCompanionFunction(bool isCompanionFunction) {
+    metadata_.isCompanionFunction = isCompanionFunction;
     return *this;
   }
 

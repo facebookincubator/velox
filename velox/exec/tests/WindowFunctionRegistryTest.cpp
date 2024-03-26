@@ -17,6 +17,7 @@
 
 #include "velox/exec/WindowFunction.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 namespace facebook::velox::exec::test {
@@ -131,6 +132,24 @@ TEST_F(WindowFunctionRegistryTest, prefix) {
   for (const auto& entry : windowFuncMap) {
     EXPECT_EQ(prefix, entry.first.substr(0, prefix.size()));
     EXPECT_EQ(1, windowFuncMapBase.count(entry.first.substr(prefix.size())));
+  }
+}
+
+TEST_F(WindowFunctionRegistryTest, isCompanionFunction) {
+  aggregate::prestosql::registerAllAggregateFunctions();
+  window::prestosql::registerAllWindowFunctions();
+  const auto windowFunctions = {
+      "count", "lead", "ntile", "nth_value", "first_value", "map_union_sum"};
+  const auto companionFunctions = {
+      "approx_most_frequent_partial",
+      "approx_percentile_merge",
+      "arbitrary_merge_extract"};
+
+  for (const auto& function : windowFunctions) {
+    ASSERT_FALSE(getWindowFunctionMetadata(function).isCompanionFunction);
+  }
+  for (const auto& function : companionFunctions) {
+    ASSERT_TRUE(getWindowFunctionMetadata(function).isCompanionFunction);
   }
 }
 
