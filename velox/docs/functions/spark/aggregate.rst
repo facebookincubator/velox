@@ -61,6 +61,12 @@ General Aggregate Functions
 
     Returns the first non-null value of `x`.
 
+.. spark:function:: kurtosis(x) -> double
+
+    Returns the Pearson's kurtosis of all input values. When the count of `x` is greater than or equal to 1,
+    a non-null output will be generated. When the value of `m2` in the accumulator is 0, a null
+    output will be generated.
+
 .. spark:function:: last(x) -> x
 
     Returns the last value of `x`.
@@ -106,12 +112,6 @@ General Aggregate Functions
 .. spark:function:: skewness(x) -> double
 
     Returns the skewness of all input values. When the count of `x` is greater than or equal to 1,
-    a non-null output will be generated. When the value of `m2` in the accumulator is 0, a null
-    output will be generated.
-
-.. spark:function:: kurtosis(x) -> double
-
-    Returns the Pearson's kurtosis of all input values. When the count of `x` is greater than or equal to 1,
     a non-null output will be generated. When the value of `m2` in the accumulator is 0, a null
     output will be generated.
 
