@@ -2203,10 +2203,12 @@ TEST_F(MinMaxByNTest, incrementalWindow) {
 
 TEST_F(MinMaxByComplexTypes, arrayTypeCompare) {
   // The data consists of five rows, and the comparison key is arrayType.
-  // Each array contains two elements.
+  // Each array contains two elements which null values are ignored during
+  // comparing.
   auto data = makeRowVector({
       makeFlatVector<int64_t>({8, 3, 4, 5, 6}),
-      makeArrayVector<int64_t>({{3, 4}, {2, 4}, {2, 3}, {0, 3}, {0, 2}}),
+      makeNullableArrayVector<int64_t>(
+          {{3, std::nullopt}, {5, 4}, {2, std::nullopt}, {1, 3}, {0, 2}}),
   });
 
   auto expected = makeRowVector({makeArrayVector<int64_t>({
@@ -2215,12 +2217,24 @@ TEST_F(MinMaxByComplexTypes, arrayTypeCompare) {
 
   testAggregations({data}, {}, {"min_by(c0, c1, 2)"}, {expected});
 
+  // Each array contains two elements which null values will be compared, so
+  // throw an exception.
+  data = makeRowVector({
+      makeFlatVector<int64_t>({8, 3, 4, 5, 6}),
+      makeNullableArrayVector<int64_t>(
+          {{3, std::nullopt}, {3, 4}, {2, std::nullopt}, {1, 3}, {0, 2}}),
+  });
+
+  testFailingAggregations(
+      {data}, {}, {"min_by(c0, c1, 2)"}, "Ordering nulls is not supported");
+
   // The data consists of five rows, and the comparison key is arrayType.
   // Each array contains two elements.
   data = makeRowVector({
       makeFlatVector<int16_t>({1, 2, 1, 2, 1}),
       makeFlatVector<int64_t>({8, 3, 4, 5, 6}),
-      makeArrayVector<int64_t>({{3, 4}, {2, 4}, {2, 3}, {0, 3}, {0, 2}}),
+      makeNullableArrayVector<int64_t>(
+          {{3, std::nullopt}, {2, 4}, {2, 3}, {0, std::nullopt}, {0, 2}}),
   });
 
   expected = makeRowVector(
@@ -2231,34 +2245,36 @@ TEST_F(MinMaxByComplexTypes, arrayTypeCompare) {
 
   // Test StringView type (both as value and comparison).
   data = makeRowVector({
-      makeFlatVector<StringView>({"1"_sv, "2"_sv, "3"_sv, "4"_sv}),
-      makeArrayVector<StringView>(
-          {{"1"_sv, "8"_sv},
-           {"2"_sv, "7"_sv},
-           {"3"_sv, "6"_sv},
-           {"4"_sv, "5"_sv}}),
+      makeFlatVector<std::string>({"a", "Abc", "bc", "Longer test string"}),
+      makeArrayVector<std::string>(
+          {{"a", "b", "Longer string ...."},
+           {"c", "Abc", "Mountains and rivers"},
+           {"bc", "Abc"},
+           {"Oceans and skies"}}),
   });
 
-  expected = makeRowVector({makeArrayVector<StringView>({
-      {"1"_sv, "2"_sv},
+  expected = makeRowVector({makeArrayVector<std::string>({
+      {"Longer test string", "a"},
   })});
 
   testAggregations({data}, {}, {"min_by(c0, c1, 2)"}, {expected});
 
   data = makeRowVector({
       makeFlatVector<int16_t>({1, 2, 1, 2, 1}),
-      makeFlatVector<StringView>({"1"_sv, "2"_sv, "3"_sv, "4"_sv, "5"_sv}),
-      makeArrayVector<StringView>(
-          {{"1"_sv, "8"_sv},
-           {"2"_sv, "7"_sv},
-           {"3"_sv, "6"_sv},
-           {"4"_sv, "5"_sv},
-           {"1"_sv, "9"_sv}}),
+      makeFlatVector<std::string>(
+          {"a", "Abc", "bc", "Longer test string", "c"}),
+      makeArrayVector<std::string>(
+          {{"a", "b", "Longer string ...."},
+           {"c", "Abc", "Mountains and rivers"},
+           {"bc", "c"},
+           {"Oceans and skies"},
+           {"d", "Longer string ....", "Abc"}}),
   });
 
   expected = makeRowVector(
       {makeFlatVector<int16_t>({1, 2}),
-       makeArrayVector<StringView>({{"3"_sv, "5"_sv}, {"4"_sv, "2"_sv}})});
+       makeArrayVector<std::string>(
+           {{"c", "bc"}, {"Abc", "Longer test string"}})});
 
   testAggregations({data}, {"c0"}, {"max_by(c1, c2, 2)"}, {expected});
 }
@@ -2331,10 +2347,7 @@ TEST_F(MinMaxByComplexTypes, rowTypeCompare) {
 
   expected = makeRowVector(
       {makeFlatVector<int16_t>({1, 2}),
-       makeArrayVector(
-           {0, 1},
-           makeArrayVector(
-               {0, 3}, makeFlatVector<int64_t>({6, 7, 8, 9, 10})))});
+       makeNestedArrayVectorFromJson<int64_t>({"[[6, 7, 8]]", "[[9, 10]]"})});
 
   testAggregations({data}, {"c0"}, {"max_by(c1, c2, 1)"}, {expected});
 }

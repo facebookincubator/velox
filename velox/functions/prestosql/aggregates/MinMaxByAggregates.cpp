@@ -577,12 +577,13 @@ struct MinMaxByNComplexCompareTypeAccumulator {
       vector_size_t compareIndex,
       std::optional<V> value,
       Compare& comparator) {
-    auto comparePosition = writeComplex(decodedCompare, compareIndex);
     if (base.heapValues.size() < base.n) {
+      auto comparePosition = writeComplex(decodedCompare, compareIndex);
       addToAccumulator(comparePosition, value, comparator);
     } else {
       const auto& topPair = base.heapValues.front();
       if (comparator.compare(topPair, decodedCompare, compareIndex)) {
+        auto comparePosition = writeComplex(decodedCompare, compareIndex);
         std::pop_heap(
             base.heapValues.begin(), base.heapValues.end(), comparator);
         base.heapValues.pop_back();
@@ -727,12 +728,13 @@ struct MinMaxByNStringViewValueTypeComplexCompareTypeAccumulator {
       vector_size_t compareIndex,
       std::optional<V> value,
       Compare& comparator) {
-    auto comparePosition = writeComplex(decodedCompare, compareIndex);
     if (base.heapValues.size() < base.n) {
+      auto comparePosition = writeComplex(decodedCompare, compareIndex);
       addToAccumulator(comparePosition, value, comparator);
     } else {
       const auto& topPair = base.heapValues.front();
       if (comparator.compare(topPair, decodedCompare, compareIndex)) {
+        auto comparePosition = writeComplex(decodedCompare, compareIndex);
         std::pop_heap(
             base.heapValues.begin(), base.heapValues.end(), comparator);
         base.heapValues.pop_back();
@@ -885,13 +887,16 @@ struct MinMaxByNBothComplexTypeAccumulator {
       DecodedVector& decodedValue,
       vector_size_t valueIndex,
       Compare& comparator) {
-    auto comparePosition = writeComplexCompare(decodedCompare, compareIndex);
-    auto valuePosition = writeComplexValue(decodedValue, valueIndex);
     if (base.heapValues.size() < base.n) {
+      auto comparePosition = writeComplexCompare(decodedCompare, compareIndex);
+      auto valuePosition = writeComplexValue(decodedValue, valueIndex);
       addToAccumulator(comparePosition, valuePosition, comparator);
     } else {
       const auto& topPair = base.heapValues.front();
       if (comparator.compare(topPair, decodedCompare, compareIndex)) {
+        auto comparePosition =
+            writeComplexCompare(decodedCompare, compareIndex);
+        auto valuePosition = writeComplexValue(decodedValue, valueIndex);
         std::pop_heap(
             base.heapValues.begin(), base.heapValues.end(), comparator);
         base.heapValues.pop_back();
