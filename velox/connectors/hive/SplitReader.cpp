@@ -195,8 +195,7 @@ void SplitReader::prepareSplit(
   auto columnTypes = adaptColumns(fileType, baseReaderOpts_.getFileSchema());
   auto requestColumnNames = fileType->names();
   auto requestColumnTypes = columnTypes;
-  translateRowIndexColumnIfNeed(
-      fileType, requestColumnNames, requestColumnTypes);
+  appendRowIndexColumnIfNeed(fileType, requestColumnNames, requestColumnTypes);
   configureRowReaderOptions(
       baseRowReaderOpts_,
       hiveTableHandle_->tableParameters(),
@@ -211,7 +210,7 @@ void SplitReader::prepareSplit(
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 
-void SplitReader::translateRowIndexColumnIfNeed(
+void SplitReader::appendRowIndexColumnIfNeed(
     const RowTypePtr& fileType,
     std::vector<std::string>& columnNames,
     std::vector<facebook::velox::TypePtr>& columnTypes) {
@@ -225,7 +224,6 @@ void SplitReader::translateRowIndexColumnIfNeed(
     columnTypes.push_back(rowIndexMetaColType);
     auto scanSpec = scanSpec_->childByName(kSparkReservedTmpMetaRowIndex);
     scanSpec->setIsRowIndexCol(true);
-    baseRowReaderOpts_.setAppendRowNumberColumn(true);
   }
 }
 

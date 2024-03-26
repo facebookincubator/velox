@@ -744,45 +744,9 @@ class ParquetRowReader::Impl {
       return 0;
     }
     VELOX_DCHECK_GT(rowsToRead, 0);
-    if (!options_.getAppendRowNumberColumn()) {
-      columnReader_->next(rowsToRead, result, mutation);
-    } else {
-      readWithRowNumber(rowsToRead, result, mutation);
-    }
-
+    columnReader_->next(rowsToRead, result, mutation);
     currentRowInGroup_ += rowsToRead;
     return rowsToRead;
-  }
-
-  void readWithRowNumber(
-      uint64_t rowsToRead,
-      VectorPtr& result,
-      const dwio::common::Mutation* mutation) {
-    auto fileType = readerBase_->schemaWithId();
-    auto& childSpecs = options_.getScanSpec()->stableChildren();
-    auto& columnReader = static_cast<StructColumnReader&>(*columnReader_);
-    facebook::velox::common::ScanSpec* rowIndexScanSpec = nullptr;
-    for (auto i = 0; i < childSpecs.size(); ++i) {
-      auto scanSpec = childSpecs[i];
-      if (scanSpec->isRowIndexCol()) {
-        rowIndexScanSpec = scanSpec;
-        break;
-      }
-    }
-    if (rowIndexScanSpec) {
-      if (!dynamic_cast<RowIndexColumnReader*>(
-              columnReader.children().back())) {
-        ParquetParams params(
-            pool_, columnReaderStats_, readerBase_->fileMetaData());
-        auto type = requestedType_->childByName(rowIndexScanSpec->fieldName());
-        auto child = std::make_unique<RowIndexColumnReader>(
-            type, params, *rowIndexScanSpec);
-        columnReader.addChild(std::move(child));
-        rowIndexScanSpec->setSubscript(columnReader.children().size() - 1);
-      }
-    }
-    columnReader.next(rowsToRead, result, mutation);
-    return;
   }
 
   std::optional<size_t> estimatedRowSize() const {

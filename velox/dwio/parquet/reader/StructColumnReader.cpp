@@ -39,11 +39,14 @@ StructColumnReader::StructColumnReader(
     if (childSpecs[i]->isConstant()) {
       continue;
     }
-    const auto& fieldName = childSpec->fieldName();
-    if (!fileType_->containsChild(fieldName)) {
-      continue;
+    if (childSpecs[i]->isRowIndexCol()) {
+      auto childRequestedType =
+          requestedType_->childByName(childSpec->fieldName());
+      auto child = std::make_unique<RowIndexColumnReader>(
+          childRequestedType, params, scanSpec);
+      addChild(std::move(child));
     } else {
-      auto childFileType = fileType_->childByName(fieldName);
+      auto childFileType = fileType_->childByName(childSpec->fieldName());
       auto childRequestedType =
           requestedType_->childByName(childSpec->fieldName());
       addChild(ParquetColumnReader::build(

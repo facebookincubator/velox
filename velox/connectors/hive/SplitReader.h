@@ -116,7 +116,7 @@ class SplitReader {
       const RowTypePtr& fileType,
       const std::shared_ptr<const velox::RowType>& tableSchema);
 
-  virtual void translateRowIndexColumnIfNeed(
+  virtual void appendRowIndexColumnIfNeed(
       const RowTypePtr& fileType,
       std::vector<std::string>& columnNames,
       std::vector<facebook::velox::TypePtr>& columnTypes);
