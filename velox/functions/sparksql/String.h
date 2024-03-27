@@ -20,6 +20,8 @@
 #include <codecvt>
 #include <string>
 #include "velox/expression/VectorFunction.h"
+#include "velox/expression/VectorReaders.h"
+#include "velox/external/utf8proc/utf8procImpl.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/UDFOutputString.h"
 #include "velox/functions/lib/string/StringCore.h"
@@ -1178,6 +1180,379 @@ struct FindInSetFunction {
 
     result = 0;
     return;
+  }
+};
+
+template <typename T>
+class CharsetFunctionBase {
+ protected:
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  enum class Charset {
+    UTF8,
+    UTF16BE,
+    UTF16LE,
+    ISO88591,
+    ASCII,
+    UTF16,
+    Unsupported
+  };
+
+  Charset getCharsetEnum(const arg_type<Varchar>& charset) {
+    if (!facebook::velox::functions::stringCore::isAscii(
+            charset.data(), charset.size())) {
+      VELOX_USER_FAIL(
+          "Unsupported encoding: {}. Only UTF-8, UTF-16, UTF-16BE, UTF-16LE, ISO-8859-1, and US-ASCII are supported.",
+          charset);
+    }
+    auto it = charsetMap.find(toLower(charset.str()));
+    if (it != charsetMap.end()) {
+      return it->second;
+    }
+    return Charset::Unsupported;
+  }
+  Charset currentCharset_;
+
+ private:
+  std::string toLower(const std::string& input) {
+    std::string lowercase;
+    lowercase.resize(input.size());
+    facebook::velox::functions::stringCore::lowerAscii(
+        lowercase.data(), input.data(), input.size());
+    return lowercase;
+  }
+  const std::map<std::string, Charset> charsetMap = {
+      {"utf-8", Charset::UTF8},
+      {"utf-16be", Charset::UTF16BE},
+      {"utf-16le", Charset::UTF16LE},
+      {"iso-8859-1", Charset::ISO88591},
+      {"us-ascii", Charset::ASCII},
+      {"utf-16", Charset::UTF16}};
+};
+
+/// ENCODE(string, charset) -> varbinary
+///
+/// Encodes the string into a binary using the provided charset.
+///
+/// Supported charsets: UTF-8, UTF-16, UTF-16BE, UTF-16LE, ISO-8859-1, US-ASCII.
+/// Throws VeloxUserError for conversion errors.
+template <typename T>
+struct EncodeFunction : public CharsetFunctionBase<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  using Charset = typename CharsetFunctionBase<T>::Charset;
+
+  void call(
+      out_type<Varbinary>& result,
+      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& charset) {
+    if (string.empty()) {
+      return;
+    }
+
+    Charset charsetEnum = this->getCharsetEnum(charset);
+    switch (charsetEnum) {
+      case Charset::UTF16BE:
+      case Charset::UTF16LE:
+      case Charset::UTF16:
+        try {
+          convertToUTF16(result, string, charsetEnum);
+          return;
+        } catch (const std::range_error& e) {
+          VELOX_USER_FAIL("Invalid UTF-16 string");
+        }
+      case Charset::UTF8:
+        result += stringToHex(string.str());
+        return;
+      case Charset::ISO88591:
+        convertToISO88591(result, string);
+        return;
+      case Charset::ASCII:
+        convertToASCII(result, string);
+        break;
+      default:
+        VELOX_USER_FAIL(
+            "Unsupported encoding: {}. Only UTF-8, UTF-16, UTF-16BE, UTF-16LE, ISO-8859-1, and US-ASCII are supported.",
+            charset);
+    }
+  }
+
+ private:
+  /// Used to convert a character of either 32, 16, or 8 bits (wchar_t,
+  /// char16_t, ANY & 0xFF) to a hex string.
+  template <typename CharType>
+  static std::string charToHex(CharType input) {
+    std::stringstream hexStream;
+    hexStream << std::hex << std::uppercase << std::setfill('0');
+
+    if constexpr (std::is_same<CharType, char16_t>::value) {
+      hexStream << std::setw(4) << static_cast<unsigned int>(input);
+    } else if constexpr (std::is_same<CharType, wchar_t>::value) {
+      hexStream << std::setw(sizeof(wchar_t) * 2)
+                << static_cast<unsigned int>(input);
+    } else {
+      hexStream << std::setw(2) << (static_cast<unsigned char>(input) & 0xff);
+    }
+
+    return hexStream.str();
+  }
+
+  /// Used to convert a string of either 16 or 8 bits (std::u16string, ANY
+  /// iterable & 0xFF) to a hex string.
+  template <typename StringType>
+  std::string stringToHex(const StringType& input) {
+    std::stringstream hexStream;
+    hexStream << std::hex << std::uppercase << std::setfill('0');
+
+    if constexpr (std::is_same<StringType, std::u16string>::value) {
+      // Handle std::u16string (16-bit characters)
+      for (char16_t ch : input) {
+        hexStream << std::setw(4) << static_cast<unsigned int>(ch);
+      }
+    } else {
+      // Handle std::string (8-bit characters)
+      for (auto byte : input) {
+        hexStream << std::setw(2) << (static_cast<unsigned char>(byte) & 0xff);
+      }
+    }
+
+    return hexStream.str();
+  }
+  /// Used to convert a single codepoint to a hex string.
+  template <typename codePointType>
+  std::string codePointToHex(const codePointType& codepoint) {
+    if constexpr (std::is_same<codePointType, int32_t>::value) {
+      if (codepoint < 0x10000) {
+        return charToHex(static_cast<char16_t>(codepoint));
+      } else {
+        int32_t temp = codepoint - 0x10000;
+        return charToHex(static_cast<char16_t>((temp >> 10) + 0xD800)) +
+            charToHex(static_cast<char16_t>((temp & 0x3FF) + 0xDC00));
+      }
+    } else if constexpr (std::is_same<codePointType, char16_t>::value) {
+      // Directly handle char16_t without additional checks or conversions.
+      return charToHex(codepoint);
+    } else {
+      VELOX_USER_FAIL("Invalid codepoint type")
+    }
+  }
+
+  /// Converts a string to UTF-16, UTF-16BE, or UTF-16LE.
+  /// Spark defautls UTF-16 to UTF-16BE, so only
+  /// UTF-16LE requires additional work.
+  void convertToUTF16(
+      out_type<Varbinary>& result,
+      const arg_type<Varchar>& string,
+      const Charset& charset) {
+    result.reserve(string.size() * 2 + 4);
+    if (charset == Charset::UTF16) {
+      // Spark uses Scala/Java which output BE
+      // by default
+      result += "FEFF";
+    }
+    const char* str = string.data();
+    size_t length = string.size();
+    size_t position = 0;
+    while (position < length) {
+      int charLength;
+      int32_t codepoint =
+          utf8proc_codepoint(str + position, str + length, charLength);
+      if (codepoint <= 0xFFFF) {
+        if (charset == Charset::UTF16LE) {
+          codepoint = ((codepoint >> 8) | (codepoint << 8)) & 0xFFFF;
+        }
+        result += codePointToHex(codepoint);
+      } else {
+        codepoint -= 0x10000;
+        char16_t highSurrogate = ((codepoint >> 10) + 0xD800);
+        char16_t lowSurrogate = ((codepoint & 0x3FF) + 0xDC00);
+
+        if (charset == Charset::UTF16LE) {
+          highSurrogate = ((highSurrogate >> 8) | (highSurrogate << 8));
+          lowSurrogate = ((lowSurrogate >> 8) | (lowSurrogate << 8));
+        }
+        result += codePointToHex(highSurrogate) + codePointToHex(lowSurrogate);
+      }
+
+      position += charLength;
+    }
+  }
+
+  void convertToISO88591(
+      out_type<Varbinary>& result,
+      const arg_type<Varchar> utf8String) {
+    int i = 0;
+    while (i < utf8String.size()) {
+      const unsigned char curr = *(utf8String.begin() + i);
+      if (curr < 0x80) {
+        result += charToHex(curr);
+        ++i;
+      } else if (curr >= 0xC2 && curr <= 0xC3 && i + 1 < utf8String.size()) {
+        const unsigned char next = *(utf8String.begin() + i + 1);
+        if (curr == 0xC2) {
+          result += charToHex(next);
+        } else if (curr == 0xC3) {
+          result += charToHex(next + 0x40);
+        }
+        i += 2;
+      } else {
+        VELOX_USER_FAIL("Invalid character for ISO-8859-1 encoding.")
+      }
+    }
+  }
+  void convertToASCII(
+      out_type<Varbinary>& result,
+      const arg_type<Varchar>& input) {
+    int i = 0;
+    while (i < input.size()) {
+      const unsigned char curr = *(input.begin() + i);
+      if (curr < 0x7F) {
+        result += charToHex(*(input.begin() + i));
+        ++i;
+      } else {
+        VELOX_USER_FAIL("Invalid character for US-ASCII encoding.")
+      }
+    }
+  }
+};
+
+/// DECODE(bin, charset) -> varchar
+////
+/// Decodes the binary into a string using the provided charset.
+/// Supported charsets: UTF-8, UTF-16, UTF-16BE, UTF-16LE, ISO-8859-1, US-ASCII.
+///
+/// Throws VeloxUserError for conversion errors.
+template <typename T>
+struct DecodeFunction : public CharsetFunctionBase<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  using Charset = typename CharsetFunctionBase<T>::Charset;
+
+  void call(
+      out_type<Varchar>& result,
+      const arg_type<Varbinary>& bin,
+      const arg_type<Varchar>& encoding) {
+    if (bin.empty()) {
+      return;
+    }
+    Charset charsetEnum = this->getCharsetEnum(encoding);
+    switch (charsetEnum) {
+      case Charset::UTF16:
+      case Charset::UTF16LE:
+      case Charset::UTF16BE:
+        this->currentCharset_ = charsetEnum;
+        decodeFromUTF16(bin, result);
+        return;
+      case Charset::UTF8:
+        decodeFromUTF8(bin, result);
+        return;
+      case Charset::ISO88591:
+        decodeFromISO(bin, result);
+        return;
+      case Charset::ASCII:
+        decodeFromASCII(bin, result);
+        return;
+      default:
+        VELOX_USER_FAIL(
+            "Unsupported encoding: {}. Only UTF-8, UTF-16, UTF-16BE, UTF-16LE, ISO-8859-1, and US-ASCII are supported.",
+            encoding);
+    }
+  }
+
+ private:
+  void decodeFromUTF16(
+      const arg_type<Varbinary>& bin,
+      out_type<Varchar>& result) {
+    uint16_t highSurrogatePair = 0;
+    uint16_t bom = 0;
+    int numChars = 0;
+    size_t index;
+    result.reserve(bin.size() / 4 + 1);
+    for (index = 0; index < bin.size() - 3; index += 4) {
+      uint16_t bytePair;
+      std::sscanf(bin.data() + index, "%04hx", &bytePair);
+      if (index == 0 && (bytePair == 0xFFFE || bytePair == 0xFEFF)) {
+        bom = bytePair;
+        continue;
+      }
+      if (this->currentCharset_ == Charset::UTF16LE || bom == 0xFFFE) {
+        bytePair = ((bytePair >> 8) | (bytePair << 8));
+      }
+      // Look for a low-surrogate
+      if (highSurrogatePair != 0) {
+        // We are in the middle of a surrogate pair
+        if (bytePair >= 0xDC00 && bytePair <= 0xDFFF) {
+          uint32_t codePoint = ((highSurrogatePair - 0xD800) << 10) +
+              (bytePair - 0xDC00) + 0x10000;
+          numChars += utf8proc_encode_char(
+              codePoint,
+              reinterpret_cast<unsigned char*>(result.data() + numChars));
+
+          highSurrogatePair = 0;
+        } else {
+          VELOX_USER_FAIL("Invalid UTF-16 surrogate pair");
+        }
+      }
+      // Encountered a high-surrogate
+      else if (bytePair >= 0xD800 && bytePair <= 0xDBFF) {
+        highSurrogatePair = bytePair;
+        continue;
+      } else {
+        // Not a surrogate pair
+        numChars += utf8proc_encode_char(
+            bytePair,
+            reinterpret_cast<unsigned char*>(result.data() + numChars));
+      }
+    }
+    VELOX_USER_CHECK_EQ(highSurrogatePair, 0, "Unpaired UTF-16 high surrogate");
+    VELOX_USER_CHECK_EQ(index, bin.size(), "Improperly sized UTF-16 string");
+    result.resize(numChars);
+  }
+
+  void decodeFromUTF8(
+      const arg_type<Varbinary>& bin,
+      out_type<Varchar>& result) {
+    for (size_t i = 0; i < bin.size(); i += 2) {
+      uint16_t byte;
+      std::sscanf(bin.data() + i, "%02hx", &byte);
+      const char temp[2] = {static_cast<char>(byte), '\0'};
+      result += temp;
+    }
+  }
+
+  void decodeFromISO(
+      const arg_type<Varbinary>& bin,
+      out_type<Varchar>& result) {
+    int numChars = 0;
+    result.reserve(bin.size() / 2 + 1);
+    for (int i = 0; i < bin.size(); i += 2) {
+      uint16_t byte;
+      std::sscanf(bin.data() + i, "%02hx", &byte);
+      VELOX_USER_CHECK_LE(
+          byte, 0xFF, "Invalid character for ISO-8859-1 encoding.");
+      if (byte >= 0x80) {
+        if (byte < 0xC0) {
+          result.data()[numChars++] = 0xC2;
+        } else {
+          result.data()[numChars++] = 0xC3;
+          byte -= 0x40;
+        }
+      }
+      result.data()[numChars++] = byte;
+    }
+    result.resize(numChars);
+  }
+
+  void decodeFromASCII(
+      const arg_type<Varbinary> bin,
+      out_type<Varchar>& result) {
+    int numChars = 0;
+    result.reserve(bin.size() / 2 + 1);
+    for (size_t i = 0; i < bin.size(); i += 2) {
+      unsigned int byte;
+      std::sscanf(bin.data() + i, "%02x", &byte);
+      VELOX_USER_CHECK_LE(
+          byte, 0x7F, "Invalid character for US-ASCII encoding.")
+      result.data()[numChars++] = byte;
+    }
+    result.resize(numChars);
   }
 };
 

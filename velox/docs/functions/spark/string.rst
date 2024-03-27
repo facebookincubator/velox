@@ -307,3 +307,19 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Returns string with all characters changed to uppercase. ::
 
         SELECT upper('SparkSql'); -- SPARKSQL
+
+.. spark:function:: decode(bin, charset) -> varchar
+
+    Decodes the binary into a string using the provided charset.
+    Supported charsets: UTF-8, UTF-16, UTF-16BE, UTF-16LE, ISO-8859-1, US-ASCII.
+    Throws VeloxUserError for conversion errors. ::
+
+        SELECT decode('48656C6C6F20576F726C64', "utf-8"); -- "Hello World"
+
+.. spark:function:: encode(string, charset) -> varbinary
+
+    Encodes the string into a binary representation using the provided charset.
+    Supported charsets: UTF-8, UTF-16, UTF-16BE, UTF-16LE, ISO-8859-1, US-ASCII.
+    Throws VeloxUserError for conversion errors. ::
+
+        SELECT decode('Hello World', "utf-8"); -- "48656C6C6F20576F726C64"
