@@ -70,7 +70,8 @@ void HiveConnectorTestBase::writeToFile(
 void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     const std::vector<RowVectorPtr>& vectors,
-    std::shared_ptr<dwrf::Config> config) {
+    std::shared_ptr<dwrf::Config> config,
+    bool writeColumnStats) {
   velox::dwrf::WriterOptions options;
   options.config = config;
   options.schema = vectors[0]->type();
@@ -79,6 +80,8 @@ void HiveConnectorTestBase::writeToFile(
       std::move(localWriteFile), filePath);
   auto childPool = rootPool_->addAggregateChild("HiveConnectorTestBase.Writer");
   options.memoryPool = childPool.get();
+  options.writeColumnStats = writeColumnStats;
+
   facebook::velox::dwrf::Writer writer{std::move(sink), options};
   for (size_t i = 0; i < vectors.size(); ++i) {
     writer.write(vectors[i]);

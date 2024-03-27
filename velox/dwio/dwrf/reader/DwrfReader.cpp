@@ -684,12 +684,13 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     uint32_t nodeId) const {
   DWIO_ENSURE_LT(nodeId, fileFooter.typesSize(), "Types missing in footer");
 
-  const auto& s = stats.getColumnStatistics(nodeId);
+  const auto* s = stats.getColumnStatistics(nodeId);
   const auto& t = fileFooter.types(nodeId);
-  if (!s.getNumberOfValues()) {
+  if (!s || !s->getNumberOfValues()) {
     return std::nullopt;
   }
-  auto valueCount = s.getNumberOfValues().value();
+
+  auto valueCount = s->getNumberOfValues().value();
   if (valueCount < 1) {
     return 0;
   }
@@ -720,7 +721,7 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     }
     case TypeKind::VARCHAR: {
       auto stringStats =
-          dynamic_cast<const dwio::common::StringColumnStatistics*>(&s);
+          dynamic_cast<const dwio::common::StringColumnStatistics*>(s);
       if (!stringStats) {
         return std::nullopt;
       }
@@ -732,7 +733,7 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     }
     case TypeKind::VARBINARY: {
       auto binaryStats =
-          dynamic_cast<const dwio::common::BinaryColumnStatistics*>(&s);
+          dynamic_cast<const dwio::common::BinaryColumnStatistics*>(s);
       if (!binaryStats) {
         return std::nullopt;
       }

@@ -242,10 +242,15 @@ std::unique_ptr<Statistics> ReaderBase::getStatistics() const {
 
 std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
     uint32_t index) const {
+  if (!footer_->statisticsSize()) {
+    return nullptr;
+  }
+
   DWIO_ENSURE_LT(
       index,
       static_cast<uint32_t>(footer_->statisticsSize()),
       "column index out of range");
+
   StatsContext statsContext(getWriterVersion());
   if (!handler_->isEncrypted(index)) {
     auto& stats = footer_->statistics(index);

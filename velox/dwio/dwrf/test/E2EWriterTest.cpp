@@ -1208,11 +1208,12 @@ TEST_F(E2EEncryptionTest, EncryptRoot) {
     ASSERT_FALSE(
         stats.has_intstatistics() || stats.has_doublestatistics() ||
         stats.has_stringstatistics());
-    auto& encrypted = encryptedStats->getColumnStatistics(i);
-    ASSERT_EQ(stats.hasnull(), encrypted.hasNull().value());
-    ASSERT_EQ(stats.numberofvalues(), encrypted.getNumberOfValues());
+    const auto* encrypted = encryptedStats->getColumnStatistics(i);
+    ASSERT_TRUE(encrypted);
+    ASSERT_EQ(stats.hasnull(), encrypted->hasNull().value());
+    ASSERT_EQ(stats.numberofvalues(), encrypted->getNumberOfValues());
     // stats got thru api should not be the basic one
-    ASSERT_EQ(typeid(encrypted) == typeid(const ColumnStatistics&), i == 0);
+    ASSERT_EQ(typeid(*encrypted) == typeid(const ColumnStatistics&), i == 0);
   }
 
   RowReaderOptions rowReaderOpts;
@@ -1287,13 +1288,14 @@ TEST_F(E2EEncryptionTest, EncryptSelectedFields) {
         stats.has_intstatistics() || stats.has_doublestatistics() ||
             stats.has_stringstatistics(),
         (i == 1 || i == 7 || i == 8 || i == 9));
-    auto& encrypted = encryptedStats->getColumnStatistics(i);
-    ASSERT_EQ(stats.hasnull(), encrypted.hasNull().value());
-    ASSERT_EQ(stats.numberofvalues(), encrypted.getNumberOfValues());
+    const auto* encrypted = encryptedStats->getColumnStatistics(i);
+    ASSERT_TRUE(encrypted);
+    ASSERT_EQ(stats.hasnull(), encrypted->hasNull().value());
+    ASSERT_EQ(stats.numberofvalues(), encrypted->getNumberOfValues());
     // stats got thru api should not be the basic one unless they are
     // intermediate nodes
     ASSERT_EQ(
-        typeid(encrypted) == typeid(const ColumnStatistics&),
+        typeid(*encrypted) == typeid(const ColumnStatistics&),
         (i == 0 || i == 3 || i == 6 || i == 10 || i == 11));
   }
 

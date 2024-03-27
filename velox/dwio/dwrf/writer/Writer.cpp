@@ -63,7 +63,8 @@ Writer::Writer(
     : writerBase_(std::make_unique<WriterBase>(std::move(sink))),
       schema_{dwio::common::TypeWithId::create(options.schema)},
       spillConfig_{options.spillConfig},
-      nonReclaimableSection_(options.nonReclaimableSection) {
+      nonReclaimableSection_(options.nonReclaimableSection),
+      writeColumnStats_(options.writeColumnStats) {
   VELOX_CHECK(
       spillConfig_ == nullptr || nonReclaimableSection_ != nullptr,
       "nonReclaimableSection_ must be set if writer memory reclaim is enabled");
@@ -600,25 +601,29 @@ void Writer::flushInternal(bool close) {
       std::optional<uint32_t> lastRoot;
       std::unordered_map<proto::ColumnStatistics*, proto::ColumnStatistics*>
           statsMap;
-      writer_->writeFileStats([&](uint32_t nodeId) -> proto::ColumnStatistics& {
-        auto entry = footer.add_statistics();
-        if (!encryption || !handler.isEncrypted(nodeId)) {
-          return *entry;
-        }
+      if (writeColumnStats_) {
+        writer_->writeFileStats(
+            [&](uint32_t nodeId) -> proto::ColumnStatistics& {
+              auto entry = footer.add_statistics();
+              if (!encryption || !handler.isEncrypted(nodeId)) {
+                return *entry;
+              }
 
-        auto root = handler.getEncryptionRoot(nodeId);
-        auto groupIndex = handler.getEncryptionGroupIndex(nodeId);
-        auto& group = stats.at(groupIndex);
-        if (!lastRoot || root != lastRoot.value()) {
-          // this is a new root, add to the footer, and use a new slot
-          group.emplace_back();
-          encryption->mutable_encryptiongroups(groupIndex)->add_nodes(root);
-        }
-        lastRoot = root;
-        auto encryptedStats = group.back().add_statistics();
-        statsMap[entry] = encryptedStats;
-        return *encryptedStats;
-      });
+              auto root = handler.getEncryptionRoot(nodeId);
+              auto groupIndex = handler.getEncryptionGroupIndex(nodeId);
+              auto& group = stats.at(groupIndex);
+              if (!lastRoot || root != lastRoot.value()) {
+                // this is a new root, add to the footer, and use a new slot
+                group.emplace_back();
+                encryption->mutable_encryptiongroups(groupIndex)
+                    ->add_nodes(root);
+              }
+              lastRoot = root;
+              auto encryptedStats = group.back().add_statistics();
+              statsMap[entry] = encryptedStats;
+              return *encryptedStats;
+            });
+      }
 
 #define COPY_STAT(from, to, stat) \
   if (from->has_##stat()) {       \

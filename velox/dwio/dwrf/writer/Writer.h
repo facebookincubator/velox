@@ -38,6 +38,7 @@ struct WriterOptions {
   // If not null, used by memory arbitration to track if a file writer is under
   // memory reclaimable section or not.
   tsan_atomic<bool>* nonReclaimableSection{nullptr};
+  bool writeColumnStats{true};
   /// The default factory allows the writer to construct the default flush
   /// policy with the configs in its ctor.
   std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory;
@@ -210,6 +211,10 @@ class Writer : public dwio::common::Writer {
   std::unique_ptr<DWRFFlushPolicy> flushPolicy_;
   std::unique_ptr<LayoutPlanner> layoutPlanner_;
   std::unique_ptr<ColumnWriter> writer_;
+  // For tests only. When writeColumnStats_ is set to true, the ColumnStatistics
+  // would NOT be written at all. Note that this is different from writing empty
+  // ColumnStatistics.
+  bool writeColumnStats_;
 };
 
 class DwrfWriterFactory : public dwio::common::WriterFactory {
