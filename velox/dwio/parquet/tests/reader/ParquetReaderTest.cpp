@@ -97,6 +97,65 @@ TEST_F(ParquetReaderTest, parseSample) {
       sampleSchema(), *rowReader, expected, *leafPool_);
 }
 
+TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyArrayValue) {
+  //  The Schema is of type
+  //  message hive_schema {
+  //    optional group test (LIST) {
+  //      repeated group array (MAP) {
+  //        repeated group key_value (MAP_KEY_VALUE) {
+  //          required binary key (UTF8);
+  //          optional group value (LIST) {
+  //            repeated int32 array;
+  //          }
+  //        }
+  //      }
+  //    }
+  //  }
+  const std::string sample(getExampleFilePath("array_of_map_of_int_key_list_value.parquet"));
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  auto numRows = reader->numberOfRows();
+  auto type = reader->typeWithId();
+  RowReaderOptions rowReaderOpts;
+  auto rowType1 = ROW({"test"}, {ARRAY(MAP(VARCHAR(), ARRAY(INTEGER())))});
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType1));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto result = BaseVector::create(rowType1, 10, leafPool_.get());
+  constexpr int kBatchSize = 1000;
+  while (rowReader->next(kBatchSize, result)) {
+  }
+}
+
+TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
+  //  The Schema is of type
+  //   message hive_schema {
+  //    optional group test (LIST) {
+  //      repeated group array (MAP) {
+  //        repeated group key_value (MAP_KEY_VALUE) {
+  //          required int32 key;
+  //          optional group value {
+  //            optional binary stringfield (UTF8);
+  //            optional int64 longfield;
+  //          }
+  //        }
+  //      }
+  //    }
+  //  }
+  const std::string sample(getExampleFilePath("array_of_map_of_int_key_struct_value.parquet"));
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  auto numRows = reader->numberOfRows();
+  auto type = reader->typeWithId();
+  RowReaderOptions rowReaderOpts;
+  auto rowType1 = reader->rowType();
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType1));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto result = BaseVector::create(rowType1, 10, leafPool_.get());
+  constexpr int kBatchSize = 1000;
+  while (rowReader->next(kBatchSize, result)) {
+  }
+}
+
 TEST_F(ParquetReaderTest, parseSampleRange1) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
