@@ -49,7 +49,6 @@ Window::Window(
       windowBuild_ = std::make_unique<StreamingWindowBuild>(
           windowNode, pool(), spillConfig, &nonReclaimableSection_);
     }
-
   } else {
     windowBuild_ = std::make_unique<SortWindowBuild>(
         windowNode, pool(), spillConfig, &nonReclaimableSection_, &spillStats_);
@@ -195,12 +194,23 @@ void Window::createWindowFunctions() {
 }
 
 // The supportRowLevelStreaming is designed to support 'rank' and
-// 'row_number' functions.
+// 'row_number' functions and the agg window function with default frame.
 bool Window::supportRowLevelStreaming() {
   for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
-    if (exec::getWindowFunctionEntry(windowNodeFunction.functionCall->name())
-            .value()
-            ->processingUnit == ProcessingUnit::kPartition) {
+    const auto& functionName = windowNodeFunction.functionCall->name();
+    auto windowFunctionEntry =
+        exec::getWindowFunctionEntry(functionName).value();
+    if (windowFunctionEntry->processingUnit == ProcessingUnit::kPartition) {
+      return false;
+    }
+
+    const auto& frame = windowNodeFunction.frame;
+    bool isDefaultFrame =
+        (frame.startType == core::WindowNode::BoundType::kUnboundedPreceding &&
+         frame.endType == core::WindowNode::BoundType::kCurrentRow);
+    // Only support the agg window function with default frame.
+    if (!(functionName == "rank" || functionName == "row_number") &&
+        !isDefaultFrame) {
       return false;
     }
   }
@@ -532,7 +542,8 @@ void Window::computePeerAndFrameBuffers(
       // Ranking functions do not care about frames. So the function decides
       // further what to do with empty frames.
       computeValidFrames(
-          currentPartition_->numRows() - 1,
+          currentPartition_->numRows() -
+              currentPartition_->offsetInPartition() - 1,
           numRows,
           rawFrameStarts[i],
           rawFrameEnds[i],
@@ -601,12 +612,16 @@ vector_size_t Window::callApplyLoop(
           result);
       resultIndex += rowsForCurrentPartition;
       numOutputRowsLeft -= rowsForCurrentPartition;
-      if (currentPartition_->isFinished()) {
-        callResetPartition();
+      if (currentPartition_->supportRowLevelStreaming()) {
+        if (currentPartition_->isFinished()) {
+          callResetPartition();
+        } else {
+          // Break until the next getOutput call to handle the remaining data in
+          // currentPartition_.
+          break;
+        }
       } else {
-        // Break until the next getOutput call to handle the remaining data in
-        // currentPartition_.
-        break;
+        callResetPartition();
       }
 
       if (!currentPartition_) {
@@ -650,8 +665,12 @@ RowVectorPtr Window::getOutput() {
     }
   }
 
-  if (!currentPartition_->isFinished()) {
-    currentPartition_->buildNextBatch();
+  // BuildNextBatch until all the rows in currentPartition finished.
+  if (currentPartition_->supportRowLevelStreaming() &&
+      partitionOffset_ == currentPartition_->numRows()) {
+    if (!currentPartition_->buildNextBatch()) {
+      return nullptr;
+    }
   }
 
   auto numOutputRows = std::min(numRowsPerOutput_, numRowsLeft);

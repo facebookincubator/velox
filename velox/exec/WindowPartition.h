@@ -46,7 +46,7 @@ class WindowPartition {
   /// the columns in 'data' for use with the spiller.
   /// 'sortKeyInfo' : Order by columns used by the the Window operator. Used to
   /// get peer rows from the input partition.
-  /// 'streaming' : Whether support streaming in WindowPartition.
+  /// 'processingUnit' : The processing unit: kPartition or kRow.
   WindowPartition(
       RowContainer* data,
       const folly::Range<char**>& rows,
@@ -60,6 +60,14 @@ class WindowPartition {
     return partition_.size() + offsetInPartition_;
   }
 
+  vector_size_t offsetInPartition() const {
+    return offsetInPartition_;
+  }
+
+  bool supportRowLevelStreaming() {
+    return processingUnit_ == ProcessingUnit::kRow;
+  }
+
   void insertNewBatch(const std::vector<char*>& inputRows) {
     rows_.push_back(inputRows);
   }
@@ -68,10 +76,11 @@ class WindowPartition {
     totalNum_ = num;
   }
 
-  void buildNextBatch();
+  bool buildNextBatch();
 
   bool isFinished() {
-    return (!rowLevelStreaming_) || (totalNum_ == processedNum_);
+    return (processingUnit_ == ProcessingUnit::kPartition) ||
+        (totalNum_ == processedNum_);
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -226,18 +235,13 @@ class WindowPartition {
   // The processed num in current partition.
   vector_size_t processedNum_ = 0;
 
-  /// Whether the last row of current batch is same with the first row of next
-  /// batch.
-  bool peerGroup_ = false;
-
-  // Whether support streaming in WindowPartition.
-  bool rowLevelStreaming_ = false;
+  ProcessingUnit processingUnit_ = ProcessingUnit::kPartition;
 
   // Add new batch in WindowPartition.
   std::vector<std::vector<char*>> rows_;
 
   // The batch index in WindowPartition.
-  vector_size_t currentBatchIndex_ = -1;
+  vector_size_t currentBatchIndex_ = 0;
 
   // The total num in WindowPartition.
   vector_size_t totalNum_ = 0;

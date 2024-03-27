@@ -37,19 +37,19 @@ void RowLevelStreamingWindowBuild::buildNextInputOrPartition(bool isFinished) {
         inputColumns_,
         sortKeyInfo_,
         ProcessingUnit::kRow));
-  } else {
-    windowPartitions_[inputCurrentPartition_]->insertNewBatch(
-        sortedRows_.back());
   }
+
+  windowPartitions_[inputCurrentPartition_]->insertNewBatch(sortedRows_.back());
 
   if (isFinished) {
     windowPartitions_[inputCurrentPartition_]->setTotalNum(
         currentPartitionNum_ - 1);
 
-    inputRows_.clear();
     inputCurrentPartition_++;
     currentPartitionNum_ = 1;
   }
+
+  inputRows_.clear();
 }
 
 void RowLevelStreamingWindowBuild::addInput(RowVectorPtr input) {
@@ -70,29 +70,30 @@ void RowLevelStreamingWindowBuild::addInput(RowVectorPtr input) {
       buildNextInputOrPartition(true);
     }
 
+    // Wait for the peers to be ready in single partition; these peers are the
+    // rows that have identical values in the ORDER BY clause.
+    if (previousRow_ != nullptr && inputRows_.size() > 0 &&
+        compareRowsWithKeys(previousRow_, newRow, sortKeyInfo_)) {
+      buildNextInputOrPartition(false);
+    }
+
     inputRows_.push_back(newRow);
     previousRow_ = newRow;
   }
-
-  buildNextInputOrPartition(false);
-
-  inputRows_.clear();
 }
 
 void RowLevelStreamingWindowBuild::noMoreInput() {
   isFinished_ = true;
-  windowPartitions_[outputCurrentPartition_]->setTotalNum(
-      currentPartitionNum_ - 1);
-  inputRows_.clear();
+  buildNextInputOrPartition(true);
 }
 
 std::shared_ptr<WindowPartition> RowLevelStreamingWindowBuild::nextPartition() {
-  return windowPartitions_[++outputCurrentPartition_];
+  return windowPartitions_[outputCurrentPartition_++];
 }
 
 bool RowLevelStreamingWindowBuild::hasNextPartition() {
   return windowPartitions_.size() > 0 &&
-      outputCurrentPartition_ < int(windowPartitions_.size() - 1);
+      outputCurrentPartition_ <= int(windowPartitions_.size() - 1);
 }
 
 } // namespace facebook::velox::exec
