@@ -1226,7 +1226,8 @@ void re2SplitAll(
 
 class Re2SplitAllConstantPattern final : public exec::VectorFunction {
  public:
-  Re2SplitAllConstantPattern(RE2& re2): re_(re2) {}
+  Re2SplitAllConstantPattern(StringView pattern):
+        re_(toStringPiece(pattern), RE2::Quiet) {}
 
   void apply(
       const SelectivityVector& rows,
@@ -1257,7 +1258,7 @@ class Re2SplitAllConstantPattern final : public exec::VectorFunction {
   }
 
  private:
-  RE2& re_;
+  RE2 re_;
 };
 
 template <bool (*Fn)(StringView, const RE2&)>
@@ -2042,7 +2043,7 @@ std::shared_ptr<exec::VectorFunction> makeRe2SplitAll(
   try {
     auto re_ = std::make_unique<RE2>(toStringPiece(pattern));
     checkForBadPattern(*re_);
-    return std::make_shared<Re2SplitAllConstantPattern>(*re_);
+    return std::make_shared<Re2SplitAllConstantPattern>(pattern);
   } catch (...) {
     return std::make_shared<exec::AlwaysFailingVectorFunction>(
         std::current_exception());
