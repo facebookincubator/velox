@@ -83,8 +83,10 @@ jobs:
         shell: bash
         working-directory: velox
     outputs:
-      bias_presto: ${{ steps.sig-check.outputs.presto }}
-      bias_spark: ${{ steps.sig-check.outputs.spark }}
+      presto_bias: ${{ steps.sig-check.outputs.presto_functions }}
+      presto_erro: ${{ steps.sig-check.outputs.presto_error }}
+      spark_bias: ${{ steps.sig-check.outputs.spark_functions }}
+      spark_error: ${{ steps.sig-check.outputs.spark_error }}
 
     steps:
 
@@ -194,31 +196,7 @@ jobs:
         run: |
           source .venv/bin/activate
           python3 -m pip install deepdiff
-          python3 scripts/signature.py export --spark /tmp/signatures/spark_signatures_contender.json
-          python3 scripts/signature.py export --presto /tmp/signatures/presto_signatures_contender.json
-
-          python3 scripts/signature.py bias /tmp/signatures/presto_signatures_main.json \
-                                           /tmp/signatures/presto_signatures_contender.json \
-                                           /tmp/signatures/presto_bias_functions 2>&1 > /tmp/signatures/presto-err-message \
-                                           || echo "::notice ::Presto Signature check failed" \
-                                           | tee /tmp/signatures/presto-err-code
-          if [ -f "/tmp/signatures/presto_bias_functions" ]; then
-            echo "presto=true" >> $GITHUB_OUTPUT
-          else
-            echo "presto=false" >> $GITHUB_OUTPUT
-          fi
-
-          python3 scripts/signature.py bias /tmp/signatures/spark_signatures_main.json \
-                                           /tmp/signatures/spark_signatures_contender.json \
-                                           /tmp/signatures/spark_bias_functions \
-                                           || echo "::notice ::Spark Signature check failed" \
-                                           | tee /tmp/signatures/spark-err-code
-
-          if [ -f "/tmp/signatures/spark_bias_functions" ]; then
-            echo "spark=true" >> $GITHUB_OUTPUT
-          else
-            echo "spark=false" >> $GITHUB_OUTPUT
-          fi
+          python3 scripts/signature.py gh_bias_check presto spark
 
       - name: Upload Signature Artifacts
         uses: actions/upload-artifact@v4
@@ -345,7 +323,7 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
-    if: ${{ needs.compile.outputs.spark  == 'true' }}
+    if: ${{ needs.compile.outputs.presto_functions  == 'true' }}
     timeout-minutes: 120
     steps:
 
@@ -382,14 +360,6 @@ jobs:
                 --minloglevel=0 \
                 --repro_persist_path=/tmp/presto_fuzzer_repro \
             && echo -e "\n\nPresto Fuzzer run finished successfully."
-
-      - name: Surface fpresto function signature errors
-        run: |
-          if [ -f /tmp/signatures/presto-signature-error-code ]; then
-            echo "Incompatible changes have been made to function signatures:"
-            cat /tmp/signatures/presto-err-message
-            exit 1
-          fi
 
       - name: Archive Spark expression production artifacts
         if: ${{ !cancelled() }}
@@ -438,7 +408,7 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
-    if: ${{ needs.compile.outputs.spark  == 'true' }}
+    if: ${{ needs.compile.outputs.spark_functions  == 'true' }}
     timeout-minutes: 120
     steps:
 
@@ -625,7 +595,7 @@ jobs:
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
     needs: compile
-    runs-on: ubuntu-latest 
+    runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     if: ${{ github.event_name != 'pull_request' }}
@@ -670,3 +640,15 @@ jobs:
           path: |
             /tmp/aggregate_fuzzer_repro
             /tmp/server.log
+
+  surface-signature-errors:
+    name: Signature Changes
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Surface Presto function signature errors
+        if: ${{ needs.compile.outputs.presto_error }}
+        run: |
+          echo "Found incompatible changes in presto function signatures. Please check the summary for details."
+          exit 1
+
