@@ -1226,8 +1226,8 @@ void re2SplitAll(
 
 class Re2SplitAllConstantPattern final : public exec::VectorFunction {
  public:
-  Re2SplitAllConstantPattern(StringView pattern):
-        re_(toStringPiece(pattern), RE2::Quiet) {}
+  Re2SplitAllConstantPattern(StringView pattern)
+      : re_(toStringPiece(pattern), RE2::Quiet) {}
 
   void apply(
       const SelectivityVector& rows,
@@ -1235,7 +1235,6 @@ class Re2SplitAllConstantPattern final : public exec::VectorFunction {
       const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
-
     BaseVector::ensureWritable(
         rows, ARRAY(VARCHAR()), context.pool(), resultRef);
     exec::VectorWriter<Array<Varchar>> resultWriter;
