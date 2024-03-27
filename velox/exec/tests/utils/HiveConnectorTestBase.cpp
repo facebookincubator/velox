@@ -89,11 +89,13 @@ void HiveConnectorTestBase::writeToFile(
 std::vector<RowVectorPtr> HiveConnectorTestBase::makeVectors(
     const RowTypePtr& rowType,
     int32_t numVectors,
-    int32_t rowsPerVector) {
+    int32_t rowsPerVector,
+    std::function<bool(vector_size_t /*index*/)> isNullAt) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < numVectors; ++i) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
-        velox::test::BatchMaker::createBatch(rowType, rowsPerVector, *pool_));
+        velox::test::BatchMaker::createBatch(
+            rowType, rowsPerVector, *pool_, isNullAt));
     vectors.push_back(vector);
   }
   return vectors;

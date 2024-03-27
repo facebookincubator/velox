@@ -53,7 +53,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
   std::vector<RowVectorPtr> makeVectors(
       const RowTypePtr& rowType,
       int32_t numVectors,
-      int32_t rowsPerVector);
+      int32_t rowsPerVector,
+      std::function<bool(vector_size_t /*index*/)> isNullAt = nullptr);
 
   using OperatorTestBase::assertQuery;
 
