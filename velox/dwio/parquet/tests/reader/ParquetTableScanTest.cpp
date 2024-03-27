@@ -443,6 +443,76 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
       result.second, {makeRowVector({"a"}, {makeFlatVector<int64_t>({0, 1})})});
 }
 
+TEST_F(ParquetTableScanTest, timestampINT64) {
+  auto a = makeFlatVector<Timestamp>(
+      12, [](auto row) { return Timestamp(row % 4, 0); });
+
+  auto expected = makeRowVector({"time"}, {a});
+  createDuckDbTable("expected", {expected});
+
+  auto vector = makeArrayVector<Timestamp>({{}});
+
+  loadData(
+      getExampleFilePath("int64_millis_dictionary.parquet"),
+      ROW({"time"}, {TIMESTAMP()}),
+      makeRowVector(
+          {"time"},
+          {
+              vector,
+          }));
+  assertSelect({"time"}, "SELECT time from expected");
+
+  loadData(
+      getExampleFilePath("int64_millis_plain.parquet"),
+      ROW({"time"}, {TIMESTAMP()}),
+      makeRowVector(
+          {"time"},
+          {
+              vector,
+          }));
+  assertSelect({"time"}, "SELECT time from expected");
+
+  loadData(
+      getExampleFilePath("int64_micros_dictionary.parquet"),
+      ROW({"time"}, {TIMESTAMP()}),
+      makeRowVector(
+          {"time"},
+          {
+              vector,
+          }));
+  assertSelect({"time"}, "SELECT time from expected");
+
+  loadData(
+      getExampleFilePath("int64_micros_plain.parquet"),
+      ROW({"time"}, {TIMESTAMP()}),
+      makeRowVector(
+          {"time"},
+          {
+              vector,
+          }));
+  assertSelect({"time"}, "SELECT time from expected");
+}
+
+TEST_F(ParquetTableScanTest, timestampINT64BackwardCompatible) {
+  auto a = makeFlatVector<Timestamp>(
+      3, [](auto row) { return Timestamp(0, 10 * 1000000L); });
+
+  auto expected = makeRowVector({"time"}, {a});
+  createDuckDbTable("expected", {expected});
+
+  auto vector = makeArrayVector<Timestamp>({{}});
+
+  loadData(
+      getExampleFilePath("int64_millis_compatibility.parquet"),
+      ROW({"time"}, {TIMESTAMP()}),
+      makeRowVector(
+          {"time"},
+          {
+              vector,
+          }));
+  assertSelect({"time"}, "SELECT time from expected");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};

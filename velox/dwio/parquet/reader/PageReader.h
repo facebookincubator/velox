@@ -20,6 +20,7 @@
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
+#include "velox/dwio/common/TimestampDecoder.h"
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
@@ -269,8 +270,13 @@ class PageReader {
         nullsFromFastPath = false;
         deltaBpDecoder_->readWithVisitor<true>(nulls, visitor);
       } else {
-        directDecoder_->readWithVisitor<true>(
-            nulls, visitor, nullsFromFastPath);
+        if (directDecoder_) {
+          directDecoder_->readWithVisitor<true>(
+              nulls, visitor, nullsFromFastPath);
+        } else {
+          timestampDecoder_->readWithVisitor<true>(
+              nulls, visitor, nullsFromFastPath);
+        }
       }
     } else {
       if (isDictionary()) {
@@ -279,8 +285,13 @@ class PageReader {
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
         deltaBpDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
-        directDecoder_->readWithVisitor<false>(
-            nulls, visitor, !this->type_->type()->isShortDecimal());
+        if (directDecoder_) {
+          directDecoder_->readWithVisitor<false>(
+              nulls, visitor, !this->type_->type()->isShortDecimal());
+        } else {
+          timestampDecoder_->readWithVisitor<false>(
+              nulls, visitor, nullsFromFastPath);
+        }
       }
     }
   }
@@ -479,6 +490,7 @@ class PageReader {
   std::unique_ptr<StringDecoder> stringDecoder_;
   std::unique_ptr<BooleanDecoder> booleanDecoder_;
   std::unique_ptr<DeltaBpDecoder> deltaBpDecoder_;
+  std::unique_ptr<dwio::common::TimestampDecoder> timestampDecoder_;
   // Add decoders for other encodings here.
 };
 
