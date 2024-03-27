@@ -48,9 +48,12 @@ class FooterStatisticsImpl : public dwio::common::Statistics {
 
   virtual ~FooterStatisticsImpl() override = default;
 
-  virtual const dwio::common::ColumnStatistics& getColumnStatistics(
+  virtual const dwio::common::ColumnStatistics* getColumnStatistics(
       uint32_t columnId) const override {
-    return *colStats_.at(columnId);
+    if (!colStats_.empty()) {
+      return colStats_.at(columnId).get();
+    }
+    return nullptr;
   }
 
   uint32_t getNumberOfColumns() const override {
