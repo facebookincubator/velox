@@ -102,7 +102,7 @@ function install_mvfst {
 
 function install_fbthrift {
   github_checkout facebook/fbthrift "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF
+  cmake_install -DBUILD_TESTS=OFF -Dthriftpy=OFF || true
 }
 
 function install_conda {
@@ -116,7 +116,7 @@ function install_conda {
     echo "Unsupported architecture: $ARCH"
     exit 1
   fi
-  
+
   mkdir -p conda && cd conda
   wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh
   bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
