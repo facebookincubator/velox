@@ -138,7 +138,8 @@ class WindowPartition {
       vector_size_t end,
       vector_size_t currentRow,
       column_index_t orderByColumn,
-      column_index_t frameColumn) const;
+      column_index_t frameColumn,
+      const CompareFlags& flags) const;
 
   template <bool isAscending>
   vector_size_t linearSearchFrameValue(
@@ -147,7 +148,8 @@ class WindowPartition {
       vector_size_t end,
       vector_size_t currentRow,
       column_index_t orderByColumn,
-      column_index_t frameColumn) const;
+      column_index_t frameColumn,
+      const CompareFlags& flags) const;
 
   // Iterates over 'numBlockRows' and searches frame value for each row.
   template <bool isAscending>
