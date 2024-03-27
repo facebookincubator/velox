@@ -162,8 +162,7 @@ class AsyncSource {
       if (making_) {
         promise_ = std::make_unique<ContinuePromise>();
         wait = promise_->getSemiFuture();
-      }
-      if (make_) {
+      } else if (make_) {
         make_ = nullptr;
       }
     }
