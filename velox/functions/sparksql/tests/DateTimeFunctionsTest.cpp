@@ -253,7 +253,7 @@ TEST_F(DateTimeFunctionsTest, currentTimestamp) {
   timestampAfter = getCurrentTimestamp();
 
   EXPECT_TRUE(result.has_value());
-  auto resultInInt = result.value().toMicros();
+  resultInInt = result.value().toMicros();
   EXPECT_LE(timestampBefore, resultInInt);
   EXPECT_LE(resultInInt, timestampAfter);
   EXPECT_LE(timestampAfter - timestampBefore, 300);
