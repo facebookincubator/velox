@@ -78,7 +78,9 @@ def export(args):
         jsoned_signatures[key] = [str(value) for value in signatures[key]]
 
     # Persist to file
-    json.dump(jsoned_signatures, args.output_file)
+    with open(args.output_file, "w") as f:
+        json.dump(jsoned_signatures, f)
+
     return 0
 
 
@@ -133,14 +135,21 @@ def diff_signatures(base_signatures, contender_signatures):
 
 def diff(args):
     """Diffs Velox function signatures."""
-    base_signatures = json.load(args.base)
-    contender_signatures = json.load(args.contender)
+    with open(args.base) as f:
+        base_signatures = json.load(f)
+
+    with open(args.contender) as f:
+        contender_signatures = json.load(f)
     return diff_signatures(base_signatures, contender_signatures)[1]
 
 
 def bias(args):
-    base_signatures = json.load(args.base)
-    contender_signatures = json.load(args.contender)
+    with open(args.base) as f:
+        base_signatures = json.load(f)
+
+    with open(args.contender) as f:
+        contender_signatures = json.load(f)
+
     tickets = args.ticket_value
     bias_output, status = bias_signatures(
         base_signatures, contender_signatures, tickets
@@ -186,6 +195,7 @@ def gh_bias_check(args):
 
     # export signatures for each group
     for group in args.group:
+        print(f"Exporting {group} signatures...")
         export_args = parse_args(
             [
                 "export",
@@ -197,6 +207,7 @@ def gh_bias_check(args):
 
     # compare signatures for each group
     for group in args.group:
+        print(f"Comparing {group} signatures...")
         bias_args = parse_args(
             [
                 "bias",
@@ -233,16 +244,16 @@ def parse_args(args):
     export_command_parser = command.add_parser("export")
     export_command_parser.add_argument("--spark", action="store_true")
     export_command_parser.add_argument("--presto", action="store_true")
-    export_command_parser.add_argument("output_file", type=argparse.FileType("w"))
+    export_command_parser.add_argument("output_file", type=str)
 
     diff_command_parser = command.add_parser("diff")
-    diff_command_parser.add_argument("base", type=argparse.FileType("r"))
-    diff_command_parser.add_argument("contender", type=argparse.FileType("r"))
+    diff_command_parser.add_argument("base", type=str)
+    diff_command_parser.add_argument("contender", type=str)
 
     bias_command_parser = command.add_parser("bias")
-    bias_command_parser.add_argument("base", type=argparse.FileType("r"))
-    bias_command_parser.add_argument("contender", type=argparse.FileType("r"))
-    bias_command_parser.add_argument("output_path")
+    bias_command_parser.add_argument("base", type=str)
+    bias_command_parser.add_argument("contender", type=str)
+    bias_command_parser.add_argument("output_path", type=str)
     bias_command_parser.add_argument(
         "ticket_value", type=get_tickets, default=10, nargs="?"
     )
