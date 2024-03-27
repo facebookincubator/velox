@@ -181,7 +181,6 @@ jobs:
         with:
           path: "${{ env.CCACHE_DIR }}"
           key: ccache-fuzzer-centos
-          retention-days: "${{ env.RETENTION }}"
 
       - name: Build PyVelox
         env:
