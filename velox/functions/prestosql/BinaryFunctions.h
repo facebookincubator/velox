@@ -21,6 +21,7 @@
 
 #include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/encode/Base32.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/Udf.h"
@@ -327,6 +328,25 @@ struct ToBase64UrlFunction {
       const arg_type<Varbinary>& input) {
     result.resize(encoding::Base64::calculateEncodedSize(input.size()));
     encoding::Base64::encodeUrl(input.data(), input.size(), result.data());
+  }
+};
+
+template <typename T>
+struct FromBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<Varchar>& input) {
+    try {
+      auto inputSize = input.size();
+      result.resize(
+          encoding::Base32::calculateDecodedSize(input.data(), inputSize));
+      encoding::Base32::decode(
+          input.data(), inputSize, result.data(), result.size());
+    } catch (const encoding::EncoderException& e) {
+      VELOX_USER_FAIL(e.what());
+    }
   }
 };
 
