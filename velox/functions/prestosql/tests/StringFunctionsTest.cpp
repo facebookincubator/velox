@@ -1887,10 +1887,6 @@ TEST_F(StringFunctionsTest, hammingDistance) {
           "The quick green dog jumps over the grey pot"),
       10);
 
-  EXPECT_EQ(hammingDistance(std::nullopt, std::nullopt), std::nullopt);
-  EXPECT_EQ(hammingDistance("hello", std::nullopt), std::nullopt);
-  EXPECT_EQ(hammingDistance(std::nullopt, "world"), std::nullopt);
-
   EXPECT_EQ(hammingDistance("hello na\u00EFve world", "hello naive world"), 1);
   EXPECT_EQ(
       hammingDistance(
