@@ -341,6 +341,59 @@ struct StrLPosFunction : public StrPosFunctionBase<T, true> {};
 template <typename T>
 struct StrRPosFunction : public StrPosFunctionBase<T, false> {};
 
+/// hamming_distance(string, string) -> bigint
+/// Computes the hamming distance between two strings.
+template <typename T>
+struct HammingDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TCodePoint>
+  void doCall(
+      out_type<int64_t>& result,
+      const TCodePoint* leftCodePoints,
+      const TCodePoint* rightCodePoints,
+      size_t leftCodePointsSize,
+      size_t rightCodePointsSize) {
+
+    VELOX_USER_CHECK(
+        leftCodePointsSize == rightCodePointsSize,
+        "The input strings to hamming_distance function must have the same length");
+
+    int64_t distance = 0;
+    for (int i = 0; i < leftCodePointsSize; i++) {
+      if (leftCodePoints[i] != rightCodePoints[i]) {
+        distance++;
+      }
+    }
+    result=distance;
+  }
+
+  void call(
+      out_type<int64_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    auto leftCodePoints = stringImpl::stringToCodePoints(left);
+    auto rightCodePoints = stringImpl::stringToCodePoints(right);
+    doCall<int32_t>(
+        result,
+        leftCodePoints.data(),
+        rightCodePoints.data(),
+        leftCodePoints.size(),
+        rightCodePoints.size());
+  }
+
+  void callAscii(
+      out_type<int64_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    auto leftCodePoints = reinterpret_cast<const uint8_t*>(left.data());
+    auto rightCodePoints = reinterpret_cast<const uint8_t*>(right.data());
+    doCall<uint8_t>(
+        result, leftCodePoints, rightCodePoints, left.size(), right.size());
+  }
+};
+
+
 template <typename T>
 struct LevenshteinDistanceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
