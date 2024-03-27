@@ -581,14 +581,16 @@ process. This set may not include all the rows. By default, a vector function
 is assumed to have the default null behavior, e.g. null in any input produces
 a null result. In this case, the expression evaluation engine will exclude
 rows with nulls from the “rows” specified in the call to “apply”. If a
-function has a different behavior for null inputs, it must override the
-isDefaultNullBehavior method to return false.
+function has a different behavior for null inputs, VectorFunctionMetadata's
+defaultNullBehavior must be set to false when it is registered.
 
 .. code-block:: c++
 
-    bool isDefaultNullBehavior() const override {
-      return false;
-    }
+    exec::registerStatefulVectorFunction(
+      prefix + "least",
+      leastSignatures(),
+      makeLeast,
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
 
 In this case, the “rows” parameter will include rows with null inputs and the
 function will need to handle these. By default, the function can assume that
