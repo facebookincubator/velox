@@ -89,6 +89,10 @@ void registerArithmeticFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "divide");
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
+  registerFunction<sparksql::NormalizeNanFunction, float, float>(
+      {prefix + "normalize_nan"});
+  registerFunction<sparksql::NormalizeNanFunction, double, double>(
+      {prefix + "normalize_nan"});
 }
 
 } // namespace facebook::velox::functions::sparksql

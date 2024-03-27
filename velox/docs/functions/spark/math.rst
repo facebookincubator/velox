@@ -152,6 +152,11 @@ Mathematical Functions
         SELECT CAST(1 as DECIMAL(20, 3)) * CAST(0 as DECIMAL(20, 3)); -- decimal 0.000000
         SELECT CAST(201e-38 as DECIMAL(38, 38)) * CAST(301e-38 as DECIMAL(38, 38)); -- decimal 0.0000000000000000000000000000000000000
 
+.. spark:function:: normalize_nan(x) -> [same as x]
+
+    Normalize different Nans.
+    Supported types are: REAL, DOUBLE.
+
 .. spark:function:: not(x) -> boolean
 
     Logical not. ::

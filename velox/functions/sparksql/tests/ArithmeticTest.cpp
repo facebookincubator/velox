@@ -149,6 +149,7 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
   static constexpr double kNanDouble = std::numeric_limits<double>::quiet_NaN();
   static constexpr float kInf = std::numeric_limits<float>::infinity();
+  static constexpr float kInfDouble = std::numeric_limits<double>::infinity();
 };
 
 TEST_F(ArithmeticTest, UnaryMinus) {
@@ -434,6 +435,66 @@ TEST_F(ArithmeticTest, isNanDouble) {
   EXPECT_EQ(true, isNan(kNanDouble));
   EXPECT_EQ(true, isNan(0.0 / 0.0));
   EXPECT_EQ(false, isNan(std::nullopt));
+}
+
+TEST_F(ArithmeticTest, normalizeNanFloat) {
+  const auto normalizeNan = [&](std::optional<float> a) {
+    return evaluateOnce<float>("normalize_nan(c0)", a);
+  };
+
+  const auto hasher = [&](std::optional<float> f) {
+    return folly::hasher<float>()(f.value());
+  };
+
+  const auto toInt64 = [&](std::optional<float> f) -> int64_t {
+    return f.value();
+  };
+
+  EXPECT_EQ(0.0f, normalizeNan(0.0f));
+  EXPECT_EQ(0.0f, normalizeNan(-0.0f));
+  EXPECT_EQ(1.0f, normalizeNan(1.0f));
+  // folly::hasher<float>()(kNan) != folly::hasher<float>()(0.0f / 0.0f)
+  // toInt64(kNan) != toInt64(0.0f / 0.0f)
+  EXPECT_EQ(toInt64(normalizeNan(kNan)), toInt64(normalizeNan(kNan)));
+  EXPECT_EQ(toInt64(normalizeNan(kNan)), toInt64(normalizeNan(0.0f / 0.0f)));
+  EXPECT_EQ(toInt64(normalizeNan(kNan)), toInt64(normalizeNan(kInf - kInf)));
+
+  EXPECT_EQ(hasher(normalizeNan(kNan)), hasher(normalizeNan(kNan)));
+  EXPECT_EQ(hasher(normalizeNan(kNan)), hasher(normalizeNan(0.0f / 0.0f)));
+  EXPECT_EQ(hasher(normalizeNan(kNan)), hasher(normalizeNan(kInf - kInf)));
+}
+
+TEST_F(ArithmeticTest, normalizeNanDouble) {
+  const auto normalizeNan = [&](std::optional<double> a) {
+    return evaluateOnce<double>("normalize_nan(c0)", a);
+  };
+
+  const auto hasher = [&](std::optional<double> f) {
+    return folly::hasher<double>()(f.value());
+  };
+
+  const auto toInt64 = [&](std::optional<double> f) -> int64_t {
+    return f.value();
+  };
+
+  EXPECT_EQ(0.0d, normalizeNan(0.0d));
+  EXPECT_EQ(0.0d, normalizeNan(-0.0d));
+  EXPECT_EQ(1.0d, normalizeNan(1.0d));
+
+  EXPECT_EQ(
+      toInt64(normalizeNan(kNanDouble)), toInt64(normalizeNan(kNanDouble)));
+  EXPECT_EQ(
+      toInt64(normalizeNan(kNanDouble)), toInt64(normalizeNan(0.0d / 0.0d)));
+  EXPECT_EQ(
+      toInt64(normalizeNan(kNanDouble)),
+      toInt64(normalizeNan(kInfDouble - kInfDouble)));
+
+  EXPECT_EQ(hasher(normalizeNan(kNanDouble)), hasher(normalizeNan(kNanDouble)));
+  EXPECT_EQ(
+      hasher(normalizeNan(kNanDouble)), hasher(normalizeNan(0.0d / 0.0d)));
+  EXPECT_EQ(
+      hasher(normalizeNan(kNanDouble)),
+      hasher(normalizeNan(kInfDouble - kInfDouble)));
 }
 
 TEST_F(ArithmeticTest, hexWithBigint) {
