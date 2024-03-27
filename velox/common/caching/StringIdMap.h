@@ -70,6 +70,8 @@ class StringIdMap {
     uint32_t numInUse{};
   };
 
+  void checkAndReportIntegrity(uint64_t id = kNoId) const;
+
   std::mutex mutex_;
   folly::F14FastMap<std::string, uint64_t> stringToId_;
   folly::F14FastMap<uint64_t, Entry> idToString_;
@@ -115,6 +117,7 @@ class StringIdLease {
   }
 
   ~StringIdLease() {
+    VLOG(1) << "[StringIdLease] releasing id: " << id_;
     clear();
   }
 

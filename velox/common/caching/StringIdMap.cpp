@@ -34,6 +34,7 @@ void StringIdMap::release(uint64_t id) {
     VELOX_CHECK_LT(
         0, it->second.numInUse, "Extra release of id in StringIdMap");
     if (--it->second.numInUse == 0) {
+      VLOG(1) << "[StringIdMap] removed id: " << id;
       pinnedSize_ -= it->second.string.size();
       auto strIter = stringToId_.find(it->second.string);
       assert(strIter != stringToId_.end());
@@ -43,13 +44,117 @@ void StringIdMap::release(uint64_t id) {
   }
 }
 
+void StringIdMap::checkAndReportIntegrity(uint64_t id) const {
+  auto reportError = [](const std::string& msg) {
+    LOG(ERROR) << "[StringIdMap] " << msg;
+  };
+
+  if (idToString_.size() != stringToId_.size()) {
+    reportError(fmt::format(
+        "idToString size {}. stringToId size {}. ",
+        idToString_.size(),
+        stringToId_.size()));
+  }
+
+  std::vector<std::pair<uint64_t, std::string>> missingFiles;
+  uint64_t pinnedSize{0};
+  for (auto it = stringToId_.begin(); it != stringToId_.end(); ++it) {
+    pinnedSize += it->first.length();
+    if (it->second == id) {
+      reportError(fmt::format(
+          "Found missing id {} in stringToId with file \"{}\".",
+          id,
+          it->first));
+    }
+    auto idEntry = idToString_.find(it->second);
+    if (idEntry == idToString_.end()) {
+      missingFiles.push_back(
+          std::pair<uint64_t, std::string>(it->second, it->first));
+    }
+  }
+
+  if (pinnedSize != pinnedSize_) {
+    reportError(fmt::format(
+        "stringToId pinnedSize {} does not match actual pinnedSize {}.",
+        pinnedSize_,
+        pinnedSize));
+  }
+
+  for (auto fileIt = missingFiles.begin(); fileIt != missingFiles.end();
+       ++fileIt) {
+    if (fileIt->first != id) {
+      reportError(fmt::format(
+          "Extra file {} in stringToId with id {}. ",
+          fileIt->second,
+          fileIt->first));
+    }
+    for (auto it = idToString_.begin(); it != idToString_.end(); ++it) {
+      if (fileIt->second == it->second.string) {
+        reportError(fmt::format(
+            " Extra file \"{}\" maps to id {} in idToString with entryId {} and numInUse {}. ",
+            fileIt->second,
+            it->first,
+            it->second.id,
+            it->second.numInUse));
+      }
+    }
+  }
+  missingFiles.clear();
+  pinnedSize = 0;
+
+  for (auto idIt = idToString_.begin(); idIt != idToString_.end(); ++idIt) {
+    pinnedSize += idIt->second.string.length();
+    if (idIt->first != idIt->second.id) {
+      reportError(fmt::format(
+          " idToString id does {} not match corresponding entry id {} file {} numInUse {}. ",
+          idIt->first,
+          idIt->second.id,
+          idIt->second.string,
+          idIt->second.numInUse));
+    }
+
+    auto stringEntry = stringToId_.find(idIt->second.string);
+    if (stringEntry == stringToId_.end()) {
+      missingFiles.push_back(
+          std::pair<uint64_t, std::string>(idIt->first, idIt->second.string));
+    }
+  }
+
+  if (pinnedSize != pinnedSize_) {
+    reportError(fmt::format(
+        "idToString pinnedSize {} does not match actual pinnedSize {}.",
+        pinnedSize_,
+        pinnedSize));
+  }
+
+  for (auto fileIt = missingFiles.begin(); fileIt != missingFiles.end();
+       ++fileIt) {
+    reportError(fmt::format(
+        "Extra id {} in idToString with file \"{}\". ",
+        fileIt->first,
+        fileIt->second));
+    for (auto stringIt = stringToId_.begin(); stringIt != stringToId_.end();
+         ++stringIt) {
+      // Find if the missing id has an entry (which would map to a different
+      // file).
+      if (fileIt->first == stringIt->second) {
+        reportError(fmt::format(
+            " Extra id {} maps to file \"{}\" in stringToId . ",
+            fileIt->first,
+            stringIt->first));
+      }
+    }
+  }
+}
+
 void StringIdMap::addReference(uint64_t id) {
   std::lock_guard<std::mutex> l(mutex_);
   auto it = idToString_.find(id);
-  VELOX_CHECK(
-      it != idToString_.end(),
-      "Trying to add a reference to id {} that is not in StringIdMap",
-      id);
+  if (it == idToString_.end()) {
+    checkAndReportIntegrity(id);
+    VELOX_FAIL(
+        "Trying to add a reference to id {} that is not in StringIdMap", id);
+  }
 
   ++it->second.numInUse;
 }
