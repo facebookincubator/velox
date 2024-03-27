@@ -76,6 +76,16 @@ class TableScanTest : public virtual HiveConnectorTestBase {
   std::vector<RowVectorPtr> makeVectors(
       int32_t count,
       int32_t rowsPerVector,
+      const RowTypePtr& rowType = nullptr,
+      std::function<bool(vector_size_t /*index*/)> isNullAt = nullptr) {
+    auto inputs = rowType ? rowType : rowType_;
+    return HiveConnectorTestBase::makeVectors(
+        inputs, count, rowsPerVector, isNullAt);
+  }
+
+  std::vector<RowVectorPtr> makeNullableVectors(
+      int32_t count,
+      int32_t rowsPerVector,
       const RowTypePtr& rowType = nullptr) {
     auto inputs = rowType ? rowType : rowType_;
     return HiveConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
@@ -172,7 +182,8 @@ class TableScanTest : public virtual HiveConnectorTestBase {
   void testPartitionedTableImpl(
       const std::string& filePath,
       const TypePtr& partitionType,
-      const std::optional<std::string>& partitionValue) {
+      const std::optional<std::string>& partitionValue,
+      bool isPartitionColumnInFile = false) {
     auto split = HiveConnectorSplitBuilder(filePath)
                      .partitionKey("pkey", partitionValue)
                      .build();
@@ -192,8 +203,11 @@ class TableScanTest : public virtual HiveConnectorTestBase {
 
     std::string partitionValueStr =
         partitionValue.has_value() ? "'" + *partitionValue + "'" : "null";
-    assertQuery(
-        op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
+
+    std::string duckdbSql = isPartitionColumnInFile
+        ? "SELECT * FROM tmp"
+        : fmt::format("SELECT {}, * FROM tmp", partitionValueStr);
+    assertQuery(op, split, duckdbSql);
 
     outputType = ROW({"c0", "pkey", "c1"}, {BIGINT(), partitionType, DOUBLE()});
     op = PlanBuilder()
@@ -231,12 +245,60 @@ class TableScanTest : public virtual HiveConnectorTestBase {
         op, split, fmt::format("SELECT {} FROM tmp", partitionValueStr));
   }
 
-  void testPartitionedTable(
+  void testPartitionedTableWithFilterOnPartitionKey(
+      const RowTypePtr& fileSchema,
       const std::string& filePath,
       const TypePtr& partitionType,
       const std::optional<std::string>& partitionValue) {
-    testPartitionedTableImpl(filePath, partitionType, partitionValue);
-    testPartitionedTableImpl(filePath, partitionType, std::nullopt);
+    // The filter on the partition key cannot eliminate the partition, therefore
+    // the split should NOT be skipped and all rows in it should be selected.
+    auto split = HiveConnectorSplitBuilder(filePath)
+                     .partitionKey("pkey", partitionValue)
+                     .build();
+    auto outputType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+    ColumnHandleMap assignments = {
+        {"pkey", partitionKey("pkey", partitionType)},
+        {"c0", regularColumn("c0", BIGINT())},
+        {"c1", regularColumn("c1", DOUBLE())}};
+    std::string filter = partitionValue.has_value()
+        ? "pkey = " + partitionValue.value()
+        : "pkey IS NULL";
+    auto op = PlanBuilder()
+                  .startTableScan()
+                  .dataColumns(fileSchema)
+                  .outputType(outputType)
+                  .assignments(assignments)
+                  .subfieldFilter(filter)
+                  .endTableScan()
+                  .planNode();
+
+    assertQuery(op, split, fmt::format("SELECT c0, c1 FROM tmp"));
+
+    // The split should be skipped because the partition key does not pass
+    // the filter
+    filter = partitionValue.has_value() ? "pkey <> " + partitionValue.value()
+                                        : "pkey IS NOT NULL";
+    op = PlanBuilder()
+             .startTableScan()
+             .dataColumns(fileSchema)
+             .outputType(outputType)
+             .assignments(assignments)
+             .subfieldFilter(filter)
+             .endTableScan()
+             .planNode();
+    assertQuery(op, split, fmt::format("SELECT c0, c1 FROM tmp WHERE 1 = 0"));
+  }
+
+  void testPartitionedTable(
+      const std::string& filePath,
+      const TypePtr& partitionType,
+      const std::optional<std::string>& partitionValue,
+      const RowTypePtr& fileSchema = nullptr,
+      bool isPartitionColumnInFile = false) {
+    testPartitionedTableImpl(
+        filePath, partitionType, partitionValue, isPartitionColumnInFile);
+    testPartitionedTableImpl(
+        filePath, partitionType, std::nullopt, isPartitionColumnInFile);
   }
 
   RowTypePtr rowType_{
@@ -1752,6 +1814,27 @@ TEST_F(TableScanTest, partitionedTableDateKey) {
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
   testPartitionedTable(filePath->getPath(), DATE(), "2023-10-27");
+}
+
+// Partition key was written as a real column in the data file, and the value is
+// NULL. The column does not have column statistics
+TEST_F(TableScanTest, partitionedTablePartitionKeyInFile) {
+  auto fileSchema = ROW({"c0", "c1", "pkey"}, {BIGINT(), DOUBLE(), BIGINT()});
+  auto filePath = TempFilePath::create();
+  // Create values of all nulls.
+  auto vectors =
+      makeVectors(10, 1'000, fileSchema, [](vector_size_t i) { return true; });
+  //  auto vectors = makeVectors(10, 1'000, rowType);
+  writeToFile(
+      filePath->getPath(),
+      vectors,
+      std::make_shared<facebook::velox::dwrf::Config>(),
+      false);
+  createDuckDbTable(vectors);
+  testPartitionedTable(
+      filePath->getPath(), BIGINT(), std::nullopt, fileSchema, true);
+  testPartitionedTableWithFilterOnPartitionKey(
+      fileSchema, filePath->getPath(), BIGINT(), std::nullopt);
 }
 
 std::vector<StringView> toStringViews(const std::vector<std::string>& values) {
