@@ -189,7 +189,10 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<SubstringIndexFunction, Varchar, Varchar, Varchar, int32_t>(
       {prefix + "substring_index"});
   exec::registerStatefulVectorFunction(
-      prefix + "concat_ws", concatWsSignatures(), makeConcatWs);
+      prefix + "concat_ws",
+      concatWsSignatures(),
+      makeConcatWs,
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
 
   registerFunction<Md5Function, Varchar, Varbinary>({prefix + "md5"});
   registerFunction<Sha1HexStringFunction, Varchar, Varbinary>(

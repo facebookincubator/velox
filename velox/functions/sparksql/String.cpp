@@ -290,10 +290,6 @@ class ConcatWs : public exec::VectorFunction {
  public:
   explicit ConcatWs(const std::string& separator) : separator_(separator) {}
 
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& selected,
       std::vector<VectorPtr>& args,
