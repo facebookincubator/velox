@@ -1844,7 +1844,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(
   // V, C, bigint -> row(bigint, array(C), array(V)) -> array(V).
   signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                            .typeVariable("V")
-                           .typeVariable("C")
+                           .orderableTypeVariable("C")
                            .returnType("array(V)")
                            .intermediateType("row(bigint,array(C),array(V))")
                            .argumentType("V")
