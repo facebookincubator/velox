@@ -29,9 +29,6 @@ class LoadUnit {
   // Perform the IO (read)
   virtual void load() = 0;
 
-  // If memory pressure is to high, we may want to unload the unit
-  virtual void unload() = 0;
-
   // Number of rows in the unit
   virtual uint64_t getNumRows() = 0;
 
