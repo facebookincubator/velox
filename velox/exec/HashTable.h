@@ -834,6 +834,8 @@ class HashTable : public BaseHashTable {
 
   // Adds a row to a hash join build side entry with multiple rows
   // with the same key.
+  // 'rows' should be the same as the one in hash table except for
+  // 'parallelJoinBuild'.
   void pushNext(RowContainer* rows, char* row, char* next);
 
   // Finishes inserting an entry into a join hash table. If 'partitionInfo' is

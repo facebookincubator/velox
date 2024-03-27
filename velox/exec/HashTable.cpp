@@ -1121,14 +1121,11 @@ void HashTable<ignoreNullKeys>::insertForGroupBy(
 template <bool ignoreNullKeys>
 bool HashTable<ignoreNullKeys>::arrayPushRow(char* row, int32_t index) {
   auto existing = table_[index];
-  if (nextOffset_) {
-    if (existing) {
+  if (existing) {
+    if (nextOffset_) {
       hasDuplicates_ = true;
       rows_->appendNextRow(existing, row);
-      return false;
     }
-  } else if (existing) {
-    // Semijoin or a known unique build side ignores a repeat of a key.
     return false;
   }
   table_[index] = row;
