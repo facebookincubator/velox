@@ -168,7 +168,7 @@ jobs:
           CCACHE_BASEDIR: "/__w/velox/velox/velox"
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"
         run: |
-          EXTRA_CMAKE_FLAGS="-DPYTHON_EXECUTABLE=$(python3 -c "import sys; print(sys.executable)") $EXTRA_CMAKE_FLAGS"
+          EXTRA_CMAKE_FLAGS="-DPYTHON_EXECUTABLE=$(which python3) $EXTRA_CMAKE_FLAGS"
           make debug
 
       - name: Ccache after
@@ -386,7 +386,7 @@ jobs:
       - name: Surface fpresto function signature errors
         run: |
           if [ -f /tmp/signatures/presto-signature-error-code ]; then
-            echo "Incompatible changes have been made to function signatures:\n"
+            echo "Incompatible changes have been made to function signatures:"
             cat /tmp/signatures/presto-err-message
             exit 1
           fi
