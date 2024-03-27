@@ -582,15 +582,8 @@ is assumed to have the default null behavior, e.g. null in any input produces
 a null result. In this case, the expression evaluation engine will exclude
 rows with nulls from the “rows” specified in the call to “apply”. If a
 function has a different behavior for null inputs, VectorFunctionMetadata's
-defaultNullBehavior must be set to false when it is registered.
-
-.. code-block:: c++
-
-    exec::registerStatefulVectorFunction(
-      prefix + "least",
-      leastSignatures(),
-      makeLeast,
-      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
+defaultNullBehavior must be set to false when it is registered. See the below
+"Registration" section.
 
 In this case, the “rows” parameter will include rows with null inputs and the
 function will need to handle these. By default, the function can assume that
@@ -644,15 +637,8 @@ dictionary or constant encoded. However, a deterministic function that takes
 a single argument and has default null behavior is guaranteed to receive its
 only input as a flat or constant vector. By default, a function is assumed to
 be deterministic. If that’s not the case, VectorFunctionMetadata's deterministic
-must be set to false when such function is registered.
-
-.. code-block:: c++
-
-    exec::registerVectorFunction(
-      "plus_random",
-      PlusRandomIntegerFunction::signatures(),
-      std::make_unique<PlusRandomIntegerFunction>(),
-      exec::VectorFunctionMetadataBuilder().deterministic(false).build());
+must be set to false when such function is registered. See the below "Registration"
+section.
 
 Note that :ref:`decoded-vector` can be used to get a flat vector-like interface to any
 vector. A helper class exec::DecodedArgs can be used to decode multiple arguments.
@@ -874,12 +860,22 @@ Use exec::registerVectorFunction to register a stateless vector function.
         const std::string& name,
         std::vector<FunctionSignaturePtr> signatures,
         std::unique_ptr<VectorFunction> func,
+        VectorFunctionMetadata metadata = {},
         bool overwrite = true)
 
 exec::registerVectorFunction takes a name, a list of supported signatures
-and unique_ptr to an instance of the function. An optional “overwrite” flag
-specifies whether to overwrite a function if a function with the specified
-name already exists.
+and unique_ptr to an instance of the function. It is optional to provide
+metadata flag to set deterministic or defaultNullBehavior.
+
+.. code-block:: c++
+
+    auto metadata = exec::VectorFunctionMetadataBuilder()
+                      .deterministic(false)
+                      .defaultNullBehavior(false)
+                      .build();
+
+An optional “overwrite” flag specifies whether to overwrite a function if a
+function with the specified name already exists.
 
 Use exec::registerStatefulVectorFunction to register a stateful vector
 function.
@@ -894,6 +890,7 @@ to a vector function over an equivalent simple function.
         const std::string& name,
         std::vector<FunctionSignaturePtr> signatures,
         VectorFunctionFactory factory,
+        VectorFunctionMetadata metadata = {},
         bool overwrite = true)
 
 exec::registerStatefulVectorFunction takes a name, a list of supported
