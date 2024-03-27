@@ -354,7 +354,6 @@ struct HammingDistanceFunction {
       const TCodePoint* rightCodePoints,
       size_t leftCodePointsSize,
       size_t rightCodePointsSize) {
-
     VELOX_USER_CHECK(
         leftCodePointsSize == rightCodePointsSize,
         "The input strings to hamming_distance function must have the same length");
@@ -365,7 +364,7 @@ struct HammingDistanceFunction {
         distance++;
       }
     }
-    result=distance;
+    result = distance;
   }
 
   void call(
@@ -392,7 +391,6 @@ struct HammingDistanceFunction {
         result, leftCodePoints, rightCodePoints, left.size(), right.size());
   }
 };
-
 
 template <typename T>
 struct LevenshteinDistanceFunction {
