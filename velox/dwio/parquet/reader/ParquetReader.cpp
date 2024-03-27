@@ -16,6 +16,7 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
+#include <boost/algorithm/string.hpp>
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
@@ -358,7 +359,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           // the name of the schema element being 'array' is
           // also an indication of this is a list type
           // child of LIST
-          if (children.size() == 1) {
+          if (children.size() == 1 && name != "array" && !boost::algorithm::ends_with(name, "_tuple")) {
             auto childrenCopy = children;
             return std::make_shared<ParquetTypeWithId>(
                 TypeFactory<TypeKind::ARRAY>::create(children[0]->type()),
@@ -385,10 +386,20 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             // could have issue.
             auto childrenRowType = createRowType(children, isFileColumnNamesReadAsLowerCase());
             std::shared_ptr<const dwio::common::TypeWithId> childrenType =
-                std::make_shared<facebook::velox::dwio::common::TypeWithId>(
-                    childrenRowType , std::move(children), curSchemaIdx,
-                    maxSchemaElementIdx, ParquetTypeWithId::kNonLeaf);
-            std::vector<std::shared_ptr<const facebook::velox::dwio::common::TypeWithId>> newRowChildren;
+                std::make_shared<ParquetTypeWithId>(
+                    childrenRowType,
+                    std::move(children),
+                    curSchemaIdx,
+                    maxSchemaElementIdx,
+                    ParquetTypeWithId::kNonLeaf,
+                    std::move(name),
+                    std::nullopt,
+                    std::nullopt,
+                    maxRepeat,
+                    maxDefine,
+                    isOptional,
+                    isRepeated);
+            std::vector<std::shared_ptr<const dwio::common::TypeWithId>> newRowChildren;
             newRowChildren.push_back(childrenType);
 
             return std::make_shared<ParquetTypeWithId>(
