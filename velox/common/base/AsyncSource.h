@@ -89,6 +89,7 @@ class AsyncSource {
     ContinueFuture wait;
     {
       std::lock_guard<std::mutex> l(mutex_);
+      moved_ = true;
       // 'making_' can be read atomically, 'exception' maybe not. So test
       // 'making' so as not to read half-assigned 'exception_'.
       if (!making_ && exception_) {
@@ -110,7 +111,6 @@ class AsyncSource {
         }
         std::swap(make, make_);
       }
-      resultMoved_ = true;
     }
     // Outside of mutex_.
     if (make) {
@@ -153,13 +153,13 @@ class AsyncSource {
   /// 3. Cleans up the 'item_' if 'make_' has completed, but the result 'item_'
   /// has not been returned to the caller.
   void close() {
-    if (closed_ || resultMoved_) {
+    if (closed_ || moved_) {
       return;
     }
     ContinueFuture wait;
     {
       std::lock_guard<std::mutex> l(mutex_);
-      if (making_ && !promise_) {
+      if (making_) {
         promise_ = std::make_unique<ContinuePromise>();
         wait = promise_->getSemiFuture();
       }
@@ -170,12 +170,13 @@ class AsyncSource {
 
     auto& exec = folly::QueuedImmediateExecutor::instance();
     std::move(wait).via(&exec).wait();
-
-    std::lock_guard<std::mutex> l(mutex_);
-    if (item_) {
-      item_ = nullptr;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      if (item_) {
+        item_ = nullptr;
+      }
+      closed_ = true;
     }
-    closed_ = true;
   }
 
  private:
@@ -188,6 +189,6 @@ class AsyncSource {
   std::exception_ptr exception_;
   CpuWallTiming timing_;
   bool closed_{false};
-  bool resultMoved_{false};
+  bool moved_{false};
 };
 } // namespace facebook::velox
