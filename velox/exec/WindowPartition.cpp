@@ -187,7 +187,8 @@ vector_size_t WindowPartition::searchFrameValue(
     vector_size_t end,
     vector_size_t currentRow,
     column_index_t orderByColumn,
-    column_index_t frameColumn) const {
+    column_index_t frameColumn,
+    const CompareFlags& flags) const {
   auto current = partition_[currentRow];
   bool crossedBound = false;
   vector_size_t begin = start;
@@ -195,8 +196,8 @@ vector_size_t WindowPartition::searchFrameValue(
   int compareResult;
   while (finish - begin >= 2) {
     auto mid = (begin + finish) / 2;
-    compareResult =
-        data_->compare(partition_[mid], current, orderByColumn, frameColumn);
+    compareResult = data_->compare(
+        partition_[mid], current, orderByColumn, frameColumn, flags);
     if constexpr (isAscending) {
       crossedBound = compareResult >= 0;
     } else {
@@ -211,7 +212,7 @@ vector_size_t WindowPartition::searchFrameValue(
   }
 
   return linearSearchFrameValue<isAscending>(
-      firstMatch, begin, end, currentRow, orderByColumn, frameColumn);
+      firstMatch, begin, end, currentRow, orderByColumn, frameColumn, flags);
 }
 
 template <bool isAscending>
@@ -221,12 +222,13 @@ vector_size_t WindowPartition::linearSearchFrameValue(
     vector_size_t end,
     vector_size_t currentRow,
     column_index_t orderByColumn,
-    column_index_t frameColumn) const {
+    column_index_t frameColumn,
+    const CompareFlags& flags) const {
   auto current = partition_[currentRow];
   bool crossedBound = false;
   for (vector_size_t i = start; i < end; ++i) {
-    auto compareResult =
-        data_->compare(partition_[i], current, orderByColumn, frameColumn);
+    auto compareResult = data_->compare(
+        partition_[i], current, orderByColumn, frameColumn, flags);
 
     // The bound value was found. Return if firstMatch required.
     // If the last match is required, then we need to find the first row that
@@ -270,8 +272,14 @@ void WindowPartition::updateKRangeFrameBounds(
     const vector_size_t* rawPeerBounds,
     vector_size_t* rawFrameBounds) const {
   column_index_t orderByColumn = sortKeyInfo_[0].first;
-  RowColumn frameRowColumn = data_->columnAt(frameColumn);
+  CompareFlags flags;
+  if constexpr (isAscending) {
+    flags.nullsFirst = sortKeyInfo_[0].second.isNullsFirst();
+  } else {
+    flags.nullsFirst = !sortKeyInfo_[0].second.isNullsFirst();
+  }
 
+  RowColumn frameRowColumn = data_->columnAt(frameColumn);
   vector_size_t start = 0;
   vector_size_t end;
   for (auto i = 0; i < numRows; i++) {
@@ -297,7 +305,13 @@ void WindowPartition::updateKRangeFrameBounds(
         end = partition_.size();
       }
       rawFrameBounds[i] = searchFrameValue<isAscending>(
-          firstMatch, start, end, currentRow, orderByColumn, frameColumn);
+          firstMatch,
+          start,
+          end,
+          currentRow,
+          orderByColumn,
+          frameColumn,
+          flags);
     }
   }
 }
