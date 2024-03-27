@@ -44,7 +44,7 @@ class UnitLoader {
   virtual ~UnitLoader() = default;
 
   // Must block until the unit is loaded. Must return the unit loaded.
-  virtual std::unique_ptr<LoadUnit> loadUnit(uint32_t unit) = 0;
+  virtual std::unique_ptr<LoadUnit> getLoadedUnit(uint32_t unit) = 0;
 
   // Reader reports progress calling this method
   virtual void
