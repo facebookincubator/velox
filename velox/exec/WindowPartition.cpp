@@ -27,37 +27,29 @@ WindowPartition::WindowPartition(
       partition_(rows),
       columns_(columns),
       sortKeyInfo_(sortKeyInfo) {
-  processedNum_ = partition_.size();
-
   if (processingUnit == ProcessingUnit::kRow) {
-    rowLevelStreaming_ = true;
+    processingUnit_ = processingUnit;
+    processedNum_ = partition_.size();
   }
 }
 
-void WindowPartition::buildNextBatch() {
+bool WindowPartition::buildNextBatch() {
   if (rows_.size() == 0 ||
-      (currentBatchIndex_ >= 0 && currentBatchIndex_ == (rows_.size() - 1)))
-    return;
-  peerGroup_ = false;
-  currentBatchIndex_++;
-  // Compute whehter the last row in current batch is same with the first row
-  // in next batch.
-  auto peerCompare = [&](const char* lhs, const char* rhs) -> bool {
-    return compareRowsWithSortKeys(lhs, rhs);
-  };
-  if (!peerCompare(
-          partition_[partition_.size() - 1], rows_[currentBatchIndex_][0])) {
-    peerGroup_ = true;
-  }
+      (currentBatchIndex_ == (rows_.size() - 1)))
+    return false;
 
-  // Erase partition_ in data_ and itself.
-  data_->eraseRows(partition_);
   offsetInPartition_ += partition_.size();
-  partition_.clear();
+  // Erase partition_ in data_ and itself.
+  data_->eraseRows(folly::Range(
+      rows_[currentBatchIndex_].data(), rows_[currentBatchIndex_].size()));
+  rows_[currentBatchIndex_].clear();
+
+  currentBatchIndex_++;
   // Set new partition_.
   partition_ = folly::Range(
       rows_[currentBatchIndex_].data(), rows_[currentBatchIndex_].size());
   processedNum_ += partition_.size();
+  return true;
 }
 
 void WindowPartition::extractColumn(
@@ -175,28 +167,7 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
   auto lastPartitionRow = numRows() - 1;
   auto peerStart = prevPeerStart;
   auto peerEnd = prevPeerEnd;
-
-  auto nextStart = start;
-  if (peerGroup_) {
-    peerEnd++;
-    nextStart = start + 1;
-    while (nextStart <= lastPartitionRow) {
-      if (peerCompare(
-              partition_[start - offsetInPartition_],
-              partition_[nextStart - offsetInPartition_])) {
-        break;
-      }
-      peerEnd++;
-      nextStart++;
-    }
-
-    for (auto j = start; j < nextStart; j++) {
-      rawPeerStarts[j - offsetInPartition_] = peerStart;
-      rawPeerEnds[j - offsetInPartition_] = peerEnd;
-    }
-  }
-
-  for (auto i = nextStart, j = (nextStart - start); i < end; i++, j++) {
+  for (auto i = start, j = 0; i < end; i++, j++) {
     // When traversing input partition rows, the peers are the rows
     // with the same values for the ORDER BY clause. These rows
     // are equal in some ways and affect the results of ranking functions.
