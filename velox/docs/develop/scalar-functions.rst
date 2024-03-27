@@ -643,14 +643,16 @@ of the function arguments. These vectors are not necessarily flat and may be
 dictionary or constant encoded. However, a deterministic function that takes
 a single argument and has default null behavior is guaranteed to receive its
 only input as a flat or constant vector. By default, a function is assumed to
-be deterministic. If that’s not the case, the function must override
-isDeterministic method to return false.
+be deterministic. If that’s not the case, VectorFunctionMetadata's deterministic
+must be set to false when such function is registered.
 
 .. code-block:: c++
 
-    bool isDeterministic() const override {
-      return false;
-    }
+    exec::registerVectorFunction(
+      "plus_random",
+      PlusRandomIntegerFunction::signatures(),
+      std::make_unique<PlusRandomIntegerFunction>(),
+      exec::VectorFunctionMetadataBuilder().deterministic(false).build());
 
 Note that :ref:`decoded-vector` can be used to get a flat vector-like interface to any
 vector. A helper class exec::DecodedArgs can be used to decode multiple arguments.
