@@ -69,7 +69,7 @@ class RowLevelStreamingWindowBuild : public WindowBuild {
   char* previousRow_ = nullptr;
 
   // Current partition being output. Used to return the WidnowPartitions.
-  vector_size_t outputCurrentPartition_ = -1;
+  vector_size_t outputCurrentPartition_ = 0;
 
   bool isFinished_ = false;
 

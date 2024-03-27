@@ -86,7 +86,8 @@ TEST_F(WindowTest, rankLikeWithEqualValue) {
 
   createDuckDbTable({data});
 
-  const std::vector<std::string> kClauses = {"rank() over (order by c1)"};
+  const std::vector<std::string> kClauses = {
+      "sum(c1) over (order by c1 rows unbounded preceding)"};
   core::PlanNodeId windowId;
   auto plan = PlanBuilder()
                   .values({data})
@@ -104,18 +105,19 @@ TEST_F(WindowTest, rankLikeWithEqualValue) {
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
           .spillDirectory(spillDirectory->path)
-          .assertResults("SELECT *, rank() over (order by c1) FROM tmp");
+          .assertResults(
+              "SELECT *, sum(c1) over (order by c1 rows unbounded preceding) FROM tmp");
 }
 
 TEST_F(WindowTest, rankLikeOptimization) {
-  const vector_size_t size = 1'000;
+  const vector_size_t size = 1'0;
   auto data = makeRowVector(
       {"d", "p", "s"},
       {
           // Payload.
           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
           // Partition key.
-          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 2; }),
           // Sorting key.
           makeFlatVector<int32_t>(size, [](auto row) { return row; }),
       });
@@ -125,7 +127,7 @@ TEST_F(WindowTest, rankLikeOptimization) {
   const std::vector<std::string> kClauses = {
       "rank() over (partition by p order by s)",
       "row_number() over (partition by p order by s)",
-  };
+      "sum(d) over (partition by p order by s)"};
   core::PlanNodeId windowId;
   auto plan = PlanBuilder()
                   .values({split(data, 10)})
@@ -142,7 +144,7 @@ TEST_F(WindowTest, rankLikeOptimization) {
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
           .spillDirectory(spillDirectory->path)
           .assertResults(
-              "SELECT *, rank() over (partition by p order by s), row_number() over (partition by p order by s) FROM tmp");
+              "SELECT *, rank() over (partition by p order by s), row_number() over (partition by p order by s), sum(d) over (partition by p order by s) FROM tmp");
 }
 
 TEST_F(WindowTest, missingFunctionSignature) {
