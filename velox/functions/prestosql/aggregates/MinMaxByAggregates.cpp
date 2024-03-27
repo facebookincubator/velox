@@ -139,8 +139,8 @@ struct MinMaxByNAccumulator {
     }
   }
 
-  /// Extract all values from 'heapValues' into 'rawValues' and 'rawValueNulls'
-  /// buffers. The heap remains unchanged after the call.
+  // Extract all values from 'heapValues' into 'rawValues' and 'rawValueNulls'
+  // buffers. The heap remains unchanged after the call.
   void extractValues(
       TRawValue* rawValues,
       uint64_t* rawValueNulls,
@@ -160,9 +160,9 @@ struct MinMaxByNAccumulator {
     std::make_heap(heapValues.begin(), heapValues.end(), comparator);
   }
 
-  /// Moves all pairs of (comparison, value) from 'heapValues' into
-  /// 'rawComparisons', 'rawValues' and 'rawValueNulls' buffers. The heap
-  /// remains unchanged after the call.
+  // Moves all pairs of (comparison, value) from 'heapValues' into
+  // 'rawComparisons', 'rawValues' and 'rawValueNulls' buffers. The heap
+  // remains unchanged after the call.
   void extractPairs(
       TRawComparison* rawComparisons,
       TRawValue* rawValues,
@@ -259,8 +259,8 @@ struct MinMaxByNStringViewAccumulator {
     }
   }
 
-  /// Extract all values from 'heapValues' into 'rawValues' and 'rawValueNulls'
-  /// buffers. The heap remains unchanged after the call.
+  // Extract all values from 'heapValues' into 'rawValues' and 'rawValueNulls'
+  // buffers. The heap remains unchanged after the call.
   void extractValues(
       FlatVector<V>& values,
       vector_size_t offset,
@@ -274,9 +274,9 @@ struct MinMaxByNStringViewAccumulator {
     std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
   }
 
-  /// Moves all pairs of (comparison, value) from 'heapValues' into
-  /// 'rawComparisons', 'rawValues' and 'rawValueNulls' buffers. The heap
-  /// remains unchanged after the call.
+  // Moves all pairs of (comparison, value) from 'heapValues' into
+  // 'rawComparisons', 'rawValues' and 'rawValueNulls' buffers. The heap
+  // remains unchanged after the call.
   void extractPairs(
       FlatVector<C>& compares,
       FlatVector<V>& values,
@@ -429,8 +429,8 @@ struct MinMaxByNComplexTypeAccumulator {
     }
   }
 
-  /// Extract all values from 'heapValues' into 'rawValues' and 'rawValueNulls'
-  /// buffers. The heap remains unchanged after the call.
+  // Extract all values from 'heapValues' into values vector.
+  // The heap remains unchanged after the call.
   void
   extractValues(BaseVector& values, vector_size_t offset, Compare& comparator) {
     std::sort_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
@@ -442,9 +442,8 @@ struct MinMaxByNComplexTypeAccumulator {
     std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
   }
 
-  /// Moves all pairs of (comparison, value) from 'heapValues' into
-  /// 'rawComparisons', 'rawValues' and 'rawValueNulls' buffers. The heap
-  /// remains unchanged after the call.
+  // Moves all pairs of (comparison, value) from 'heapValues' into compare
+  // vector and value vector. The heap remains unchanged after the call.
   void extractPairs(
       FlatVector<C>& compares,
       BaseVector& values,
@@ -592,42 +591,36 @@ struct MinMaxByNComplexCompareTypeAccumulator {
     }
   }
 
-  /// Extract all values from 'heapValues' into 'rawValues' and 'rawValueNulls'
-  /// buffers. The heap remains unchanged after the call.
+  // Extract all values from 'heapValues' into values vector.
+  // The heap remains unchanged after the call.
   void extractValues(
       FlatVector<V>& values,
       vector_size_t offset,
       Compare& comparator) {
-    std::sort_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
-    // Add heap elements to rawValues in ascending order.
-    for (int64_t i = 0; i < base.heapValues.size(); ++i) {
-      const auto& pair = base.heapValues[i];
-      extractValue(pair, values, offset + i);
-    }
-    std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
+    processHeap(
+        base.heapValues, offset, comparator, [&](const auto& pair, auto i) {
+          extractValue(pair, values, i);
+        });
   }
 
-  /// Moves all pairs of (comparison, value) from 'heapValues' into
-  /// 'rawComparisons', 'rawValues' and 'rawValueNulls' buffers. The heap
-  /// remains unchanged after the call.
+  // Moves all pairs of (comparison, value) from 'heapValues' into compare
+  // vector and value vector. The heap remains unchanged after the call.
   void extractPairs(
       BaseVector& compares,
       FlatVector<V>& values,
       vector_size_t offset,
       Compare& comparator) {
-    std::sort_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
-    // Add heap elements to rawComparisons and rawValues in ascending order.
-    for (int64_t i = 0; i < base.heapValues.size(); ++i) {
-      const auto& pair = base.heapValues[i];
-      extractCompare(pair, compares, offset + i);
-      extractValue(pair, values, offset + i);
-    }
-    std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
+    processHeap(
+        base.heapValues, offset, comparator, [&](const auto& pair, auto i) {
+          extractCompare(pair, compares, i);
+          extractValue(pair, values, i);
+        });
   }
 
  private:
   using C = HashStringAllocator::Position;
   using Pair = typename MinMaxByNAccumulator<V, C, Compare>::Pair;
+  using Heap = typename MinMaxByNAccumulator<V, C, Compare>::Heap;
 
   void addToAccumulator(
       C comparePosition,
@@ -665,6 +658,19 @@ struct MinMaxByNComplexCompareTypeAccumulator {
     auto position = topPair.first;
     valueSet.read(&compares, index, position.header);
   }
+
+  template <typename Func>
+  void processHeap(
+      Heap& heap,
+      vector_size_t offset,
+      Compare& comparator,
+      Func process) {
+    std::sort_heap(heap.begin(), heap.end(), comparator);
+    for (int64_t i = 0; i < heap.size(); ++i) {
+      process(heap[i], offset + i);
+    }
+    std::make_heap(heap.begin(), heap.end(), comparator);
+  }
 };
 
 template <typename V, typename Compare>
@@ -695,7 +701,6 @@ template <typename Compare>
 struct MinMaxByNStringViewValueTypeComplexCompareTypeAccumulator {
   using V = StringView;
   using C = HashStringAllocator::Position;
-  using Pair = typename MinMaxByNAccumulator<V, C, Compare>::Pair;
   using BaseType = MinMaxByNAccumulator<V, C, Compare>;
 
   BaseType base;
@@ -743,40 +748,36 @@ struct MinMaxByNStringViewValueTypeComplexCompareTypeAccumulator {
     }
   }
 
-  /// Extract all values from 'heapValues' into 'rawValues' and 'rawValueNulls'
-  /// buffers. The heap remains unchanged after the call.
+  // Extract all values from 'heapValues' into values vector.
+  // The heap remains unchanged after the call.
   void extractValues(
       FlatVector<V>& values,
       vector_size_t offset,
       Compare& comparator) {
-    std::sort_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
-    // Add heap elements to values in ascending order.
-    for (int64_t i = 0; i < base.heapValues.size(); ++i) {
-      const auto& pair = base.heapValues[i];
-      extractValue(pair, values, offset + i);
-    }
-    std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
+    processHeap(
+        base.heapValues, offset, comparator, [&](const auto& pair, auto i) {
+          extractValue(pair, values, i);
+        });
   }
 
-  /// Moves all pairs of (comparison, value) from 'heapValues' into
-  /// 'rawComparisons', 'rawValues' and 'rawValueNulls' buffers. The heap
-  /// remains unchanged after the call.
+  // Moves all pairs of (comparison, value) from 'heapValues' into compare
+  // vector and value vector. The heap remains unchanged after the call.
   void extractPairs(
       BaseVector& compares,
       FlatVector<V>& values,
       vector_size_t offset,
       Compare& comparator) {
-    std::sort_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
-    // Add heap elements to compares and values in ascending order.
-    for (int64_t i = 0; i < base.heapValues.size(); ++i) {
-      const auto& pair = base.heapValues[i];
-      extractCompare(pair, compares, offset + i);
-      extractValue(pair, values, offset + i);
-    }
-    std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
+    processHeap(
+        base.heapValues, offset, comparator, [&](const auto& pair, auto i) {
+          extractCompare(pair, compares, i);
+          extractValue(pair, values, i);
+        });
   }
 
  private:
+  using Pair = typename MinMaxByNAccumulator<V, C, Compare>::Pair;
+  using Heap = typename MinMaxByNAccumulator<V, C, Compare>::Heap;
+
   std::optional<StringView> writeString(
       const std::optional<StringView>& value) {
     if (!value.has_value()) {
@@ -804,7 +805,9 @@ struct MinMaxByNStringViewValueTypeComplexCompareTypeAccumulator {
 
   void freePair(typename BaseType::Heap::const_reference pair) {
     valueSet.free(pair.first.header);
-    valueSet.free(*pair.second);
+    if (pair.second.has_value()) {
+      valueSet.free(*pair.second);
+    }
   }
 
   void
@@ -820,6 +823,19 @@ struct MinMaxByNStringViewValueTypeComplexCompareTypeAccumulator {
   extractCompare(const Pair& pair, BaseVector& compares, vector_size_t index) {
     auto position = pair.first;
     valueSet.read(&compares, index, position.header);
+  }
+
+  template <typename Func>
+  void processHeap(
+      Heap& heap,
+      vector_size_t offset,
+      Compare& comparator,
+      Func process) {
+    std::sort_heap(heap.begin(), heap.end(), comparator);
+    for (int64_t i = 0; i < heap.size(); ++i) {
+      process(heap[i], offset + i);
+    }
+    std::make_heap(heap.begin(), heap.end(), comparator);
   }
 };
 
@@ -905,42 +921,34 @@ struct MinMaxByNBothComplexTypeAccumulator {
     }
   }
 
-  /// Extract all values from 'heapValues' into 'rawValues' and 'rawValueNulls'
-  /// buffers. The heap remains unchanged after the call.
+  // Extract all values from 'heapValues' into values vector.
+  // The heap remains unchanged after the call.
   void
   extractValues(BaseVector& values, vector_size_t offset, Compare& comparator) {
-    std::sort_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
-    // Add heap elements to values in ascending order.
-    for (int64_t i = 0; i < base.heapValues.size(); ++i) {
-      const auto& pair = base.heapValues[i];
-      extractValue(pair, values, offset + i);
-    }
-    std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
+    processHeap(
+        base.heapValues, offset, comparator, [&](const auto& pair, auto i) {
+          extractValue(pair, values, i);
+        });
   }
 
-  /// Moves all pairs of (comparison, value) from 'heapValues' into
-  /// 'rawComparisons', 'rawValues' and 'rawValueNulls' buffers. The heap
-  /// remains unchanged after the call.
+  // Moves all pairs of (comparison, value) from 'heapValues' into compare
+  // vector and value vector. The heap remains unchanged after the call.
   void extractPairs(
       BaseVector& compares,
       BaseVector& values,
       vector_size_t offset,
       Compare& comparator) {
-    std::sort_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
-    // Add heap elements to compares and values in ascending order.
-    for (int64_t i = 0; i < base.heapValues.size(); ++i) {
-      const auto& pair = base.heapValues[i];
-      const auto index = offset + i;
-
-      extractCompare(pair, compares, index);
-      extractValue(pair, values, index);
-    }
-    std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
+    processHeap(
+        base.heapValues, offset, comparator, [&](const auto& pair, auto i) {
+          extractCompare(pair, compares, i);
+          extractValue(pair, values, i);
+        });
   }
 
  private:
   using P = HashStringAllocator::Position;
   using Pair = typename MinMaxByNAccumulator<P, P, Compare>::Pair;
+  using Heap = typename MinMaxByNAccumulator<P, P, Compare>::Heap;
 
   void addToAccumulator(
       P comparePosition,
@@ -972,7 +980,9 @@ struct MinMaxByNBothComplexTypeAccumulator {
 
   void freePair(typename BaseType::Heap::const_reference pair) {
     valueSet.free(pair.first.header);
-    valueSet.free(pair.second->header);
+    if (pair.second.has_value()) {
+      valueSet.free(pair.second->header);
+    }
   }
 
   void
@@ -991,6 +1001,19 @@ struct MinMaxByNBothComplexTypeAccumulator {
       vector_size_t index) {
     auto position = topPair.first;
     valueSet.read(&compares, index, position.header);
+  }
+
+  template <typename Func>
+  void processHeap(
+      Heap& heap,
+      vector_size_t offset,
+      Compare& comparator,
+      Func process) {
+    std::sort_heap(heap.begin(), heap.end(), comparator);
+    for (int64_t i = 0; i < heap.size(); ++i) {
+      process(heap[i], offset + i);
+    }
+    std::make_heap(heap.begin(), heap.end(), comparator);
   }
 };
 
@@ -1552,8 +1575,8 @@ class MinMaxByNAggregate : public exec::Aggregate {
     return result;
   }
 
-  /// Return total number of values in all accumulators of specified 'groups'.
-  /// Set null flags in 'result'.
+  // Return total number of values in all accumulators of specified 'groups'.
+  // Set null flags in 'result'.
   vector_size_t countValuesAndSetResultNulls(
       char** groups,
       int32_t numGroups,
@@ -1713,15 +1736,17 @@ std::unique_ptr<exec::Aggregate> createNArg(
       return std::make_unique<NAggregate<W, float>>(resultType, compareType);
     case TypeKind::DOUBLE:
       return std::make_unique<NAggregate<W, double>>(resultType, compareType);
+    case TypeKind::VARBINARY:
+      [[fallthrough]];
     case TypeKind::VARCHAR:
       return std::make_unique<NAggregate<W, StringView>>(
           resultType, compareType);
     case TypeKind::TIMESTAMP:
       return std::make_unique<NAggregate<W, Timestamp>>(
           resultType, compareType);
+    // Map is not order-able in Presto. So it is not supported in minmaxBy
+    // aggregation.
     case TypeKind::ARRAY:
-      [[fallthrough]];
-    case TypeKind::MAP:
       [[fallthrough]];
     case TypeKind::ROW:
       return std::make_unique<NAggregate<W, ComplexType>>(
@@ -1768,9 +1793,9 @@ std::unique_ptr<exec::Aggregate> createNArg(
     case TypeKind::TIMESTAMP:
       return createNArg<NAggregate, Timestamp>(
           resultType, compareType, errorMessage);
-    // Map is not order-able in Presto. So it is not supported in minmaxBy
-    // aggregation.
     case TypeKind::ARRAY:
+      [[fallthrough]];
+    case TypeKind::MAP:
       [[fallthrough]];
     case TypeKind::ROW:
       return createNArg<NAggregate, ComplexType>(

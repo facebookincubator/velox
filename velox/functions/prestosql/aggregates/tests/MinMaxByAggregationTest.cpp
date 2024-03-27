@@ -2245,7 +2245,8 @@ TEST_F(MinMaxByComplexTypes, arrayTypeCompare) {
 
   // Test StringView type (both as value and comparison).
   data = makeRowVector({
-      makeFlatVector<std::string>({"a", "Abc", "bc", "Longer test string"}),
+      makeNullableFlatVector<std::string>(
+          {std::nullopt, "Abc", "bc", "Longer test string"}),
       makeArrayVector<std::string>(
           {{"a", "b", "Longer string ...."},
            {"c", "Abc", "Mountains and rivers"},
@@ -2253,16 +2254,20 @@ TEST_F(MinMaxByComplexTypes, arrayTypeCompare) {
            {"Oceans and skies"}}),
   });
 
-  expected = makeRowVector({makeArrayVector<std::string>({
-      {"Longer test string", "a"},
+  expected = makeRowVector({makeNullableArrayVector<std::string>({
+      {"Longer test string", std::nullopt},
   })});
 
   testAggregations({data}, {}, {"min_by(c0, c1, 2)"}, {expected});
 
   data = makeRowVector({
       makeFlatVector<int16_t>({1, 2, 1, 2, 1}),
-      makeFlatVector<std::string>(
-          {"a", "Abc", "bc", "Longer test string", "c"}),
+      makeNullableFlatVector<std::string>(
+          {std::nullopt,
+           "Abc",
+           std::nullopt,
+           "Longer test string",
+           std::nullopt}),
       makeArrayVector<std::string>(
           {{"a", "b", "Longer string ...."},
            {"c", "Abc", "Mountains and rivers"},
@@ -2273,8 +2278,8 @@ TEST_F(MinMaxByComplexTypes, arrayTypeCompare) {
 
   expected = makeRowVector(
       {makeFlatVector<int16_t>({1, 2}),
-       makeArrayVector<std::string>(
-           {{"c", "bc"}, {"Abc", "Longer test string"}})});
+       makeNullableArrayVector<std::string>(
+           {{std::nullopt, std::nullopt}, {"Abc", "Longer test string"}})});
 
   testAggregations({data}, {"c0"}, {"max_by(c1, c2, 2)"}, {expected});
 }
