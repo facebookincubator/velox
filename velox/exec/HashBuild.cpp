@@ -465,8 +465,6 @@ void HashBuild::ensureInputFits(RowVectorPtr& input) {
     if (testingTriggerSpill()) {
       Operator::ReclaimableSectionGuard guard(this);
       memory::testingRunArbitration(pool());
-      // NOTE: the memory arbitration should have triggered spilling on this
-      // hash build operator so we return true to indicate have enough memory.
       return;
     }
   }
@@ -778,6 +776,13 @@ void HashBuild::ensureTableFits(uint64_t numRows) {
   // NOTE: we don't need memory reservation if all the partitions have been
   // spilled as nothing need to be built.
   if (!spillEnabled() || spiller_ == nullptr || spiller_->isAllSpilled()) {
+    return;
+  }
+
+  // Test-only spill path.
+  if (testingTriggerSpill()) {
+    Operator::ReclaimableSectionGuard guard(this);
+    memory::testingRunArbitration(pool());
     return;
   }
 
