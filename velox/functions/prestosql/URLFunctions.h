@@ -98,36 +98,55 @@ FOLLY_ALWAYS_INLINE void charEscape(unsigned char c, char* output) {
   output[2] = toHex(c % 16);
 }
 
+bool isDigit(char c) {
+  return c >= '0' && c <= '9';
+}
+
+bool isAlphaNumeric(char c) {
+  return isDigit(c) || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+bool shouldEncode(char c) {
+  static std::unordered_set<char> const ExtraNonEncodableChars = {
+      '-', '_', '.', '*'};
+  return !isAlphaNumeric(c) &&
+      ExtraNonEncodableChars.find(c) == ExtraNonEncodableChars.end();
+}
+
 /// Escapes ``input`` by encoding it so that it can be safely included in
 /// URL query parameter names and values:
 ///
 ///  * Alphanumeric characters are not encoded.
 ///  * The characters ``.``, ``-``, ``*`` and ``_`` are not encoded.
-///  * The ASCII space character is encoded as ``+``.
+///  * The ASCII space character is encoded as ``+`` if usePlusForSpace is true.
 ///  * All other characters are converted to UTF-8 and the bytes are encoded
 ///    as the string ``%XX`` where ``XX`` is the uppercase hexadecimal
 ///    value of the UTF-8 byte.
 template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE void urlEscape(TOutString& output, const TInString& input) {
+FOLLY_ALWAYS_INLINE void urlEscape(
+    TOutString& output,
+    const TInString& input,
+    bool usePlusForSpace = true,
+    const std::string& doNotEncodeSymbols = "") {
   auto inputSize = input.size();
   output.reserve(inputSize * 3);
 
   auto inputBuffer = input.data();
   auto outputBuffer = output.data();
-
+  std::unordered_set<char> const doNotEncodeSymbolsSet(
+      doNotEncodeSymbols.begin(), doNotEncodeSymbols.end());
   size_t outIndex = 0;
   for (auto i = 0; i < inputSize; ++i) {
     unsigned char p = inputBuffer[i];
-
-    if ((p >= 'a' && p <= 'z') || (p >= 'A' && p <= 'Z') ||
-        (p >= '0' && p <= '9') || p == '-' || p == '_' || p == '.' ||
-        p == '*') {
-      outputBuffer[outIndex++] = p;
-    } else if (p == ' ') {
+    if (p == ' ' && usePlusForSpace) {
       outputBuffer[outIndex++] = '+';
-    } else {
+    } else if (
+        shouldEncode(p) &&
+        doNotEncodeSymbolsSet.find(p) == doNotEncodeSymbolsSet.end()) {
       charEscape(p, outputBuffer + outIndex);
       outIndex += 3;
+    } else {
+      outputBuffer[outIndex++] = p;
     }
   }
   output.resize(outIndex);

@@ -27,6 +27,8 @@ enum class CapacityUnit {
   PETABYTE
 };
 
+extern thread_local std::string inputFileName;
+
 double toBytesPerCapacityUnit(CapacityUnit unit);
 
 CapacityUnit valueOfCapacityUnit(const std::string& unitStr);
