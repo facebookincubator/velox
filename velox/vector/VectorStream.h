@@ -125,6 +125,12 @@ class BatchVectorSerializer {
     serialize(vector, ranges, scratch, stream);
   }
 
+  virtual void estimateSerializedSize(
+      VectorPtr vector,
+      const folly::Range<const IndexRange*>& ranges,
+      vector_size_t** sizes,
+      Scratch& scratch) = 0;
+
   /// Serializes all rows in a vector.
   void serialize(const RowVectorPtr& vector, OutputStream* stream);
 };
@@ -257,7 +263,7 @@ class VectorStreamGroup : public StreamArena {
  public:
   /// If `serde` is not specified, fallback to the default registered.
   explicit VectorStreamGroup(
-      memory::MemoryPool* FOLLY_NONNULL pool,
+      memory::MemoryPool* pool,
       VectorSerde* serde = nullptr)
       : StreamArena(pool),
         serde_(serde != nullptr ? serde : getVectorSerde()) {}
