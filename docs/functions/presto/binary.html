@@ -78,6 +78,20 @@
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="from_ieee754_32">
+<span class="sig-name descname"><span class="pre">from_ieee754_32</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">real</span></span></span><a class="headerlink" href="#from_ieee754_32" title="Link to this definition">¶</a></dt>
+<dd><p>Decodes the 32-bit big-endian <code class="docutils literal notranslate"><span class="pre">binary</span></code> in IEEE 754 single-precision floating-point format.
+Throws a user error if input size is shorter / longer than 32 bits.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="from_ieee754_64">
+<span class="sig-name descname"><span class="pre">from_ieee754_64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#from_ieee754_64" title="Link to this definition">¶</a></dt>
+<dd><p>Decodes the 64-bit big-endian <code class="docutils literal notranslate"><span class="pre">binary</span></code> in IEEE 754 double-precision floating-point format.
+Throws a user error if input size is shorter / longer than 64 bits.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="hmac_md5">
 <span class="sig-name descname"><span class="pre">hmac_md5</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#hmac_md5" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the HMAC with md5 of <code class="docutils literal notranslate"><span class="pre">binary</span></code> with the given <code class="docutils literal notranslate"><span class="pre">key</span></code>.</p>
@@ -188,12 +202,6 @@
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="from_ieee754_64">
-<span class="sig-name descname"><span class="pre">from_ieee754_64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#from_ieee754_64" title="Link to this definition">¶</a></dt>
-<dd><p>Decodes the 64-bit big-endian <code class="docutils literal notranslate"><span class="pre">binary</span></code> in IEEE 754 double-precision floating-point format.</p>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="xxhash64">
 <span class="sig-name descname"><span class="pre">xxhash64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#xxhash64" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the xxhash64 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
@@ -218,6 +226,8 @@
 <li><a class="reference internal" href="#from_big_endian_32"><code class="docutils literal notranslate"><span class="pre">from_big_endian_32()</span></code></a></li>
 <li><a class="reference internal" href="#from_big_endian_64"><code class="docutils literal notranslate"><span class="pre">from_big_endian_64()</span></code></a></li>
 <li><a class="reference internal" href="#from_hex"><code class="docutils literal notranslate"><span class="pre">from_hex()</span></code></a></li>
+<li><a class="reference internal" href="#from_ieee754_32"><code class="docutils literal notranslate"><span class="pre">from_ieee754_32()</span></code></a></li>
+<li><a class="reference internal" href="#from_ieee754_64"><code class="docutils literal notranslate"><span class="pre">from_ieee754_64()</span></code></a></li>
 <li><a class="reference internal" href="#hmac_md5"><code class="docutils literal notranslate"><span class="pre">hmac_md5()</span></code></a></li>
 <li><a class="reference internal" href="#hmac_sha1"><code class="docutils literal notranslate"><span class="pre">hmac_sha1()</span></code></a></li>
 <li><a class="reference internal" href="#hmac_sha256"><code class="docutils literal notranslate"><span class="pre">hmac_sha256()</span></code></a></li>
@@ -236,7 +246,6 @@
 <li><a class="reference internal" href="#to_hex"><code class="docutils literal notranslate"><span class="pre">to_hex()</span></code></a></li>
 <li><a class="reference internal" href="#to_ieee754_32"><code class="docutils literal notranslate"><span class="pre">to_ieee754_32()</span></code></a></li>
 <li><a class="reference internal" href="#to_ieee754_64"><code class="docutils literal notranslate"><span class="pre">to_ieee754_64()</span></code></a></li>
-<li><a class="reference internal" href="#from_ieee754_64"><code class="docutils literal notranslate"><span class="pre">from_ieee754_64()</span></code></a></li>
 <li><a class="reference internal" href="#xxhash64"><code class="docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></li>
 </ul>
 </li>
