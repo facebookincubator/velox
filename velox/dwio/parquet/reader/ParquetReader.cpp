@@ -235,6 +235,8 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   auto& schema = fileMetaData_->schema;
   uint32_t curSchemaIdx = schemaIdx;
   auto& schemaElement = schema[curSchemaIdx];
+  bool isRepeated = false;
+  bool isOptional = false;
 
   if (schemaElement.__isset.repetition_type) {
     if (schemaElement.repetition_type !=
@@ -244,6 +246,11 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     if (schemaElement.repetition_type ==
         thrift::FieldRepetitionType::REPEATED) {
       maxRepeat++;
+      isRepeated = true;
+    }
+    if (schemaElement.repetition_type ==
+        thrift::FieldRepetitionType::OPTIONAL) {
+      isOptional = true;
     }
   }
 
@@ -296,7 +303,9 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 std::nullopt,
                 std::nullopt,
                 maxRepeat,
-                maxDefine);
+                maxDefine,
+                isOptional,
+                isRepeated);
           }
 
           // For backward-compatibility, a group annotated with MAP_KEY_VALUE
@@ -309,6 +318,12 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           VELOX_CHECK_EQ(children.size(), 1);
           const auto& child = children[0];
           auto grandChildren = child->getChildren();
+          isRepeated = true;
+          // This level will not have the "isRepeated" info in the parquet
+          // schema since parquet schema will have a child layer which will have
+          // the "repeated info" which we are ignoring here, hence we set the
+          // isRepeated to true eg
+          // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
           return std::make_shared<const ParquetTypeWithId>(
               child->type(),
               std::move(grandChildren),
@@ -319,7 +334,9 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               std::nullopt,
               std::nullopt,
               maxRepeat + 1,
-              maxDefine);
+              maxDefine,
+              isOptional,
+              isRepeated);
         }
 
         default:
@@ -346,7 +363,9 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               std::nullopt,
               std::nullopt,
               maxRepeat,
-              maxDefine);
+              maxDefine,
+              isOptional,
+              isRepeated);
         } else if (children.size() == 2) {
           // children  of MAP
           auto childrenCopy = children;
@@ -361,7 +380,9 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               std::nullopt,
               std::nullopt,
               maxRepeat,
-              maxDefine);
+              maxDefine,
+              isOptional,
+              isRepeated);
         }
       } else {
         // Row type
@@ -376,7 +397,9 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             std::nullopt,
             std::nullopt,
             maxRepeat,
-            maxDefine);
+            maxDefine,
+            isOptional,
+            isRepeated);
       }
     }
   } else { // leaf node
@@ -403,6 +426,8 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             logicalType_,
             maxRepeat,
             maxDefine,
+            isOptional,
+            isRepeated,
             precision,
             scale,
             type_length);
@@ -423,7 +448,9 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           std::nullopt,
           std::nullopt,
           maxRepeat,
-          maxDefine - 1);
+          maxDefine - 1,
+          isOptional,
+          isRepeated);
     }
     return leafTypePtr;
   }
