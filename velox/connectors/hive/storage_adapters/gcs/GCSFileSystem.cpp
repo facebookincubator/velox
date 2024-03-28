@@ -269,6 +269,21 @@ class GCSFileSystem::Impl {
     }
     options.set<gcs::UploadBufferSizeOption>(kUploadBufferSize);
 
+    const auto max_retry_count = hiveConfig_->gcsMaxRetryCount();
+    if (max_retry_count) {
+      LOG(INFO) << "Config::gcsMaxRetryCount = " << max_retry_count.value();
+      options.set<gcs::RetryPolicyOption>(
+          gcs::LimitedErrorCountRetryPolicy(max_retry_count.value()).clone());
+    }
+
+    const auto max_retry_time = hiveConfig_->gcsMaxRetryTime();
+    if (max_retry_time) {
+      LOG(INFO) << "Config::gcsMaxRetryTime = " << max_retry_time.value();
+      const auto retry_time = std::chrono::seconds(max_retry_time.value());
+      options.set<gcs::RetryPolicyOption>(
+          gcs::LimitedTimeRetryPolicy(retry_time).clone());
+    }
+
     auto endpointOverride = hiveConfig_->gcsEndpoint();
     if (!endpointOverride.empty()) {
       options.set<gcs::RestEndpointOption>(scheme + "://" + endpointOverride);
