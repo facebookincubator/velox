@@ -319,6 +319,19 @@ struct IsNanFunction {
 };
 
 template <typename T>
+struct NormalizeNanFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    static constexpr TInput kNan = std::numeric_limits<TInput>::quiet_NaN();
+    if (std::isnan(a)) {
+      result = kNan;
+    } else {
+      result = a;
+    }
+  }
+};
+
+template <typename T>
 struct ToHexVarbinaryFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
