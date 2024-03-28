@@ -160,6 +160,8 @@ Below are arguments that toggle certain fuzzer features in Expression Fuzzer:
 
 * ``--velox_fuzzer_enable_complex_types``: Enable testing of function signatures with complex argument or return types. Default is false.
 
+* ``--velox_fuzzer_enable_decimal_type``: Enable testing of function signatures with decimal argument or return type. Default is false.
+
 * ``--lazy_vector_generation_ratio``: Specifies the probability with which columns in the input row vector will be selected to be wrapped in lazy encoding (expressed as double from 0 to 1). Default is 0.0.
 
 * ``--velox_fuzzer_enable_column_reuse``: Enable generation of expressions where one input column can be used by multiple subexpressions. Default is false.
@@ -187,6 +189,7 @@ An example set of arguments to run the expression fuzzer with all features enabl
 --enable_variadic_signatures
 --lazy_vector_generation_ratio 0.2
 --velox_fuzzer_enable_complex_types
+--velox_fuzzer_enable_decimal_type
 --velox_fuzzer_enable_expression_reuse
 --velox_fuzzer_enable_column_reuse
 --retry_with_try

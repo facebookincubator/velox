@@ -48,6 +48,10 @@ class ExpressionFuzzer {
     // types.
     bool enableComplexTypes = false;
 
+    // Enable testing of function signatures with decimal argument or return
+    // types.
+    bool enableDecimalType = false;
+
     // Enable generation of expressions where one input column can be used by
     // multiple subexpressions.
     bool enableColumnReuse = false;
@@ -239,9 +243,15 @@ class ExpressionFuzzer {
 
   core::TypedExprPtr generateArg(const TypePtr& arg, bool isConstant);
 
-  // Return a vector of expressions for each argument of callable in order.
-  std::vector<core::TypedExprPtr> getArgsForCallable(
-      const CallableSignature& callable);
+  /// Specialization for the "greatest" and "least" functions: decimal varargs
+  /// need to be constant or column.
+  std::vector<core::TypedExprPtr> generateExtremeFunctionArgs(
+      const CallableSignature& input);
+
+  /// Specialization for the "make_timestamp" function: 1) decimal argument
+  /// needs to be constant or column. 2) timezone argument needs to be valid.
+  std::vector<core::TypedExprPtr> generateMakeTimestampArgs(
+      const CallableSignature& input);
 
   /// Specialization for the "switch" function. Takes in a signature that is
   /// of the form Switch (condition, then): boolean, T -> T where the type
@@ -252,9 +262,25 @@ class ExpressionFuzzer {
   std::vector<core::TypedExprPtr> generateSwitchArgs(
       const CallableSignature& input);
 
+  /// Specialization for the "unscaled_value" function: decimal argument needs
+  /// to be constant or column.
+  std::vector<core::TypedExprPtr> generateUnscaledValueArgs(
+      const CallableSignature& input);
+
+  // Return a vector of expressions for each argument of callable in order.
+  std::vector<core::TypedExprPtr> getArgsForCallable(
+      const CallableSignature& callable);
+
+  /// Given the argument types, calculates the return type of a decimal function
+  /// by evaluating constraints.
+  TypePtr getConstrainedOutputType(
+      const std::vector<core::TypedExprPtr>& args,
+      const exec::FunctionSignature* signature);
+
   core::TypedExprPtr getCallExprFromCallable(
       const CallableSignature& callable,
-      const TypePtr& type);
+      const TypePtr& type,
+      const exec::FunctionSignature* signature = nullptr);
 
   /// Return a random signature mapped to functionName in
   /// expressionToSignature_ whose return type can match returnType. Return
