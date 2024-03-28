@@ -58,4 +58,56 @@ struct RandFunction {
   }
 };
 
+template <typename T>
+struct SecureRandFunction {
+  static constexpr bool is_deterministic = false;
+
+  template <typename InputType>
+  FOLLY_ALWAYS_INLINE void checkInput(
+      const InputType lower,
+      const InputType upper) {
+    VELOX_USER_CHECK_GT(
+        upper, lower, "upper bound must be greater than lower bound");
+  }
+
+  FOLLY_ALWAYS_INLINE void call(double& out) {
+    out = folly::Random::secureRandDouble01();
+  }
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& out, const double lower, const double upper) {
+    checkInput(lower, upper);
+    out = folly::Random::secureRandDouble(lower, upper);
+  }
+
+  FOLLY_ALWAYS_INLINE void
+  call(float& out, const float lower, const float upper) {
+    checkInput(lower, upper);
+    out = float(folly::Random::secureRandDouble(lower, upper));
+  }
+
+  FOLLY_ALWAYS_INLINE void
+  call(int64_t& out, const int64_t lower, const int64_t upper) {
+    checkInput(lower, upper);
+    out = folly::Random::secureRand64(lower, upper);
+  }
+
+  FOLLY_ALWAYS_INLINE void
+  call(int32_t& out, const int32_t lower, const int32_t upper) {
+    checkInput(lower, upper);
+    out = int32_t(folly::Random::secureRand64(lower, upper));
+  }
+
+  FOLLY_ALWAYS_INLINE void
+  call(int16_t& out, const int16_t lower, const int16_t upper) {
+    checkInput(lower, upper);
+    out = int16_t(folly::Random::secureRand64(lower, upper));
+  }
+
+  FOLLY_ALWAYS_INLINE void
+  call(int8_t& out, const int8_t lower, const int8_t upper) {
+    checkInput(lower, upper);
+    out = int8_t(folly::Random::secureRand64(lower, upper));
+  }
+};
 } // namespace facebook::velox::functions
