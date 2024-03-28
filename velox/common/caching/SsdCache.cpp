@@ -40,14 +40,22 @@ SsdCache::SsdCache(
       numShards_(numShards),
       groupStats_(std::make_unique<FileGroupStats>()),
       executor_(executor) {
-  // Make sure the given path of Ssd files has the prefix for local file system.
-  // Local file system would be derived based on the prefix.
-  VELOX_CHECK(
-      filePrefix_.find("/") == 0,
-      "Ssd path '{}' does not start with '/' that points to local file system.",
-      filePrefix_);
-  filesystems::getFileSystem(filePrefix_, nullptr)
-      ->mkdir(std::filesystem::path(filePrefix).parent_path().string());
+  std::vector<std::string> prefixes;
+  std::istringstream iss(filePrefix_);
+  std::string prefix;
+  while (std::getline(iss, prefix, ',')) {
+    // Make sure the given path of Ssd files has the prefix for local file
+    // system. Local file system would be derived based on the prefix.
+    VELOX_CHECK(
+        prefix.find("/") == 0,
+        "Ssd path '{}' does not start with '/' that points to local file system.",
+        prefix);
+    filesystems::getFileSystem(prefix, nullptr)
+        ->mkdir(std::filesystem::path(prefix).parent_path().string());
+    prefixes.push_back(prefix);
+  }
+  std::random_device rd;
+  std::default_random_engine engine(rd());
 
   files_.reserve(numShards_);
   // Cache size must be a multiple of this so that each shard has the same max
@@ -55,8 +63,12 @@ SsdCache::SsdCache(
   uint64_t sizeQuantum = numShards_ * SsdFile::kRegionSize;
   int32_t fileMaxRegions = bits::roundUp(maxBytes, sizeQuantum) / sizeQuantum;
   for (auto i = 0; i < numShards_; ++i) {
+    // Shuffle the prefixes to avoid hotspotting.
+    std::shuffle(prefixes.begin(), prefixes.end(), engine);
+    std::string selectedPrefix = prefixes.front();
+
     files_.push_back(std::make_unique<SsdFile>(
-        fmt::format("{}{}", filePrefix_, i),
+        fmt::format("{}{}", selectedPrefix, i),
         i,
         fileMaxRegions,
         checkpointIntervalBytes / numShards,
