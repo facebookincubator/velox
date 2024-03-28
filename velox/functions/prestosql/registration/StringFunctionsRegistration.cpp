@@ -127,5 +127,9 @@ void registerStringFunctions(const std::string& prefix) {
       {prefix + "strrpos"});
   registerFunction<StrRPosFunction, int64_t, Varchar, Varchar, int64_t>(
       {prefix + "strrpos"});
+
+  registerFunction<NormalizeFunction, Varchar, Varchar>({prefix + "normalize"});
+  registerFunction<NormalizeFunction, Varchar, Varchar, Varchar>(
+      {prefix + "normalize"});
 }
 } // namespace facebook::velox::functions
