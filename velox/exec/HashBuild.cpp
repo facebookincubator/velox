@@ -231,9 +231,11 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
                    << spillConfig.maxSpillLevel
                    << ", and disable spilling for memory pool: "
                    << pool()->name();
+      ++spillStats_.wlock()->spillMaxLevelExceededCount;
       exceededMaxSpillLevelLimit_ = true;
       return;
     }
+    exceededMaxSpillLevelLimit_ = false;
     hashBits = HashBitRange(startBit, startBit + spillConfig.numPartitionBits);
   }
 
@@ -243,7 +245,8 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       table_->rows(),
       spillType_,
       std::move(hashBits),
-      &spillConfig);
+      &spillConfig,
+      &spillStats_);
 
   const int32_t numPartitions = spiller_->hashBits().numPartitions();
   spillInputIndicesBuffers_.resize(numPartitions);
@@ -732,7 +735,6 @@ bool HashBuild::finishHashBuild() {
     }
     if (spiller != nullptr) {
       spiller->finishSpill(spillPartitions);
-      build->recordSpillStats(spiller.get());
     }
   }
 
@@ -740,18 +742,25 @@ bool HashBuild::finishHashBuild() {
     spiller_->finishSpill(spillPartitions);
     removeEmptyPartitions(spillPartitions);
   }
-  recordSpillStats();
 
   // TODO: re-enable parallel join build with spilling triggered after
   // https://github.com/facebookincubator/velox/issues/3567 is fixed.
   const bool allowParallelJoinBuild =
       !otherTables.empty() && spillPartitions.empty();
-  table_->prepareJoinTable(
-      std::move(otherTables),
-      allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
-                             : nullptr,
-      isInputFromSpill() ? spillConfig()->startPartitionBit
-                         : BaseHashTable::kNoSpillInputStartPartitionBit);
+  CpuWallTiming timing;
+  {
+    CpuWallTimer cpuWallTimer{timing};
+    table_->prepareJoinTable(
+        std::move(otherTables),
+        allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
+                               : nullptr,
+        isInputFromSpill() ? spillConfig()->startPartitionBit
+                           : BaseHashTable::kNoSpillInputStartPartitionBit);
+  }
+  stats_.wlock()->addRuntimeStat(
+      BaseHashTable::kBuildWallNanos,
+      RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos));
+
   addRuntimeStats();
   joinBridge_->setHashTable(
       std::move(table_), std::move(spillPartitions), joinHasNullKeys_);
@@ -763,23 +772,6 @@ bool HashBuild::finishHashBuild() {
   // table build.
   pool()->release();
   return true;
-}
-
-void HashBuild::recordSpillStats() {
-  recordSpillStats(spiller_.get());
-}
-
-void HashBuild::recordSpillStats(Spiller* spiller) {
-  if (spiller != nullptr) {
-    const auto spillStats = spiller->stats();
-    VELOX_CHECK_EQ(spillStats.spillSortTimeUs, 0);
-    Operator::recordSpillStats(spillStats);
-  } else if (exceededMaxSpillLevelLimit_) {
-    exceededMaxSpillLevelLimit_ = false;
-    common::SpillStats spillStats;
-    spillStats.spillMaxLevelExceededCount = 1;
-    Operator::recordSpillStats(spillStats);
-  }
 }
 
 void HashBuild::ensureTableFits(uint64_t numRows) {
@@ -890,14 +882,14 @@ void HashBuild::addRuntimeStats() {
     }
   }
 
-  lockedStats->runtimeStats["hashtable.capacity"] =
+  lockedStats->runtimeStats[BaseHashTable::kCapacity] =
       RuntimeMetric(hashTableStats.capacity);
-  lockedStats->runtimeStats["hashtable.numRehashes"] =
+  lockedStats->runtimeStats[BaseHashTable::kNumRehashes] =
       RuntimeMetric(hashTableStats.numRehashes);
-  lockedStats->runtimeStats["hashtable.numDistinct"] =
+  lockedStats->runtimeStats[BaseHashTable::kNumDistinct] =
       RuntimeMetric(hashTableStats.numDistinct);
   if (hashTableStats.numTombstones != 0) {
-    lockedStats->runtimeStats["hashtable.numTombstones"] =
+    lockedStats->runtimeStats[BaseHashTable::kNumTombstones] =
         RuntimeMetric(hashTableStats.numTombstones);
   }
 
@@ -1108,7 +1100,7 @@ void HashBuild::reclaim(
       // this runs.
       try {
         spillTask->move();
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
       }
     }
   });

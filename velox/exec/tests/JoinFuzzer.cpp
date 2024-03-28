@@ -301,6 +301,14 @@ std::vector<RowVectorPtr> JoinFuzzer::generateProbeInput(
   std::vector<std::string> names = keyNames;
   std::vector<TypePtr> types = keyTypes;
 
+  bool keyTypesAllBool = true;
+  for (const auto& type : keyTypes) {
+    if (!type->isBoolean()) {
+      keyTypesAllBool = false;
+      break;
+    }
+  }
+
   // Add up to 3 payload columns.
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
@@ -311,7 +319,15 @@ std::vector<RowVectorPtr> JoinFuzzer::generateProbeInput(
   const auto inputType = ROW(std::move(names), std::move(types));
   std::vector<RowVectorPtr> input;
   for (auto i = 0; i < FLAGS_num_batches; ++i) {
-    input.push_back(vectorFuzzer_.fuzzInputRow(inputType));
+    if (keyTypesAllBool) {
+      // Joining on just boolean keys creates so many hits it explodes the
+      // output size, reduce the batch size to 10% to control the output size
+      // while still covering this case.
+      input.push_back(
+          vectorFuzzer_.fuzzRow(inputType, FLAGS_batch_size / 10, false));
+    } else {
+      input.push_back(vectorFuzzer_.fuzzInputRow(inputType));
+    }
   }
   return input;
 }
@@ -980,7 +996,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
   for (auto i = 0; i < altPlans.size(); ++i) {
     LOG(INFO) << "Testing plan #" << i;
     auto actual = execute(altPlans[i], /*injectSpill=*/false);
-    if (actual != nullptr) {
+    if (actual != nullptr && expected != nullptr) {
       VELOX_CHECK(
           assertEqualResults({expected}, {actual}),
           "Logically equivalent plans produced different results");
@@ -1000,7 +1016,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
       LOG(INFO) << "Testing plan #" << i << " with spilling";
       actual = execute(altPlans[i], /*=injectSpill=*/true);
-      if (actual != nullptr) {
+      if (actual != nullptr && expected != nullptr) {
         VELOX_CHECK(
             assertEqualResults({expected}, {actual}),
             "Logically equivalent plans produced different results");

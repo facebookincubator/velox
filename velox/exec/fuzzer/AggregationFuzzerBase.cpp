@@ -87,6 +87,10 @@ DEFINE_bool(
 
 namespace facebook::velox::exec::test {
 
+int32_t AggregationFuzzerBase::randInt(int32_t min, int32_t max) {
+  return boost::random::uniform_int_distribution<int32_t>(min, max)(rng_);
+}
+
 bool AggregationFuzzerBase::isSupportedType(const TypePtr& type) const {
   // Date / IntervalDayTime/ Unknown are not currently supported by DWRF.
   if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown()) {
@@ -403,8 +407,10 @@ velox::test::ResultOrError AggregationFuzzerBase::execute(
       spillDirectory = exec::test::TempDirectoryPath::create();
       builder.spillDirectory(spillDirectory->path)
           .config(core::QueryConfig::kSpillEnabled, "true")
-          .config(core::QueryConfig::kAggregationSpillEnabled, "true");
-      spillPct = 100;
+          .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+          .config(core::QueryConfig::kMaxSpillRunRows, randInt(32, 1L << 30));
+      // Randomized the spill injection with a percentage less than 100.
+      spillPct = 20;
     }
 
     if (abandonPartial) {
@@ -428,7 +434,7 @@ velox::test::ResultOrError AggregationFuzzerBase::execute(
     TestScopedSpillInjection scopedSpillInjection(spillPct);
     resultOrError.result =
         builder.maxDrivers(maxDrivers).copyResults(pool_.get());
-  } catch (VeloxUserError& e) {
+  } catch (VeloxUserError&) {
     // NOTE: velox user exception is accepted as it is caused by the invalid
     // fuzzer test inputs.
     resultOrError.exceptionPtr = std::current_exception();

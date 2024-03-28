@@ -430,7 +430,7 @@ bool RowType::equivalent(const Type& other) const {
   if (!Type::hasSameTypeId(other)) {
     return false;
   }
-  auto& otherTyped = other.asRow();
+  const auto& otherTyped = other.asRow();
   if (otherTyped.size() != size()) {
     return false;
   }
@@ -443,13 +443,20 @@ bool RowType::equivalent(const Type& other) const {
 }
 
 bool RowType::equals(const Type& other) const {
-  if (!this->equivalent(other)) {
+  if (&other == this) {
+    return true;
+  }
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
-  auto& otherTyped = other.asRow();
+  const auto& otherTyped = other.asRow();
+  if (otherTyped.size() != size()) {
+    return false;
+  }
   for (size_t i = 0; i < size(); ++i) {
     // todo: case sensitivity
-    if (nameOf(i) != otherTyped.nameOf(i)) {
+    if (nameOf(i) != otherTyped.nameOf(i) ||
+        *childAt(i) != *otherTyped.childAt(i)) {
       return false;
     }
   }
@@ -884,37 +891,6 @@ exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
   }
 
   return nullptr;
-}
-
-TypePtr fromKindToScalerType(TypeKind kind) {
-  switch (kind) {
-    case TypeKind::TINYINT:
-      return TINYINT();
-    case TypeKind::BOOLEAN:
-      return BOOLEAN();
-    case TypeKind::SMALLINT:
-      return SMALLINT();
-    case TypeKind::BIGINT:
-      return BIGINT();
-    case TypeKind::INTEGER:
-      return INTEGER();
-    case TypeKind::REAL:
-      return REAL();
-    case TypeKind::VARCHAR:
-      return VARCHAR();
-    case TypeKind::VARBINARY:
-      return VARBINARY();
-    case TypeKind::TIMESTAMP:
-      return TIMESTAMP();
-    case TypeKind::DOUBLE:
-      return DOUBLE();
-    case TypeKind::UNKNOWN:
-      return UNKNOWN();
-    default:
-      VELOX_UNSUPPORTED(
-          "Kind is not a scalar type: {}", mapTypeKindToName(kind));
-      return nullptr;
-  }
 }
 
 void toTypeSql(const TypePtr& type, std::ostream& out) {

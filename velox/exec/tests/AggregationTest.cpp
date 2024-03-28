@@ -138,14 +138,8 @@ void checkSpillStats(PlanNodeStats& stats, bool expectedSpill) {
 class AggregationTest : public OperatorTestBase {
  protected:
   static void SetUpTestCase() {
-    FLAGS_velox_testing_enable_arbitration = true;
     OperatorTestBase::SetUpTestCase();
     TestValue::enable();
-  }
-
-  static void TearDownTestCase() {
-    FLAGS_velox_testing_enable_arbitration = false;
-    OperatorTestBase::TearDownTestCase();
   }
 
   void SetUp() override {
@@ -2745,7 +2739,7 @@ namespace {
 void abortPool(memory::MemoryPool* pool) {
   try {
     VELOX_FAIL("Memory pool manually aborted");
-  } catch (const VeloxException& e) {
+  } catch (const VeloxException&) {
     pool->abort(std::current_exception());
   }
 }
@@ -3186,112 +3180,96 @@ TEST_F(AggregationTest, maxSpillBytes) {
 }
 
 DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
-  std::vector<RowVectorPtr> vectors = createVectors(8, rowType_, fuzzerOpts_);
+  const int numInputs = 8;
+  std::vector<RowVectorPtr> vectors =
+      createVectors(numInputs, rowType_, fuzzerOpts_);
   createDuckDbTable(vectors);
-  std::vector<bool> sameQueries = {false, true};
-  for (bool sameQuery : sameQueries) {
-    SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto fakeQueryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    std::shared_ptr<core::QueryCtx> aggregationQueryCtx;
-    if (sameQuery) {
-      aggregationQueryCtx = fakeQueryCtx;
-    } else {
-      aggregationQueryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    }
+  for (const auto maxSpillRunRows : std::vector<uint32_t>({32, 1UL << 30})) {
+    SCOPED_TRACE(fmt::format("maxSpillRunRows {}", maxSpillRunRows));
 
-    folly::EventCount arbitrationWait;
-    std::atomic_bool arbitrationWaitFlag{true};
-    folly::EventCount taskPauseWait;
-    std::atomic_bool taskPauseWaitFlag{true};
-
-    std::atomic_int numInputs{0};
+    std::atomic_int inputCount{0};
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::Driver::runInternal::addInput",
-        std::function<void(Operator*)>(([&](Operator* op) {
-          if (op->operatorType() != "Aggregation") {
+        std::function<void(exec::Operator*)>(([&](exec::Operator* op) {
+          if (op->testingOperatorCtx()->operatorType() != "Aggregation") {
             return;
           }
-          if (++numInputs != 5) {
+          // Inject spill in the middle of aggregation input processing.
+          if (++inputCount != numInputs / 2) {
             return;
           }
-          arbitrationWaitFlag = false;
-          arbitrationWait.notifyAll();
-
-          // Wait for task pause to be triggered.
-          taskPauseWait.await([&] { return !taskPauseWaitFlag.load(); });
+          testingRunArbitration(op->pool());
         })));
 
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Task::requestPauseLocked",
-        std::function<void(Task*)>(([&](Task* /*unused*/) {
-          taskPauseWaitFlag = false;
-          taskPauseWait.notifyAll();
-        })));
-
-    std::thread aggregationThread([&]() {
-      core::PlanNodeId aggrNodeId;
-      auto task =
-          AssertQueryBuilder(duckDbQueryRunner_)
-              .spillDirectory(spillDirectory->path)
-              .config(core::QueryConfig::kSpillEnabled, true)
-              .config(core::QueryConfig::kAggregationSpillEnabled, true)
-              .queryCtx(aggregationQueryCtx)
-              .plan(PlanBuilder()
-                        .values(vectors)
-                        .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                        .capturePlanNodeId(aggrNodeId)
-                        .planNode())
-              .assertResults(
-                  "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
-      auto taskStats = exec::toPlanStats(task->taskStats());
-      auto& planStats = taskStats.at(aggrNodeId);
-      ASSERT_GT(planStats.spilledBytes, 0);
-      ASSERT_GT(planStats.customStats["memoryArbitrationWallNanos"].sum, 0);
-    });
-
-    arbitrationWait.await([&] { return !arbitrationWaitFlag.load(); });
-
-    auto fakePool = fakeQueryCtx->pool()->addLeafChild(
-        "fakePool", true, exec::MemoryReclaimer::create());
-    fakePool->maybeReserve(memory::memoryManager()->arbitrator()->capacity());
-
-    aggregationThread.join();
-
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    core::PlanNodeId aggrNodeId;
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .spillDirectory(spillDirectory->path)
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kAggregationSpillEnabled, true)
+            .config(
+                core::QueryConfig::kMaxSpillRunRows,
+                std::to_string(maxSpillRunRows))
+            .plan(PlanBuilder()
+                      .values(vectors)
+                      .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                      .capturePlanNodeId(aggrNodeId)
+                      .planNode())
+            .assertResults(
+                "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    auto& planStats = taskStats.at(aggrNodeId);
+    ASSERT_GT(planStats.spilledBytes, 0);
+    ASSERT_GT(planStats.customStats["memoryArbitrationWallNanos"].sum, 0);
+    task.reset();
     waitForAllTasksToBeDeleted();
   }
 }
 
-TEST_F(AggregationTest, reclaimFromDistinctAggregation) {
-  const uint64_t maxQueryCapacity = 20L << 20;
+DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromDistinctAggregation) {
+  const int numInputs = 32;
   std::vector<RowVectorPtr> vectors =
-      createVectors(rowType_, maxQueryCapacity * 10, fuzzerOpts_);
+      createVectors(numInputs, rowType_, fuzzerOpts_);
   createDuckDbTable(vectors);
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
-  core::PlanNodeId aggrNodeId;
-  std::shared_ptr<core::QueryCtx> queryCtx = std::make_shared<core::QueryCtx>(
-      executor_.get(),
-      core::QueryConfig({}),
-      std::unordered_map<std::string, std::shared_ptr<Config>>{},
-      cache::AsyncDataCache::getInstance(),
-      memory::memoryManager()->addRootPool(
-          "test-root", maxQueryCapacity, exec::MemoryReclaimer::create()));
-  auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .spillDirectory(spillDirectory->path)
-                  .config(core::QueryConfig::kSpillEnabled, true)
-                  .config(core::QueryConfig::kAggregationSpillEnabled, true)
-                  .queryCtx(queryCtx)
-                  .plan(PlanBuilder()
-                            .values(vectors)
-                            .singleAggregation({"c0"}, {})
-                            .capturePlanNodeId(aggrNodeId)
-                            .planNode())
-                  .assertResults("SELECT distinct c0 FROM tmp");
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& planStats = taskStats.at(aggrNodeId);
-  ASSERT_GT(planStats.spilledBytes, 0);
-  task.reset();
-  waitForAllTasksToBeDeleted();
+  for (const auto maxSpillRunRows : std::vector<uint32_t>({32, 1UL << 30})) {
+    SCOPED_TRACE(fmt::format("maxSpillRunRows {}", maxSpillRunRows));
+
+    std::atomic_int inputCount{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::addInput",
+        std::function<void(exec::Operator*)>(([&](exec::Operator* op) {
+          if (op->testingOperatorCtx()->operatorType() != "Aggregation") {
+            return;
+          }
+          // Inject spill at the end of aggregation input processing.
+          if (++inputCount != numInputs / 2) {
+            return;
+          }
+          testingRunArbitration(op->pool());
+        })));
+
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    core::PlanNodeId aggrNodeId;
+    auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                    .spillDirectory(spillDirectory->path)
+                    .config(core::QueryConfig::kSpillEnabled, true)
+                    .config(core::QueryConfig::kAggregationSpillEnabled, true)
+                    .config(
+                        core::QueryConfig::kMaxSpillRunRows,
+                        std::to_string(maxSpillRunRows))
+                    .plan(PlanBuilder()
+                              .values(vectors)
+                              .singleAggregation({"c0"}, {})
+                              .capturePlanNodeId(aggrNodeId)
+                              .planNode())
+                    .assertResults("SELECT distinct c0 FROM tmp");
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    auto& planStats = taskStats.at(aggrNodeId);
+    ASSERT_GT(planStats.spilledBytes, 0);
+    task.reset();
+    waitForAllTasksToBeDeleted();
+  }
 }
 
 DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationOnNoMoreInput) {
@@ -3546,4 +3524,28 @@ TEST_F(AggregationTest, ignoreNullKeys) {
   AssertQueryBuilder(makePlan(true)).assertEmptyResults();
 }
 
+// Verify that ORDER BY clause is ignored for aggregates that are not order
+// sensitive.
+TEST_F(AggregationTest, ignoreOrderBy) {
+  auto data = makeRowVector({
+      makeFlatVector<int16_t>({1, 1, 2, 2, 1, 2, 1}),
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7}),
+      makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60, 70}),
+      makeFlatVector<int32_t>({11, 44, 22, 55, 33, 66, 77}),
+  });
+
+  createDuckDbTable({data});
+
+  // Sorted aggregations over same inputs.
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .partialAggregation(
+              {"c0"}, {"sum(c1 ORDER BY c2 DESC)", "avg(c1 ORDER BY c3)"})
+          .finalAggregation()
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT c0, sum(c1), avg(c1) FROM tmp GROUP BY 1");
+}
 } // namespace facebook::velox::exec::test
