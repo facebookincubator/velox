@@ -13,11 +13,12 @@
 # limitations under the License.
 import argparse
 import json
+import os
 import sys
 
-import pyvelox.pyvelox as pv
 from deepdiff import DeepDiff
 
+import pyvelox.pyvelox as pv
 
 # Utility to export and diff function signatures.
 
@@ -31,14 +32,32 @@ class bcolors:
     BOLD = "\033[1m"
 
 
-def get_error_string(error_message):
-    return f"""
+def get_error_string(error_message, markdown=False):
+    return f"""{"> [!CAUTION]" if markdown else ""}
 Incompatible changes in function signatures have been detected.
 
 {error_message}
 
 Changing or removing function signatures breaks backwards compatibility as some users may rely on function signatures that no longer exist.
 """
+
+
+def set_output(name: str, value: str):
+    """Sets a Github Actions output variable. Only single line values are supported."""
+    if "\n" in value:
+        raise ValueError("Only single line values are supported.")
+
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+        f.write(f"{name}={value}\n")
+
+
+def show_error(error_message):
+    if "GITHUB_ACTIONS" in os.environ:
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+            f.writelines(get_error_string(error_message, markdown=True))
+
+    else:
+        print(get_error_string(error_message))
 
 
 def export(args):
@@ -59,7 +78,9 @@ def export(args):
         jsoned_signatures[key] = [str(value) for value in signatures[key]]
 
     # Persist to file
-    json.dump(jsoned_signatures, args.output_file)
+    with open(args.output_file, "w") as f:
+        json.dump(jsoned_signatures, f)
+
     return 0
 
 
@@ -82,28 +103,28 @@ def diff_signatures(base_signatures, contender_signatures):
                 error_message += (
                     f"""Function '{dic_removed.get_root_key()}' has been removed.\n"""
                 )
-            print(get_error_string(error_message))
+            show_error(error_message)
             exit_status = 1
 
         if "values_changed" in delta:
             error_message = ""
             for value_change in delta["values_changed"]:
                 error_message += f"""'{value_change.get_root_key()}{value_change.t1}' is changed to '{value_change.get_root_key()}{value_change.t2}'.\n"""
-            print(get_error_string(error_message))
+            show_error(error_message)
             exit_status = 1
 
         if "repetition_change" in delta:
             error_message = ""
             for rep_change in delta["repetition_change"]:
                 error_message += f"""'{rep_change.get_root_key()}{rep_change.t1}' is repeated {rep_change.repetition['new_repeat']} times.\n"""
-            print(get_error_string(error_message))
+            show_error(error_message)
             exit_status = 1
 
         if "iterable_item_removed" in delta:
             error_message = ""
             for iter_change in delta["iterable_item_removed"]:
                 error_message += f"""{iter_change.get_root_key()} has its function signature '{iter_change.t1}' removed.\n"""
-            print(get_error_string(error_message))
+            show_error(error_message)
             exit_status = 1
 
     else:
@@ -114,14 +135,21 @@ def diff_signatures(base_signatures, contender_signatures):
 
 def diff(args):
     """Diffs Velox function signatures."""
-    base_signatures = json.load(args.base)
-    contender_signatures = json.load(args.contender)
+    with open(args.base) as f:
+        base_signatures = json.load(f)
+
+    with open(args.contender) as f:
+        contender_signatures = json.load(f)
     return diff_signatures(base_signatures, contender_signatures)[1]
 
 
 def bias(args):
-    base_signatures = json.load(args.base)
-    contender_signatures = json.load(args.contender)
+    with open(args.base) as f:
+        base_signatures = json.load(f)
+
+    with open(args.contender) as f:
+        contender_signatures = json.load(f)
+
     tickets = args.ticket_value
     bias_output, status = bias_signatures(
         base_signatures, contender_signatures, tickets
@@ -156,6 +184,47 @@ def bias_signatures(base_signatures, contender_signatures, tickets):
     return "", status
 
 
+def gh_bias_check(args):
+    """
+    Exports signatures for the given group(s) and checks them for changes compared to a baseline.
+    Saves the results to a file and sets a Github Actions Output for each group.
+    """
+    if not os.getenv("GITHUB_ACTIONS"):
+        print("This command is meant to be run in a Github Actions environment.")
+        return 1
+
+    # export signatures for each group
+    for group in args.group:
+        print(f"Exporting {group} signatures...")
+        export_args = parse_args(
+            [
+                "export",
+                f"--{group}",
+                os.path.join(args.signature_dir, group + args.contender_postfix),
+            ]
+        )
+        export(export_args)
+
+    # compare signatures for each group
+    for group in args.group:
+        print(f"Comparing {group} signatures...")
+        bias_args = parse_args(
+            [
+                "bias",
+                os.path.join(args.signature_dir, group + args.base_postfix),
+                os.path.join(args.signature_dir, group + args.contender_postfix),
+                os.path.join(args.signature_dir, group + args.output_postfix),
+            ]
+        )
+        bias_status = bias(bias_args)
+        set_output(f"{group}_error", str(bias_status == 1).lower())
+
+        has_tickets = os.path.isfile(
+            os.path.join(args.signature_dir, group + args.output_postfix)
+        )
+        set_output(f"{group}_functions", str(has_tickets).lower())
+
+
 def get_tickets(val):
     tickets = int(val)
     if tickets < 0:
@@ -175,19 +244,39 @@ def parse_args(args):
     export_command_parser = command.add_parser("export")
     export_command_parser.add_argument("--spark", action="store_true")
     export_command_parser.add_argument("--presto", action="store_true")
-    export_command_parser.add_argument("output_file", type=argparse.FileType("w"))
+    export_command_parser.add_argument("output_file", type=str)
 
     diff_command_parser = command.add_parser("diff")
-    diff_command_parser.add_argument("base", type=argparse.FileType("r"))
-    diff_command_parser.add_argument("contender", type=argparse.FileType("r"))
+    diff_command_parser.add_argument("base", type=str)
+    diff_command_parser.add_argument("contender", type=str)
 
     bias_command_parser = command.add_parser("bias")
-    bias_command_parser.add_argument("base", type=argparse.FileType("r"))
-    bias_command_parser.add_argument("contender", type=argparse.FileType("r"))
-    bias_command_parser.add_argument("output_path")
+    bias_command_parser.add_argument("base", type=str)
+    bias_command_parser.add_argument("contender", type=str)
+    bias_command_parser.add_argument("output_path", type=str)
     bias_command_parser.add_argument(
         "ticket_value", type=get_tickets, default=10, nargs="?"
     )
+    gh_command_parser = command.add_parser("gh_bias_check")
+    gh_command_parser.add_argument(
+        "group",
+        nargs="+",
+        help='One or more group names to check for changed signatures. e.g. "spark" or "presto"',
+        type=str,
+    )
+    gh_command_parser.add_argument(
+        "--signature_dir", type=str, default="/tmp/signatures"
+    )
+    gh_command_parser.add_argument(
+        "--base_postfix", type=str, default="_signatures_main.json"
+    )
+    gh_command_parser.add_argument(
+        "--contender_postfix", type=str, default="_signatures_contender.json"
+    )
+    gh_command_parser.add_argument(
+        "--output_postfix", type=str, default="_bias_functions"
+    )
+
     parser.set_defaults(command="help")
 
     return parser.parse_args(args)

@@ -91,7 +91,7 @@ build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
 	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j $(NUM_THREADS)
 
 debug:					#: Build with debugging symbols
-	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug
+	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS}"
 	$(MAKE) build BUILD_DIR=debug -j ${NUM_THREADS}
 
 release:				#: Build the release version
@@ -183,7 +183,7 @@ python-clean:
 	DEBUG=1 ${PYTHON_EXECUTABLE} setup.py clean
 
 python-build:
-	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=4 ${PYTHON_EXECUTABLE} -m pip install -e .$(extras) --verbose
+	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=${NUM_THREADS} ${PYTHON_EXECUTABLE} -m pip install -e .$(extras) --verbose
 
 python-test: 
 	$(MAKE) python-build extras="[tests]"
