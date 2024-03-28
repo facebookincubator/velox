@@ -64,6 +64,31 @@ TEST_F(TimestampWithTimeZoneCastTest, fromTimestamp) {
   testCast(tsVector, expected);
 }
 
+TEST_F(TimestampWithTimeZoneCastTest, fromVarchar) {
+  const auto stringVector = makeNullableFlatVector<StringView>(
+      {std::nullopt,
+       "2012-10-31 01:00:47 America/Denver",
+       "2012-10-31 01:00:47 -06:00",
+       "1979-02-24 08:33:31 Pacific/Chatham",
+       "1979-02-24 08:33:31 +13:45"});
+
+  auto timestamps = std::vector<int64_t>{
+      0,
+      1351666847 * kMillisInSecond,
+      1351666847 * kMillisInSecond,
+      288643711 * kMillisInSecond,
+      288643711 * kMillisInSecond};
+  auto timezones = std::vector<TimeZoneKey>{{0, 1784, 481, 2123, 1665}};
+
+  const auto expected = makeTimestampWithTimeZoneVector(
+      timestamps.size(),
+      [&](int32_t index) { return timestamps[index]; },
+      [&](int32_t index) { return timezones[index]; });
+  expected->setNull(0, true);
+
+  testCast(stringVector, expected);
+}
+
 TEST_F(TimestampWithTimeZoneCastTest, toTimestamp) {
   auto timestamps =
       std::vector<int64_t>{1996 * kMillisInSecond, 0, 19920 * kMillisInSecond};

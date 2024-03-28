@@ -41,6 +41,7 @@
  */
 
 #include "velox/type/TimestampConversion.h"
+#include <string>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -747,6 +748,15 @@ Timestamp fromTimestampString(const char* str, size_t len) {
     }
   }
   return timestamp;
+}
+
+std::tuple<const StringView&, std::string_view>
+splitTimestampWithTimezoneString(const std::string_view& tsTzStr) {
+  auto pos = tsTzStr.find(" ");
+  pos = tsTzStr.find(" ", pos + 1);
+  auto tsStr = tsTzStr.substr(0, pos);
+  auto tzStr = tsTzStr.substr(pos + 1);
+  return std::make_tuple(StringView(tsStr), (std::string_view)(tzStr));
 }
 
 } // namespace facebook::velox::util
