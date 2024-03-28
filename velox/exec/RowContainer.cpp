@@ -458,7 +458,7 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
 
   if (clear) {
     for (auto row : rows) {
-      auto& vector = getNextRowVector(row);
+      auto vector = getNextRowVector(row);
       if (vector) {
         // Clear all rows, we can clear the nextOffset_ slots and delete the
         // next-row-vector.
@@ -472,7 +472,7 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
   }
 
   for (auto row : rows) {
-    auto& vector = getNextRowVector(row);
+    auto vector = getNextRowVector(row);
     if (vector) {
       // If 'clear' is false, the caller must ensure that all rows with same
       // keys appear in the 'rows'.
@@ -891,7 +891,8 @@ void RowContainer::hash(
 
 void RowContainer::clear() {
   const bool sharedStringAllocator = !stringAllocator_.unique();
-  if (checkFree_ || sharedStringAllocator || usesExternalMemory_) {
+  if (checkFree_ || sharedStringAllocator || usesExternalMemory_ ||
+      hasDuplicateRows_) {
     constexpr int32_t kBatch = 1000;
     std::vector<char*> rows(kBatch);
     RowContainerIterator iter;
