@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "vector/tests/utils/VectorTestBase.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MallocAllocator.h"
@@ -29,6 +30,7 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
@@ -39,6 +41,10 @@ using namespace facebook::velox::memory;
 namespace facebook::velox::exec::test {
 
 OperatorTestBase::OperatorTestBase() {
+  rootPool_ = memory::memoryManager()->addRootPool(
+      "", memory::kMaxMemory, exec::MemoryReclaimer::create());
+  pool_ = rootPool_->addLeafChild("", true, exec::MemoryReclaimer::create());
+
   parse::registerTypeResolver();
 }
 
@@ -58,6 +64,7 @@ void OperatorTestBase::SetUpTestCase() {
   MemoryManagerOptions options;
   options.allocatorCapacity = 8L << 30;
   options.arbitratorCapacity = 6L << 30;
+  options.memoryPoolInitCapacity = 512 << 20;
   options.arbitratorKind = "SHARED";
   options.checkUsageLeak = true;
   options.arbitrationStateCheckCb = memoryArbitrationStateCheck;

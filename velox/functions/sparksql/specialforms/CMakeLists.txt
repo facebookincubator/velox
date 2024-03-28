@@ -17,4 +17,4 @@ add_library(
                                      SparkCastExpr.cpp SparkCastHooks.cpp)
 
 target_link_libraries(velox_functions_spark_specialforms fmt::fmt
-                      velox_expression)
+                      velox_exec velox_expression)

@@ -209,26 +209,21 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
     }
   }
 
-  const auto& spillConfig = spillConfig_.value();
-  HashBitRange hashBits(
-      spillConfig.startPartitionBit,
-      spillConfig.startPartitionBit + spillConfig.numPartitionBits);
-
+  const auto* config = spillConfig();
+  uint8_t startPartitionBit = config->startPartitionBit;
   if (spillPartition != nullptr) {
     LOG(INFO) << "Setup reader to read spilled input from "
               << spillPartition->toString()
               << ", memory pool: " << pool()->name();
 
     spillInputReader_ = spillPartition->createUnorderedReader(pool());
-
-    const auto startBit = spillPartition->id().partitionBitOffset() +
-        spillConfig.numPartitionBits;
+    startPartitionBit =
+        spillPartition->id().partitionBitOffset() + config->numPartitionBits;
     // Disable spilling if exceeding the max spill level and the query might run
     // out of memory if the restored partition still can't fit in memory.
-    if (spillConfig.exceedSpillLevelLimit(startBit)) {
+    if (config->exceedSpillLevelLimit(startPartitionBit)) {
       RECORD_METRIC_VALUE(kMetricMaxSpillLevelExceededCount);
-      LOG(WARNING) << "Exceeded spill level limit: "
-                   << spillConfig.maxSpillLevel
+      LOG(WARNING) << "Exceeded spill level limit: " << config->maxSpillLevel
                    << ", and disable spilling for memory pool: "
                    << pool()->name();
       ++spillStats_.wlock()->spillMaxLevelExceededCount;
@@ -236,7 +231,6 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       return;
     }
     exceededMaxSpillLevelLimit_ = false;
-    hashBits = HashBitRange(startBit, startBit + spillConfig.numPartitionBits);
   }
 
   spiller_ = std::make_unique<Spiller>(
@@ -244,8 +238,9 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       joinType_,
       table_->rows(),
       spillType_,
-      std::move(hashBits),
-      &spillConfig,
+      HashBitRange(
+          startPartitionBit, startPartitionBit + config->numPartitionBits),
+      config,
       &spillStats_);
 
   const int32_t numPartitions = spiller_->hashBits().numPartitions();
