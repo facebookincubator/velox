@@ -233,6 +233,11 @@ TEST_F(RowNumberTest, spill) {
         (static_cast<uint32_t>(1) << testData.spillPartitionBits) * 2);
     ASSERT_GT(planStats.spilledFiles, 0);
     ASSERT_GT(planStats.spilledRows, 0);
+    auto operatorStats =
+        task->taskStats().pipelineStats.back().operatorStats.at(1);
+    auto runTimeStats = operatorStats.runtimeStats;
+    ASSERT_EQ(
+        runTimeStats.at("spillReadBytes").sum, operatorStats.spilledBytes);
 
     task.reset();
     waitForAllTasksToBeDeleted();

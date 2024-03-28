@@ -136,7 +136,7 @@ class HashJoinBridgeTest : public testing::Test,
       partitionSet.emplace(
           id,
           std::make_unique<SpillPartition>(
-              id, makeFakeSpillFiles(numSpillFilesPerPartition_)));
+              id, makeFakeSpillFiles(numSpillFilesPerPartition_), nullptr));
     }
     return partitionSet;
   }

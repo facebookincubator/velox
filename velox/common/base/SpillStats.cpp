@@ -48,7 +48,8 @@ SpillStats::SpillStats(
     uint64_t _spillWrites,
     uint64_t _spillFlushTimeUs,
     uint64_t _spillWriteTimeUs,
-    uint64_t _spillMaxLevelExceededCount)
+    uint64_t _spillMaxLevelExceededCount,
+    uint64_t _spilledReadBytes)
     : spillRuns(_spillRuns),
       spilledInputBytes(_spilledInputBytes),
       spilledBytes(_spilledBytes),
@@ -61,7 +62,8 @@ SpillStats::SpillStats(
       spillWrites(_spillWrites),
       spillFlushTimeUs(_spillFlushTimeUs),
       spillWriteTimeUs(_spillWriteTimeUs),
-      spillMaxLevelExceededCount(_spillMaxLevelExceededCount) {}
+      spillMaxLevelExceededCount(_spillMaxLevelExceededCount),
+      spillReadBytes(_spilledReadBytes) {}
 
 SpillStats& SpillStats::operator+=(const SpillStats& other) {
   spillRuns += other.spillRuns;
@@ -77,6 +79,7 @@ SpillStats& SpillStats::operator+=(const SpillStats& other) {
   spillFlushTimeUs += other.spillFlushTimeUs;
   spillWriteTimeUs += other.spillWriteTimeUs;
   spillMaxLevelExceededCount += other.spillMaxLevelExceededCount;
+  spillReadBytes += other.spillReadBytes;
   return *this;
 }
 
@@ -97,6 +100,7 @@ SpillStats SpillStats::operator-(const SpillStats& other) const {
   result.spillWriteTimeUs = spillWriteTimeUs - other.spillWriteTimeUs;
   result.spillMaxLevelExceededCount =
       spillMaxLevelExceededCount - other.spillMaxLevelExceededCount;
+  result.spillReadBytes = spillReadBytes - other.spillReadBytes;
   return result;
 }
 
@@ -125,6 +129,7 @@ bool SpillStats::operator<(const SpillStats& other) const {
   UPDATE_COUNTER(spillFlushTimeUs);
   UPDATE_COUNTER(spillWriteTimeUs);
   UPDATE_COUNTER(spillMaxLevelExceededCount);
+  UPDATE_COUNTER(spillReadBytes);
 #undef UPDATE_COUNTER
   VELOX_CHECK(
       !((gtCount > 0) && (ltCount > 0)),
@@ -160,7 +165,8 @@ bool SpillStats::operator==(const SpillStats& other) const {
              spillWrites,
              spillFlushTimeUs,
              spillWriteTimeUs,
-             spillMaxLevelExceededCount) ==
+             spillMaxLevelExceededCount,
+             spillReadBytes) ==
       std::tie(
              other.spillRuns,
              other.spilledInputBytes,
@@ -174,7 +180,8 @@ bool SpillStats::operator==(const SpillStats& other) const {
              other.spillWrites,
              other.spillFlushTimeUs,
              other.spillWriteTimeUs,
-             spillMaxLevelExceededCount);
+             spillMaxLevelExceededCount,
+             spillReadBytes);
 }
 
 void SpillStats::reset() {
@@ -191,6 +198,7 @@ void SpillStats::reset() {
   spillFlushTimeUs = 0;
   spillWriteTimeUs = 0;
   spillMaxLevelExceededCount = 0;
+  spillReadBytes = 0;
 }
 
 std::string SpillStats::toString() const {
@@ -208,7 +216,8 @@ std::string SpillStats::toString() const {
       spillWrites,
       succinctMicros(spillFlushTimeUs),
       succinctMicros(spillWriteTimeUs),
-      spillMaxLevelExceededCount);
+      spillMaxLevelExceededCount,
+      succinctBytes(spillReadBytes));
 }
 
 void updateGlobalSpillRunStats(uint64_t numRuns) {
@@ -271,6 +280,10 @@ void updateGlobalMaxSpillLevelExceededCount(
     uint64_t maxSpillLevelExceededCount) {
   localSpillStats().wlock()->spillMaxLevelExceededCount +=
       maxSpillLevelExceededCount;
+}
+
+void updateGlobalSpillReadBytes(uint64_t spillReadBytes) {
+  localSpillStats().wlock()->spillReadBytes += spillReadBytes;
 }
 
 SpillStats globalSpillStats() {

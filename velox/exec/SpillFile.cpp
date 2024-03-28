@@ -33,6 +33,7 @@ void SpillInputStream::next(bool /*throwIfPastEnd*/) {
   VELOX_CHECK_LT(0, readBytes, "Reading past end of spill file");
   setRange({buffer_->asMutable<uint8_t>(), readBytes, 0});
   file_->pread(offset_, readBytes, buffer_->asMutable<char>());
+  stats_->wlock()->spillReadBytes += readBytes;
   offset_ += readBytes;
 }
 
@@ -268,7 +269,8 @@ std::vector<uint32_t> SpillWriter::testingSpilledFileIds() const {
 
 std::unique_ptr<SpillReadFile> SpillReadFile::create(
     const SpillFileInfo& fileInfo,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* stats) {
   return std::unique_ptr<SpillReadFile>(new SpillReadFile(
       fileInfo.id,
       fileInfo.path,
@@ -277,7 +279,8 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
       fileInfo.numSortKeys,
       fileInfo.sortFlags,
       fileInfo.compressionKind,
-      pool));
+      pool,
+      stats));
 }
 
 SpillReadFile::SpillReadFile(
@@ -288,7 +291,8 @@ SpillReadFile::SpillReadFile(
     uint32_t numSortKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
     common::CompressionKind compressionKind,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* stats)
     : id_(id),
       path_(path),
       size_(size),
@@ -300,15 +304,16 @@ SpillReadFile::SpillReadFile(
           kDefaultUseLosslessTimestamp,
           compressionKind_,
           true /*nullsFirst*/},
-      pool_(pool) {
+      pool_(pool),
+      stats_(stats) {
   constexpr uint64_t kMaxReadBufferSize =
       (1 << 20) - AlignedBuffer::kPaddedSize; // 1MB - padding.
   auto fs = filesystems::getFileSystem(path_, nullptr);
   auto file = fs->openFileForRead(path_);
   auto buffer = AlignedBuffer::allocate<char>(
       std::min<uint64_t>(size_, kMaxReadBufferSize), pool_);
-  input_ =
-      std::make_unique<SpillInputStream>(std::move(file), std::move(buffer));
+  input_ = std::make_unique<SpillInputStream>(
+      std::move(file), std::move(buffer), stats_);
 }
 
 bool SpillReadFile::nextBatch(RowVectorPtr& rowVector) {

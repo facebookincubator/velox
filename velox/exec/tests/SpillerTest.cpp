@@ -275,6 +275,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     ASSERT_EQ(stats.spilledPartitions, numPartitions_);
     ASSERT_EQ(stats.spilledRows, kNumRows);
     ASSERT_EQ(stats.spilledBytes, totalSpilledBytes);
+    ASSERT_EQ(stats.spillReadBytes, totalSpilledBytes);
     ASSERT_GT(stats.spillWriteTimeUs, 0);
     if (type_ == Spiller::Type::kAggregateOutput) {
       ASSERT_EQ(stats.spillSortTimeUs, 0);
@@ -296,6 +297,9 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         newGStats.spilledPartitions);
     ASSERT_EQ(
         prevGStats.spilledBytes + stats.spilledBytes, newGStats.spilledBytes);
+    ASSERT_EQ(
+        prevGStats.spillReadBytes + stats.spillReadBytes,
+        newGStats.spillReadBytes);
     ASSERT_EQ(
         prevGStats.spillWriteTimeUs + stats.spillWriteTimeUs,
         newGStats.spillWriteTimeUs);
@@ -870,6 +874,9 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         std::move(spillers), spillPartitionNumSet, inputsByPartition);
     // Spilled file stats should be updated after finalizing spiller.
     ASSERT_GT(common::globalSpillStats().spilledFiles, 0);
+    ASSERT_GT(
+        common::globalSpillStats().spilledBytes,
+        common::globalSpillStats().spillReadBytes);
   }
 
   void verifyNonSortedSpillData(

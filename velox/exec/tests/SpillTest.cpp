@@ -350,8 +350,8 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     for (auto partition = 0; partition < state_->maxPartitions(); ++partition) {
       auto spillFiles = state_->finish(partition);
       ASSERT_EQ(state_->numFinishedFiles(partition), 0);
-      auto spillPartition =
-          SpillPartition(SpillPartitionId{0, partition}, std::move(spillFiles));
+      auto spillPartition = SpillPartition(
+          SpillPartitionId{0, partition}, std::move(spillFiles), &stats_);
       auto merge = spillPartition.createOrderedReader(pool());
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
@@ -486,7 +486,8 @@ TEST_P(SpillTest, spillTimestamp) {
   EXPECT_TRUE(
       state.testingNonEmptySpilledPartitionSet().contains(partitionIndex));
 
-  SpillPartition spillPartition(SpillPartitionId{0, 0}, state.finish(0));
+  SpillPartition spillPartition(
+      SpillPartitionId{0, 0}, state.finish(0), &stats_);
   auto merge = spillPartition.createOrderedReader(pool());
   ASSERT_TRUE(merge != nullptr);
   ASSERT_TRUE(spillPartition.createOrderedReader(pool()) == nullptr);
@@ -640,8 +641,8 @@ TEST_P(SpillTest, spillPartitionSet) {
         ++expectedPartitionFiles[i];
       }
       if (iter == 0) {
-        spillPartitions.emplace_back(
-            std::make_unique<SpillPartition>(id, std::move(spillFiles)));
+        spillPartitions.emplace_back(std::make_unique<SpillPartition>(
+            id, std::move(spillFiles), &stats_));
       } else {
         spillPartitions[i]->addFiles(std::move(spillFiles));
       }
@@ -695,7 +696,7 @@ TEST_P(SpillTest, spillPartitionSpilt) {
     const SpillPartitionId id(0, 0);
 
     auto spillPartition =
-        std::make_unique<SpillPartition>(id, state_->finish(0));
+        std::make_unique<SpillPartition>(id, state_->finish(0), &stats_);
     std::copy(
         batchesByPartition_[0].begin(),
         batchesByPartition_[0].end(),
@@ -782,7 +783,7 @@ TEST(SpillTest, removeEmptyPartitions) {
       partitionSet.emplace(
           id,
           std::make_unique<SpillPartition>(
-              id, makeFakeSpillFiles(1 + partition / 2)));
+              id, makeFakeSpillFiles(1 + partition / 2), nullptr));
     } else {
       partitionSet.emplace(id, std::make_unique<SpillPartition>(id));
     }

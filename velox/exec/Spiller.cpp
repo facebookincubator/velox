@@ -595,7 +595,7 @@ void Spiller::finishSpill(SpillPartitionSet& partitionSet) {
       partitionSet.emplace(
           partitionId,
           std::make_unique<SpillPartition>(
-              partitionId, state_.finish(partition)));
+              partitionId, state_.finish(partition), spillStats_));
     } else {
       partitionSet[partitionId]->addFiles(state_.finish(partition));
     }
@@ -607,7 +607,8 @@ SpillPartition Spiller::finishSpill() {
   VELOX_CHECK(state_.isPartitionSpilled(0));
 
   finalizeSpill();
-  return SpillPartition(SpillPartitionId{bits_.begin(), 0}, state_.finish(0));
+  return SpillPartition(
+      SpillPartitionId{bits_.begin(), 0}, state_.finish(0), spillStats_);
 }
 
 void Spiller::finalizeSpill() {
