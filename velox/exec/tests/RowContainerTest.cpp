@@ -1899,7 +1899,7 @@ TEST_F(RowContainerTest, nextRowVector) {
     validateNextRowVector();
   };
 
-  auto nextRowVectorEraseValidation = [&](const std::vector<int> eraseRows) {
+  auto nextRowVectorEraseValidation = [&](const std::vector<int>& eraseRows) {
     dataClear();
     nextRowVectorAppendValidation();
     std::vector<char*> erasingRows;

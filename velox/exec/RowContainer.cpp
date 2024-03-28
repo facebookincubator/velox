@@ -442,7 +442,6 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
     return;
   }
 
-  int32_t rowIndex = 0;
   for (auto row : rows) {
     auto& vector = getNextRowVector(row);
     if (vector) {
@@ -456,7 +455,6 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
       }
       delete vector;
     }
-    rowIndex++;
   }
 }
 
