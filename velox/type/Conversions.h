@@ -21,6 +21,7 @@
 #include <string>
 #include <type_traits>
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/StringToFloatParser.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 
@@ -384,16 +385,27 @@ struct Converter<
     return folly::to<T>(v);
   }
 
+  static T stringToFloat(const std::string_view& v) {
+    T output;
+    const auto status = StringToFloatParser::parse<T>(v, output);
+
+    if (status.ok()) {
+      return output;
+    }
+
+    throw std::invalid_argument(status.message());
+  }
+
   static T cast(folly::StringPiece v) {
-    return cast<folly::StringPiece>(v);
+    return stringToFloat(v);
   }
 
   static T cast(const StringView& v) {
-    return cast<folly::StringPiece>(folly::StringPiece(v));
+    return stringToFloat(static_cast<std::string_view>(v));
   }
 
   static T cast(const std::string& v) {
-    return cast<std::string>(v);
+    return stringToFloat(v);
   }
 
   static T cast(const bool& v) {

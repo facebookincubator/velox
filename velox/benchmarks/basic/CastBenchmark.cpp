@@ -23,6 +23,15 @@ using namespace facebook;
 
 using namespace facebook::velox;
 
+std::vector<StringView> toStringViews(const std::vector<std::string>& values) {
+  std::vector<StringView> views;
+  views.reserve(values.size());
+  for (const auto& value : values) {
+    views.emplace_back(StringView(value));
+  }
+  return views;
+}
+
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   memory::MemoryManager::initialize({});
@@ -60,6 +69,18 @@ int main(int argc, char** argv) {
         return Timestamp(1695859694 + j / 1000, j % 1000 * 1'000'000);
       });
 
+  std::default_random_engine generator;
+  std::uniform_real_distribution<float> distribution(
+      -9999999999.9999, 9999999999.9999);
+
+  std::vector<std::string> doubleVector;
+  for (auto i = 0; i < vectorSize; i++) {
+    auto randomDouble = distribution(generator);
+    doubleVector.push_back(std::to_string(randomDouble));
+  }
+  auto doubleInput =
+      vectorMaker.flatVector<StringView>(toStringViews(doubleVector));
+
   invalidInput->resize(vectorSize);
   validInput->resize(vectorSize);
   nanInput->resize(vectorSize);
@@ -84,7 +105,8 @@ int main(int argc, char** argv) {
                "small_real",
                "small_double",
                "large_double",
-               "timestamp"},
+               "timestamp",
+               "string_double"},
               {validInput,
                invalidInput,
                nanInput,
@@ -95,7 +117,8 @@ int main(int argc, char** argv) {
                smallRealInput,
                smallDoubleInput,
                largeDoubleInput,
-               timestampInput}))
+               timestampInput,
+               doubleInput}))
       .addExpression("try_cast_invalid_empty_input", "try_cast (empty as int) ")
       .addExpression(
           "tryexpr_cast_invalid_empty_input", "try (cast (empty as int))")
@@ -122,6 +145,8 @@ int main(int argc, char** argv) {
       .addExpression("cast_timestamp", "cast (timestamp as varchar)")
       .addExpression("cast_real_as_int", "cast (small_real as integer)")
       .addExpression("cast_decimal_as_bigint", "cast (short_decimal as bigint)")
+      .addExpression("cast_string_as_double", "cast (string_double as double)")
+      .addExpression("cast_string_as_float", "cast (string_double as float)")
       .withIterations(100)
       .disableTesting();
 
