@@ -450,15 +450,18 @@ TEST_F(ArithmeticTest, normalizeNanFloat) {
     return f.value();
   };
 
-  EXPECT_EQ(0.0f, normalizeNan(0.0f));
-  EXPECT_EQ(0.0f, normalizeNan(-0.0f));
-  EXPECT_EQ(1.0f, normalizeNan(1.0f));
+  EXPECT_EQ(toInt64(0.0f), toInt64(normalizeNan(0.0f)));
+  EXPECT_EQ(toInt64(0.0f), toInt64(normalizeNan(-0.0f)));
+  EXPECT_EQ(toInt64(1.0f), toInt64(normalizeNan(1.0f)));
   // folly::hasher<float>()(kNan) != folly::hasher<float>()(0.0f / 0.0f)
   // toInt64(kNan) != toInt64(0.0f / 0.0f)
   EXPECT_EQ(toInt64(normalizeNan(kNan)), toInt64(normalizeNan(kNan)));
   EXPECT_EQ(toInt64(normalizeNan(kNan)), toInt64(normalizeNan(0.0f / 0.0f)));
   EXPECT_EQ(toInt64(normalizeNan(kNan)), toInt64(normalizeNan(kInf - kInf)));
 
+  EXPECT_EQ(hasher(0.0f), hasher(normalizeNan(0.0f)));
+  EXPECT_EQ(hasher(0.0f), hasher(normalizeNan(-0.0f)));
+  EXPECT_EQ(hasher(1.0f), hasher(normalizeNan(1.0f)));
   EXPECT_EQ(hasher(normalizeNan(kNan)), hasher(normalizeNan(kNan)));
   EXPECT_EQ(hasher(normalizeNan(kNan)), hasher(normalizeNan(0.0f / 0.0f)));
   EXPECT_EQ(hasher(normalizeNan(kNan)), hasher(normalizeNan(kInf - kInf)));
@@ -477,10 +480,9 @@ TEST_F(ArithmeticTest, normalizeNanDouble) {
     return f.value();
   };
 
-  EXPECT_EQ(0.0d, normalizeNan(0.0d));
-  EXPECT_EQ(0.0d, normalizeNan(-0.0d));
-  EXPECT_EQ(1.0d, normalizeNan(1.0d));
-
+  EXPECT_EQ(toInt64(0.0d), toInt64(normalizeNan(0.0d)));
+  EXPECT_EQ(toInt64(0.0d), toInt64(normalizeNan(-0.0d)));
+  EXPECT_EQ(toInt64(1.0d), toInt64(normalizeNan(1.0d)));
   EXPECT_EQ(
       toInt64(normalizeNan(kNanDouble)), toInt64(normalizeNan(kNanDouble)));
   EXPECT_EQ(
@@ -489,6 +491,9 @@ TEST_F(ArithmeticTest, normalizeNanDouble) {
       toInt64(normalizeNan(kNanDouble)),
       toInt64(normalizeNan(kInfDouble - kInfDouble)));
 
+  EXPECT_EQ(hasher(0.0d), hasher(normalizeNan(0.0d)));
+  EXPECT_EQ(hasher(0.0d), hasher(normalizeNan(-0.0d)));
+  EXPECT_EQ(hasher(1.0d), hasher(normalizeNan(1.0d)));
   EXPECT_EQ(hasher(normalizeNan(kNanDouble)), hasher(normalizeNan(kNanDouble)));
   EXPECT_EQ(
       hasher(normalizeNan(kNanDouble)), hasher(normalizeNan(0.0d / 0.0d)));
