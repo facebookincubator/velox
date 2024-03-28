@@ -364,7 +364,7 @@ void registerDecimalMultiply(const std::string& prefix) {
       exec::SignatureVariable(
           S3::name(),
           fmt::format(
-              "{a_scale} + {b_scale}",
+              "min({a_scale} + {b_scale}, min(38, {a_precision} + {b_precision}))",
               fmt::arg("a_scale", S1::name()),
               fmt::arg("b_scale", S2::name())),
           exec::ParameterType::kIntegerParameter),
