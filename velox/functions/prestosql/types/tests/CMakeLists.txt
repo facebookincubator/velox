@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_executable(
-  velox_presto_types_test HyperLogLogTypeTest.cpp JsonTypeTest.cpp
-                          TimestampWithTimeZoneTypeTest.cpp TypeTestBase.cpp)
+  velox_presto_types_test
+  HyperLogLogTypeTest.cpp JsonTypeTest.cpp TimestampWithTimeZoneTypeTest.cpp
+  TimestampWithTimeZoneUtilTest.cpp TimeWithTimeZoneTypeTest.cpp
+  TypeTestBase.cpp)
 
 add_test(velox_presto_types_test velox_presto_types_test)
 

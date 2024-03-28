@@ -24,6 +24,7 @@ add_library(
   Conversions.cpp
   DecimalUtil.cpp
   DoubleUtil.cpp
+  TimeUtil.h
   Filter.cpp
   HugeInt.cpp
   StringView.cpp

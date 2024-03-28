@@ -16,6 +16,7 @@
 #include "velox/type/Type.h"
 #include <sstream>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/external/date/tz.h"
 #include "velox/type/CppToType.h"
 #include "velox/type/SimpleFunctionApi.h"
 
@@ -165,6 +166,56 @@ TEST(TypeTest, date) {
   EXPECT_FALSE(INTEGER()->equivalent(*date));
 
   testTypeSerde(date);
+}
+
+TEST(TypeTest, timeMillis) {
+  auto time = TIME_MILLIS();
+  EXPECT_EQ(time->toString(), "TIME_MILLIS");
+  EXPECT_EQ(time->size(), 0);
+  EXPECT_THROW(time->childAt(0), std::invalid_argument);
+  EXPECT_EQ(time->kind(), TypeKind::BIGINT);
+  EXPECT_STREQ(time->kindName(), "BIGINT");
+  EXPECT_EQ(time->begin(), time->end());
+
+  EXPECT_TRUE(time->kindEquals(BIGINT()));
+  EXPECT_NE(*time, *BIGINT());
+  EXPECT_FALSE(time->equivalent(*BIGINT()));
+  EXPECT_FALSE(BIGINT()->equivalent(*time));
+
+  EXPECT_EQ(
+      "01:02:03.456",
+      TIME_MILLIS()->valueToString(
+          -25076544, date::locate_zone("Asia/Shanghai")));
+
+  std::vector<int64_t> input{
+      14767098, 14767098, 32767123, 54367456, 14767098, 14767098};
+
+  std::vector<std::optional<std::string>> zones{
+      std::nullopt,
+      "Asia/Shanghai",
+      "America/New_York",
+      "America/Adak",
+      "Europe/Lisbon",
+      "Asia/Tokyo"};
+  std::vector<std::string> expect{
+      "04:06:07.098",
+      "12:06:07.098",
+      "04:06:07.123",
+      "04:06:07.456",
+      "05:06:07.098",
+      "13:06:07.098"};
+
+  for (int i = 0; i < zones.size(); i++) {
+    auto zone = zones[i];
+    const date::time_zone* timeZone = nullptr;
+    if (zone.has_value()) {
+      timeZone = date::locate_zone(zone.value());
+    }
+
+    EXPECT_EQ(expect[i], TIME_MILLIS()->valueToString(input[i], timeZone));
+  }
+
+  testTypeSerde(time);
 }
 
 TEST(TypeTest, intervalDayTime) {
