@@ -76,6 +76,10 @@ class WindowBuild {
     return data_->estimateRowSize();
   }
 
+  column_index_t inputChannelOf(column_index_t originalIndex) const {
+    return inverseInputChannels_[originalIndex];
+  }
+
  protected:
   bool compareRowsWithKeys(
       const char* lhs,
@@ -92,6 +96,10 @@ class WindowBuild {
 
   // Input columns in the order of: partition keys, sorting keys, the rest.
   const std::vector<column_index_t> inputChannels_;
+
+  // The mapping from original input column index to the index after column
+  // reordering. This is the inversed mapping of inputChannels_.
+  const std::vector<column_index_t> inverseInputChannels_;
 
   // Input column types in 'inputChannels_' order.
   const RowTypePtr inputType_;
