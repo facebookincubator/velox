@@ -14,28 +14,25 @@
  * limitations under the License.
  */
 
-#include "velox/exec/Aggregate.h"
-#include "velox/exec/SimpleAggregateAdapter.h"
-#include "velox/expression/FunctionSignature.h"
-#include "velox/expression/VectorWriters.h"
-#include "velox/functions/lib/aggregates/ValueList.h"
+#include "velox/functions/sparksql/aggregates/CollectListAggregate.h"
 
+using namespace facebook::velox::aggregate;
 using namespace facebook::velox::exec;
 
-namespace facebook::velox::aggregate {
-
+namespace facebook::velox::functions::aggregate::sparksql {
 namespace {
-class ArrayAggAggregate {
+class CollectListAggregate {
  public:
-  // Type(s) of input vector(s) wrapped in Row.
   using InputType = Row<Generic<T1>>;
 
-  // Type of intermediate result vector.
   using IntermediateType = Array<Generic<T1>>;
 
-  // Type of output vector.
   using OutputType = Array<Generic<T1>>;
 
+  /// In Spark, when all inputs are null, the output is an empty array instead
+  /// of null. Therefore, in the writeIntermediateResult and writeFinalResult,
+  /// we still need to output the empty element_ when the group is null. This
+  /// behavior can only be achieved when the default-null behavior is disabled.
   static constexpr bool default_null_behavior_ = false;
 
   static bool toIntermediate(
@@ -43,10 +40,9 @@ class ArrayAggAggregate {
       exec::optional_arg_type<Generic<T1>> in) {
     if (in.has_value()) {
       out.add_item().copy_from(in.value());
-    } else {
-      out.add_null();
+      return true;
     }
-    return true;
+    return false;
   }
 
   struct AccumulatorType {
@@ -54,26 +50,24 @@ class ArrayAggAggregate {
 
     AccumulatorType() = delete;
 
-    // Constructor used in initializeNewGroups().
     explicit AccumulatorType(HashStringAllocator* /*allocator*/)
         : elements_{} {}
 
     static constexpr bool is_fixed_size_ = false;
 
-    // addInput expects one parameter of exec::optional_arg_type<T> for each
-    // child-type T wrapped in InputType.
     bool addInput(
         HashStringAllocator* allocator,
         exec::optional_arg_type<Generic<T1>> data) {
-      elements_.appendValue(data, allocator);
-      return true;
+      if (data.has_value()) {
+        elements_.appendValue(data, allocator);
+        return true;
+      }
+      return false;
     }
 
-    // combine expects one parameter of
-    // exec::optional_arg_type<IntermediateType>.
     bool combine(
         HashStringAllocator* allocator,
-        exec::optional_arg_type<Array<Generic<T1>>> other) {
+        exec::optional_arg_type<IntermediateType> other) {
       if (!other.has_value()) {
         return false;
       }
@@ -83,24 +77,20 @@ class ArrayAggAggregate {
       return true;
     }
 
-    bool writeFinalResult(
-        bool nonNullGroup,
-        exec::out_type<Array<Generic<T1>>>& out) {
-      if (!nonNullGroup) {
-        return false;
-      }
+    bool writeIntermediateResult(
+        bool /*nonNullGroup*/,
+        exec::out_type<IntermediateType>& out) {
+      // If the group's accumulator is null, the corresponding intermediate
+      // result is an empty list.
       copyValueListToArrayWriter(out, elements_);
       return true;
     }
 
-    bool writeIntermediateResult(
-        bool nonNullGroup,
-        exec::out_type<Array<Generic<T1>>>& out) {
-      // If the group's accumulator is null, the corresponding intermediate
-      // result is null too.
-      if (!nonNullGroup) {
-        return false;
-      }
+    bool writeFinalResult(
+        bool /*nonNullGroup*/,
+        exec::out_type<OutputType>& out) {
+      // If the group's accumulator is null, the corresponding result is an
+      // empty list.
       copyValueListToArrayWriter(out, elements_);
       return true;
     }
@@ -111,10 +101,10 @@ class ArrayAggAggregate {
   };
 };
 
-} // namespace
-
-exec::AggregateRegistrationResult registerSimpleArrayAggAggregate(
-    const std::string& name) {
+AggregateRegistrationResult registerCollectList(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("E")
@@ -122,7 +112,6 @@ exec::AggregateRegistrationResult registerSimpleArrayAggAggregate(
           .intermediateType("array(E)")
           .argumentType("E")
           .build()};
-
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
@@ -134,11 +123,19 @@ exec::AggregateRegistrationResult registerSimpleArrayAggAggregate(
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
             argTypes.size(), 1, "{} takes at most one argument", name);
-        return std::make_unique<SimpleAggregateAdapter<ArrayAggAggregate>>(
+        return std::make_unique<SimpleAggregateAdapter<CollectListAggregate>>(
             resultType);
       },
-      true /*registerCompanionFunctions*/,
-      true /*overwrite*/);
+      withCompanionFunctions,
+      overwrite);
 }
+} // namespace
 
-} // namespace facebook::velox::aggregate
+void registerCollectListAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  registerCollectList(
+      prefix + "collect_list", withCompanionFunctions, overwrite);
+}
+} // namespace facebook::velox::functions::aggregate::sparksql
