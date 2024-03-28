@@ -29,9 +29,6 @@ class LoadUnit {
   // Perform the IO (read)
   virtual void load() = 0;
 
-  // If memory pressure is to high, we may want to unload the unit
-  virtual void unload() = 0;
-
   // Number of rows in the unit
   virtual uint64_t getNumRows() = 0;
 
@@ -44,7 +41,7 @@ class UnitLoader {
   virtual ~UnitLoader() = default;
 
   // Must block until the unit is loaded. Must return the unit loaded.
-  virtual std::unique_ptr<LoadUnit> loadUnit(uint32_t unit) = 0;
+  virtual std::unique_ptr<LoadUnit> getLoadedUnit(uint32_t unit) = 0;
 
   // Reader reports progress calling this method
   virtual void
