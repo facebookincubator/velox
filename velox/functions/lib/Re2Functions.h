@@ -237,6 +237,20 @@ std::shared_ptr<exec::VectorFunction> makeRe2ExtractAll(
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractAllSignatures();
 
+/// re2SplitAll(string, pattern) → array<string>
+///
+/// Returns an array by splitting string as many times as possible.
+/// The pattern is any string matching regex.
+///
+/// If the pattern is invalid or not constant, throws an exception.
+/// If the pattern does not match, returns original string as array.
+std::shared_ptr<exec::VectorFunction> makeRe2SplitAll(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
+
+std::vector<std::shared_ptr<exec::FunctionSignature>> re2SplitAllSignatures();
+
 /// regexp_replace(string, pattern, replacement) -> string
 /// regexp_replace(string, pattern) -> string
 ///
