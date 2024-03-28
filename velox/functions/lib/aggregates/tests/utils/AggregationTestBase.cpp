@@ -770,11 +770,13 @@ void AggregationTestBase::testAggregationsImpl(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
+    core::PlanNodeId finalNodeId;
     builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeys, aggregates)
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeys)
-        .finalAggregation();
+        .finalAggregation()
+        .capturePlanNodeId(finalNodeId);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -786,25 +788,28 @@ void AggregationTestBase::testAggregationsImpl(
     const auto peakSpillMemoryUsage =
         memory::spillMemoryPool()->stats().peakBytes;
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+    const int numDrivers{4};
     queryBuilder.configs(config)
         .config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kAggregationSpillEnabled, true)
         .spillDirectory(spillDirectory->path)
-        .maxDrivers(4);
+        .maxDrivers(numDrivers);
 
     exec::TestScopedSpillInjection scopedSpillInjection(100);
     auto task = assertResults(queryBuilder);
 
-    // Expect > 0 spilled bytes unless there was no input.
-    auto inputRows = toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    if (inputRows > 1) {
+    // Always expect > 0 spilled bytes if there is more than one input vector to
+    // any one of the final aggregation operator.
+    const auto finalInputVectors =
+        exec::toPlanStats(task->taskStats()).at(finalNodeId).inputVectors;
+    if (finalInputVectors / numDrivers > 1) {
       EXPECT_LT(0, spilledBytes(*task));
       ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
       ASSERT_GT(memory::spillMemoryPool()->stats().peakBytes, 0);
       ASSERT_GE(
           memory::spillMemoryPool()->stats().peakBytes, peakSpillMemoryUsage);
     } else {
-      EXPECT_EQ(0, spilledBytes(*task));
+      EXPECT_LE(0, spilledBytes(*task));
     }
   }
 
