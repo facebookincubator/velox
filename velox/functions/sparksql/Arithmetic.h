@@ -322,9 +322,9 @@ template <typename T>
 struct NormalizeNanFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
-    constexpr TInput nan = std::numeric_limits<TInput>::quiet_NaN();
+    static constexpr TInput kNan = std::numeric_limits<TInput>::quiet_NaN();
     if (std::isnan(a)) {
-      result = nan;
+      result = kNan;
     } else {
       result = a;
     }
