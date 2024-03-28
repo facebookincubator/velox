@@ -108,6 +108,19 @@ struct UnixDateFunction {
 };
 
 template <typename T>
+struct CurrentTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result) {
+    auto now = std::chrono::system_clock::now();
+    auto epoch = std::chrono::duration_cast<std::chrono::microseconds>(
+                     now.time_since_epoch())
+                     .count();
+    result = Timestamp::fromMicros(epoch);
+  }
+};
+
+template <typename T>
 struct UnixTimestampFunction {
   // unix_timestamp();
   // If no parameters, return the current unix timestamp without adjusting

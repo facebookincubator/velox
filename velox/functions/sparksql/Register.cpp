@@ -295,6 +295,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<FromUtcTimestampFunction, Timestamp, Timestamp, Varchar>(
       {prefix + "from_utc_timestamp"});
 
+  registerFunction<CurrentTimestampFunction, Timestamp>(
+      {prefix + "current_timestamp", prefix + "now"});
+
   registerFunction<UnixDateFunction, int32_t, Date>({prefix + "unix_date"});
 
   registerFunction<UnixTimestampFunction, int64_t>({prefix + "unix_timestamp"});
