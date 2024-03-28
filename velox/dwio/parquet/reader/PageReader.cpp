@@ -366,6 +366,42 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       }
       break;
     }
+    case thrift::Type::INT96: {
+      auto numVeloxBytes = dictionary_.numValues * sizeof(Timestamp);
+      dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
+      auto numBytes = dictionary_.numValues * sizeof(Int96Timestamp);
+      if (pageData_) {
+        memcpy(dictionary_.values->asMutable<char>(), pageData_, numBytes);
+      } else {
+        dwio::common::readBytes(
+            numBytes,
+            inputStream_.get(),
+            dictionary_.values->asMutable<char>(),
+            bufferStart_,
+            bufferEnd_);
+      }
+      // Expand the Parquet type length values to Velox type length.
+      // We start from the end to allow in-place expansion.
+      auto values = dictionary_.values->asMutable<Timestamp>();
+      auto parquetValues = dictionary_.values->asMutable<char>();
+
+      for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
+        // Convert the timestamp into seconds and nanos since the Unix epoch,
+        // 00:00:00.000000 on 1 January 1970.
+        int64_t nanos;
+        memcpy(
+            &nanos,
+            parquetValues + i * sizeof(Int96Timestamp),
+            sizeof(int64_t));
+        int32_t days;
+        memcpy(
+            &days,
+            parquetValues + i * sizeof(Int96Timestamp) + sizeof(int64_t),
+            sizeof(int32_t));
+        values[i] = Timestamp::fromDaysAndNanos(days, nanos);
+      }
+      break;
+    }
     case thrift::Type::BYTE_ARRAY: {
       dictionary_.values =
           AlignedBuffer::allocate<StringView>(dictionary_.numValues, &pool_);
@@ -456,7 +492,6 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       VELOX_UNSUPPORTED(
           "Parquet type {} not supported for dictionary", parquetType);
     }
-    case thrift::Type::INT96:
     default:
       VELOX_UNSUPPORTED(
           "Parquet type {} not supported for dictionary", parquetType);
@@ -483,6 +518,8 @@ int32_t parquetTypeBytes(thrift::Type::type type) {
     case thrift::Type::INT64:
     case thrift::Type::DOUBLE:
       return 8;
+    case thrift::Type::INT96:
+      return 12;
     default:
       VELOX_FAIL("Type does not have a byte width {}", type);
   }
