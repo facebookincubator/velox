@@ -47,6 +47,26 @@ int64_t totalBufferSize(const std::vector<folly::Range<char*>>& buffers) {
   }
   return bufferSize;
 }
+
+class MeasureTimeCloser {
+ public:
+  MeasureTimeCloser(IoStatistics* stats, uint64_t length)
+      : stats_{stats}, length_{length}, startTime_{getCurrentTimeMicro()} {}
+
+  ~MeasureTimeCloser() {
+    if (!stats_) {
+      return;
+    }
+
+    stats_->incRawBytesRead(length_);
+    stats_->incTotalScanTime((getCurrentTimeMicro() - startTime_) * 1000);
+  }
+
+ private:
+  IoStatistics* stats_;
+  uint64_t length_;
+  size_t startTime_;
+};
 } // namespace
 
 folly::SemiFuture<uint64_t> InputStream::readAsync(
@@ -65,6 +85,12 @@ folly::SemiFuture<uint64_t> InputStream::readAsync(
   }
 }
 
+void InputStream::logRead(uint64_t offset, uint64_t length, LogType purpose)
+    const {
+  metricsLog_->logRead(
+      0, "readFully", getLength(), 0, 0, offset, length, purpose, 1, 0);
+}
+
 ReadFileInputStream::ReadFileInputStream(
     std::shared_ptr<velox::ReadFile> readFile,
     const MetricsLogPtr& metricsLog,
@@ -81,11 +107,10 @@ void ReadFileInputStream::read(
     throw std::invalid_argument("Buffer is null");
   }
   logRead(offset, length, purpose);
-  auto readStartMicros = getCurrentTimeMicro();
-  std::string_view data_read = readFile_->pread(offset, length, buf);
-  if (stats_) {
-    stats_->incRawBytesRead(length);
-    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
+  std::string_view data_read;
+  {
+    const MeasureTimeCloser closer(getStats(), length);
+    data_read = readFile_->pread(offset, length, buf);
   }
 
   DWIO_ENSURE_EQ(
@@ -145,21 +170,10 @@ void ReadFileInputStream::vread(
       size_t(0),
       [&](size_t acc, const auto& r) { return acc + r.length; });
   logRead(regions[0].offset, length, purpose);
-  auto readStartMicros = getCurrentTimeMicro();
-  readFile_->preadv(regions, iobufs);
-  if (stats_) {
-    stats_->incRawBytesRead(length);
-    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
+  {
+    const MeasureTimeCloser closer(getStats(), length);
+    readFile_->preadv(regions, iobufs);
   }
-}
-
-const std::string& InputStream::getName() const {
-  return path_;
-}
-
-void InputStream::logRead(uint64_t offset, uint64_t length, LogType purpose) {
-  metricsLog_->logRead(
-      0, "readFully", getLength(), 0, 0, offset, length, purpose, 1, 0);
 }
 
 } // namespace facebook::velox::dwio::common
