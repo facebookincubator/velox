@@ -166,6 +166,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
         targetFileSize,
         writeBufferSize,
         compressionKind_,
+        executor_.get(),
         pool(),
         &stats_);
     ASSERT_EQ(targetFileSize, state_->targetFileSize());
@@ -415,6 +416,8 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(runtimeStats_["spillFileSize"].count, spilledFiles.size());
   }
 
+  std::shared_ptr<folly::CPUThreadPoolExecutor> executor_{
+      std::make_shared<folly::CPUThreadPoolExecutor>(4)};
   folly::Random::DefaultGenerator rng_;
   std::shared_ptr<TempDirectoryPath> tempDir_;
   memory::MemoryAllocator* allocator_;
@@ -473,6 +476,7 @@ TEST_P(SpillTest, spillTimestamp) {
       1024,
       0,
       compressionKind_,
+      executor_.get(),
       pool(),
       &stats_);
   int partitionIndex = 0;

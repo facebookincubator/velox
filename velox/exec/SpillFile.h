@@ -18,6 +18,7 @@
 
 #include <folly/container/F14Set.h>
 
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/base/SpillStats.h"
 #include "velox/common/compression/Compression.h"
@@ -119,6 +120,7 @@ class SpillWriter {
       uint64_t writeBufferSize,
       const std::string& fileCreateConfig,
       common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+      folly::Executor* executor,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats);
 
@@ -161,6 +163,8 @@ class SpillWriter {
   // Closes the current open spill file pointed by 'currentFile_'.
   void closeFile();
 
+  void asyncFlush();
+
   // Writes data from 'batch_' to the current output file. Returns the actual
   // written size.
   uint64_t flush();
@@ -177,6 +181,8 @@ class SpillWriter {
       uint64_t flushTimeUs,
       uint64_t writeTimeUs);
 
+  void updateAsyncIOBlockStats(uint64_t asyncIOBlockTimeUs);
+
   const RowTypePtr type_;
   const uint32_t numSortKeys_;
   const std::vector<CompareFlags> sortCompareFlags_;
@@ -189,14 +195,17 @@ class SpillWriter {
   // Updates the aggregated spill bytes of this query, and throws if exceeds
   // the max spill bytes limit.
   common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb_;
+  folly::Executor* const executor_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
 
   bool finished_{false};
   uint32_t nextFileId_{0};
   std::unique_ptr<VectorStreamGroup> batch_;
+  std::unique_ptr<VectorStreamGroup> flushingBatch_;
   std::unique_ptr<SpillWriteFile> currentFile_;
   SpillFiles finishedFiles_;
+  std::shared_ptr<AsyncSource<uint64_t>> asyncFlushJob_;
 };
 
 /// Input stream backed by spill file.

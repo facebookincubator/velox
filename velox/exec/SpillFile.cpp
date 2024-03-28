@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/SpillFile.h"
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/file/FileSystems.h"
 
@@ -88,6 +89,7 @@ SpillWriter::SpillWriter(
     uint64_t writeBufferSize,
     const std::string& fileCreateConfig,
     common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+    folly::Executor* executor,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats)
     : type_(type),
@@ -99,6 +101,7 @@ SpillWriter::SpillWriter(
       writeBufferSize_(writeBufferSize),
       fileCreateConfig_(fileCreateConfig),
       updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
+      executor_(executor),
       pool_(pool),
       stats_(stats) {
   // NOTE: if the associated spilling operator has specified the sort
@@ -141,8 +144,18 @@ size_t SpillWriter::numFinishedFiles() const {
   return finishedFiles_.size();
 }
 
+void SpillWriter::asyncFlush() {
+  VELOX_CHECK_NULL(flushingBatch_);
+  VELOX_CHECK_NOT_NULL(batch_);
+  flushingBatch_ = std::move(batch_);
+  asyncFlushJob_ = std::make_shared<AsyncSource<uint64_t>>(
+      [this]() { return std::make_unique<uint64_t>(flush()); });
+  executor_->add(
+      [asyncFlushJob = asyncFlushJob_]() { asyncFlushJob->prepare(); });
+}
+
 uint64_t SpillWriter::flush() {
-  if (batch_ == nullptr) {
+  if (flushingBatch_ == nullptr) {
     return 0;
   }
 
@@ -150,13 +163,13 @@ uint64_t SpillWriter::flush() {
   VELOX_CHECK_NOT_NULL(file);
 
   IOBufOutputStream out(
-      *pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
+      *pool_, nullptr, std::max<int64_t>(64 * 1024, flushingBatch_->size()));
   uint64_t flushTimeUs{0};
   {
     MicrosecondTimer timer(&flushTimeUs);
-    batch_->flush(&out);
+    flushingBatch_->flush(&out);
   }
-  batch_.reset();
+  flushingBatch_.reset();
 
   uint64_t writeTimeUs{0};
   uint64_t writtenBytes{0};
@@ -193,7 +206,20 @@ uint64_t SpillWriter::write(
   if (batch_->size() < writeBufferSize_) {
     return 0;
   }
-  return flush();
+
+  if (asyncFlushJob_ == nullptr) {
+    asyncFlush();
+    return 0;
+  }
+  uint64_t flushedBytes{0};
+  uint64_t asyncIOBlockTimeUs{0};
+  {
+    MicrosecondTimer timer(&asyncIOBlockTimeUs);
+    flushedBytes = *asyncFlushJob_->move();
+  }
+  updateAsyncIOBlockStats(asyncIOBlockTimeUs);
+  asyncFlush();
+  return flushedBytes;
 }
 
 void SpillWriter::updateAppendStats(
@@ -218,6 +244,12 @@ void SpillWriter::updateWriteStats(
       spilledBytes, flushTimeUs, fileWriteTimeUs);
 }
 
+void SpillWriter::updateAsyncIOBlockStats(uint64_t asyncIOBlockTimeUs) {
+  auto statsLocked = stats_->wlock();
+  statsLocked->spillAsyncIOBlockTimeUs += asyncIOBlockTimeUs;
+  // TODO: Update global stats for async io block time.
+}
+
 void SpillWriter::updateSpilledFileStats(uint64_t fileSize) {
   ++stats_->wlock()->spilledFiles;
   addThreadLocalRuntimeStat(
@@ -227,6 +259,16 @@ void SpillWriter::updateSpilledFileStats(uint64_t fileSize) {
 
 void SpillWriter::finishFile() {
   checkNotFinished();
+  if (asyncFlushJob_ != nullptr) {
+    uint64_t asyncIOBlockTimeUs{0};
+    {
+      MicrosecondTimer timer(&asyncIOBlockTimeUs);
+      asyncFlushJob_->move();
+    }
+    updateAsyncIOBlockStats(asyncIOBlockTimeUs);
+    asyncFlushJob_.reset();
+  }
+  flushingBatch_ = std::move(batch_);
   flush();
   closeFile();
   VELOX_CHECK_NULL(currentFile_);
