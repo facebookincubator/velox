@@ -34,6 +34,8 @@ class DecimalSumAggregate {
 
   using OutputType = TSumType;
 
+  struct FunctionState {};
+
   /// Spark's decimal sum doesn't have the concept of a null group, each group
   /// is initialized with an initial value, where sum = 0 and isEmpty = true.
   /// The final agg may fallback to being executed in Spark, so the meaning of
@@ -70,7 +72,9 @@ class DecimalSumAggregate {
 
     AccumulatorType() = delete;
 
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {}
+    explicit AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/) {}
 
     std::optional<int128_t> computeFinalResult() const {
       if (!sum.has_value()) {
@@ -92,7 +96,8 @@ class DecimalSumAggregate {
 
     bool addInput(
         HashStringAllocator* /*allocator*/,
-        exec::optional_arg_type<TInputType> data) {
+        exec::optional_arg_type<TInputType> data,
+        const FunctionState& /*state*/) {
       if (!data.has_value()) {
         return false;
       }
@@ -112,7 +117,8 @@ class DecimalSumAggregate {
 
     bool combine(
         HashStringAllocator* /*allocator*/,
-        exec::optional_arg_type<Row<TSumType, bool>> other) {
+        exec::optional_arg_type<Row<TSumType, bool>> other,
+        const FunctionState& /*state*/) {
       if (!other.has_value()) {
         return false;
       }
@@ -143,7 +149,8 @@ class DecimalSumAggregate {
 
     bool writeIntermediateResult(
         bool nonNullGroup,
-        exec::out_type<IntermediateType>& out) {
+        exec::out_type<IntermediateType>& out,
+        const FunctionState& /*state*/) {
       if (!nonNullGroup) {
         // If a group is null, all values in this group are null. In Spark, this
         // group will be the initial value, where sum is 0 and isEmpty is true.
@@ -163,7 +170,10 @@ class DecimalSumAggregate {
       return true;
     }
 
-    bool writeFinalResult(bool nonNullGroup, exec::out_type<OutputType>& out) {
+    bool writeFinalResult(
+        bool nonNullGroup,
+        exec::out_type<OutputType>& out,
+        const FunctionState& /*state*/) {
       if (!nonNullGroup || isEmpty) {
         // If isEmpty is true, we should set null.
         return false;
