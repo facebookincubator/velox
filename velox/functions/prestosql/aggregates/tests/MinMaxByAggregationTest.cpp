@@ -2186,5 +2186,161 @@ TEST_F(MinMaxByNTest, incrementalWindow) {
   }
 }
 
+TEST_F(MinMaxByComplexTypes, arrayTypeCompare) {
+  // The data consists of five rows, and the comparison key is arrayType.
+  // Each array contains two elements which null values are ignored during
+  // comparing.
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({8, 3, 4, 5, 6}),
+      makeNullableArrayVector<int64_t>(
+          {{3, std::nullopt}, {5, 4}, {2, std::nullopt}, {1, 3}, {0, 2}}),
+  });
+
+  auto expected = makeRowVector({makeArrayVector<int64_t>({
+      {6, 5},
+  })});
+
+  testAggregations({data}, {}, {"min_by(c0, c1, 2)"}, {expected});
+
+  // Each array contains two elements which null values will be compared, so
+  // throw an exception.
+  data = makeRowVector({
+      makeFlatVector<int64_t>({8, 3, 4, 5, 6}),
+      makeNullableArrayVector<int64_t>(
+          {{3, std::nullopt}, {3, 4}, {2, std::nullopt}, {1, 3}, {0, 2}}),
+  });
+
+  testFailingAggregations(
+      {data}, {}, {"min_by(c0, c1, 2)"}, "Ordering nulls is not supported");
+
+  // The data consists of five rows, and the comparison key is arrayType.
+  // Each array contains two elements.
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2, 1}),
+      makeFlatVector<int64_t>({8, 3, 4, 5, 6}),
+      makeNullableArrayVector<int64_t>(
+          {{3, std::nullopt}, {2, 4}, {2, 3}, {0, std::nullopt}, {0, 2}}),
+  });
+
+  expected = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2}),
+       makeArrayVector<int64_t>({{8, 4}, {3, 5}})});
+
+  testAggregations({data}, {"c0"}, {"max_by(c1, c2, 2)"}, {expected});
+
+  // Test StringView type (both as value and comparison).
+  data = makeRowVector({
+      makeNullableFlatVector<std::string>(
+          {std::nullopt, "Abc", "bc", "Longer test string"}),
+      makeArrayVector<std::string>(
+          {{"a", "b", "Longer string ...."},
+           {"c", "Abc", "Mountains and rivers"},
+           {"bc", "Abc"},
+           {"Oceans and skies"}}),
+  });
+
+  expected = makeRowVector({makeNullableArrayVector<std::string>({
+      {"Longer test string", std::nullopt},
+  })});
+
+  testAggregations({data}, {}, {"min_by(c0, c1, 2)"}, {expected});
+
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2, 1}),
+      makeNullableFlatVector<std::string>(
+          {std::nullopt,
+           "Abc",
+           std::nullopt,
+           "Longer test string",
+           std::nullopt}),
+      makeArrayVector<std::string>(
+          {{"a", "b", "Longer string ...."},
+           {"c", "Abc", "Mountains and rivers"},
+           {"bc", "c"},
+           {"Oceans and skies"},
+           {"d", "Longer string ....", "Abc"}}),
+  });
+
+  expected = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2}),
+       makeNullableArrayVector<std::string>(
+           {{std::nullopt, std::nullopt}, {"Abc", "Longer test string"}})});
+
+  testAggregations({data}, {"c0"}, {"max_by(c1, c2, 2)"}, {expected});
+}
+
+TEST_F(MinMaxByComplexTypes, rowTypeCompare) {
+  // The data consists of four rows, and the comparison key is RowType and
+  // the value key are ArrayType. Each comparison key has two attributes.
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+          {9, 10},
+      }),
+      makeRowVector(
+          {makeFlatVector<int32_t>({10, 0, 30, 20}),
+           makeNullableFlatVector<int32_t>({3, std::nullopt, 1, 4})}),
+  });
+
+  auto expected = makeRowVector({makeArrayVector(
+      {0},
+      makeArrayVector(
+          {0, 2, 5}, makeFlatVector<int64_t>({4, 5, 1, 2, 3, 9, 10})))});
+
+  testAggregations({data}, {}, {"min_by(c0, c1, 3)"}, {expected});
+
+  // The data consists of four rows, and the comparison key is RowType and
+  // the value key are ArrayType. Each comparison key has two attributes.
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2}),
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+          {9, 10},
+      }),
+      makeRowVector(
+          {makeFlatVector<int32_t>({10, 10, 30, 20}),
+           makeFlatVector<int32_t>({3, 2, 1, 4})}),
+  });
+
+  expected = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2}),
+       makeArrayVector(
+           {0, 1},
+           makeArrayVector({0, 3}, makeFlatVector<int64_t>({1, 2, 3, 4, 5})))});
+
+  testAggregations({data}, {"c0"}, {"min_by(c1, c2, 1)"}, {expected});
+
+  // The data consists of four rows, and the comparison key is
+  // RowType(1.array 2.int32_t) and the value key are ArrayType. Each
+  // comparison key has two attributes.
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2}),
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+          {9, 10},
+      }),
+      makeRowVector(
+          {makeNullableArrayVector<int64_t>({
+               {1, 2},
+               {3, 4, 5},
+               {6, 7},
+               {8, 9, std::nullopt},
+           }),
+           makeNullableFlatVector<int32_t>({3, std::nullopt, 1, 4})}),
+  });
+
+  expected = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2}),
+       makeNestedArrayVectorFromJson<int64_t>({"[[6, 7, 8]]", "[[9, 10]]"})});
+
+  testAggregations({data}, {"c0"}, {"max_by(c1, c2, 1)"}, {expected});
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test
