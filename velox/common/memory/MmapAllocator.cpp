@@ -336,8 +336,7 @@ bool MmapAllocator::allocateContiguousImpl(
           0);
     }
   }
-  // TODO: add handling of MAP_FAILED.
-  if (data == nullptr) {
+  if (data == nullptr || data == MAP_FAILED) {
     const std::string errorMsg = fmt::format(
         "Mmap failed with {} pages use MmapArena {}",
         numPages,
