@@ -175,6 +175,11 @@ class SimpleFunctionAdapterFactory {
 std::optional<std::vector<FunctionSignaturePtr>> getVectorFunctionSignatures(
     const std::string& name);
 
+/// Returns metadata corresponding to function with the specified name. Returns
+/// std::nullopt if there is no function with the specified name.
+std::optional<VectorFunctionMetadata> getVectorFunctionMetadata(
+    const std::string& name);
+
 /// Given name of vector function and argument types, returns
 /// the return type if function exists and have a signature that binds to the
 /// input types otherwise returns nullptr.

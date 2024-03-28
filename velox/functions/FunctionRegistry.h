@@ -76,4 +76,8 @@ resolveVectorFunctionWithMetadata(
 /// Clears the function registry.
 void clearFunctionRegistry();
 
+/// Get the function metadata corresponding to functionName.
+exec::VectorFunctionMetadata getFunctionMetadata(
+    const std::string& functionName);
+
 } // namespace facebook::velox

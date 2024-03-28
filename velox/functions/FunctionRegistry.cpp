@@ -122,4 +122,23 @@ resolveVectorFunctionWithMetadata(
   return exec::resolveVectorFunctionWithMetadata(functionName, argTypes);
 }
 
+exec::VectorFunctionMetadata getFunctionMetadata(
+    const std::string& functionName) {
+  auto simpleFunctionMetadata =
+      exec::simpleFunctions().getFunctionSignaturesAndMetadata(functionName);
+  if (simpleFunctionMetadata.size()) {
+    // Functions like abs are registered as simple functions for primitive
+    // types, and as a vector function for complex types like DECIMAL. So do not
+    // throw an error if function metadata is not found in simple function
+    // signature map.
+    return simpleFunctionMetadata.back().first;
+  }
+
+  auto vectorFunctionMetadata = exec::getVectorFunctionMetadata(functionName);
+  if (vectorFunctionMetadata.has_value()) {
+    return vectorFunctionMetadata.value();
+  }
+  VELOX_USER_FAIL("Metadata not found for scalar function {}", functionName);
+}
+
 } // namespace facebook::velox
