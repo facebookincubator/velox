@@ -52,6 +52,11 @@ class ParquetRowReader : public dwio::common::RowReader {
       velox::VectorPtr& result,
       const dwio::common::Mutation* = nullptr) override;
 
+  void readWithRowNumber(
+      uint64_t rowsToRead,
+      VectorPtr& result,
+      const dwio::common::Mutation* mutation);
+
   void updateRuntimeStats(
       dwio::common::RuntimeStatistics& stats) const override;
 

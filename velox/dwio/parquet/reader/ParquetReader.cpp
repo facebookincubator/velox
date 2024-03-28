@@ -19,6 +19,7 @@
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/RowIndexColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
@@ -653,7 +654,7 @@ class ParquetRowReader::Impl {
           "Input Table Schema (with partition columns): {}\n",
           readerBase_->bufferedInput().getReadFile()->getName(),
           readerBase_->schema()->toString(),
-          requestedType_->toString());
+          requestedType_->type()->toString());
       return exceptionMessageContext;
     };
 
@@ -664,8 +665,9 @@ class ParquetRowReader::Impl {
         pool_, columnReaderStats_, readerBase_->fileMetaData());
     auto columnSelector = std::make_shared<ColumnSelector>(
         ColumnSelector::apply(options_.getSelector(), readerBase_->schema()));
+    requestedType_ = columnSelector->getSchemaWithId();
     columnReader_ = ParquetColumnReader::build(
-        columnSelector->getSchemaWithId(),
+        requestedType_,
         readerBase_->schemaWithId(), // Id is schema id
         params,
         *options_.getScanSpec());
@@ -802,7 +804,7 @@ class ParquetRowReader::Impl {
 
   std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
 
-  RowTypePtr requestedType_;
+  std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
 
   dwio::common::ColumnReaderStatistics columnReaderStats_;
 };

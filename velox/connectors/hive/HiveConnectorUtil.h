@@ -35,6 +35,7 @@ using SubfieldFilters =
 
 constexpr const char* kPath = "$path";
 constexpr const char* kBucket = "$bucket";
+constexpr const char* kSparkReservedTmpMetaRowIndex = "_tmp_metadata_row_index";
 
 const std::string& getColumnName(const common::Subfield& subfield);
 
