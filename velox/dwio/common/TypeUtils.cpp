@@ -43,11 +43,16 @@ std::shared_ptr<const TypeWithId> visit(
     const std::shared_ptr<const TypeWithId>& typeWithId,
     const std::function<bool(size_t)>& selector) {
   if (typeWithId->type()->isPrimitiveType()) {
-    return typeWithId;
+    return std::make_shared<TypeWithId>(
+        typeWithId->type(),
+        std::vector<std::shared_ptr<const TypeWithId>>(),
+        typeWithId->id(),
+        typeWithId->maxId(),
+        typeWithId->column());
   }
   if (typeWithId->type()->isRow()) {
     std::vector<std::string> names;
-    std::vector<std::shared_ptr<const TypeWithId>> typesWithId;
+    std::vector<std::shared_ptr<const TypeWithId>> selectedChildren;
     std::vector<std::shared_ptr<const Type>> types;
     auto& row = typeWithId->type()->asRow();
     for (auto i = 0; i < typeWithId->size(); ++i) {
@@ -56,7 +61,7 @@ std::shared_ptr<const TypeWithId> visit(
         names.push_back(row.nameOf(i));
         std::shared_ptr<const TypeWithId> twid;
         twid = visit(child, selector);
-        typesWithId.push_back(twid);
+        selectedChildren.push_back(twid);
         types.push_back(twid->type());
       }
     }
@@ -64,24 +69,24 @@ std::shared_ptr<const TypeWithId> visit(
         !types.empty(), "selected nothing from row: " + row.toString());
     return std::make_shared<TypeWithId>(
         ROW(std::move(names), std::move(types)),
-        std::move(typesWithId),
+        std::move(selectedChildren),
         typeWithId->id(),
         typeWithId->maxId(),
         typeWithId->column());
   } else {
     checkChildrenSelected(typeWithId, selector);
-    std::vector<std::shared_ptr<const TypeWithId>> typesWithId;
+    std::vector<std::shared_ptr<const TypeWithId>> selectedChildren;
     std::vector<std::shared_ptr<const Type>> types;
     for (auto i = 0; i < typeWithId->size(); ++i) {
       auto& child = typeWithId->childAt(i);
       std::shared_ptr<const TypeWithId> twid = visit(child, selector);
-      typesWithId.push_back(twid);
+      selectedChildren.push_back(twid);
       types.push_back(twid->type());
     }
     auto type = createType(typeWithId->type()->kind(), std::move(types));
     return std::make_shared<TypeWithId>(
         type,
-        std::move(typesWithId),
+        std::move(selectedChildren),
         typeWithId->id(),
         typeWithId->maxId(),
         typeWithId->column());

@@ -29,6 +29,28 @@ using namespace facebook::velox::dwio::common::typeutils;
 using facebook::velox::type::fbhive::HiveTypeParser;
 using facebook::velox::type::fbhive::HiveTypeSerializer;
 
+void assertEqualTypeWithId(
+    std::shared_ptr<const TypeWithId>& actual,
+    std::shared_ptr<const TypeWithId>& expected) {
+  EXPECT_EQ(actual->size(), expected->size());
+  for (auto idx = 0; idx < actual->size(); idx++) {
+    auto actualTypeChild = actual->childAt(idx);
+    auto expectedTypeChild = expected->childAt(idx);
+    EXPECT_TRUE(actualTypeChild->type()->kindEquals(expectedTypeChild->type()));
+    EXPECT_EQ(actualTypeChild->id(), expectedTypeChild->id());
+    EXPECT_EQ(actualTypeChild->column(), expectedTypeChild->column());
+    assertEqualTypeWithId(actualTypeChild, expectedTypeChild);
+  }
+}
+
+void assertValidTypeWithId(
+    const std::shared_ptr<const TypeWithId>& typeWithId) {
+  for (auto idx = 0; idx < typeWithId->size(); idx++) {
+    EXPECT_EQ(typeWithId->childAt(idx)->parent(), typeWithId.get());
+    assertValidTypeWithId(typeWithId->childAt(idx));
+  }
+}
+
 TEST(TestType, selectedType) {
   auto type = HiveTypeParser().parse(
       "struct<col0:tinyint,col1:smallint,col2:array<string>,"
@@ -43,11 +65,27 @@ TEST(TestType, selectedType) {
   EXPECT_EQ(0, typeWithId->id());
   EXPECT_EQ(11, typeWithId->maxId());
 
+  auto copySelector = [](size_t index) { return true; };
+
+  // The following two lines verify that the original type tree's children are
+  // not re-parented by the buildSelectedType method when copying. If it is
+  // re-parented, then this test would crash with SIGSEGV. The return type is
+  // deliberately ignored so the copied type will be deallocated upon return.
+  buildSelectedType(typeWithId, copySelector);
+  EXPECT_EQ(typeWithId->childAt(1)->parent()->type()->kind(), TypeKind::ROW);
+
+  auto typeWithIdCopy = buildSelectedType(typeWithId, copySelector);
+  assertEqualTypeWithId(typeWithId, typeWithIdCopy);
+  assertValidTypeWithId(typeWithId);
+  assertValidTypeWithId(typeWithIdCopy);
+
   std::vector<bool> selected(12);
   selected[0] = true;
   selected[2] = true;
   auto selector = [&selected](size_t index) { return selected[index]; };
+
   auto cutType = buildSelectedType(typeWithId, selector);
+  assertEqualTypeWithId(typeWithIdCopy, typeWithId);
   EXPECT_STREQ(
       "struct<col1:smallint>",
       HiveTypeSerializer::serialize(cutType->type()).c_str());
@@ -57,6 +95,9 @@ TEST(TestType, selectedType) {
 
   selected.assign(12, true);
   cutType = buildSelectedType(typeWithId, selector);
+  assertEqualTypeWithId(typeWithIdCopy, typeWithId);
+  assertValidTypeWithId(typeWithId);
+  assertValidTypeWithId(typeWithIdCopy);
   EXPECT_STREQ(
       "struct<col0:tinyint,col1:smallint,col2:array<string>,"
       "col3:map<float,double>,col4:float,"
@@ -69,6 +110,9 @@ TEST(TestType, selectedType) {
   selected[0] = true;
   selected[8] = true;
   cutType = buildSelectedType(typeWithId, selector);
+  assertEqualTypeWithId(typeWithIdCopy, typeWithId);
+  assertValidTypeWithId(typeWithId);
+  assertValidTypeWithId(typeWithIdCopy);
   EXPECT_STREQ(
       "struct<col4:float>",
       HiveTypeSerializer::serialize(cutType->type()).c_str());
@@ -91,6 +135,9 @@ TEST(TestType, selectedType) {
   selected[3] = true;
   selected[4] = true;
   cutType = buildSelectedType(typeWithId, selector);
+  assertEqualTypeWithId(typeWithIdCopy, typeWithId);
+  assertValidTypeWithId(typeWithId);
+  assertValidTypeWithId(typeWithIdCopy);
   EXPECT_STREQ(
       "struct<col2:array<string>>",
       HiveTypeSerializer::serialize(cutType->type()).c_str());
@@ -106,6 +153,9 @@ TEST(TestType, selectedType) {
   selected[6] = true;
   selected[7] = true;
   cutType = buildSelectedType(typeWithId, selector);
+  assertEqualTypeWithId(typeWithIdCopy, typeWithId);
+  assertValidTypeWithId(typeWithId);
+  assertValidTypeWithId(typeWithIdCopy);
   EXPECT_STREQ(
       "struct<col3:map<float,double>>",
       HiveTypeSerializer::serialize(cutType->type()).c_str());
@@ -135,6 +185,10 @@ TEST(TestType, selectedType) {
   selected[1] = true;
   selected[11] = true;
   cutType = buildSelectedType(typeWithId, selector);
+  assertEqualTypeWithId(typeWithIdCopy, typeWithId);
+  assertValidTypeWithId(typeWithId);
+  assertValidTypeWithId(typeWithIdCopy);
+
   EXPECT_STREQ(
       "struct<col0:tinyint,col7:string>",
       HiveTypeSerializer::serialize(cutType->type()).c_str());
