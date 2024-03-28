@@ -286,6 +286,30 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
     if (schemaElement.__isset.converted_type) {
       switch (schemaElement.converted_type) {
+        case thrift::ConvertedType::LIST: {
+          VELOX_CHECK_EQ(children.size(), 1);
+
+          const auto& child = children[0];
+          auto childrenForCurrentElement = child->getChildren();
+          auto currentElementType = child->type();
+          if (child->type()->kind() == TypeKind::MAP) {
+            currentElementType = TypeFactory<TypeKind::ARRAY>::create(child->type());
+            childrenForCurrentElement = children;
+          }
+          return std::make_shared<const ParquetTypeWithId>(
+              currentElementType,
+              std::move(childrenForCurrentElement),
+              curSchemaIdx, // TODO: there are holes in the ids
+              maxSchemaElementIdx,
+              ParquetTypeWithId::kNonLeaf, // columnIdx,
+              std::move(name),
+              std::nullopt,
+              std::nullopt,
+              maxRepeat + 1,
+              maxDefine,
+              isOptional,
+              1);
+        }
         case thrift::ConvertedType::MAP_KEY_VALUE:
           // If the MAP_KEY_VALUE annotated group's parent is a MAP, it should
           // be the repeated key_value group that directly contains the key and
@@ -323,7 +347,6 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           // a MAP-annotated group.
           [[fallthrough]];
 
-        case thrift::ConvertedType::LIST:
         case thrift::ConvertedType::MAP: {
           VELOX_CHECK_EQ(children.size(), 1);
           const auto& child = children[0];
