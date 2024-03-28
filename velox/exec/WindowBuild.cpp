@@ -82,6 +82,16 @@ slice(const std::vector<TypePtr>& types, int32_t start, int32_t end) {
   }
   return result;
 }
+
+std::vector<column_index_t> inverseInputChannels(
+    const std::vector<column_index_t>& inputChannels) {
+  std::vector<column_index_t> inverseInputChannels;
+  inverseInputChannels.resize(inputChannels.size());
+  for (auto i = 0; i < inputChannels.size(); ++i) {
+    inverseInputChannels[inputChannels[i]] = i;
+  }
+  return inverseInputChannels;
+}
 } // namespace
 
 WindowBuild::WindowBuild(
@@ -93,6 +103,7 @@ WindowBuild::WindowBuild(
           windowNode->inputType(),
           windowNode->partitionKeys(),
           windowNode->sortingKeys())},
+      inverseInputChannels_{inverseInputChannels(inputChannels_)},
       inputType_{reorderInputType(windowNode->inputType(), inputChannels_)},
       spillConfig_{spillConfig},
       nonReclaimableSection_{nonReclaimableSection},
