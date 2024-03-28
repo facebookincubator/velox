@@ -368,6 +368,13 @@ void Operator::recordSpillStats() {
     common::updateGlobalMaxSpillLevelExceededCount(
         lockedSpillStats->spillMaxLevelExceededCount);
   }
+
+  if (lockedSpillStats->spillReadBytes != 0) {
+    lockedStats->addRuntimeStat(
+        "spillReadBytes",
+        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReadBytes)});
+    common::updateGlobalSpillReadBytes(lockedSpillStats->spillReadBytes);
+  }
   lockedSpillStats->reset();
 }
 

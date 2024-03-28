@@ -110,6 +110,7 @@ void verifyTaskSpilledRuntimeStats(const exec::Task& task, bool expectedSpill) {
           ASSERT_EQ(op.runtimeStats["spillFlushTime"].count, 0);
           ASSERT_EQ(op.runtimeStats["spillWrites"].count, 0);
           ASSERT_EQ(op.runtimeStats["spillWriteTime"].count, 0);
+          ASSERT_EQ(op.runtimeStats["spillReadBytes"].count, 0);
         } else {
           if (op.operatorType == "HashBuild") {
             ASSERT_GT(op.runtimeStats["spillRuns"].count, 0);
@@ -131,6 +132,8 @@ void verifyTaskSpilledRuntimeStats(const exec::Task& task, bool expectedSpill) {
           ASSERT_GE(
               op.runtimeStats["spillWrites"].count,
               op.runtimeStats["spillWriteTime"].count);
+          ASSERT_GT(op.runtimeStats["spillReadBytes"].sum, 0);
+          ASSERT_GT(op.runtimeStats["spillReadBytes"].count, 0);
         }
       }
     }
@@ -6507,6 +6510,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimFromJoinBuild) {
                   "SELECT u_k2 FROM tmp WHERE u_k1 NOT IN (SELECT u_k1 FROM tmp)");
       auto stats = task->taskStats().pipelineStats;
       ASSERT_GT(stats[1].operatorStats[2].spilledBytes, 0);
+      ASSERT_EQ(
+          stats[1].operatorStats[2].spilledBytes,
+          stats[1].operatorStats[2].runtimeStats.at("spillReadBytes").sum);
+
     });
 
     arbitrationWait.await([&] { return !arbitrationWaitFlag.load(); });

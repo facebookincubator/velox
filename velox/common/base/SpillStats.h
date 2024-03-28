@@ -55,6 +55,8 @@ struct SpillStats {
   /// The number of times that an hash build operator exceeds the max spill
   /// limit.
   uint64_t spillMaxLevelExceededCount{0};
+  /// The number of bytes read from spill files.
+  uint64_t spillReadBytes{0};
 
   SpillStats(
       uint64_t _spillRuns,
@@ -69,7 +71,8 @@ struct SpillStats {
       uint64_t _spillWrites,
       uint64_t _spillFlushTimeUs,
       uint64_t _spillWriteTimeUs,
-      uint64_t _spillMaxLevelExceededCount);
+      uint64_t _spillMaxLevelExceededCount,
+      uint64_t _spilledReadBytes);
 
   SpillStats() = default;
 
@@ -135,6 +138,9 @@ void incrementGlobalSpilledFiles();
 /// Increments the exceeded max spill level count.
 void updateGlobalMaxSpillLevelExceededCount(
     uint64_t maxSpillLevelExceededCount);
+
+/// Increment the spill read bytes.
+void updateGlobalSpillReadBytes(uint64_t spillReadBytes);
 
 /// Gets the cumulative global spill stats.
 SpillStats globalSpillStats();

@@ -223,7 +223,8 @@ std::vector<std::unique_ptr<SpillPartition>> SpillPartition::split(
     while (files.size() < numFiles) {
       files.push_back(std::move(files_[fileIdx++]));
     }
-    shards[shard] = std::make_unique<SpillPartition>(id_, std::move(files));
+    shards[shard] =
+        std::make_unique<SpillPartition>(id_, std::move(files), stats_);
   }
   VELOX_CHECK_EQ(fileIdx, files_.size());
   files_.clear();
@@ -244,8 +245,8 @@ SpillPartition::createUnorderedReader(memory::MemoryPool* pool) {
   std::vector<std::unique_ptr<BatchStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
-    streams.push_back(
-        FileSpillBatchStream::create(SpillReadFile::create(fileInfo, pool)));
+    streams.push_back(FileSpillBatchStream::create(
+        SpillReadFile::create(fileInfo, pool, stats_)));
   }
   files_.clear();
   return std::make_unique<UnorderedStreamReader<BatchStream>>(
@@ -257,8 +258,8 @@ SpillPartition::createOrderedReader(memory::MemoryPool* pool) {
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
-    streams.push_back(
-        FileSpillMergeStream::create(SpillReadFile::create(fileInfo, pool)));
+    streams.push_back(FileSpillMergeStream::create(
+        SpillReadFile::create(fileInfo, pool, stats_)));
   }
   files_.clear();
   // Check if the partition is empty or not.

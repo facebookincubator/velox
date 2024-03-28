@@ -254,9 +254,13 @@ using SpillPartitionNumSet = folly::F14FastSet<uint32_t>;
 class SpillPartition {
  public:
   explicit SpillPartition(const SpillPartitionId& id)
-      : SpillPartition(id, {}) {}
+      : SpillPartition(id, {}, nullptr) {}
 
-  SpillPartition(const SpillPartitionId& id, SpillFiles files) : id_(id) {
+  SpillPartition(
+      const SpillPartitionId& id,
+      SpillFiles files,
+      folly::Synchronized<common::SpillStats>* stats)
+      : stats_(stats), id_(id) {
     addFiles(std::move(files));
   }
 
@@ -300,6 +304,7 @@ class SpillPartition {
   std::string toString() const;
 
  private:
+  folly::Synchronized<common::SpillStats>* const stats_;
   SpillPartitionId id_;
   SpillFiles files_;
   // Counts the total file size in bytes from this spilled partition.
