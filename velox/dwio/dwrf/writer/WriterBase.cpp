@@ -37,7 +37,6 @@ void WriterBase::writeFooter(const Type& type) {
   }
 
   ProtoUtils::writeType(type, footer_);
-  DWIO_ENSURE_EQ(footer_.types_size(), footer_.statistics_size());
   auto writerVersion =
       static_cast<uint32_t>(context_->getConfig(Config::WRITER_VERSION));
   writeUserMetadata(writerVersion);

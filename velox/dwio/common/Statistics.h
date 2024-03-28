@@ -510,7 +510,7 @@ class Statistics {
    * @param colId id of the column
    * @return one column's statistics
    */
-  virtual const ColumnStatistics& getColumnStatistics(uint32_t colId) const = 0;
+  virtual const ColumnStatistics* getColumnStatistics(uint32_t colId) const = 0;
 
   /**
    * Get the number of columns

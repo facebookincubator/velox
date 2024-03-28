@@ -129,11 +129,12 @@ class EncryptedStatsTest : public Test {
 TEST_F(EncryptedStatsTest, getStatistics) {
   auto stats = reader_->getStatistics();
   for (size_t i = 1; i < 7; ++i) {
-    auto& stat = stats->getColumnStatistics(i);
+    const auto* stat = stats->getColumnStatistics(i);
+    ASSERT_TRUE(stat);
     if (i != 5) {
-      ASSERT_EQ(stat.getNumberOfValues(), i * 100);
+      ASSERT_EQ(stat->getNumberOfValues(), i * 100);
     } else {
-      ASSERT_EQ(stat.getNumberOfValues(), i);
+      ASSERT_EQ(stat->getNumberOfValues(), i);
     }
   }
 }
@@ -142,11 +143,11 @@ TEST_F(EncryptedStatsTest, getStatisticsKeyNotLoaded) {
   clearKey(0);
   auto stats = reader_->getStatistics();
   for (size_t i = 2; i < 7; ++i) {
-    auto& stat = stats->getColumnStatistics(i);
+    const auto* stat = stats->getColumnStatistics(i);
     if (i != 5) {
-      ASSERT_EQ(stat.getNumberOfValues(), i * 100);
+      ASSERT_EQ(stat->getNumberOfValues(), i * 100);
     } else {
-      ASSERT_EQ(stat.getNumberOfValues(), i);
+      ASSERT_EQ(stat->getNumberOfValues(), i);
     }
   }
 }

@@ -47,12 +47,14 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::string& filePath,
       const std::vector<RowVectorPtr>& vectors,
       std::shared_ptr<dwrf::Config> config =
-          std::make_shared<facebook::velox::dwrf::Config>());
+          std::make_shared<facebook::velox::dwrf::Config>(),
+      bool writeColumnStats = true);
 
   std::vector<RowVectorPtr> makeVectors(
       const RowTypePtr& rowType,
       int32_t numVectors,
-      int32_t rowsPerVector);
+      int32_t rowsPerVector,
+      std::function<bool(vector_size_t /*index*/)> isNullAt = nullptr);
 
   using OperatorTestBase::assertQuery;
 

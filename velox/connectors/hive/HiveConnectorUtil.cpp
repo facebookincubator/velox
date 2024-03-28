@@ -582,18 +582,24 @@ bool testFilters(
   for (const auto& child : scanSpec->children()) {
     if (child->filter()) {
       const auto& name = child->fieldName();
-      if (!rowType->containsChild(name)) {
-        // If missing column is partition key.
-        auto iter = partitionKey.find(name);
+      auto iter = partitionKey.find(name);
+      // The partition key columns are writen in the data file for
+      // IcebergTables, so we need to test both cases
+      if (!rowType->containsChild(name) || iter != partitionKey.end()) {
         if (iter != partitionKey.end() && iter->second.has_value()) {
+          // This is a non-null partition key
           return applyPartitionFilter(
               (*partitionKeysHandle)[name]->dataType()->kind(),
               iter->second.value(),
               child->filter());
         }
-        // Column is missing. Most likely due to schema evolution.
+        // Column is missing, most likely due to schema evolution. Or it's a
+        // partition key but the partition value is NULL.
         if (child->filter()->isDeterministic() &&
             !child->filter()->testNull()) {
+          VLOG(1) << "Skipping " << filePath
+                  << " because the filter testNull() failed for column "
+                  << child->fieldName();
           return false;
         }
       } else {
