@@ -95,10 +95,7 @@ function install_velox_deps_from_apt {
 
 function install_fmt {
   wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
-  (
-    cd fmt
-    cmake_install -DFMT_TEST=OFF
-  )
+  cmake_install fmt -DFMT_TEST=OFF
 }
 
 function install_boost {
@@ -112,42 +109,27 @@ function install_boost {
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-  (
-    cd folly
-    cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
-  )
+  cmake_install folly -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
 }
 
 function install_fizz {
   wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
-  (
-    cd fizz/fizz
-    cmake_install -DBUILD_TESTS=OFF
-  )
+  cmake_install fizz/fizz -DBUILD_TESTS=OFF
 }
 
 function install_wangle {
   wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
-  (
-    cd wangle/wangle
-    cmake_install -DBUILD_TESTS=OFF
-  )
+  cmake_install wangle/wangle -DBUILD_TESTS=OFF
 }
 
 function install_mvfst {
   wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
-  (
-   cd mvfst
-   cmake_install -DBUILD_TESTS=OFF
-  )
+  cmake_install mvfst -DBUILD_TESTS=OFF
 }
 
 function install_fbthrift {
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
-  (
-    cd fbthrift
-    cmake_install -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
-  )
+  cmake_install fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_conda {

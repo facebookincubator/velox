@@ -164,9 +164,16 @@ function wget_and_untar {
 }
 
 function cmake_install {
+  if [ -n "$1" ]; then
+    DIR="$1"
+    shift
+  else
+    DIR=$(pwd)
+  fi
   local NAME=$(basename "$(pwd)")
   local BINARY_DIR=_build
   SUDO="${SUDO:-""}"
+  cd "${DIR}"
   if [ -d "${BINARY_DIR}" ] && prompt "Do you want to rebuild ${NAME}?"; then
     ${SUDO} rm -rf "${BINARY_DIR}"
   fi

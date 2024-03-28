@@ -83,74 +83,47 @@ function install_velox_deps_from_brew {
 
 function install_fmt {
   wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
-  (
-    cd fmt
-    cmake_install -DFMT_TEST=OFF
-  )
+  cmake_install fmt -DFMT_TEST=OFF
 }
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-  (
-    cd folly
-    cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
-  )
+  cmake_install folly -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
 }
 
 function install_fizz {
   wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
-  (
-    cd fizz/fizz
-    cmake_install -DBUILD_TESTS=OFF
-  )
+  cmake_install fizz/fizz -DBUILD_TESTS=OFF
 }
 
 function install_wangle {
   wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
-  (
-    cd wangle/wangle
-    cmake_install -DBUILD_TESTS=OFF
-  )
+  cmake_install wangle/wangle -DBUILD_TESTS=OFF
 }
 
 function install_mvfst {
   wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
-  (
-   cd mvfst
-   cmake_install -DBUILD_TESTS=OFF
-  )
+  cmake_install mvfst -DBUILD_TESTS=OFF
 }
 
 function install_fbthrift {
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
-  (
-    cd fbthrift
-    cmake_install -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
-  )
+  cmake_install fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_double_conversion {
   wget_and_untar https://github.com/google/double-conversion/archive/refs/tags/v3.1.5.tar.gz double-conversion
-  (
-    cd double-conversion
-    cmake_install -DBUILD_TESTING=OFF
-  )
+  cmake_install double-conversion -DBUILD_TESTING=OFF
 }
 
 function install_ranges_v3 {
   wget_and_untar https://github.com/ericniebler/range-v3/archive/refs/tags/0.12.0.tar.gz ranges_v3
-  (
-    cd ranges_v3
-    cmake_install -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
-  )
+  cmake_install ranges_v3 -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
 }
 
 function install_re2 {
   wget_and_untar https://github.com/google/re2/archive/refs/tags/2022-02-01.tar.gz re2
-  (
-    cd re2
-    cmake_install -DRE2_BUILD_TESTING=OFF
-  )
+  cmake_install re2 -DRE2_BUILD_TESTING=OFF
 }
 
 function install_velox_deps {
