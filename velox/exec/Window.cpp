@@ -37,6 +37,10 @@ Window::Window(
       numInputColumns_(windowNode->inputType()->size()),
       windowNode_(windowNode),
       currentPartition_(nullptr),
+      minFrameSizeUseSegmentTree_(
+          driverCtx->queryConfig().minFrameSizeUseSegmentTree()),
+      enableSegmentTreeOpt_(
+          driverCtx->queryConfig().enableWindowSegmentTreeOpt()),
       stringAllocator_(pool()) {
   auto* spillConfig =
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
@@ -108,7 +112,7 @@ void checkKRangeFrameBounds(
 
 } // namespace
 
-Window::WindowFrame Window::createWindowFrame(
+WindowFrame Window::createWindowFrame(
     const std::shared_ptr<const core::WindowNode>& windowNode,
     const core::WindowNode::Frame& frame,
     const RowTypePtr& inputType) {
@@ -184,6 +188,10 @@ void Window::createWindowFunctions() {
 
     windowFrames_.push_back(
         createWindowFrame(windowNode_, windowNodeFunction.frame, inputType));
+
+    windowFunctions_.back()->initialize(windowFrames_.back(),
+                                       minFrameSizeUseSegmentTree_,
+                                       enableSegmentTreeOpt_);
   }
 }
 

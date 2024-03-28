@@ -363,6 +363,24 @@ class QueryConfig {
   static constexpr const char* kDriverCpuTimeSliceLimitMs =
       "driver_cpu_time_slice_limit_ms";
 
+  /// When the frame size is large than it, use segmentTree to improve window
+  /// aggregate.
+  static constexpr const char* kMinFrameSizeUseSegmentTree =
+      "min_frame_size_use_segment_tree";
+
+  /// Whether enable window segment tree optimization.
+  static constexpr const char* kEnableWindowSegmentTreeOpt =
+      "enable_window_segment_tree_opt";
+
+  uint64_t minFrameSizeUseSegmentTree() const {
+    static constexpr uint64_t kDefault = 16;
+    return get<uint64_t>(kMinFrameSizeUseSegmentTree, kDefault);
+  }
+
+  bool enableWindowSegmentTreeOpt() const {
+    return get<bool>(kEnableWindowSegmentTreeOpt, false);
+  }
+
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
         get<std::string>(kQueryMaxMemoryPerNode, "0B"), CapacityUnit::BYTE);

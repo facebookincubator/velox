@@ -31,6 +31,26 @@ struct WindowFunctionArg {
   std::optional<const column_index_t> index;
 };
 
+// Used for k preceding/following frames. Index is the column index if k is a
+// column. value is used to read column values from the column index when k
+// is a column. The field constant stores constant k values.
+struct FrameChannelArg {
+  column_index_t index;
+  VectorPtr value;
+  std::optional<int64_t> constant;
+};
+
+// Structure for the window frame for each function.
+struct WindowFrame {
+  const core::WindowNode::WindowType type;
+  const core::WindowNode::BoundType startType;
+  const core::WindowNode::BoundType endType;
+  // Set only when startType is BoundType::kPreceding or kFollowing.
+  const std::optional<FrameChannelArg> start;
+  // Set only when endType is BoundType::kPreceding or kFollowing.
+  const std::optional<FrameChannelArg> end;
+};
+
 class WindowFunction {
  public:
   explicit WindowFunction(
@@ -58,6 +78,12 @@ class WindowFunction {
   const HashStringAllocator* stringAllocator() const {
     return stringAllocator_;
   }
+
+  /// This function is invoked when the WindowFunction was created.
+  virtual void initialize(
+      const WindowFrame& windowFrame,
+      vector_size_t minFrameSizeUseSegmentTree,
+      bool enableSegmentTreeOpt) {};
 
   /// This function is invoked by the Window operator when it
   /// starts processing a new partition of rows in the input data.

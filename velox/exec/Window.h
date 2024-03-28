@@ -68,26 +68,6 @@ class Window : public Operator {
       override;
 
  private:
-  // Used for k preceding/following frames. Index is the column index if k is a
-  // column. value is used to read column values from the column index when k
-  // is a column. The field constant stores constant k values.
-  struct FrameChannelArg {
-    column_index_t index;
-    VectorPtr value;
-    std::optional<int64_t> constant;
-  };
-
-  // Structure for the window frame for each function.
-  struct WindowFrame {
-    const core::WindowNode::WindowType type;
-    const core::WindowNode::BoundType startType;
-    const core::WindowNode::BoundType endType;
-    // Set only when startType is BoundType::kPreceding or kFollowing.
-    const std::optional<FrameChannelArg> start;
-    // Set only when endType is BoundType::kPreceding or kFollowing.
-    const std::optional<FrameChannelArg> end;
-  };
-
   // Creates WindowFunction and frame objects for this operator.
   void createWindowFunctions();
 
@@ -166,6 +146,12 @@ class Window : public Operator {
   // Used to access window partition rows and columns by the window
   // operator and functions. This structure is owned by the WindowBuild.
   std::unique_ptr<WindowPartition> currentPartition_;
+
+  // The min average frame size can use segment tree.
+  int32_t minFrameSizeUseSegmentTree_;
+
+  // Whether turn on the optimization of segment tree.
+  bool enableSegmentTreeOpt_;
 
   // HashStringAllocator required by functions that allocate out of line
   // buffers.
