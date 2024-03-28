@@ -149,7 +149,8 @@ using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(
 bool registerWindowFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
-    WindowFunctionFactory factory);
+    WindowFunctionFactory factory,
+    ProcessingUnit processingUnit = ProcessingUnit::kPartition);
 
 /// Returns signatures of the window function with the specified name.
 /// Returns empty std::optional if function with that name is not found.
@@ -159,7 +160,11 @@ std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(
 struct WindowFunctionEntry {
   std::vector<FunctionSignaturePtr> signatures;
   WindowFunctionFactory factory;
+  ProcessingUnit processingUnit;
 };
+
+std::optional<const WindowFunctionEntry*> getWindowFunctionEntry(
+    const std::string& name);
 
 using WindowFunctionMap = std::unordered_map<std::string, WindowFunctionEntry>;
 

@@ -79,6 +79,74 @@ TEST_F(WindowTest, spill) {
   ASSERT_GT(stats.spilledPartitions, 0);
 }
 
+TEST_F(WindowTest, rankLikeWithEqualValue) {
+  auto data = makeRowVector(
+      {"c1"},
+      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "sum(c1) over (order by c1 rows unbounded preceding)"};
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"c1"}, false)
+                  .streamingWindow(kClauses)
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+          .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .spillDirectory(spillDirectory->path)
+          .assertResults(
+              "SELECT *, sum(c1) over (order by c1 rows unbounded preceding) FROM tmp");
+}
+
+TEST_F(WindowTest, rankLikeOptimization) {
+  const vector_size_t size = 1'0;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 2; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "rank() over (partition by p order by s)",
+      "row_number() over (partition by p order by s)",
+      "sum(d) over (partition by p order by s)"};
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values({split(data, 10)})
+                  .orderBy({"p", "s"}, false)
+                  .streamingWindow(kClauses)
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .spillDirectory(spillDirectory->path)
+          .assertResults(
+              "SELECT *, rank() over (partition by p order by s), row_number() over (partition by p order by s), sum(d) over (partition by p order by s) FROM tmp");
+}
+
 TEST_F(WindowTest, missingFunctionSignature) {
   auto input = {makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3}),

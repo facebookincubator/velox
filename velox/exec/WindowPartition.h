@@ -23,6 +23,17 @@
 /// TODO: This implementation will be revised for Spill to disk semantics.
 
 namespace facebook::velox::exec {
+
+/// The processing unit for calculating the window function in a streaming
+/// manner. kRow indicates that the calculation begins as soon as rows are
+/// available within a single partition, without waiting for all data in the
+/// partition to be ready. kPartition indicates that the calculation begins only
+/// when all rows in a partition are ready.
+enum class ProcessingUnit {
+  kPartition,
+  kRow,
+};
+
 class WindowPartition {
  public:
   /// The WindowPartition is used by the Window operator and WindowFunction
@@ -33,16 +44,41 @@ class WindowPartition {
   /// 'columns' : Input rows of 'data' used for accessing column data from it.
   /// 'sortKeyInfo' : Order by columns used by the the Window operator. Used to
   /// get peer rows from the input partition.
+  /// 'processingUnit' : The processing unit: kPartition or kRow.
   WindowPartition(
       RowContainer* data,
       const folly::Range<char**>& rows,
       const std::vector<exec::RowColumn>& columns,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
-          sortKeyInfo);
+          sortKeyInfo,
+      ProcessingUnit processingUnit = ProcessingUnit::kPartition);
 
   /// Returns the number of rows in the current WindowPartition.
   vector_size_t numRows() const {
-    return partition_.size();
+    return partition_.size() + offsetInPartition_;
+  }
+
+  vector_size_t offsetInPartition() const {
+    return offsetInPartition_;
+  }
+
+  bool supportRowLevelStreaming() {
+    return processingUnit_ == ProcessingUnit::kRow;
+  }
+
+  void insertNewBatch(const std::vector<char*>& inputRows) {
+    rows_.push_back(inputRows);
+  }
+
+  void setTotalNum(const vector_size_t& num) {
+    totalNum_ = num;
+  }
+
+  bool buildNextBatch();
+
+  bool isFinished() {
+    return (processingUnit_ == ProcessingUnit::kPartition) ||
+        (totalNum_ == processedNum_);
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -181,5 +217,22 @@ class WindowPartition {
 
   // ORDER BY column info for this partition.
   const std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
+
+  // The offset of every batch in partition.
+  vector_size_t offsetInPartition_ = 0;
+
+  // The processed num in current partition.
+  vector_size_t processedNum_ = 0;
+
+  ProcessingUnit processingUnit_ = ProcessingUnit::kPartition;
+
+  // Add new batch in WindowPartition.
+  std::vector<std::vector<char*>> rows_;
+
+  // The batch index in WindowPartition.
+  vector_size_t currentBatchIndex_ = 0;
+
+  // The total num in WindowPartition.
+  vector_size_t totalNum_ = 0;
 };
 } // namespace facebook::velox::exec

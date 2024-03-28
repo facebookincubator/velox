@@ -15,6 +15,7 @@
  */
 #include "velox/exec/Window.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/RowLevelStreamingWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/StreamingWindowBuild.h"
 #include "velox/exec/Task.h"
@@ -41,8 +42,13 @@ Window::Window(
   auto* spillConfig =
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   if (windowNode->inputsSorted()) {
-    windowBuild_ = std::make_unique<StreamingWindowBuild>(
-        windowNode, pool(), spillConfig, &nonReclaimableSection_);
+    if (supportRowLevelStreaming()) {
+      windowBuild_ = std::make_unique<RowLevelStreamingWindowBuild>(
+          windowNode_, pool(), spillConfig, &nonReclaimableSection_);
+    } else {
+      windowBuild_ = std::make_unique<StreamingWindowBuild>(
+          windowNode, pool(), spillConfig, &nonReclaimableSection_);
+    }
   } else {
     windowBuild_ = std::make_unique<SortWindowBuild>(
         windowNode, pool(), spillConfig, &nonReclaimableSection_, &spillStats_);
@@ -185,6 +191,31 @@ void Window::createWindowFunctions() {
     windowFrames_.push_back(
         createWindowFrame(windowNode_, windowNodeFunction.frame, inputType));
   }
+}
+
+// The supportRowLevelStreaming is designed to support 'rank' and
+// 'row_number' functions and the agg window function with default frame.
+bool Window::supportRowLevelStreaming() {
+  for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
+    const auto& functionName = windowNodeFunction.functionCall->name();
+    auto windowFunctionEntry =
+        exec::getWindowFunctionEntry(functionName).value();
+    if (windowFunctionEntry->processingUnit == ProcessingUnit::kPartition) {
+      return false;
+    }
+
+    const auto& frame = windowNodeFunction.frame;
+    bool isDefaultFrame =
+        (frame.startType == core::WindowNode::BoundType::kUnboundedPreceding &&
+         frame.endType == core::WindowNode::BoundType::kCurrentRow);
+    // Only support the agg window function with default frame.
+    if (!(functionName == "rank" || functionName == "row_number") &&
+        !isDefaultFrame) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void Window::addInput(RowVectorPtr input) {
@@ -511,7 +542,8 @@ void Window::computePeerAndFrameBuffers(
       // Ranking functions do not care about frames. So the function decides
       // further what to do with empty frames.
       computeValidFrames(
-          currentPartition_->numRows() - 1,
+          currentPartition_->numRows() -
+              currentPartition_->offsetInPartition() - 1,
           numRows,
           rawFrameStarts[i],
           rawFrameEnds[i],
@@ -580,7 +612,18 @@ vector_size_t Window::callApplyLoop(
           result);
       resultIndex += rowsForCurrentPartition;
       numOutputRowsLeft -= rowsForCurrentPartition;
-      callResetPartition();
+      if (currentPartition_->supportRowLevelStreaming()) {
+        if (currentPartition_->isFinished()) {
+          callResetPartition();
+        } else {
+          // Break until the next getOutput call to handle the remaining data in
+          // currentPartition_.
+          break;
+        }
+      } else {
+        callResetPartition();
+      }
+
       if (!currentPartition_) {
         // The WindowBuild doesn't have any more partitions to process right
         // now. So break until the next getOutput call.
@@ -618,6 +661,14 @@ RowVectorPtr Window::getOutput() {
     callResetPartition();
     if (!currentPartition_) {
       // WindowBuild doesn't have a partition to output.
+      return nullptr;
+    }
+  }
+
+  // BuildNextBatch until all the rows in currentPartition finished.
+  if (currentPartition_->supportRowLevelStreaming() &&
+      partitionOffset_ == currentPartition_->numRows()) {
+    if (!currentPartition_->buildNextBatch()) {
       return nullptr;
     }
   }

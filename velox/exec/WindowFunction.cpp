@@ -25,7 +25,6 @@ WindowFunctionMap& windowFunctions() {
   return functions;
 }
 
-namespace {
 std::optional<const WindowFunctionEntry*> getWindowFunctionEntry(
     const std::string& name) {
   auto& functionsMap = windowFunctions();
@@ -36,15 +35,15 @@ std::optional<const WindowFunctionEntry*> getWindowFunctionEntry(
 
   return std::nullopt;
 }
-} // namespace
 
 bool registerWindowFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
-    WindowFunctionFactory factory) {
+    WindowFunctionFactory factory,
+    ProcessingUnit processingUnit) {
   auto sanitizedName = sanitizeName(name);
   windowFunctions()[sanitizedName] = {
-      std::move(signatures), std::move(factory)};
+      std::move(signatures), std::move(factory), processingUnit};
   return true;
 }
 

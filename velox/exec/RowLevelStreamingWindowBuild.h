@@ -20,13 +20,16 @@
 
 namespace facebook::velox::exec {
 
-/// The StreamingWindowBuild is used when the input data is already sorted by
-/// {partition keys + order by keys}. The logic identifies partition changes
-/// when receiving input rows and splits out WindowPartitions for the Window
-/// operator to process.
-class StreamingWindowBuild : public WindowBuild {
+/// Unlike StreamingWindowBuild, RowLevelStreamingWindowBuild is capable of
+/// processing window functions as rows arrive within a single partition,
+/// without the need to wait for the entire partition to be ready. This approach
+/// can significantly reduce memory usage, especially when a single partition
+/// contains a large amount of data. It is particularly suited for optimizing
+/// rank and row_number functions, as well as aggregate window functions with a
+/// default frame.
+class RowLevelStreamingWindowBuild : public WindowBuild {
  public:
-  StreamingWindowBuild(
+  RowLevelStreamingWindowBuild(
       const std::shared_ptr<const core::WindowNode>& windowNode,
       velox::memory::MemoryPool* pool,
       const common::SpillConfig* spillConfig,
@@ -49,34 +52,34 @@ class StreamingWindowBuild : public WindowBuild {
   std::shared_ptr<WindowPartition> nextPartition() override;
 
   bool needsInput() override {
-    // No partitions are available or the currentPartition is the last available
-    // one, so can consume input rows.
-    return partitionStartRows_.size() == 0 ||
-        currentPartition_ == partitionStartRows_.size() - 2;
+    return !isFinished_;
   }
 
  private:
-  void buildNextPartition();
+  void buildNextInputOrPartition(bool isFinished);
 
-  // Vector of pointers to each input row in the data_ RowContainer.
-  // Rows are erased from data_ when they are output from the
-  // Window operator.
-  std::vector<char*> sortedRows_;
+  /// Vector of pointers to each input row in the data_ RowContainer.
+  /// Rows are erased from data_ when they are processed in WindowPartition.
+  std::vector<std::vector<char*>> sortedRows_;
 
   // Holds input rows within the current partition.
   std::vector<char*> inputRows_;
 
-  // Indices of  the start row (in sortedRows_) of each partition in
-  // the RowContainer data_. This auxiliary structure helps demarcate
-  // partitions.
-  std::vector<vector_size_t> partitionStartRows_;
-
   // Used to compare rows based on partitionKeys.
   char* previousRow_ = nullptr;
 
-  // Current partition being output. Used to construct WindowPartitions
-  // during resetPartition.
-  vector_size_t currentPartition_ = -1;
+  // Current partition being output. Used to return the WidnowPartitions.
+  vector_size_t outputCurrentPartition_ = 0;
+
+  bool isFinished_ = false;
+
+  // Current partition when adding input. Used to construct WindowPartitions.
+  vector_size_t inputCurrentPartition_ = 0;
+
+  std::vector<std::shared_ptr<WindowPartition>> windowPartitions_;
+
+  // Records the total rows number in each partition.
+  vector_size_t currentPartitionNum_ = 0;
 };
 
 } // namespace facebook::velox::exec

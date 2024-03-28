@@ -21,11 +21,36 @@ WindowPartition::WindowPartition(
     RowContainer* data,
     const folly::Range<char**>& rows,
     const std::vector<exec::RowColumn>& columns,
-    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo)
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
+    ProcessingUnit processingUnit)
     : data_(data),
       partition_(rows),
       columns_(columns),
-      sortKeyInfo_(sortKeyInfo) {}
+      sortKeyInfo_(sortKeyInfo) {
+  if (processingUnit == ProcessingUnit::kRow) {
+    processingUnit_ = processingUnit;
+    processedNum_ = partition_.size();
+  }
+}
+
+bool WindowPartition::buildNextBatch() {
+  if (rows_.size() == 0 ||
+      (currentBatchIndex_ == (rows_.size() - 1)))
+    return false;
+
+  offsetInPartition_ += partition_.size();
+  // Erase partition_ in data_ and itself.
+  data_->eraseRows(folly::Range(
+      rows_[currentBatchIndex_].data(), rows_[currentBatchIndex_].size()));
+  rows_[currentBatchIndex_].clear();
+
+  currentBatchIndex_++;
+  // Set new partition_.
+  partition_ = folly::Range(
+      rows_[currentBatchIndex_].data(), rows_[currentBatchIndex_].size());
+  processedNum_ += partition_.size();
+  return true;
+}
 
 void WindowPartition::extractColumn(
     int32_t columnIndex,
@@ -47,7 +72,7 @@ void WindowPartition::extractColumn(
     vector_size_t resultOffset,
     const VectorPtr& result) const {
   RowContainer::extractColumn(
-      partition_.data() + partitionOffset,
+      partition_.data() + partitionOffset - offsetInPartition_,
       numRows,
       columns_[columnIndex],
       resultOffset,
@@ -158,7 +183,9 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
       peerStart = i;
       peerEnd = i;
       while (peerEnd <= lastPartitionRow) {
-        if (peerCompare(partition_[peerStart], partition_[peerEnd])) {
+        if (peerCompare(
+                partition_[peerStart - offsetInPartition_],
+                partition_[peerEnd - offsetInPartition_])) {
           break;
         }
         peerEnd++;

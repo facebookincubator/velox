@@ -84,7 +84,8 @@ void registerRowNumber(const std::string& name, TypeKind resultTypeKind) {
           const core::QueryConfig& /*queryConfig*/)
           -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<RowNumberFunction>(resultType);
-      });
+      },
+      exec::ProcessingUnit::kRow);
 }
 
 void registerRowNumberInteger(const std::string& name) {

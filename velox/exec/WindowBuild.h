@@ -68,7 +68,7 @@ class WindowBuild {
   // the underlying columns of Window partition data.
   // Check hasNextPartition() before invoking this function. This function fails
   // if called when no partition is available.
-  virtual std::unique_ptr<WindowPartition> nextPartition() = 0;
+  virtual std::shared_ptr<WindowPartition> nextPartition() = 0;
 
   // Returns the average size of input rows in bytes stored in the
   // data container of the WindowBuild.
