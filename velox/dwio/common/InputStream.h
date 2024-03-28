@@ -124,11 +124,16 @@ class InputStream {
       folly::Range<folly::IOBuf*> iobufs,
       const LogType purpose) = 0;
 
-  const std::string& getName() const;
-
-  virtual void logRead(uint64_t offset, uint64_t length, LogType purpose);
+  const std::string& getName() const {
+    return path_;
+  }
 
  protected:
+  void logRead(uint64_t offset, uint64_t length, LogType purpose) const;
+
+ private:
+  void updateMetric(uint64_t rawBytesRead, uint64_t scanTime) const;
+
   std::string path_;
   MetricsLogPtr metricsLog_;
   IoStatistics* stats_;
