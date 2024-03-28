@@ -51,7 +51,7 @@ function install_build_prerequisites {
   dnf config-manager --set-enabled powertools
   dnf update -y
   dnf_install ninja-build cmake curl ccache gcc-toolset-9 git wget which
-  dnf_install autoconf automake python39 python39-devel libtool
+  dnf_install autoconf automake python39 python39-devel python39-pip libtool
 }
 
 # Install dependencies from the package managers.
