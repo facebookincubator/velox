@@ -65,7 +65,9 @@ operator and UDAFs by generating random aggregations and evaluating these on
 random input vectors.</p>
 <p>The Aggregation Fuzzer tests global aggregations (no grouping keys), group-by
 aggregations (one or more grouping keys), distinct aggregations(no aggregates),
-aggregations with and without masks.</p>
+aggregations with and without masks, aggregations over sorted and distinct inputs.</p>
+<p>The Aggregation Fuzzer includes testing of spilling and abandoning partial
+aggregation.</p>
 <p>The results of aggregations using functions supported by DuckDB are compared
 with DuckDB results.</p>
 <p>For each aggregation, Fuzzer generates multiple logically equivalent plans and
@@ -90,10 +92,60 @@ using OrderBy and StreamingAggregation.</p>
 </ul>
 <p>Fuzzer iterations alternate between generating plans using Values or TableScan
 nodes.</p>
+<p>Many functions work well with random input data. However, some functions have
+restrictions on the input values and random data tend to violate these causing
+failures and preventing the fuzzer from exercising the aggregation beyond the
+initial sanity checks.</p>
+<p>For example, “min” function has 2 signatures:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>min(x) → [same as x]
+Returns the minimum value of all input values.
+
+min(x, n) → array&lt;[same as x]&gt;
+Returns n smallest values of all input values of x. n must be a positive integer and not exceed 10,000.
+</pre></div>
+</div>
+<p>The second signature, let’s call it min_n, has 2 arguments. The first argument
+is the value and the second is a constant number of minimum values to return.
+Most of the time, randomly generated value for the second argument doesn’t fall
+into [1, 10’000] range and aggregation fails:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">VeloxUserError</span>
+<span class="n">Error</span> <span class="n">Source</span><span class="p">:</span> <span class="n">USER</span>
+<span class="n">Error</span> <span class="n">Code</span><span class="p">:</span> <span class="n">INVALID_ARGUMENT</span>
+<span class="n">Reason</span><span class="p">:</span> <span class="p">(</span><span class="mi">3069436511015786487</span> <span class="n">vs</span><span class="o">.</span> <span class="mi">10000</span><span class="p">)</span> <span class="n">second</span> <span class="n">argument</span> <span class="n">of</span> <span class="nb">max</span><span class="o">/</span><span class="nb">min</span> <span class="n">must</span> <span class="n">be</span> <span class="n">less</span> <span class="n">than</span> <span class="ow">or</span> <span class="n">equal</span> <span class="n">to</span> <span class="mi">10000</span>
+<span class="n">Retriable</span><span class="p">:</span> <span class="kc">False</span>
+<span class="n">Expression</span><span class="p">:</span> <span class="n">newN</span> <span class="o">&lt;=</span> <span class="mi">10</span><span class="s1">&#39;000</span>
+<span class="n">Function</span><span class="p">:</span> <span class="n">checkAndSetN</span>
+<span class="n">File</span><span class="p">:</span> <span class="o">/</span><span class="n">Users</span><span class="o">/</span><span class="n">mbasmanova</span><span class="o">/</span><span class="n">cpp</span><span class="o">/</span><span class="n">velox</span><span class="o">-</span><span class="mi">1</span><span class="o">/</span><span class="n">velox</span><span class="o">/</span><span class="n">functions</span><span class="o">/</span><span class="n">prestosql</span><span class="o">/</span><span class="n">aggregates</span><span class="o">/</span><span class="n">MinMaxAggregates</span><span class="o">.</span><span class="n">cpp</span>
+<span class="n">Line</span><span class="p">:</span> <span class="mi">574</span>
+</pre></div>
+</div>
+<p>Similarly, approx_distinct function has a signature that allows to specify max
+standard error in the range of [0.0040625, 0.26000]. Random values for ‘e’ have
+near zero chance to fall into this range.</p>
+<p>To enable effective testing of these functions, Aggregation Fuzzer allows
+registering custom input generators for individual functions.</p>
 <p>When testing aggregate functions whose results depend on the order of inputs
 (e.g. map_agg, map_union, arbitrary, etc.), the Fuzzer verifies that all plans
 succeed or fail with compatible user exceptions. When plans succeed, the Fuzzer
 verifies that number of result rows is the same across all plans.</p>
+<p>Additionally, Fuzzer tests order-sensitive functions using aggregations over
+sorted inputs. When inputs are sorted, the results are deterministic and therefore
+can be verified.</p>
+<p>Fuzzer also supports specifying custom result verifiers. For example, array_agg
+results can be verified by first sorting the result arrays. Similarly, map_agg
+results can be partially verified by transforming result maps into sorted arrays
+of map keys. approx_distinct can be verified by comparing the results with
+count(distinct).</p>
+<p>A custom verifier may work by comparing results of executing two logically
+equivalent Velox plans or results of executing Velox plan and equivalent query
+in Reference DB. These verifiers using transform the results to make them
+deterministic, then compare. This is used to verify array_agg, set_agg,
+set_union, map_agg, and similar functions.</p>
+<p>A custom verifier may also work by analyzing the results of single execution
+of a Velox plan. For example, approx_distinct verifies the results by
+computing count(distinct) on input data and checking whether the results
+of approx_distinct are within expected error bound. Verifier for approx_percentile
+works similarly.</p>
 <p>At the end of the run, Fuzzer prints out statistics that show what has been
 tested:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">==============================&gt;</span> <span class="n">Done</span> <span class="k">with</span> <span class="n">iteration</span> <span class="mi">5683</span>
@@ -135,13 +187,8 @@ aggregate functions supported by the engine, and call
 <code class="docutils literal notranslate"><span class="pre">AggregationFuzzerRunner::run()</span></code> defined in <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/exec/tests/AggregationFuzzer.h">AggregationFuzzerRunner.h</a>. See
 <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/exec/tests/AggregationFuzzerTest.cpp">AggregationFuzzerTest.cpp</a>.</p>
 <p>Aggregation Fuzzer allows to indicate functions whose results depend on the
-order of inputs and optionally provide an expression to apply to the result to
-make it stable. For example, the results of array_agg can be stabilized by
-applying array_sort on top: array_sort(array_map(x)) and the results of map_agg
-can be stabilized using array_sort(map_keys(map_agg(k, v))). Order-dependent
-functions are tested to ensure no crashes or failures. The results of
-order-dependent functions with stabilizing expressions are further verified for
-correctness by ensuring that results of logically equivalent plans match.</p>
+order of inputs and optionally provide custom result verifiers. The Fuzzer
+also allows to provide custom input generators for individual functions.</p>
 </section>
 <section id="how-to-run">
 <h2>How to run<a class="headerlink" href="#how-to-run" title="Link to this heading">¶</a></h2>
@@ -174,7 +221,7 @@ correctness by ensuring that results of logically equivalent plans match.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--num_batches</span></code>: The number of input vectors of size <cite>–batch_size</cite> to generate. Default is 10.</p></li>
 </ul>
-<p>Window Fuzzer supports verifiering window query results against reference DB:</p>
+<p>Window Fuzzer supports verifying window query results against reference DB:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--enable_window_reference_verification</span></code>: When true, the results of the window aggregation are compared to reference DB results. Default is false.</p></li>
 </ul>
