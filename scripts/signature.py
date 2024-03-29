@@ -229,7 +229,7 @@ def gh_bias_check(args):
         has_tickets = os.path.isfile(
             os.path.join(args.signature_dir, group + args.output_postfix)
         )
-        set_gh_output(f"{group}_functions", has_tickets) 
+        set_gh_output(f"{group}_functions", has_tickets)
 
 
 def get_tickets(val):
