@@ -651,7 +651,6 @@ jobs:
       - name: Surface Presto function signature errors
         if: ${{ needs.compile.outputs.presto_error == 'true' }}
         run: |
-          echo "Found incompatible changes in presto function signatures:"
           cat /tmp/signatures/presto_errors
           exit 1
 
