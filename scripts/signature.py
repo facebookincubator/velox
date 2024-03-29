@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import sys
+from typing import Any
 
 from deepdiff import DeepDiff
 
@@ -43,8 +44,11 @@ Changing or removing function signatures breaks backwards compatibility as some 
 """
 
 
-def set_output(name: str, value: str):
-    """Sets a Github Actions output variable. Only single line values are supported."""
+def set_gh_output(name: str, value: Any):
+    """Sets a Github Actions output variable. Only single line values are supported.
+    value will be converted to a lower case string."""
+    value = str(value).lower()
+
     if "\n" in value:
         raise ValueError("Only single line values are supported.")
 
@@ -217,13 +221,15 @@ def gh_bias_check(args):
                 os.path.join(args.signature_dir, group + "_errors"),
             ]
         )
-        bias_status = bias(bias_args)
-        set_output(f"{group}_error", str(bias_status == 1).lower())
 
+        bias_status = bias(bias_args)
+        set_gh_output(f"{group}_error", bias_status == 1)
+
+        # check if there are any changes that require the bias fuzzer to run
         has_tickets = os.path.isfile(
             os.path.join(args.signature_dir, group + args.output_postfix)
         )
-        set_output(f"{group}_functions", str(has_tickets).lower())
+        set_gh_output(f"{group}_functions", has_tickets) 
 
 
 def get_tickets(val):
