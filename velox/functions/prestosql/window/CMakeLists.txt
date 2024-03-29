@@ -15,7 +15,9 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-add_subdirectory(benchmark)
+if(${VELOX_ENABLE_BENCHMARKS})
+  add_subdirectory(benchmark)
+endif()
 
 add_library(velox_window CumeDist.cpp FirstLastValue.cpp LeadLag.cpp
                          WindowFunctionsRegistration.cpp)
