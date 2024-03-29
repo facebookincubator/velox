@@ -168,9 +168,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "poisson_cdf"});
   registerFunction<GammaCDFFunction, double, double, double, double>(
       {prefix + "gamma_cdf"});
-  // Removed for TEST Purposes, do not merge !!
-//  registerFunction<LaplaceCDFFunction, double, double, double, double>(
-//      {prefix + "laplace_cdf"});
+  registerFunction<LaplaceCDFFunction, double, double, double, double>(
+      {prefix + "laplace_cdf"});
   registerFunction<
       WilsonIntervalUpperFunction,
       double,
