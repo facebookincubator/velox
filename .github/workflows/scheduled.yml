@@ -335,7 +335,7 @@ jobs:
           name: signatures
           path: /tmp/signatures
 
-      - name: Run Spark Expression Fuzzer
+      - name: Run Presto Expression Fuzzer
         run: |
           ls /tmp/signatures
           mkdir -p /tmp/presto_fuzzer_repro/
