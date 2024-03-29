@@ -303,7 +303,7 @@ jobs:
                 --enable_dereference \
                 --duration_sec $DURATION \
                 --logtostderr=1 \
-                --minloglevel=0 \
+                --minloglevel=1 \
                 --repro_persist_path=/tmp/fuzzer_repro \
           && echo -e "\n\nFuzzer run finished successfully."
 
@@ -354,7 +354,7 @@ jobs:
                 --retry_with_try \
                 --enable_dereference \
                 --logtostderr=1 \
-                --minloglevel=0 \
+                --minloglevel=1 \
                 --repro_persist_path=/tmp/presto_fuzzer_repro \
             && echo -e "\n\nPresto Fuzzer run finished successfully."
 
@@ -388,7 +388,7 @@ jobs:
                 --seed ${RANDOM} \
                 --duration_sec $DURATION \
                 --logtostderr=1 \
-                --minloglevel=0 \
+                --minloglevel=1 \
                 --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro \
           && echo -e "\n\nSpark Aggregation Fuzzer run finished successfully."
 
@@ -430,7 +430,7 @@ jobs:
                 --seed ${RANDOM} \
                 --duration_sec $DURATION \
                 --logtostderr=1 \
-                --minloglevel=0 \
+                --minloglevel=1 \
                 --assign_function_tickets  $(cat /tmp/signatures/spark_bias_functions) \
                 --repro_persist_path=/tmp/spark_fuzzer_repro \
             && echo -e "\n\nSpark Fuzzer run finished successfully."
@@ -472,7 +472,7 @@ jobs:
                 --enable_dereference \
                 --duration_sec $DURATION \
                 --logtostderr=1 \
-                --minloglevel=0 \
+                --minloglevel=1 \
                 --repro_persist_path=/tmp/spark_fuzzer_repro \
             && echo -e "\n\nSpark Fuzzer run finished successfully."
 
@@ -507,7 +507,7 @@ jobs:
                 --seed ${RANDOM} \
                 --duration_sec $DURATION \
                 --logtostderr=1 \
-                --minloglevel=0 \
+                --minloglevel=1 \
                 --repro_persist_path=/tmp/aggregate_fuzzer_repro \
             && echo -e "\n\nAggregation fuzzer run finished successfully."
 
@@ -542,7 +542,7 @@ jobs:
                 --seed ${RANDOM} \
                 --duration_sec $DURATION \
                 --logtostderr=1 \
-                --minloglevel=0 \
+                --minloglevel=1 \
             && echo -e "\n\nAggregation fuzzer run finished successfully."
 
       - name: Archive aggregate production artifacts
@@ -577,7 +577,7 @@ jobs:
                 --seed ${RANDOM} \
                 --duration_sec ${{ env.DURATION }} \
                 --logtostderr=1 \
-                --minloglevel=0 \
+                --minloglevel=1 \
                 --repro_path=/tmp/exchange_fuzzer_repro \
             && echo -e "\n\Exchange fuzzer run finished successfully."
 
@@ -622,7 +622,7 @@ jobs:
                 --seed ${RANDOM} \
                 --duration_sec $DURATION \
                 --logtostderr=1 \
-                --minloglevel=0 \
+                --minloglevel=1 \
                 --repro_persist_path=/tmp/aggregate_fuzzer_repro \
                 --enable_sorted_aggregations=true \
                 --presto_url=http://127.0.0.1:8080 \
