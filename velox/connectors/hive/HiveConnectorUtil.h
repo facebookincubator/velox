@@ -35,6 +35,8 @@ using SubfieldFilters =
 
 constexpr const char* kPath = "$path";
 constexpr const char* kBucket = "$bucket";
+constexpr const char* kFileSize = "$file_size";
+constexpr const char* kModificationTime = "$file_modified_time";
 
 const std::string& getColumnName(const common::Subfield& subfield);
 

@@ -60,7 +60,12 @@ class AbfsReadFile::Impl {
             connectStr, abfsAccount.fileSystem(), fileName_));
   }
 
-  void initialize() {
+  void initialize(const FileOptions& options) {
+    if (options.values.count("fileSize") > 0) {
+      length_ = !options.values.at("fileSize").empty()
+          ? std::stoull(options.values.at("fileSize"))
+          : -1;
+    }
     if (length_ != -1) {
       return;
     }
@@ -166,8 +171,8 @@ AbfsReadFile::AbfsReadFile(
   impl_ = std::make_shared<Impl>(path, connectStr);
 }
 
-void AbfsReadFile::initialize() {
-  return impl_->initialize();
+void AbfsReadFile::initialize(const FileOptions& options) {
+  return impl_->initialize(options);
 }
 
 std::string_view
@@ -242,10 +247,10 @@ std::string AbfsFileSystem::name() const {
 
 std::unique_ptr<ReadFile> AbfsFileSystem::openFileForRead(
     std::string_view path,
-    const FileOptions& /*unused*/) {
+    const FileOptions& options) {
   auto abfsfile = std::make_unique<AbfsReadFile>(
       std::string(path), impl_->connectionString(std::string(path)));
-  abfsfile->initialize();
+  abfsfile->initialize(options);
   return abfsfile;
 }
 

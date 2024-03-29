@@ -34,7 +34,9 @@ std::string groupName(const std::string& filename) {
 } // namespace
 
 std::shared_ptr<FileHandle> FileHandleGenerator::operator()(
-    const std::string& filename) {
+    const std::string& filename,
+    const std::string& fileSize = "",
+    const std::string& modificationTime = "") {
   // We have seen cases where drivers are stuck when creating file handles.
   // Adding a trace here to spot this more easily in future.
   process::TraceContext trace("FileHandleGenerator::operator()");
@@ -43,8 +45,11 @@ std::shared_ptr<FileHandle> FileHandleGenerator::operator()(
   {
     MicrosecondTimer timer(&elapsedTimeUs);
     fileHandle = std::make_shared<FileHandle>();
+    filesystems::FileOptions options;
+    options.values["fileSize"] = fileSize;
+    // Add length and modification time here to create a unique handle?
     fileHandle->file = filesystems::getFileSystem(filename, properties_)
-                           ->openFileForRead(filename);
+                           ->openFileForRead(filename, options);
     fileHandle->uuid = StringIdLease(fileIds(), filename);
     fileHandle->groupId = StringIdLease(fileIds(), groupName(filename));
     VLOG(1) << "Generating file handle for: " << filename
