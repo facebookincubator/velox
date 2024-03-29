@@ -613,8 +613,15 @@ vector_size_t Window::callApplyLoop(
       resultIndex += rowsForCurrentPartition;
       numOutputRowsLeft -= rowsForCurrentPartition;
       if (currentPartition_->supportRowLevelStreaming()) {
-        if (currentPartition_->isFinished()) {
+        if (currentPartition_->processFinished()) {
           callResetPartition();
+          if (currentPartition_ &&
+              partitionOffset_ == currentPartition_->numRows()) {
+            if (!currentPartition_->buildNextRows()) {
+              break;
+            }
+          }
+
         } else {
           // Break until the next getOutput call to handle the remaining data in
           // currentPartition_.
@@ -665,10 +672,9 @@ RowVectorPtr Window::getOutput() {
     }
   }
 
-  // BuildNextBatch until all the rows in currentPartition finished.
   if (currentPartition_->supportRowLevelStreaming() &&
       partitionOffset_ == currentPartition_->numRows()) {
-    if (!currentPartition_->buildNextBatch()) {
+    if (!currentPartition_->buildNextRows()) {
       return nullptr;
     }
   }
