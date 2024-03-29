@@ -47,17 +47,15 @@ struct ExtremeValueFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   // For double, presto should throw error if input is Nan
-  // void checkNan(const TInput& value) const {
-  //   if constexpr (std::is_same_v<
-  //                     TInput,
-  //                     TypeTraits<TypeKind::DOUBLE>::NativeType>) {
-  //     if (std::isnan(value)) {
-  //       VELOX_USER_FAIL(
-  //           "Invalid argument to {}: NaN", isLeast ? "least()" :
-  //           "greatest()");
-  //     }
-  //   }
-  // }
+  template <typename T>
+  void checkNan(const T& value) const {
+    if constexpr (std::is_same_v<T, TypeTraits<TypeKind::DOUBLE>::NativeType>) {
+      if (std::isnan(value)) {
+        VELOX_USER_FAIL(
+            "Invalid argument to {}: NaN", isLeast ? "least()" : "greatest()");
+      }
+    }
+  }
 
   // expect all input to be not null, else the result is null
   FOLLY_ALWAYS_INLINE bool callNullFree(
@@ -71,28 +69,14 @@ struct ExtremeValueFunction {
     }
 
     auto currentValue = inputs[0];
-    // checkNan(currentValue);
-    if constexpr (std::is_same_v<
-                      TInput,
-                      TypeTraits<TypeKind::DOUBLE>::NativeType>) {
-      if (std::isnan(currentValue)) {
-        VELOX_USER_FAIL(
-            "Invalid argument to {}: NaN", isLeast ? "least()" : "greatest()");
-      }
-    }
 
+    // if current value type is double and value is Nan, throw error
+    checkNan(currentValue);
     for (auto i = 1; i < inputs.size(); ++i) {
       auto candidateValue = inputs[i];
-      // checkNan(candidateValue);
-      if constexpr (std::is_same_v<
-                        TInput,
-                        TypeTraits<TypeKind::DOUBLE>::NativeType>) {
-        if (std::isnan(candidateValue)) {
-          VELOX_USER_FAIL(
-              "Invalid argument to {}: NaN",
-              isLeast ? "least()" : "greatest()");
-        }
-      }
+
+      // if candidate value type is double and value is Nan, throw error
+      checkNan(candidateValue);
 
       if constexpr (isLeast) {
         if (candidateValue < currentValue) {
