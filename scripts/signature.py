@@ -32,8 +32,8 @@ class bcolors:
     BOLD = "\033[1m"
 
 
-def get_error_string(error_message, markdown=False):
-    return f"""{"> [!CAUTION]" if markdown else ""}
+def get_error_string(error_message):
+    return f"""
 Incompatible changes in function signatures have been detected.
 
 {error_message}
@@ -52,13 +52,12 @@ def set_output(name: str, value: str):
         f.write(f"{name}={value}\n")
 
 
-def show_error(error_message):
-    if "GITHUB_ACTIONS" in os.environ:
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
-            f.writelines(get_error_string(error_message, markdown=True))
+def show_error(error_message, error_path):
+    if error_path:
+        with open(error_path) as f:
+            f.writelines(get_error_string(error_message))
 
-    else:
-        print(get_error_string(error_message))
+    print(get_error_string(error_message))
 
 
 def export(args):
@@ -85,7 +84,7 @@ def export(args):
     return 0
 
 
-def diff_signatures(base_signatures, contender_signatures):
+def diff_signatures(base_signatures, contender_signatures, error_path=""):
     """Diffs Velox function signatures. Returns a tuple of the delta diff and exit status"""
 
     delta = DeepDiff(
@@ -104,28 +103,28 @@ def diff_signatures(base_signatures, contender_signatures):
                 error_message += (
                     f"""Function '{dic_removed.get_root_key()}' has been removed.\n"""
                 )
-            show_error(error_message)
+            show_error(error_message, error_path)
             exit_status = 1
 
         if "values_changed" in delta:
             error_message = ""
             for value_change in delta["values_changed"]:
                 error_message += f"""'{value_change.get_root_key()}{value_change.t1}' is changed to '{value_change.get_root_key()}{value_change.t2}'.\n"""
-            show_error(error_message)
+            show_error(error_message, error_path)
             exit_status = 1
 
         if "repetition_change" in delta:
             error_message = ""
             for rep_change in delta["repetition_change"]:
                 error_message += f"""'{rep_change.get_root_key()}{rep_change.t1}' is repeated {rep_change.repetition['new_repeat']} times.\n"""
-            show_error(error_message)
+            show_error(error_message, error_path)
             exit_status = 1
 
         if "iterable_item_removed" in delta:
             error_message = ""
             for iter_change in delta["iterable_item_removed"]:
                 error_message += f"""{iter_change.get_root_key()} has its function signature '{iter_change.t1}' removed.\n"""
-            show_error(error_message)
+            show_error(error_message, error_path)
             exit_status = 1
 
     else:
@@ -153,7 +152,7 @@ def bias(args):
 
     tickets = args.ticket_value
     bias_output, status = bias_signatures(
-        base_signatures, contender_signatures, tickets
+        base_signatures, contender_signatures, tickets, args.error_path
     )
 
     if bias_output:
@@ -163,12 +162,12 @@ def bias(args):
     return status
 
 
-def bias_signatures(base_signatures, contender_signatures, tickets):
+def bias_signatures(base_signatures, contender_signatures, tickets, error_path):
     """Returns newly added functions as string and a status flag.
     Newly added functions are biased like so `fn_name1=<ticket_count>,fn_name2=<ticket_count>`.
     If it detects incompatible changes returns 1 in the status.
     """
-    delta, status = diff_signatures(base_signatures, contender_signatures)
+    delta, status = diff_signatures(base_signatures, contender_signatures, error_path)
 
     if not delta:
         print(f"{bcolors.BOLD} No changes detected: Nothing to do!")
@@ -215,6 +214,7 @@ def gh_bias_check(args):
                 os.path.join(args.signature_dir, group + args.base_postfix),
                 os.path.join(args.signature_dir, group + args.contender_postfix),
                 os.path.join(args.signature_dir, group + args.output_postfix),
+                os.path.join(args.signature_dir, group + "_errors"),
             ]
         )
         bias_status = bias(bias_args)
@@ -258,6 +258,7 @@ def parse_args(args):
     bias_command_parser.add_argument(
         "ticket_value", type=get_tickets, default=10, nargs="?"
     )
+    bias_command_parser.add_argument("error_path", type=str, default="")
     gh_command_parser = command.add_parser("gh_bias_check")
     gh_command_parser.add_argument(
         "group",

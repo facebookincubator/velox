@@ -74,7 +74,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:centos8
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "/__w/velox/velox/.ccache/"
+      CCACHE_DIR: "/__w/velox/velox/.ccache"
       LINUX_DISTRO: "ubuntu"
       MAKEFLAGS: "NUM_THREADS=${{ inputs.numThreads || 16 }} MAX_HIGH_MEM_JOBS=${{ inputs.maxHighMemJobs || 8 }} MAX_LINK_JOBS=${{ inputs.maxLinkJobs || 4 }}"
 
@@ -641,9 +641,16 @@ jobs:
     needs: compile
     runs-on: ubuntu-latest
     steps:
+      - name: Download Signatures
+        uses: actions/download-artifact@v4
+        with:
+          name: signatures
+          path: /tmp/signatures
+
       - name: Surface Presto function signature errors
         if: ${{ needs.compile.outputs.presto_error == 'true' }}
         run: |
-          echo "Found incompatible changes in presto function signatures. Please check the summary for details."
+          echo "Found incompatible changes in presto function signatures:"
+          cat /tmp/signatures/presto_errors
           exit 1
 
