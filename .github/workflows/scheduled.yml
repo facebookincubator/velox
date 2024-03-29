@@ -129,8 +129,6 @@ jobs:
 
       - name: Build PyVelox
         if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
-        env:
-          CCACHE_BASEDIR: "/__w/velox/velox/velox_main"
         working-directory: velox_main
         run: |
           python3 -m venv .venv
@@ -167,7 +165,6 @@ jobs:
 
       - name: Build
         env:
-          CCACHE_BASEDIR: "/__w/velox/velox/velox"
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"
         run: |
           EXTRA_CMAKE_FLAGS="-DPYTHON_EXECUTABLE=$(which python3) $EXTRA_CMAKE_FLAGS"
@@ -600,7 +597,6 @@ jobs:
     if: ${{ github.event_name != 'pull_request' }}
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
-      CCACHE_BASEDIR: "${{ github.workspace }}"
       LINUX_DISTRO: "centos"
     steps:
 
