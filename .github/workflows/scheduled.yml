@@ -84,7 +84,7 @@ jobs:
         working-directory: velox
     outputs:
       presto_bias: ${{ steps.sig-check.outputs.presto_functions }}
-      presto_erro: ${{ steps.sig-check.outputs.presto_error }}
+      presto_error: ${{ steps.sig-check.outputs.presto_error }}
       spark_bias: ${{ steps.sig-check.outputs.spark_functions }}
       spark_error: ${{ steps.sig-check.outputs.spark_error }}
 
@@ -322,7 +322,7 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
-    if: ${{ needs.compile.outputs.presto_functions  == 'true' }}
+    if: ${{ needs.compile.outputs.presto_bias  == 'true' }}
     timeout-minutes: 120
     steps:
 
@@ -407,7 +407,7 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
-    if: ${{ needs.compile.outputs.spark_functions  == 'true' }}
+    if: ${{ needs.compile.outputs.spark_bias  == 'true' }}
     timeout-minutes: 120
     steps:
 
@@ -646,7 +646,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Surface Presto function signature errors
-        if: ${{ needs.compile.outputs.presto_error }}
+        if: ${{ needs.compile.outputs.presto_error == 'true' }}
         run: |
           echo "Found incompatible changes in presto function signatures. Please check the summary for details."
           exit 1
