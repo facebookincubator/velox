@@ -54,7 +54,7 @@ def set_output(name: str, value: str):
 
 def show_error(error_message, error_path):
     if error_path:
-        with open(error_path) as f:
+        with open(error_path, "a+") as f:
             f.writelines(get_error_string(error_message))
 
     print(get_error_string(error_message))
