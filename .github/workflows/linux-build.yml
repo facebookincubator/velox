@@ -103,7 +103,7 @@ jobs:
         # Some of the adapters dependencies are in the 'adapters' conda env
         shell: mamba run --no-capture-output -n adapters /usr/bin/bash -e {0}
         env:
-          LIBHDFS3_CONF: "/__w/velox/velox/.circleci/hdfs-client.xml"
+          LIBHDFS3_CONF: "/__w/velox/velox/scripts/hdfs-client.xml"
         working-directory: _build/release
         run: |
           ctest -j 8 --output-on-failure --no-tests=error
