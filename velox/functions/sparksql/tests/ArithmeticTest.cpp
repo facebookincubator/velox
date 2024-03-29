@@ -480,23 +480,22 @@ TEST_F(ArithmeticTest, normalizeNanDouble) {
     return f.value();
   };
 
-  EXPECT_EQ(toInt64(0.0d), toInt64(normalizeNan(0.0d)));
-  EXPECT_EQ(toInt64(0.0d), toInt64(normalizeNan(-0.0d)));
-  EXPECT_EQ(toInt64(1.0d), toInt64(normalizeNan(1.0d)));
+  EXPECT_EQ(toInt64(0.0), toInt64(normalizeNan(0.0)));
+  EXPECT_EQ(toInt64(0.0), toInt64(normalizeNan(-0.0)));
+  EXPECT_EQ(toInt64(1.0), toInt64(normalizeNan(1.0)));
   EXPECT_EQ(
       toInt64(normalizeNan(kNanDouble)), toInt64(normalizeNan(kNanDouble)));
   EXPECT_EQ(
-      toInt64(normalizeNan(kNanDouble)), toInt64(normalizeNan(0.0d / 0.0d)));
+      toInt64(normalizeNan(kNanDouble)), toInt64(normalizeNan(0.0 / 0.0)));
   EXPECT_EQ(
       toInt64(normalizeNan(kNanDouble)),
       toInt64(normalizeNan(kInfDouble - kInfDouble)));
 
-  EXPECT_EQ(hasher(0.0d), hasher(normalizeNan(0.0d)));
-  EXPECT_EQ(hasher(0.0d), hasher(normalizeNan(-0.0d)));
-  EXPECT_EQ(hasher(1.0d), hasher(normalizeNan(1.0d)));
+  EXPECT_EQ(hasher(0.0), hasher(normalizeNan(0.0)));
+  EXPECT_EQ(hasher(0.0), hasher(normalizeNan(-0.0)));
+  EXPECT_EQ(hasher(1.0), hasher(normalizeNan(1.0)));
   EXPECT_EQ(hasher(normalizeNan(kNanDouble)), hasher(normalizeNan(kNanDouble)));
-  EXPECT_EQ(
-      hasher(normalizeNan(kNanDouble)), hasher(normalizeNan(0.0d / 0.0d)));
+  EXPECT_EQ(hasher(normalizeNan(kNanDouble)), hasher(normalizeNan(0.0 / 0.0)));
   EXPECT_EQ(
       hasher(normalizeNan(kNanDouble)),
       hasher(normalizeNan(kInfDouble - kInfDouble)));

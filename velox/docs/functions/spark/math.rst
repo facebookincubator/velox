@@ -154,7 +154,9 @@ Mathematical Functions
 
 .. spark:function:: normalize_nan(x) -> [same as x]
 
-    Normalize different Nans.
+    Normalize NaNs. This function ensures the generation of a single hash value 
+    for different NaNs through the hash functions. Spark utilizes this function 
+    to prevent erroneous aggregation or joining when NaN keys are involved.
     Supported types are: REAL, DOUBLE.
 
 .. spark:function:: not(x) -> boolean
