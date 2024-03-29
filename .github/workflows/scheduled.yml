@@ -243,6 +243,7 @@ jobs:
 
   presto-fuzzer-run:
     name: Presto Fuzzer
+    if: ${{ needs.compile.outputs.presto_bias  != 'true' }}
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
@@ -442,6 +443,7 @@ jobs:
 
   spark-fuzzer:
     name: Spark Fuzzer
+    if: ${{ needs.compile.outputs.spark_bias  != 'true' }}
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos8
     needs: compile
