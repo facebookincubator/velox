@@ -26,27 +26,20 @@ RowLevelStreamingWindowBuild::RowLevelStreamingWindowBuild(
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection) {}
 
 void RowLevelStreamingWindowBuild::buildNextInputOrPartition(bool isFinished) {
-  sortedRows_.push_back(inputRows_);
   if (windowPartitions_.size() <= inputCurrentPartition_) {
-    auto partition =
-        folly::Range(sortedRows_.back().data(), sortedRows_.back().size());
-
     windowPartitions_.push_back(std::make_shared<WindowPartition>(
         data_.get(),
-        partition,
+        folly::Range<char**>(nullptr, nullptr),
         inputColumns_,
         sortKeyInfo_,
-        ProcessingUnit::kRow));
+        true));
   }
 
-  windowPartitions_[inputCurrentPartition_]->insertNewBatch(sortedRows_.back());
+  windowPartitions_[inputCurrentPartition_]->addNewRows(inputRows_);
 
   if (isFinished) {
-    windowPartitions_[inputCurrentPartition_]->setTotalNum(
-        currentPartitionNum_ - 1);
-
+    windowPartitions_[inputCurrentPartition_]->setInputRowsFinished();
     inputCurrentPartition_++;
-    currentPartitionNum_ = 1;
   }
 
   inputRows_.clear();
@@ -58,7 +51,6 @@ void RowLevelStreamingWindowBuild::addInput(RowVectorPtr input) {
   }
 
   for (auto row = 0; row < input->size(); ++row) {
-    currentPartitionNum_++;
     char* newRow = data_->newRow();
 
     for (auto col = 0; col < input->childrenSize(); ++col) {
@@ -83,17 +75,20 @@ void RowLevelStreamingWindowBuild::addInput(RowVectorPtr input) {
 }
 
 void RowLevelStreamingWindowBuild::noMoreInput() {
-  isFinished_ = true;
   buildNextInputOrPartition(true);
 }
 
 std::shared_ptr<WindowPartition> RowLevelStreamingWindowBuild::nextPartition() {
-  return windowPartitions_[outputCurrentPartition_++];
+  if (outputCurrentPartition_ > 0) {
+    windowPartitions_[outputCurrentPartition_].reset();
+  }
+
+  return windowPartitions_[++outputCurrentPartition_];
 }
 
 bool RowLevelStreamingWindowBuild::hasNextPartition() {
   return windowPartitions_.size() > 0 &&
-      outputCurrentPartition_ <= int(windowPartitions_.size() - 1);
+      outputCurrentPartition_ <= int(windowPartitions_.size() - 2);
 }
 
 } // namespace facebook::velox::exec

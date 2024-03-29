@@ -31,6 +31,16 @@ struct WindowFunctionArg {
   std::optional<const column_index_t> index;
 };
 
+/// The processing unit for calculating the window function in a streaming
+/// manner. kRow indicates that the calculation begins as soon as rows are
+/// available within a single partition, without waiting for all data in the
+/// partition to be ready. kPartition indicates that the calculation begins only
+/// when all rows in a partition are ready.
+enum class ProcessingUnit {
+  kPartition,
+  kRow,
+};
+
 class WindowFunction {
  public:
   explicit WindowFunction(

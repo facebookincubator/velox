@@ -52,15 +52,14 @@ class RowLevelStreamingWindowBuild : public WindowBuild {
   std::shared_ptr<WindowPartition> nextPartition() override;
 
   bool needsInput() override {
-    return !isFinished_;
+    // No partitions are available or the currentPartition is the last available
+    // one, so can consume input rows.
+    return windowPartitions_.size() == 0 ||
+        outputCurrentPartition_ == windowPartitions_.size() - 1;
   }
 
  private:
   void buildNextInputOrPartition(bool isFinished);
-
-  /// Vector of pointers to each input row in the data_ RowContainer.
-  /// Rows are erased from data_ when they are processed in WindowPartition.
-  std::vector<std::vector<char*>> sortedRows_;
 
   // Holds input rows within the current partition.
   std::vector<char*> inputRows_;
@@ -69,17 +68,12 @@ class RowLevelStreamingWindowBuild : public WindowBuild {
   char* previousRow_ = nullptr;
 
   // Current partition being output. Used to return the WidnowPartitions.
-  vector_size_t outputCurrentPartition_ = 0;
-
-  bool isFinished_ = false;
+  vector_size_t outputCurrentPartition_ = -1;
 
   // Current partition when adding input. Used to construct WindowPartitions.
   vector_size_t inputCurrentPartition_ = 0;
 
   std::vector<std::shared_ptr<WindowPartition>> windowPartitions_;
-
-  // Records the total rows number in each partition.
-  vector_size_t currentPartitionNum_ = 0;
 };
 
 } // namespace facebook::velox::exec

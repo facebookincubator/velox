@@ -51,7 +51,7 @@ void WindowPartition::extractColumn(
     vector_size_t resultOffset,
     const VectorPtr& result) const {
   RowContainer::extractColumn(
-      partition_.data() + partitionOffset - offsetInPartition_,
+      partition_.data() + partitionOffset - offsetInPartition(),
       numRows,
       columns_[columnIndex],
       resultOffset,
@@ -163,8 +163,8 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
       peerEnd = i;
       while (peerEnd <= lastPartitionRow) {
         if (peerCompare(
-                partition_[peerStart - offsetInPartition_],
-                partition_[peerEnd - offsetInPartition_])) {
+                partition_[peerStart - offsetInPartition()],
+                partition_[peerEnd - offsetInPartition()])) {
           break;
         }
         peerEnd++;

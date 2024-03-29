@@ -24,16 +24,6 @@
 
 namespace facebook::velox::exec {
 
-/// The processing unit for calculating the window function in a streaming
-/// manner. kRow indicates that the calculation begins as soon as rows are
-/// available within a single partition, without waiting for all data in the
-/// partition to be ready. kPartition indicates that the calculation begins only
-/// when all rows in a partition are ready.
-enum class ProcessingUnit {
-  kPartition,
-  kRow,
-};
-
 class WindowPartition {
  public:
   /// The WindowPartition is used by the Window operator and WindowFunction
@@ -46,41 +36,52 @@ class WindowPartition {
   /// the columns in 'data' for use with the spiller.
   /// 'sortKeyInfo' : Order by columns used by the the Window operator. Used to
   /// get peer rows from the input partition.
-  /// 'processingUnit' : The processing unit: kPartition or kRow.
+  /// 'supportRowLevelStreaming' : Whether support row level streaming or not.
   WindowPartition(
       RowContainer* data,
       const folly::Range<char**>& rows,
       const std::vector<column_index_t>& inputMapping,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo,
-      ProcessingUnit processingUnit = ProcessingUnit::kPartition);
+      bool supportRowLevelStreaming = false);
 
   /// Returns the number of rows in the current WindowPartition.
   vector_size_t numRows() const {
-    return partition_.size() + offsetInPartition_;
+    if (supportRowLevelStreaming_) {
+      if (currentPartition_ == -1) {
+        return 0;
+      } else {
+        return partition_.size() + partitionStartRows_[currentPartition_];
+      }
+    } else {
+      return partition_.size();
+    }
   }
 
   vector_size_t offsetInPartition() const {
-    return offsetInPartition_;
+    if (supportRowLevelStreaming_) {
+      return partitionStartRows_[currentPartition_];
+    } else {
+      return 0;
+    }
   }
 
   bool supportRowLevelStreaming() {
-    return processingUnit_ == ProcessingUnit::kRow;
+    return supportRowLevelStreaming_;
   }
 
-  void insertNewBatch(const std::vector<char*>& inputRows) {
-    rows_.push_back(inputRows);
+  void setInputRowsFinished() {
+    inputRowsFinished_ = true;
   }
 
-  void setTotalNum(const vector_size_t& num) {
-    totalNum_ = num;
-  }
+  void addNewRows(std::vector<char*> rows);
 
-  bool buildNextBatch();
+  bool buildNextRows();
 
-  bool isFinished() {
-    return (processingUnit_ == ProcessingUnit::kPartition) ||
-        (totalNum_ == processedNum_);
+  bool processFinished() {
+    return (!supportRowLevelStreaming_) ||
+        (inputRowsFinished_ &&
+         currentPartition_ == partitionStartRows_.size() - 2);
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -229,21 +230,19 @@ class WindowPartition {
   // ORDER BY column info for this partition.
   const std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
 
-  // The offset of every batch in partition.
-  vector_size_t offsetInPartition_ = 0;
+  // Whether support row level streaming.
+  bool supportRowLevelStreaming_ = false;
 
-  // The processed num in current partition.
-  vector_size_t processedNum_ = 0;
+  // The input rows is finished.
+  bool inputRowsFinished_ = false;
 
-  ProcessingUnit processingUnit_ = ProcessingUnit::kPartition;
+  // Add new rows in WindowPartition.
+  std::vector<char*> sortedRows_;
 
-  // Add new batch in WindowPartition.
-  std::vector<std::vector<char*>> rows_;
+  // Indices of the start row (in sortedRows_) of each partitial partition.
+  std::vector<vector_size_t> partitionStartRows_;
 
-  // The batch index in WindowPartition.
-  vector_size_t currentBatchIndex_ = 0;
-
-  // The total num in WindowPartition.
-  vector_size_t totalNum_ = 0;
+  // Current partial partition being output.
+  vector_size_t currentPartition_ = -1;
 };
 } // namespace facebook::velox::exec
