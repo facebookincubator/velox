@@ -63,9 +63,7 @@ struct ExtremeValueFunction {
       const null_free_arg_type<Variadic<TInput>>& inputs) {
     // ensure that input size is greater than 0
     if (inputs.size() == 0) {
-      VELOX_USER_FAIL(
-          "Invalid number of argument to {}",
-          isLeast ? "least()" : "greatest()");
+      return false;
     }
 
     auto currentValue = inputs[0];
