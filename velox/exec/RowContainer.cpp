@@ -914,6 +914,18 @@ void RowContainer::clear() {
   firstFreeRow_ = nullptr;
 }
 
+void RowContainer::clearNextRowVectors() {
+  if (hasDuplicateRows_) {
+    constexpr int32_t kBatch = 1000;
+    std::vector<char*> rows(kBatch);
+    RowContainerIterator iter;
+    while (auto numRows = listRows(&iter, kBatch, rows.data())) {
+      freeNextRowVectors(folly::Range<char**>(rows.data(), numRows), true);
+    }
+    hasDuplicateRows_ = false;
+  }
+}
+
 void RowContainer::setProbedFlag(char** rows, int32_t numRows) {
   for (auto i = 0; i < numRows; i++) {
     // Row may be null in case of a FULL join.

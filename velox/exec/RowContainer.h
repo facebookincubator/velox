@@ -680,6 +680,9 @@ class RowContainer {
   /// Resets the state to be as after construction. Frees memory for payload.
   void clear();
 
+  /// Frees memory for next row vectors.
+  void clearNextRowVectors();
+
   int32_t compareRows(
       const char* left,
       const char* right,

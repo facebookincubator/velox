@@ -446,6 +446,15 @@ class HashTable : public BaseHashTable {
       memory::MemoryPool* pool,
       const std::shared_ptr<velox::HashStringAllocator>& stringArena = nullptr);
 
+  ~HashTable() {
+    if (otherTables_.size() > 0) {
+      rows_->clearNextRowVectors();
+      for (auto i = 0; i < otherTables_.size(); ++i) {
+        otherTables_[i]->rows()->clearNextRowVectors();
+      }
+    }
+  }
+
   static std::unique_ptr<HashTable> createForAggregation(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       const std::vector<Accumulator>& accumulators,
