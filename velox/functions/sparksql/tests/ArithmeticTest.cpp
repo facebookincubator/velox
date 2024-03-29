@@ -438,67 +438,48 @@ TEST_F(ArithmeticTest, isNanDouble) {
 }
 
 TEST_F(ArithmeticTest, normalizeNanFloat) {
-  const auto normalizeNan = [&](std::optional<float> a) {
-    return evaluateOnce<float>("normalize_nan(c0)", a);
+  const auto normalizeNan = [&](float a) {
+    return evaluateOnce<float>("normalize_nan(c0)", std::optional<float>{a})
+        .value();
   };
 
-  const auto hasher = [&](std::optional<float> f) {
-    return folly::hasher<float>()(f.value());
+  const auto toInt32 = [&](float a) {
+    uint32_t fInt;
+    std::memcpy(&fInt, &a, sizeof(a));
+    return fInt;
   };
 
-  const auto toInt64 = [&](std::optional<float> f) -> int64_t {
-    return f.value();
-  };
-
-  EXPECT_EQ(toInt64(0.0f), toInt64(normalizeNan(0.0f)));
-  EXPECT_EQ(toInt64(0.0f), toInt64(normalizeNan(-0.0f)));
-  EXPECT_EQ(toInt64(1.0f), toInt64(normalizeNan(1.0f)));
-  // folly::hasher<float>()(kNan) != folly::hasher<float>()(0.0f / 0.0f)
-  // toInt64(kNan) != toInt64(0.0f / 0.0f)
-  EXPECT_EQ(toInt64(normalizeNan(kNan)), toInt64(normalizeNan(kNan)));
-  EXPECT_EQ(toInt64(normalizeNan(kNan)), toInt64(normalizeNan(0.0f / 0.0f)));
-  EXPECT_EQ(toInt64(normalizeNan(kNan)), toInt64(normalizeNan(kInf - kInf)));
-
-  EXPECT_EQ(hasher(0.0f), hasher(normalizeNan(0.0f)));
-  EXPECT_EQ(hasher(0.0f), hasher(normalizeNan(-0.0f)));
-  EXPECT_EQ(hasher(1.0f), hasher(normalizeNan(1.0f)));
-  EXPECT_EQ(hasher(normalizeNan(kNan)), hasher(normalizeNan(kNan)));
-  EXPECT_EQ(hasher(normalizeNan(kNan)), hasher(normalizeNan(0.0f / 0.0f)));
-  EXPECT_EQ(hasher(normalizeNan(kNan)), hasher(normalizeNan(kInf - kInf)));
+  EXPECT_EQ(0.0f, normalizeNan(0.0f));
+  EXPECT_EQ(0.0f, normalizeNan(-0.0f));
+  EXPECT_EQ(1.0f, normalizeNan(1.0f));
+  EXPECT_EQ(
+      toInt32(kNan),
+      toInt32(normalizeNan(std::numeric_limits<float>::signaling_NaN())));
+  EXPECT_EQ(toInt32(kNan), toInt32(normalizeNan(std::nanf("1"))));
+  EXPECT_EQ(toInt32(kNan), toInt32(normalizeNan(std::nanf("2"))));
 }
 
 TEST_F(ArithmeticTest, normalizeNanDouble) {
-  const auto normalizeNan = [&](std::optional<double> a) {
-    return evaluateOnce<double>("normalize_nan(c0)", a);
+  const auto normalizeNan = [&](double a) {
+    return evaluateOnce<double>("normalize_nan(c0)", std::optional<double>{a})
+        .value();
   };
 
-  const auto hasher = [&](std::optional<double> f) {
-    return folly::hasher<double>()(f.value());
+  const auto toInt64 = [&](double a) {
+    uint64_t fInt;
+    std::memcpy(&fInt, &a, sizeof(a));
+    return fInt;
   };
 
-  const auto toInt64 = [&](std::optional<double> f) -> int64_t {
-    return f.value();
-  };
+  EXPECT_EQ(0.0, normalizeNan(0.0));
+  EXPECT_EQ(0.0, normalizeNan(-0.0));
+  EXPECT_EQ(1.0, normalizeNan(1.0));
 
-  EXPECT_EQ(toInt64(0.0), toInt64(normalizeNan(0.0)));
-  EXPECT_EQ(toInt64(0.0), toInt64(normalizeNan(-0.0)));
-  EXPECT_EQ(toInt64(1.0), toInt64(normalizeNan(1.0)));
   EXPECT_EQ(
-      toInt64(normalizeNan(kNanDouble)), toInt64(normalizeNan(kNanDouble)));
-  EXPECT_EQ(
-      toInt64(normalizeNan(kNanDouble)), toInt64(normalizeNan(0.0 / 0.0)));
-  EXPECT_EQ(
-      toInt64(normalizeNan(kNanDouble)),
-      toInt64(normalizeNan(kInfDouble - kInfDouble)));
-
-  EXPECT_EQ(hasher(0.0), hasher(normalizeNan(0.0)));
-  EXPECT_EQ(hasher(0.0), hasher(normalizeNan(-0.0)));
-  EXPECT_EQ(hasher(1.0), hasher(normalizeNan(1.0)));
-  EXPECT_EQ(hasher(normalizeNan(kNanDouble)), hasher(normalizeNan(kNanDouble)));
-  EXPECT_EQ(hasher(normalizeNan(kNanDouble)), hasher(normalizeNan(0.0 / 0.0)));
-  EXPECT_EQ(
-      hasher(normalizeNan(kNanDouble)),
-      hasher(normalizeNan(kInfDouble - kInfDouble)));
+      toInt64(kNanDouble),
+      toInt64(normalizeNan(std::numeric_limits<double>::signaling_NaN())));
+  EXPECT_EQ(toInt64(kNanDouble), toInt64(normalizeNan(std::nan("1"))));
+  EXPECT_EQ(toInt64(kNanDouble), toInt64(normalizeNan(std::nan("2"))));
 }
 
 TEST_F(ArithmeticTest, hexWithBigint) {

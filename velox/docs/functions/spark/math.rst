@@ -154,9 +154,14 @@ Mathematical Functions
 
 .. spark:function:: normalize_nan(x) -> [same as x]
 
-    Normalize NaNs. This function ensures the generation of a single hash value 
-    for different NaNs through the hash functions. Spark utilizes this function 
-    to prevent erroneous aggregation or joining when NaN keys are involved.
+    In IEEE 754 any value with all bits of the exponent set and at least one 
+    bit of the fraction set represents a NaN. Therefore there can be many 
+    different NaN representations, including quiet and signaling NaNs with sign 
+    bit set or not.
+
+    If x is not a NaN, returns x unmodified. Otherwise, returns 
+    `std::numeric_limits<float>::quiet_NaN()` or `std::numeric_limits<double>::quiet_NaN()` 
+    based on type of x.
     Supported types are: REAL, DOUBLE.
 
 .. spark:function:: not(x) -> boolean
