@@ -17,9 +17,21 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/prestosql/Cardinality.h"
+#include "velox/functions/prestosql/GreatestLeast.h"
 #include "velox/functions/prestosql/InPredicate.h"
 
 namespace facebook::velox::functions {
+
+template <typename T>
+inline void registerGreatestFunction(const std::string& prefix) {
+  registerFunction<GreatestFunction, T, Variadic<T>>({prefix + "greatest"});
+}
+
+template <typename T>
+inline void registerLeastFunction(const std::string& prefix) {
+  registerFunction<LeastFunction, T, Variadic<T>>({prefix + "least"});
+}
+
 extern void registerSubscriptFunction(
     const std::string& name,
     bool enableCaching);
@@ -48,8 +60,27 @@ void registerGeneralFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "reduce");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_filter, prefix + "filter");
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_least, prefix + "least");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_greatest, prefix + "greatest");
+  registerGreatestFunction<bool>(prefix);
+  registerGreatestFunction<int8_t>(prefix);
+  registerGreatestFunction<int16_t>(prefix);
+  registerGreatestFunction<int32_t>(prefix);
+  registerGreatestFunction<int64_t>(prefix);
+  registerGreatestFunction<int128_t>(prefix);
+  registerGreatestFunction<float>(prefix);
+  registerGreatestFunction<double>(prefix);
+  registerGreatestFunction<StringView>(prefix);
+  registerGreatestFunction<Timestamp>(prefix);
+
+  registerLeastFunction<bool>(prefix);
+  registerLeastFunction<int8_t>(prefix);
+  registerLeastFunction<int16_t>(prefix);
+  registerLeastFunction<int32_t>(prefix);
+  registerLeastFunction<int64_t>(prefix);
+  registerLeastFunction<int128_t>(prefix);
+  registerLeastFunction<float>(prefix);
+  registerLeastFunction<double>(prefix);
+  registerLeastFunction<StringView>(prefix);
+  registerLeastFunction<Timestamp>(prefix);
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_typeof, prefix + "typeof");
 
