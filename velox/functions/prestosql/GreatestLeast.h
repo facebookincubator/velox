@@ -59,7 +59,7 @@ struct ExtremeValueFunction {
   //   }
   // }
 
-  // Properly handles multi-byte characters.
+  // expect all input to be not null, else the result is null
   FOLLY_ALWAYS_INLINE bool callNullFree(
       out_type<TInput>& result,
       const null_free_arg_type<Variadic<TInput>>& inputs) {
