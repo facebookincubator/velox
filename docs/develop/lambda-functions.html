@@ -209,29 +209,16 @@ the signature of the “filter” function:</p>
 </section>
 <section id="testing">
 <h2>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h2>
-<p>Testing framework doesn’t support Presto SQL lambda expressions, e.g. one cannot
-evaluate “filter(a, x - &gt;x &gt;= b)” expression directly. Instead, use the
-registerLambda helper method of the FunctionBaseTest class to register lambda
-expression and give it a name, then use that name to specify the lambda
-parameter. Here is an example that evaluates “filter(a, x -&gt;x &gt;= b)” expression
-in a test:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">rowType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ROW</span><span class="p">({</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;b&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">ARRAY</span><span class="p">(</span><span class="n">BIGINT</span><span class="p">()),</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">()});</span>
-
-<span class="n">registerLambda</span><span class="p">(</span><span class="s">&quot;lambda&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">ROW</span><span class="p">({</span><span class="s">&quot;x&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">BIGINT</span><span class="p">()}),</span><span class="w"> </span><span class="n">rowType</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;x &gt;= b&quot;</span><span class="p">));</span>
-
-<span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span>
-<span class="w">    </span><span class="n">evaluate</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="p">(</span><span class="s">&quot;filter(a, function(&#39;lambda&#39;))&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">);</span>
+<p>Testing framework fully supports evaluating lambda expression. Just write
+an expression as you would in Presto SQL:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span><span class="s">&quot;filter(a, x -&gt; (x &gt;= b))&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>The first argument to registerLambda is the name for the lambda. This name can
-later be used to refer to the lambda in a function call.</p>
-<p>The second argument is the signature of the lambda, e.g. the list of lambda
-parameters along with their names and types.</p>
-<p>The third argument is the type of the input data to the overall expression. This
-is used to resolve the types of captures.</p>
-<p>The last argument is the lambda body as SQL expression.</p>
-<p>To specify lambda expression as an argument of a lambda function use function
-(‘&lt;lambda-name&gt;’) syntax.</p>
+<p>In the above, ‘data’ is expected to have a column “a” of type array and
+column “b” of type matching array element type. For example, “a” can be
+an array(integer) and “b” an integer.</p>
+<p>The only caveat is you need to put lambda body in parentheses.
+<cite>x -&gt; (x &gt;= b)</cite> works, but <cite>x -&gt; x &gt;= b</cite> doesn’t.</p>
 </section>
 </section>
 
