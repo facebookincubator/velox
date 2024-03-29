@@ -201,8 +201,8 @@ TEST(AsyncSourceTest, close) {
   dateCounter.reset();
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 0);
-  countAsyncSource.close();
 
+  countAsyncSource.close();
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 1);
   DataCounter::reset();
@@ -218,8 +218,8 @@ TEST(AsyncSourceTest, close) {
   thread.join();
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 0);
-  asyncSource->close();
 
+  asyncSource->close();
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 1);
   DataCounter::reset();
@@ -239,8 +239,8 @@ TEST(AsyncSourceTest, close) {
   while (!started) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  sleepAsyncSource->close();
 
+  sleepAsyncSource->close();
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 1);
   thread1.join();
