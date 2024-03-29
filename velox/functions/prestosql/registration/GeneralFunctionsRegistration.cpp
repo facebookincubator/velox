@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <type/StringView.h>
 #include "velox/expression/RegisterSpecialForm.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/IsNull.h"
@@ -24,12 +25,14 @@ namespace facebook::velox::functions {
 
 template <typename T>
 inline void registerGreatestFunction(const std::string& prefix) {
-  registerFunction<GreatestFunction, T, Variadic<T>>({prefix + "greatest"});
+  registerFunction<ParameterBinder<GreatestFunction, T>, T, Variadic<T>>(
+      {prefix + "greatest"});
 }
 
 template <typename T>
 inline void registerLeastFunction(const std::string& prefix) {
-  registerFunction<LeastFunction, T, Variadic<T>>({prefix + "least"});
+  registerFunction<ParameterBinder<LeastFunction, T>, T, Variadic<T>>(
+      {prefix + "least"});
 }
 
 extern void registerSubscriptFunction(
@@ -68,7 +71,10 @@ void registerGeneralFunctions(const std::string& prefix) {
   registerGreatestFunction<int128_t>(prefix);
   registerGreatestFunction<float>(prefix);
   registerGreatestFunction<double>(prefix);
-  registerGreatestFunction<StringView>(prefix);
+  registerGreatestFunction<Varchar>(prefix);
+  registerGreatestFunction<LongDecimal<P1, S1>>(prefix);
+  registerGreatestFunction<ShortDecimal<P1, S1>>(prefix);
+  registerGreatestFunction<Date>(prefix);
   registerGreatestFunction<Timestamp>(prefix);
 
   registerLeastFunction<bool>(prefix);
@@ -79,7 +85,10 @@ void registerGeneralFunctions(const std::string& prefix) {
   registerLeastFunction<int128_t>(prefix);
   registerLeastFunction<float>(prefix);
   registerLeastFunction<double>(prefix);
-  registerLeastFunction<StringView>(prefix);
+  registerLeastFunction<Varchar>(prefix);
+  registerLeastFunction<LongDecimal<P1, S1>>(prefix);
+  registerLeastFunction<ShortDecimal<P1, S1>>(prefix);
+  registerLeastFunction<Date>(prefix);
   registerLeastFunction<Timestamp>(prefix);
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_typeof, prefix + "typeof");

@@ -24,14 +24,14 @@
 
 namespace facebook::velox::functions {
 
-template <typename TExec, bool isLeast>
+template <typename TExec, typename TInput, bool isLeast>
 struct ExtremeValueFunction;
 
-template <typename TExec>
-using LeastFunction = ExtremeValueFunction<TExec, true>;
+template <typename TExec, typename TInput>
+using LeastFunction = ExtremeValueFunction<TExec, TInput, true>;
 
-template <typename TExec>
-using GreatestFunction = ExtremeValueFunction<TExec, false>;
+template <typename TExec, typename TInput>
+using GreatestFunction = ExtremeValueFunction<TExec, TInput, false>;
 
 /**
  * This class implements two functions:
@@ -42,23 +42,24 @@ using GreatestFunction = ExtremeValueFunction<TExec, false>;
  * least(value1, value2, ..., valueN) → [same as input]
  * Returns the smallest of the provided values.
  **/
-template <typename TExec, bool isLeast>
+template <typename TExec, typename TInput, bool isLeast>
 struct ExtremeValueFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   // For double, presto should throw error if input is Nan
-  template <typename T>
-  void checkNan(const T& value) const {
-    if constexpr (std::is_same_v<T, TypeTraits<TypeKind::DOUBLE>::NativeType>) {
-      if (std::isnan(value)) {
-        VELOX_USER_FAIL(
-            "Invalid argument to {}: NaN", isLeast ? "least()" : "greatest()");
-      }
-    }
-  }
+  // void checkNan(const TInput& value) const {
+  //   if constexpr (std::is_same_v<
+  //                     TInput,
+  //                     TypeTraits<TypeKind::DOUBLE>::NativeType>) {
+  //     if (std::isnan(value)) {
+  //       VELOX_USER_FAIL(
+  //           "Invalid argument to {}: NaN", isLeast ? "least()" :
+  //           "greatest()");
+  //     }
+  //   }
+  // }
 
   // Properly handles multi-byte characters.
-  template <typename TInput>
   FOLLY_ALWAYS_INLINE bool callNullFree(
       out_type<TInput>& result,
       const null_free_arg_type<Variadic<TInput>>& inputs) {
@@ -69,12 +70,29 @@ struct ExtremeValueFunction {
           isLeast ? "least()" : "greatest()");
     }
 
-    TInput currentValue = inputs[0];
-    checkNan(currentValue);
+    auto currentValue = inputs[0];
+    // checkNan(currentValue);
+    if constexpr (std::is_same_v<
+                      TInput,
+                      TypeTraits<TypeKind::DOUBLE>::NativeType>) {
+      if (std::isnan(currentValue)) {
+        VELOX_USER_FAIL(
+            "Invalid argument to {}: NaN", isLeast ? "least()" : "greatest()");
+      }
+    }
 
     for (auto i = 1; i < inputs.size(); ++i) {
-      TInput candidateValue = inputs[i];
-      checkNan(candidateValue);
+      auto candidateValue = inputs[i];
+      // checkNan(candidateValue);
+      if constexpr (std::is_same_v<
+                        TInput,
+                        TypeTraits<TypeKind::DOUBLE>::NativeType>) {
+        if (std::isnan(candidateValue)) {
+          VELOX_USER_FAIL(
+              "Invalid argument to {}: NaN",
+              isLeast ? "least()" : "greatest()");
+        }
+      }
 
       if constexpr (isLeast) {
         if (candidateValue < currentValue) {
