@@ -1374,7 +1374,7 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
     try {
       while (cursor->moveNext()) {
       };
-    } catch (VeloxRuntimeError& ex) {
+    } catch (VeloxRuntimeError&) {
     }
   });
 

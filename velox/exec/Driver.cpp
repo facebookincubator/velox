@@ -365,7 +365,7 @@ void Driver::enqueueInternal() {
     auto stopGuard = folly::makeGuard([&]() { opCallStatus_.stop(); });    \
     call;                                                                  \
     recordSilentThrows(*operatorPtr);                                      \
-  } catch (const VeloxException& e) {                                      \
+  } catch (const VeloxException&) {                                        \
     throw;                                                                 \
   } catch (const std::exception& e) {                                      \
     VELOX_FAIL(                                                            \

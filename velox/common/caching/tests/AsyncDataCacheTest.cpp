@@ -225,7 +225,7 @@ class AsyncDataCacheTest : public testing::Test {
       EXPECT_TRUE(pin.entry()->isExclusive());
       pin.entry()->setPrefetch();
       return pin;
-    } catch (const VeloxException& e) {
+    } catch (const VeloxException&) {
       return CachePin();
     };
   }
@@ -333,12 +333,12 @@ class TestingCoalescedSsdLoad : public TestingCoalescedLoad {
     try {
       file.load(toLoad, pins);
       VELOX_CHECK(!injectError_, "Testing error");
-    } catch (std::exception& e) {
+    } catch (std::exception&) {
       try {
         for (const auto& ssdPin : toLoad) {
           file.erase(RawFileCacheKey{fileNum, ssdPin.run().offset()});
         }
-      } catch (const std::exception& e2) {
+      } catch (const std::exception&) {
         // Ignore error.
       }
       throw;
@@ -444,7 +444,7 @@ void AsyncDataCacheTest::loadBatch(
     executor()->add([load, semaphore]() {
       try {
         load->loadOrFuture(nullptr);
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
         // Expecting error, ignore.
       };
       if (semaphore) {
@@ -473,7 +473,7 @@ void AsyncDataCacheTest::loadBatch(
     executor()->add([load, semaphore]() {
       try {
         load->loadOrFuture(nullptr);
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
         // Expecting error, ignore.
       };
       if (semaphore) {
@@ -564,7 +564,7 @@ void AsyncDataCacheTest::loadLoop(
           loadBatch(fileNum, batch, injectError);
           try {
             checkBatch(fileNum, batch, injectError);
-          } catch (std::exception& e) {
+          } catch (std::exception&) {
             continue;
           }
           batch.clear();

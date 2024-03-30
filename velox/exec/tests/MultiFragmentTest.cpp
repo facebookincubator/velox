@@ -1917,7 +1917,7 @@ TEST_F(MultiFragmentTest, earlyTaskFailure) {
     if (internalFailure) {
       try {
         VELOX_FAIL("memoryAbortTest");
-      } catch (const VeloxRuntimeError& e) {
+      } catch (const VeloxRuntimeError&) {
         finalSortTask->pool()->abort(std::current_exception());
       }
     } else {
