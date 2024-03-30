@@ -60,7 +60,7 @@ HiveConnector::HiveConnector(
       fileHandleFactory_(
           hiveConfig_->isFileHandleCacheEnabled()
               ? std::make_unique<
-                    SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(
+                    SimpleLRUCache<std::tuple<const std::string, const std::string, const std::string>, std::shared_ptr<FileHandle>>>(
                     hiveConfig_->numCacheFileHandles())
               : nullptr,
           std::make_unique<FileHandleGenerator>(config)),

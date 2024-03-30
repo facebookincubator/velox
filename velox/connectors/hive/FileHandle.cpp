@@ -34,9 +34,7 @@ std::string groupName(const std::string& filename) {
 } // namespace
 
 std::shared_ptr<FileHandle> FileHandleGenerator::operator()(
-    const std::string& filename,
-    const std::string& fileSize = "",
-    const std::string& modificationTime = "") {
+    std::tuple<const std::string, const std::string, const std::string> params) {
   // We have seen cases where drivers are stuck when creating file handles.
   // Adding a trace here to spot this more easily in future.
   process::TraceContext trace("FileHandleGenerator::operator()");
@@ -46,13 +44,13 @@ std::shared_ptr<FileHandle> FileHandleGenerator::operator()(
     MicrosecondTimer timer(&elapsedTimeUs);
     fileHandle = std::make_shared<FileHandle>();
     filesystems::FileOptions options;
-    options.values["fileSize"] = fileSize;
+    options.values["fileSize"] = std::get<1>(params);
     // Add length and modification time here to create a unique handle?
-    fileHandle->file = filesystems::getFileSystem(filename, properties_)
-                           ->openFileForRead(filename, options);
-    fileHandle->uuid = StringIdLease(fileIds(), filename);
-    fileHandle->groupId = StringIdLease(fileIds(), groupName(filename));
-    VLOG(1) << "Generating file handle for: " << filename
+    fileHandle->file = filesystems::getFileSystem(std::get<0>(params), properties_)
+                           ->openFileForRead(std::get<0>(params), options);
+    fileHandle->uuid = StringIdLease(fileIds(), std::get<0>(params));
+    fileHandle->groupId = StringIdLease(fileIds(), groupName(std::get<0>(params)));
+    VLOG(1) << "Generating file handle for: " << std::get<0>(params)
             << " uuid: " << fileHandle->uuid.id();
   }
   RECORD_HISTOGRAM_METRIC_VALUE(
