@@ -16,8 +16,7 @@
 
 #pragma once
 
-#include "velox/exec/SimpleAggregateAdapter.h"
-#include "velox/functions/lib/aggregates/ValueList.h"
+#include <string>
 
 namespace facebook::velox::functions::aggregate::sparksql {
 

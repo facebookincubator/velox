@@ -16,6 +16,9 @@
 
 #include "velox/functions/sparksql/aggregates/CollectListAggregate.h"
 
+#include "velox/exec/SimpleAggregateAdapter.h"
+#include "velox/functions/lib/aggregates/ValueList.h"
+
 using namespace facebook::velox::aggregate;
 using namespace facebook::velox::exec;
 
@@ -48,8 +51,6 @@ class CollectListAggregate {
   struct AccumulatorType {
     ValueList elements_;
 
-    AccumulatorType() = delete;
-
     explicit AccumulatorType(HashStringAllocator* /*allocator*/)
         : elements_{} {}
 
@@ -81,7 +82,7 @@ class CollectListAggregate {
         bool /*nonNullGroup*/,
         exec::out_type<IntermediateType>& out) {
       // If the group's accumulator is null, the corresponding intermediate
-      // result is an empty list.
+      // result is an empty array.
       copyValueListToArrayWriter(out, elements_);
       return true;
     }
@@ -90,7 +91,7 @@ class CollectListAggregate {
         bool /*nonNullGroup*/,
         exec::out_type<OutputType>& out) {
       // If the group's accumulator is null, the corresponding result is an
-      // empty list.
+      // empty array.
       copyValueListToArrayWriter(out, elements_);
       return true;
     }
