@@ -727,6 +727,12 @@ void HashTable<ignoreNullKeys>::allocateTables(uint64_t size) {
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::clear(bool freeTable) {
+  if (otherTables_.size() > 0) {
+    rows_->clearNextRowVectors();
+    for (auto i = 0; i < otherTables_.size(); ++i) {
+      otherTables_[i]->rows()->clearNextRowVectors();
+    }
+  }
   for (auto* rowContainer : allRows()) {
     rowContainer->clear();
   }
