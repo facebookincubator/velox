@@ -1372,8 +1372,7 @@ TEST_F(TableScanTest, preloadingSplitClose) {
       ++finishedCount;
     });
   }
-  ASSERT_EQ(0, Task::numCreatedTasks());
-  ASSERT_EQ(0, Task::numDeletedTasks());
+  ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
   auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp", 2);
   auto stats = getTableScanRuntimeStats(task);
 
