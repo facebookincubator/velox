@@ -63,7 +63,8 @@ class FileHandleGenerator {
   FileHandleGenerator(std::shared_ptr<const Config> properties)
       : properties_(std::move(properties)) {}
   std::shared_ptr<FileHandle> operator()(
-    std::tuple<const std::string, const std::string, const std::string> params);
+      std::tuple<const std::string, const std::string, const std::string>
+          params);
 
  private:
   const std::shared_ptr<const Config> properties_;

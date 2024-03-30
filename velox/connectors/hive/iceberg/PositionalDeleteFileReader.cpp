@@ -94,7 +94,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       deleteSplit_);
 
   auto deleteFileHandle =
-      fileHandleFactory_->generate(make_tuple(deleteFile_.filePath, "", "")).second;
+      fileHandleFactory_->generate(make_tuple(deleteFile_.filePath, "", ""))
+          .second;
   auto deleteFileInput = createBufferedInput(
       *deleteFileHandle,
       deleteReaderOpts,
