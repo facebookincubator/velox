@@ -647,7 +647,18 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     VELOX_CHECK_EQ(args.size(), 1);
     DecodedVector decoded(*args[0], rows);
     auto rowVec = decoded.base()->as<RowVector>();
-    VELOX_CHECK(rowVec);
+    if constexpr (checkIntermediateInputs) {
+      VELOX_USER_CHECK(rowVec);
+      for (int i = kK; i <= kMaxValue; ++i) {
+        VELOX_USER_CHECK(rowVec->childAt(i)->isFlatEncoding());
+      }
+      for (int i = kItems; i <= kLevels; ++i) {
+        VELOX_USER_CHECK(
+            rowVec->childAt(i)->encoding() == VectorEncoding::Simple::ARRAY);
+      }
+    } else {
+      VELOX_CHECK(rowVec);
+    }
 
     const SelectivityVector* baseRows = &rows;
     SelectivityVector innerRows{rowVec->size(), false};
