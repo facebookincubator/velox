@@ -28,7 +28,7 @@ bool hasSingleReferencedBuffers(const FlatVector<StringView>& vector) {
     }
   }
   return true;
-};
+}
 } // namespace
 
 bool prepareFlatResultsVector(
@@ -65,6 +65,6 @@ bool isAscii(BaseVector* vector, const SelectivityVector& rows) {
   }
   VELOX_UNREACHABLE();
   return false;
-};
+}
 
 } // namespace facebook::velox::functions
