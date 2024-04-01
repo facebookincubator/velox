@@ -122,7 +122,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           # hardcode ref without broken pr
-          ref: 'main'
+          # Only for test purposes
+          ref: "${{ inputs.ref }}"
           path: velox_main
 
       - name: Build PyVelox
@@ -652,4 +653,3 @@ jobs:
         run: |
           cat /tmp/signatures/presto_errors
           exit 1
-
