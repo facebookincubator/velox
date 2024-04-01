@@ -146,6 +146,40 @@ hash build operators. This stat is only reported by the HashBuild operator.</p><
 </tr>
 </thead>
 <tbody>
+<tr class="row-even"><td><p>spillFillTime</p></td>
+<td><p>microseconds</p></td>
+<td><p>The time spent on filling rows for spilling.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spillSortTime</p></td>
+<td><p>microseconds</p></td>
+<td><p>The time spent on sorting rows for spilling.</p></td>
+</tr>
+<tr class="row-even"><td><p>spillSerializationTime</p></td>
+<td><p>microseconds</p></td>
+<td><p>The time spent on serializing rows for spilling.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spillFlushTime</p></td>
+<td><p>microseconds</p></td>
+<td><p>The time spent on copy out serialized rows for disk write. If compression
+is enabled, this includes the compression time.</p></td>
+</tr>
+<tr class="row-even"><td><p>spillWrites</p></td>
+<td></td>
+<td><p>The number of spill writer flushes, equivalent to number of write calls to
+underlying filesystem.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spillWriteTime</p></td>
+<td><p>microseconds</p></td>
+<td><p>The time spent on writing spilled rows to disk.</p></td>
+</tr>
+<tr class="row-even"><td><p>spillRuns</p></td>
+<td></td>
+<td><p>The number of times that spilling runs on an operator.</p></td>
+</tr>
+<tr class="row-odd"><td><p>exceededMaxSpillLevel</p></td>
+<td></td>
+<td><p>The number of times that an operator exceeds the max spill limit.</p></td>
+</tr>
 <tr class="row-even"><td><p>spillReadBytes</p></td>
 <td><p>bytes</p></td>
 <td><p>The number of bytes read from spilled files.</p></td>
