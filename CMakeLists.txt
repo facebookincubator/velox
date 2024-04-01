@@ -540,7 +540,7 @@ include_directories(SYSTEM velox/external)
 if(NOT VELOX_DISABLE_GOOGLETEST)
   set(gtest_SOURCE AUTO)
   resolve_dependency(gtest)
-  set(VELOX_GTEST_INCUDE_DIR
+  set(VELOX_GTEST_INCLUDE_DIR
       "${gtest_SOURCE_DIR}/googletest/include"
       PARENT_SCOPE)
 endif()
