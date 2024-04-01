@@ -628,14 +628,9 @@ implement the “apply” method.</p>
 process. This set may not include all the rows. By default, a vector function
 is assumed to have the default null behavior, e.g. null in any input produces
 a null result. In this case, the expression evaluation engine will exclude
-rows with nulls from the “rows” specified in the call to “apply”. If a
-function has a different behavior for null inputs, it must override the
-isDefaultNullBehavior method to return false.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">isDefaultNullBehavior</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
-<span class="p">}</span>
-</pre></div>
-</div>
+rows with nulls from the “rows” specified in the call to “apply”. If a function
+has a different behavior for null inputs, it must specify that during registration.
+See <a class="reference internal" href="#id1"><span class="std std-ref">vector function registration</span></a> for more details.</p>
 <p>In this case, the “rows” parameter will include rows with null inputs and the
 function will need to handle these. By default, the function can assume that
 all inputs are not null for all “rows”.</p>
@@ -678,13 +673,9 @@ of the function arguments. These vectors are not necessarily flat and may be
 dictionary or constant encoded. However, a deterministic function that takes
 a single argument and has default null behavior is guaranteed to receive its
 only input as a flat or constant vector. By default, a function is assumed to
-be deterministic. If that’s not the case, the function must override
-isDeterministic method to return false.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">isDeterministic</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
-<span class="p">}</span>
-</pre></div>
-</div>
+be deterministic. If that’s not the case, it must specify the non-deterministic
+behavior during registration. See <a class="reference internal" href="#id1"><span class="std std-ref">vector function registration</span></a>
+for more details.</p>
 <p>Note that <a class="reference internal" href="dictionary-encoding.html#decoded-vector"><span class="std std-ref">DecodedVector</span></a> can be used to get a flat vector-like interface to any
 vector. A helper class exec::DecodedArgs can be used to decode multiple arguments.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">exec</span><span class="o">::</span><span class="n">DecodedArgs</span><span class="w"> </span><span class="nf">decodedArgs</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"> </span><span class="n">context</span><span class="p">);</span>
@@ -869,19 +860,26 @@ wraps the “call” and “callNullable” methods in a try-catch and reports e
 using context.setError.</p>
 </section>
 <section id="id1">
-<h3>Registration<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<span id="id2"></span><h3>Registration<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <p>Use exec::registerVectorFunction to register a stateless vector function.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="n">registerVectorFunction</span><span class="p">(</span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">FunctionSignaturePtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">signatures</span><span class="p">,</span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">VectorFunction</span><span class="o">&gt;</span><span class="w"> </span><span class="n">func</span><span class="p">,</span>
+<span class="w">    </span><span class="n">VectorFunctionMetadata</span><span class="w"> </span><span class="n">metadata</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{},</span>
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">overwrite</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>exec::registerVectorFunction takes a name, a list of supported signatures
-and unique_ptr to an instance of the function. An optional “overwrite” flag
-specifies whether to overwrite a function if a function with the specified
-name already exists.</p>
+and unique_ptr to an instance of the function. It takes an optional ‘metadata’
+parameter that specifies whether a function is deterministic, has default null
+behavior, and other properties. A helper VectorFunctionMetadataBuilder class
+allows to easily construct ‘metadata’. For example,</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorFunctionMetadataBuilder</span><span class="p">().</span><span class="n">defaultNullBehavior</span><span class="p">(</span><span class="nb">false</span><span class="p">).</span><span class="n">build</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>An optional “overwrite” flag specifies whether to overwrite a function if a function
+with the specified name already exists.</p>
 <p>Use exec::registerStatefulVectorFunction to register a stateful vector
 function.</p>
 <p>Note: A vector function will be given precedence over a simple function during resolution time.
@@ -891,6 +889,7 @@ to a vector function over an equivalent simple function.</p>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">FunctionSignaturePtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">signatures</span><span class="p">,</span>
 <span class="w">    </span><span class="n">VectorFunctionFactory</span><span class="w"> </span><span class="n">factory</span><span class="p">,</span>
+<span class="w">    </span><span class="n">VectorFunctionMetadata</span><span class="w"> </span><span class="n">metadata</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{},</span>
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">overwrite</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -922,7 +921,7 @@ once and reuse it for all the batches of data.</p>
 </div>
 </section>
 <section id="function-signature">
-<span id="id2"></span><h3>Function signature<a class="headerlink" href="#function-signature" title="Link to this heading">¶</a></h3>
+<span id="id3"></span><h3>Function signature<a class="headerlink" href="#function-signature" title="Link to this heading">¶</a></h3>
 <p>It is recommended to use FunctionSignatureBuilder to create FunctionSignature
 instances. FunctionSignatureBuilder and FunctionSignature support Java-like
 generics, variable number of arguments and lambdas. Here are some examples.</p>
