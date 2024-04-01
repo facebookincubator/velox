@@ -368,6 +368,32 @@ void Operator::recordSpillStats() {
     common::updateGlobalMaxSpillLevelExceededCount(
         lockedSpillStats->spillMaxLevelExceededCount);
   }
+
+  if (lockedSpillStats->spillReadBytes != 0) {
+    lockedStats->addRuntimeStat(
+        kSpillReadBytes,
+        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReadBytes)});
+  }
+
+  if (lockedSpillStats->spillReads != 0) {
+    lockedStats->addRuntimeStat(
+        kSpillReads,
+        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReads)});
+  }
+
+  if (lockedSpillStats->spillReadTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        kSpillReadTimeUs,
+        RuntimeCounter{
+            static_cast<int64_t>(lockedSpillStats->spillReadTimeUs)});
+  }
+
+  if (lockedSpillStats->spillDeserializationTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        kSpillDeserializationTimeUs,
+        RuntimeCounter{static_cast<int64_t>(
+            lockedSpillStats->spillDeserializationTimeUs)});
+  }
   lockedSpillStats->reset();
 }
 
@@ -599,7 +625,12 @@ uint64_t Operator::MemoryReclaimer::reclaim(
   VELOX_CHECK_EQ(pool->name(), op_->pool()->name());
   VELOX_CHECK(
       !driver->state().isOnThread() || driver->state().isSuspended ||
-      driver->state().isTerminated);
+          driver->state().isTerminated,
+      "driverOnThread {}, driverSuspended {} driverTerminated {} {}",
+      driver->state().isOnThread(),
+      driver->state().isSuspended,
+      driver->state().isTerminated,
+      pool->name());
   VELOX_CHECK(driver->task()->pauseRequested());
 
   TestValue::adjust(

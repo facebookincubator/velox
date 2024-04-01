@@ -47,8 +47,10 @@ struct FuncOne {
 template <typename T>
 struct FuncTwo {
   template <typename T1, typename T2>
-  FOLLY_ALWAYS_INLINE bool
-  call(int64_t& /* result */, const T1& /* arg1 */, const T2& /* arg2 */) {
+  FOLLY_ALWAYS_INLINE bool callNullable(
+      int64_t& /* result */,
+      const T1* /* arg1 */,
+      const T2* /* arg2 */) {
     return true;
   }
 };
@@ -171,11 +173,6 @@ class VectorFuncFour : public velox::exec::VectorFunction {
                 .argumentType("map(K,V)")
                 .build()};
   }
-
-  // Make it non-deterministic.
-  bool isDeterministic() const override {
-    return false;
-  }
 };
 
 VELOX_DECLARE_VECTOR_FUNCTION(
@@ -193,9 +190,10 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     VectorFuncThree::signatures(),
     std::make_unique<VectorFuncThree>());
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_vector_func_four,
     VectorFuncFour::signatures(),
+    exec::VectorFunctionMetadataBuilder().deterministic(false).build(),
     std::make_unique<VectorFuncFour>());
 
 inline void registerTestFunctions() {
@@ -564,4 +562,30 @@ TEST_F(FunctionRegistryTest, resolveCast) {
       velox::VeloxRuntimeError);
 }
 
+TEST_F(FunctionRegistryTest, resolveWithMetadata) {
+  auto result = resolveFunctionWithMetadata("func_one", {VARCHAR()});
+  EXPECT_TRUE(result.has_value());
+  EXPECT_EQ(*result->first, *VARCHAR());
+  EXPECT_TRUE(result->second.defaultNullBehavior);
+  EXPECT_FALSE(result->second.deterministic);
+  EXPECT_FALSE(result->second.supportsFlattening);
+
+  result = resolveFunctionWithMetadata("func_two", {BIGINT(), INTEGER()});
+  EXPECT_TRUE(result.has_value());
+  EXPECT_EQ(*result->first, *BIGINT());
+  EXPECT_FALSE(result->second.defaultNullBehavior);
+  EXPECT_TRUE(result->second.deterministic);
+  EXPECT_FALSE(result->second.supportsFlattening);
+
+  result = resolveFunctionWithMetadata(
+      "vector_func_four", {MAP(INTEGER(), VARCHAR())});
+  EXPECT_TRUE(result.has_value());
+  EXPECT_EQ(*result->first, *ARRAY(INTEGER()));
+  EXPECT_TRUE(result->second.defaultNullBehavior);
+  EXPECT_FALSE(result->second.deterministic);
+  EXPECT_FALSE(result->second.supportsFlattening);
+
+  result = resolveFunctionWithMetadata("non-existent-function", {VARCHAR()});
+  EXPECT_FALSE(result.has_value());
+}
 } // namespace facebook::velox

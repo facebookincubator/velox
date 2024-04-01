@@ -829,10 +829,6 @@ namespace {
 // f(n) = n + rand() - non-deterministict function with a single argument
 class PlusRandomIntegerFunction : public exec::VectorFunction {
  public:
-  bool isDeterministic() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -865,15 +861,20 @@ class PlusRandomIntegerFunction : public exec::VectorFunction {
                 .build()};
   }
 };
+
+void registerPlusRandomIntegerFunction() {
+  exec::registerVectorFunction(
+      "plus_random",
+      PlusRandomIntegerFunction::signatures(),
+      std::make_unique<PlusRandomIntegerFunction>(),
+      exec::VectorFunctionMetadataBuilder().deterministic(false).build());
+}
 } // namespace
 
 // Test evaluating single-argument non-deterministic vector function on
 // constant vector. The function must be called on each row, not just one.
 TEST_P(ParameterizedExprTest, nonDeterministicVectorFunctionOnConstantInput) {
-  exec::registerVectorFunction(
-      "plus_random",
-      PlusRandomIntegerFunction::signatures(),
-      std::make_unique<PlusRandomIntegerFunction>());
+  registerPlusRandomIntegerFunction();
 
   const vector_size_t size = 1'000;
   auto row = makeRowVector({makeConstant(10, size)});
@@ -888,10 +889,7 @@ TEST_P(ParameterizedExprTest, nonDeterministicVectorFunctionOnConstantInput) {
 
 // Verify constant folding doesn't apply to non-deterministic functions.
 TEST_P(ParameterizedExprTest, nonDeterministicConstantFolding) {
-  exec::registerVectorFunction(
-      "plus_random",
-      PlusRandomIntegerFunction::signatures(),
-      std::make_unique<PlusRandomIntegerFunction>());
+  registerPlusRandomIntegerFunction();
 
   const vector_size_t size = 1'000;
   auto emptyRow = makeRowVector(ROW({}), size);
@@ -1822,10 +1820,6 @@ namespace {
 // Returns the first value of the argument vector wrapped as a constant.
 class TestingConstantFunction : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -1850,10 +1844,6 @@ class TestingConstantFunction : public exec::VectorFunction {
 // vector and indices from the second.
 class TestingDictionaryFunction : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -1904,14 +1894,17 @@ class TestingSingleArgDeterministicFunction : public exec::VectorFunction {
 };
 
 } // namespace
-VELOX_DECLARE_VECTOR_FUNCTION(
+
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_testing_constant,
     TestingConstantFunction::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<TestingConstantFunction>());
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_testing_dictionary,
     TestingDictionaryFunction::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<TestingDictionaryFunction>());
 
 VELOX_DECLARE_VECTOR_FUNCTION(
@@ -2625,6 +2618,17 @@ TEST_P(ParameterizedExprTest, constantToSql) {
   ASSERT_EQ(toSql(18'506, DATE()), "'2020-09-01'::DATE");
   ASSERT_EQ(toSql(variant::null(TypeKind::INTEGER), DATE()), "NULL::DATE");
 
+  ASSERT_EQ(toSql(2134456LL, DECIMAL(18, 2)), "'21344.56'::DECIMAL(18, 2)");
+  ASSERT_EQ(
+      toSql(variant::null(TypeKind::BIGINT), DECIMAL(18, 2)),
+      "NULL::DECIMAL(18, 2)");
+  ASSERT_EQ(
+      toSql((int128_t)1'000'000'000'000'000'000, DECIMAL(38, 2)),
+      "'10000000000000000.00'::DECIMAL(38, 2)");
+  ASSERT_EQ(
+      toSql(variant::null(TypeKind::HUGEINT), DECIMAL(38, 2)),
+      "NULL::DECIMAL(38, 2)");
+
   ASSERT_EQ(
       toSql(Timestamp(123'456, 123'000)),
       "'1970-01-02T10:17:36.000123000'::TIMESTAMP");
@@ -2781,10 +2785,6 @@ namespace {
 // A naive function that wraps the input in a dictionary vector.
 class WrapInDictionaryFunc : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return true;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -2810,10 +2810,6 @@ class WrapInDictionaryFunc : public exec::VectorFunction {
 
 class LastRowNullFunc : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -2841,11 +2837,15 @@ TEST_P(ParameterizedExprTest, dictionaryResizedInAddNulls) {
   exec::registerVectorFunction(
       "dict_wrap",
       WrapInDictionaryFunc::signatures(),
-      std::make_unique<WrapInDictionaryFunc>());
+      std::make_unique<WrapInDictionaryFunc>(),
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
+
   exec::registerVectorFunction(
       "last_row_null",
       LastRowNullFunc::signatures(),
-      std::make_unique<LastRowNullFunc>());
+      std::make_unique<LastRowNullFunc>(),
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
+
   // This test verifies an edge case where applyFunctionWithPeeling may produce
   // a result vector which is dictionary encoded and has fewer values than
   // are rows.
