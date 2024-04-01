@@ -132,7 +132,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     });
 
     auto resetSize = [&](vector_size_t row) { mutableSizes[row] = 0; };
-    auto nulls = allocateNulls(rows.size(), context.pool());
+    auto nulls = allocateNulls(decodedRowVector->size(), context.pool());
     auto* mutableNulls = nulls->asMutable<uint64_t>();
 
     if (decodedRowVector->mayHaveNulls() || keyVector->mayHaveNulls() ||
@@ -227,9 +227,13 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     }
 
     // For Presto, need construct map vector based on input nulls for possible
-    // outer expression like try(). For Spark, use the updated nulls.
+    // outer expression like try(). For Spark, use the updated nulls unless it's empty.
     if constexpr (throwForNull) {
       nulls = inputArray->nulls();
+    } else {
+      if (decodedRowVector->size() == 0) {
+        nulls = inputArray->nulls();
+      }
     }
     auto mapVector = std::make_shared<MapVector>(
         context.pool(),

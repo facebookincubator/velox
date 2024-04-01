@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 #include <cstdint>
-#include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/lib/CheckDuplicateKeys.h"
 #include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
-#include "velox/vector/tests/TestingDictionaryArrayElementsFunction.h"
 
 using namespace facebook::velox::test;
 
