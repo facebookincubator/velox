@@ -130,6 +130,41 @@ hash build operators. This stat is only reported by the HashBuild operator.</p><
 </tbody>
 </table>
 </section>
+<section id="spilling">
+<h2>Spilling<a class="headerlink" href="#spilling" title="Link to this heading">¶</a></h2>
+<p>These stats are reported by operators that support spilling.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 40.0%" />
+<col style="width: 20.0%" />
+<col style="width: 40.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Stats</p></th>
+<th class="head"><p>Unit</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>spillReadBytes</p></td>
+<td><p>bytes</p></td>
+<td><p>The number of bytes read from spilled files.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spillReads</p></td>
+<td></td>
+<td><p>The number of spill reader reads, equivalent to the number of read calls to the underlying filesystem.</p></td>
+</tr>
+<tr class="row-even"><td><p>spillReadTimeUs</p></td>
+<td><p>microseconds</p></td>
+<td><p>The time spent on read data from spilled files.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spillDeserializationTimeUs</p></td>
+<td><p>microseconds</p></td>
+<td><p>The time spent on deserializing rows read from spilled files.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 </section>
 
 
@@ -145,6 +180,7 @@ hash build operators. This stat is only reported by the HashBuild operator.</p><
 <li><a class="reference internal" href="#">Runtime Stats</a><ul>
 <li><a class="reference internal" href="#memory-arbitration">Memory Arbitration</a></li>
 <li><a class="reference internal" href="#hashbuild-hashaggregation">HashBuild, HashAggregation</a></li>
+<li><a class="reference internal" href="#spilling">Spilling</a></li>
 </ul>
 </li>
 </ul>
