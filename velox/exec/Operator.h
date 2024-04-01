@@ -305,6 +305,19 @@ class Operator : public BaseRuntimeStatWriter {
     }
   };
 
+  /// The name of the runtime spill write stats collected and reported by
+  /// operators that support spilling.
+  static inline const std::string kSpillFillTime{"spillFillTime"};
+  static inline const std::string kSpillSortTime{"spillSortTime"};
+  static inline const std::string kSpillSerializationTime{
+      "spillSerializationTime"};
+  static inline const std::string kSpillFlushTime{"spillFlushTime"};
+  static inline const std::string kSpillWrites{"spillWrites"};
+  static inline const std::string kSpillWriteTime{"spillWriteTime"};
+  static inline const std::string kSpillRuns{"spillRuns"};
+  static inline const std::string kExceededMaxSpillLevel{
+      "exceededMaxSpillLevel"};
+
   /// 'operatorId' is the initial index of the 'this' in the Driver's list of
   /// Operators. This is used as in index into OperatorStats arrays in the Task.
   /// 'planNodeId' is a query-level unique identifier of the PlanNode to which
