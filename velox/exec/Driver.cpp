@@ -590,7 +590,7 @@ StopReason Driver::runInternal(
                 if (ctx_->queryConfig().validateOutputFromOperators()) {
                   validateOperatorResult(intermediateResult, *op);
                 }
-                resultBytes = intermediateResult->estimateFlatSize();
+                resultBytes = intermediateResult->estimateCompactSize();
                 {
                   auto lockedStats = op->stats().wlock();
                   lockedStats->addOutputVector(
@@ -699,7 +699,7 @@ StopReason Driver::runInternal(
               {
                 auto lockedStats = op->stats().wlock();
                 lockedStats->addOutputVector(
-                    result->estimateFlatSize(), result->size());
+                    result->estimateCompactSize(), result->size());
               }
 
               // This code path is used only in single-threaded execution.
