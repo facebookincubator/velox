@@ -298,7 +298,7 @@ void registerArbitraryAggregate(
             if (inputType->isLongDecimal()) {
               return std::make_unique<ArbitraryAggregate<int128_t>>(inputType);
             }
-            VELOX_UNREACHABLE();
+            VELOX_NYI();
           case TypeKind::REAL:
             return std::make_unique<ArbitraryAggregate<float>>(inputType);
           case TypeKind::DOUBLE:
