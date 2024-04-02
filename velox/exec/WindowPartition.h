@@ -43,6 +43,8 @@ class WindowPartition {
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo);
 
+  virtual ~WindowPartition() = default;
+
   /// Returns the number of rows in the current WindowPartition.
   virtual vector_size_t numRows() const {
     return partition_.size();
