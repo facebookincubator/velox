@@ -270,6 +270,8 @@ void HashProbe::maybeSetupSpillInputReader(
   if (!restoredPartitionId.has_value()) {
     return;
   }
+  LOG(ERROR) << "probe " << joinTypeName(joinType_) << " setup input reader " << restoredPartitionId->toString() << " " << pool()->name();
+  LOG(ERROR) << "probe " << joinTypeName(joinType_) << " left spill partition set " << spillPartitionSet_.size() << " " << pool()->name();
   // If 'restoredPartitionId' is not null, then 'table_' is built from the
   // spilled build data. Create an unsorted reader to read the probe inputs from
   // the corresponding spilled probe partition on disk.
@@ -293,6 +295,7 @@ void HashProbe::asyncWaitForHashTable() {
     return;
   }
 
+  LOG(ERROR) << "probe " << joinTypeName(joinType_) << " " << pool()->name() << " got result";
   if (hashBuildResult->hasNullKeys) {
     VELOX_CHECK(nullAware_);
     if (isAntiJoin(joinType_) && !joinNode_->filter()) {
@@ -383,6 +386,7 @@ void HashProbe::prepareForSpillRestore() {
     return;
   }
   // Notify the hash build operators to build the next hash table.
+  LOG(ERROR) << "probe " << joinTypeName(joinType_) << " prepare restore finished " << pool()->name();
   joinBridge_->probeFinished();
 
   wakeupPeerOperators();
@@ -921,10 +925,12 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       }
 
       if (hasMoreSpillData()) {
+        LOG(ERROR) << "probe " << joinTypeName(joinType_) << " prepare restore " << pool()->name() << " last prober " << lastProber_;
         prepareForSpillRestore();
         asyncWaitForHashTable();
       } else {
         if (lastProber_ && spillEnabled()) {
+          LOG(ERROR) << "probe " << joinTypeName(joinType_) << " complete finish " << pool()->name();
           joinBridge_->probeFinished();
           wakeupPeerOperators();
         }
@@ -1454,6 +1460,7 @@ bool HashProbe::hasMoreInput() const {
 void HashProbe::noMoreInputInternal() {
   checkRunning();
 
+  LOG(ERROR) << "probe " << joinTypeName(joinType_) << " no more input " << pool()->name();
   noMoreSpillInput_ = true;
   if (!spillInputPartitionIds_.empty()) {
     VELOX_CHECK_NOT_NULL(inputSpiller_);
@@ -1475,6 +1482,7 @@ void HashProbe::noMoreInputInternal() {
           hasSpillEnabled ? &future_ : nullptr,
           hasSpillEnabled ? promises_ : promises,
           peers)) {
+    LOG(ERROR) << "probe " << joinTypeName(joinType_) << " not the last one: " << pool()->name();
     if (hasSpillEnabled) {
       VELOX_CHECK(future_.valid());
       setState(ProbeOperatorState::kWaitForPeers);
@@ -1492,6 +1500,7 @@ void HashProbe::noMoreInputInternal() {
   // other probe operators, or there is previously spilled table partition(s)
   // that needs to restore.
   VELOX_CHECK(hasSpillEnabled || peers.empty());
+  LOG(ERROR) << "probe " << joinTypeName(joinType_) << " set prober: " << pool()->name();
   lastProber_ = true;
 }
 

@@ -1664,6 +1664,7 @@ bool Task::allPeersFinished(
   auto& state = barriers[planNodeId];
 
   const auto numPeers = numDrivers(caller->driverCtx()->pipelineId);
+  LOG(ERROR) << "numPeers " << numPeers << " requests " << state.numRequested;
   if (++state.numRequested == numPeers) {
     peers = std::move(state.drivers);
     promises = std::move(state.allPeersFinishedPromises);

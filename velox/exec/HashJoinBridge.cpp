@@ -41,6 +41,8 @@ void HashJoinBridge::setHashTable(
 
   auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
 
+  LOG(ERROR) << "bridge " << this << " build set table, spill partitions count "
+             << spillPartitionSet.size();
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -56,7 +58,13 @@ void HashJoinBridge::setHashTable(
       }
     }
 
+    if (!spillPartitionSet.empty()) {
+      CHECK_EQ(table->numDistinct(), 0);
+    }
+
     for (auto& partitionEntry : spillPartitionSet) {
+      LOG(ERROR) << "bridge " << this << " build set partition "
+                 << partitionEntry.first.toString();
       const auto id = partitionEntry.first;
       VELOX_CHECK_EQ(spillPartitionSets_.count(id), 0);
       spillPartitionSets_.emplace(id, std::move(partitionEntry.second));
@@ -66,6 +74,10 @@ void HashJoinBridge::setHashTable(
         std::move(restoringSpillPartitionId_),
         std::move(spillPartitionIdSet),
         hasNullKeys);
+    if (restoringSpillPartitionId_.has_value()) {
+      LOG(ERROR) << "bridge " << this << " build clear restore id: "
+                 << restoringSpillPartitionId_->toString();
+    }
     restoringSpillPartitionId_.reset();
     promises = std::move(promises_);
   }
@@ -81,8 +93,12 @@ void HashJoinBridge::setSpilledHashTable(SpillPartitionSet spillPartitionSet) {
   VELOX_CHECK(restoringSpillShards_.empty());
   VELOX_CHECK(!restoringSpillPartitionId_.has_value());
 
+  LOG(ERROR) << "bridge " << this << " probe set spill partitions count "
+             << spillPartitionSet.size();
   for (auto& partitionEntry : spillPartitionSet) {
     const auto id = partitionEntry.first;
+    LOG(ERROR) << "bridge " << this << " probe set spill partition "
+               << id.toString();
     VELOX_CHECK_EQ(spillPartitionSets_.count(id), 0);
     spillPartitionSets_.emplace(id, std::move(partitionEntry.second));
   }
@@ -116,6 +132,16 @@ std::optional<HashJoinBridge::HashBuildResult> HashJoinBridge::tableOrFuture(
        restoringSpillShards_.empty()));
 
   if (buildResult_.has_value()) {
+    if (buildResult_->restoredPartitionId.has_value()) {
+      LOG(ERROR) << "bridge " << this << " probe to restore: "
+                 << buildResult_->restoredPartitionId->toString();
+    } else {
+      if (buildResult_->table->numDistinct() != 0) {
+        CHECK(buildResult_->spillPartitionIds.empty());
+      }
+      LOG(ERROR) << "bridge " << this << " probe get table with partition ids: "
+                 << buildResult_->spillPartitionIds.empty();
+    }
     return buildResult_.value();
   }
   promises_.emplace_back("HashJoinBridge::tableOrFuture");
@@ -140,9 +166,13 @@ bool HashJoinBridge::probeFinished() {
     // table from the next spill partition now.
     buildResult_.reset();
 
+    LOG(ERROR) << "bridge " << this << " spill partition set is empty: "
+               << spillPartitionSets_.empty();
     if (!spillPartitionSets_.empty()) {
       hasSpillInput = true;
       restoringSpillPartitionId_ = spillPartitionSets_.begin()->first;
+      LOG(ERROR) << "bridge " << this << " build to restore: "
+                 << restoringSpillPartitionId_->toString();
       restoringSpillShards_ =
           spillPartitionSets_.begin()->second->split(numBuilders_);
       VELOX_CHECK_EQ(restoringSpillShards_.size(), numBuilders_);
