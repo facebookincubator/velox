@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cmath>
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -45,6 +46,14 @@ class GreatestLeastTest : public functions::test::FunctionBaseTest {
         query, makeRowVector(inputColumns), std::nullopt, resultType);
     for (int32_t i = 0; i < vectorSize; ++i) {
       if (output[i].has_value()) {
+        if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
+          // For double and float, if expected output is NaN then the result
+          // must also be NaN
+          if (std::isnan(output[i].value())) {
+            ASSERT_TRUE(std::isnan(result->valueAt(i)));
+            continue;
+          }
+        }
         ASSERT_EQ(result->valueAt(i), output[i]);
       } else {
         ASSERT_TRUE(result->isNullAt(i));
@@ -83,29 +92,132 @@ TEST_F(GreatestLeastTest, leastReal) {
       {0, -100, -1.1});
 }
 
-TEST_F(GreatestLeastTest, nanInput) {
-  // Presto rejects NaN inputs of type DOUBLE, but allows NaN inputs of type
-  // REAL.
-  std::vector<double> input{0, 1.1, std::nan("1")};
-  VELOX_ASSERT_THROW(
-      runTest<double>("least(c0)", {{0.0 / 0.0}}, {0}),
-      "Invalid argument to least(): NaN");
-  runTest<double>("try(least(c0, 1.0))", {input}, {0, 1.0, std::nullopt});
+TEST_F(GreatestLeastTest, leastNanInput) {
+  runTest<float>(
+      "least(c0)", {{0, std::nanf("1"), -1.1}}, {0, std::nanf("1"), -1.1});
+  runTest<float>(
+      "least(c0, c1)",
+      {
+          {-1.1},
+          {std::nanf("1")},
+      },
+      {-1.1});
+  runTest<float>(
+      "least(c0, c1)",
+      {
+          {std::nanf("1")},
+          {-1.1},
+      },
+      {-1.1});
+  runTest<float>(
+      "least(c0, c1)",
+      {
+          {-std::numeric_limits<float>::infinity()},
+          {std::nanf("1")},
+      },
+      {-std::numeric_limits<float>::infinity()});
+  runTest<float>(
+      "least(c0, c1)",
+      {
+          {std::nanf("1")},
+          {-std::numeric_limits<float>::infinity()},
+      },
+      {-std::numeric_limits<float>::infinity()});
 
-  VELOX_ASSERT_THROW(
-      runTest<double>("greatest(c0)", {1, {0.0 / 0.0}}, {1, 0}),
-      "Invalid argument to greatest(): NaN");
-  runTest<double>("try(greatest(c0, 1.0))", {input}, {1.0, 1.1, std::nullopt});
+  runTest<double>(
+      "least(c0)", {{0, std::nan("1"), -1.1}}, {0, std::nan("1"), -1.1});
+  runTest<double>(
+      "least(c0, c1)",
+      {
+          {-1.1},
+          {std::nan("1")},
+      },
+      {-1.1});
+  runTest<double>(
+      "least(c0, c1)",
+      {
+          {std::nan("1")},
+          {-1.1},
+      },
+      {-1.1});
+  runTest<double>(
+      "least(c0, c1)",
+      {
+          {-std::numeric_limits<double>::infinity()},
+          {std::nanf("1")},
+      },
+      {-std::numeric_limits<double>::infinity()});
+  runTest<double>(
+      "least(c0, c1)",
+      {
+          {std::nanf("1")},
+          {-std::numeric_limits<double>::infinity()},
+      },
+      {-std::numeric_limits<double>::infinity()});
+}
 
-  auto result = evaluateOnce<bool, float, float>(
-      "is_nan(least(c0))", std::nanf("1"), 1.2);
-  ASSERT_TRUE(result.has_value());
-  ASSERT_TRUE(result.value());
+TEST_F(GreatestLeastTest, greatestNanInput) {
+  runTest<float>(
+      "greatest(c0)", {{0, std::nanf("1"), -1.1}}, {0, std::nanf("1"), -1.1});
+  runTest<float>(
+      "greatest(c0, c1)",
+      {
+          {1.1},
+          {std::nanf("1")},
+      },
+      {std::nanf("1")});
+  runTest<float>(
+      "greatest(c0, c1)",
+      {
+          {std::nanf("1")},
+          {1.1},
+      },
+      {std::nanf("1")});
+  runTest<float>(
+      "greatest(c0, c1)",
+      {
+          {std::numeric_limits<float>::infinity()},
+          {std::nanf("1")},
+      },
+      {std::nanf("1")});
+  runTest<float>(
+      "greatest(c0, c1)",
+      {
+          {std::nanf("1")},
+          {std::numeric_limits<float>::infinity()},
+      },
+      {std::nanf("1")});
 
-  result = evaluateOnce<bool, float, float>(
-      "is_nan(greatest(c0))", std::nanf("1"), 1.2);
-  ASSERT_TRUE(result.has_value());
-  ASSERT_TRUE(result.value());
+  runTest<double>(
+      "greatest(c0)", {{0, std::nan("1"), -1.1}}, {0, std::nan("1"), -1.1});
+  runTest<double>(
+      "greatest(c0, c1)",
+      {
+          {1.1},
+          {std::nan("1")},
+      },
+      {std::nan("1")});
+  runTest<double>(
+      "greatest(c0, c1)",
+      {
+          {std::nan("1")},
+          {1.1},
+      },
+      {std::nan("1")});
+  runTest<double>(
+      "greatest(c0, c1)",
+      {
+          {std::numeric_limits<double>::infinity()},
+          {std::nan("1")},
+      },
+      {std::nan("1")});
+  runTest<double>(
+      "greatest(c0, c1)",
+      {
+          {std::nan("1")},
+          {std::numeric_limits<double>::infinity()},
+      },
+      {std::nan("1")});
 }
 
 TEST_F(GreatestLeastTest, greatestDouble) {

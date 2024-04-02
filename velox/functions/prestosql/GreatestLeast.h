@@ -41,6 +41,9 @@ using GreatestFunction = ExtremeValueFunction<TExec, T, false>;
  *
  * least(value1, value2, ..., valueN) → [same as input]
  * Returns the smallest of the provided values.
+ *
+ * For DOUBLE and REAL type, NaN is considered as the biggest according to
+ * https://github.com/prestodb/presto/wiki/Presto-NaN-behavior
  **/
 template <typename TExec, typename T, bool isLeast>
 struct ExtremeValueFunction {
@@ -49,25 +52,56 @@ struct ExtremeValueFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<T>& result,
       const arg_type<T>& firstElement,
-      const arg_type<Variadic<T>>& remainingList) {
+      const arg_type<Variadic<T>>& remainingElement) {
     auto currentValue = firstElement;
 
-    for (auto i = 0; i < remainingList.size(); ++i) {
-      VELOX_USER_CHECK(remainingList[i].has_value());
-      auto candidateValue = remainingList[i].value();
+    for (auto i = 0; i < remainingElement.size(); ++i) {
+      VELOX_USER_CHECK(remainingElement[i].has_value());
+      auto candidateValue = remainingElement[i].value();
 
       if constexpr (isLeast) {
-        if (candidateValue < currentValue) {
+        if (smallerThan(candidateValue, currentValue)) {
           currentValue = candidateValue;
         }
       } else {
-        if (candidateValue > currentValue) {
+        if (greaterThan(candidateValue, currentValue)) {
           currentValue = candidateValue;
         }
       }
     }
 
     result = currentValue;
+  }
+
+ private:
+  template <typename K>
+  bool greaterThan(const K& lhs, const K& rhs) const {
+    if constexpr (std::is_same_v<K, double> || std::is_same_v<K, float>) {
+      if (std::isnan(lhs)) {
+        return true;
+      }
+
+      if (std::isnan(rhs)) {
+        return false;
+      }
+    }
+
+    return lhs > rhs;
+  }
+
+  template <typename K>
+  bool smallerThan(const K& lhs, const K& rhs) const {
+    if constexpr (std::is_same_v<K, double> || std::is_same_v<K, float>) {
+      if (std::isnan(lhs)) {
+        return false;
+      }
+
+      if (std::isnan(rhs)) {
+        return true;
+      }
+    }
+
+    return lhs < rhs;
   }
 };
 
