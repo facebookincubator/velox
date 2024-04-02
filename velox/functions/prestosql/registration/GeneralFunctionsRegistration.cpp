@@ -23,14 +23,11 @@
 namespace facebook::velox::functions {
 
 template <typename T>
-inline void registerGreatestFunction(const std::string& prefix) {
-  registerFunction<ParameterBinder<GreatestFunction, T>, T, Variadic<T>>(
+inline void registerGreatestLeastFunction(const std::string& prefix) {
+  registerFunction<ParameterBinder<GreatestFunction, T>, T, T, Variadic<T>>(
       {prefix + "greatest"});
-}
 
-template <typename T>
-inline void registerLeastFunction(const std::string& prefix) {
-  registerFunction<ParameterBinder<LeastFunction, T>, T, Variadic<T>>(
+  registerFunction<ParameterBinder<LeastFunction, T>, T, T, Variadic<T>>(
       {prefix + "least"});
 }
 
@@ -62,33 +59,19 @@ void registerGeneralFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "reduce");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_filter, prefix + "filter");
 
-  registerGreatestFunction<bool>(prefix);
-  registerGreatestFunction<int8_t>(prefix);
-  registerGreatestFunction<int16_t>(prefix);
-  registerGreatestFunction<int32_t>(prefix);
-  registerGreatestFunction<int64_t>(prefix);
-  registerGreatestFunction<int128_t>(prefix);
-  registerGreatestFunction<float>(prefix);
-  registerGreatestFunction<double>(prefix);
-  registerGreatestFunction<Varchar>(prefix);
-  registerGreatestFunction<LongDecimal<P1, S1>>(prefix);
-  registerGreatestFunction<ShortDecimal<P1, S1>>(prefix);
-  registerGreatestFunction<Date>(prefix);
-  registerGreatestFunction<Timestamp>(prefix);
-
-  registerLeastFunction<bool>(prefix);
-  registerLeastFunction<int8_t>(prefix);
-  registerLeastFunction<int16_t>(prefix);
-  registerLeastFunction<int32_t>(prefix);
-  registerLeastFunction<int64_t>(prefix);
-  registerLeastFunction<int128_t>(prefix);
-  registerLeastFunction<float>(prefix);
-  registerLeastFunction<double>(prefix);
-  registerLeastFunction<Varchar>(prefix);
-  registerLeastFunction<LongDecimal<P1, S1>>(prefix);
-  registerLeastFunction<ShortDecimal<P1, S1>>(prefix);
-  registerLeastFunction<Date>(prefix);
-  registerLeastFunction<Timestamp>(prefix);
+  registerGreatestLeastFunction<bool>(prefix);
+  registerGreatestLeastFunction<int8_t>(prefix);
+  registerGreatestLeastFunction<int16_t>(prefix);
+  registerGreatestLeastFunction<int32_t>(prefix);
+  registerGreatestLeastFunction<int64_t>(prefix);
+  registerGreatestLeastFunction<int128_t>(prefix);
+  registerGreatestLeastFunction<float>(prefix);
+  registerGreatestLeastFunction<double>(prefix);
+  registerGreatestLeastFunction<Varchar>(prefix);
+  registerGreatestLeastFunction<LongDecimal<P1, S1>>(prefix);
+  registerGreatestLeastFunction<ShortDecimal<P1, S1>>(prefix);
+  registerGreatestLeastFunction<Date>(prefix);
+  registerGreatestLeastFunction<Timestamp>(prefix);
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_typeof, prefix + "typeof");
 

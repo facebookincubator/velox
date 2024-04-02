@@ -24,14 +24,14 @@
 
 namespace facebook::velox::functions {
 
-template <typename TExec, typename TInput, bool isLeast>
+template <typename TExec, typename T, bool isLeast>
 struct ExtremeValueFunction;
 
-template <typename TExec, typename TInput>
-using LeastFunction = ExtremeValueFunction<TExec, TInput, true>;
+template <typename TExec, typename T>
+using LeastFunction = ExtremeValueFunction<TExec, T, true>;
 
-template <typename TExec, typename TInput>
-using GreatestFunction = ExtremeValueFunction<TExec, TInput, false>;
+template <typename TExec, typename T>
+using GreatestFunction = ExtremeValueFunction<TExec, T, false>;
 
 /**
  * This class implements two functions:
@@ -42,39 +42,19 @@ using GreatestFunction = ExtremeValueFunction<TExec, TInput, false>;
  * least(value1, value2, ..., valueN) → [same as input]
  * Returns the smallest of the provided values.
  **/
-template <typename TExec, typename TInput, bool isLeast>
+template <typename TExec, typename T, bool isLeast>
 struct ExtremeValueFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  // For double, presto should throw error if input is Nan
-  template <typename T>
-  void checkNan(const T& value) const {
-    if constexpr (std::is_same_v<T, TypeTraits<TypeKind::DOUBLE>::NativeType>) {
-      if (std::isnan(value)) {
-        VELOX_USER_FAIL(
-            "Invalid argument to {}: NaN", isLeast ? "least()" : "greatest()");
-      }
-    }
-  }
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<T>& result,
+      const arg_type<T>& firstElement,
+      const arg_type<Variadic<T>>& remainingList) {
+    auto currentValue = firstElement;
 
-  // expect all input to be not null, else the result is null
-  FOLLY_ALWAYS_INLINE bool callNullFree(
-      out_type<TInput>& result,
-      const null_free_arg_type<Variadic<TInput>>& inputs) {
-    // ensure that input size is greater than 0
-    if (inputs.size() == 0) {
-      return false;
-    }
-
-    auto currentValue = inputs[0];
-
-    // if current value type is double and value is Nan, throw error
-    checkNan(currentValue);
-    for (auto i = 1; i < inputs.size(); ++i) {
-      auto candidateValue = inputs[i];
-
-      // if candidate value type is double and value is Nan, throw error
-      checkNan(candidateValue);
+    for (auto i = 0; i < remainingList.size(); ++i) {
+      VELOX_USER_CHECK(remainingList[i].has_value());
+      auto candidateValue = remainingList[i].value();
 
       if constexpr (isLeast) {
         if (candidateValue < currentValue) {
@@ -88,8 +68,6 @@ struct ExtremeValueFunction {
     }
 
     result = currentValue;
-
-    return true;
   }
 };
 
