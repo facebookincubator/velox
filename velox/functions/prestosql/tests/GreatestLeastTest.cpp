@@ -48,7 +48,7 @@ class GreatestLeastTest : public functions::test::FunctionBaseTest {
       if (output[i].has_value()) {
         if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
           // For double and float, if expected output is NaN then the result
-          // must also be NaN
+          // must also be NaN.
           if (std::isnan(output[i].value())) {
             ASSERT_TRUE(std::isnan(result->valueAt(i)));
             continue;
