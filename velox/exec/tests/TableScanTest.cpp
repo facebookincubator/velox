@@ -1380,25 +1380,14 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   ASSERT_GT(stats.at("preloadedSplits").sum, 1);
 
   task.reset();
-  bool taskDelayedRelease = false;
-  // Even when the thread pool is blocked, tasks should be promptly destructed.
-  while (Task::numCreatedTasks() != Task::numDeletedTasks() &&
-         !taskDelayedRelease) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    taskDelayedRelease = true;
-  }
   // Once all task references are cleared, the count of deleted tasks should
-  // promptly match the count of created tasks (taskDelayedRelease == false).
-  auto createdTasks = Task::numCreatedTasks();
-  auto deletedTasks = Task::numDeletedTasks();
-  // Clean blocking items in the IO thread pool before assert.
+  // promptly match the count of created tasks.
+  ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
+  // Clean blocking items in the IO thread pool.
   stop = true;
   while (finishedCount != executors->numThreads()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
-
-  ASSERT_EQ(createdTasks, deletedTasks);
-  ASSERT_EQ(taskDelayedRelease, false);
 }
 
 TEST_F(TableScanTest, waitForSplit) {
