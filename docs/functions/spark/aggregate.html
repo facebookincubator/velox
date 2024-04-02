@@ -98,6 +98,13 @@ But Spark allows for changing the defaults while Velox does not.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="collect_list">
+<span class="sig-name descname"><span class="pre">collect_list</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;[same</span> <span class="pre">as</span> <span class="pre">x]&gt;</span></span></span><a class="headerlink" href="#collect_list" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array created from the input <code class="docutils literal notranslate"><span class="pre">x</span></code> elements. Ignores null
+inputs, and returns an empty array when all inputs are null.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="first">
 <span class="sig-name descname"><span class="pre">first</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#first" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the first value of <cite>x</cite>.</p>
@@ -219,6 +226,7 @@ overflowed value rather than raising an error.</p>
 <li><a class="reference internal" href="#bloom_filter_agg"><code class="docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a></li>
 <li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a></li>
+<li><a class="reference internal" href="#collect_list"><code class="docutils literal notranslate"><span class="pre">collect_list()</span></code></a></li>
 <li><a class="reference internal" href="#first"><code class="docutils literal notranslate"><span class="pre">first()</span></code></a></li>
 <li><a class="reference internal" href="#first_ignore_null"><code class="docutils literal notranslate"><span class="pre">first_ignore_null()</span></code></a></li>
 <li><a class="reference internal" href="#kurtosis"><code class="docutils literal notranslate"><span class="pre">kurtosis()</span></code></a></li>
