@@ -498,15 +498,40 @@ location of the accumulator.</p>
 <span class="c1">// @param offset Offset in bytes from the start of the row of the accumulator</span>
 <span class="c1">// @param nullByte Offset in bytes from the start of the row of the null flag</span>
 <span class="c1">// @param nullMask The specific bit in the nullByte that stores the null flag</span>
-<span class="kt">void</span><span class="w"> </span><span class="n">setOffsets</span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">offset</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">nullByte</span><span class="p">,</span><span class="w"> </span><span class="kt">uint8_t</span><span class="w"> </span><span class="n">nullMask</span><span class="p">)</span>
+<span class="c1">// @param initializedByte Offset in bytes from the start of the row of the</span>
+<span class="c1">// initialized flag</span>
+<span class="c1">// @param initializedMask The specific bit in the initializedByte that stores</span>
+<span class="c1">// the initialized flag</span>
+<span class="c1">// @param rowSizeOffset The offset of a uint32_t row size from the start of</span>
+<span class="c1">// the row. Only applies to accumulators that store variable size data out of</span>
+<span class="c1">// line. Fixed length accumulators do not use this. 0 if the row does not have</span>
+<span class="c1">// a size field.</span>
+<span class="kt">void</span><span class="w"> </span><span class="n">setOffsets</span><span class="p">(</span>
+<span class="w">  </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">offset</span><span class="p">,</span>
+<span class="w">  </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">nullByte</span><span class="p">,</span>
+<span class="w">  </span><span class="kt">uint8_t</span><span class="w"> </span><span class="n">nullMask</span><span class="p">,</span>
+<span class="w">  </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">initializedByte</span><span class="p">,</span>
+<span class="w">  </span><span class="kt">int8_t</span><span class="w"> </span><span class="n">initializedMask</span><span class="p">,</span>
+<span class="w">  </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">rowSizeOffset</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>The base class implements the setOffsets method by storing the offsets in member variables.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Byte position of null flag in group row.</span>
 <span class="kt">int32_t</span><span class="w"> </span><span class="n">nullByte_</span><span class="p">;</span>
 <span class="kt">uint8_t</span><span class="w"> </span><span class="n">nullMask_</span><span class="p">;</span>
+<span class="c1">// Byte position of the initialized flag in group row.</span>
+<span class="kt">int32_t</span><span class="w"> </span><span class="n">initializedByte_</span><span class="p">;</span>
+<span class="kt">uint8_t</span><span class="w"> </span><span class="n">initializedMask_</span><span class="p">;</span>
 <span class="c1">// Offset of fixed length accumulator state in group row.</span>
 <span class="kt">int32_t</span><span class="w"> </span><span class="n">offset_</span><span class="p">;</span>
+
+<span class="c1">// Offset of uint32_t row byte size of row. 0 if there are no</span>
+<span class="c1">// variable width fields or accumulators on the row.  The size is</span>
+<span class="c1">// capped at 4G and will stay at 4G and not wrap around if growing</span>
+<span class="c1">// past this. This serves to track the batch size when extracting</span>
+<span class="c1">// rows. A size in excess of 4G would finish the batch in any case,</span>
+<span class="c1">// so larger values need not be represented.</span>
+<span class="kt">int32_t</span><span class="w"> </span><span class="n">rowSizeOffset_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Typically, an aggregate function doesn’t use the offsets directly. Instead, it uses helper methods from the base class.</p>
@@ -530,11 +555,11 @@ location of the accumulator.</p>
 </section>
 <section id="initialization">
 <h3>Initialization<a class="headerlink" href="#initialization" title="Link to this heading">¶</a></h3>
-<p>Once you have accumulatorFixedWidthSize(), the next method to implement is initializeNewGroups().</p>
+<p>Once you have accumulatorFixedWidthSize(), the next method to implement is initializeNewGroupsInternal().</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Initializes null flags and accumulators for newly encountered groups.</span>
 <span class="c1">// @param groups Pointers to the start of the new group rows.</span>
 <span class="c1">// @param indices Indices into &#39;groups&#39; of the new entries.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">initializeNewGroups</span><span class="p">(</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">initializeNewGroupsInternal</span><span class="p">(</span>
 <span class="w">    </span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span>
 <span class="w">    </span><span class="n">folly</span><span class="o">::</span><span class="n">Range</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">vector_size_t</span><span class="o">*&gt;</span><span class="w"> </span><span class="n">indices</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
@@ -543,7 +568,7 @@ location of the accumulator.</p>
 </section>
 <section id="groupby-aggregation">
 <h3>GroupBy aggregation<a class="headerlink" href="#groupby-aggregation" title="Link to this heading">¶</a></h3>
-<p>At this point you have accumulatorFixedWidthSize() and initializeNewGroups() methods implemented. Now, we can proceed to implementing the end-to-end group-by aggregation. We need the following pieces:</p>
+<p>At this point you have accumulatorFixedWidthSize() and initializeNewGroupsInternal() methods implemented. Now, we can proceed to implementing the end-to-end group-by aggregation. We need the following pieces:</p>
 <ul class="simple">
 <li><dl class="simple">
 <dt>Logic for adding raw input to the accumulator:</dt><dd><ul>
