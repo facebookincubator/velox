@@ -405,18 +405,20 @@ writeIntermediateResult
 """""""""""""""""""""""
 
 This method has an out-parameter of the type `exec::out_type<IntermediateType>&`
-and a boolean flag `nonNullGroup` indicating whether *this* accumulator is
-non-null. This method returns true if it writes a non-null value to `out`, or
-return false meaning a null should be written to the intermediate state vector.
+and a boolean flag `nonNullGroup` indicating whether *this* accumulator has ever
+been updated by `addInput` or `combine`. This method returns true if it writes a
+non-null value to `out`, or returns false meaning a null should be written to the
+intermediate state vector.
 
 writeFinalResult
 """"""""""""""""
 
 This method writes *this* accumulator out to a final result vector. It has an
 out-parameter of the type `exec::out_type<OutputType>&` and a boolean flag
-`nonNullGroup` indicating whether *this* accumulator is non-null. This method
-returns true if it writes a non-null value to `out`, or return false meaning a
-null should be written to the final result vector.
+`nonNullGroup` indicating whether *this* accumulator has ever been updated by
+`addInput` or `combine`. This method returns true if it writes a non-null value
+to `out`, or returns false meaning a null should be written to the final result
+vector.
 
 Limitations
 ^^^^^^^^^^^
