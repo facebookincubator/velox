@@ -36,52 +36,40 @@ class WindowPartition {
   /// the columns in 'data' for use with the spiller.
   /// 'sortKeyInfo' : Order by columns used by the the Window operator. Used to
   /// get peer rows from the input partition.
-  /// 'supportRowLevelStreaming' : Whether support row level streaming or not.
   WindowPartition(
       RowContainer* data,
       const folly::Range<char**>& rows,
       const std::vector<column_index_t>& inputMapping,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
-          sortKeyInfo,
-      bool supportRowLevelStreaming = false);
+          sortKeyInfo);
 
   /// Returns the number of rows in the current WindowPartition.
-  vector_size_t numRows() const {
-    if (supportRowLevelStreaming_) {
-      if (currentPartition_ == -1) {
-        return 0;
-      } else {
-        return partition_.size() + partitionStartRows_[currentPartition_];
-      }
-    } else {
-      return partition_.size();
-    }
+  virtual vector_size_t numRows() const {
+    return partition_.size();
   }
 
-  vector_size_t offsetInPartition() const {
-    if (supportRowLevelStreaming_) {
-      return partitionStartRows_[currentPartition_];
-    } else {
-      return 0;
-    }
+  virtual vector_size_t offsetInPartition() const {
+    return 0;
   }
 
-  bool supportRowLevelStreaming() {
-    return supportRowLevelStreaming_;
+  virtual bool supportRowLevelStreaming() const {
+    return false;
+  };
+
+  virtual void setInputRowsFinished() {
+    return;
   }
 
-  void setInputRowsFinished() {
-    inputRowsFinished_ = true;
+  virtual void addNewRows(std::vector<char*> rows) {
+    return;
   }
 
-  void addNewRows(std::vector<char*> rows);
+  virtual bool buildNextRows() {
+    return false;
+  }
 
-  bool buildNextRows();
-
-  bool processFinished() {
-    return (!supportRowLevelStreaming_) ||
-        (inputRowsFinished_ &&
-         currentPartition_ == partitionStartRows_.size() - 2);
+  virtual bool processFinished() const {
+    return true;
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -199,6 +187,7 @@ class WindowPartition {
       const vector_size_t* rawPeerBounds,
       vector_size_t* rawFrameBounds) const;
 
+ protected:
   // The RowContainer associated with the partition.
   // It is owned by the WindowBuild that creates the partition.
   RowContainer* data_;
@@ -229,20 +218,5 @@ class WindowPartition {
 
   // ORDER BY column info for this partition.
   const std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
-
-  // Whether support row level streaming.
-  bool supportRowLevelStreaming_ = false;
-
-  // The input rows is finished.
-  bool inputRowsFinished_ = false;
-
-  // Add new rows in WindowPartition.
-  std::vector<char*> sortedRows_;
-
-  // Indices of the start row (in sortedRows_) of each partitial partition.
-  std::vector<vector_size_t> partitionStartRows_;
-
-  // Current partial partition being output.
-  vector_size_t currentPartition_ = -1;
 };
 } // namespace facebook::velox::exec

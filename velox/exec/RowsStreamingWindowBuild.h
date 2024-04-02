@@ -20,16 +20,16 @@
 
 namespace facebook::velox::exec {
 
-/// Unlike StreamingWindowBuild, RowLevelStreamingWindowBuild is capable of
+/// Unlike StreamingWindowBuild, RowsStreamingWindowBuild is capable of
 /// processing window functions as rows arrive within a single partition,
 /// without the need to wait for the entire partition to be ready. This approach
 /// can significantly reduce memory usage, especially when a single partition
 /// contains a large amount of data. It is particularly suited for optimizing
 /// rank and row_number functions, as well as aggregate window functions with a
 /// default frame.
-class RowLevelStreamingWindowBuild : public WindowBuild {
+class RowsStreamingWindowBuild : public WindowBuild {
  public:
-  RowLevelStreamingWindowBuild(
+  RowsStreamingWindowBuild(
       const std::shared_ptr<const core::WindowNode>& windowNode,
       velox::memory::MemoryPool* pool,
       const common::SpillConfig* spillConfig,
@@ -73,6 +73,7 @@ class RowLevelStreamingWindowBuild : public WindowBuild {
   // Current partition when adding input. Used to construct WindowPartitions.
   vector_size_t inputCurrentPartition_ = 0;
 
+  // Holds all the WindowPartitions.
   std::vector<std::shared_ptr<WindowPartition>> windowPartitions_;
 };
 
