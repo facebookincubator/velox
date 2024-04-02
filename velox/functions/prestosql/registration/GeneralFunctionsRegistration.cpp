@@ -24,17 +24,11 @@ namespace facebook::velox::functions {
 
 template <typename T>
 inline void registerGreatestLeastFunction(const std::string& prefix) {
-  registerFunction<
-      ParameterBinder<details::GreatestFunction, T>,
-      T,
-      T,
-      Variadic<T>>({prefix + "greatest"});
+  registerFunction<ParameterBinder<GreatestFunction, T>, T, T, Variadic<T>>(
+      {prefix + "greatest"});
 
-  registerFunction<
-      ParameterBinder<details::LeastFunction, T>,
-      T,
-      T,
-      Variadic<T>>({prefix + "least"});
+  registerFunction<ParameterBinder<LeastFunction, T>, T, T, Variadic<T>>(
+      {prefix + "least"});
 }
 
 extern void registerSubscriptFunction(

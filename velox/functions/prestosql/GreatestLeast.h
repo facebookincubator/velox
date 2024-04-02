@@ -17,17 +17,8 @@
 #include <functions/Macros.h>
 #include <cmath>
 
-namespace facebook::velox::functions::details {
-
-template <typename TExec, typename T, bool isLeast>
-struct ExtremeValueFunction;
-
-template <typename TExec, typename T>
-using LeastFunction = ExtremeValueFunction<TExec, T, true>;
-
-template <typename TExec, typename T>
-using GreatestFunction = ExtremeValueFunction<TExec, T, false>;
-
+namespace facebook::velox::functions {
+namespace details {
 /**
  * This class implements two functions:
  *
@@ -38,7 +29,7 @@ using GreatestFunction = ExtremeValueFunction<TExec, T, false>;
  * Returns the smallest of the provided values.
  *
  * For DOUBLE and REAL type, NaN is considered as the biggest according to
- * https://github.com/prestodb/presto/wiki/Presto-NaN-behavior
+ * https://github.com/prestodb/presto/issues/22391
  **/
 template <typename TExec, typename T, bool isLeast>
 struct ExtremeValueFunction {
@@ -50,9 +41,8 @@ struct ExtremeValueFunction {
       const arg_type<Variadic<T>>& remainingElement) {
     auto currentValue = firstElement;
 
-    for (auto i = 0; i < remainingElement.size(); ++i) {
-      VELOX_USER_CHECK(remainingElement[i].has_value());
-      auto candidateValue = remainingElement[i].value();
+    for (auto element : remainingElement) {
+      auto candidateValue = element.value();
 
       if constexpr (isLeast) {
         if (smallerThan(candidateValue, currentValue)) {
@@ -99,5 +89,12 @@ struct ExtremeValueFunction {
     return lhs < rhs;
   }
 };
+} // namespace details
 
-} // namespace facebook::velox::functions::details
+template <typename TExec, typename T>
+using LeastFunction = details::ExtremeValueFunction<TExec, T, true>;
+
+template <typename TExec, typename T>
+using GreatestFunction = details::ExtremeValueFunction<TExec, T, false>;
+
+} // namespace facebook::velox::functions
