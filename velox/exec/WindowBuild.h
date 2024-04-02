@@ -76,6 +76,10 @@ class WindowBuild {
     return data_->estimateRowSize();
   }
 
+  void setNumRowsPerOutput(vector_size_t numRowsPerOutput) {
+    numRowsPerOutput_ = numRowsPerOutput;
+  }
+
  protected:
   bool compareRowsWithKeys(
       const char* lhs,
@@ -113,6 +117,9 @@ class WindowBuild {
 
   // Number of input rows.
   vector_size_t numRows_ = 0;
+
+  // Number of rows that be fit into an output block.
+  vector_size_t numRowsPerOutput_;
 };
 
 } // namespace facebook::velox::exec

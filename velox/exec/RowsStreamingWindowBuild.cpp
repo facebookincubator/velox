@@ -14,25 +14,25 @@
  * limitations under the License.
  */
 
-#include "velox/exec/RowLevelStreamingWindowBuild.h"
+#include "velox/exec/RowsStreamingWindowBuild.h"
+#include "velox/exec/RowsStreamingWindowPartition.h"
 
 namespace facebook::velox::exec {
 
-RowLevelStreamingWindowBuild::RowLevelStreamingWindowBuild(
+RowsStreamingWindowBuild::RowsStreamingWindowBuild(
     const std::shared_ptr<const core::WindowNode>& windowNode,
     velox::memory::MemoryPool* pool,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection)
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection) {}
 
-void RowLevelStreamingWindowBuild::buildNextInputOrPartition(bool isFinished) {
+void RowsStreamingWindowBuild::buildNextInputOrPartition(bool isFinished) {
   if (windowPartitions_.size() <= inputCurrentPartition_) {
-    windowPartitions_.push_back(std::make_shared<WindowPartition>(
+    windowPartitions_.push_back(std::make_shared<RowsStreamingWindowPartition>(
         data_.get(),
         folly::Range<char**>(nullptr, nullptr),
         inputColumns_,
-        sortKeyInfo_,
-        true));
+        sortKeyInfo_));
   }
 
   windowPartitions_[inputCurrentPartition_]->addNewRows(inputRows_);
@@ -45,7 +45,7 @@ void RowLevelStreamingWindowBuild::buildNextInputOrPartition(bool isFinished) {
   inputRows_.clear();
 }
 
-void RowLevelStreamingWindowBuild::addInput(RowVectorPtr input) {
+void RowsStreamingWindowBuild::addInput(RowVectorPtr input) {
   for (auto i = 0; i < inputChannels_.size(); ++i) {
     decodedInputVectors_[i].decode(*input->childAt(inputChannels_[i]));
   }
@@ -64,7 +64,7 @@ void RowLevelStreamingWindowBuild::addInput(RowVectorPtr input) {
 
     // Wait for the peers to be ready in single partition; these peers are the
     // rows that have identical values in the ORDER BY clause.
-    if (previousRow_ != nullptr && inputRows_.size() > 0 &&
+    if (previousRow_ != nullptr && inputRows_.size() >= numRowsPerOutput_ &&
         compareRowsWithKeys(previousRow_, newRow, sortKeyInfo_)) {
       buildNextInputOrPartition(false);
     }
@@ -74,11 +74,11 @@ void RowLevelStreamingWindowBuild::addInput(RowVectorPtr input) {
   }
 }
 
-void RowLevelStreamingWindowBuild::noMoreInput() {
+void RowsStreamingWindowBuild::noMoreInput() {
   buildNextInputOrPartition(true);
 }
 
-std::shared_ptr<WindowPartition> RowLevelStreamingWindowBuild::nextPartition() {
+std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
   if (outputCurrentPartition_ > 0) {
     windowPartitions_[outputCurrentPartition_].reset();
   }
@@ -86,7 +86,7 @@ std::shared_ptr<WindowPartition> RowLevelStreamingWindowBuild::nextPartition() {
   return windowPartitions_[++outputCurrentPartition_];
 }
 
-bool RowLevelStreamingWindowBuild::hasNextPartition() {
+bool RowsStreamingWindowBuild::hasNextPartition() {
   return windowPartitions_.size() > 0 &&
       outputCurrentPartition_ <= int(windowPartitions_.size() - 2);
 }

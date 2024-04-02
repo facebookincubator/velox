@@ -15,7 +15,7 @@
  */
 #include "velox/exec/Window.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/RowLevelStreamingWindowBuild.h"
+#include "velox/exec/RowsStreamingWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/StreamingWindowBuild.h"
 #include "velox/exec/Task.h"
@@ -43,7 +43,7 @@ Window::Window(
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   if (windowNode->inputsSorted()) {
     if (supportRowLevelStreaming()) {
-      windowBuild_ = std::make_unique<RowLevelStreamingWindowBuild>(
+      windowBuild_ = std::make_unique<RowsStreamingWindowBuild>(
           windowNode_, pool(), spillConfig, &nonReclaimableSection_);
     } else {
       windowBuild_ = std::make_unique<StreamingWindowBuild>(
@@ -60,6 +60,7 @@ void Window::initialize() {
   VELOX_CHECK_NOT_NULL(windowNode_);
   createWindowFunctions();
   createPeerAndFrameBuffers();
+  windowBuild_->setNumRowsPerOutput(numRowsPerOutput_);
   windowNode_.reset();
 }
 
@@ -542,8 +543,7 @@ void Window::computePeerAndFrameBuffers(
       // Ranking functions do not care about frames. So the function decides
       // further what to do with empty frames.
       computeValidFrames(
-          currentPartition_->numRows() -
-              currentPartition_->offsetInPartition() - 1,
+          currentPartition_->numRows() - 1,
           numRows,
           rawFrameStarts[i],
           rawFrameEnds[i],
