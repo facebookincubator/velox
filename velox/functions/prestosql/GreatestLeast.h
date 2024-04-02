@@ -17,7 +17,7 @@
 #include <functions/Macros.h>
 #include <cmath>
 
-namespace facebook::velox::functions {
+namespace facebook::velox::functions::details {
 
 template <typename TExec, typename T, bool isLeast>
 struct ExtremeValueFunction;
@@ -100,4 +100,4 @@ struct ExtremeValueFunction {
   }
 };
 
-} // namespace facebook::velox::functions
+} // namespace facebook::velox::functions::details
