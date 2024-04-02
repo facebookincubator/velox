@@ -13,17 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <random>
 
-#include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 using namespace facebook::velox::functions::aggregate::test;
-using facebook::velox::exec::test::AssertQueryBuilder;
-using facebook::velox::exec::test::PlanBuilder;
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
 
@@ -47,8 +41,7 @@ TEST_F(CollectListAggregateTest, groupBy) {
   // 4: {4, 4}    {4, 5}    {4, 6}
   for (auto i = 0; i < 3; i++) {
     RowVectorPtr data = makeRowVector(
-        {makeFlatVector<int32_t>(
-             5, [](const vector_size_t& row) { return row; }),
+        {makeFlatVector<int32_t>({0, 1, 2, 3, 4}),
          makeFlatVector<int64_t>(
              5,
              [&i](const vector_size_t& row) { return i + row; },
@@ -69,7 +62,7 @@ TEST_F(CollectListAggregateTest, groupBy) {
       [](auto& /*builder*/) {},
       {"c0"},
       {"spark_collect_list(c1)"},
-      {{ARRAY(BIGINT())}},
+      {{BIGINT()}},
       {"c0", "array_sort(a0)"},
       "SELECT c0, array_sort(array_agg(c1)"
       "filter (where c1 is not null)) FROM tmp GROUP BY c0");
@@ -92,7 +85,7 @@ TEST_F(CollectListAggregateTest, global) {
       [](auto& /*builder*/) {},
       {},
       {"spark_collect_list(c0)"},
-      {{ARRAY(VARCHAR())}},
+      {{INTEGER()}},
       {"array_sort(a0)"},
       "SELECT array_sort(array_agg(c0)"
       "filter (where c0 is not null)) FROM tmp");

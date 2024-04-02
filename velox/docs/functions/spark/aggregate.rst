@@ -56,7 +56,7 @@ General Aggregate Functions
 .. spark:function:: collect_list(x) -> array<[same as x]>
 
     Returns an array created from the input ``x`` elements. Ignores null
-    inputs, and return an empty array when all inputs are null.
+    inputs, and returns an empty array when all inputs are null.
 
 .. spark:function:: first(x) -> x
 
