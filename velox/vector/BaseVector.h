@@ -727,6 +727,17 @@ class BaseVector {
   /// hasn't been loaded yet.
   virtual uint64_t estimateFlatSize() const;
 
+  /// Returns an estimate size of each row in this vector.
+  virtual double estimateRowSize() const;
+
+  /// Returns an estimate size of the vector as if it was compacted,
+  /// ignoring any over-allocations. For example:
+  /// (1) For dictionary vector, it only counts each dictionary entry once,
+  /// rather than each time a value is referenced.
+  /// (2) For flat vector, returns its retained size.
+  /// (3) For lazy vector that hasn't been loaded, returns zero.
+  virtual uint64_t estimateCompactSize() const;
+
   /// To safely reuse a vector one needs to (1) ensure that the vector as well
   /// as all its buffers and child vectors are singly-referenced and mutable
   /// (for buffers); (2) clear append-only string buffers and child vectors

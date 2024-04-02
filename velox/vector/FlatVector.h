@@ -386,6 +386,17 @@ class FlatVector final : public SimpleVector<T> {
     return size;
   }
 
+  double estimateRowSize() const override {
+    if (BaseVector::length_ == 0) {
+      return 0;
+    }
+    return 1.0 * retainedSize() / BaseVector::length_;
+  }
+
+  uint64_t estimateCompactSize() const override {
+    return retainedSize();
+  }
+
   /**
    * Used for vectors of type VARCHAR and VARBINARY to hold data referenced by
    * StringView's. It is safe to share these among multiple vectors. These

@@ -675,6 +675,15 @@ class VectorTestBase {
         size, 0, vectorMaker_.arrayVector<T>({data}));
   }
 
+  /// Create constant vector of type MAP from keys and values.
+  VectorPtr makeConstantMap(
+      vector_size_t size,
+      const VectorPtr& keys,
+      const VectorPtr& values) {
+    return BaseVector::wrapInConstant(
+        size, 0, vectorMaker_.mapVector({0}, keys, values));
+  }
+
   VectorPtr makeNullConstant(TypeKind typeKind, vector_size_t size) {
     return BaseVector::createNullConstant(
         createType(typeKind, {}), size, pool());

@@ -153,6 +153,14 @@ class SequenceVector : public SimpleVector<T> {
     return sequenceValues_->retainedSize() + sequenceLengths_->capacity();
   }
 
+  double estimateRowSize() const override {
+    return sequenceValues_->estimateRowSize();
+  }
+
+  uint64_t estimateCompactSize() const override {
+    return sequenceLengths_->size() * estimateRowSize();
+  }
+
   bool isScalar() const override {
     return sequenceValues_->isScalar();
   }

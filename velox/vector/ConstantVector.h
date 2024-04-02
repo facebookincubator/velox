@@ -205,6 +205,14 @@ class ConstantVector final : public SimpleVector<T> {
     return sizeof(T);
   }
 
+  double estimateRowSize() const override {
+    return valueVector_ ? valueVector_->estimateRowSize() : retainedSize();
+  }
+
+  uint64_t estimateCompactSize() const override {
+    return 1 * estimateRowSize();
+  }
+
   BaseVector* loadedVector() override {
     if (!valueVector_) {
       return this;
