@@ -310,7 +310,7 @@ exec::optional_arg_type&lt;Generic&lt;T1&gt;&gt; in);</p>
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">use_external_memory_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
 
 <span class="w">  </span><span class="c1">// Optional. Default is false.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">aligned_accumulator_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_aligned_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
 
 <span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
 
@@ -334,7 +334,7 @@ every accumulator takes fixed amount of memory. This flag is true by default.
 Next, the author defines another optional flag <cite>use_external_memory_</cite>
 indicating whether the accumulator uses memory that is not tracked by Velox.
 This flag is false by default. Then, the author can define an optional flag
-<cite>aligned_accumulator_</cite> indicating whether the accumulator requires aligned
+<cite>is_aligned_</cite> indicating whether the accumulator requires aligned
 access. This flag is false by default.</p>
 <p>The author defines a constructor that takes a single argument of
 <cite>HashStringAllocator*</cite>. This constructor is called before aggregation starts to
@@ -395,7 +395,7 @@ nulls in the final result vector without <cite>writeFinalResult</cite> being cal
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">use_external_memory_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
 
 <span class="w">  </span><span class="c1">// Optional. Default is false.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">aligned_accumulator_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_aligned_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
 
 <span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
 
@@ -415,7 +415,7 @@ nulls in the final result vector without <cite>writeFinalResult</cite> being cal
 </pre></div>
 </div>
 <p>The definition of <cite>is_fixed_size_</cite>, <cite>use_external_memory_</cite>,
-<cite>aligned_accumulator_</cite>, the constructor, and the <cite>destroy</cite> method are exactly
+<cite>is_aligned_</cite>, the constructor, and the <cite>destroy</cite> method are exactly
 the same as those for default-null behavior.</p>
 <p>On the other hand, the C++ function signatures of <cite>addInput</cite>, <cite>combine</cite>,
 <cite>writeIntermediateResult</cite>, and <cite>writeFinalResult</cite> are different.</p>
