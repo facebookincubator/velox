@@ -185,6 +185,12 @@ function install_duckdb {
   fi
 }
 
+function install_cuda {
+  # See https://developer.nvidia.com/cuda-downloads
+  dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
+  yum install -y cuda-nvcc-$(echo $1 | tr '.' '-') cuda-cudart-devel-$(echo $1 | tr '.' '-')
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_dnf
   run_and_time install_conda
@@ -201,6 +207,8 @@ function install_velox_deps {
   run_and_time install_mvfst
   run_and_time install_fbthrift
   run_and_time install_duckdb
+  run_and_time install_cuda 11.8
+  run_and_time install_cuda 12.4
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
