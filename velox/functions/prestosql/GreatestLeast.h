@@ -16,11 +16,6 @@
 
 #include <functions/Macros.h>
 #include <cmath>
-#include <type_traits>
-#include "velox/common/base/Exceptions.h"
-#include "velox/expression/Expr.h"
-#include "velox/expression/VectorFunction.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::functions {
 
