@@ -605,6 +605,19 @@ jobs:
         with:
           name: aggregation
 
+      - name: "Checkout Repo"
+        uses: actions/checkout@v4
+        with:
+          path: velox
+          submodules: 'recursive'
+          ref: "${{ inputs.ref }}"
+
+      - name: Fix git permissions
+          # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory /__w/velox/velox/velox
+
+
       - name: "Run Aggregate Fuzzer"
         run: |
           cd  velox
