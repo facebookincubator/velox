@@ -594,7 +594,7 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
-#    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' }}
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       LINUX_DISTRO: "centos"
@@ -627,7 +627,7 @@ jobs:
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
-          cd - 
+          cd -
           mkdir -p /tmp/aggregate_fuzzer_repro/
           rm -rfv /tmp/aggregate_fuzzer_repro/*
           chmod -R 777 /tmp/aggregate_fuzzer_repro
