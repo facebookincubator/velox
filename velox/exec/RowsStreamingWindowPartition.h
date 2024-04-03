@@ -31,6 +31,8 @@ class RowsStreamingWindowPartition : public WindowPartition {
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo);
 
+  // Returns the number of rows in the current partial window partition,
+  // including the offset within the full partition.
   vector_size_t numRows() const override {
     if (currentPartition_ == -1) {
       return 0;
@@ -39,22 +41,32 @@ class RowsStreamingWindowPartition : public WindowPartition {
     }
   }
 
+  // Returns the starting offset of the current partial window partition within
+  // the full partition.
   vector_size_t offsetInPartition() const override {
     return partitionStartRows_[currentPartition_];
   }
 
+  // Indicates support for row-level streaming processing.
   bool supportRowLevelStreaming() const override {
     return true;
   }
 
+  // Sets the flag indicating that all input rows have been processed on the
+  // producer side.
   void setInputRowsFinished() override {
     inputRowsFinished_ = true;
   }
 
+  // Adds new rows to the partition using a streaming approach on the producer
+  // side.
   void addNewRows(std::vector<char*> rows) override;
 
+  // Builds the next set of available rows on the consumer side.
   bool buildNextRows() override;
 
+  // Determines if the current partition is complete and then proceed to the
+  // next partition.
   bool processFinished() const override {
     return (
         inputRowsFinished_ &&
@@ -62,10 +74,10 @@ class RowsStreamingWindowPartition : public WindowPartition {
   }
 
  private:
-  // Whether the input rows is all added into the sortedRows_.
+  // Indicates whether all input rows have been added to sortedRows_
   bool inputRowsFinished_ = false;
 
-  // Add new rows in WindowPartition.
+  // Stores new rows added to the WindowPartition.
   std::vector<char*> sortedRows_;
 
   // Indices of the start row (in sortedRows_) of each partitial partition.
