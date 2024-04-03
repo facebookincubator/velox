@@ -217,8 +217,5 @@ class WindowPartition {
   // corresponding indexes of their input arguments into this vector.
   // They will request for column vector values at the respective index.
   std::vector<exec::RowColumn> columns_;
-
-  // ORDER BY column info for this partition.
-  const std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
 };
 } // namespace facebook::velox::exec

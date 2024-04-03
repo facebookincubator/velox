@@ -31,7 +31,7 @@ void RowsStreamingWindowBuild::buildNextInputOrPartition(bool isFinished) {
     windowPartitions_.push_back(std::make_shared<RowsStreamingWindowPartition>(
         data_.get(),
         folly::Range<char**>(nullptr, nullptr),
-        inputColumns_,
+        inversedInputChannels_,
         sortKeyInfo_));
   }
 

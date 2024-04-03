@@ -20,9 +20,9 @@ namespace facebook::velox::exec {
 RowsStreamingWindowPartition::RowsStreamingWindowPartition(
     RowContainer* data,
     const folly::Range<char**>& rows,
-    const std::vector<exec::RowColumn>& columns,
+    const std::vector<column_index_t>& inputMapping,
     const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo)
-    : WindowPartition(data, rows, columns, sortKeyInfo) {
+    : WindowPartition(data, rows, inputMapping, sortKeyInfo) {
   partitionStartRows_.push_back(0);
 }
 
