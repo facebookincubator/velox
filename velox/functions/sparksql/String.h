@@ -768,9 +768,9 @@ struct LeftFunction {
   }
 };
 
-/// left function
-/// left(string, length) -> string
-/// Returns the leftmost length characters from the string
+/// right function
+/// right(string, length) -> string
+/// Returns the rightmost length characters from the string
 /// Return an empty string if length is less or equal than 0
 template <typename T>
 struct RightFunction {
