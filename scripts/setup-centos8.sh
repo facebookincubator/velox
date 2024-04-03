@@ -207,8 +207,6 @@ function install_velox_deps {
   run_and_time install_mvfst
   run_and_time install_fbthrift
   run_and_time install_duckdb
-  run_and_time install_cuda 11.8
-  run_and_time install_cuda 12.4
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

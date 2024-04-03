@@ -162,8 +162,6 @@ function install_velox_deps {
   run_and_time install_mvfst
   run_and_time install_fbthrift
   run_and_time install_conda
-  run_and_time install_cuda 11.8
-  run_and_time install_cuda 12.4
 }
 
 function install_apt_deps {
