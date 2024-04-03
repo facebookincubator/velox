@@ -305,7 +305,7 @@ void Operator::recordSpillStats() {
   lockedStats->spilledFiles += lockedSpillStats->spilledFiles;
   if (lockedSpillStats->spillFillTimeUs != 0) {
     lockedStats->addRuntimeStat(
-        "spillFillTime",
+        kSpillFillTime,
         RuntimeCounter{
             static_cast<int64_t>(
                 lockedSpillStats->spillFillTimeUs *
@@ -314,7 +314,7 @@ void Operator::recordSpillStats() {
   }
   if (lockedSpillStats->spillSortTimeUs != 0) {
     lockedStats->addRuntimeStat(
-        "spillSortTime",
+        kSpillSortTime,
         RuntimeCounter{
             static_cast<int64_t>(
                 lockedSpillStats->spillSortTimeUs *
@@ -323,7 +323,7 @@ void Operator::recordSpillStats() {
   }
   if (lockedSpillStats->spillSerializationTimeUs != 0) {
     lockedStats->addRuntimeStat(
-        "spillSerializationTime",
+        kSpillSerializationTime,
         RuntimeCounter{
             static_cast<int64_t>(
                 lockedSpillStats->spillSerializationTimeUs *
@@ -332,7 +332,7 @@ void Operator::recordSpillStats() {
   }
   if (lockedSpillStats->spillFlushTimeUs != 0) {
     lockedStats->addRuntimeStat(
-        "spillFlushTime",
+        kSpillFlushTime,
         RuntimeCounter{
             static_cast<int64_t>(
                 lockedSpillStats->spillFlushTimeUs *
@@ -341,12 +341,12 @@ void Operator::recordSpillStats() {
   }
   if (lockedSpillStats->spillWrites != 0) {
     lockedStats->addRuntimeStat(
-        "spillWrites",
+        kSpillWrites,
         RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillWrites)});
   }
   if (lockedSpillStats->spillWriteTimeUs != 0) {
     lockedStats->addRuntimeStat(
-        "spillWriteTime",
+        kSpillWriteTime,
         RuntimeCounter{
             static_cast<int64_t>(
                 lockedSpillStats->spillWriteTimeUs *
@@ -355,18 +355,44 @@ void Operator::recordSpillStats() {
   }
   if (lockedSpillStats->spillRuns != 0) {
     lockedStats->addRuntimeStat(
-        "spillRuns",
+        kSpillRuns,
         RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillRuns)});
     common::updateGlobalSpillRunStats(lockedSpillStats->spillRuns);
   }
 
   if (lockedSpillStats->spillMaxLevelExceededCount != 0) {
     lockedStats->addRuntimeStat(
-        "exceededMaxSpillLevel",
+        kExceededMaxSpillLevel,
         RuntimeCounter{static_cast<int64_t>(
             lockedSpillStats->spillMaxLevelExceededCount)});
     common::updateGlobalMaxSpillLevelExceededCount(
         lockedSpillStats->spillMaxLevelExceededCount);
+  }
+
+  if (lockedSpillStats->spillReadBytes != 0) {
+    lockedStats->addRuntimeStat(
+        kSpillReadBytes,
+        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReadBytes)});
+  }
+
+  if (lockedSpillStats->spillReads != 0) {
+    lockedStats->addRuntimeStat(
+        kSpillReads,
+        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReads)});
+  }
+
+  if (lockedSpillStats->spillReadTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        kSpillReadTimeUs,
+        RuntimeCounter{
+            static_cast<int64_t>(lockedSpillStats->spillReadTimeUs)});
+  }
+
+  if (lockedSpillStats->spillDeserializationTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        kSpillDeserializationTimeUs,
+        RuntimeCounter{static_cast<int64_t>(
+            lockedSpillStats->spillDeserializationTimeUs)});
   }
   lockedSpillStats->reset();
 }
@@ -599,7 +625,12 @@ uint64_t Operator::MemoryReclaimer::reclaim(
   VELOX_CHECK_EQ(pool->name(), op_->pool()->name());
   VELOX_CHECK(
       !driver->state().isOnThread() || driver->state().isSuspended ||
-      driver->state().isTerminated);
+          driver->state().isTerminated,
+      "driverOnThread {}, driverSuspended {} driverTerminated {} {}",
+      driver->state().isOnThread(),
+      driver->state().isSuspended,
+      driver->state().isTerminated,
+      pool->name());
   VELOX_CHECK(driver->task()->pauseRequested());
 
   TestValue::adjust(
