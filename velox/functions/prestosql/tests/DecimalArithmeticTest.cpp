@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
+#include <boost/random/uniform_int_distribution.hpp>
+#include <unordered_set>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -622,4 +625,154 @@ TEST_F(DecimalArithmeticTest, negate) {
            DecimalUtil::kLongDecimalMax,
            DecimalUtil::kLongDecimalMin},
           DECIMAL(38, 19))});
+}
+
+int32_t rand(FuzzerGenerator& rng) {
+  return boost::random::uniform_int_distribution<int32_t>()(rng);
+}
+
+class ArgGenerator {
+ public:
+  virtual ~ArgGenerator() = default;
+
+  virtual std::vector<TypePtr> generateArgs(
+      const TypePtr& returnType,
+      FuzzerGenerator& rng) = 0;
+};
+
+class PlusMinusArgGenerator : public ArgGenerator {
+ public:
+  // p = max(p1 - s1, p2 - s2) + 1 + max(s1, s2)
+  // s = max(s1, s2)
+  std::vector<TypePtr> generateArgs(
+      const TypePtr& returnType,
+      FuzzerGenerator& rng) {
+    auto [p, s] = getDecimalPrecisionScale(*returnType);
+
+    if (p == s) {
+      // There are no input types that would produce this result type.
+      return {};
+    }
+
+    int p1, s1, p2, s2;
+
+    // s = max(s1, s2)
+    if (rand(rng) % 2 == 0) {
+      s1 = s;
+      s2 = rand(rng) % (s + 1);
+    } else {
+      s1 = rand(rng) % (s + 1);
+      s2 = s;
+    }
+
+    // p = max(p1 - s1, p2 - s2) + 1 + max(s1, s2)
+    // p = max(p1 - s1, p2 - s2) + 1 + s
+    // p - s - 1 = max(p1 - s1, p2 - s2)
+
+    auto n = p - s - 1;
+    if (rand(rng) % 2 == 0) {
+      p1 = s1 + n;
+      p2 = s2 + rand(rng) % (n + 1);
+    } else {
+      p1 = s1 + rand(rng) % (n + 1);
+      p2 = s2 + n;
+    }
+
+    return {DECIMAL(p1, s1), DECIMAL(p2, s2)};
+  }
+};
+
+class MultiplyArgGenerator : public ArgGenerator {
+ public:
+  // p = p1 + p2
+  // s = s1 + s2
+  std::vector<TypePtr> generateArgs(
+      const TypePtr& returnType,
+      FuzzerGenerator& rng) override {
+    auto [p, s] = getDecimalPrecisionScale(*returnType);
+
+    int p1, s1, p2, s2;
+
+    // s = s1 + s2
+    s1 = rand(rng) % (s + 1);
+    s2 = s - s1;
+
+    // p = p1 + p2
+    if (p == s) {
+      p1 = s1;
+      p2 = s2;
+    } else {
+      p1 = s1 + (rand(rng) % (p - s));
+      p2 = p - p1;
+    }
+
+    return {DECIMAL(p1, s1), DECIMAL(p2, s2)};
+  }
+};
+
+class DivideArgGenerator : public ArgGenerator {
+ public:
+  // p = p1 + s2 + max(0, s2 - s1)
+  // s = max(s1, s2)
+  std::vector<TypePtr> generateArgs(
+      const TypePtr& returnType,
+      FuzzerGenerator& rng) override {
+    auto [p, s] = getDecimalPrecisionScale(*returnType);
+
+    int p1, s1, p2, s2;
+
+    // If s1 < s2, then p = (p1 - s1) + 2 * s2 and s = s2. Hence, this is only
+    // possible if p >= 2 * s. If p < s, then s1 must be >= s2.
+    if (p < 2 * s || (rand(rng) % 2 == 0)) {
+      s1 = s;
+      s2 = rand(rng) % (std::min(p - s, s) + 1);
+      p1 = p - s2;
+    } else {
+      s1 = rand(rng) % (s + 1);
+      s2 = s;
+      p1 = s1 + p - 2 * s;
+    }
+
+    p2 = s2 + rand(rng) % (38 - s2);
+
+    return {DECIMAL(p1, s1), DECIMAL(p2, s2)};
+  }
+};
+
+TEST_F(DecimalArithmeticTest, xxx) {
+  FuzzerGenerator rng;
+
+  VectorFuzzer::Options options;
+  VectorFuzzer fuzzer(options, pool());
+
+  std::vector<std::pair<std::string, std::shared_ptr<ArgGenerator>>> generators{
+      {"plus", std::make_shared<PlusMinusArgGenerator>()},
+      {"multiply", std::make_shared<MultiplyArgGenerator>()},
+      {"divide", std::make_shared<DivideArgGenerator>()},
+  };
+
+  for (auto i = 0; i < 1000; ++i) {
+    const auto index = rand(rng) % generators.size();
+    auto& [name, generator] = generators[index];
+
+    TypePtr returnType;
+    if (fuzzer.coinToss(0.5)) {
+      returnType = fuzzer.randShortDecimalType();
+    } else {
+      returnType = fuzzer.randLongDecimalType();
+    }
+
+    auto argTypes = generator->generateArgs(returnType, rng);
+    if (argTypes.empty()) {
+      LOG(ERROR) << "Cannot generate inputs for " << name << " and "
+                 << returnType->toString();
+      continue;
+    }
+
+    LOG(ERROR) << name << ": " << argTypes[0]->toString() << ", "
+               << argTypes[1]->toString() << " -> " << returnType->toString();
+
+    auto r = resolveFunction(name, argTypes);
+    ASSERT_EQ(r->toString(), returnType->toString());
+  }
 }
