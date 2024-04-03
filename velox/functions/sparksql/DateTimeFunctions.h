@@ -111,13 +111,22 @@ template <typename T>
 struct CurrentTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result) {
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/) {
     auto now = std::chrono::system_clock::now();
     auto epoch = std::chrono::duration_cast<std::chrono::microseconds>(
                      now.time_since_epoch())
                      .count();
-    result = Timestamp::fromMicros(epoch);
+    currentTimestamp_ = Timestamp::fromMicros(epoch);
   }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result) {
+    result = currentTimestamp_;
+  }
+
+ protected:
+  Timestamp currentTimestamp_;
 };
 
 template <typename T>
