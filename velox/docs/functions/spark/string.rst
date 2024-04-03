@@ -158,6 +158,11 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT replace('ABCabc', 'abc', ''); -- ABC
         SELECT replace('ABCabc', 'abc', 'DEF'); -- ABCDEF
 
+.. spark:function:: right(string, length) -> string
+
+    Returns the rightmost length characters from the ``string``.
+    If ``length`` is less or equal than 0 the result is an empty string.
+
 .. spark:function:: rpad(string, len, pad) -> string
     
     Returns ``string``, right-padded with ``pad`` to a length of ``len``. 
