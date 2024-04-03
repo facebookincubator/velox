@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Decimal Operators &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Bitwise Functions" href="bitwise.html" />
+    <link rel="prev" title="Mathematical Functions" href="math.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="bitwise.html" title="Bitwise Functions"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="math.html" title="Mathematical Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Decimal Operators</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="decimal-operators">
+<h1>Decimal Operators<a class="headerlink" href="#decimal-operators" title="Link to this heading">¶</a></h1>
+<p>DECIMAL type is designed to represent floating point numbers precisely.
+Mathematical operations on decimal values are exact, except for division. On
+the other hand, DOUBLE and REAL types are designed to represent floating point
+numbers approximately. Mathematical operations on double and real values are
+approximate.</p>
+<p>For example, the number 5,000,000,000,000,000 can be represented using DOUBLE.
+However, the number 5,000,000,000,000,000.15 cannot be represented using
+DOUBLE, but it can be represented using DECIMAL. See
+<a class="reference external" href="https://en.wikipedia.org/wiki/Double-precision_floating-point_format">https://en.wikipedia.org/wiki/Double-precision_floating-point_format</a> for more
+details.</p>
+<p>DECIMAL type has 2 parameters: precision and scale. Precision is the total
+number of digits used to represent the number. Scale is the number of digits
+after the decimal point. Naturally, scale must not exceed precision. In
+addition, precision cannot exceed 38.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">decimal</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">s</span><span class="p">)</span>
+
+<span class="n">p</span> <span class="o">&gt;=</span> <span class="mi">1</span> <span class="o">&amp;&amp;</span> <span class="n">p</span> <span class="o">&lt;=</span> <span class="mi">38</span>
+<span class="n">s</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">s</span> <span class="o">&lt;=</span> <span class="n">p</span>
+</pre></div>
+</div>
+<p>The number 5,000,000,000,000,000.15 can be represented using DECIMAL(18, 2).
+This number needs at least 18 digits (precision) of which at least 2 digits
+must appear after the decimal point (scale). This number can be represented
+using any DECIMAL type where scale &gt;= 2 and precision is &gt;= scale + 16.</p>
+<section id="addition-and-subtraction">
+<h2>Addition and Subtraction<a class="headerlink" href="#addition-and-subtraction" title="Link to this heading">¶</a></h2>
+<p>To represent the results of adding two decimal numbers we need to use max
+(s1, s2) digits after the decimal point and max(p1 - s1, p2 - s2) + 1 digits
+before the decimal point.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span><span class="p">,</span> <span class="n">p2</span> <span class="o">-</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
+<span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>It is easiest to understand this formula by thinking about column addition where
+we place two numbers one under the other and line up decimal points.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>     <span class="mf">1.001</span>
+  <span class="mf">9999.5</span>
+<span class="o">-----------</span>
+ <span class="mf">10000.501</span>
+</pre></div>
+</div>
+<p>We can see that the result needs max(s1, s2) digits after the decimal point and
+max(p1 - s1, p2 - s2) + 1 digits before the decimal point.</p>
+<p>The precision of the result may exceed 38. There are two options. One option is
+to say that addition and subtraction is supported as long as p &lt;= 38 and reject
+operations that produce p &gt; 38. Another option is to cap p at 38 and allow the
+operation to succeed as long as the actual result can be represented using 38
+digits. In this case, users experience runtime errors when the actual result
+cannot be represented using 38 digits. Presto implements the second option. Velox
+implementation matches Presto.</p>
+</section>
+<section id="multiplication">
+<h2>Multiplication<a class="headerlink" href="#multiplication" title="Link to this heading">¶</a></h2>
+<p>To represent the results of multiplying two decimal numbers we need s1 + s2
+digits after the decimal point and p1 + p2 digits overall.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="n">p1</span> <span class="o">+</span> <span class="n">p2</span>
+<span class="n">s</span> <span class="o">=</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">s2</span>
+</pre></div>
+</div>
+<p>To multiply two numbers we can multiply them as integers ignoring the decimal
+points, then add up the number of digits after the decimal point in the
+original numbers and place the decimal point that many digits away in the
+result.</p>
+<p>To multiply 0.01 with 0.001, we can multiply 1 with 1, then place the decimal
+point 5 digits to the left: 0.00001. Hence, the scale of the result is the sum
+of scales of the inputs.</p>
+<p>When multiplying two integers with p1 and p2 digits respectively we get a result
+that is strictly less than 10^p1 * 10^p2 = 10^(p1 + p2). Hence, we need at most
+p1 + p2 digits to represent the result.</p>
+<p>Both scale and precision of the result may exceed 38. There are two options
+again. One option is to say that multiplication is supported as long as p &lt;=
+38 (by definition, s does not exceed p and therefore does not exceed 38 if p &lt;=
+38). Another option is to cap p and s at 38 and allow operation to succeed as
+long as the actual result can be represented as a decimal(38, s). In this case,
+users experience runtime errors when the actual result cannot be represented as a
+decimal(38, s). Presto implements a third option. Reject the operation if s
+exceeds 38 and cap p at 38 when s &lt;= 38. In this case some operations are rejected
+outright while others are allowed to proceed, but may produce runtime errors. Velox
+implementation matches Presto.</p>
+</section>
+<section id="division">
+<h2>Division<a class="headerlink" href="#division" title="Link to this heading">¶</a></h2>
+<p>Perfect division is not possible. For example, 1 / 3 cannot be represented as a
+decimal value.</p>
+<p>When dividing a number with p1 digits over a number of s2 scale, we need p1 + s2
+digits for the result. In the worst case we divide by 0.0000001, which
+effectively is a multiplication by 10^s2.</p>
+<p>Presto also chooses to extend the scale of the result to a maximum of scales of
+the inputs. It is not clear exactly why.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>To support increased scale, the result precision needs to be extended by the
+difference in s1 and s.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="n">p1</span> <span class="o">+</span> <span class="n">s2</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">s2</span> <span class="o">-</span> <span class="n">s1</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Like in Addition, the precision of the result may exceed 38. The choices are the
+same. Presto chooses to cap p at 38 and allow runtime errors.</p>
+<p>The choice of formula for the result scale produces the following behavior that
+might be surprising to users.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="mf">0.01</span> <span class="o">/</span> <span class="mf">0.001</span> <span class="o">=</span> <span class="mf">0.000</span> <span class="p">(</span><span class="ow">not</span> <span class="mf">0.00001</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>, where 0.01 is a decimal(3, 2) and 0.001 is a decimal (4, 3).</p>
+<p>Velox implementation matches Presto.</p>
+</section>
+<section id="decimal-functions">
+<h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="abs">
+<span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abs" title="Link to this definition">¶</a></dt>
+<dd><p>Returns absolute value of x (r = <cite>|x|</cite>).</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="negate">
+<span class="sig-name descname"><span class="pre">negate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#negate" title="Link to this definition">¶</a></dt>
+<dd><p>Returns negated value of x (r = -x).</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="plus">
+<span class="sig-name descname"><span class="pre">plus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#plus" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the result of adding x to y (r = x + y).</p>
+<p>x and y are decimal values with possibly different precisions and scales. The
+precision and scale of the result are calculated as follows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span><span class="p">,</span> <span class="n">p2</span> <span class="o">-</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">))</span>
+<span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Throws if result cannot be represented using precision calculated above.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="minus">
+<span class="sig-name descname"><span class="pre">minus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#minus" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the result of subtracting y from x (r = x - y).</p>
+<p>x and y are decimal values with possibly different precisions and scales. The
+precision and scale of the result are calculated as follows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span><span class="p">,</span> <span class="n">p2</span> <span class="o">-</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">))</span>
+<span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Throws if result cannot be represented using precision calculated above.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="multiply">
+<span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#multiply" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the result of multiplying x by y (r = x * y).</p>
+<p>x and y are decimal values with possibly different precisions and scales. The
+precision and scale of the result are calculated as follows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="n">p1</span> <span class="o">+</span> <span class="n">p2</span><span class="p">)</span>
+<span class="n">s</span> <span class="o">=</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">s2</span>
+</pre></div>
+</div>
+<p>The operation is not supported if s1 + s2 exceeds 38.</p>
+<p>Throws if result cannot be represented using precision calculated above.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="divide">
+<span class="sig-name descname"><span class="pre">divide</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#divide" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the result of dividing x by y (r = x / y).</p>
+<p>x and y are decimal values with possibly different precisions and scales. The
+precision and scale of the result are calculated as follows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="n">p1</span> <span class="o">+</span> <span class="n">s2</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">s2</span> <span class="o">-</span> <span class="n">s1</span><span class="p">))</span>
+<span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Throws if y is zero or result cannot be represented using precision calculated
+above.</p>
+</dd></dl>
+
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Decimal Operators</a><ul>
+<li><a class="reference internal" href="#addition-and-subtraction">Addition and Subtraction</a></li>
+<li><a class="reference internal" href="#multiplication">Multiplication</a></li>
+<li><a class="reference internal" href="#division">Division</a></li>
+<li><a class="reference internal" href="#decimal-functions">Decimal Functions</a><ul>
+<li><a class="reference internal" href="#abs"><code class="docutils literal notranslate"><span class="pre">abs()</span></code></a></li>
+<li><a class="reference internal" href="#negate"><code class="docutils literal notranslate"><span class="pre">negate()</span></code></a></li>
+<li><a class="reference internal" href="#plus"><code class="docutils literal notranslate"><span class="pre">plus()</span></code></a></li>
+<li><a class="reference internal" href="#minus"><code class="docutils literal notranslate"><span class="pre">minus()</span></code></a></li>
+<li><a class="reference internal" href="#multiply"><code class="docutils literal notranslate"><span class="pre">multiply()</span></code></a></li>
+<li><a class="reference internal" href="#divide"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="math.html"
+                          title="previous chapter">Mathematical Functions</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="bitwise.html"
+                          title="next chapter">Bitwise Functions</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/functions/presto/decimal.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="bitwise.html" title="Bitwise Functions"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="math.html" title="Mathematical Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" >Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Decimal Operators</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+    </div>
+  </body>
+</html>
