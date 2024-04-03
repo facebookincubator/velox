@@ -239,7 +239,7 @@ void SortWindowBuild::noMoreInput() {
 
     VELOX_CHECK_NULL(merge_);
     auto spillPartition = spiller_->finishSpill();
-    merge_ = spillPartition.createOrderedReader(pool_);
+    merge_ = spillPartition.createOrderedReader(pool_, spillStats_);
   } else {
     // At this point we have seen all the input rows. The operator is
     // being prepared to output rows now.
@@ -296,7 +296,7 @@ std::unique_ptr<WindowPartition> SortWindowBuild::nextPartition() {
     VELOX_CHECK(!sortedRows_.empty(), "No window partitions available")
     auto partition = folly::Range(sortedRows_.data(), sortedRows_.size());
     return std::make_unique<WindowPartition>(
-        data_.get(), partition, inputColumns_, sortKeyInfo_);
+        data_.get(), partition, inversedInputChannels_, sortKeyInfo_);
   }
 
   VELOX_CHECK(!partitionStartRows_.empty(), "No window partitions available")
@@ -314,7 +314,7 @@ std::unique_ptr<WindowPartition> SortWindowBuild::nextPartition() {
       sortedRows_.data() + partitionStartRows_[currentPartition_],
       partitionSize);
   return std::make_unique<WindowPartition>(
-      data_.get(), partition, inputColumns_, sortKeyInfo_);
+      data_.get(), partition, inversedInputChannels_, sortKeyInfo_);
 }
 
 bool SortWindowBuild::hasNextPartition() {

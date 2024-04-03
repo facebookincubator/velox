@@ -51,7 +51,6 @@ jobs:
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
-      CCACHE_BASEDIR: "${{ github.workspace }}"
       LINUX_DISTRO: "ubuntu"
     steps:
 
@@ -72,7 +71,7 @@ jobs:
           ref: "${{ inputs.ref || 'main' }}"
 
       - name: "Install dependencies"
-        run: cd  velox && source ./scripts/setup-ubuntu.sh
+        run: cd  velox && source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: "Build"
         run: |
@@ -110,8 +109,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache/"
-      CCACHE_BASEDIR: "${{ github.workspace }}"
+      CCACHE_DIR: "/__w/velox/velox/.ccache/"
       LINUX_DISTRO: "centos"
     steps:
 
@@ -183,7 +181,7 @@ jobs:
           ref: "${{ inputs.ref || 'main' }}"
 
       - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
+        run: source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Download spark aggregation fuzzer
         uses: actions/download-artifact@v3
@@ -224,7 +222,7 @@ jobs:
           ref: "${{ inputs.ref || 'main' }}"
 
       - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
+        run: source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Download join fuzzer
         uses: actions/download-artifact@v3
