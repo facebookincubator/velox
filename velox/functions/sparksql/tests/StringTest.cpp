@@ -266,6 +266,22 @@ TEST_F(StringTest, left) {
   EXPECT_EQ(left("da\u6570\u636Eta", 30), "da\u6570\u636Eta");
 }
 
+TEST_F(StringTest, right) {
+  const auto right = [&](const std::optional<std::string>& str,
+                        const std::optional<int32_t>& length) {
+    return evaluateOnce<std::string>("right(c0, c1)", str, length);
+  };
+  EXPECT_EQ(right("example", -2), "");
+  EXPECT_EQ(right("example", 0), "");
+  EXPECT_EQ(right("example", 2), "le");
+  EXPECT_EQ(right("example", 7), "example");
+  EXPECT_EQ(right("example", 20), "example");
+
+  EXPECT_EQ(right("da\u6570\u636Eta", 2), "ta");
+  EXPECT_EQ(right("da\u6570\u636Eta", 3), "\u636Eta");
+  EXPECT_EQ(right("da\u6570\u636Eta", 30), "da\u6570\u636Eta");
+}
+
 TEST_F(StringTest, lengthString) {
   const auto length = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t>("length(c0)", arg);

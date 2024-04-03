@@ -204,6 +204,8 @@ void registerFunctions(const std::string& prefix) {
 
   registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
       {prefix + "left"});
+  registerFunction<sparksql::RightFunction, Varchar, Varchar, int32_t>(
+      {prefix + "right"});
 
   registerFunction<sparksql::BitLengthFunction, int32_t, Varchar>(
       {prefix + "bit_length"});
