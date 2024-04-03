@@ -444,9 +444,7 @@ class BaseVector {
   // Sets null when 'nulls' has a null value for active rows in 'rows'.
   // Is a no-op 'nulls' is a nullptr or 'rows' has no selections. This API
   // throws if the vector is a ConstantVector.
-  virtual void addNulls(
-      const uint64_t* FOLLY_NULLABLE nulls,
-      const SelectivityVector& rows);
+  virtual void addNulls(const uint64_t* nulls, const SelectivityVector& rows);
 
   // Sets nulls for all active row in 'nullRows'. Is a no-op if nullRows has no
   // selections. This API throws if the vector is a ConstantVector.
@@ -622,6 +620,10 @@ class BaseVector {
   // virtual and defined here because we must be able to access this in type
   // agnostic code without a switch on all data types.
   virtual const VectorPtr& valueVector() const {
+    VELOX_UNSUPPORTED("Vector is not a wrapper");
+  }
+
+  virtual VectorPtr& valueVector() {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 

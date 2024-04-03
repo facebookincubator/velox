@@ -150,7 +150,6 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       spillFilePrefix,
       queryConfig.maxSpillFileSize(),
       queryConfig.spillWriteBufferSize(),
-      queryConfig.minSpillRunSize(),
       task->queryCtx()->spillExecutor(),
       queryConfig.minSpillableReservationPct(),
       queryConfig.spillableReservationGrowthPct(),
@@ -827,6 +826,15 @@ void Driver::closeOperators() {
   }
 }
 
+void Driver::updateStats() {
+  DriverStats stats;
+  stats.runtimeStats[DriverStats::kTotalPauseTime] = RuntimeMetric(
+      1'000'000 * state_.totalPauseTimeMs, RuntimeCounter::Unit::kNanos);
+  stats.runtimeStats[DriverStats::kTotalOffThreadTime] = RuntimeMetric(
+      1'000'000 * state_.totalOffThreadTimeMs, RuntimeCounter::Unit::kNanos);
+  task()->addDriverStats(ctx_->pipelineId, std::move(stats));
+}
+
 void Driver::close() {
   if (closed_) {
     // Already closed.
@@ -836,6 +844,7 @@ void Driver::close() {
     LOG(FATAL) << "Driver::close is only allowed from the Driver's thread";
   }
   closeOperators();
+  updateStats();
   closed_ = true;
   Task::removeDriver(ctx_->task, this);
 }
@@ -844,6 +853,7 @@ void Driver::closeByTask() {
   VELOX_CHECK(isOnThread());
   VELOX_CHECK(isTerminated());
   closeOperators();
+  updateStats();
   closed_ = true;
 }
 

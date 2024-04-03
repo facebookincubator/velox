@@ -18,24 +18,104 @@ analysis.
 
 Memory Arbitration
 ------------------
+These stats are reported by all operators.
+
 .. list-table::
-   :widths: 40 10 50
+   :widths: 50 25 50
    :header-rows: 1
 
-   * - Stats Name
-     - Type
+   * - Stats
+     - Unit
      - Description
    * - memoryReclaimCount
-     - kNone
+     -
      - The number of times that the memory arbitration to reclaim memory from
        an spillable operator.
        This stats only applies for spillable operators.
    * - memoryReclaimWallNanos
-     - kNano
+     - nanos
      - The memory reclaim execution time of an operator during the memory
        arbitration. It collects time spent on disk spilling or file write.
        This stats only applies for spillable operators.
    * - reclaimedMemoryBytes
-     - kByte
+     - bytes
      - The reclaimed memory bytes of an operator during the memory arbitration.
        This stats only applies for spillable operators.
+
+HashBuild, HashAggregation
+--------------------------
+These stats are reported only by HashBuild and HashAggregation operators.
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - hashtable.capacity
+     -
+     - Number of slots across all buckets in the hash table.
+   * - hashtable.numRehashes
+     -
+     - Number of rehash() calls.
+   * - hashtable.numDistinct
+     -
+     - Number of distinct keys in the hash table.
+   * - hashtable.numTombstones
+     -
+     - Number of tombstone slots in the hash table.
+   * - hashtable.buildWallNanos
+     - nanos
+     - Time spent on building the hash table from rows collected by all the
+       hash build operators. This stat is only reported by the HashBuild operator.
+
+Spilling
+--------
+These stats are reported by operators that support spilling.
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - spillFillTime
+     - microseconds
+     - The time spent on filling rows for spilling.
+   * - spillSortTime
+     - microseconds
+     - The time spent on sorting rows for spilling.
+   * - spillSerializationTime
+     - microseconds
+     - The time spent on serializing rows for spilling.
+   * - spillFlushTime
+     - microseconds
+     - The time spent on copy out serialized rows for disk write. If compression
+       is enabled, this includes the compression time.
+   * - spillWrites
+     -
+     - The number of spill writer flushes, equivalent to number of write calls to
+       underlying filesystem.
+   * - spillWriteTime
+     - microseconds
+     - The time spent on writing spilled rows to disk.
+   * - spillRuns
+     -
+     - The number of times that spilling runs on an operator.
+   * - exceededMaxSpillLevel
+     -
+     - The number of times that an operator exceeds the max spill limit.
+   * - spillReadBytes
+     - bytes
+     - The number of bytes read from spilled files.
+   * - spillReads
+     -
+     - The number of spill reader reads, equivalent to the number of read calls to the underlying filesystem.
+   * - spillReadTimeUs
+     - microseconds
+     - The time spent on read data from spilled files.
+   * - spillDeserializationTimeUs
+     - microseconds
+     - The time spent on deserializing rows read from spilled files.

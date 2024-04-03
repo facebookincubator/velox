@@ -1544,7 +1544,6 @@ TEST_F(TaskTest, spillDirNotCreated) {
       {{core::QueryConfig::kSpillEnabled, "true"},
        {core::QueryConfig::kJoinSpillEnabled, "true"}});
   params.maxDrivers = 1;
-  TestScopedSpillInjection scopedSpillInjection(100);
 
   auto cursor = TaskCursor::create(params);
   auto* task = cursor->task().get();
@@ -1555,14 +1554,14 @@ TEST_F(TaskTest, spillDirNotCreated) {
   while (cursor->moveNext()) {
   }
   ASSERT_TRUE(waitForTaskCompletion(task, 5'000'000));
-  EXPECT_EQ(exec::TaskState::kFinished, task->state());
+  ASSERT_EQ(exec::TaskState::kFinished, task->state());
   auto taskStats = exec::toPlanStats(task->taskStats());
   auto& stats = taskStats.at(hashJoinNodeId);
   ASSERT_EQ(stats.spilledRows, 0);
   // Check for spill folder without destroying the Task object to ensure its
   // destructor has not removed the directory if it was created earlier.
   auto fs = filesystems::getFileSystem(tmpDirectoryPath, nullptr);
-  EXPECT_FALSE(fs->exists(tmpDirectoryPath));
+  ASSERT_FALSE(fs->exists(tmpDirectoryPath));
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
@@ -1659,15 +1658,64 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
     arbitrator->testingFreeCapacity(reclaimedQueryCapacity);
   }
 
-  const auto taskStats = task->taskStats();
+  auto taskStats = task->taskStats();
   ASSERT_EQ(taskStats.memoryReclaimCount, numReclaims);
   ASSERT_GT(taskStats.memoryReclaimMs, 0);
 
   // Fail the task to finish test.
   task->requestAbort();
   ASSERT_TRUE(waitForTaskAborted(task.get()));
+
+  taskStats = task->taskStats();
+  ASSERT_EQ(taskStats.pipelineStats.size(), 1);
+  ASSERT_EQ(taskStats.pipelineStats[0].driverStats.size(), 1);
+  const auto& driverStats = taskStats.pipelineStats[0].driverStats[0];
+  const auto& totalPauseTime =
+      driverStats.runtimeStats.at(DriverStats::kTotalPauseTime);
+  ASSERT_EQ(totalPauseTime.count, 1);
+  ASSERT_GE(totalPauseTime.sum, 0);
+  const auto& totalOffThreadTime =
+      driverStats.runtimeStats.at(DriverStats::kTotalOffThreadTime);
+  ASSERT_EQ(totalOffThreadTime.count, 1);
+  ASSERT_GE(totalOffThreadTime.sum, 0);
+
   task.reset();
   waitForAllTasksToBeDeleted();
+}
+
+TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatVector<int64_t>(50, folly::identity),
+  });
+  const auto plan =
+      PlanBuilder()
+          .tableScan(asRowType(data->type()))
+          .partitionedOutput({}, 1, std::vector<std::string>{"c0"})
+          .planFragment();
+  auto task = Task::create(
+      "task",
+      std::move(plan),
+      0,
+      std::make_shared<core::QueryCtx>(driverExecutor_.get()));
+  task->start(4, 1);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  task->testingVisitDrivers(
+      [](Driver* driver) { VELOX_CHECK(!driver->isOnThread()); });
+  task->requestAbort();
+  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  auto taskStats = task->taskStats();
+  ASSERT_EQ(taskStats.pipelineStats.size(), 1);
+  ASSERT_EQ(taskStats.pipelineStats[0].driverStats.size(), 4);
+  const auto& driverStats = taskStats.pipelineStats[0].driverStats[0];
+  const auto& totalPauseTime =
+      driverStats.runtimeStats.at(DriverStats::kTotalPauseTime);
+  ASSERT_EQ(totalPauseTime.count, 1);
+  ASSERT_GE(totalPauseTime.sum, 0);
+  const auto& totalOffThreadTime =
+      driverStats.runtimeStats.at(DriverStats::kTotalOffThreadTime);
+  ASSERT_EQ(totalOffThreadTime.count, 1);
+  ASSERT_GE(totalOffThreadTime.sum, 0);
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, driverEnqueAfterFailedAndPausedTask) {
