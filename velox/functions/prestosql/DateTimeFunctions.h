@@ -1442,14 +1442,12 @@ struct CurrentDateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   const date::time_zone* timeZone_ = nullptr;
+  int32_t currentDate_;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config) {
     timeZone_ = getTimeZoneFromConfig(config);
-  }
-
-  FOLLY_ALWAYS_INLINE void call(out_type<Date>& result) {
     auto now = Timestamp::now();
     if (timeZone_ != nullptr) {
       now.toTimezone(*timeZone_);
@@ -1457,8 +1455,13 @@ struct CurrentDateFunction {
     const std::chrono::
         time_point<std::chrono::system_clock, std::chrono::milliseconds>
             localTimepoint(std::chrono::milliseconds(now.toMillis()));
-    result = std::chrono::floor<date::days>((localTimepoint).time_since_epoch())
-                 .count();
+    currentDate_ =
+        std::chrono::floor<date::days>((localTimepoint).time_since_epoch())
+            .count();
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<Date>& result) {
+    result = currentDate_;
   }
 };
 
