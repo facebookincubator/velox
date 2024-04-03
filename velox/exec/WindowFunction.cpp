@@ -25,6 +25,7 @@ WindowFunctionMap& windowFunctions() {
   return functions;
 }
 
+namespace {
 std::optional<const WindowFunctionEntry*> getWindowFunctionEntry(
     const std::string& name) {
   auto& functionsMap = windowFunctions();
@@ -35,16 +36,26 @@ std::optional<const WindowFunctionEntry*> getWindowFunctionEntry(
 
   return std::nullopt;
 }
+} // namespace
 
 bool registerWindowFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
     WindowFunctionFactory factory,
-    ProcessingUnit processingUnit) {
+    StreamingProcessMetadata metadata) {
   auto sanitizedName = sanitizeName(name);
   windowFunctions()[sanitizedName] = {
-      std::move(signatures), std::move(factory), processingUnit};
+      std::move(signatures), std::move(factory), metadata};
   return true;
+}
+
+std::optional<StreamingProcessMetadata> getWindowFunctionMetadata(
+    const std::string& name) {
+  auto sanitizedName = sanitizeName(name);
+  if (auto func = getWindowFunctionEntry(sanitizedName)) {
+    return func.value()->metadata;
+  }
+  return std::nullopt;
 }
 
 std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(

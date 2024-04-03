@@ -41,6 +41,12 @@ enum class ProcessingUnit {
   kRows,
 };
 
+/// Store the metadata for WindowFunction.
+struct StreamingProcessMetadata {
+  ProcessingUnit processingUnit;
+  bool ignoreFrame;
+};
+
 class WindowFunction {
  public:
   explicit WindowFunction(
@@ -160,7 +166,7 @@ bool registerWindowFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
     WindowFunctionFactory factory,
-    ProcessingUnit processingUnit = ProcessingUnit::kPartition);
+    StreamingProcessMetadata metadata = {ProcessingUnit::kPartition, false});
 
 /// Returns signatures of the window function with the specified name.
 /// Returns empty std::optional if function with that name is not found.
@@ -170,10 +176,10 @@ std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(
 struct WindowFunctionEntry {
   std::vector<FunctionSignaturePtr> signatures;
   WindowFunctionFactory factory;
-  ProcessingUnit processingUnit;
+  StreamingProcessMetadata metadata;
 };
 
-std::optional<const WindowFunctionEntry*> getWindowFunctionEntry(
+std::optional<StreamingProcessMetadata> getWindowFunctionMetadata(
     const std::string& name);
 
 using WindowFunctionMap = std::unordered_map<std::string, WindowFunctionEntry>;

@@ -194,14 +194,14 @@ void Window::createWindowFunctions() {
   }
 }
 
-// The supportRowLevelStreaming is designed to support 'rank' and
+// Support 'rank' and
 // 'row_number' functions and the agg window function with default frame.
 bool Window::supportRowLevelStreaming() {
   for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
     const auto& functionName = windowNodeFunction.functionCall->name();
-    auto windowFunctionEntry =
-        exec::getWindowFunctionEntry(functionName).value();
-    if (windowFunctionEntry->processingUnit == ProcessingUnit::kPartition) {
+    auto windowFunctionMetadata =
+        exec::getWindowFunctionMetadata(functionName).value();
+    if (windowFunctionMetadata.processingUnit == ProcessingUnit::kPartition) {
       return false;
     }
 
@@ -210,8 +210,7 @@ bool Window::supportRowLevelStreaming() {
         (frame.startType == core::WindowNode::BoundType::kUnboundedPreceding &&
          frame.endType == core::WindowNode::BoundType::kCurrentRow);
     // Only support the agg window function with default frame.
-    if (!(functionName == "rank" || functionName == "row_number") &&
-        !isDefaultFrame) {
+    if (!windowFunctionMetadata.ignoreFrame && !isDefaultFrame) {
       return false;
     }
   }
