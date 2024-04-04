@@ -109,12 +109,12 @@ Division
 Perfect division is not possible. For example, 1 / 3 cannot be represented as a
 decimal value.
 
-When dividing a number with p1 digits over a number of s2 scale, we need p1 + s2
-digits for the result. In the worst case we divide by 0.0000001, which
-effectively is a multiplication by 10^s2.
+When dividing a number with p1 digits over a number of s2 scale, the biggest result requires s2 extra digits before the
+decimal point. To get the largest number we must divide by 0.0000001, which effectively is a multiplication by 10^s2.
+Hence, precision of the result needs to be at least p1 + s2.
 
 Presto also chooses to extend the scale of the result to a maximum of scales of
-the inputs. It is not clear exactly why.
+the inputs.
 
 ::
 
@@ -130,6 +130,40 @@ difference in s1 and s.
 Like in Addition, the precision of the result may exceed 38. The choices are the
 same. Presto chooses to cap p at 38 and allow runtime errors.
 
+Let’s say :code:`a is of type decimal(p1, s1)` with unscaled value `A` and :code:`b is of type decimal(p2, s2)`
+with unscaled value B.
+
+::
+
+    a = A / 10^s1
+    a = B / 10^s2
+
+The result type precision and scale are:
+
+::
+
+	s = max(s1, s2)
+	p = p1 + s2 + max(0, s2 - s1)
+
+The final result:
+::
+
+   r = a / b = (A / 10^s1) / (B / 10^s2) = A * 10^(s2 - s1) / B
+   r = R / 10^s
+   R = r * 10^s = A * 10^(s + s2 - s1) / B
+
+To compute this value, we first rescale A using the rescale factor :code:`(s + s2 - s1)`, then divide by B and
+round to the nearest whole. This method works as long as the :code:`rescale factor < 38`. If :code:`s + s2 - s1`
+exceeds 38, an error is raised.
+
+**Result scale and rescale factor**
+We don't have a definitive answer for setting result scale to  :code:`s=max(s1, s2)`.
+One possible reason is to ensure dividend rescale :code:`s + s2 - s1` >= 0.
+Let's assume :code:`A= Decimal(10, 0) and B=Decimal(13, 13)` and we are computing :code:`A/B`. The result scale
+:code:`s = max(0, 13) = 13` and :code:`rf = 13 + (0 - 13)`. If we don't set the result scale to max of input scales,
+then our rescale factor wouldn't be a positive integer.
+
+Like in Addition, the precision of the result may exceed 38. Presto chooses to cap p at 38 and allow runtime errors.
 Velox implementation matches Presto.
 
 Decimal Functions
@@ -150,8 +184,10 @@ Decimal Functions
         p = min(38, p1 + s2 + max(0, s2 - s1))
         s = max(s1, s2)
 
-    Throws if y is zero or result cannot be represented using precision calculated
+    Throws if:
+    1. y is zero or result cannot be represented using precision calculated
     above.
+    2. :code:`rescale factor=max(s1, s2) - s1 + s2 exceeds 38`.
 
 .. function:: floor(x: decimal(p, s)) -> r: decimal(pr, 0)
 
@@ -234,3 +270,4 @@ Decimal Functions
         SELECT round(123.45, -1); -- 120.00
         SELECT round(123.45, -2); -- 100.00
         SELECT round(123.45, -10); -- 0.00
+
