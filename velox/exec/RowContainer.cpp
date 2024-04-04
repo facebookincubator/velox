@@ -393,7 +393,7 @@ void RowContainer::appendNextRow(char* current, char* nextRow) {
   NextRowVector*& nextRowArrayPtr = getNextRowVector(current);
   if (!nextRowArrayPtr) {
     nextRowArrayPtr =
-        new (stringAllocator_->allocateFromPool(kNextRowVectorSize))
+        new (stringAllocator_->allocate(kNextRowVectorSize)->begin())
             NextRowVector(StlAllocator<char*>(stringAllocator_.get()));
     hasDuplicateRows_ = true;
     nextRowArrayPtr->emplace_back(current);
@@ -470,7 +470,7 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
         }
         auto allocator = vector->get_allocator().allocator();
         vector->~vector();
-        allocator->freeToPool(vector, kNextRowVectorSize);
+        allocator->free(HashStringAllocator::headerOf(vector));
       }
     }
     return;
@@ -489,7 +489,7 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
       }
       auto allocator = vector->get_allocator().allocator();
       vector->~vector();
-      allocator->freeToPool(vector, kNextRowVectorSize);
+      allocator->free(HashStringAllocator::headerOf(vector));
     }
   }
 }
