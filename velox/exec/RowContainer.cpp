@@ -23,6 +23,8 @@
 
 namespace facebook::velox::exec {
 namespace {
+static constexpr int32_t kNextRowVectorSize = sizeof(NextRowVector);
+
 template <TypeKind Kind>
 static int32_t kindSize() {
   return sizeof(typename KindToFlatVector<Kind>::HashRowType);
@@ -391,7 +393,8 @@ void RowContainer::appendNextRow(char* current, char* nextRow) {
   NextRowVector*& nextRowArrayPtr = getNextRowVector(current);
   if (!nextRowArrayPtr) {
     nextRowArrayPtr =
-        new NextRowVector(StlAllocator<char*>(stringAllocator_.get()));
+        new (stringAllocator_->allocateFromPool(kNextRowVectorSize))
+            NextRowVector(StlAllocator<char*>(stringAllocator_.get()));
     hasDuplicateRows_ = true;
     nextRowArrayPtr->emplace_back(current);
   }
@@ -465,7 +468,9 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
         for (auto& next : *vector) {
           getNextRowVector(next) = nullptr;
         }
-        delete vector;
+        auto allocator = vector->get_allocator().allocator();
+        vector->~vector();
+        allocator->freeToPool(vector, kNextRowVectorSize);
       }
     }
     return;
@@ -482,7 +487,9 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
             "All rows with the same keys must be present in 'rows'");
         getNextRowVector(next) = nullptr;
       }
-      delete vector;
+      auto allocator = vector->get_allocator().allocator();
+      vector->~vector();
+      allocator->freeToPool(vector, kNextRowVectorSize);
     }
   }
 }
