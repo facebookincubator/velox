@@ -338,6 +338,7 @@ struct ToBase32Function {
   }
 };
 
+template <typename T>
 struct FromBase32Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
