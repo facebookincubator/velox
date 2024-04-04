@@ -885,7 +885,8 @@ class MemoryPoolImpl : public MemoryPool {
     if (FOLLY_UNLIKELY(
             (reservationBytes_ < usedReservationBytes_) ||
             (reservationBytes_ < minReservationBytes_) ||
-            (usedReservationBytes_ < 0))) {
+            (usedReservationBytes_ < 0) ||
+            (isRoot() && reservationBytes_ > peakBytes_))) {
       VELOX_FAIL("Bad memory usage track state: {}", toStringLocked());
     }
   }
