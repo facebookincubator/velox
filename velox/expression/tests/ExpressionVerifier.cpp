@@ -48,7 +48,8 @@ ResultOrError ExpressionVerifier::verify(
     bool canThrow,
     std::vector<int> columnsToWrapInLazy) {
   for (int i = 0; i < plans.size(); ++i) {
-    LOG(INFO) << "Executing expression " << i << " : " << plans[i]->toString();
+    LOG(INFO) << "Executing expression " << i << " : " << plans[i]->toString()
+              << " -> " << plans[i]->type()->toString();
   }
   logRowVector(rowVector);
 

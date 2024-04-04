@@ -379,4 +379,6 @@ RowTypePtr randRowType(
     const std::vector<TypePtr>& scalarTypes,
     int maxDepth = 5);
 
+TypePtr randDecimalType(FuzzerGenerator& rng);
+
 } // namespace facebook::velox

@@ -1040,7 +1040,31 @@ const std::vector<TypePtr> defaultScalarTypes() {
   };
   return kScalarTypes;
 }
+
+std::pair<int8_t, int8_t> randPrecisionScale(
+    FuzzerGenerator& rng,
+    int8_t maxPrecision) {
+  // Generate precision in range [1, Decimal type max precision]
+  auto precision = 1 + rand<int8_t>(rng) % maxPrecision;
+  // Generate scale in range [0, precision]
+  auto scale = rand<int8_t>(rng) % (precision + 1);
+  return {precision, scale};
+}
+
 } // namespace
+
+TypePtr randDecimalType(FuzzerGenerator& rng) {
+  // Short or Long?
+  if (rand<bool>(rng)) {
+    auto [precision, scale] =
+        randPrecisionScale(rng, ShortDecimalType::kMaxPrecision);
+    return DECIMAL(precision, scale);
+  } else {
+    auto [precision, scale] =
+        randPrecisionScale(rng, LongDecimalType::kMaxPrecision);
+    return DECIMAL(precision, scale);
+  }
+}
 
 TypePtr randType(FuzzerGenerator& rng, int maxDepth) {
   return randType(rng, defaultScalarTypes(), maxDepth);

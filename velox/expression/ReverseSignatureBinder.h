@@ -43,6 +43,10 @@ class ReverseSignatureBinder : private SignatureBinderBase {
     return typeVariablesBindings_;
   }
 
+  const std::unordered_map<std::string, int>& integerBindings() const {
+    return integerVariablesBindings_;
+  }
+
  private:
   /// Return whether there is a constraint on an integer variable in type
   /// signature.

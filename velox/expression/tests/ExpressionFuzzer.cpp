@@ -32,6 +32,195 @@
 namespace facebook::velox::test {
 
 namespace {
+
+int32_t rand(FuzzerGenerator& rng) {
+  return boost::random::uniform_int_distribution<int32_t>()(rng);
+}
+
+class DecimalArgGeneratorBase : public ArgGenerator {
+ public:
+  TypePtr generateReturnType(
+      const exec::FunctionSignature& /*signature*/,
+      FuzzerGenerator& /*rng*/) override {
+    auto [p, s] = inputs_.begin()->first;
+    return DECIMAL(p, s);
+  }
+
+  std::vector<TypePtr> generateArgs(
+      const exec::FunctionSignature& /*signature*/,
+      const TypePtr& returnType,
+      FuzzerGenerator& rng) override {
+    auto inputs = findInputs(returnType, rng);
+    if (inputs.a == nullptr || inputs.b == nullptr) {
+      return {};
+    }
+
+    return {std::move(inputs.a), std::move(inputs.b)};
+  }
+
+ protected:
+  // Compute result type for all possible pairs of decimal input types. Store
+  // the results in 'inputs_' maps keyed by return type.
+  void initialize() {
+    std::vector<TypePtr> allTypes;
+    for (auto p = 1; p < 38; ++p) {
+      for (auto s = 0; s <= p; ++s) {
+        allTypes.push_back(DECIMAL(p, s));
+      }
+    }
+
+    for (auto& a : allTypes) {
+      for (auto& b : allTypes) {
+        auto [p1, s1] = getDecimalPrecisionScale(*a);
+        auto [p2, s2] = getDecimalPrecisionScale(*b);
+
+        if (auto returnType = toReturnType(p1, s1, p2, s2)) {
+          inputs_[returnType.value()].push_back({a, b});
+        }
+      }
+    }
+  }
+
+  struct Inputs {
+    TypePtr a;
+    TypePtr b;
+  };
+
+  // Return randomly selected pair of input types that produce the specified
+  // result type.
+  Inputs findInputs(const TypePtr& returnType, FuzzerGenerator& rng) const {
+    auto [p, s] = getDecimalPrecisionScale(*returnType);
+    auto it = inputs_.find({p, s});
+    if (it == inputs_.end()) {
+      LOG(ERROR) << "Cannot find input types for " << returnType->toString();
+      return {nullptr, nullptr};
+    }
+
+    auto index = rand(rng) % it->second.size();
+    return it->second[index];
+  }
+
+  // Given precisions and scales of the inputs, return precision and scale of
+  // the result.
+  virtual std::optional<std::pair<int, int>>
+  toReturnType(int p1, int s1, int p2, int s2) = 0;
+
+  std::map<std::pair<int, int>, std::vector<Inputs>> inputs_;
+};
+
+class PlusMinusArgGenerator : public DecimalArgGeneratorBase {
+ public:
+  PlusMinusArgGenerator() {
+    initialize();
+  }
+
+ protected:
+  std::optional<std::pair<int, int>>
+  toReturnType(int p1, int s1, int p2, int s2) override {
+    auto s = std::max(s1, s2);
+    auto p = std::min(38, std::max(p1 - s1, p2 - s2) + 1 + s);
+    return {{p, s}};
+  }
+};
+
+class MultiplyArgGenerator : public DecimalArgGeneratorBase {
+ public:
+  MultiplyArgGenerator() {
+    initialize();
+  }
+
+ protected:
+  std::optional<std::pair<int, int>>
+  toReturnType(int p1, int s1, int p2, int s2) override {
+    if (s1 + s2 > 38) {
+      return std::nullopt;
+    }
+
+    auto p = std::min(38, p1 + p2);
+    auto s = s1 + s2;
+    return {{p, s}};
+  }
+};
+
+class DivideArgGenerator : public DecimalArgGeneratorBase {
+ public:
+  DivideArgGenerator() {
+    initialize();
+  }
+
+ protected:
+  std::optional<std::pair<int, int>>
+  toReturnType(int p1, int s1, int p2, int s2) override {
+    if (s1 + s2 > 38) {
+      return std::nullopt;
+    }
+
+    auto p = std::min(38, p1 + s2 + std::max(0, s2 - s1));
+    auto s = std::max(s1, s2);
+    return {{p, s}};
+  }
+};
+
+class FloorAndRoundArgGenerator : public ArgGenerator {
+ public:
+  TypePtr generateReturnType(
+      const exec::FunctionSignature& signature,
+      FuzzerGenerator& rng) override {
+    if (signature.argumentTypes().size() == 1) {
+      auto p = 1 + rand(rng) % 38;
+      return DECIMAL(p, 0);
+    } else {
+      auto p = 2 + rand(rng) % 37;
+      auto s = rand(rng) % p;
+      return DECIMAL(p, s);
+    }
+  }
+
+  std::vector<TypePtr> generateArgs(
+      const exec::FunctionSignature& signature,
+      const TypePtr& returnType,
+      FuzzerGenerator& rng) override {
+    if (signature.argumentTypes().size() == 1) {
+      return generateSingleArg(returnType, rng);
+    } else {
+      VELOX_CHECK_EQ(2, signature.argumentTypes().size())
+      return generateTwoArgs(returnType);
+    }
+  }
+
+ private:
+  std::vector<TypePtr> generateSingleArg(
+      const TypePtr& returnType,
+      FuzzerGenerator& rng) {
+    auto [p, s] = getDecimalPrecisionScale(*returnType);
+
+    // p = p1 - s1 + min(s1, 1)
+    // s = 0
+    if (s != 0) {
+      return {};
+    }
+
+    auto s1 = rand(rng) % (38 - p + 1);
+    if (s1 == 0) {
+      return {DECIMAL(p, 0)};
+    }
+
+    return {DECIMAL(p - 1 + s1, s1)};
+  }
+
+  std::vector<TypePtr> generateTwoArgs(const TypePtr& returnType) {
+    auto [p, s] = getDecimalPrecisionScale(*returnType);
+
+    // p = p1 + 1
+    // s = s1
+    if (p == 1 || p == s) {
+      return {};
+    }
+
+    return {DECIMAL(p - 1, s), INTEGER()};
+  }
+};
+
 using exec::SignatureBinder;
 using exec::SignatureBinderBase;
 
@@ -249,8 +438,8 @@ static const std::unordered_map<
         },
         {
             "cast",
-            /// TODO: Add supported Cast signatures to CastTypedExpr and expose
-            /// them to fuzzer instead of hard-coding signatures here.
+            // TODO: Add supported Cast signatures to CastTypedExpr and expose
+            // them to fuzzer instead of hard-coding signatures here.
             getSignaturesForCast(),
         },
 };
@@ -440,9 +629,9 @@ bool isSupportedSignature(
   // timestamp with time zone types.
   return !(
       useTypeName(signature, "opaque") ||
-      useTypeName(signature, "long_decimal") ||
-      useTypeName(signature, "short_decimal") ||
-      useTypeName(signature, "decimal") ||
+      // useTypeName(signature, "long_decimal") ||
+      // useTypeName(signature, "short_decimal") ||
+      // useTypeName(signature, "decimal") ||
       useTypeName(signature, "timestamp with time zone") ||
       useTypeName(signature, "interval day to second") ||
       (enableComplexType && useTypeName(signature, "unknown")));
@@ -533,6 +722,15 @@ ExpressionFuzzer::ExpressionFuzzer(
   VELOX_CHECK(vectorFuzzer, "Vector fuzzer must be provided");
   seed(initialSeed);
 
+  argGenerators_.emplace("plus", std::make_shared<PlusMinusArgGenerator>());
+  argGenerators_.emplace("minus", std::make_shared<PlusMinusArgGenerator>());
+  argGenerators_.emplace("multiply", std::make_shared<MultiplyArgGenerator>());
+  argGenerators_.emplace("divide", std::make_shared<DivideArgGenerator>());
+  argGenerators_.emplace(
+      "floor", std::make_shared<FloorAndRoundArgGenerator>());
+  argGenerators_.emplace(
+      "round", std::make_shared<FloorAndRoundArgGenerator>());
+
   appendSpecialForms(signatureMap, options_.specialForms);
   filterSignatures(
       signatureMap, options_.useOnlyFunctions, options_.skipFunctions);
@@ -590,11 +788,28 @@ ExpressionFuzzer::ExpressionFuzzer(
           continue;
         }
       } else {
+        // TODO Remove this code. argTypes are used only to call
+        // isDeterministic() which can be be figured out without the argTypes.
         ArgumentTypeFuzzer typeFuzzer{*signature, localRng};
-        typeFuzzer.fuzzReturnType();
-        VELOX_CHECK_EQ(
-            typeFuzzer.fuzzArgumentTypes(options_.maxNumVarArgs), true);
-        argTypes = typeFuzzer.argumentTypes();
+        auto returnType = typeFuzzer.fuzzReturnType();
+        bool ok = typeFuzzer.fuzzArgumentTypes(options_.maxNumVarArgs);
+        if (!ok) {
+          auto it = argGenerators_.find(function.first);
+          if (it != argGenerators_.end()) {
+            returnType = it->second->generateReturnType(*signature, localRng);
+            argTypes =
+                it->second->generateArgs(*signature, returnType, localRng);
+            VELOX_CHECK(
+                !argTypes.empty(),
+                "Failed to generate arguments for {} with return type {}",
+                function.first,
+                returnType->toString());
+          } else {
+            VELOX_FAIL("Failed to generate arguments");
+          }
+        } else {
+          argTypes = typeFuzzer.argumentTypes();
+        }
       }
       if (!isDeterministic(function.first, argTypes)) {
         LOG(WARNING) << "Skipping non-deterministic function: "
@@ -1168,6 +1383,11 @@ const SignatureTemplate* ExpressionFuzzer::chooseRandomSignatureTemplate(
     }
   }
   if (eligible.empty()) {
+    if (argGenerators_.find(functionName) != argGenerators_.end()) {
+      auto idx = rand32(0, signatureTemplates.size() - 1);
+      return signatureTemplates[idx];
+    }
+
     return nullptr;
   }
 
@@ -1223,8 +1443,21 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
 
   auto chosenSignature = *chosen->signature;
   ArgumentTypeFuzzer fuzzer{chosenSignature, returnType, rng_};
-  VELOX_CHECK_EQ(fuzzer.fuzzArgumentTypes(options_.maxNumVarArgs), true);
-  auto& argumentTypes = fuzzer.argumentTypes();
+  bool ok = fuzzer.fuzzArgumentTypes(options_.maxNumVarArgs);
+
+  std::vector<TypePtr> argumentTypes;
+  if (!ok) {
+    auto it = argGenerators_.find(functionName);
+    VELOX_CHECK(it != argGenerators_.end());
+
+    argumentTypes = it->second->generateArgs(chosenSignature, returnType, rng_);
+    if (argumentTypes.empty()) {
+      return nullptr;
+    }
+  } else {
+    argumentTypes = fuzzer.argumentTypes();
+  }
+
   auto constantArguments = chosenSignature.constantArguments();
 
   // ArgumentFuzzer may generate duplicate arguments if the signature's

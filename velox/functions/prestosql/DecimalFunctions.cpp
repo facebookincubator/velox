@@ -176,6 +176,7 @@ struct DecimalDivideFunction {
     auto [rPrecision, rScale] =
         computeResultPrecisionScale(aPrecision, aScale, bPrecision, bScale);
     aRescale_ = computeRescaleFactor(aScale, bScale, rScale);
+    VELOX_USER_CHECK_LE(aRescale_, LongDecimalType::kMaxPrecision);
   }
 
   template <typename R, typename A, typename B>

@@ -27,6 +27,25 @@
 
 namespace facebook::velox::test {
 
+class ArgGenerator {
+ public:
+  virtual ~ArgGenerator() = default;
+
+  /// Given a signature and a concrete return type return randomly selected
+  /// valid input types. Returns empty vector if no input types can
+  /// produce the specified result type.
+  virtual std::vector<TypePtr> generateArgs(
+      const exec::FunctionSignature& signature,
+      const TypePtr& returnType,
+      FuzzerGenerator& rng) = 0;
+
+  /// Returns a randomly generated valid return type for a given signature.
+  /// TODO Remove. This API should not be needed.
+  virtual TypePtr generateReturnType(
+      const exec::FunctionSignature& signature,
+      FuzzerGenerator& rng) = 0;
+};
+
 // A tool that can be used to generate random expressions.
 class ExpressionFuzzer {
  public:
@@ -416,6 +435,8 @@ class ExpressionFuzzer {
 
   } state;
   friend class ExpressionFuzzerUnitTest;
+
+  std::unordered_map<std::string, std::shared_ptr<ArgGenerator>> argGenerators_;
 };
 
 } // namespace facebook::velox::test

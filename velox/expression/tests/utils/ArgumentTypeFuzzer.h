@@ -69,6 +69,8 @@ class ArgumentTypeFuzzer {
   /// randomly generated type.
   void determineUnboundedTypeVariables();
 
+  void determineUnboundedIntegerVariables(const exec::TypeSignature& type);
+
   TypePtr randType();
 
   /// Generates an orderable random type, including structs, and arrays.
@@ -82,6 +84,8 @@ class ArgumentTypeFuzzer {
 
   /// Bindings between type variables and their actual types.
   std::unordered_map<std::string, TypePtr> bindings_;
+
+  std::unordered_map<std::string, int> integerBindings_;
 
   /// RNG to generate random types for unbounded type variables when necessary.
   std::mt19937& rng_;

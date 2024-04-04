@@ -239,7 +239,7 @@ TypePtr SignatureBinder::tryResolveType(
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const std::unordered_map<std::string, TypePtr>& typeVariablesBindings,
     std::unordered_map<std::string, int>& integerVariablesBindings) {
-  const auto baseName = typeSignature.baseName();
+  const auto& baseName = typeSignature.baseName();
 
   if (variables.count(baseName)) {
     auto it = typeVariablesBindings.find(baseName);
