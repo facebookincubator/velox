@@ -259,7 +259,7 @@ uint64_t SharedArbitrator::shrinkCapacity(
   {
     std::lock_guard<std::mutex> l(mutex_);
     ++numReleases_;
-    freedBytes = pool->shrink(targetBytes);
+    freedBytes = pool->shrink(targetBytes, true);
     incrementFreeCapacityLocked(freedBytes);
     freeCapacity = freeCapacity_ + freeReservedCapacity_;
     freeReservedCapacity = freeReservedCapacity_;
@@ -430,7 +430,7 @@ bool SharedArbitrator::handleOOM(
   }
   // Free up all the unused capacity from the aborted memory pool and gives back
   // to the arbitrator.
-  incrementFreeCapacity(victim->shrink());
+  incrementFreeCapacity(victim->shrink(0, true));
   return true;
 }
 
@@ -510,7 +510,7 @@ uint64_t SharedArbitrator::reclaimFreeMemoryFromCandidates(
     if (bytesToShrink <= 0) {
       break;
     }
-    freedBytes += candidate.pool->shrink(bytesToShrink);
+    freedBytes += candidate.pool->shrink(bytesToShrink, false);
     if (freedBytes >= targetBytes) {
       break;
     }
@@ -566,7 +566,7 @@ uint64_t SharedArbitrator::reclaimUsedMemoryFromCandidatesByAbort(
     } catch (VeloxRuntimeError&) {
       abort(candidate.pool, std::current_exception());
     }
-    freedBytes += candidate.pool->shrink();
+    freedBytes += candidate.pool->shrink(0, true);
     if (freedBytes >= targetBytes) {
       break;
     }
@@ -588,7 +588,7 @@ uint64_t SharedArbitrator::reclaim(
     MicrosecondTimer reclaimTimer(&reclaimDurationUs);
     const uint64_t oldCapacity = pool->capacity();
     try {
-      freedBytes = pool->shrink(targetBytes);
+      freedBytes = pool->shrink(targetBytes, false);
       if (freedBytes < targetBytes) {
         if (isLocalArbitration) {
           incrementLocalArbitrationCount();
@@ -602,7 +602,7 @@ uint64_t SharedArbitrator::reclaim(
       abort(pool, std::current_exception());
       // Free up all the free capacity from the aborted pool as the associated
       // query has failed at this point.
-      pool->shrink();
+      pool->shrink(0, true);
     }
     const uint64_t newCapacity = pool->capacity();
     VELOX_CHECK_GE(oldCapacity, newCapacity);

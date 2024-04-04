@@ -57,7 +57,7 @@ class MemoryArbitrator {
     /// manager.
     int64_t capacity;
 
-    uint64_t reservedCapacity{6ULL << 30};
+    int64_t reservedCapacity{6LL << 30};
 
     /// The min reserved capacity for each query.
     uint64_t minReservedCapacity{64UL << 20};
@@ -251,7 +251,7 @@ class MemoryArbitrator {
         memoryReclaimWaitMs_(config.memoryReclaimWaitMs),
         arbitrationStateCheckCb_(config.arbitrationStateCheckCb),
         checkUsageLeak_(config.checkUsageLeak) {
-    VELOX_CHECK_LT(reservedCapacity_, capacity_);
+    VELOX_CHECK_LE(reservedCapacity_, capacity_);
     VELOX_CHECK_EQ(reservedCapacity_ % minReservedCapacity_, 0);
   }
 

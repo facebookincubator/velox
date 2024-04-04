@@ -61,6 +61,7 @@ std::unique_ptr<MemoryArbitrator> createArbitrator(
       {.kind = options.arbitratorKind,
        .capacity =
            std::min(options.arbitratorCapacity, options.allocatorCapacity),
+       .reservedCapacity = options.arbitratorReservedCapacity,
        .memoryPoolTransferCapacity = options.memoryPoolTransferCapacity,
        .memoryReclaimWaitMs = options.memoryReclaimWaitMs,
        .arbitrationStateCheckCb = options.arbitrationStateCheckCb,

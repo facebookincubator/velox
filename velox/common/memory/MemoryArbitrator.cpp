@@ -200,7 +200,10 @@ bool MemoryReclaimer::reclaimableBytes(
   if (pool.kind() == MemoryPool::Kind::kLeaf) {
     return false;
   }
-  bool reclaimable{false};
+  if (pool.capacity() < pool.minCapacity_) {
+    return false;
+  }
+   bool reclaimable{false};
   pool.visitChildren([&](MemoryPool* pool) {
     auto reclaimableBytesOpt = pool->reclaimableBytes();
     reclaimable |= reclaimableBytesOpt.has_value();
@@ -217,6 +220,9 @@ uint64_t MemoryReclaimer::reclaim(
     uint64_t maxWaitMs,
     Stats& stats) {
   if (pool->kind() == MemoryPool::Kind::kLeaf) {
+    return 0;
+  }
+  if (pool->capacity() < pool->minCapacity_) {
     return 0;
   }
 
