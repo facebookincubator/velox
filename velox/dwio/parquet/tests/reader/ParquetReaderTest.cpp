@@ -968,7 +968,8 @@ TEST_F(ParquetReaderTest, structSkipRowGroup) {
   auto readerWithoutFilter = createReader(upper, readerOptions);
   auto scanSpec = makeScanSpec(rowType);
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReaderWithoutFilter = readerWithoutFilter->createRowReader(rowReaderOpts);
+  auto rowReaderWithoutFilter =
+      readerWithoutFilter->createRowReader(rowReaderOpts);
   rowReaderWithoutFilter->updateRuntimeStats(runtimeStats_);
   EXPECT_EQ(runtimeStats_.skippedStrides, 0);
 
@@ -981,6 +982,7 @@ TEST_F(ParquetReaderTest, structSkipRowGroup) {
   auto rowReaderWithFilter = readerWithFilter->createRowReader(rowReaderOpts);
   rowReaderWithFilter->updateRuntimeStats(runtimeStats_);
   EXPECT_EQ(runtimeStats_.skippedStrides, 1);
+}
 
 TEST_F(ParquetReaderTest, testEnumType) {
   // enum_type.parquet contains 1 column (ENUM) with 3 rows.
