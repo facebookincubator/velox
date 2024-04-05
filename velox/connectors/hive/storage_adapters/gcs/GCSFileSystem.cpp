@@ -72,7 +72,7 @@ class GCSReadFile final : public ReadFile {
 
   // Gets the length of the file.
   // Checks if there are any issues reading the file.
-  void initialize(const FileOptions& options) {
+  void initialize(const filesystems::FileOptions& options) {
     if (options.values.count("fileSize") > 0) {
       length_ = !options.values.at("fileSize").empty()
           ? std::stoull(options.values.at("fileSize"))
