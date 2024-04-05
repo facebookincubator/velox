@@ -111,16 +111,16 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyArrayValue) {
   //      }
   //    }
   //  }
-  const std::string sample(getExampleFilePath("array_of_map_of_int_key_list_value.parquet"));
+  const std::string sample(getExampleFilePath("array_of_map_of_int_key_array_value.parquet"));
   facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
   auto numRows = reader->numberOfRows();
   auto type = reader->typeWithId();
   RowReaderOptions rowReaderOpts;
-  auto rowType1 = ROW({"test"}, {ARRAY(MAP(VARCHAR(), ARRAY(INTEGER())))});
-  rowReaderOpts.setScanSpec(makeScanSpec(rowType1));
+  auto rowType = ROW({"test"}, {ARRAY(MAP(VARCHAR(), ARRAY(INTEGER())))});
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
   auto rowReader = reader->createRowReader(rowReaderOpts);
-  auto result = BaseVector::create(rowType1, 10, leafPool_.get());
+  auto result = BaseVector::create(rowType, 10, leafPool_.get());
   constexpr int kBatchSize = 1000;
   while (rowReader->next(kBatchSize, result)) {
   }
@@ -147,10 +147,10 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
   auto numRows = reader->numberOfRows();
   auto type = reader->typeWithId();
   RowReaderOptions rowReaderOpts;
-  auto rowType1 = reader->rowType();
-  rowReaderOpts.setScanSpec(makeScanSpec(rowType1));
+  auto rowType = reader->rowType();
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
   auto rowReader = reader->createRowReader(rowReaderOpts);
-  auto result = BaseVector::create(rowType1, 10, leafPool_.get());
+  auto result = BaseVector::create(rowType, 10, leafPool_.get());
   constexpr int kBatchSize = 1000;
   while (rowReader->next(kBatchSize, result)) {
   }
