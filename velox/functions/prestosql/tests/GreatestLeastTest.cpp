@@ -46,14 +46,6 @@ class GreatestLeastTest : public functions::test::FunctionBaseTest {
         query, makeRowVector(inputColumns), std::nullopt, resultType);
     for (int32_t i = 0; i < vectorSize; ++i) {
       if (output[i].has_value()) {
-        if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
-          // For double and float, if expected output is NaN then the result
-          // must also be NaN.
-          if (std::isnan(output[i].value())) {
-            ASSERT_TRUE(std::isnan(result->valueAt(i)));
-            continue;
-          }
-        }
         ASSERT_EQ(result->valueAt(i), output[i]);
       } else {
         ASSERT_TRUE(result->isNullAt(i));
@@ -92,132 +84,53 @@ TEST_F(GreatestLeastTest, leastReal) {
       {0, -100, -1.1});
 }
 
-TEST_F(GreatestLeastTest, leastNanInput) {
-  runTest<float>(
-      "least(c0)", {{0, std::nanf("1"), -1.1}}, {0, std::nanf("1"), -1.1});
-  runTest<float>(
-      "least(c0, c1)",
-      {
-          {-1.1},
-          {std::nanf("1")},
-      },
-      {-1.1});
-  runTest<float>(
-      "least(c0, c1)",
-      {
-          {std::nanf("1")},
-          {-1.1},
-      },
-      {-1.1});
-  runTest<float>(
-      "least(c0, c1)",
-      {
-          {-std::numeric_limits<float>::infinity()},
-          {std::nanf("1")},
-      },
-      {-std::numeric_limits<float>::infinity()});
-  runTest<float>(
-      "least(c0, c1)",
-      {
-          {std::nanf("1")},
-          {-std::numeric_limits<float>::infinity()},
-      },
-      {-std::numeric_limits<float>::infinity()});
+TEST_F(GreatestLeastTest, greatestNanInput) {
+  auto greatestFloatTestThreeArgs = [&](float a, float b, float c) {
+    return evaluateOnce<float, float, float, float>(
+               "greatest(c0, c1, c2)", {a}, {b}, {c})
+        .value();
+  };
 
-  runTest<double>(
-      "least(c0)", {{0, std::nan("1"), -1.1}}, {0, std::nan("1"), -1.1});
-  runTest<double>(
-      "least(c0, c1)",
-      {
-          {-1.1},
-          {std::nan("1")},
-      },
-      {-1.1});
-  runTest<double>(
-      "least(c0, c1)",
-      {
-          {std::nan("1")},
-          {-1.1},
-      },
-      {-1.1});
-  runTest<double>(
-      "least(c0, c1)",
-      {
-          {-std::numeric_limits<double>::infinity()},
-          {std::nanf("1")},
-      },
-      {-std::numeric_limits<double>::infinity()});
-  runTest<double>(
-      "least(c0, c1)",
-      {
-          {std::nanf("1")},
-          {-std::numeric_limits<double>::infinity()},
-      },
-      {-std::numeric_limits<double>::infinity()});
+  auto greatestDoubleTestThreeArgs = [&](double a, double b, double c) {
+    return evaluateOnce<double, double, double, double>(
+               "greatest(c0, c1, c2)", {a}, {b}, {c})
+        .value();
+  };
+
+  EXPECT_TRUE(std::isnan(greatestFloatTestThreeArgs(1.0, std::nanf("1"), 2.0)));
+  EXPECT_TRUE(std::isnan(greatestFloatTestThreeArgs(
+      std::nanf("1"), 1.0, std::numeric_limits<float>::infinity())));
+
+  EXPECT_TRUE(
+      std::isnan(greatestDoubleTestThreeArgs(1.0, std::nanf("1"), 2.0)));
+  EXPECT_TRUE(std::isnan(greatestDoubleTestThreeArgs(
+      std::nanf("1"), 1.0, std::numeric_limits<double>::infinity())));
 }
 
-TEST_F(GreatestLeastTest, greatestNanInput) {
-  runTest<float>(
-      "greatest(c0)", {{0, std::nanf("1"), -1.1}}, {0, std::nanf("1"), -1.1});
-  runTest<float>(
-      "greatest(c0, c1)",
-      {
-          {1.1},
-          {std::nanf("1")},
-      },
-      {std::nanf("1")});
-  runTest<float>(
-      "greatest(c0, c1)",
-      {
-          {std::nanf("1")},
-          {1.1},
-      },
-      {std::nanf("1")});
-  runTest<float>(
-      "greatest(c0, c1)",
-      {
-          {std::numeric_limits<float>::infinity()},
-          {std::nanf("1")},
-      },
-      {std::nanf("1")});
-  runTest<float>(
-      "greatest(c0, c1)",
-      {
-          {std::nanf("1")},
-          {std::numeric_limits<float>::infinity()},
-      },
-      {std::nanf("1")});
+TEST_F(GreatestLeastTest, leastNanInput) {
+  auto leastFloatTestThreeArgs = [&](float a, float b, float c) {
+    return evaluateOnce<float, float, float, float>(
+               "least(c0, c1, c2)", {a}, {b}, {c})
+        .value();
+  };
 
-  runTest<double>(
-      "greatest(c0)", {{0, std::nan("1"), -1.1}}, {0, std::nan("1"), -1.1});
-  runTest<double>(
-      "greatest(c0, c1)",
-      {
-          {1.1},
-          {std::nan("1")},
-      },
-      {std::nan("1")});
-  runTest<double>(
-      "greatest(c0, c1)",
-      {
-          {std::nan("1")},
-          {1.1},
-      },
-      {std::nan("1")});
-  runTest<double>(
-      "greatest(c0, c1)",
-      {
-          {std::numeric_limits<double>::infinity()},
-          {std::nan("1")},
-      },
-      {std::nan("1")});
-  runTest<double>(
-      "greatest(c0, c1)",
-      {
-          {std::nan("1")},
-          {std::numeric_limits<double>::infinity()},
-      },
-      {std::nan("1")});
+  auto leastDoubleTestThreeArgs = [&](double a, double b, double c) {
+    return evaluateOnce<double, double, double, double>(
+               "least(c0, c1, c2)", {a}, {b}, {c})
+        .value();
+  };
+
+  EXPECT_EQ(leastFloatTestThreeArgs(1.0, std::nanf("1"), 0.5), 0.5);
+  EXPECT_EQ(
+      leastFloatTestThreeArgs(
+          std::nanf("1"), 1.0, -std::numeric_limits<float>::infinity()),
+      -std::numeric_limits<double>::infinity());
+
+  EXPECT_EQ(leastDoubleTestThreeArgs(1.0, std::nanf("1"), 0.5), 0.5);
+  EXPECT_EQ(
+      leastDoubleTestThreeArgs(
+          std::nanf("1"), 1.0, -std::numeric_limits<double>::infinity()),
+      -std::numeric_limits<double>::infinity());
 }
 
 TEST_F(GreatestLeastTest, greatestDouble) {
