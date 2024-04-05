@@ -640,10 +640,13 @@ struct CastFromJsonTypedImpl {
   // class.
   template <TypeKind kind, typename Dummy = void>
   struct KindDispatcher {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wreturn-type"
     static simdjson::error_code apply(Input, exec::GenericWriter&) {
       VELOX_NYI(
           "Casting from JSON to {} is not supported.", TypeTraits<kind>::name);
     }
+#pragma GCC diagnostic pop
   };
 
   template <typename Dummy>
