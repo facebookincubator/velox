@@ -46,25 +46,14 @@ void FieldReference::apply(
   } else {
     inputs_[0]->eval(rows, context, input);
 
-    if (auto rowTry = input->as<RowVector>()) {
-      // Make sure output is not copied
-      if (rowTry->isCodegenOutput()) {
-        auto rowType = dynamic_cast<const RowType*>(rowTry->type().get());
-        index_ = rowType->getChildIdx(field_);
-        result = std::move(rowTry->childAt(index_));
-        VELOX_CHECK(result.unique());
-        return;
-      }
-    }
-
     decoded.decode(*input, rows);
     if (decoded.mayHaveNulls()) {
       nonNullRowsHolder.get(rows);
       nonNullRowsHolder->deselectNulls(
-          decoded.nulls(), rows.begin(), rows.end());
+          decoded.nulls(&rows), rows.begin(), rows.end());
       nonNullRows = nonNullRowsHolder.get();
       if (!nonNullRows->hasSelections()) {
-        addNulls(rows, decoded.nulls(), context, result);
+        addNulls(rows, decoded.nulls(&rows), context, result);
         return;
       }
     }
@@ -116,7 +105,7 @@ void FieldReference::apply(
 
   // Check for nulls in the input struct. Propagate these nulls to 'result'.
   if (!inputs_.empty() && decoded.mayHaveNulls()) {
-    addNulls(rows, decoded.nulls(), context, result);
+    addNulls(rows, decoded.nulls(&rows), context, result);
   }
 }
 

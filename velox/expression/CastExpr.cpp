@@ -159,10 +159,11 @@ VectorPtr CastExpr::castFromDate(
       auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         try {
+          // TODO Optimize to avoid creating an intermediate string.
           auto output = DATE()->toString(inputFlatVector->valueAt(row));
           auto writer = exec::StringWriter<>(resultFlatVector, row);
           writer.resize(output.size());
-          std::memcpy(writer.data(), output.data(), output.size());
+          ::memcpy(writer.data(), output.data(), output.size());
           writer.finalize();
         } catch (const VeloxException& ue) {
           if (!ue.isUserError()) {
@@ -244,6 +245,49 @@ VectorPtr CastExpr::castToDate(
     default:
       VELOX_UNSUPPORTED(
           "Cast from {} to DATE is not supported", fromType->toString());
+  }
+}
+
+VectorPtr CastExpr::castFromIntervalDayTime(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType) {
+  VectorPtr castResult;
+  context.ensureWritable(rows, toType, castResult);
+  (*castResult).clearNulls(rows);
+
+  auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
+  switch (toType->kind()) {
+    case TypeKind::VARCHAR: {
+      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        try {
+          // TODO Optimize to avoid creating an intermediate string.
+          auto output =
+              INTERVAL_DAY_TIME()->valueToString(inputFlatVector->valueAt(row));
+          auto writer = exec::StringWriter<>(resultFlatVector, row);
+          writer.resize(output.size());
+          ::memcpy(writer.data(), output.data(), output.size());
+          writer.finalize();
+        } catch (const VeloxException& ue) {
+          if (!ue.isUserError()) {
+            throw;
+          }
+          VELOX_USER_FAIL(
+              makeErrorMessage(input, row, toType) + " " + ue.message());
+        } catch (const std::exception& e) {
+          VELOX_USER_FAIL(
+              makeErrorMessage(input, row, toType) + " " + e.what());
+        }
+      });
+      return castResult;
+    }
+    default:
+      VELOX_UNSUPPORTED(
+          "Cast from {} to {} is not supported",
+          INTERVAL_DAY_TIME()->toString(),
+          toType->toString());
   }
 }
 
@@ -576,8 +620,12 @@ VectorPtr CastExpr::applyDecimal(
       applyIntToDecimalCastKernel<int32_t, toDecimalType>(
           rows, input, context, toType, castResult);
       break;
+    case TypeKind::REAL:
+      applyFloatingPointToDecimalCastKernel<float, toDecimalType>(
+          rows, input, context, toType, castResult);
+      break;
     case TypeKind::DOUBLE:
-      applyDoubleToDecimalCastKernel<toDecimalType>(
+      applyFloatingPointToDecimalCastKernel<double, toDecimalType>(
           rows, input, context, toType, castResult);
       break;
     case TypeKind::BIGINT: {
@@ -673,6 +721,13 @@ void CastExpr::applyPeeled(
     result = castFromDate(rows, input, context, toType);
   } else if (toType->isDate()) {
     result = castToDate(rows, input, context, fromType);
+  } else if (fromType->isIntervalDayTime()) {
+    result = castFromIntervalDayTime(rows, input, context, toType);
+  } else if (toType->isIntervalDayTime()) {
+    VELOX_UNSUPPORTED(
+        "Cast from {} to {} is not supported",
+        fromType->toString(),
+        toType->toString());
   } else if (toType->isShortDecimal()) {
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
   } else if (toType->isLongDecimal()) {
@@ -698,6 +753,11 @@ void CastExpr::applyPeeled(
             fromType,
             toType);
     }
+  } else if (
+      fromType->kind() == TypeKind::TIMESTAMP &&
+      (toType->kind() == TypeKind::VARCHAR ||
+       toType->kind() == TypeKind::VARBINARY)) {
+    result = applyTimestampToVarcharCast(toType, rows, context, input);
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:
@@ -740,6 +800,44 @@ void CastExpr::applyPeeled(
   }
 }
 
+VectorPtr CastExpr::applyTimestampToVarcharCast(
+    const TypePtr& toType,
+    const SelectivityVector& rows,
+    exec::EvalCtx& context,
+    const BaseVector& input) {
+  VectorPtr result;
+  context.ensureWritable(rows, toType, result);
+  (*result).clearNulls(rows);
+  auto flatResult = result->asFlatVector<StringView>();
+  const auto simpleInput = input.as<SimpleVector<Timestamp>>();
+
+  const auto& options = hooks_->timestampToStringOptions();
+  const uint32_t rowSize = getMaxStringLength(options);
+
+  Buffer* buffer = flatResult->getBufferWithSpace(
+      rows.countSelected() * rowSize, true /*exactSize*/);
+  char* rawBuffer = buffer->asMutable<char>() + buffer->size();
+
+  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
+    // Adjust input timestamp according the session timezone.
+    Timestamp inputValue(simpleInput->valueAt(row));
+    if (options.timeZone) {
+      inputValue.toTimezone(*(options.timeZone));
+    }
+    const auto stringView =
+        Timestamp::tsToStringView(inputValue, options, rawBuffer);
+    flatResult->setNoCopy(row, stringView);
+    // The result of both Presto and Spark contains more than 12 digits even
+    // when 'zeroPaddingYear' is disabled.
+    VELOX_DCHECK(!stringView.isInline());
+    rawBuffer += stringView.size();
+  });
+
+  // Update the exact buffer size.
+  buffer->setSize(rawBuffer - buffer->asMutable<char>());
+  return result;
+}
+
 void CastExpr::apply(
     const SelectivityVector& rows,
     const VectorPtr& input,
@@ -752,7 +850,7 @@ void CastExpr::apply(
   context.deselectErrors(*remainingRows);
 
   LocalDecodedVector decoded(context, *input, *remainingRows);
-  auto* rawNulls = decoded->nulls();
+  auto* rawNulls = decoded->nulls(remainingRows.get());
 
   if (rawNulls) {
     remainingRows->deselectNulls(

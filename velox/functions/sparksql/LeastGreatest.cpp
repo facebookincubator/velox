@@ -27,10 +27,6 @@ template <typename Cmp, TypeKind kind>
 class LeastGreatestFunction final : public exec::VectorFunction {
   using T = typename TypeTraits<kind>::NativeType;
 
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -56,7 +52,7 @@ class LeastGreatestFunction final : public exec::VectorFunction {
 
       // Only compare with non-null elements of each argument
       *cmpRows = rows;
-      if (auto* rawNulls = decodedVectorHolder->nulls()) {
+      if (auto* rawNulls = decodedVectorHolder->nulls(&rows)) {
         cmpRows->deselectNulls(rawNulls, 0, nrows);
       }
 

@@ -28,7 +28,7 @@ add_library(
   ArraySort.cpp
   ArraySum.cpp
   Comparisons.cpp
-  DecimalVectorFunctions.cpp
+  DecimalFunctions.cpp
   ElementAt.cpp
   FilterFunctions.cpp
   FindFirst.cpp
@@ -56,6 +56,7 @@ add_library(
   Transform.cpp
   TransformKeys.cpp
   TransformValues.cpp
+  TypeOf.cpp
   URLFunctions.cpp
   Utf8Utils.cpp
   VectorArithmetic.cpp

@@ -19,13 +19,13 @@
 #include <fmt/format.h>
 
 #include "velox/common/process/TraceContext.h"
+#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/exception/Exception.h"
 
 namespace facebook::velox::dwrf {
 
 using dwio::common::ColumnStatistics;
 using dwio::common::FileFormat;
-using dwio::common::InputStream;
 using dwio::common::LogType;
 using dwio::common::Statistics;
 using dwio::common::encryption::DecrypterFactory;
@@ -94,13 +94,15 @@ ReaderBase::ReaderBase(
     uint64_t footerEstimatedSize,
     uint64_t filePreloadThreshold,
     FileFormat fileFormat,
-    bool fileColumnNamesReadAsLowerCase)
+    bool fileColumnNamesReadAsLowerCase,
+    std::shared_ptr<random::RandomSkipTracker> randomSkip)
     : pool_{pool},
       arena_(std::make_unique<google::protobuf::Arena>()),
       decryptorFactory_(decryptorFactory),
       footerEstimatedSize_(footerEstimatedSize),
       filePreloadThreshold_(filePreloadThreshold),
-      input_(std::move(input)) {
+      input_(std::move(input)),
+      randomSkip_(std::move(randomSkip)) {
   process::TraceContext trace("ReaderBase::ReaderBase");
   // read last bytes into buffer to get PostScript
   // If file is small, load the entire file.

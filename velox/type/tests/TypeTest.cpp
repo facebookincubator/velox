@@ -16,6 +16,8 @@
 #include "velox/type/Type.h"
 #include <sstream>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/CppToType.h"
+#include "velox/type/SimpleFunctionApi.h"
 
 using namespace facebook;
 using namespace facebook::velox;
@@ -206,6 +208,11 @@ TEST(TypeTest, intervalYearMonth) {
   month = kMonthInYear * -2 + -1;
   EXPECT_EQ("-2-1", INTERVAL_YEAR_MONTH()->valueToString(month));
 
+  EXPECT_EQ(
+      "-178956970-8",
+      INTERVAL_YEAR_MONTH()->valueToString(
+          std::numeric_limits<int32_t>::min()));
+
   testTypeSerde(interval);
 }
 
@@ -220,6 +227,9 @@ TEST(TypeTest, shortDecimal) {
   EXPECT_EQ(*DECIMAL(10, 5), *shortDecimal);
   EXPECT_NE(*DECIMAL(9, 5), *shortDecimal);
   EXPECT_NE(*DECIMAL(10, 4), *shortDecimal);
+
+  VELOX_ASSERT_THROW(
+      DECIMAL(0, 0), "Precision of decimal type must be at least 1");
 
   EXPECT_STREQ(shortDecimal->name(), "DECIMAL");
   EXPECT_EQ(shortDecimal->parameters().size(), 2);
@@ -608,6 +618,12 @@ TEST(TypeTest, equality) {
   EXPECT_FALSE(
       *ROW({{"a", INTEGER()}, {"b", REAL()}}) ==
       *ROW({{"a", INTEGER()}, {"d", REAL()}}));
+  EXPECT_FALSE(
+      *ROW({{"a", ROW({{"x", INTEGER()}, {"y", INTEGER()}})}}) ==
+      *ROW({{"a", ROW({{"x", INTEGER()}, {"z", INTEGER()}})}}));
+  EXPECT_FALSE(
+      *ROW({{"a", ROW({{"x", INTEGER()}, {"y", INTEGER()}})}}) ==
+      *ARRAY(INTEGER()));
 
   // mix
   EXPECT_FALSE(MAP(REAL(), INTEGER())
@@ -637,6 +653,7 @@ TEST(TypeTest, cpp2Type) {
 TEST(TypeTest, equivalent) {
   EXPECT_TRUE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"b", BIGINT()}})));
   EXPECT_FALSE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"a", INTEGER()}})));
+  EXPECT_TRUE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"b", BIGINT()}})));
   EXPECT_TRUE(MAP(BIGINT(), BIGINT())->equivalent(*MAP(BIGINT(), BIGINT())));
   EXPECT_FALSE(
       MAP(BIGINT(), BIGINT())->equivalent(*MAP(BIGINT(), ARRAY(BIGINT()))));
@@ -792,36 +809,6 @@ TEST(TypeTest, isVariadicType) {
   EXPECT_FALSE(isVariadicType<velox::StringView>::value);
   EXPECT_FALSE(isVariadicType<bool>::value);
   EXPECT_FALSE((isVariadicType<Map<int8_t, Date>>::value));
-}
-
-TEST(TypeTest, fromKindToScalerType) {
-  for (const TypeKind& kind :
-       {TypeKind::BOOLEAN,
-        TypeKind::TINYINT,
-        TypeKind::SMALLINT,
-        TypeKind::INTEGER,
-        TypeKind::BIGINT,
-        TypeKind::REAL,
-        TypeKind::DOUBLE,
-        TypeKind::VARCHAR,
-        TypeKind::VARBINARY,
-        TypeKind::TIMESTAMP,
-        TypeKind::UNKNOWN}) {
-    SCOPED_TRACE(mapTypeKindToName(kind));
-    auto type = fromKindToScalerType(kind);
-    ASSERT_EQ(type->kind(), kind);
-  }
-
-  for (const TypeKind& kind :
-       {TypeKind::ARRAY,
-        TypeKind::MAP,
-        TypeKind::ROW,
-        TypeKind::OPAQUE,
-        TypeKind::FUNCTION,
-        TypeKind::INVALID}) {
-    SCOPED_TRACE(mapTypeKindToName(kind));
-    EXPECT_ANY_THROW(fromKindToScalerType(kind));
-  }
 }
 
 TEST(TypeTest, rowEquvialentCheckWithChildRowsWithDifferentNames) {

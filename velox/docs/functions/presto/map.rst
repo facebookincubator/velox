@@ -70,11 +70,37 @@ Map Functions
 
         SELECT map_from_entries(ARRAY[(1, 'x'), (2, 'y')]); -- {1 -> 'x', 2 -> 'y'}
 
-.. function:: multimap_from_entries(array(row(K,V))) -> map(K,array(V))
+.. function:: map_normalize(map(varchar,double)) -> map(varchar,double)
 
-    Returns a multimap created from the given array of entries. Each key can be associated with multiple values. ::
+    Returns the map with the same keys but all non-null values scaled proportionally
+    so that the sum of values becomes 1. Map entries with null values remain unchanged.
 
-        SELECT multimap_from_entries(ARRAY[(1, 'x'), (2, 'y'), (1, 'z')]); -- {1 -> ['x', 'z'], 2 -> ['y']}
+    When total sum of non-null values is zero, null values remain null,
+    zero, NaN, Infinity and -Infinity values become NaN,
+    positive values become Infinity, negative values become -Infinity.::
+
+        SELECT map_normalize(map(array['a', 'b', 'c'], array[1, 4, 5])); -- {a=0.1, b=0.4, c=0.5}
+        SELECT map_normalize(map(array['a', 'b', 'c', 'd'], array[1, null, 4, 5])); -- {a=0.1, b=null, c=0.4, d=0.5}
+        SELECT map_normalize(map(array['a', 'b', 'c'], array[1, 0, -1])); -- {a=Infinity, b=NaN, c=-Infinity}
+
+
+.. function:: map_subset(map(K,V), array(k)) -> map(K,V)
+
+    Constructs a map from those entries of ``map`` for which the key is in the array given::
+
+        SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[10]); -- {}
+        SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1]); -- {1->'a'}
+        SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1,3]); -- {1->'a'}
+        SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[]); -- {}
+        SELECT map_subset(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
+
+.. function:: map_top_n(map(K,V), n) -> map(K, V)
+
+    Truncates map items. Keeps only the top N elements by value.
+    ``n`` must be a non-negative BIGINT value.::
+
+        SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[2, 3, 1]), 2) --- {'b' -> 3, 'a' -> 2}
+        SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[NULL, 3, NULL]), 2) --- {'b' -> 3, 'a' -> NULL}
 
 .. function:: map_keys(x(K,V)) -> array(K)
 
@@ -98,6 +124,12 @@ Map Functions
         SELECT map_zip_with(MAP(ARRAY['a', 'b', 'c'], ARRAY[1, 8, 27]), -- {a -> a1, b -> b4, c -> c9}
                             MAP(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]),
                             (k, v1, v2) -> k || CAST(v1/v2 AS VARCHAR));
+
+.. function:: multimap_from_entries(array(row(K,V))) -> map(K,array(V))
+
+    Returns a multimap created from the given array of entries. Each key can be associated with multiple values. ::
+
+        SELECT multimap_from_entries(ARRAY[(1, 'x'), (2, 'y'), (1, 'z')]); -- {1 -> ['x', 'z'], 2 -> ['y']}
 
 .. function:: no_keys_match(x(K,V), function(K, boolean)) -> boolean
 

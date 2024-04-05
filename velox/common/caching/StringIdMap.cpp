@@ -67,7 +67,7 @@ uint64_t StringIdMap::makeId(std::string_view string) {
     return it->second;
   }
   Entry entry;
-  entry.string = std::string(string);
+  entry.string = string;
   // Check that we do not use an id twice. In practice this never
   // happens because the int64 counter would have to wrap around for
   // this. Even if this happened, the time spent in the loop would
@@ -79,8 +79,8 @@ uint64_t StringIdMap::makeId(std::string_view string) {
   entry.numInUse = 1;
   pinnedSize_ += entry.string.size();
   auto id = entry.id;
-  auto& entryInTable = idToString_[id] = std::move(entry);
-  stringToId_[entryInTable.string] = entry.id;
+  idToString_[id] = std::move(entry);
+  stringToId_[string] = id;
   return lastId_;
 }
 

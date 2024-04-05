@@ -402,7 +402,7 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
     SelectivityVector allRows(sourceSize);
     DecodedVector decoded(*source, allRows);
     auto base = decoded.base();
-    auto nulls = decoded.nulls();
+    auto nulls = decoded.nulls(&allRows);
     auto indices = decoded.indices();
     for (int32_t i = 0; i < sourceSize; ++i) {
       if (i % 2 == 0) {
@@ -843,9 +843,9 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
     }
 
     VectorStreamGroup::estimateSerializedSize(
-        source, evenIndices, evenSizePointers.data());
+        source.get(), evenIndices, evenSizePointers.data());
     VectorStreamGroup::estimateSerializedSize(
-        source, oddIndices, oddSizePointers.data());
+        source.get(), oddIndices, oddSizePointers.data());
     even.append(
         sourceRow, folly::Range(evenIndices.data(), evenIndices.size() / 2));
     even.append(
@@ -2754,6 +2754,12 @@ TEST_F(VectorTest, flattenVector) {
   test(dictionary, false);
   EXPECT_TRUE(dictionary->isFlatEncoding());
 
+  VectorPtr lazyDictionary =
+      wrapInLazyDictionary(makeFlatVector<int32_t>({1, 2, 3}));
+  test(lazyDictionary, true);
+  EXPECT_TRUE(lazyDictionary->isLazy());
+  EXPECT_TRUE(lazyDictionary->loadedVector()->isFlatEncoding());
+
   // Array with constant elements.
   auto* arrayVector = array->as<ArrayVector>();
   arrayVector->elements() = BaseVector::wrapInConstant(100, 1, flat);
@@ -3645,6 +3651,119 @@ TEST_F(VectorTest, getLargeStringBuffer) {
   size_t size = size_t(std::numeric_limits<int32_t>::max()) + 1;
   auto* buffer = vector->getBufferWithSpace(size);
   EXPECT_GE(buffer->capacity(), size);
+}
+
+TEST_F(VectorTest, mapUpdate) {
+  auto base = makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 1}, {2, 1}}},
+      {{}},
+      {{{3, 1}}},
+      std::nullopt,
+      {{{4, 1}}},
+  });
+  auto update = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, 2}, {3, 2}}},
+      {{{4, 2}}},
+      {{}},
+      {{{5, 2}}},
+      std::nullopt,
+  });
+  auto expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, 2}, {3, 2}, {1, 1}}},
+      {{{4, 2}}},
+      {{{3, 1}}},
+      std::nullopt,
+      std::nullopt,
+  });
+  auto actual = base->update({update});
+  ASSERT_EQ(actual->size(), expected->size());
+  for (int i = 0; i < actual->size(); ++i) {
+    ASSERT_TRUE(actual->equalValueAt(expected.get(), i, i));
+  }
+}
+
+TEST_F(VectorTest, mapUpdateRowKeyType) {
+  auto base = makeMapVector(
+      {0, 2},
+      makeRowVector({
+          makeFlatVector<int64_t>({1, 2}),
+          makeFlatVector<int64_t>({1, 2}),
+      }),
+      makeFlatVector<int64_t>({1, 1}));
+  auto update = makeMapVector(
+      {0, 2},
+      makeRowVector({
+          makeFlatVector<int64_t>({2, 3}),
+          makeFlatVector<int64_t>({2, 3}),
+      }),
+      makeFlatVector<int64_t>({2, 2}));
+  auto expected = makeMapVector(
+      {0, 3},
+      makeRowVector({
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({1, 2, 3}),
+      }),
+      makeFlatVector<int64_t>({1, 2, 2}));
+  auto actual = base->update({update});
+  ASSERT_EQ(actual->size(), expected->size());
+  for (int i = 0; i < actual->size(); ++i) {
+    ASSERT_TRUE(actual->equalValueAt(expected.get(), i, i));
+  }
+}
+
+TEST_F(VectorTest, mapUpdateNullMapValue) {
+  auto base = makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 1}, {2, 1}}},
+  });
+  auto update = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, std::nullopt}, {3, 2}}},
+  });
+  auto expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 1}, {2, std::nullopt}, {3, 2}}},
+  });
+  auto actual = base->update({update});
+  ASSERT_EQ(actual->size(), expected->size());
+  for (int i = 0; i < actual->size(); ++i) {
+    ASSERT_TRUE(actual->equalValueAt(expected.get(), i, i));
+  }
+}
+
+TEST_F(VectorTest, mapUpdateMultipleUpdates) {
+  auto base = makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 1}, {2, 1}}},
+      {{}},
+      {{{3, 1}}},
+      std::nullopt,
+      {{{4, 1}}},
+  });
+  std::vector<MapVectorPtr> updates = {
+      makeNullableMapVector<int64_t, int64_t>({
+          {{{2, 2}, {3, 2}}},
+          {{{4, 2}}},
+          {{}},
+          {{{5, 2}}},
+          std::nullopt,
+      }),
+      makeNullableMapVector<int64_t, int64_t>({
+          {{{3, 3}, {4, 3}}},
+          std::nullopt,
+          {{}},
+          {{}},
+          {{}},
+      }),
+  };
+  auto expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 1}, {2, 2}, {3, 3}, {4, 3}}},
+      std::nullopt,
+      {{{3, 1}}},
+      std::nullopt,
+      std::nullopt,
+  });
+  auto actual = base->update(updates);
+  ASSERT_EQ(actual->size(), expected->size());
+  for (int i = 0; i < actual->size(); ++i) {
+    ASSERT_TRUE(actual->equalValueAt(expected.get(), i, i));
+  }
 }
 
 } // namespace

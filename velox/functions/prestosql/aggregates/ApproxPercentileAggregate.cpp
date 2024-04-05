@@ -146,22 +146,6 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     return false;
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (auto i : indices) {
-      auto group = groups[i];
-      new (group + offset_) KllSketchAccumulator<T>(allocator_);
-    }
-  }
-
-  void destroy(folly::Range<char**> groups) override {
-    for (auto group : groups) {
-      value<KllSketchAccumulator<T>>(group)->~KllSketchAccumulator<T>();
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     finalize(groups, numGroups);
@@ -418,6 +402,25 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     addIntermediate<true>(group, rows, args);
   }
 
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (auto i : indices) {
+      auto group = groups[i];
+      new (group + offset_) KllSketchAccumulator<T>(allocator_);
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
+    for (auto group : groups) {
+      if (isInitialized(group)) {
+        value<KllSketchAccumulator<T>>(group)->~KllSketchAccumulator<T>();
+      }
+    }
+  }
+
  private:
   void finalize(char** groups, int32_t numGroups) {
     for (auto i = 0; i < numGroups; ++i) {
@@ -671,7 +674,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         innerRows.updateBounds();
       } else {
         velox::translateToInnerRows(
-            rows, decoded.indices(), decoded.nulls(), innerRows);
+            rows, decoded.indices(), decoded.nulls(&rows), innerRows);
       }
       baseRows = &innerRows;
     }
@@ -830,7 +833,8 @@ void addSignatures(
 
 void registerApproxPercentileAggregate(
     const std::string& prefix,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& inputType :
        {"tinyint", "smallint", "integer", "bigint", "real", "double"}) {
@@ -930,7 +934,8 @@ void registerApproxPercentileAggregate(
                 type->toString());
         }
       },
-      withCompanionFunctions);
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

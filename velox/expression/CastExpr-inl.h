@@ -341,21 +341,6 @@ void CastExpr::applyCastKernel(
   try {
     auto inputRowValue = input->valueAt(row);
 
-    if constexpr (
-        FromKind == TypeKind::TIMESTAMP &&
-        (ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY)) {
-      auto writer = exec::StringWriter<>(result, row);
-      const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
-      auto sessionTzName = queryConfig.sessionTimezone();
-      if (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty()) {
-        const auto* timeZone = date::locate_zone(sessionTzName);
-        hooks_->castTimestampToString(inputRowValue, writer, timeZone);
-      } else {
-        hooks_->castTimestampToString(inputRowValue, writer);
-      }
-      return;
-    }
-
     // Optimize empty input strings casting by avoiding throwing exceptions.
     if constexpr (
         FromKind == TypeKind::VARCHAR || FromKind == TypeKind::VARBINARY) {
@@ -460,22 +445,22 @@ void CastExpr::applyIntToDecimalCastKernel(
       });
 }
 
-template <typename TOutput>
-void CastExpr::applyDoubleToDecimalCastKernel(
+template <typename TInput, typename TOutput>
+void CastExpr::applyFloatingPointToDecimalCastKernel(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
     const TypePtr& toType,
     VectorPtr& result) {
-  const auto doubleInput = input.as<SimpleVector<double>>();
+  const auto floatingInput = input.as<SimpleVector<TInput>>();
   auto rawResults =
       result->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
   const auto toPrecisionScale = getDecimalPrecisionScale(*toType);
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
     TOutput output;
-    const auto status = DecimalUtil::rescaleDouble<TOutput>(
-        doubleInput->valueAt(row),
+    const auto status = DecimalUtil::rescaleFloatingPoint<TInput, TOutput>(
+        floatingInput->valueAt(row),
         toPrecisionScale.first,
         toPrecisionScale.second,
         output);

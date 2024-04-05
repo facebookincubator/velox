@@ -58,7 +58,7 @@ common::SpillStats spilledStats(const exec::Task& task) {
 void abortPool(memory::MemoryPool* pool) {
   try {
     VELOX_FAIL("Manual MemoryPool Abortion");
-  } catch (const VeloxException& error) {
+  } catch (const VeloxException&) {
     pool->abort(std::current_exception());
   }
 }
@@ -196,8 +196,8 @@ class OrderByTest : public OperatorTestBase {
       SCOPED_TRACE("run with spilling");
       auto spillDirectory = exec::test::TempDirectoryPath::create();
       auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+      TestScopedSpillInjection scopedSpillInjection(100);
       queryCtx->testingOverrideConfigUnsafe({
-          {core::QueryConfig::kTestingSpillPct, "100"},
           {core::QueryConfig::kSpillEnabled, "true"},
           {core::QueryConfig::kOrderBySpillEnabled, "true"},
       });
@@ -493,12 +493,11 @@ TEST_F(OrderByTest, spill) {
   const auto expectedResult = AssertQueryBuilder(plan).copyResults(pool_.get());
 
   auto spillDirectory = exec::test::TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
   auto task = AssertQueryBuilder(plan)
                   .spillDirectory(spillDirectory->path)
                   .config(core::QueryConfig::kSpillEnabled, true)
                   .config(core::QueryConfig::kOrderBySpillEnabled, true)
-                  // Set a small capacity to trigger threshold based spilling
-                  .config(QueryConfig::kOrderBySpillMemoryThreshold, 32 << 20)
                   .assertResults(expectedResult);
   auto taskStats = exec::toPlanStats(task->taskStats());
   auto& planStats = taskStats.at(orderNodeId);
@@ -508,81 +507,20 @@ TEST_F(OrderByTest, spill) {
   ASSERT_GT(planStats.spilledInputBytes, 0);
   ASSERT_EQ(planStats.spilledPartitions, 1);
   ASSERT_GT(planStats.spilledFiles, 0);
-  ASSERT_GT(planStats.customStats["spillRuns"].count, 0);
-  ASSERT_GT(planStats.customStats["spillFillTime"].sum, 0);
-  ASSERT_GT(planStats.customStats["spillSortTime"].sum, 0);
-  ASSERT_GT(planStats.customStats["spillSerializationTime"].sum, 0);
-  ASSERT_GT(planStats.customStats["spillFlushTime"].sum, 0);
+  ASSERT_GT(planStats.customStats[Operator::kSpillRuns].count, 0);
+  ASSERT_GT(planStats.customStats[Operator::kSpillFillTime].sum, 0);
+  ASSERT_GT(planStats.customStats[Operator::kSpillSortTime].sum, 0);
+  ASSERT_GT(planStats.customStats[Operator::kSpillSerializationTime].sum, 0);
+  ASSERT_GT(planStats.customStats[Operator::kSpillFlushTime].sum, 0);
   ASSERT_EQ(
-      planStats.customStats["spillSerializationTime"].count,
-      planStats.customStats["spillFlushTime"].count);
-  ASSERT_GT(planStats.customStats["spillWrites"].sum, 0);
-  ASSERT_GT(planStats.customStats["spillWriteTime"].sum, 0);
+      planStats.customStats[Operator::kSpillSerializationTime].count,
+      planStats.customStats[Operator::kSpillFlushTime].count);
+  ASSERT_GT(planStats.customStats[Operator::kSpillWrites].sum, 0);
+  ASSERT_GT(planStats.customStats[Operator::kSpillWriteTime].sum, 0);
   ASSERT_EQ(
-      planStats.customStats["spillWrites"].count,
-      planStats.customStats["spillWriteTime"].count);
+      planStats.customStats[Operator::kSpillWrites].count,
+      planStats.customStats[Operator::kSpillWriteTime].count);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
-}
-
-TEST_F(OrderByTest, spillWithMemoryLimit) {
-  constexpr int32_t kNumRows = 2000;
-  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
-  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
-  VectorFuzzer fuzzer({}, pool());
-  const int32_t numBatches = 5;
-  std::vector<RowVectorPtr> batches;
-  for (int32_t i = 0; i < numBatches; ++i) {
-    batches.push_back(fuzzer.fuzzRow(rowType));
-  }
-  struct {
-    uint64_t orderByMemLimit;
-    bool expectSpill;
-
-    std::string debugString() const {
-      return fmt::format(
-          "orderByMemLimit:{}, expectSpill:{}", orderByMemLimit, expectSpill);
-    }
-  } testSettings[] = {// Memory limit is disabled so spilling is not triggered.
-                      {0, false},
-                      // Memory limit is too small so always trigger spilling.
-                      {1, true},
-                      // Memory limit is too large so spilling is not triggered.
-                      {1'000'000'000, false}};
-  for (const auto& testData : testSettings) {
-    SCOPED_TRACE(testData.debugString());
-    auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
-    auto results =
-        AssertQueryBuilder(
-            PlanBuilder()
-                .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-                .planNode())
-            .queryCtx(queryCtx)
-            .copyResults(pool_.get());
-    auto task =
-        AssertQueryBuilder(
-            PlanBuilder()
-                .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-                .planNode())
-            .queryCtx(queryCtx)
-            .spillDirectory(tempDirectory->path)
-            .config(core::QueryConfig::kSpillEnabled, true)
-            .config(core::QueryConfig::kOrderBySpillEnabled, true)
-            .config(
-                QueryConfig::kOrderBySpillMemoryThreshold,
-                testData.orderByMemLimit)
-            .assertResults(results);
-
-    auto stats = task->taskStats().pipelineStats;
-    ASSERT_EQ(
-        testData.expectSpill, stats[0].operatorStats[1].spilledInputBytes > 0);
-    ASSERT_EQ(testData.expectSpill, stats[0].operatorStats[1].spilledBytes > 0);
-    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
-  }
 }
 
 DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
@@ -1096,8 +1034,9 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
     taskThread.join();
 
     auto stats = task->taskStats().pipelineStats;
-    ASSERT_EQ(stats[0].operatorStats[1].spilledBytes, 0);
-    ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 0);
+    ASSERT_TRUE(!enableSpilling || stats[0].operatorStats[1].spilledBytes > 0);
+    ASSERT_TRUE(
+        !enableSpilling || stats[0].operatorStats[1].spilledPartitions > 0);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
   ASSERT_EQ(reclaimerStats_.numNonReclaimableAttempts, 0);
@@ -1371,13 +1310,12 @@ TEST_F(OrderByTest, maxSpillBytes) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     try {
+      TestScopedSpillInjection scopedSpillInjection(100);
       AssertQueryBuilder(plan)
           .spillDirectory(spillDirectory->path)
           .queryCtx(queryCtx)
           .config(core::QueryConfig::kSpillEnabled, true)
           .config(core::QueryConfig::kOrderBySpillEnabled, true)
-          // Set a small capacity to trigger threshold based spilling
-          .config(QueryConfig::kOrderBySpillMemoryThreshold, 5 << 20)
           .config(QueryConfig::kMaxSpillBytes, testData.maxSpilledBytes)
           .copyResults(pool_.get());
       ASSERT_FALSE(testData.expectedExceedLimit);

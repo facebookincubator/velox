@@ -337,6 +337,36 @@ class OutputBufferManagerTest : public testing::Test {
       }
     }
     bufferManager_->deleteResults(taskId, destination);
+    // out of order requests are allowed (fetch after delete)
+    {
+      struct Response {
+        std::vector<std::unique_ptr<folly::IOBuf>> pages;
+        int64_t sequence;
+        std::vector<int64_t> remainingBytes;
+      };
+      folly::Promise<Response> promise;
+      auto future = promise.getSemiFuture();
+      bufferManager_->getData(
+          taskId,
+          destination,
+          32'000'000,
+          nextSequence,
+          [&promise](
+              std::vector<std::unique_ptr<folly::IOBuf>> pages,
+              int64_t inSequence,
+              std::vector<int64_t> remainingBytes) {
+            promise.setValue(Response{
+                std::move(pages), inSequence, std::move(remainingBytes)});
+          });
+      future.wait();
+      ASSERT_TRUE(future.isReady());
+      auto& response = future.value();
+      ASSERT_EQ(response.sequence, nextSequence);
+      ASSERT_EQ(response.remainingBytes.size(), 0);
+      ASSERT_EQ(response.pages.size(), 1);
+      ASSERT_EQ(response.pages.at(0), nullptr);
+    }
+
     fetchedPages = nextSequence;
   }
 
@@ -454,6 +484,7 @@ TEST_F(OutputBufferManagerTest, arbitrayBuffer) {
     buffer.enqueue(std::move(page3));
     ASSERT_EQ(
         buffer.toString(), "[ARBITRARY_BUFFER PAGES[2] NO MORE DATA[false]]");
+    ASSERT_TRUE(buffer.getPages(0).empty());
     buffer.noMoreData();
     ASSERT_FALSE(buffer.empty());
     ASSERT_TRUE(buffer.hasNoMoreData());
@@ -475,7 +506,9 @@ TEST_F(OutputBufferManagerTest, arbitrayBuffer) {
     ASSERT_EQ(
         buffer.toString(), "[ARBITRARY_BUFFER PAGES[0] NO MORE DATA[true]]");
     buffer.noMoreData();
-    VELOX_ASSERT_THROW(buffer.getPages(0), "maxBytes can't be zero");
+    pages = buffer.getPages(0);
+    ASSERT_EQ(pages.size(), 1);
+    ASSERT_FALSE(pages[0]);
     // Verify the end marker is persistent.
     for (int i = 0; i < 3; ++i) {
       pages = buffer.getPages(100);
@@ -508,8 +541,7 @@ TEST_F(OutputBufferManagerTest, destinationBuffer) {
   {
     ArbitraryBuffer buffer;
     DestinationBuffer destinationBuffer;
-    VELOX_ASSERT_THROW(
-        destinationBuffer.loadData(&buffer, 0), "maxBytes can't be zero");
+    destinationBuffer.loadData(&buffer, 0);
     destinationBuffer.loadData(&buffer, 100);
     std::atomic<bool> notified{false};
     auto buffers = destinationBuffer.getData(
@@ -827,9 +859,7 @@ TEST_F(OutputBufferManagerTest, basicBroadcast) {
   acknowledge(taskId, 5, 3);
   EXPECT_FALSE(bufferManager_->isFinished(taskId));
   deleteResults(taskId, 5);
-  VELOX_ASSERT_THROW(
-      fetch(taskId, 5, 0, 1'000'000'000, 2),
-      "getData received after its buffer is deleted. Destination: 5, sequence: 0");
+  fetch(taskId, 5, 0, 1'000'000'000, 1, true);
 
   bufferManager_->updateOutputBuffers(taskId, 7, true);
   EXPECT_FALSE(bufferManager_->isFinished(taskId));

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 cmake_minimum_required(VERSION 3.14)
+message(STATUS "Building using CMake version: ${CMAKE_VERSION}")
 
 # The policy allows us to change options without caching.
 cmake_policy(SET CMP0077 NEW)
@@ -101,7 +102,6 @@ option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
-option(VELOX_ENABLE_CODEGEN_SUPPORT "Enable experimental codegen support." OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_VECTOR_TEST_UTILS "Builds Velox vector test utilities" OFF)
@@ -132,7 +132,6 @@ if(${VELOX_BUILD_MINIMAL})
   set(VELOX_ENABLE_GCS OFF)
   set(VELOX_ENABLE_ABFS OFF)
   set(VELOX_ENABLE_SUBSTRAIT OFF)
-  set(VELOX_ENABLE_CODEGEN_SUPPORT OFF)
 endif()
 
 if(${VELOX_BUILD_TESTING})
@@ -167,24 +166,13 @@ if(${VELOX_ENABLE_EXAMPLES})
 endif()
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
-  set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
   set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_EXPRESSION ON)
   set(VELOX_ENABLE_PARSE ON)
   set(VELOX_ENABLE_EXEC ON)
-  set(VELOX_ENABLE_AGGREGATES OFF)
-  set(VELOX_ENABLE_HIVE_CONNECTOR OFF)
-  set(VELOX_ENABLE_TPCH_CONNECTOR OFF)
+  set(VELOX_ENABLE_AGGREGATES ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
-  set(VELOX_ENABLE_EXAMPLES OFF)
-  set(VELOX_ENABLE_S3 OFF)
-  set(VELOX_ENABLE_GCS OFF)
-  set(VELOX_ENABLE_ABFS OFF)
-  set(VELOX_ENABLE_SUBSTRAIT OFF)
-  set(VELOX_ENABLE_CODEGEN_SUPPORT OFF)
-  set(VELOX_ENABLE_BENCHMARKS_BASIC OFF)
-  set(VELOX_ENABLE_BENCHMARKS OFF)
 endif()
 
 # We look for OpenSSL here to cache the result enforce the version across our
@@ -263,11 +251,6 @@ if(VELOX_ENABLE_PARQUET)
   set(VELOX_ENABLE_ARROW ON)
 endif()
 
-# define processor variable for conditional compilation
-if(${VELOX_ENABLE_CODEGEN_SUPPORT})
-  add_compile_definitions(CODEGEN_ENABLED=1)
-endif()
-
 # make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer
 # overflow
 if(${VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND})
@@ -282,7 +265,7 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 endif()
 
 if(UNIX AND NOT APPLE)
-  # codegen linker flags, -export-dynamic for rtti
+  # linker flags, -export-dynamic for rtti
   add_link_options("-Wl,-export-dynamic")
 endif()
 
@@ -382,7 +365,6 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(BOOST_INCLUDE_LIBRARIES
-    headers
     atomic
     context
     date_time
@@ -456,7 +438,7 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
 endif()
 
 set_source(simdjson)
-resolve_dependency(simdjson)
+resolve_dependency(simdjson 3.2.0)
 
 # Locate or build folly.
 add_compile_definitions(FOLLY_HAVE_INT128_T=1)
@@ -477,11 +459,10 @@ else()
   set(FOLLY_BENCHMARK Folly::follybenchmark)
 endif()
 
-# DWIO (ORC/DWRF), Substrait and experimental/codegen depend on protobuf.
+# DWIO (ORC/DWRF) and Substrait depend on protobuf.
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO}
    OR ${VELOX_ENABLE_HIVE_CONNECTOR}
-   OR ${VELOX_ENABLE_SUBSTRAIT}
-   OR ${VELOX_ENABLE_CODEGEN_SUPPORT})
+   OR ${VELOX_ENABLE_SUBSTRAIT})
   # Locate or build protobuf.
   set_source(Protobuf)
   resolve_dependency(Protobuf 3.21 EXACT)

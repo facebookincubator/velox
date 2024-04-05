@@ -49,11 +49,9 @@ class SortBufferTest : public OperatorTestBase {
         "0.0.0",
         0,
         0,
-        0,
         executor_.get(),
         5,
         10,
-        0,
         0,
         0,
         0,
@@ -282,6 +280,7 @@ TEST_F(SortBufferTest, batchOutput) {
       {false, {1024, 1024, 1024}, 1000, {1000, 1000, 1000, 72}},
       {true, {1024, 1024, 1024}, 1000, {1000, 1000, 1000, 72}}};
 
+  TestScopedSpillInjection scopedSpillInjection(100);
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto spillDirectory = exec::test::TempDirectoryPath::create();
@@ -291,7 +290,6 @@ TEST_F(SortBufferTest, batchOutput) {
         "0.0.0",
         1000,
         0,
-        1000,
         executor_.get(),
         5,
         10,
@@ -300,8 +298,8 @@ TEST_F(SortBufferTest, batchOutput) {
         0,
         0,
         0,
-        100, //  testSpillPct
         "none");
+    folly::Synchronized<common::SpillStats> spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,
         sortColumnIndices_,
@@ -309,7 +307,7 @@ TEST_F(SortBufferTest, batchOutput) {
         pool_.get(),
         &nonReclaimableSection_,
         testData.triggerSpill ? &spillConfig : nullptr,
-        0);
+        &spillStats);
     ASSERT_EQ(sortBuffer->canSpill(), testData.triggerSpill);
 
     const std::shared_ptr<memory::MemoryPool> fuzzerPool =
@@ -326,8 +324,6 @@ TEST_F(SortBufferTest, batchOutput) {
       totalNumInput += inputRows;
     }
     sortBuffer->noMoreInput();
-    auto spillStats = sortBuffer->spilledStats();
-
     int expectedOutputBufferIndex = 0;
     RowVectorPtr output = sortBuffer->getOutput(testData.maxOutputRows);
     while (output != nullptr) {
@@ -338,14 +334,14 @@ TEST_F(SortBufferTest, batchOutput) {
     }
 
     if (!testData.triggerSpill) {
-      ASSERT_FALSE(spillStats.has_value());
+      ASSERT_TRUE(spillStats.rlock()->empty());
     } else {
-      ASSERT_TRUE(spillStats.has_value());
-      ASSERT_GT(spillStats->spilledRows, 0);
-      ASSERT_LE(spillStats->spilledRows, totalNumInput);
-      ASSERT_GT(spillStats->spilledBytes, 0);
-      ASSERT_EQ(spillStats->spilledPartitions, 1);
-      ASSERT_GT(spillStats->spilledFiles, 0);
+      ASSERT_FALSE(spillStats.rlock()->empty());
+      ASSERT_GT(spillStats.rlock()->spilledRows, 0);
+      ASSERT_LE(spillStats.rlock()->spilledRows, totalNumInput);
+      ASSERT_GT(spillStats.rlock()->spilledBytes, 0);
+      ASSERT_EQ(spillStats.rlock()->spilledPartitions, 1);
+      ASSERT_GT(spillStats.rlock()->spilledFiles, 0);
     }
   }
 }
@@ -354,15 +350,15 @@ TEST_F(SortBufferTest, spill) {
   struct {
     bool spillEnabled;
     bool memoryReservationFailure;
-    uint64_t spillMemoryThreshold;
+    bool triggerSpill;
     bool spillTriggered;
 
     std::string debugString() const {
       return fmt::format(
-          "spillEnabled:{}, memoryReservationFailure:{}, spillMemoryThreshold:{}, spillTriggered:{}",
+          "spillEnabled:{}, memoryReservationFailure:{}, triggerSpill:{}, spillTriggered:{}",
           spillEnabled,
           memoryReservationFailure,
-          spillMemoryThreshold,
+          triggerSpill,
           spillTriggered);
     }
   } testSettings[] = {
@@ -371,9 +367,8 @@ TEST_F(SortBufferTest, spill) {
        true,
        0,
        false}, // memory reservation failure won't trigger spilling.
-      {true, false, 1000, true}, // threshold is small, spilling is triggered.
-      {true, false, 1000000, false} // threshold is too large, not triggered
-  };
+      {true, false, true, true},
+      {true, false, false, false}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -389,7 +384,6 @@ TEST_F(SortBufferTest, spill) {
         "0.0.0",
         1000,
         0,
-        1000,
         executor_.get(),
         100,
         spillableReservationGrowthPct,
@@ -398,8 +392,8 @@ TEST_F(SortBufferTest, spill) {
         0,
         0,
         0,
-        0,
         "none");
+    folly::Synchronized<common::SpillStats> spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,
         sortColumnIndices_,
@@ -407,7 +401,7 @@ TEST_F(SortBufferTest, spill) {
         pool_.get(),
         &nonReclaimableSection_,
         testData.spillEnabled ? &spillConfig : nullptr,
-        testData.spillMemoryThreshold);
+        &spillStats);
 
     const std::shared_ptr<memory::MemoryPool> fuzzerPool =
         memory::memoryManager()->addLeafPool("spillSource");
@@ -418,28 +412,29 @@ TEST_F(SortBufferTest, spill) {
     const auto peakSpillMemoryUsage =
         memory::spillMemoryPool()->stats().peakBytes;
 
+    TestScopedSpillInjection scopedSpillInjection(
+        testData.triggerSpill ? 100 : 0);
     for (int i = 0; i < 3; ++i) {
       sortBuffer->addInput(fuzzer.fuzzRow(inputType_));
       totalNumInput += 1024;
     }
     sortBuffer->noMoreInput();
-    const auto spillStats = sortBuffer->spilledStats();
 
     if (!testData.spillTriggered) {
-      ASSERT_FALSE(spillStats.has_value());
+      ASSERT_TRUE(spillStats.rlock()->empty());
       if (!testData.spillEnabled) {
         VELOX_ASSERT_THROW(sortBuffer->spill(), "spill config is null");
       }
     } else {
-      ASSERT_TRUE(spillStats.has_value());
-      ASSERT_GT(spillStats->spilledRows, 0);
-      ASSERT_LE(spillStats->spilledRows, totalNumInput);
-      ASSERT_GT(spillStats->spilledBytes, 0);
-      ASSERT_EQ(spillStats->spilledPartitions, 1);
+      ASSERT_FALSE(spillStats.rlock()->empty());
+      ASSERT_GT(spillStats.rlock()->spilledRows, 0);
+      ASSERT_LE(spillStats.rlock()->spilledRows, totalNumInput);
+      ASSERT_GT(spillStats.rlock()->spilledBytes, 0);
+      ASSERT_EQ(spillStats.rlock()->spilledPartitions, 1);
       // SortBuffer shall not respect maxFileSize. Total files should be num
       // addInput() calls minus one which is the first one that has nothing to
       // spill.
-      ASSERT_EQ(spillStats->spilledFiles, 3);
+      ASSERT_EQ(spillStats.rlock()->spilledFiles, 3);
       sortBuffer.reset();
       ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
       if (memory::spillMemoryPool()->trackUsage()) {
@@ -459,6 +454,7 @@ TEST_F(SortBufferTest, emptySpill) {
     SCOPED_TRACE(fmt::format("hasPostSpillData {}", hasPostSpillData));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig = getSpillConfig(spillDirectory->path);
+    folly::Synchronized<common::SpillStats> spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,
         sortColumnIndices_,
@@ -466,7 +462,7 @@ TEST_F(SortBufferTest, emptySpill) {
         pool_.get(),
         &nonReclaimableSection_,
         &spillConfig,
-        0);
+        &spillStats);
 
     sortBuffer->spill();
     if (hasPostSpillData) {
@@ -474,7 +470,7 @@ TEST_F(SortBufferTest, emptySpill) {
       sortBuffer->addInput(fuzzer.fuzzRow(inputType_));
     }
     sortBuffer->noMoreInput();
-    ASSERT_FALSE(sortBuffer->spilledStats());
+    ASSERT_TRUE(spillStats.rlock()->empty());
   }
 }
 } // namespace facebook::velox::functions::test

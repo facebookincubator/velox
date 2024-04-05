@@ -16,6 +16,8 @@ add_library(
   AverageAggregate.cpp
   BitwiseXorAggregate.cpp
   BloomFilterAggAggregate.cpp
+  CentralMomentsAggregate.cpp
+  CollectListAggregate.cpp
   FirstLastAggregate.cpp
   MinMaxByAggregate.cpp
   Register.cpp

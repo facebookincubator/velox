@@ -123,6 +123,16 @@ class BaseHashTable {
 
   static constexpr int8_t kNoSpillInputStartPartitionBit = -1;
 
+  /// The name of the runtime stats collected and reported by operators that use
+  /// the HashTable (HashBuild, HashAggregation).
+  static inline const std::string kCapacity{"hashtable.capacity"};
+  static inline const std::string kNumRehashes{"hashtable.numRehashes"};
+  static inline const std::string kNumDistinct{"hashtable.numDistinct"};
+  static inline const std::string kNumTombstones{"hashtable.numTombstones"};
+
+  /// The same as above but only reported by the HashBuild operator.
+  static inline const std::string kBuildWallNanos{"hashtable.buildWallNanos"};
+
   /// Returns the string of the given 'mode'.
   static std::string modeString(HashMode mode);
 
@@ -155,6 +165,8 @@ class BaseHashTable {
     void reset() {
       *this = {};
     }
+
+    std::string toString() const;
   };
 
   struct NullKeyRowsIterator {
@@ -211,7 +223,7 @@ class BaseHashTable {
 
   /// Fills 'hits' with consecutive hash join results. The corresponding element
   /// of 'inputRows' is set to the corresponding row number in probe keys.
-  /// Returns the number of hits produced. If this s less than hits.size() then
+  /// Returns the number of hits produced. If this is less than hits.size() then
   /// all the hits have been produced.
   /// Adds input rows without a match to 'inputRows' with corresponding hit
   /// set to nullptr if 'includeMisses' is true. Otherwise, skips input rows
@@ -258,9 +270,9 @@ class BaseHashTable {
   /// owned by 'this'.
   virtual int64_t allocatedBytes() const = 0;
 
-  /// Deletes any content of 'this' but does not free the memory. Can
-  /// be used for flushing a partial group by, for example.
-  virtual void clear() = 0;
+  /// Deletes any content of 'this'. If 'freeTable' is false, then hash table is
+  /// not freed which can be used for flushing a partial group by, for example.
+  virtual void clear(bool freeTable = false) = 0;
 
   /// Returns the capacity of the internal hash table which is number of rows
   /// it can stores in a group by or hash join build.
@@ -327,8 +339,12 @@ class BaseHashTable {
     return rows_.get();
   }
 
-  // Static functions for processing internals. Public because used in
-  // structs that define probe and insert algorithms.
+  /// Returns all the row containers of a composed hash table such as for hash
+  /// join use.
+  virtual std::vector<RowContainer*> allRows() const = 0;
+
+  /// Static functions for processing internals. Public because used in
+  /// structs that define probe and insert algorithms.
 
   /// Extracts a 7 bit tag from a hash number. The high bit is always set.
   static uint8_t hashTag(uint64_t hash) {
@@ -498,7 +514,7 @@ class HashTable : public BaseHashTable {
       int32_t maxRows,
       char** rows) override;
 
-  void clear() override;
+  void clear(bool freeTable = false) override;
 
   int64_t allocatedBytes() const override {
     // For each row: sizeof(char*) per table entry + memory
@@ -576,6 +592,8 @@ class HashTable : public BaseHashTable {
   uint64_t rehashSize() const {
     return rehashSize(capacity_ - numTombstones_);
   }
+
+  std::vector<RowContainer*> allRows() const override;
 
   std::string toString() override;
 

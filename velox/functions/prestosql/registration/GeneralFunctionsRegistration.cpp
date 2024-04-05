@@ -17,6 +17,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/prestosql/Cardinality.h"
+#include "velox/functions/prestosql/InPredicate.h"
 
 namespace facebook::velox::functions {
 extern void registerSubscriptFunction(
@@ -30,6 +31,11 @@ extern void registerElementAtFunction(
 void registerAllSpecialFormGeneralFunctions() {
   exec::registerFunctionCallToSpecialForms();
   VELOX_REGISTER_VECTOR_FUNCTION(udf_in, "in");
+  registerFunction<
+      GenericInPredicateFunction,
+      bool,
+      Generic<T1>,
+      Variadic<Generic<T1>>>({"in"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, "row_constructor");
   registerIsNullFunction("is_null");
 }
@@ -44,6 +50,8 @@ void registerGeneralFunctions(const std::string& prefix) {
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_least, prefix + "least");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_greatest, prefix + "greatest");
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_typeof, prefix + "typeof");
 
   registerFunction<CardinalityFunction, int64_t, Array<Any>>(
       {prefix + "cardinality"});

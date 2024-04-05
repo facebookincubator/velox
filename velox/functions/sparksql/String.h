@@ -17,7 +17,6 @@
 
 #include "folly/ssl/OpenSSLHash.h"
 
-#include <boost/locale.hpp>
 #include <codecvt>
 #include <string>
 #include "velox/expression/VectorFunction.h"
@@ -89,6 +88,16 @@ struct AsciiFunction {
       int32_t& result,
       const arg_type<Varchar>& s) {
     result = s.empty() ? 0 : s.data()[0];
+  }
+};
+
+template <typename T>
+struct BitLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, TInput& input) {
+    result = input.size() * 8;
   }
 };
 
@@ -821,6 +830,7 @@ struct TranslateFunction {
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*string*/,
       const arg_type<Varchar>* match,

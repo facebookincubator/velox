@@ -163,7 +163,7 @@ std::shared_ptr<exec::VectorFunction> createDecimalRound(
     }
   }
 }
-}; // namespace
+} // namespace
 
 std::pair<uint8_t, uint8_t>
 DecimalRoundCallToSpecialForm::getResultPrecisionScale(
@@ -242,6 +242,7 @@ exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
       type,
       std::move(args),
       std::move(decimalRound),
+      exec::VectorFunctionMetadata{},
       kRoundDecimal,
       trackCpuUsage);
 }

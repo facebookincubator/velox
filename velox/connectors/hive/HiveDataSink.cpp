@@ -180,8 +180,8 @@ std::shared_ptr<memory::MemoryPool> createSortPool(
   return writerPool->addLeafChild(fmt::format("{}.sort", writerPool->name()));
 }
 
-#define WRITER_NON_RECLAIMABLE_SECTION_GUARD(index)     \
-  exec::NonReclaimableSectionGuard nonReclaimableGuard( \
+#define WRITER_NON_RECLAIMABLE_SECTION_GUARD(index)       \
+  memory::NonReclaimableSectionGuard nonReclaimableGuard( \
       writerInfo_[(index)]->nonReclaimableSectionHolder.get())
 
 } // namespace
@@ -510,8 +510,9 @@ DataSink::Stats HiveDataSink::stats() const {
   for (int i = 0; i < writerInfo_.size(); ++i) {
     const auto& info = writerInfo_.at(i);
     VELOX_CHECK_NOT_NULL(info);
-    if (!info->spillStats->empty()) {
-      stats.spillStats += *info->spillStats;
+    const auto spillStats = info->spillStats->rlock();
+    if (!spillStats->empty()) {
+      stats.spillStats += *spillStats;
     }
   }
   return stats;
@@ -675,6 +676,11 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
       hiveConfig_->orcWriterMaxStripeSize(connectorSessionProperties));
   options.maxDictionaryMemory = std::optional(
       hiveConfig_->orcWriterMaxDictionaryMemory(connectorSessionProperties));
+  options.parquetWriteTimestampUnit =
+      hiveConfig_->parquetWriteTimestampUnit(connectorSessionProperties);
+  options.serdeParameters = std::map<std::string, std::string>(
+      insertTableHandle_->serdeParameters().begin(),
+      insertTableHandle_->serdeParameters().end());
   ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
 
   // Prevents the memory allocation during the writer creation.
@@ -714,15 +720,15 @@ HiveDataSink::maybeCreateBucketSortWriter(
       sortCompareFlags_,
       sortPool,
       writerInfo_.back()->nonReclaimableSectionHolder.get(),
-      spillConfig_);
+      spillConfig_,
+      writerInfo_.back()->spillStats.get());
   return std::make_unique<dwio::common::SortingWriter>(
       std::move(writer),
       std::move(sortBuffer),
       hiveConfig_->sortWriterMaxOutputRows(
           connectorQueryCtx_->sessionProperties()),
       hiveConfig_->sortWriterMaxOutputBytes(
-          connectorQueryCtx_->sessionProperties()),
-      writerInfo_.back()->spillStats.get());
+          connectorQueryCtx_->sessionProperties()));
 }
 
 void HiveDataSink::splitInputRowsAndEnsureWriters() {

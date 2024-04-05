@@ -14,17 +14,20 @@
  * limitations under the License.
  */
 #include "velox/exec/TableScan.h"
+#include <atomic>
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/exec/Exchange.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Timestamp.h"
@@ -54,6 +57,8 @@ class TableScanTest : public virtual HiveConnectorTestBase {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
+    exec::ExchangeSource::factories().clear();
+    exec::ExchangeSource::registerFactory(createLocalExchangeSource);
   }
 
   static void SetUpTestCase() {
@@ -68,8 +73,9 @@ class TableScanTest : public virtual HiveConnectorTestBase {
     return HiveConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
   }
 
-  exec::Split makeHiveSplit(std::string path) {
-    return exec::Split(makeHiveConnectorSplit(std::move(path)));
+  exec::Split makeHiveSplit(std::string path, int64_t splitWeight = 0) {
+    return exec::Split(makeHiveConnectorSplit(
+        std::move(path), 0, std::numeric_limits<uint64_t>::max(), splitWeight));
   }
 
   std::shared_ptr<Task> assertQuery(
@@ -485,7 +491,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, timeLimitInGetOutput) {
   // Count how many times we bailed from getOutput.
   size_t numBailed{0};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::TableScan::getOutput::bail",
+      "facebook::velox::exec::TableScan::getOutput::yield",
       std::function<void(const TableScan*)>(
           ([&](const TableScan* /*tableScan*/) { ++numBailed; })));
 
@@ -1369,6 +1375,152 @@ TEST_F(TableScanTest, waitForSplit) {
       duckDbQueryRunner_);
 }
 
+DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
+  // Create 10 data files for 10 splits.
+  const size_t numSplits{10};
+  const auto filePaths = makeFilePaths(numSplits);
+  auto vectors = makeVectors(numSplits, 100);
+  for (auto i = 0; i < numSplits; i++) {
+    writeToFile(filePaths.at(i)->path, vectors.at(i));
+  }
+
+  // Set the table scan operators wait twice:
+  // First, before acquiring a split and then after.
+  std::atomic_uint32_t numAcquiredSplits{0};
+  std::shared_mutex pauseTableScan;
+  std::shared_mutex pauseSplitProcessing;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::TableScan::getOutput",
+      std::function<void(const TableScan*)>(
+          ([&](const TableScan* /*tableScan*/) {
+            pauseTableScan.lock_shared();
+            pauseTableScan.unlock_shared();
+          })));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::TableScan::getOutput::gotSplit",
+      std::function<void(const TableScan*)>(
+          ([&](const TableScan* /*tableScan*/) {
+            ++numAcquiredSplits;
+            pauseSplitProcessing.lock_shared();
+            pauseSplitProcessing.unlock_shared();
+          })));
+  // This will stop table scan operators from proceeding reading from the
+  // acquired splits.
+  pauseTableScan.lock();
+  pauseSplitProcessing.lock();
+
+  // Prepare leaf task for the remote exchange node to pull data from.
+  auto leafTaskId = "local://leaf-0";
+  auto leafPlan = PlanBuilder()
+                      .values(vectors)
+                      .partitionedOutput({}, 1, {"c0", "c1", "c2"})
+                      .planNode();
+  std::unordered_map<std::string, std::string> config;
+  auto queryCtx = std::make_shared<core::QueryCtx>(
+      executor_.get(), core::QueryConfig(std::move(config)));
+  core::PlanFragment planFragment{leafPlan};
+  Consumer consumer = nullptr;
+  auto leafTask = Task::create(
+      leafTaskId,
+      core::PlanFragment{leafPlan},
+      0,
+      std::move(queryCtx),
+      std::move(consumer));
+  leafTask->start(4);
+
+  // Main task plan with table scan and remote exchange.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId scanNodeId, exchangeNodeId;
+  auto planNode = PlanBuilder(planNodeIdGenerator, pool_.get())
+                      .tableScan(rowType_)
+                      .capturePlanNodeId(scanNodeId)
+                      .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
+                      .hashJoin(
+                          {"t0"},
+                          {"u0"},
+                          PlanBuilder(planNodeIdGenerator, pool_.get())
+                              .exchange(leafPlan->outputType())
+                              .capturePlanNodeId(exchangeNodeId)
+                              // .values(vectors)
+                              // .partitionedOutput({}, 1, {"c0", "c1", "c2"})
+                              .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                              .planNode(),
+                          "",
+                          {"t1"},
+                          core::JoinType::kAnti)
+                      .planNode();
+
+  // Create task, cursor, start the task and supply the table scan splits.
+  const int32_t numDrivers = 6;
+  CursorParameters params;
+  params.planNode = planNode;
+  params.maxDrivers = numDrivers;
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+  auto task = cursor->task();
+  int64_t totalSplitWeights{0};
+  for (auto fileIndex = 0; fileIndex < numSplits; ++fileIndex) {
+    const int64_t splitWeight = fileIndex * 10 + 1;
+    totalSplitWeights += splitWeight;
+    auto split = makeHiveSplit(filePaths.at(fileIndex)->path, splitWeight);
+    task->addSplit(scanNodeId, std::move(split));
+  }
+  task->noMoreSplits(scanNodeId);
+  // Manage remote exchange splits.
+  task->addSplit(
+      exchangeNodeId,
+      exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId)));
+  task->noMoreSplits(exchangeNodeId);
+
+  // Check the task stats.
+  auto stats = task->taskStats();
+  EXPECT_EQ(stats.numRunningTableScanSplits, 0);
+  EXPECT_EQ(stats.numQueuedTableScanSplits, numSplits);
+  EXPECT_EQ(stats.runningTableScanSplitWeights, 0);
+  EXPECT_EQ(stats.queuedTableScanSplitWeights, totalSplitWeights);
+  EXPECT_EQ(stats.numTotalSplits, numSplits + 1);
+
+  // Let all the operators proceed to acquire splits.
+  pauseTableScan.unlock();
+
+  // Wait till 6 out of 10 splits are acquired by the operators in 6 threads
+  while (numAcquiredSplits < numDrivers) {
+    /* sleep override */
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
+  // Check the task stats.
+  int64_t runningSplitWeights{0};
+  for (auto i = 0; i < numAcquiredSplits; ++i) {
+    runningSplitWeights += i * 10 + 1;
+  }
+  stats = task->taskStats();
+  const auto queuedSplitWeights = totalSplitWeights - runningSplitWeights;
+  EXPECT_EQ(stats.numRunningTableScanSplits, numDrivers);
+  EXPECT_EQ(stats.numQueuedTableScanSplits, numSplits - numDrivers);
+  EXPECT_EQ(stats.runningTableScanSplitWeights, runningSplitWeights);
+  EXPECT_EQ(stats.queuedTableScanSplitWeights, queuedSplitWeights);
+
+  // Let all the operators proceed.
+  pauseSplitProcessing.unlock();
+
+  // Finish the task.
+  std::vector<RowVectorPtr> result;
+  while (cursor->moveNext()) {
+    result.push_back(cursor->current());
+  }
+  EXPECT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+  EXPECT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+
+  // Check task stats again.
+  stats = task->taskStats();
+  EXPECT_EQ(stats.numRunningTableScanSplits, 0);
+  EXPECT_EQ(stats.numQueuedTableScanSplits, 0);
+  EXPECT_EQ(stats.runningTableScanSplitWeights, 0);
+  EXPECT_EQ(stats.queuedTableScanSplitWeights, 0);
+  EXPECT_EQ(numAcquiredSplits, numSplits);
+}
+
 TEST_F(TableScanTest, splitOffsetAndLength) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
@@ -1433,6 +1585,18 @@ TEST_F(TableScanTest, emptyFile) {
   } catch (const VeloxException& e) {
     EXPECT_EQ("ORC file is empty", e.message());
   }
+}
+
+TEST_F(TableScanTest, preloadEmptySplit) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+  auto emptyVector = makeVectors(1, 0, rowType);
+  auto vector = makeVectors(1, 1'000, rowType);
+  auto filePaths = makeFilePaths(2);
+  writeToFile(filePaths[0]->path, vector[0]);
+  writeToFile(filePaths[1]->path, emptyVector[0]);
+  createDuckDbTable(vector);
+  auto op = tableScanNode(rowType);
+  assertQuery(op, filePaths, "SELECT * FROM tmp", 1);
 }
 
 TEST_F(TableScanTest, partitionedTableVarcharKey) {
@@ -2291,6 +2455,76 @@ TEST_F(TableScanTest, path) {
       op, {filePath}, fmt::format("SELECT '{}', * FROM tmp", pathValue));
 }
 
+TEST_F(TableScanTest, fileSizeAndModifiedTime) {
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto filePath = makeFilePaths(1)[0];
+  auto vector = makeVectors(1, 10, rowType)[0];
+  writeToFile(filePath->path, vector);
+  createDuckDbTable({vector});
+
+  static const char* kSize = "$file_size";
+  static const char* kModifiedTime = "$file_modified_time";
+
+  auto allColumns =
+      ROW({"a", kSize, kModifiedTime}, {BIGINT(), BIGINT(), BIGINT()});
+
+  auto assignments = allRegularColumns(rowType);
+  assignments[kSize] = synthesizedColumn(kSize, BIGINT());
+  assignments[kModifiedTime] = synthesizedColumn(kModifiedTime, BIGINT());
+
+  auto fileSizeValue = fmt::format("{}", filePath->fileSize());
+  auto fileTimeValue = fmt::format("{}", filePath->fileModifiedTime());
+
+  // Select and project both '$file_size', '$file_modified_time'.
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(allColumns)
+                .dataColumns(allColumns)
+                .assignments(assignments)
+                .endTableScan()
+                .planNode();
+  assertQuery(
+      op,
+      {filePath},
+      fmt::format("SELECT *, {}, {} FROM tmp", fileSizeValue, fileTimeValue));
+
+  auto filterTest = [&](const std::string& filter) {
+    auto tableHandle = makeTableHandle(
+        SubfieldFilters{},
+        parseExpr(filter, allColumns),
+        "hive_table",
+        allColumns);
+
+    // Use synthesized column in a filter but don't project it.
+    op = PlanBuilder()
+             .startTableScan()
+             .outputType(rowType)
+             .dataColumns(allColumns)
+             .tableHandle(tableHandle)
+             .assignments(assignments)
+             .endTableScan()
+             .planNode();
+    assertQuery(op, {filePath}, "SELECT * FROM tmp");
+
+    // Use synthesized column in a filter and project it out.
+    op = PlanBuilder()
+             .startTableScan()
+             .outputType(allColumns)
+             .dataColumns(allColumns)
+             .tableHandle(tableHandle)
+             .assignments(assignments)
+             .endTableScan()
+             .planNode();
+    assertQuery(
+        op,
+        {filePath},
+        fmt::format("SELECT *, {}, {} FROM tmp", fileSizeValue, fileTimeValue));
+  };
+
+  filterTest(fmt::format("\"{}\" = {}", kSize, fileSizeValue));
+  filterTest(fmt::format("\"{}\" = {}", kModifiedTime, fileTimeValue));
+}
+
 TEST_F(TableScanTest, bucket) {
   vector_size_t size = 1'000;
   int numBatches = 5;
@@ -2680,6 +2914,52 @@ TEST_F(TableScanTest, skipStridesForParentNulls) {
   auto split = makeHiveConnectorSplit(file->path);
   auto result = AssertQueryBuilder(plan).split(split).copyResults(pool());
   ASSERT_EQ(result->size(), 5000);
+}
+
+TEST_F(TableScanTest, randomSample) {
+  random::setSeed(42);
+  auto column = makeFlatVector<double>(
+      100, [](auto /*i*/) { return folly::Random::randDouble01(); });
+  auto rows = makeRowVector({column});
+  auto rowType = asRowType(rows->type());
+  std::vector<std::shared_ptr<TempFilePath>> files;
+  auto writeConfig = std::make_shared<dwrf::Config>();
+  writeConfig->set<uint64_t>(
+      dwrf::Config::STRIPE_SIZE, rows->size() * sizeof(double));
+  int numTotalRows = 0;
+  for (int i = 0; i < 10; ++i) {
+    auto file = TempFilePath::create();
+    if (i % 2 == 0) {
+      std::vector<RowVectorPtr> vectors;
+      for (int j = 0; j < 100; ++j) {
+        vectors.push_back(rows);
+      }
+      writeToFile(file->path, vectors, writeConfig);
+      numTotalRows += rows->size() * vectors.size();
+    } else {
+      writeToFile(file->path, {rows}, writeConfig);
+      numTotalRows += rows->size();
+    }
+    files.push_back(file);
+  }
+  CursorParameters params;
+  params.planNode =
+      PlanBuilder().tableScan(rowType, {}, "rand() < 0.01").planNode();
+  auto cursor = TaskCursor::create(params);
+  for (auto& file : files) {
+    cursor->task()->addSplit("0", makeHiveSplit(file->path));
+  }
+  cursor->task()->noMoreSplits("0");
+  int numRows = 0;
+  while (cursor->moveNext()) {
+    auto result = cursor->current();
+    VELOX_CHECK_GT(result->size(), 0);
+    numRows += result->size();
+  }
+  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_GT(getSkippedStridesStat(cursor->task()), 0);
+  double expectedNumRows = 0.01 * numTotalRows;
+  ASSERT_LT(abs(numRows - expectedNumRows) / expectedNumRows, 0.1);
 }
 
 /// Test the handling of constant remaining filter results which occur when

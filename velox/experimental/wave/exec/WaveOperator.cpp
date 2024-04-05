@@ -16,11 +16,15 @@
 
 #include "velox/experimental/wave/exec/WaveOperator.h"
 #include "velox/experimental/wave/exec/ToWave.h"
+#include "velox/experimental/wave/exec/WaveDriver.h"
 
 namespace facebook::velox::wave {
 
-WaveOperator::WaveOperator(CompileState& state, const RowTypePtr& type)
-    : id_(state.numOperators()), outputType_(type) {
+WaveOperator::WaveOperator(
+    CompileState& state,
+    const RowTypePtr& type,
+    const std::string& planNodeId)
+    : id_(state.numOperators()), planNodeId_(planNodeId), outputType_(type) {
   definesSubfields(state, outputType_);
 }
 
@@ -45,11 +49,16 @@ void WaveOperator::definesSubfields(
         defines_[Value(field)] = operand;
       }
     }
+      [[fallthrough]];
       // TODO:Add cases for nested types.
     default: {
       return;
     }
   }
+}
+
+folly::Synchronized<exec::OperatorStats>& WaveOperator::stats() {
+  return driver_->stats();
 }
 
 } // namespace facebook::velox::wave

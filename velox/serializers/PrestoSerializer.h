@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/common/base/Crc.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/vector/VectorStream.h"
@@ -49,8 +51,8 @@ class PrestoVectorSerde : public VectorSerde {
         bool _useLosslessTimestamp,
         common::CompressionKind _compressionKind,
         bool _nullsFirst = false)
-        : useLosslessTimestamp(_useLosslessTimestamp),
-          compressionKind(_compressionKind),
+        : VectorSerde::Options(_compressionKind),
+          useLosslessTimestamp(_useLosslessTimestamp),
           nullsFirst(_nullsFirst) {}
 
     /// Currently presto only supports millisecond precision and the serializer
@@ -59,27 +61,29 @@ class PrestoVectorSerde : public VectorSerde {
     /// currently used for spilling. Is false by default.
     bool useLosslessTimestamp{false};
 
-    common::CompressionKind compressionKind{
-        common::CompressionKind::CompressionKind_NONE};
-
     /// Serializes nulls of structs before the columns. Used to allow
     /// single pass reading of in spilling.
     ///
     /// TODO: Make Presto also serialize nulls before columns of
     /// structs.
     bool nullsFirst{false};
+
+    /// Minimum achieved compression if compression is enabled. Compressing less
+    /// than this causes subsequent compression attempts to be skipped. The more
+    /// times compression misses the target the less frequently it is tried.
+    float minCompressionRatio{0.8};
   };
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
   void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* vector,
       const folly::Range<const IndexRange*>& ranges,
       vector_size_t** sizes,
       Scratch& scratch) override;
 
   void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* vector,
       const folly::Range<const vector_size_t*> rows,
       vector_size_t** sizes,
       Scratch& scratch) override;
@@ -129,6 +133,59 @@ class PrestoVectorSerde : public VectorSerde {
       TypePtr type,
       VectorPtr* result,
       const Options* options);
+
+  enum class TokenType {
+    HEADER,
+    NUM_COLUMNS,
+    COLUMN_ENCODING,
+    NUM_ROWS,
+    NULLS,
+    BYTE_ARRAY,
+    SHORT_ARRAY,
+    INT_ARRAY,
+    LONG_ARRAY,
+    INT128_ARRAY,
+    VARIABLE_WIDTH_DATA_SIZE,
+    VARIABLE_WIDTH_DATA,
+    DICTIONARY_INDICES,
+    DICTIONARY_ID,
+    HASH_TABLE_SIZE,
+    HASH_TABLE,
+    NUM_FIELDS,
+    OFFSETS,
+  };
+
+  struct Token {
+    TokenType tokenType;
+    uint32_t length;
+  };
+
+  /**
+   * This function lexes the PrestoPage encoded source into tokens so that
+   * Zstrong can parse the PrestoPage without knowledge of the PrestoPage
+   * format. The compressor, which needs to parse presto page, uses this
+   * function to attach meaning to each token in the source. Then the decoder
+   * can simply regnerate the tokens and concatenate, so it is independent of
+   * the PrestoPage format and agnostic to any changes in the format.
+   *
+   * @returns Status::OK() if the @p source successfully parses as a PrestoPage,
+   * and fills @p out with the tokens. Otherwise, returns an error status and
+   * does not modify @p out.
+   *
+   * WARNING: This function does not support compression, encryption, nulls
+   * first, or lossless timestamps and will throw an exception if these features
+   * are enabled.
+   *
+   * NOTE: If this function returns success, the lex is guaranteed to be valid.
+   * However, if the source was not PrestoPage, this function may still return
+   * success, if the source is also interpretable as a PrestoPage. It attempts
+   * to validate as much as possible, to reduce false positives, but provides no
+   * guarantees.
+   */
+  static Status lex(
+      std::string_view source,
+      std::vector<Token>& out,
+      const Options* options = nullptr);
 
   static void registerVectorSerde();
 };

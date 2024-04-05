@@ -43,13 +43,14 @@ function github_checkout {
   shift
   local GIT_CLONE_PARAMS=$@
   local DIRNAME=$(basename $REPO)
+  SUDO="${SUDO:-""}"
   cd "${DEPENDENCY_DIR}"
   if [ -z "${DIRNAME}" ]; then
     echo "Failed to get repo name from ${REPO}"
     exit 1
   fi
   if [ -d "${DIRNAME}" ] && prompt "${DIRNAME} already exists. Delete?"; then
-    rm -rf "${DIRNAME}"
+    ${SUDO} rm -rf "${DIRNAME}"
   fi
   if [ ! -d "${DIRNAME}" ]; then
     git clone -q -b $VERSION $GIT_CLONE_PARAMS "https://github.com/${REPO}.git"
@@ -152,8 +153,9 @@ function wget_and_untar {
 function cmake_install {
   local NAME=$(basename "$(pwd)")
   local BINARY_DIR=_build
+  SUDO="${SUDO:-""}"
   if [ -d "${BINARY_DIR}" ] && prompt "Do you want to rebuild ${NAME}?"; then
-    rm -rf "${BINARY_DIR}"
+    ${SUDO} rm -rf "${BINARY_DIR}"
   fi
   mkdir -p "${BINARY_DIR}"
   CPU_TARGET="${CPU_TARGET:-unknown}"
@@ -169,6 +171,6 @@ function cmake_install {
     -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
     -DBUILD_TESTING=OFF \
     "$@"
-  ninja -C "${BINARY_DIR}" install
+  ${SUDO} ninja -C "${BINARY_DIR}" install
 }
 

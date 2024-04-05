@@ -36,7 +36,7 @@ class OrderBy : public Operator {
  public:
   OrderBy(
       int32_t operatorId,
-      DriverCtx* FOLLY_NONNULL driverCtx,
+      DriverCtx* driverCtx,
       const std::shared_ptr<const core::OrderByNode>& orderByNode);
 
   bool needsInput() const override {
@@ -49,7 +49,7 @@ class OrderBy : public Operator {
 
   RowVectorPtr getOutput() override;
 
-  BlockingReason isBlocked(ContinueFuture* FOLLY_NULLABLE /*future*/) override {
+  BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return BlockingReason::kNotBlocked;
   }
 
@@ -60,13 +60,9 @@ class OrderBy : public Operator {
   void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
       override;
 
-  void abort() override;
+  void close() override;
 
  private:
-  // Invoked to record the spilling stats in operator stats after processing all
-  // the inputs.
-  void recordSpillStats();
-
   std::unique_ptr<SortBuffer> sortBuffer_;
   bool finished_ = false;
   uint32_t maxOutputRows_;

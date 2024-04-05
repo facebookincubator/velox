@@ -359,3 +359,37 @@ TEST_F(ByteStreamTest, appendWindow) {
   stream.flush(&out);
   EXPECT_EQ(0, memcmp(stringStream.str().data(), words.data(), words.size()));
 }
+
+TEST_F(ByteStreamTest, readBytesNegativeSize) {
+  constexpr int32_t kBufferSize = 4096;
+  uint8_t buffer[kBufferSize];
+  ByteInputStream byteStream({ByteRange{buffer, kBufferSize, 0}});
+  std::string output;
+  EXPECT_THROW(byteStream.readBytes(output.data(), -100), VeloxRuntimeError);
+}
+
+TEST_F(ByteStreamTest, skipNegativeSize) {
+  constexpr int32_t kBufferSize = 4096;
+  uint8_t buffer[kBufferSize];
+  ByteInputStream byteStream({ByteRange{buffer, kBufferSize, 0}});
+  EXPECT_THROW(byteStream.skip(-100), VeloxRuntimeError);
+}
+
+TEST_F(ByteStreamTest, nextViewNegativeSize) {
+  constexpr int32_t kBufferSize = 4096;
+  uint8_t buffer[kBufferSize];
+  ByteInputStream byteStream({ByteRange{buffer, kBufferSize, 0}});
+  EXPECT_THROW(byteStream.nextView(-100), VeloxRuntimeError);
+}
+
+TEST_F(ByteStreamTest, reuse) {
+  auto arena = newArena();
+  ByteOutputStream stream(arena.get());
+  char bytes[10000] = {};
+  for (auto i = 0; i < 10; ++i) {
+    arena->clear();
+    stream.startWrite(i * 100);
+    stream.appendStringView(std::string_view(bytes, sizeof(bytes)));
+    EXPECT_EQ(sizeof(bytes), stream.size());
+  }
+}

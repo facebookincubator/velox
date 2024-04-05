@@ -202,6 +202,46 @@ TEST_F(GenericViewTest, arrayOfGeneric) {
   }
 }
 
+TEST_F(GenericViewTest, toString) {
+  {
+    auto data = makeArrayVectorFromJson<int32_t>({
+        "[1, 2, 3]",
+    });
+
+    DecodedVector decoded(*data);
+    exec::VectorReader<Array<Any>> reader(&decoded);
+
+    auto arrayView = reader[0];
+    EXPECT_EQ("1", arrayView[0].value().toString());
+    EXPECT_EQ("2", arrayView[1].value().toString());
+    EXPECT_EQ("3", arrayView[2].value().toString());
+  }
+
+  {
+    auto data = makeMapVectorFromJson<int32_t, int64_t>({
+        "{1: 10, 2: null, 3: 30}",
+    });
+
+    auto keys = data->mapKeys();
+    auto values = data->mapValues();
+
+    DecodedVector decoded(*data);
+    exec::VectorReader<Map<Any, Any>> reader(&decoded);
+
+    auto mapView = reader[0];
+    auto it = mapView.begin();
+    for (auto i = 0; i < 3; ++i) {
+      EXPECT_EQ(keys->toString(i), it->first.toString());
+      if (values->isNullAt(i)) {
+        EXPECT_FALSE(it->second.has_value());
+      } else {
+        EXPECT_EQ(values->toString(i), it->second->toString());
+      }
+      ++it;
+    }
+  }
+}
+
 template <typename T>
 struct CompareFunc {
   VELOX_DEFINE_FUNCTION_TYPES(T);

@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_process ProcessBase.cpp StackTrace.cpp ThreadDebugInfo.cpp
-                          TraceContext.cpp TraceHistory.cpp)
+add_library(velox_process ProcessBase.cpp Profiler.cpp StackTrace.cpp
+                          ThreadDebugInfo.cpp TraceContext.cpp TraceHistory.cpp)
 
 target_link_libraries(
   velox_process
-  PUBLIC velox_flag_definitions Folly::folly
+  PUBLIC velox_file velox_flag_definitions Folly::folly
   PRIVATE fmt::fmt gflags::gflags glog::glog)
 
 if(${VELOX_BUILD_TESTING})

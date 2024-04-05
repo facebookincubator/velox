@@ -168,14 +168,6 @@ class HistogramAggregate : public exec::Aggregate {
     return false;
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    for (auto index : indices) {
-      new (groups[index] + offset_) AccumulatorType{allocator_};
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto mapVector = (*result)->as<MapVector>();
@@ -321,7 +313,16 @@ class HistogramAggregate : public exec::Aggregate {
     });
   }
 
-  void destroy(folly::Range<char**> groups) override {
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    for (auto index : indices) {
+      new (groups[index] + offset_) AccumulatorType{allocator_};
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
     destroyAccumulators<AccumulatorType>(groups);
   }
 
@@ -340,7 +341,10 @@ class HistogramAggregate : public exec::Aggregate {
 
 } // namespace
 
-void registerHistogramAggregate(const std::string& prefix) {
+void registerHistogramAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto inputType :
        {"boolean",
@@ -405,7 +409,10 @@ void registerHistogramAggregate(const std::string& prefix) {
                 name,
                 inputType->kindName());
         }
-      });
+      },
+      {false /*orderSensitive*/},
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

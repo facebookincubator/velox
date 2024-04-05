@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/type/CppToType.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
@@ -101,6 +102,20 @@ struct resolver<Array<V>> {
   using out_type = ArrayWriter<V>;
 };
 
+template <typename P, typename S>
+struct resolver<ShortDecimal<P, S>> {
+  using in_type = int64_t;
+  using null_free_in_type = in_type;
+  using out_type = int64_t;
+};
+
+template <typename P, typename S>
+struct resolver<LongDecimal<P, S>> {
+  using in_type = int128_t;
+  using null_free_in_type = in_type;
+  using out_type = int128_t;
+};
+
 template <>
 struct resolver<Varchar> {
   using in_type = StringView;
@@ -127,6 +142,13 @@ struct resolver<IntervalDayTime> {
   using in_type = int64_t;
   using null_free_in_type = in_type;
   using out_type = int64_t;
+};
+
+template <>
+struct resolver<IntervalYearMonth> {
+  using in_type = int32_t;
+  using null_free_in_type = in_type;
+  using out_type = int32_t;
 };
 
 template <typename T>

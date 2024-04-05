@@ -175,7 +175,7 @@ uint16_t MemoryManager::alignment() const {
 
 std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     const std::string& name,
-    int64_t capacity,
+    int64_t maxCapacity,
     std::unique_ptr<MemoryReclaimer> reclaimer) {
   std::string poolName = name;
   if (poolName.empty()) {
@@ -185,7 +185,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
 
   MemoryPool::Options options;
   options.alignment = alignment_;
-  options.maxCapacity = capacity;
+  options.maxCapacity = maxCapacity;
   options.trackUsage = true;
   options.debugEnabled = debugEnabled_;
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
@@ -206,7 +206,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   pools_.emplace(poolName, pool);
   VELOX_CHECK_EQ(pool->capacity(), 0);
   arbitrator_->growCapacity(
-      pool.get(), std::min<uint64_t>(poolInitCapacity_, capacity));
+      pool.get(), std::min<uint64_t>(poolInitCapacity_, maxCapacity));
   return pool;
 }
 
@@ -227,8 +227,12 @@ bool MemoryManager::growPool(MemoryPool* pool, uint64_t incrementBytes) {
   return arbitrator_->growCapacity(pool, getAlivePools(), incrementBytes);
 }
 
-uint64_t MemoryManager::shrinkPools(uint64_t targetBytes) {
-  return arbitrator_->shrinkCapacity(getAlivePools(), targetBytes);
+uint64_t MemoryManager::shrinkPools(
+    uint64_t targetBytes,
+    bool allowSpill,
+    bool allowAbort) {
+  return arbitrator_->shrinkCapacity(
+      getAlivePools(), targetBytes, allowSpill, allowAbort);
 }
 
 void MemoryManager::dropPool(MemoryPool* pool) {

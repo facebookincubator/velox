@@ -13,7 +13,7 @@
 # limitations under the License.
 
 add_library(velox_hive_config OBJECT HiveConfig.cpp)
-target_link_libraries(velox_hive_config velox_exception)
+target_link_libraries(velox_hive_config velox_core velox_exception)
 
 add_subdirectory(iceberg)
 
@@ -22,13 +22,13 @@ add_library(
   FileHandle.cpp
   HiveConfig.cpp
   HiveConnector.cpp
+  HiveConnectorUtil.cpp
   HiveDataSink.cpp
   HiveDataSource.cpp
   HivePartitionUtil.cpp
   PartitionIdGenerator.cpp
   SplitReader.cpp
-  TableHandle.cpp
-  HiveConnectorUtil.cpp)
+  TableHandle.cpp)
 
 target_link_libraries(
   velox_hive_connector

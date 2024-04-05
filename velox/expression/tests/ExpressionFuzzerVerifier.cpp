@@ -40,7 +40,7 @@ BufferPtr extractNonNullIndices(const RowVectorPtr& data) {
 
   for (auto& child : data->children()) {
     decoded.decode(*child);
-    auto* rawNulls = decoded.nulls();
+    auto* rawNulls = decoded.nulls(nullptr);
     if (rawNulls) {
       nonNullRows.deselectNulls(rawNulls, 0, data->size());
     }
@@ -82,6 +82,10 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
     size_t initialSeed,
     const ExpressionFuzzerVerifier::Options& options)
     : options_(options),
+      queryCtx_(std::make_shared<core::QueryCtx>(
+          nullptr,
+          core::QueryConfig(options.queryConfigs))),
+      execCtx_({pool_.get(), queryCtx_.get()}),
       verifier_(
           &execCtx_,
           {options_.disableConstantFolding,

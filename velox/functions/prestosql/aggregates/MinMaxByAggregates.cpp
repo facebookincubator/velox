@@ -253,6 +253,7 @@ struct MinMaxByNStringViewAccumulator {
       if (comparator.compare(comparison, topPair)) {
         std::pop_heap(
             base.heapValues.begin(), base.heapValues.end(), comparator);
+        freePair(base.heapValues.back());
         base.heapValues.pop_back();
         addToAccumulator(comparison, value, comparator);
       }
@@ -423,6 +424,7 @@ struct MinMaxByNComplexTypeAccumulator {
         std::pop_heap(
             base.heapValues.begin(), base.heapValues.end(), comparator);
         auto position = writeComplex(decoded, index);
+        freePair(base.heapValues.back());
         base.heapValues.pop_back();
         addToAccumulator(comparison, position, comparator);
       }
@@ -515,7 +517,7 @@ struct MinMaxByNComplexTypeAccumulator {
     compares.setNull(index, false);
     compares.set(index, pair.first);
   }
-}; // namespace
+};
 
 template <typename C, typename Compare>
 struct ComplexTypeExtractor {
@@ -632,16 +634,6 @@ class MinMaxByNAggregate : public exec::Aggregate {
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(AccumulatorType);
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (const vector_size_t i : indices) {
-      auto group = groups[i];
-      new (group + offset_) AccumulatorType(allocator_);
-    }
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -819,7 +811,18 @@ class MinMaxByNAggregate : public exec::Aggregate {
     });
   }
 
-  void destroy(folly::Range<char**> groups) override {
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (const vector_size_t i : indices) {
+      auto group = groups[i];
+      new (group + offset_) AccumulatorType(allocator_);
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
     destroyAccumulators<AccumulatorType>(groups);
   }
 
@@ -1122,7 +1125,10 @@ template <
     bool isMaxFunc,
     template <typename U, typename V>
     class NAggregate>
-exec::AggregateRegistrationResult registerMinMaxBy(const std::string& name) {
+exec::AggregateRegistrationResult registerMinMaxBy(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   // V, C -> row(V, C) -> V.
   signatures.push_back(exec::AggregateFunctionSignatureBuilder()
@@ -1184,16 +1190,21 @@ exec::AggregateRegistrationResult registerMinMaxBy(const std::string& name) {
           return create<Aggregate, Comparator, isMaxFunc>(
               resultType, argTypes[0], argTypes[1], errorMessage, true);
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace
 
-void registerMinMaxByAggregates(const std::string& prefix) {
+void registerMinMaxByAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerMinMaxBy<MinMaxByAggregateBase, true, MaxByNAggregate>(
-      prefix + kMaxBy);
+      prefix + kMaxBy, withCompanionFunctions, overwrite);
   registerMinMaxBy<MinMaxByAggregateBase, false, MinByNAggregate>(
-      prefix + kMinBy);
+      prefix + kMinBy, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

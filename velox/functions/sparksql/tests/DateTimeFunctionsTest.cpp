@@ -16,10 +16,21 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
+
+std::string timestampToString(Timestamp ts) {
+  TimestampToStringOptions options;
+  options.mode = TimestampToStringOptions::Mode::kFull;
+  std::string result;
+  result.resize(getMaxStringLength(options));
+  const auto view = Timestamp::tsToStringView(ts, options, result.data());
+  result.resize(view.size());
+  return result;
+}
 
 class DateTimeFunctionsTest : public SparkFunctionBaseTest {
  public:
@@ -56,6 +67,89 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
                  std::vector<std::optional<TValue>>{value})}));
   }
 };
+
+TEST_F(DateTimeFunctionsTest, toUtcTimestamp) {
+  const auto toUtcTimestamp = [&](std::string_view ts, const std::string& tz) {
+    auto timestamp = std::make_optional<Timestamp>(
+        util::fromTimestampString(ts.data(), ts.length()));
+    auto result = evaluateOnce<Timestamp>(
+        "to_utc_timestamp(c0, c1)",
+        timestamp,
+        std::make_optional<std::string>(tz));
+    return timestampToString(result.value());
+  };
+  EXPECT_EQ(
+      "2015-07-24T07:00:00.000000000",
+      toUtcTimestamp("2015-07-24 00:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(
+      "2015-01-24T08:00:00.000000000",
+      toUtcTimestamp("2015-01-24 00:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(
+      "2015-01-24T00:00:00.000000000",
+      toUtcTimestamp("2015-01-24 00:00:00", "UTC"));
+  EXPECT_EQ(
+      "2015-01-24T00:00:00.000000000",
+      toUtcTimestamp("2015-01-24 05:30:00", "Asia/Kolkata"));
+  VELOX_ASSERT_THROW(
+      toUtcTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
+      "Asia/Ooty not found in timezone database");
+}
+
+TEST_F(DateTimeFunctionsTest, fromUtcTimestamp) {
+  const auto fromUtcTimestamp = [&](std::string_view ts,
+                                    const std::string& tz) {
+    auto timestamp = std::make_optional<Timestamp>(
+        util::fromTimestampString(ts.data(), ts.length()));
+    auto result = evaluateOnce<Timestamp>(
+        "from_utc_timestamp(c0, c1)",
+        timestamp,
+        std::make_optional<std::string>(tz));
+    return timestampToString(result.value());
+  };
+  EXPECT_EQ(
+      "2015-07-24T00:00:00.000000000",
+      fromUtcTimestamp("2015-07-24 07:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(
+      "2015-01-24T00:00:00.000000000",
+      fromUtcTimestamp("2015-01-24 08:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(
+      "2015-01-24T00:00:00.000000000",
+      fromUtcTimestamp("2015-01-24 00:00:00", "UTC"));
+  EXPECT_EQ(
+      "2015-01-24T05:30:00.000000000",
+      fromUtcTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
+  VELOX_ASSERT_THROW(
+      fromUtcTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
+      "Asia/Ooty not found in timezone database");
+}
+
+TEST_F(DateTimeFunctionsTest, toFromUtcTimestamp) {
+  const auto toFromUtcTimestamp = [&](std::string_view ts,
+                                      const std::string& tz) {
+    auto timestamp = std::make_optional<Timestamp>(
+        util::fromTimestampString(ts.data(), ts.length()));
+    auto result = evaluateOnce<Timestamp>(
+        "to_utc_timestamp(from_utc_timestamp(c0, c1), c1)",
+        timestamp,
+        std::make_optional<std::string>(tz));
+    return timestampToString(result.value());
+  };
+  EXPECT_EQ(
+      "2015-07-24T07:00:00.000000000",
+      toFromUtcTimestamp("2015-07-24 07:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(
+      "2015-01-24T08:00:00.000000000",
+      toFromUtcTimestamp("2015-01-24 08:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(
+      "2015-01-24T00:00:00.000000000",
+      toFromUtcTimestamp("2015-01-24 00:00:00", "UTC"));
+  EXPECT_EQ(
+      "2015-01-24T00:00:00.000000000",
+      toFromUtcTimestamp("2015-01-24 00:00:00", "Asia/Kolkata"));
+  VELOX_ASSERT_THROW(
+      toFromUtcTimestamp("2015-01-24 00:00:00", "Asia/Ooty"),
+      "Asia/Ooty not found in timezone database");
+}
 
 TEST_F(DateTimeFunctionsTest, year) {
   const auto year = [&](std::optional<Timestamp> date) {
@@ -112,6 +206,26 @@ TEST_F(DateTimeFunctionsTest, weekOfYear) {
   EXPECT_EQ(8, weekOfYear("2008-02-20"));
   EXPECT_EQ(15, weekOfYear("2015-04-08"));
   EXPECT_EQ(15, weekOfYear("2013-04-08"));
+}
+
+TEST_F(DateTimeFunctionsTest, unixDate) {
+  const auto unixDate = [&](std::string_view date) {
+    return evaluateOnce<int32_t, int32_t>(
+        "unix_date(c0)",
+        {util::fromDateString(date.data(), date.length())},
+        {DATE()});
+  };
+
+  EXPECT_EQ(unixDate("1970-01-01"), 0);
+  EXPECT_EQ(unixDate("1970-01-02"), 1);
+  EXPECT_EQ(unixDate("1969-12-31"), -1);
+  EXPECT_EQ(unixDate("1970-02-01"), 31);
+  EXPECT_EQ(unixDate("1971-01-31"), 395);
+  EXPECT_EQ(unixDate("1971-01-01"), 365);
+  EXPECT_EQ(unixDate("1972-02-29"), 365 + 365 + 30 + 29);
+  EXPECT_EQ(unixDate("1971-03-01"), 365 + 30 + 28 + 1);
+  EXPECT_EQ(unixDate("5881580-07-11"), kMax);
+  EXPECT_EQ(unixDate("-5877641-06-23"), kMin);
 }
 
 TEST_F(DateTimeFunctionsTest, unixTimestamp) {
@@ -696,6 +810,48 @@ TEST_F(DateTimeFunctionsTest, hour) {
   EXPECT_EQ(2, hour("1969-01-01 13:23:00.001"));
 }
 
+TEST_F(DateTimeFunctionsTest, minute) {
+  const auto minute = [&](std::string_view timestampStr) {
+    const auto timeStamp = std::make_optional(
+        util::fromTimestampString(timestampStr.data(), timestampStr.length()));
+    return evaluateOnce<int32_t>("minute(c0)", timeStamp);
+  };
+
+  EXPECT_EQ(23, minute("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, minute("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(10, minute("2015-04-08 13:10:15"));
+  EXPECT_EQ(43, minute("1969-01-01 13:43:00.001"));
+
+  // Set time zone to Pacific/Apia (13 hours ahead of UTC).
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(23, minute("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, minute("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(10, minute("2015-04-08 13:10:15"));
+  EXPECT_EQ(43, minute("1969-01-01 13:43:00.001"));
+
+  // Set time zone to Asia/Kolkata (5.5 hours ahead of UTC).
+  setQueryTimeZone("Asia/Kolkata");
+
+  EXPECT_EQ(53, minute("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(29, minute("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(40, minute("2015-04-08 13:10:15"));
+  EXPECT_EQ(13, minute("1969-01-01 13:43:00.001"));
+}
+
+TEST_F(DateTimeFunctionsTest, second) {
+  const auto second = [&](std::string_view timestampStr) {
+    const auto timeStamp = std::make_optional(
+        util::fromTimestampString(timestampStr.data(), timestampStr.length()));
+    return evaluateOnce<int32_t>("second(c0)", timeStamp);
+  };
+
+  EXPECT_EQ(0, second("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, second("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(15, second("2015-04-08 13:10:15"));
+  EXPECT_EQ(0, second("1969-01-01 13:43:00.001"));
+}
+
 TEST_F(DateTimeFunctionsTest, fromUnixtime) {
   const auto getUnixTime = [&](const StringView& str) {
     Timestamp t = util::fromTimestampString(str);
@@ -755,6 +911,61 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
       fromUnixTime(0, "FF/MM/dd"), "Specifier F is not supported");
   VELOX_ASSERT_THROW(
       fromUnixTime(0, "yyyy-MM-dd HH:II"), "Specifier I is not supported");
+}
+
+TEST_F(DateTimeFunctionsTest, makeYMInterval) {
+  const auto fromYearAndMonth = [&](const std::optional<int32_t>& year,
+                                    const std::optional<std::int32_t>& month) {
+    auto result = evaluateOnce<int32_t, int32_t>(
+        "make_ym_interval(c0, c1)",
+        {year, month},
+        {INTEGER(), INTEGER()},
+        std::nullopt,
+        {INTERVAL_YEAR_MONTH()});
+    VELOX_CHECK(result.has_value());
+    return INTERVAL_YEAR_MONTH()->valueToString(result.value());
+  };
+  const auto fromYear = [&](const std::optional<int32_t>& year) {
+    auto result = evaluateOnce<int32_t, int32_t>(
+        "make_ym_interval(c0)",
+        {year},
+        {INTEGER()},
+        std::nullopt,
+        {INTERVAL_YEAR_MONTH()});
+    VELOX_CHECK(result.has_value());
+    return INTERVAL_YEAR_MONTH()->valueToString(result.value());
+  };
+
+  EXPECT_EQ(fromYearAndMonth(1, 2), "1-2");
+  EXPECT_EQ(fromYearAndMonth(0, 1), "0-1");
+  EXPECT_EQ(fromYearAndMonth(1, 100), "9-4");
+  EXPECT_EQ(fromYear(0), "0-0");
+  EXPECT_EQ(fromYear(178956970), "178956970-0");
+  EXPECT_EQ(fromYear(-178956970), "-178956970-0");
+  {
+    // Test signature for no year and month.
+    auto result = evaluateOnce<int32_t>(
+        "make_ym_interval()",
+        makeRowVector(ROW({}), 1),
+        std::nullopt,
+        {INTERVAL_YEAR_MONTH()});
+    VELOX_CHECK(result.has_value());
+    EXPECT_EQ(INTERVAL_YEAR_MONTH()->valueToString(result.value()), "0-0");
+  }
+
+  VELOX_ASSERT_THROW(
+      fromYearAndMonth(178956970, 8),
+      "Integer overflow in make_ym_interval(178956970, 8)");
+  VELOX_ASSERT_THROW(
+      fromYearAndMonth(-178956970, -9),
+      "Integer overflow in make_ym_interval(-178956970, -9)");
+  VELOX_ASSERT_THROW(
+      fromYearAndMonth(178956971, 0),
+      "Integer overflow in make_ym_interval(178956971, 0)");
+  VELOX_ASSERT_THROW(
+      fromYear(178956971), "Integer overflow in make_ym_interval(178956971)");
+  VELOX_ASSERT_THROW(
+      fromYear(-178956971), "Integer overflow in make_ym_interval(-178956971)");
 }
 
 } // namespace

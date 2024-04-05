@@ -23,6 +23,7 @@
 
 #include <gtest/gtest.h>
 #include <optional>
+#include "velox/type/CppToType.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::test {
@@ -127,6 +128,13 @@ class VectorTestBase {
       const std::shared_ptr<const RowType>& rowType,
       vector_size_t size) {
     return vectorMaker_.rowVector(rowType, size);
+  }
+
+  RowVectorPtr makeRowVector(
+      const RowTypePtr& type,
+      const VectorFuzzer::Options& fuzzerOpts) {
+    VectorFuzzer fuzzer(fuzzerOpts, pool());
+    return fuzzer.fuzzRow(type);
   }
 
   std::vector<RowVectorPtr> createVectors(

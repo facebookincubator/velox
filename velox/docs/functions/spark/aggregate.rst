@@ -53,6 +53,11 @@ General Aggregate Functions
 
     ``hash`` cannot be null.
 
+.. spark:function:: collect_list(x) -> array<[same as x]>
+
+    Returns an array created from the input ``x`` elements. Ignores null
+    inputs, and returns an empty array when all inputs are null.
+
 .. spark:function:: first(x) -> x
 
     Returns the first value of `x`.
@@ -60,6 +65,12 @@ General Aggregate Functions
 .. spark:function:: first_ignore_null(x) -> x
 
     Returns the first non-null value of `x`.
+
+.. spark:function:: kurtosis(x) -> double
+
+    Returns the Pearson's kurtosis of all input values. When the count of `x` is not empty,
+    a non-null output will be generated. When the value of `m2` in the accumulator is 0, a null
+    output will be generated.
 
 .. spark:function:: last(x) -> x
 
@@ -103,17 +114,30 @@ General Aggregate Functions
 
     Returns b
 
+.. spark:function:: skewness(x) -> double
+
+    Returns the skewness of all input values. When the count of `x` is greater than or equal to 1,
+    a non-null output will be generated. When the value of `m2` in the accumulator is 0, a null
+    output will be generated.
+
 .. spark:function:: sum(x) -> bigint|double|real
 
     Returns the sum of `x`.
 
-    Supported types are TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
+    Supported types are TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE and DECIMAL.
 
     When x is of type DOUBLE, the result type is DOUBLE.
     When x is of type REAL, the result type is REAL.
+    When x is of type DECIMAL(p, s), the result type is DECIMAL(p + 10, s), where (p + 10) is capped at 38.
+
     For all other input types, the result type is BIGINT.
 
-    Note: When the sum of BIGINT values exceeds its limit, it cycles to the overflowed value rather than raising an error.
+    Note:
+    When all input values is NULL, for all input types, the result is NULL.
+
+    For DECIMAL type, when an overflow occurs in the accumulation, it returns NULL. For REAL and DOUBLE type, it
+    returns Infinity. For all other input types, when the sum of input values exceeds its limit, it cycles to the
+    overflowed value rather than raising an error.
 
     Example::
 

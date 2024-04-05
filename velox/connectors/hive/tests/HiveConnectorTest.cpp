@@ -87,7 +87,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_multilevel) {
   auto rowType = ROW({{"c0", columnType}});
   auto subfields = makeSubfields({"c0.c0c1[3][\"foo\"].c0c1c0"});
   auto scanSpec = makeScanSpec(
-      rowType, groupSubfields(subfields), {}, nullptr, {}, pool_.get());
+      rowType, groupSubfields(subfields), {}, nullptr, {}, {}, pool_.get());
   auto* c0c0 = scanSpec->childByName("c0")->childByName("c0c0");
   validateNullConstant(*c0c0, *BIGINT());
   auto* c0c1 = scanSpec->childByName("c0")->childByName("c0c1");
@@ -122,6 +122,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_mergeFields) {
       {},
       nullptr,
       {},
+      {},
       pool_.get());
   auto* c0c0 = scanSpec->childByName("c0")->childByName("c0c0");
   ASSERT_FALSE(c0c0->childByName("c0c0c0")->isConstant());
@@ -144,9 +145,11 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_mergeArray) {
       {},
       nullptr,
       {},
+      {},
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(c0->maxArrayElementsCount(), 2);
+  ASSERT_TRUE(c0->flatMapFeatureSelection().empty());
   auto* elements = c0->childByName(ScanSpec::kArrayElementsFieldName);
   ASSERT_FALSE(elements->childByName("c0c0")->isConstant());
   ASSERT_FALSE(elements->childByName("c0c2")->isConstant());
@@ -160,7 +163,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_mergeArrayNegative) {
   auto subfields = makeSubfields({"c0[1].c0c0", "c0[-1].c0c2"});
   auto groupedSubfields = groupSubfields(subfields);
   VELOX_ASSERT_USER_THROW(
-      makeScanSpec(rowType, groupedSubfields, {}, nullptr, {}, pool_.get()),
+      makeScanSpec(rowType, groupedSubfields, {}, nullptr, {}, {}, pool_.get()),
       "Non-positive array subscript cannot be push down");
 }
 
@@ -175,8 +178,11 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_mergeMap) {
       {},
       nullptr,
       {},
+      {},
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
+  ASSERT_EQ(
+      c0->flatMapFeatureSelection(), std::vector<std::string>({"10", "20"}));
   auto* keysFilter = c0->childByName(ScanSpec::kMapKeysFieldName)->filter();
   ASSERT_TRUE(keysFilter);
   ASSERT_TRUE(applyFilter(*keysFilter, 10));
@@ -200,8 +206,10 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_allSubscripts) {
         {},
         nullptr,
         {},
+        {},
         pool_.get());
     auto* c0 = scanSpec->childByName("c0");
+    ASSERT_TRUE(c0->flatMapFeatureSelection().empty());
     ASSERT_FALSE(c0->childByName(ScanSpec::kMapKeysFieldName)->filter());
     auto* values = c0->childByName(ScanSpec::kMapValuesFieldName);
     ASSERT_EQ(
@@ -217,6 +225,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_allSubscripts) {
       groupSubfields(makeSubfields({"c0[*][*].c0c0"})),
       {},
       nullptr,
+      {},
       {},
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
@@ -239,6 +248,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_doubleMapKey) {
       groupSubfields(makeSubfields({"c0[0]", "c1[-1]"})),
       {},
       nullptr,
+      {},
       {},
       pool_.get());
   auto* keysFilter = scanSpec->childByName("c0")
@@ -267,6 +277,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_doubleMapKey) {
       {},
       nullptr,
       {},
+      {},
       pool_.get());
   keysFilter = scanSpec->childByName("c0")
                    ->childByName(ScanSpec::kMapKeysFieldName)
@@ -285,6 +296,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_doubleMapKey) {
       {},
       nullptr,
       {},
+      {},
       pool_.get());
   keysFilter = scanSpec->childByName("c0")
                    ->childByName(ScanSpec::kMapKeysFieldName)
@@ -299,6 +311,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_doubleMapKey) {
       groupSubfields(makeSubfields({"c0[-100000000]", "c0[100000000]"})),
       {},
       nullptr,
+      {},
       {},
       pool_.get());
   keysFilter = scanSpec->childByName("c0")
@@ -334,6 +347,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_filtersNotInRequiredSubfields) {
       groupSubfields(makeSubfields({"c0.c0c1", "c0.c0c3"})),
       filters,
       ROW({{"c0", c0Type}, {"c1", c1Type}}),
+      {},
       {},
       pool_.get());
   auto c0 = scanSpec->childByName("c0");
@@ -379,6 +393,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_duplicateSubfields) {
       {},
       nullptr,
       {},
+      {},
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(c0->children().size(), 2);
@@ -392,7 +407,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_filterPartitionKey) {
   SubfieldFilters filters;
   filters.emplace(Subfield("ds"), exec::equal("2023-10-13"));
   auto scanSpec = makeScanSpec(
-      rowType, {}, filters, rowType, {{"ds", nullptr}}, pool_.get());
+      rowType, {}, filters, rowType, {{"ds", nullptr}}, {}, pool_.get());
   ASSERT_TRUE(scanSpec->childByName("c0")->projectOut());
   ASSERT_FALSE(scanSpec->childByName("ds")->projectOut());
 }
@@ -404,17 +419,20 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
 
   auto expr = parseExpr("not (c0 > 0 or c1 > 0)", rowType);
   SubfieldFilters filters;
-  auto remaining = HiveDataSource::extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters);
+  double sampleRate = 1;
+  auto remaining = extractFiltersFromRemainingFilter(
+      expr, &evaluator, false, filters, sampleRate);
   ASSERT_FALSE(remaining);
+  ASSERT_EQ(sampleRate, 1);
   ASSERT_EQ(filters.size(), 2);
   ASSERT_GT(filters.count(Subfield("c0")), 0);
   ASSERT_GT(filters.count(Subfield("c1")), 0);
 
   expr = parseExpr("not (c0 > 0 or c1 > c0)", rowType);
   filters.clear();
-  remaining = HiveDataSource::extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters);
+  remaining = extractFiltersFromRemainingFilter(
+      expr, &evaluator, false, filters, sampleRate);
+  ASSERT_EQ(sampleRate, 1);
   ASSERT_EQ(filters.size(), 1);
   ASSERT_GT(filters.count(Subfield("c0")), 0);
   ASSERT_TRUE(remaining);
@@ -423,13 +441,58 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   expr = parseExpr(
       "not (c2 > 1::decimal(20, 0) or c2 < 0::decimal(20, 0))", rowType);
   filters.clear();
-  remaining = HiveDataSource::extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters);
+  remaining = extractFiltersFromRemainingFilter(
+      expr, &evaluator, false, filters, sampleRate);
+  ASSERT_EQ(sampleRate, 1);
   ASSERT_GT(filters.count(Subfield("c2")), 0);
   // Change these once HUGEINT filter merge is fixed.
   ASSERT_TRUE(remaining);
   ASSERT_EQ(
       remaining->toString(), "not(lt(ROW[\"c2\"],cast 0 as DECIMAL(20, 0)))");
+}
+
+TEST_F(HiveConnectorTest, prestoTableSampling) {
+  core::QueryCtx queryCtx;
+  exec::SimpleExpressionEvaluator evaluator(&queryCtx, pool_.get());
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  auto expr = parseExpr("rand() < 0.5", rowType);
+  SubfieldFilters filters;
+  double sampleRate = 1;
+  auto remaining = extractFiltersFromRemainingFilter(
+      expr, &evaluator, false, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(sampleRate, 0.5);
+  ASSERT_TRUE(filters.empty());
+
+  expr = parseExpr("c0 > 0 and rand() < 0.5", rowType);
+  filters.clear();
+  sampleRate = 1;
+  remaining = extractFiltersFromRemainingFilter(
+      expr, &evaluator, false, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(sampleRate, 0.5);
+  ASSERT_EQ(filters.size(), 1);
+  ASSERT_GT(filters.count(Subfield("c0")), 0);
+
+  expr = parseExpr("rand() < 0.5 and rand() < 0.5", rowType);
+  filters.clear();
+  sampleRate = 1;
+  remaining = extractFiltersFromRemainingFilter(
+      expr, &evaluator, false, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(sampleRate, 0.25);
+  ASSERT_TRUE(filters.empty());
+
+  expr = parseExpr("c0 > 0 or rand() < 0.5", rowType);
+  filters.clear();
+  sampleRate = 1;
+  remaining = extractFiltersFromRemainingFilter(
+      expr, &evaluator, false, filters, sampleRate);
+  ASSERT_TRUE(remaining);
+  ASSERT_EQ(*remaining, *expr);
+  ASSERT_EQ(sampleRate, 1);
+  ASSERT_TRUE(filters.empty());
 }
 
 } // namespace

@@ -26,8 +26,8 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/SharedArbitrator.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -390,7 +390,7 @@ MockTask::~MockTask() {
 class MockSharedArbitrationTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
-    exec::SharedArbitrator::registerFactory();
+    SharedArbitrator::registerFactory();
     FLAGS_velox_memory_leak_check_enabled = true;
     TestValue::enable();
   }
@@ -590,9 +590,190 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailsTask) {
   growOp->freeAll();
 }
 
-TEST_F(MockSharedArbitrationTest, shrinkMemory) {
-  std::vector<std::shared_ptr<MemoryPool>> pools;
-  ASSERT_THROW(arbitrator_->shrinkCapacity(pools, 128), VeloxException);
+TEST_F(MockSharedArbitrationTest, shrinkPools) {
+  struct TaskTestData {
+    uint64_t capacity{0};
+    bool reclaimable{false};
+
+    uint64_t expectedCapacityAfterShrink{0};
+    bool expectedAbortAfterShrink{false};
+
+    std::string debugString() const {
+      return fmt::format(
+          "capacity: {}, reclaimable: {}, expectedCapacityAfterShrink: {}, expectedAbortAfterShrink: {}",
+          succinctBytes(capacity),
+          reclaimable,
+          succinctBytes(expectedCapacityAfterShrink),
+          expectedAbortAfterShrink);
+    }
+  };
+
+  struct {
+    std::vector<TaskTestData> taskTestDatas;
+    uint64_t targetBytes;
+    uint64_t expectedFreedBytes;
+    bool allowSpill;
+    bool allowAbort;
+
+    std::string debugString() const {
+      std::stringstream tasksOss;
+      for (const auto& taskTestData : taskTestDatas) {
+        tasksOss << taskTestData.debugString();
+        tasksOss << ",";
+      }
+      return fmt::format(
+          "taskTestDatas: [{}], targetBytes: {}, expectedFreedBytes: {}, allowSpill: {}, allowAbort: {}",
+          tasksOss.str(),
+          succinctBytes(targetBytes),
+          succinctBytes(expectedFreedBytes),
+          allowSpill,
+          allowAbort);
+    }
+  } testSettings[] = {
+      {{{kMemoryCapacity / 4, true, 0, false},
+        {kMemoryCapacity / 2, true, 0, false},
+        {kMemoryCapacity / 4, false, kMemoryCapacity / 4, false}},
+       0,
+       kMemoryCapacity / 4 * 3,
+       true,
+       false},
+      {{{kMemoryCapacity / 4, true, 0, false},
+        {kMemoryCapacity / 2, true, 0, false},
+        {kMemoryCapacity / 4, false, 0, true}},
+       0,
+       kMemoryCapacity,
+       true,
+       true},
+      {{{kMemoryCapacity / 4, true, kMemoryCapacity / 4, false},
+        {kMemoryCapacity / 2, true, kMemoryCapacity / 2, false},
+        {kMemoryCapacity / 4, false, kMemoryCapacity / 4, false}},
+       0,
+       0,
+       false,
+       false},
+      {{{kMemoryCapacity / 4, true, 0, true},
+        {kMemoryCapacity / 2, true, 0, true},
+        {kMemoryCapacity / 4, false, 0, true}},
+       0,
+       kMemoryCapacity,
+       false,
+       true},
+      {{{kMemoryCapacity / 4, true, 0, false},
+        {kMemoryCapacity / 2, true, 0, false},
+        {kMemoryCapacity / 4, false, kMemoryCapacity / 4, false}},
+       1UL << 30,
+       kMemoryCapacity / 4 * 3,
+       true,
+       false},
+      {{{kMemoryCapacity / 4, true, 0, false},
+        {kMemoryCapacity / 2, true, 0, false},
+        {kMemoryCapacity / 4, false, 0, true}},
+       1UL << 30,
+       kMemoryCapacity,
+       true,
+       true},
+      {{{kMemoryCapacity / 4, true, kMemoryCapacity / 4, false},
+        {kMemoryCapacity / 2, true, kMemoryCapacity / 2, false},
+        {kMemoryCapacity / 4, false, kMemoryCapacity / 4, false}},
+       1UL << 30,
+       0,
+       false,
+       false},
+      {{{kMemoryCapacity / 4, true, 0, true},
+        {kMemoryCapacity / 2, true, 0, true},
+        {kMemoryCapacity / 4, false, 0, true}},
+       1UL << 30,
+       kMemoryCapacity,
+       false,
+       true},
+      {{{kMemoryCapacity / 4, true, kMemoryCapacity / 4, false},
+        {kMemoryCapacity / 2,
+         true,
+         kMemoryCapacity / 2 - kMemoryPoolTransferCapacity,
+         false},
+        {kMemoryCapacity / 4, false, kMemoryCapacity / 4, false}},
+       1,
+       kMemoryPoolTransferCapacity,
+       true,
+       false},
+      {{{kMemoryCapacity / 4, true, kMemoryCapacity / 4, false},
+        {kMemoryCapacity / 2,
+         true,
+         kMemoryCapacity / 2 - kMemoryPoolTransferCapacity,
+         false},
+        {kMemoryCapacity / 4, false, kMemoryCapacity / 4, false}},
+       1,
+       kMemoryPoolTransferCapacity,
+       true,
+       true},
+      {{{kMemoryCapacity / 4, true, kMemoryCapacity / 4, false},
+        {kMemoryCapacity / 2, true, kMemoryCapacity / 2, false},
+
+        {kMemoryCapacity / 4, false, kMemoryCapacity / 4, false}},
+       1,
+       0,
+       false,
+       false},
+      {{{kMemoryCapacity / 4, true, kMemoryCapacity / 4, false},
+        {kMemoryCapacity / 2, true, 0, true},
+        {kMemoryCapacity / 4, false, kMemoryCapacity / 4, false}},
+       1,
+       kMemoryCapacity / 2,
+       false,
+       true}};
+  struct MockTaskContainer {
+    std::shared_ptr<MockTask> task;
+    MockMemoryOperator* op;
+    void* buf;
+    TaskTestData taskTestData;
+  };
+
+  std::function<void(MockTask*, bool)> checkTaskException =
+      [](MockTask* task, bool expectedAbort) {
+        if (!expectedAbort) {
+          ASSERT_EQ(task->error(), nullptr);
+          return;
+        }
+        ASSERT_NE(task->error(), nullptr);
+        VELOX_ASSERT_THROW(
+            std::rethrow_exception(task->error()),
+            "Memory pool aborted to reclaim used memory, current usage");
+      };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    std::vector<MockTaskContainer> taskContainers;
+    for (const auto& taskTestData : testData.taskTestDatas) {
+      auto task = addTask(taskTestData.capacity);
+      auto* op = addMemoryOp(task, taskTestData.reclaimable);
+      auto* buf = op->allocate(taskTestData.capacity);
+      ASSERT_EQ(op->capacity(), taskTestData.capacity);
+      taskContainers.push_back({task, op, buf, taskTestData});
+    }
+
+    ASSERT_EQ(
+        manager_->shrinkPools(
+            testData.targetBytes, testData.allowSpill, testData.allowAbort),
+        testData.expectedFreedBytes);
+
+    for (const auto& taskContainer : taskContainers) {
+      ASSERT_EQ(
+          taskContainer.task->capacity(),
+          taskContainer.taskTestData.expectedCapacityAfterShrink);
+      checkTaskException(
+          taskContainer.task.get(),
+          taskContainer.taskTestData.expectedAbortAfterShrink);
+    }
+
+    uint64_t totalCapacity{0};
+    for (const auto& taskContainer : taskContainers) {
+      totalCapacity += taskContainer.task->capacity();
+    }
+    ASSERT_EQ(
+        totalCapacity + arbitrator_->stats().freeCapacityBytes,
+        arbitrator_->capacity());
+  }
 }
 
 TEST_F(MockSharedArbitrationTest, singlePoolGrowWithoutArbitration) {
@@ -1797,11 +1978,11 @@ DEBUG_ONLY_TEST_F(
 
   arbitrationRun.wait(arbitrationRunKey);
 
-  // Allocate a new root memory pool and check its initial memory reservation is
-  // zero.
+  // Allocate a new root memory pool and check it has its initial capacity
+  // allocated.
   std::shared_ptr<MockTask> skipTask = addTask(kMemoryCapacity);
   MockMemoryOperator* skipTaskOp = addMemoryOp(skipTask);
-  ASSERT_EQ(skipTaskOp->pool()->capacity(), 0);
+  ASSERT_EQ(skipTaskOp->pool()->capacity(), kMemoryPoolInitCapacity);
 
   arbitrationBlock.notify();
   allocThread.join();

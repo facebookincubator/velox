@@ -275,6 +275,7 @@ class TableWriteTest : public HiveConnectorTestBase {
           .assertResults(duckDbSql);
     }
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .spillDirectory(spillDirectory->path)
         .maxDrivers(
@@ -286,7 +287,6 @@ class TableWriteTest : public HiveConnectorTestBase {
             std::to_string(numPartitionedTableWriterCount_))
         .config(core::QueryConfig::kSpillEnabled, "true")
         .config(QueryConfig::kWriterSpillEnabled, "true")
-        .config(QueryConfig::kTestingSpillPct, "100")
         .splits(splits)
         .assertResults(duckDbSql);
   }
@@ -296,6 +296,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       const std::string& duckDbSql,
       bool enableSpill = false) {
     if (!enableSpill) {
+      TestScopedSpillInjection scopedSpillInjection(100);
       return AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(
               2 *
@@ -308,11 +309,11 @@ class TableWriteTest : public HiveConnectorTestBase {
               std::to_string(numPartitionedTableWriterCount_))
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(QueryConfig::kWriterSpillEnabled, "true")
-          .config(QueryConfig::kTestingSpillPct, "100")
           .assertResults(duckDbSql);
     }
 
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .spillDirectory(spillDirectory->path)
         .maxDrivers(
@@ -324,7 +325,6 @@ class TableWriteTest : public HiveConnectorTestBase {
             std::to_string(numPartitionedTableWriterCount_))
         .config(core::QueryConfig::kSpillEnabled, "true")
         .config(QueryConfig::kWriterSpillEnabled, "true")
-        .config(QueryConfig::kTestingSpillPct, "100")
         .assertResults(duckDbSql);
   }
 
@@ -346,6 +346,7 @@ class TableWriteTest : public HiveConnectorTestBase {
     }
 
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .spillDirectory(spillDirectory->path)
         .maxDrivers(
@@ -357,7 +358,6 @@ class TableWriteTest : public HiveConnectorTestBase {
             std::to_string(numPartitionedTableWriterCount_))
         .config(core::QueryConfig::kSpillEnabled, "true")
         .config(QueryConfig::kWriterSpillEnabled, "true")
-        .config(QueryConfig::kTestingSpillPct, "100")
         .copyResults(pool());
   }
 
@@ -3230,13 +3230,13 @@ TEST_P(BucketSortOnlyTableWriterTest, sortWriterSpill) {
   // One spilled partition per each written files.
   const int numWrittenFiles = stats.customStats["numWrittenFiles"].sum;
   ASSERT_GE(stats.spilledPartitions, numWrittenFiles);
-  ASSERT_GT(stats.customStats["spillRuns"].sum, 0);
-  ASSERT_GT(stats.customStats["spillFillTime"].sum, 0);
-  ASSERT_GT(stats.customStats["spillSortTime"].sum, 0);
-  ASSERT_GT(stats.customStats["spillSerializationTime"].sum, 0);
-  ASSERT_GT(stats.customStats["spillFlushTime"].sum, 0);
-  ASSERT_GT(stats.customStats["spillWrites"].sum, 0);
-  ASSERT_GT(stats.customStats["spillWriteTime"].sum, 0);
+  ASSERT_GT(stats.customStats[Operator::kSpillRuns].sum, 0);
+  ASSERT_GT(stats.customStats[Operator::kSpillFillTime].sum, 0);
+  ASSERT_GT(stats.customStats[Operator::kSpillSortTime].sum, 0);
+  ASSERT_GT(stats.customStats[Operator::kSpillSerializationTime].sum, 0);
+  ASSERT_GT(stats.customStats[Operator::kSpillFlushTime].sum, 0);
+  ASSERT_GT(stats.customStats[Operator::kSpillWrites].sum, 0);
+  ASSERT_GT(stats.customStats[Operator::kSpillWriteTime].sum, 0);
 }
 
 DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
@@ -3724,6 +3724,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(arbitrator->stats().numFailures, 1);
   ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 1);
   ASSERT_EQ(arbitrator->stats().numReserves, 1);
+  waitForAllTasksToBeDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
@@ -3815,6 +3816,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(arbitrator->stats().numFailures, 0);
   ASSERT_GT(arbitrator->stats().numReclaimedBytes, 0);
   ASSERT_EQ(arbitrator->stats().numReserves, 1);
+  waitForAllTasksToBeDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
