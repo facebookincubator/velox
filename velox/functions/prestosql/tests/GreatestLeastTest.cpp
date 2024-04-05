@@ -101,10 +101,9 @@ TEST_F(GreatestLeastTest, greatestNanInput) {
   EXPECT_TRUE(std::isnan(greatestFloatTestThreeArgs(
       std::nanf("1"), 1.0, std::numeric_limits<float>::infinity())));
 
-  EXPECT_TRUE(
-      std::isnan(greatestDoubleTestThreeArgs(1.0, std::nanf("1"), 2.0)));
+  EXPECT_TRUE(std::isnan(greatestDoubleTestThreeArgs(1.0, std::nan("1"), 2.0)));
   EXPECT_TRUE(std::isnan(greatestDoubleTestThreeArgs(
-      std::nanf("1"), 1.0, std::numeric_limits<double>::infinity())));
+      std::nan("1"), 1.0, std::numeric_limits<double>::infinity())));
 }
 
 TEST_F(GreatestLeastTest, leastNanInput) {
@@ -126,10 +125,10 @@ TEST_F(GreatestLeastTest, leastNanInput) {
           std::nanf("1"), 1.0, -std::numeric_limits<float>::infinity()),
       -std::numeric_limits<double>::infinity());
 
-  EXPECT_EQ(leastDoubleTestThreeArgs(1.0, std::nanf("1"), 0.5), 0.5);
+  EXPECT_EQ(leastDoubleTestThreeArgs(1.0, std::nan("1"), 0.5), 0.5);
   EXPECT_EQ(
       leastDoubleTestThreeArgs(
-          std::nanf("1"), 1.0, -std::numeric_limits<double>::infinity()),
+          std::nan("1"), 1.0, -std::numeric_limits<double>::infinity()),
       -std::numeric_limits<double>::infinity());
 }
 
