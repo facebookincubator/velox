@@ -45,6 +45,8 @@ int32_t hashTimestamp(const Timestamp& ts) {
   return hashInt64((ts.getSeconds() << 30) | ts.getNanos());
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wreturn-type"
 template <TypeKind kind>
 inline uint32_t hashOne(
     const typename TypeTraits<kind>::NativeType& /* value */) {
@@ -52,6 +54,7 @@ inline uint32_t hashOne(
       "Hive partitioning function doesn't support {} type",
       TypeTraits<kind>::name);
 }
+#pragma GCC diagnostic pop
 
 template <>
 inline uint32_t hashOne<TypeKind::BOOLEAN>(const bool& value) {
