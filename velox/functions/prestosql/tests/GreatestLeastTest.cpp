@@ -15,6 +15,7 @@
  */
 
 #include <cmath>
+#include <limits>
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -85,51 +86,49 @@ TEST_F(GreatestLeastTest, leastReal) {
 }
 
 TEST_F(GreatestLeastTest, greatestNanInput) {
-  auto greatestFloatTestThreeArgs = [&](float a, float b, float c) {
+  auto constexpr kInf32 = std::numeric_limits<float>::infinity();
+  auto constexpr kInf64 = std::numeric_limits<double>::infinity();
+
+  auto greatestFloat = [&](float a, float b, float c) {
     return evaluateOnce<float, float, float, float>(
                "greatest(c0, c1, c2)", {a}, {b}, {c})
         .value();
   };
 
-  auto greatestDoubleTestThreeArgs = [&](double a, double b, double c) {
+  auto greatestDouble = [&](double a, double b, double c) {
     return evaluateOnce<double, double, double, double>(
                "greatest(c0, c1, c2)", {a}, {b}, {c})
         .value();
   };
 
-  EXPECT_TRUE(std::isnan(greatestFloatTestThreeArgs(1.0, std::nanf("1"), 2.0)));
-  EXPECT_TRUE(std::isnan(greatestFloatTestThreeArgs(
-      std::nanf("1"), 1.0, std::numeric_limits<float>::infinity())));
+  EXPECT_TRUE(std::isnan(greatestFloat(1.0, std::nanf("1"), 2.0)));
+  EXPECT_TRUE(std::isnan(greatestFloat(std::nanf("1"), 1.0, kInf32)));
 
-  EXPECT_TRUE(std::isnan(greatestDoubleTestThreeArgs(1.0, std::nan("1"), 2.0)));
-  EXPECT_TRUE(std::isnan(greatestDoubleTestThreeArgs(
-      std::nan("1"), 1.0, std::numeric_limits<double>::infinity())));
+  EXPECT_TRUE(std::isnan(greatestDouble(1.0, std::nan("1"), 2.0)));
+  EXPECT_TRUE(std::isnan(greatestDouble(std::nan("1"), 1.0, kInf64)));
 }
 
 TEST_F(GreatestLeastTest, leastNanInput) {
-  auto leastFloatTestThreeArgs = [&](float a, float b, float c) {
+  auto constexpr kInf32 = std::numeric_limits<float>::infinity();
+  auto constexpr kInf64 = std::numeric_limits<double>::infinity();
+
+  auto leastFloat = [&](float a, float b, float c) {
     return evaluateOnce<float, float, float, float>(
                "least(c0, c1, c2)", {a}, {b}, {c})
         .value();
   };
 
-  auto leastDoubleTestThreeArgs = [&](double a, double b, double c) {
+  auto leastDouble = [&](double a, double b, double c) {
     return evaluateOnce<double, double, double, double>(
                "least(c0, c1, c2)", {a}, {b}, {c})
         .value();
   };
 
-  EXPECT_EQ(leastFloatTestThreeArgs(1.0, std::nanf("1"), 0.5), 0.5);
-  EXPECT_EQ(
-      leastFloatTestThreeArgs(
-          std::nanf("1"), 1.0, -std::numeric_limits<float>::infinity()),
-      -std::numeric_limits<double>::infinity());
+  EXPECT_EQ(leastFloat(1.0, std::nanf("1"), 0.5), 0.5);
+  EXPECT_EQ(leastFloat(std::nanf("1"), 1.0, -kInf32), -kInf32);
 
-  EXPECT_EQ(leastDoubleTestThreeArgs(1.0, std::nan("1"), 0.5), 0.5);
-  EXPECT_EQ(
-      leastDoubleTestThreeArgs(
-          std::nan("1"), 1.0, -std::numeric_limits<double>::infinity()),
-      -std::numeric_limits<double>::infinity());
+  EXPECT_EQ(leastDouble(1.0, std::nan("1"), 0.5), 0.5);
+  EXPECT_EQ(leastDouble(std::nan("1"), 1.0, -kInf64), -kInf64);
 }
 
 TEST_F(GreatestLeastTest, greatestDouble) {
