@@ -23,7 +23,7 @@
 namespace facebook::velox::functions {
 
 template <typename T>
-inline void registerGreatestLeastFunctionHelper(const std::string& prefix) {
+inline void registerGreatestLeastFunction(const std::string& prefix) {
   registerFunction<ParameterBinder<GreatestFunction, T>, T, T, Variadic<T>>(
       {prefix + "greatest"});
 
@@ -31,20 +31,20 @@ inline void registerGreatestLeastFunctionHelper(const std::string& prefix) {
       {prefix + "least"});
 }
 
-inline void registerGreatestLeastFunction(const std::string& prefix) {
-  registerGreatestLeastFunctionHelper<bool>(prefix);
-  registerGreatestLeastFunctionHelper<int8_t>(prefix);
-  registerGreatestLeastFunctionHelper<int16_t>(prefix);
-  registerGreatestLeastFunctionHelper<int32_t>(prefix);
-  registerGreatestLeastFunctionHelper<int64_t>(prefix);
-  registerGreatestLeastFunctionHelper<int128_t>(prefix);
-  registerGreatestLeastFunctionHelper<float>(prefix);
-  registerGreatestLeastFunctionHelper<double>(prefix);
-  registerGreatestLeastFunctionHelper<Varchar>(prefix);
-  registerGreatestLeastFunctionHelper<LongDecimal<P1, S1>>(prefix);
-  registerGreatestLeastFunctionHelper<ShortDecimal<P1, S1>>(prefix);
-  registerGreatestLeastFunctionHelper<Date>(prefix);
-  registerGreatestLeastFunctionHelper<Timestamp>(prefix);
+inline void registerAllGreatestLeastFunctions(const std::string& prefix) {
+  registerGreatestLeastFunction<bool>(prefix);
+  registerGreatestLeastFunction<int8_t>(prefix);
+  registerGreatestLeastFunction<int16_t>(prefix);
+  registerGreatestLeastFunction<int32_t>(prefix);
+  registerGreatestLeastFunction<int64_t>(prefix);
+  registerGreatestLeastFunction<int128_t>(prefix);
+  registerGreatestLeastFunction<float>(prefix);
+  registerGreatestLeastFunction<double>(prefix);
+  registerGreatestLeastFunction<Varchar>(prefix);
+  registerGreatestLeastFunction<LongDecimal<P1, S1>>(prefix);
+  registerGreatestLeastFunction<ShortDecimal<P1, S1>>(prefix);
+  registerGreatestLeastFunction<Date>(prefix);
+  registerGreatestLeastFunction<Timestamp>(prefix);
 }
 
 extern void registerSubscriptFunction(
@@ -76,7 +76,7 @@ void registerGeneralFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_filter, prefix + "filter");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_typeof, prefix + "typeof");
 
-  registerGreatestLeastFunction(prefix);
+  registerAllGreatestLeastFunctions(prefix);
 
   registerFunction<CardinalityFunction, int64_t, Array<Any>>(
       {prefix + "cardinality"});
