@@ -71,19 +71,20 @@ are supported if the conversion of their element types are supported. In additio
 supported conversions to/from JSON are listed in <a class="reference internal" href="json.html"><span class="doc">JSON Functions</span></a>.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
+<col style="width: 7.1%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"></th>
@@ -98,6 +99,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <th class="head"><p>timestamp</p></th>
 <th class="head"><p>timestamp with time zone</p></th>
 <th class="head"><p>date</p></th>
+<th class="head"><p>interval day to second</p></th>
 <th class="head"><p>decimal</p></th>
 </tr>
 </thead>
@@ -111,6 +113,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -128,6 +131,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
 </tr>
 <tr class="row-even"><td><p>integer</p></td>
@@ -139,6 +143,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -156,6 +161,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
 </tr>
 <tr class="row-even"><td><p>boolean</p></td>
@@ -167,6 +173,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -184,6 +191,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
 </tr>
 <tr class="row-even"><td><p>double</p></td>
@@ -195,6 +203,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -212,6 +221,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td></td>
 <td><p>Y</p></td>
+<td></td>
 <td><p>Y</p></td>
 </tr>
 <tr class="row-even"><td><p>timestamp</p></td>
@@ -227,6 +237,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>timestamp with time zone</p></td>
 <td></td>
@@ -241,6 +252,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td></td>
 <td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>date</p></td>
 <td></td>
@@ -250,13 +262,29 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
-<td></td>
 <td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>decimal</p></td>
+<tr class="row-odd"><td><p>interval day to second</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>decimal</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
@@ -265,6 +293,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -318,8 +347,8 @@ supported cases.</p>
 </pre></div>
 </div>
 </section>
-<section id="from-strings">
-<h3>From strings<a class="headerlink" href="#from-strings" title="Link to this heading">¶</a></h3>
+<section id="from-varchar">
+<h3>From VARCHAR<a class="headerlink" href="#from-varchar" title="Link to this heading">¶</a></h3>
 <p>Casting a string to an integral type is allowed if the string represents an
 integral number within the range of the result type. By default, casting from
 strings that represent floating-point numbers is not allowed.
@@ -380,7 +409,7 @@ numbers are converted to <cite>true</cite> while zero is converted to <cite>fals
 </div>
 </section>
 <section id="id2">
-<h3>From strings<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<h3>From VARCHAR<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
 <p>There is a set of strings allowed to be casted to boolean. Casting from other strings to boolean throws.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
@@ -422,7 +451,7 @@ behavior.</p>
 </div>
 </section>
 <section id="id3">
-<h3>From strings<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<h3>From VARCHAR<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <p>Casting a string to real is allowed if the string represents an integral or
 floating-point number. Casting from invalid input values throws.</p>
 <p>Valid examples</p>
@@ -473,8 +502,8 @@ consistent with other supported cases of cast.</p>
 </div>
 </section>
 </section>
-<section id="cast-to-string">
-<h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Link to this heading">¶</a></h2>
+<section id="cast-to-varchar">
+<h2>Cast to VARCHAR<a class="headerlink" href="#cast-to-varchar" title="Link to this heading">¶</a></h2>
 <p>Casting from scalar types to string is allowed.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">123</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;123&#39;</span>
@@ -533,6 +562,13 @@ returns ‘-Infinity’. Positive and negative NaN returns ‘NaN’.</p>
 </pre></div>
 </div>
 </section>
+<section id="from-date">
+<h3>From DATE<a class="headerlink" href="#from-date" title="Link to this heading">¶</a></h3>
+<p>Casting DATE to VARCHAR returns an ISO-8601 formatted string: YYYY-MM-DD.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">date</span><span class="p">(</span><span class="s1">&#39;2024-03-14&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2024-03-14&#39;</span>
+</pre></div>
+</div>
+</section>
 <section id="from-timestamp">
 <h3>From TIMESTAMP<a class="headerlink" href="#from-timestamp" title="Link to this heading">¶</a></h3>
 <p>By default, casting a timestamp to a string returns ISO 8601 format with space as separator
@@ -555,11 +591,25 @@ as separator between date and time and the year part is not padded.</p>
 </pre></div>
 </div>
 </section>
+<section id="from-interval-day-to-second">
+<h3>From INTERVAL DAY TO SECOND<a class="headerlink" href="#from-interval-day-to-second" title="Link to this heading">¶</a></h3>
+<p>Casting INTERVAL DAY TO SECOND to VARCHAR returns a string formatted as
+‘[sign]D HH:MM:SS.ZZZ’, where ‘sign’ is an optional ‘-’ sign if interval is negative, D
+is the number of whole days in the interval, HH is then number of hours between 00 and
+24, MM is the number of minutes between 00 and 59, SS is the number of seconds between
+00 and 59, and zzz is the number of milliseconds between 000 and 999.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">interval</span> <span class="s1">&#39;1&#39;</span> <span class="n">day</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1 00:00:00.000&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">interval</span> <span class="s1">&#39;123456&#39;</span> <span class="n">second</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1 10:17:36.000&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">now</span><span class="p">()</span> <span class="o">-</span> <span class="n">date</span><span class="p">(</span><span class="s1">&#39;2024-03-01&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;35 09:15:54.092&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">date</span><span class="p">(</span><span class="s1">&#39;2024-03-01&#39;</span><span class="p">)</span> <span class="o">-</span> <span class="n">now</span><span class="p">()</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-35 09:16:20.598&#39;</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="cast-to-timestamp">
 <h2>Cast to TIMESTAMP<a class="headerlink" href="#cast-to-timestamp" title="Link to this heading">¶</a></h2>
 <section id="id6">
-<h3>From strings<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<h3>From VARCHAR<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <p>Casting from a string to timestamp is allowed if the string represents a
 timestamp in the format <cite>YYYY-MM-DD</cite> followed by an optional <cite>hh:mm:ssZZ</cite>.
 Casting from invalid input values throws.</p>
@@ -575,8 +625,8 @@ Casting from invalid input values throws.</p>
 </pre></div>
 </div>
 </section>
-<section id="from-date">
-<h3>From date<a class="headerlink" href="#from-date" title="Link to this heading">¶</a></h3>
+<section id="id7">
+<h3>From DATE<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <p>Casting from date to timestamp is allowed.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">date</span> <span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
@@ -609,8 +659,8 @@ SELECT to_unixtime(cast(from_unixtime(0, &#39;-02:00&#39;) as timestamp)); -- -7
 </section>
 <section id="cast-to-timestamp-with-time-zone">
 <h2>Cast to TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#cast-to-timestamp-with-time-zone" title="Link to this heading">¶</a></h2>
-<section id="id7">
-<h3>From TIMESTAMP<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<section id="id8">
+<h3>From TIMESTAMP<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <p>The results depend on whether configuration property <cite>adjust_timestamp_to_session_timezone</cite> is set or not.</p>
 <p>If set to true, the output is adjusted to be equivalent as the input timestamp in UTC
 based on the user provided <cite>session_timezone</cite> (if any). For example, when user supplies
@@ -633,8 +683,8 @@ SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:0
 </section>
 <section id="cast-to-date">
 <h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Link to this heading">¶</a></h2>
-<section id="id8">
-<h3>From strings<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<section id="id9">
+<h3>From VARCHAR<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
 <p>Only ISO 8601 strings are supported: <cite>[+-]YYYY-MM-DD</cite>. Casting from invalid input values throws.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>
@@ -652,8 +702,8 @@ SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:0
 </pre></div>
 </div>
 </section>
-<section id="id9">
-<h3>From TIMESTAMP<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<section id="id10">
+<h3>From TIMESTAMP<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
 <p>Casting from timestamp to date is allowed. If present, the part of <cite>hh:mm:ss</cite>
 in the input is ignored.</p>
 <p>Valid examples</p>
@@ -675,8 +725,8 @@ True value is converted to 1 and false to 0.</p>
 </pre></div>
 </div>
 </section>
-<section id="id10">
-<h3>From integral types<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<section id="id11">
+<h3>From integral types<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <p>Casting an integral number to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. Casting from
 invalid input values throws.</p>
@@ -692,8 +742,8 @@ invalid input values throws.</p>
 </pre></div>
 </div>
 </section>
-<section id="id11">
-<h3>From floating-point types<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="id12">
+<h3>From floating-point types<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <p>Casting a floating-point number to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. When the given
 scale is less than the number of decimal places, the floating-point value is rounded.
@@ -714,8 +764,8 @@ throws.</p>
 </pre></div>
 </div>
 </section>
-<section id="id12">
-<h3>From decimal<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<section id="id13">
+<h3>From decimal<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
 <p>Casting one decimal to another is allowed if the input value can be represented
 by the result decimal type. When casting from a larger scale to a smaller one,
 the fraction part is rounded.</p>
@@ -730,8 +780,8 @@ the fraction part is rounded.</p>
 </pre></div>
 </div>
 </section>
-<section id="from-varchar">
-<h3>From varchar<a class="headerlink" href="#from-varchar" title="Link to this heading">¶</a></h3>
+<section id="id14">
+<h3>From varchar<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
 <p>Casting varchar to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. When casting from
 a larger scale to a smaller one, the fraction part is rounded. Casting from invalid input value throws.</p>
@@ -802,47 +852,49 @@ a larger scale to a smaller one, the fraction part is rounded. Casting from inva
 <li><a class="reference internal" href="#cast-to-integral-types">Cast to Integral Types</a><ul>
 <li><a class="reference internal" href="#from-integral-types">From integral types</a></li>
 <li><a class="reference internal" href="#from-floating-point-types">From floating-point types</a></li>
-<li><a class="reference internal" href="#from-strings">From strings</a></li>
+<li><a class="reference internal" href="#from-varchar">From VARCHAR</a></li>
 <li><a class="reference internal" href="#from-decimal">From decimal</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-boolean">Cast to Boolean</a><ul>
 <li><a class="reference internal" href="#from-integral-and-floating-point-types">From integral and floating-point types</a></li>
-<li><a class="reference internal" href="#id2">From strings</a></li>
+<li><a class="reference internal" href="#id2">From VARCHAR</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-floating-point-types">Cast to Floating-Point Types</a><ul>
 <li><a class="reference internal" href="#from-integral-or-floating-point-types">From integral or floating-point types</a></li>
-<li><a class="reference internal" href="#id3">From strings</a></li>
+<li><a class="reference internal" href="#id3">From VARCHAR</a></li>
 <li><a class="reference internal" href="#id4">From decimal</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#cast-to-string">Cast to String</a><ul>
+<li><a class="reference internal" href="#cast-to-varchar">Cast to VARCHAR</a><ul>
 <li><a class="reference internal" href="#id5">From Floating-Point Types</a></li>
+<li><a class="reference internal" href="#from-date">From DATE</a></li>
 <li><a class="reference internal" href="#from-timestamp">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#from-interval-day-to-second">From INTERVAL DAY TO SECOND</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp">Cast to TIMESTAMP</a><ul>
-<li><a class="reference internal" href="#id6">From strings</a></li>
-<li><a class="reference internal" href="#from-date">From date</a></li>
+<li><a class="reference internal" href="#id6">From VARCHAR</a></li>
+<li><a class="reference internal" href="#id7">From DATE</a></li>
 <li><a class="reference internal" href="#from-timestamp-with-time-zone">From TIMESTAMP WITH TIME ZONE</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp-with-time-zone">Cast to TIMESTAMP WITH TIME ZONE</a><ul>
-<li><a class="reference internal" href="#id7">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id8">From TIMESTAMP</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-date">Cast to Date</a><ul>
-<li><a class="reference internal" href="#id8">From strings</a></li>
-<li><a class="reference internal" href="#id9">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id9">From VARCHAR</a></li>
+<li><a class="reference internal" href="#id10">From TIMESTAMP</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
 <li><a class="reference internal" href="#from-boolean-type">From boolean type</a></li>
-<li><a class="reference internal" href="#id10">From integral types</a></li>
-<li><a class="reference internal" href="#id11">From floating-point types</a></li>
-<li><a class="reference internal" href="#id12">From decimal</a></li>
-<li><a class="reference internal" href="#from-varchar">From varchar</a></li>
+<li><a class="reference internal" href="#id11">From integral types</a></li>
+<li><a class="reference internal" href="#id12">From floating-point types</a></li>
+<li><a class="reference internal" href="#id13">From decimal</a></li>
+<li><a class="reference internal" href="#id14">From varchar</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#miscellaneous">Miscellaneous</a><ul>
