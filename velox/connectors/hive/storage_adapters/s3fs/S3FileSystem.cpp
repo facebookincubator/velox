@@ -79,7 +79,12 @@ class S3ReadFile final : public ReadFile {
 
   // Gets the length of the file.
   // Checks if there are any issues reading the file.
-  void initialize() {
+  void initialize(const FileOptions& options) {
+    if (options.values.count("fileSize") > 0) {
+      length_ = !options.values.at("fileSize").empty()
+          ? std::stoull(options.values.at("fileSize"))
+          : -1;
+    }
     // Make it a no-op if invoked twice.
     if (length_ != -1) {
       return;
@@ -643,7 +648,7 @@ std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(
     const FileOptions& options) {
   const auto file = s3Path(path);
   auto s3file = std::make_unique<S3ReadFile>(file, impl_->s3Client());
-  s3file->initialize();
+  s3file->initialize(options);
   return s3file;
 }
 

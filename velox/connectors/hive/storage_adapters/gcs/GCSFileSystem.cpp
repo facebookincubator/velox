@@ -72,7 +72,12 @@ class GCSReadFile final : public ReadFile {
 
   // Gets the length of the file.
   // Checks if there are any issues reading the file.
-  void initialize() {
+  void initialize(const FileOptions& options) {
+    if (options.values.count("fileSize") > 0) {
+      length_ = !options.values.at("fileSize").empty()
+          ? std::stoull(options.values.at("fileSize"))
+          : -1;
+    }
     // Make it a no-op if invoked twice.
     if (length_ != -1) {
       return;
@@ -308,7 +313,7 @@ std::unique_ptr<ReadFile> GCSFileSystem::openFileForRead(
     const FileOptions& options) {
   const auto gcspath = gcsPath(path);
   auto gcsfile = std::make_unique<GCSReadFile>(gcspath, impl_->getClient());
-  gcsfile->initialize();
+  gcsfile->initialize(options);
   return gcsfile;
 }
 

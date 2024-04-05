@@ -146,22 +146,7 @@ void SplitReader::prepareSplit(
 
   std::shared_ptr<FileHandle> fileHandle;
   try {
-    auto fileSizeIter = hiveSplit_->infoColumns.find(kFileSize);
-    auto fileModificationTimeIter =
-        hiveSplit_->infoColumns.find(kModificationTime);
-    if (fileSizeIter != hiveSplit_->infoColumns.end() &&
-        fileModificationTimeIter != hiveSplit_->infoColumns.end()) {
-      fileHandle = fileHandleFactory_
-                       ->generate(std::make_tuple(
-                           hiveSplit_->filePath,
-                           fileSizeIter->second,
-                           fileModificationTimeIter->second))
-                       .second;
-    } else {
-      fileHandle = fileHandleFactory_
-                       ->generate(std::make_tuple(hiveSplit_->filePath, "", ""))
-                       .second;
-    }
+    fileHandle = fileHandleFactory_->generate(hiveSplit_->filePath).second;
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
         hiveConfig_->ignoreMissingFiles(

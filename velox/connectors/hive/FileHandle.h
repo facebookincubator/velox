@@ -62,16 +62,14 @@ class FileHandleGenerator {
   FileHandleGenerator() {}
   FileHandleGenerator(std::shared_ptr<const Config> properties)
       : properties_(std::move(properties)) {}
-  std::shared_ptr<FileHandle> operator()(
-      std::tuple<const std::string, const std::string, const std::string>
-          params);
+  std::shared_ptr<FileHandle> operator()(const std::string& filename);
 
  private:
   const std::shared_ptr<const Config> properties_;
 };
 
 using FileHandleFactory = CachedFactory<
-    std::tuple<const std::string, const std::string, const std::string>,
+    std::string,
     std::shared_ptr<FileHandle>,
     FileHandleGenerator>;
 
