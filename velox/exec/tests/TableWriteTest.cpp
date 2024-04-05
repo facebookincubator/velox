@@ -63,6 +63,8 @@ std::string testModeString(TestMode mode) {
       return "PARTITIONED";
     case TestMode::kBucketed:
       return "BUCKETED";
+    default:
+      return "UNKOWN";
   }
 }
 
