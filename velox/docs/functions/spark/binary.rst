@@ -55,3 +55,7 @@ Binary Functions
     have a value of 224, 256, 384, 512, or 0 (which is equivalent to 256). If asking
     for an unsupported bitLength, the return value is NULL.
     Note: x can only be varbinary type.
+
+.. spark:function:: unbase64(x) -> varbinary
+
+    Converts a base64 encoded string to a binary.
