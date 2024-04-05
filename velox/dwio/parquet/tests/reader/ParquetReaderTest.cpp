@@ -111,7 +111,8 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyArrayValue) {
   //      }
   //    }
   //  }
-  const std::string sample(getExampleFilePath("array_of_map_of_int_key_array_value.parquet"));
+  const std::string sample(
+      getExampleFilePath("array_of_map_of_int_key_array_value.parquet"));
   facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
   auto numRows = reader->numberOfRows();
@@ -141,7 +142,8 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
   //      }
   //    }
   //  }
-  const std::string sample(getExampleFilePath("array_of_map_of_int_key_struct_value.parquet"));
+  const std::string sample(
+      getExampleFilePath("array_of_map_of_int_key_struct_value.parquet"));
   facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
   auto numRows = reader->numberOfRows();

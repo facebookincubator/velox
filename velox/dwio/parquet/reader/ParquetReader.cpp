@@ -307,10 +307,13 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         case thrift::ConvertedType::MAP: {
           VELOX_CHECK_EQ(children.size(), 1);
           const auto& child = children[0];
-          auto childrenForCurrentElement = std::move(*(ParquetTypeWithId*)child.get()).moveChildren();
+          auto childrenForCurrentElement =
+              std::move(*(ParquetTypeWithId*)child.get()).moveChildren();
           auto currentElementType = child->type();
-          if (schemaElement.converted_type == thrift::ConvertedType::LIST && child->type()->kind() == TypeKind::MAP) {
-            currentElementType = TypeFactory<TypeKind::ARRAY>::create(child->type());
+          if (schemaElement.converted_type == thrift::ConvertedType::LIST &&
+              child->type()->kind() == TypeKind::MAP) {
+            currentElementType =
+                TypeFactory<TypeKind::ARRAY>::create(child->type());
             childrenForCurrentElement = std::move(children);
           }
           return std::make_unique<ParquetTypeWithId>(
