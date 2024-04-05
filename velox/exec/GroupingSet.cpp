@@ -824,7 +824,8 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
 
   // Test-only spill path.
   if (testingTriggerSpill()) {
-    spill();
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
+    memory::testingRunArbitration(&pool_);
     return;
   }
 
@@ -1012,7 +1013,7 @@ bool GroupingSet::getOutputWithSpill(
 
     VELOX_CHECK_NULL(merge_);
     auto spillPartition = spiller_->finishSpill();
-    merge_ = spillPartition.createOrderedReader(&pool_);
+    merge_ = spillPartition.createOrderedReader(&pool_, spillStats_);
   }
   VELOX_CHECK_EQ(spiller_->state().maxPartitions(), 1);
   if (merge_ == nullptr) {

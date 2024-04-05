@@ -209,34 +209,25 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
     }
   }
 
-  const auto& spillConfig = spillConfig_.value();
-  HashBitRange hashBits(
-      spillConfig.startPartitionBit,
-      spillConfig.startPartitionBit + spillConfig.numPartitionBits);
-
+  const auto* config = spillConfig();
+  uint8_t startPartitionBit = config->startPartitionBit;
   if (spillPartition != nullptr) {
-    LOG(INFO) << "Setup reader to read spilled input from "
-              << spillPartition->toString()
-              << ", memory pool: " << pool()->name();
-
-    spillInputReader_ = spillPartition->createUnorderedReader(pool());
-
-    const auto startBit = spillPartition->id().partitionBitOffset() +
-        spillConfig.numPartitionBits;
+    spillInputReader_ =
+        spillPartition->createUnorderedReader(pool(), &spillStats_);
+    startPartitionBit =
+        spillPartition->id().partitionBitOffset() + config->numPartitionBits;
     // Disable spilling if exceeding the max spill level and the query might run
     // out of memory if the restored partition still can't fit in memory.
-    if (spillConfig.exceedSpillLevelLimit(startBit)) {
+    if (config->exceedSpillLevelLimit(startPartitionBit)) {
       RECORD_METRIC_VALUE(kMetricMaxSpillLevelExceededCount);
-      LOG(WARNING) << "Exceeded spill level limit: "
-                   << spillConfig.maxSpillLevel
-                   << ", and disable spilling for memory pool: "
-                   << pool()->name();
+      FB_LOG_EVERY_MS(WARNING, 1'000)
+          << "Exceeded spill level limit: " << config->maxSpillLevel
+          << ", and disable spilling for memory pool: " << pool()->name();
       ++spillStats_.wlock()->spillMaxLevelExceededCount;
       exceededMaxSpillLevelLimit_ = true;
       return;
     }
     exceededMaxSpillLevelLimit_ = false;
-    hashBits = HashBitRange(startBit, startBit + spillConfig.numPartitionBits);
   }
 
   spiller_ = std::make_unique<Spiller>(
@@ -244,8 +235,9 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       joinType_,
       table_->rows(),
       spillType_,
-      std::move(hashBits),
-      &spillConfig,
+      HashBitRange(
+          startPartitionBit, startPartitionBit + config->numPartitionBits),
+      config,
       &spillStats_);
 
   const int32_t numPartitions = spiller_->hashBits().numPartitions();
@@ -465,8 +457,6 @@ void HashBuild::ensureInputFits(RowVectorPtr& input) {
     if (testingTriggerSpill()) {
       Operator::ReclaimableSectionGuard guard(this);
       memory::testingRunArbitration(pool());
-      // NOTE: the memory arbitration should have triggered spilling on this
-      // hash build operator so we return true to indicate have enough memory.
       return;
     }
   }
@@ -781,6 +771,13 @@ void HashBuild::ensureTableFits(uint64_t numRows) {
     return;
   }
 
+  // Test-only spill path.
+  if (testingTriggerSpill()) {
+    Operator::ReclaimableSectionGuard guard(this);
+    memory::testingRunArbitration(pool());
+    return;
+  }
+
   TestValue::adjust("facebook::velox::exec::HashBuild::ensureTableFits", this);
 
   // NOTE: reserve a bit more memory to consider the extra memory used for
@@ -1031,14 +1028,15 @@ void HashBuild::reclaim(
     // TODO: reduce the log frequency if it is too verbose.
     RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
     ++stats.numNonReclaimableAttempts;
-    LOG(WARNING) << "Can't reclaim from hash build operator, state_["
-                 << stateName(state_) << "], nonReclaimableSection_["
-                 << nonReclaimableSection_ << "], spiller_["
-                 << (stateCleared_ ? "cleared"
-                                   : (spiller_->finalized() ? "finalized"
-                                                            : "non-finalized"))
-                 << "] " << pool()->name()
-                 << ", usage: " << succinctBytes(pool()->currentBytes());
+    FB_LOG_EVERY_MS(WARNING, 1'000)
+        << "Can't reclaim from hash build operator, state_["
+        << stateName(state_) << "], nonReclaimableSection_["
+        << nonReclaimableSection_ << "], spiller_["
+        << (stateCleared_
+                ? "cleared"
+                : (spiller_->finalized() ? "finalized" : "non-finalized"))
+        << "] " << pool()->name()
+        << ", usage: " << succinctBytes(pool()->currentBytes());
     return;
   }
 
@@ -1054,11 +1052,11 @@ void HashBuild::reclaim(
       // TODO: reduce the log frequency if it is too verbose.
       RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
       ++stats.numNonReclaimableAttempts;
-      LOG(WARNING) << "Can't reclaim from hash build operator, state_["
-                   << stateName(buildOp->state_) << "], nonReclaimableSection_["
-                   << buildOp->nonReclaimableSection_ << "], "
-                   << buildOp->pool()->name() << ", usage: "
-                   << succinctBytes(buildOp->pool()->currentBytes());
+      FB_LOG_EVERY_MS(WARNING, 1'000)
+          << "Can't reclaim from hash build operator, state_["
+          << stateName(buildOp->state_) << "], nonReclaimableSection_["
+          << buildOp->nonReclaimableSection_ << "], " << buildOp->pool()->name()
+          << ", usage: " << succinctBytes(buildOp->pool()->currentBytes());
       return;
     }
   }
