@@ -469,7 +469,7 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
           getNextRowVector(next) = nullptr;
         }
         auto allocator = vector->get_allocator().allocator();
-        vector->~vector();
+        std::destroy_at(vector);
         allocator->free(HashStringAllocator::headerOf(vector));
       }
     }
@@ -488,7 +488,7 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
         getNextRowVector(next) = nullptr;
       }
       auto allocator = vector->get_allocator().allocator();
-      vector->~vector();
+      std::destroy_at(vector);
       allocator->free(HashStringAllocator::headerOf(vector));
     }
   }

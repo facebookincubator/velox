@@ -723,6 +723,10 @@ bool HashBuild::finishHashBuild() {
       spiller->finishSpill(spillPartitions);
     }
   }
+  bool allowDuplicateRows = table_->rows()->nextOffset() != 0;
+  if (allowDuplicateRows) {
+    ensureNextRowVectorFits(numRows, otherBuilds);
+  }
 
   if (spiller_ != nullptr) {
     spiller_->finishSpill(spillPartitions);
@@ -757,6 +761,11 @@ bool HashBuild::finishHashBuild() {
   // Release the unused memory reservation since we have finished the merged
   // table build.
   pool()->release();
+  if (allowDuplicateRows) {
+    for (auto* build : otherBuilds) {
+      build->pool()->release();
+    }
+  }
   return true;
 }
 
@@ -790,6 +799,50 @@ void HashBuild::ensureTableFits(uint64_t numRows) {
                << " for memory pool " << pool()->name()
                << ", usage: " << succinctBytes(pool()->currentBytes())
                << ", reservation: " << succinctBytes(pool()->reservedBytes());
+}
+
+void HashBuild::ensureNextRowVectorFits(
+    uint64_t numRows,
+    const std::vector<HashBuild*>& otherBuilds) {
+  if (!spillEnabled() || spiller_ == nullptr || spiller_->isAllSpilled()) {
+    return;
+  }
+
+  // Test-only spill path.
+  if (testingTriggerSpill()) {
+    Operator::ReclaimableSectionGuard guard(this);
+    memory::testingRunArbitration(pool());
+    return;
+  }
+
+  TestValue::adjust(
+      "facebook::velox::exec::HashBuild::ensureNextRowVectorFits", this);
+
+  // The memory allocation for next-row-vectors may stuck in
+  // 'SharedArbitrator::growCapacity' when memory arbitrating is also
+  // triggered. Reserve memory for next-row-vectors to prevent this issue.
+  auto bytesToReserve = numRows * (sizeof(char*) + sizeof(NextRowVector));
+  {
+    Operator::ReclaimableSectionGuard guard(this);
+    if (!pool()->maybeReserve(bytesToReserve)) {
+      LOG(WARNING) << "Failed to reserve " << succinctBytes(bytesToReserve)
+                   << " for memory pool " << pool()->name()
+                   << ", usage: " << succinctBytes(pool()->currentBytes())
+                   << ", reservation: "
+                   << succinctBytes(pool()->reservedBytes());
+    }
+  }
+  for (auto* build : otherBuilds) {
+    Operator::ReclaimableSectionGuard guard(build);
+    if (!build->pool()->maybeReserve(bytesToReserve)) {
+      LOG(WARNING) << "Failed to reserve " << succinctBytes(bytesToReserve)
+                   << " for memory pool " << build->pool()->name()
+                   << ", usage: "
+                   << succinctBytes(build->pool()->currentBytes())
+                   << ", reservation: "
+                   << succinctBytes(build->pool()->reservedBytes());
+    }
+  }
 }
 
 void HashBuild::postHashBuildProcess() {
