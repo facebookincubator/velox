@@ -247,6 +247,58 @@ VectorPtr CastExpr::castToDate(
   }
 }
 
+VectorPtr CastExpr::castToTimestamp(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  VectorPtr castResult;
+  context.ensureWritable(rows, toType, castResult);
+  (*castResult).clearNulls(rows);
+  auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
+
+  switch (fromType->kind()) {
+    case TypeKind::BIGINT: {
+      auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
+      const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
+      const auto sessionTzName = queryConfig.sessionTimezone();
+      const auto* timeZone =
+          (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty())
+          ? date::locate_zone(sessionTzName)
+          : nullptr;
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        auto timestamp = Timestamp::fromMillis(
+            inputFlatVector->valueAt(row) * kMillisInSecond);
+        resultFlatVector->set(row, timestamp);
+      });
+
+      return castResult;
+    }
+    case TypeKind::VARCHAR: {
+      auto* inputVector = input.as<SimpleVector<StringView>>();
+      const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
+      const auto sessionTzName = queryConfig.sessionTimezone();
+      const auto* timeZone =
+          (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty())
+          ? date::locate_zone(sessionTzName)
+          : nullptr;
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        auto timestamp = hooks_->castStringToTimestamp(inputVector->valueAt(row));
+        if (timeZone) {
+          timestamp.toGMT(*timeZone);
+        }
+        resultFlatVector->set(row, timestamp);
+      });
+
+      return castResult;
+    }
+    default:
+      VELOX_UNSUPPORTED(
+          "Cast from {} to Timestamp is not supported", fromType->toString());
+  }
+}
+
 namespace {
 void propagateErrorsOrSetNulls(
     bool setNullInResultAtError,
@@ -681,6 +733,8 @@ void CastExpr::applyPeeled(
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
   } else if (toType->isLongDecimal()) {
     result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
+  } else if ((fromType->isBigint() || fromType->isVarchar()) && toType->isTimestamp()) {
+    result = castToTimestamp(rows, input, context, fromType, toType);
   } else if (fromType->isDecimal()) {
     switch (toType->kind()) {
       case TypeKind::VARCHAR:
