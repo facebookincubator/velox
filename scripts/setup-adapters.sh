@@ -58,7 +58,7 @@ function install_gcs-sdk-cpp {
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
   # abseil-cpp
-  github_checkout abseil/abseil-cpp 20230125.3 --depth 1
+  github_checkout abseil/abseil-cpp 20240116.1 --depth 1
   sed -i 's/^#define ABSL_OPTION_USE_\(.*\) 2/#define ABSL_OPTION_USE_\1 0/' "absl/base/options.h"
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DABSL_BUILD_TESTING=OFF
@@ -71,12 +71,12 @@ function install_gcs-sdk-cpp {
     -DCRC32C_USE_GLOG=OFF
 
   # nlohmann json
-  github_checkout nlohmann/json v3.11.2 --depth 1
+  github_checkout nlohmann/json v3.11.3 --depth 1
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DJSON_BuildTests=OFF
 
   # google-cloud-cpp
-  github_checkout googleapis/google-cloud-cpp v2.10.1 --depth 1
+  github_checkout googleapis/google-cloud-cpp v2.22.0 --depth 1
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_INSTALL_MESSAGE=NEVER \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
@@ -84,6 +84,9 @@ function install_gcs-sdk-cpp {
 }
 
 function install_azure-storage-sdk-cpp {
+  # Disable VCPKG to install additional static dependencies under the VCPKG installed path
+  # instead of using system pre-installed dependencies.
+  export AZURE_SDK_DISABLE_AUTO_VCPKG=ON
   vcpkg_commit_id=7a6f366cefd27210f6a8309aed10c31104436509
   github_checkout azure/azure-sdk-for-cpp azure-storage-files-datalake_12.8.0
   sed -i "s/set(VCPKG_COMMIT_STRING .*)/set(VCPKG_COMMIT_STRING $vcpkg_commit_id)/" cmake-modules/AzureVcpkg.cmake

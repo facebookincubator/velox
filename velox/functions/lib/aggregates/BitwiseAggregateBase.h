@@ -33,15 +33,6 @@ class BitwiseAggregateBase : public SimpleNumericAggregate<T, T, T> {
     return sizeof(T);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (auto i : indices) {
-      *exec::Aggregate::value<T>(groups[i]) = initialValue_;
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     BaseAggregate::doExtractValues(groups, numGroups, result, [&](char* group) {
@@ -66,13 +57,24 @@ class BitwiseAggregateBase : public SimpleNumericAggregate<T, T, T> {
   }
 
  protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (auto i : indices) {
+      *exec::Aggregate::value<T>(groups[i]) = initialValue_;
+    }
+  }
+
   const T initialValue_;
 };
 
 template <template <typename U> class T>
 exec::AggregateRegistrationResult registerBitwise(
     const std::string& name,
-    bool onlyPrestoSignatures) {
+    bool withCompanionFunctions,
+    bool onlyPrestoSignatures,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> typeList{"tinyint", "smallint", "integer", "bigint"};
   if (onlyPrestoSignatures) {
@@ -112,7 +114,10 @@ exec::AggregateRegistrationResult registerBitwise(
                 name,
                 inputType->kindName());
         }
-      });
+      },
+      {false /*orderSensitive*/},
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate

@@ -180,8 +180,8 @@ std::shared_ptr<memory::MemoryPool> createSortPool(
   return writerPool->addLeafChild(fmt::format("{}.sort", writerPool->name()));
 }
 
-#define WRITER_NON_RECLAIMABLE_SECTION_GUARD(index)     \
-  exec::NonReclaimableSectionGuard nonReclaimableGuard( \
+#define WRITER_NON_RECLAIMABLE_SECTION_GUARD(index)       \
+  memory::NonReclaimableSectionGuard nonReclaimableGuard( \
       writerInfo_[(index)]->nonReclaimableSectionHolder.get())
 
 } // namespace
@@ -510,8 +510,9 @@ DataSink::Stats HiveDataSink::stats() const {
   for (int i = 0; i < writerInfo_.size(); ++i) {
     const auto& info = writerInfo_.at(i);
     VELOX_CHECK_NOT_NULL(info);
-    if (!info->spillStats->empty()) {
-      stats.spillStats += *info->spillStats;
+    const auto spillStats = info->spillStats->rlock();
+    if (!spillStats->empty()) {
+      stats.spillStats += *spillStats;
     }
   }
   return stats;
@@ -524,13 +525,15 @@ std::shared_ptr<memory::MemoryPool> HiveDataSink::createWriterPool(
       fmt::format("{}.{}", connectorPool->name(), writerId.toString()));
 }
 
-void HiveDataSink::setMemoryReclaimers(HiveWriterInfo* writerInfo) {
+void HiveDataSink::setMemoryReclaimers(
+    HiveWriterInfo* writerInfo,
+    io::IoStatistics* ioStats) {
   auto* connectorPool = connectorQueryCtx_->connectorMemoryPool();
   if (connectorPool->reclaimer() == nullptr) {
     return;
   }
   writerInfo->writerPool->setReclaimer(
-      WriterReclaimer::create(this, writerInfo));
+      WriterReclaimer::create(this, writerInfo, ioStats));
   writerInfo->sinkPool->setReclaimer(exec::MemoryReclaimer::create());
   // NOTE: we set the memory reclaimer for sort pool when we construct the sort
   // writer.
@@ -657,7 +660,8 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
       std::move(writerPool),
       std::move(sinkPool),
       std::move(sortPool)));
-  setMemoryReclaimers(writerInfo_.back().get());
+  ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
+  setMemoryReclaimers(writerInfo_.back().get(), ioStats_.back().get());
 
   dwio::common::WriterOptions options;
   const auto* connectorSessionProperties =
@@ -675,7 +679,11 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
       hiveConfig_->orcWriterMaxStripeSize(connectorSessionProperties));
   options.maxDictionaryMemory = std::optional(
       hiveConfig_->orcWriterMaxDictionaryMemory(connectorSessionProperties));
-  ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
+  options.parquetWriteTimestampUnit =
+      hiveConfig_->parquetWriteTimestampUnit(connectorSessionProperties);
+  options.serdeParameters = std::map<std::string, std::string>(
+      insertTableHandle_->serdeParameters().begin(),
+      insertTableHandle_->serdeParameters().end());
 
   // Prevents the memory allocation during the writer creation.
   WRITER_NON_RECLAIMABLE_SECTION_GUARD(writerInfo_.size() - 1);
@@ -714,15 +722,15 @@ HiveDataSink::maybeCreateBucketSortWriter(
       sortCompareFlags_,
       sortPool,
       writerInfo_.back()->nonReclaimableSectionHolder.get(),
-      spillConfig_);
+      spillConfig_,
+      writerInfo_.back()->spillStats.get());
   return std::make_unique<dwio::common::SortingWriter>(
       std::move(writer),
       std::move(sortBuffer),
       hiveConfig_->sortWriterMaxOutputRows(
           connectorQueryCtx_->sessionProperties()),
       hiveConfig_->sortWriterMaxOutputBytes(
-          connectorQueryCtx_->sessionProperties()),
-      writerInfo_.back()->spillStats.get());
+          connectorQueryCtx_->sessionProperties()));
 }
 
 void HiveDataSink::splitInputRowsAndEnsureWriters() {
@@ -926,9 +934,10 @@ LocationHandlePtr LocationHandle::create(const folly::dynamic& obj) {
 
 std::unique_ptr<memory::MemoryReclaimer> HiveDataSink::WriterReclaimer::create(
     HiveDataSink* dataSink,
-    HiveWriterInfo* writerInfo) {
+    HiveWriterInfo* writerInfo,
+    io::IoStatistics* ioStats) {
   return std::unique_ptr<memory::MemoryReclaimer>(
-      new HiveDataSink::WriterReclaimer(dataSink, writerInfo));
+      new HiveDataSink::WriterReclaimer(dataSink, writerInfo, ioStats));
 }
 
 bool HiveDataSink::WriterReclaimer::reclaimableBytes(
@@ -965,8 +974,18 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
 
   const uint64_t memoryUsageBeforeReclaim = pool->currentBytes();
   const std::string memoryUsageTreeBeforeReclaim = pool->treeMemoryUsage();
+  const auto writtenBytesBeforeReclaim = ioStats_->rawBytesWritten();
   const auto reclaimedBytes =
       exec::MemoryReclaimer::reclaim(pool, targetBytes, maxWaitMs, stats);
+  const auto earlyFlushedRawBytes =
+      ioStats_->rawBytesWritten() - writtenBytesBeforeReclaim;
+  addThreadLocalRuntimeStat(
+      kEarlyFlushedRawBytes,
+      RuntimeCounter(earlyFlushedRawBytes, RuntimeCounter::Unit::kBytes));
+  if (earlyFlushedRawBytes > 0) {
+    RECORD_METRIC_VALUE(
+        kMetricFileWriterEarlyFlushedRawBytes, earlyFlushedRawBytes);
+  }
   const uint64_t memoryUsageAfterReclaim = pool->currentBytes();
   if (memoryUsageAfterReclaim > memoryUsageBeforeReclaim) {
     VELOX_FAIL(

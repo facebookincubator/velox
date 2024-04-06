@@ -13,6 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# This script documents setting up a Centos8 host for Velox
+# development.  Running it should make you ready to compile.
+#
+# Environment variables:
+# * INSTALL_PREREQUISITES="N": Skip installation of packages for build.
+# * PROMPT_ALWAYS_RESPOND="n": Automatically respond to interactive prompts.
+#     Use "n" to never wipe directories.
+#
+# You can also run individual functions below by specifying them as arguments:
+# $ scripts/setup-ubuntu.sh install_googletest install_fmt
+#
+
 # Minimal setup for Ubuntu 20.04.
 set -eufx -o pipefail
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
@@ -23,68 +35,68 @@ source $SCRIPTDIR/setup-helper-functions.sh
 CPU_TARGET="${CPU_TARGET:-avx}"
 COMPILER_FLAGS=$(get_cxx_flags "$CPU_TARGET")
 export COMPILER_FLAGS
-FB_OS_VERSION=v2023.12.04.00
+FB_OS_VERSION=v2024.04.01.00
+FMT_VERSION=10.1.1
+BOOST_VERSION=boost-1.84.0
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 export CMAKE_BUILD_TYPE=Release
+SUDO="${SUDO:-"sudo --preserve-env"}"
 
-# Install all velox and folly dependencies. 
-# The is an issue on 22.04 where a version conflict prevents glog install,
-# installing libunwind first fixes this.
-apt update && apt install sudo
-sudo --preserve-env apt update && sudo --preserve-env apt install -y libunwind-dev && \
-  sudo --preserve-env apt install -y \
-  g++ \
-  cmake \
-  ccache \
-  ninja-build \
-  checkinstall \
-  git \
-  libc-ares-dev \
-  libcurl4-openssl-dev \
-  libssl-dev \
-  libboost-all-dev \
-  libicu-dev \
-  libdouble-conversion-dev \
-  libfmt-dev \
-  libgoogle-glog-dev \
-  libbz2-dev \
-  libgflags-dev \
-  libgmock-dev \
-  libevent-dev \
-  liblz4-dev \
-  libzstd-dev \
-  libre2-dev \
-  libsnappy-dev \
-  libsodium-dev \
-  libthrift-dev \
-  liblzo2-dev \
-  libelf-dev \
-  libdwarf-dev \
-  bison \
-  flex \
-  libfl-dev \
-  tzdata \
-  wget
-
-function run_and_time {
-  time "$@"
-  { echo "+ Finished running $*"; } 2> /dev/null
+# Install packages required for build.
+function install_build_prerequisites {
+  ${SUDO} apt update
+  # The is an issue on 22.04 where a version conflict prevents glog install,
+  # installing libunwind first fixes this.
+  ${SUDO} apt install -y libunwind-dev
+  ${SUDO} apt install -y \
+    build-essential \
+    cmake \
+    ccache \
+    ninja-build \
+    checkinstall \
+    git \
+    wget
 }
 
-function prompt {
-  (
-    while true; do
-      local input="${PROMPT_ALWAYS_RESPOND:-}"
-      echo -n "$(tput bold)$* [Y, n]$(tput sgr0) "
-      [[ -z "${input}" ]] && read input
-      if [[ "${input}" == "Y" || "${input}" == "y" || "${input}" == "" ]]; then
-        return 0
-      elif [[ "${input}" == "N" || "${input}" == "n" ]]; then
-        return 1
-      fi
-    done
-  ) 2> /dev/null
+# Install packages required for build.
+function install_velox_deps_from_apt {
+  ${SUDO} apt update
+  ${SUDO} apt install -y \
+    libc-ares-dev \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libicu-dev \
+    libdouble-conversion-dev \
+    libgoogle-glog-dev \
+    libbz2-dev \
+    libgflags-dev \
+    libgmock-dev \
+    libevent-dev \
+    liblz4-dev \
+    libzstd-dev \
+    libre2-dev \
+    libsnappy-dev \
+    libsodium-dev \
+    libthrift-dev \
+    liblzo2-dev \
+    libelf-dev \
+    libdwarf-dev \
+    bison \
+    flex \
+    libfl-dev \
+    tzdata
+}
+
+function install_fmt {
+  github_checkout fmtlib/fmt "${FMT_VERSION}"
+  cmake_install -DFMT_TEST=OFF
+}
+
+function install_boost {
+  github_checkout boostorg/boost "${BOOST_VERSION}" --recursive
+  ./bootstrap.sh --prefix=/usr/local
+  ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi
 }
 
 function install_folly {
@@ -109,23 +121,42 @@ function install_mvfst {
 
 function install_fbthrift {
   github_checkout facebook/fbthrift "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF
+  cmake_install -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_conda {
-  mkdir -p conda && cd conda
-  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
   MINICONDA_PATH=/opt/miniconda-for-velox
-  bash Miniconda3-latest-Linux-x86_64.sh -b -p $MINICONDA_PATH
+  if [ -e ${MINICONDA_PATH} ]; then
+    echo "File or directory already exists: ${MINICONDA_PATH}"
+    return
+  fi
+  ARCH=$(uname -m)
+  if [ "$ARCH" != "x86_64" ] && [ "$ARCH" != "aarch64" ]; then
+    echo "Unsupported architecture: $ARCH"
+    exit 1
+  fi
+
+  mkdir -p conda && cd conda
+  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh
+  bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
 
+
 function install_velox_deps {
+  run_and_time install_velox_deps_from_apt
+  run_and_time install_fmt
+  run_and_time install_boost
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle
   run_and_time install_mvfst
   run_and_time install_fbthrift
   run_and_time install_conda
+}
+
+function install_apt_deps {
+  install_build_prerequisites
+  install_velox_deps_from_apt
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
@@ -135,9 +166,16 @@ function install_velox_deps {
     for cmd in "$@"; do
       run_and_time "${cmd}"
     done
+    echo "All specified dependencies installed!"
   else
+    if [ "${INSTALL_PREREQUISITES:-Y}" == "Y" ]; then
+      echo "Installing build dependencies"
+      run_and_time install_build_prerequisites
+    else
+      echo "Skipping installation of build dependencies since INSTALL_PREREQUISITES is not set"
+    fi
     install_velox_deps
+    echo "All dependencies for Velox installed!"
   fi
 )
 
-echo "All deps for Velox installed! Now try \"make\""

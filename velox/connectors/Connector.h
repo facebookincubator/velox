@@ -27,6 +27,9 @@
 
 #include <folly/Synchronized.h>
 
+namespace facebook::velox::wave {
+class WaveDataSource;
+}
 namespace facebook::velox::common {
 class Filter;
 }
@@ -43,11 +46,14 @@ class DataSource;
 // as a RowVectorPtr, potentially after processing pushdowns.
 struct ConnectorSplit {
   const std::string connectorId;
+  const int64_t splitWeight{0};
 
   std::unique_ptr<AsyncSource<DataSource>> dataSource;
 
-  explicit ConnectorSplit(const std::string& _connectorId)
-      : connectorId(_connectorId) {}
+  explicit ConnectorSplit(
+      const std::string& _connectorId,
+      int64_t _splitWeight = 0)
+      : connectorId(_connectorId), splitWeight(_splitWeight) {}
 
   virtual ~ConnectorSplit() {}
 
@@ -201,18 +207,17 @@ class DataSource {
 
   virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
 
-  // Returns true if 'this' has initiated all the prefetch this will
-  // initiate. This means that the caller should schedule next splits
-  // to prefetch in the background. false if the source does not
-  // prefetch.
+  /// Returns true if 'this' has initiated all the prefetch this will initiate.
+  /// This means that the caller should schedule next splits to prefetch in the
+  /// background. false if the source does not prefetch.
   virtual bool allPrefetchIssued() const {
     return false;
   }
 
-  // Initializes this from 'source'. 'source' is effectively moved
-  // into 'this' Adaptation like dynamic filters stay in effect but
-  // the parts dealing with open files, prefetched data etc. are moved. 'source'
-  // is freed after the move.
+  /// Initializes this from 'source'. 'source' is effectively moved into 'this'
+  /// Adaptation like dynamic filters stay in effect but the parts dealing with
+  /// open files, prefetched data etc. are moved. 'source' is freed after the
+  /// move.
   virtual void setFromDataSource(std::unique_ptr<DataSource> /*source*/) {
     VELOX_UNSUPPORTED("setFromDataSource");
   }
@@ -225,6 +230,16 @@ class DataSource {
   // fully account for size of sparsely accessed columns.
   virtual int64_t estimatedRowSize() {
     return kUnknownRowSize;
+  }
+
+  /// Returns a Wave delegate that implements the Wave Operator
+  /// interface for a GPU table scan. This should be called after
+  /// construction and no other methods should be called on 'this'
+  /// after creating the delegate. Splits, dynamic filters etc.  will
+  /// be added to the WaveDataSource instead of 'this'. 'this' should
+  /// stay live until after the destruction of the delegate.
+  virtual std::shared_ptr<wave::WaveDataSource> toWaveDataSource() {
+    VELOX_UNSUPPORTED();
   }
 };
 
@@ -376,7 +391,7 @@ class Connector {
       const std::string& scanId,
       int32_t loadQuantum);
 
-  virtual folly::Executor* FOLLY_NULLABLE executor() const {
+  virtual folly::Executor* executor() const {
     return nullptr;
   }
 
@@ -406,7 +421,7 @@ class ConnectorFactory {
   virtual std::shared_ptr<Connector> newConnector(
       const std::string& id,
       std::shared_ptr<const Config> config,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr) = 0;
+      folly::Executor* executor = nullptr) = 0;
 
  private:
   const std::string name_;

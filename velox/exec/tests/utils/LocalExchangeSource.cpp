@@ -44,7 +44,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
 
   folly::SemiFuture<Response> request(
       uint32_t maxBytes,
-      uint32_t maxWaitSeconds) override {
+      std::chrono::microseconds maxWait) override {
     ++numRequests_;
 
     auto promise = VeloxPromise<Response>("LocalExchangeSource::request");
@@ -61,7 +61,8 @@ class LocalExchangeSource : public exec::ExchangeSource {
     // shared_ptr to the current object (self).
     auto resultCallback = [self, requestedSequence, buffers, this](
                               std::vector<std::unique_ptr<folly::IOBuf>> data,
-                              int64_t sequence) {
+                              int64_t sequence,
+                              std::vector<int64_t> remainingBytes) {
       {
         std::lock_guard<std::mutex> l(timeoutMutex_);
         // This function is called either for a result or timeout. Only the
@@ -103,7 +104,6 @@ class LocalExchangeSource : public exec::ExchangeSource {
       numPages_ += pages.size();
       totalBytes_ += totalBytes;
       if (data.empty()) {
-        LOG(INFO) << "adjust timeout";
         common::testutil::TestValue::adjust(
             "facebook::velox::exec::test::LocalExchangeSource::timeout", this);
       }
@@ -148,16 +148,21 @@ class LocalExchangeSource : public exec::ExchangeSource {
       }
 
       if (!requestPromise.isFulfilled()) {
-        requestPromise.setValue(Response{totalBytes, atEnd_});
+        requestPromise.setValue(Response{totalBytes, atEnd_, remainingBytes});
       }
     };
 
-    registerTimeout(self, resultCallback, maxWaitSeconds);
+    registerTimeout(self, resultCallback, maxWait);
 
     buffers->getData(
         taskId_, destination_, maxBytes, sequence_, resultCallback);
 
     return future;
+  }
+
+  folly::SemiFuture<Response> requestDataSizes(
+      std::chrono::microseconds maxWait) override {
+    return request(0, maxWait);
   }
 
   void close() override {
@@ -189,12 +194,14 @@ class LocalExchangeSource : public exec::ExchangeSource {
   }
 
  private:
-  using ResultCallback = std::function<
-      void(std::vector<std::unique_ptr<folly::IOBuf>> data, int64_t sequence)>;
+  using ResultCallback = std::function<void(
+      std::vector<std::unique_ptr<folly::IOBuf>> data,
+      int64_t sequence,
+      std::vector<int64_t> remainingBytes)>;
   static void registerTimeout(
       const std::shared_ptr<ExchangeSource>& self,
       ResultCallback callback,
-      int32_t seconds) {
+      std::chrono::microseconds maxWait) {
     std::lock_guard<std::mutex> l(timeoutMutex_);
     if (!executor_) {
       executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(1);
@@ -205,7 +212,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
       stop_ = false;
       executor_->add([]() {
         while (!stop_) {
-          auto now = getCurrentTimeSec();
+          auto now = std::chrono::system_clock::now();
           ResultCallback callback = nullptr;
           {
             std::lock_guard<std::mutex> t(timeoutMutex_);
@@ -218,14 +225,15 @@ class LocalExchangeSource : public exec::ExchangeSource {
           }
           if (callback) {
             // Outside of mutex.
-            callback({}, 0);
+            callback({}, 0, {});
             continue;
           }
           std::this_thread::sleep_for(std::chrono::seconds(1));
         }
       });
     }
-    timeouts_[self] = std::make_pair(callback, getCurrentTimeSec() + seconds);
+    timeouts_[self] =
+        std::make_pair(callback, std::chrono::system_clock::now() + maxWait);
   }
 
   bool checkSetRequestPromise() {
@@ -235,7 +243,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
       promise = std::move(promise_);
     }
     if (promise.valid() && !promise.isFulfilled()) {
-      promise.setValue(Response{0, false});
+      promise.setValue(Response{0, false, {}});
       return true;
     }
 
@@ -251,7 +259,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
   static std::mutex timeoutMutex_;
   static folly::F14FastMap<
       std::shared_ptr<ExchangeSource>,
-      std::pair<ResultCallback, size_t>>
+      std::pair<ResultCallback, std::chrono::system_clock::time_point>>
       timeouts_;
   static std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
   static std::atomic_bool stop_;
@@ -261,7 +269,9 @@ class LocalExchangeSource : public exec::ExchangeSource {
 std::mutex LocalExchangeSource::timeoutMutex_;
 folly::F14FastMap<
     std::shared_ptr<ExchangeSource>,
-    std::pair<LocalExchangeSource::ResultCallback, size_t>>
+    std::pair<
+        LocalExchangeSource::ResultCallback,
+        std::chrono::system_clock::time_point>>
     LocalExchangeSource::timeouts_;
 std::unique_ptr<folly::CPUThreadPoolExecutor> LocalExchangeSource::executor_;
 std::atomic_bool LocalExchangeSource::stop_ = false;

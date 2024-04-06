@@ -27,6 +27,11 @@ namespace facebook::velox::aggregate::prestosql {
 void registerAllAggregateFunctions(
     const std::string& prefix = "",
     bool withCompanionFunctions = true,
-    bool onlyPrestoSignatures = false);
+    bool onlyPrestoSignatures = false,
+    bool overwrite = true);
+
+/// Register internal aggregation functions only for testing.
+/// \param prefix : Prefix for the aggregate functions.
+void registerInternalAggregateFunctions(const std::string& prefix);
 
 } // namespace facebook::velox::aggregate::prestosql

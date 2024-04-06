@@ -190,7 +190,7 @@ class WindowTestBase : public exec::test::OperatorTestBase {
   void testKRangeFrames(const std::string& function);
 
   /// ParseOptions for the DuckDB Parser. nth_value in Spark expects to parse
-  /// integer as bigint vs bigint in Presto. The default is to parse integer
+  /// integer as int vs bigint in Presto. The default is to parse integer
   /// as bigint (Presto behavior).
   parse::ParseOptions options_;
 
@@ -211,5 +211,12 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::string& function,
       const RangeFrameBound& startBound,
       const RangeFrameBound& endBound);
+
+  void rangeFrameTestImpl(
+      bool ascending,
+      const std::string& function,
+      const RangeFrameBound& startBound,
+      const RangeFrameBound& endBound,
+      bool unorderedColumns);
 };
-}; // namespace facebook::velox::window::test
+} // namespace facebook::velox::window::test

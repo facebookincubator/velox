@@ -40,12 +40,6 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool);
 
-  /// Temporary API to indicate whether 'request(maxBytes, maxWaitSeconds)' API
-  /// is supported.
-  virtual bool supportsFlowControlV2() const {
-    VELOX_UNREACHABLE();
-  }
-
   /// Temporary API to indicate whether 'metrics()' API
   /// is supported.
   virtual bool supportsMetrics() const {
@@ -65,14 +59,6 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
     return requestPending_;
   }
 
-  /// Requests the producer to generate up to 'maxBytes' more data.
-  /// Returns a future that completes when producer responds either with 'data'
-  /// or with a message indicating that all data has been already produced or
-  /// data will take more time to produce.
-  virtual ContinueFuture request(uint32_t /*maxBytes*/) {
-    VELOX_NYI();
-  }
-
   struct Response {
     /// Size of the response in bytes. Zero means response didn't contain any
     /// data.
@@ -80,17 +66,27 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
 
     /// Boolean indicating that there will be no more data.
     const bool atEnd;
+
+    /// Number of bytes still buffered at the source.  Each element represent
+    /// one page, and the consumer can choose to fetch a prefix of them
+    /// according to the memory restriction.
+    const std::vector<int64_t> remainingBytes;
   };
 
   /// Requests the producer to generate up to 'maxBytes' more data and reply
-  /// within 'maxWaitSeconds'. Returns a future that completes when producer
-  /// responds either with 'data' or with a message indicating that all data has
-  /// been already produced or data will take more time to produce.
+  /// within 'maxWait'. Returns a future that completes when producer responds
+  /// either with 'data' or with a message indicating that all data has been
+  /// already produced or data will take more time to produce.
   virtual folly::SemiFuture<Response> request(
-      uint32_t /*maxBytes*/,
-      uint32_t /*maxWaitSeconds*/) {
-    VELOX_NYI();
-  }
+      uint32_t maxBytes,
+      std::chrono::microseconds maxWait) = 0;
+
+  /// Ask for available data sizes that can be fetched.  Normally should not
+  /// fetching any actual data (i.e. Response::bytes should be 0).  However for
+  /// backward compatibility (e.g. communicating with coordinator), we allow
+  /// small data (1MB) to be returned.
+  virtual folly::SemiFuture<Response> requestDataSizes(
+      std::chrono::microseconds maxWait) = 0;
 
   /// Close the exchange source. May be called before all data
   /// has been received and processed. This can happen in case

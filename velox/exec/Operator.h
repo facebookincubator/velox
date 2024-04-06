@@ -152,6 +152,11 @@ struct OperatorStats {
   int64_t lastLazyCpuNanos{0};
   int64_t lastLazyWallNanos{0};
 
+  // Total null keys processed by the operator.
+  // Currently populated only by HashJoin/HashBuild.
+  // HashProbe doesn't populate numNullKeys when build side is empty.
+  int64_t numNullKeys{0};
+
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
 
   int numDrivers = 0;
@@ -300,6 +305,26 @@ class Operator : public BaseRuntimeStatWriter {
     }
   };
 
+  /// The name of the runtime spill stats collected and reported by operators
+  /// that support spilling.
+  /// The spill write stats.
+  static inline const std::string kSpillFillTime{"spillFillTime"};
+  static inline const std::string kSpillSortTime{"spillSortTime"};
+  static inline const std::string kSpillSerializationTime{
+      "spillSerializationTime"};
+  static inline const std::string kSpillFlushTime{"spillFlushTime"};
+  static inline const std::string kSpillWrites{"spillWrites"};
+  static inline const std::string kSpillWriteTime{"spillWriteTime"};
+  static inline const std::string kSpillRuns{"spillRuns"};
+  static inline const std::string kExceededMaxSpillLevel{
+      "exceededMaxSpillLevel"};
+  /// The spill read stats.
+  static inline const std::string kSpillReadBytes{"spillReadBytes"};
+  static inline const std::string kSpillReads{"spillReads"};
+  static inline const std::string kSpillReadTimeUs{"spillReadTimeUs"};
+  static inline const std::string kSpillDeserializationTimeUs{
+      "spillDeserializationTimeUs"};
+
   /// 'operatorId' is the initial index of the 'this' in the Driver's list of
   /// Operators. This is used as in index into OperatorStats arrays in the Task.
   /// 'planNodeId' is a query-level unique identifier of the PlanNode to which
@@ -415,17 +440,9 @@ class Operator : public BaseRuntimeStatWriter {
   virtual void close() {
     input_ = nullptr;
     results_.clear();
+    recordSpillStats();
     // Release the unused memory reservation on close.
     operatorCtx_->pool()->release();
-  }
-
-  /// Invoked by memory arbitrator to free up operator's resource immediately on
-  /// memory abort, and the query will stop running after this call.
-  ///
-  /// NOTE: we don't expect any access to this operator except close method
-  /// call.
-  virtual void abort() {
-    close();
   }
 
   // Returns true if 'this' never has more output rows than input rows.
@@ -503,6 +520,10 @@ class Operator : public BaseRuntimeStatWriter {
     return operatorCtx_->operatorId();
   }
 
+  const uint32_t splitGroupId() const {
+    return operatorCtx_->driverCtx()->splitGroupId;
+  }
+
   /// Sets operator id. Use is limited to renumbering Operators from
   /// DriverAdapter. Do not use outside of this.
   void setOperatorIdFromAdapter(int32_t id) {
@@ -512,6 +533,10 @@ class Operator : public BaseRuntimeStatWriter {
 
   const std::string& operatorType() const {
     return operatorCtx_->operatorType();
+  }
+
+  const std::string& taskId() const {
+    return operatorCtx_->taskId();
   }
 
   /// Registers 'translator' for mapping user defined PlanNode subclass
@@ -607,6 +632,10 @@ class Operator : public BaseRuntimeStatWriter {
     return nonReclaimableSection_;
   }
 
+  bool testingHasInput() const {
+    return input_ != nullptr;
+  }
+
  protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
   friend class NonReclaimableSection;
@@ -661,6 +690,10 @@ class Operator : public BaseRuntimeStatWriter {
     return spillConfig_.has_value();
   }
 
+  const common::SpillConfig* spillConfig() const {
+    return spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
+  }
+
   /// Creates output vector from 'input_' and 'results' according to
   /// 'identityProjections_' and 'resultProjections_'. If 'mapping' is set to
   /// nullptr, the children of the output vector will be identical to their
@@ -686,7 +719,7 @@ class Operator : public BaseRuntimeStatWriter {
       std::optional<uint64_t> averageRowSize = std::nullopt) const;
 
   /// Invoked to record spill stats in operator stats.
-  void recordSpillStats(const common::SpillStats& spillStats);
+  virtual void recordSpillStats();
 
   const std::unique_ptr<OperatorCtx> operatorCtx_;
   const RowTypePtr outputType_;
@@ -697,6 +730,7 @@ class Operator : public BaseRuntimeStatWriter {
   bool initialized_{false};
 
   folly::Synchronized<OperatorStats> stats_;
+  folly::Synchronized<common::SpillStats> spillStats_;
 
   /// Indicates if an operator is under a non-reclaimable execution section.
   /// This prevents the memory arbitrator from reclaiming memory from this

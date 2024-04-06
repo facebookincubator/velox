@@ -18,8 +18,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "velox/exec/SpillOperatorGroup.h"
-
 namespace facebook::velox::exec {
 
 class Driver;
@@ -28,7 +26,6 @@ class LocalExchangeMemoryManager;
 class MergeSource;
 class MergeJoinSource;
 struct Split;
-class SpillOperatorGroup;
 
 /// Corresponds to Presto TaskState, needed for reporting query completion.
 enum TaskState { kRunning, kFinished, kCanceled, kAborted, kFailed };
@@ -64,6 +61,9 @@ struct SplitsStore {
 
 /// Structure contains the current info on splits for a particular plan node.
 struct SplitsState {
+  /// True if the source node is a table scan.
+  bool sourceIsTableScan{false};
+
   /// Plan node-wide 'no more splits'.
   bool noMoreSplits{false};
 
@@ -89,11 +89,6 @@ struct LocalExchangeState {
 struct SplitGroupState {
   /// Map from the plan node id of the join to the corresponding JoinBridge.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>> bridges;
-
-  /// Map from the plan node id to the associated spill operator group if disk
-  /// spill is enabled for the corresponding plan operator.
-  std::unordered_map<core::PlanNodeId, std::shared_ptr<SpillOperatorGroup>>
-      spillOperatorGroups;
 
   /// Holds states for Task::allPeersFinished.
   std::unordered_map<core::PlanNodeId, BarrierState> barriers;
@@ -130,7 +125,6 @@ struct SplitGroupState {
   void clear() {
     if (!mixedExecutionMode) {
       bridges.clear();
-      spillOperatorGroups.clear();
       barriers.clear();
     }
     localMergeSources.clear();

@@ -50,8 +50,6 @@ class HashAggregation : public Operator {
 
   void close() override;
 
-  void abort() override;
-
  private:
   void updateRuntimeStats();
 
@@ -73,10 +71,6 @@ class HashAggregation : public Operator {
   bool abandonPartialAggregationEarly(int64_t numOutput) const;
 
   RowVectorPtr getDistinctOutput();
-
-  // Invoked to record the spilling stats in operator stats after processing all
-  // the inputs.
-  void recordSpillStats();
 
   void updateEstimatedOutputRowSize();
 

@@ -15,8 +15,6 @@
  */
 
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
-#include "velox/common/memory/Memory.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/exec/TableWriter.h"
 
 using namespace facebook::velox;
@@ -99,6 +97,7 @@ QueryTestResult runHashJoinTask(
                       .spillDirectory(spillDirectory->path)
                       .config(core::QueryConfig::kSpillEnabled, true)
                       .config(core::QueryConfig::kJoinSpillEnabled, true)
+                      .config(core::QueryConfig::kSpillStartPartitionBit, "29")
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -349,5 +348,4 @@ QueryTestResult runWriteTask(
   }
   return result;
 }
-
 } // namespace facebook::velox::exec::test

@@ -13,6 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# This script documents setting up a Centos8 host for Velox
+# development.  Running it should make you ready to compile.
+#
+# Environment variables:
+# * INSTALL_PREREQUISITES="N": Skip installation of packages for build.
+# * PROMPT_ALWAYS_RESPOND="n": Automatically respond to interactive prompts.
+#     Use "n" to never wipe directories.
+#
+# You can also run individual functions below by specifying them as arguments:
+# $ scripts/setup-centos8.sh install_googletest install_fmt
+#
+
 set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
@@ -25,108 +37,196 @@ export CXXFLAGS=$CFLAGS  # Used by boost.
 export CPPFLAGS=$CFLAGS  # Used by LZO.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
+export CC=/opt/rh/gcc-toolset-9/root/bin/gcc
+export CXX=/opt/rh/gcc-toolset-9/root/bin/g++
 
 function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
 }
 
-dnf_install epel-release dnf-plugins-core # For ccache, ninja
-dnf config-manager --set-enabled powertools
-dnf_install ninja-build cmake curl ccache gcc-toolset-9 git wget which libevent-devel \
-  openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
-  libdwarf-devel curl-devel libicu-devel
-
-dnf remove -y gflags
-
-# Required for Thrift
-dnf_install autoconf automake libtool bison flex python3 libsodium-devel
-
-dnf_install conda
-
-# install sphinx for doc gen
-pip3 install sphinx sphinx-tabs breathe sphinx_rtd_theme
-
-# Activate gcc9; enable errors on unset variables afterwards.
-source /opt/rh/gcc-toolset-9/enable || exit 1
-set -u
-
-function cmake_install {
-  cmake -B "$1-build" -GNinja -DCMAKE_CXX_STANDARD=17 \
-    -DCMAKE_CXX_FLAGS="${CFLAGS}" -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -Wno-dev "$@"
-  ninja -C "$1-build" install
+# Install packages required for build.
+function install_build_prerequisites {
+  dnf update -y
+  dnf_install epel-release dnf-plugins-core # For ccache, ninja
+  dnf config-manager --set-enabled powertools
+  dnf update -y
+  dnf_install ninja-build cmake curl ccache gcc-toolset-9 git wget which
+  dnf_install autoconf automake python39 python39-devel python39-pip libtool
 }
 
-# Fetch sources.
-wget_and_untar https://github.com/gflags/gflags/archive/v2.2.2.tar.gz gflags
-wget_and_untar https://github.com/google/glog/archive/v0.6.0.tar.gz glog
-wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz lzo
-wget_and_untar https://boostorg.jfrog.io/artifactory/main/release/1.72.0/source/boost_1_72_0.tar.gz boost
-wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy
-wget_and_untar https://github.com/fmtlib/fmt/archive/10.1.1.tar.gz fmt
+# Install dependencies from the package managers.
+function install_velox_deps_from_dnf {
+  dnf_install libevent-devel \
+    openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
+    libdwarf-devel curl-devel libicu-devel bison flex libsodium-devel
 
-wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protobuf-all-21.4.tar.gz protobuf
+  # install sphinx for doc gen
+  pip3 install sphinx sphinx-tabs breathe sphinx_rtd_theme
+}
 
-FB_OS_VERSION="v2023.12.04.00"
+function install_conda {
+  dnf_install conda
+}
 
-wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
-wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
-wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
-wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
-
-wait  # For cmake and source downloads to complete.
-
-# Build & install.
-(
-  cd lzo
-  ./configure --prefix=/usr --enable-shared --disable-static --docdir=/usr/share/doc/lzo-2.10
-  make "-j$(nproc)"
-  make install
-)
-
-(
-  cd boost
-  ./bootstrap.sh --prefix=/usr/local
-  ./b2 "-j$(nproc)" -d0 install threading=multi
-)
-
-(
-  cd protobuf
-  ./configure --prefix=/usr
-  make "-j${NPROC}"
-  make install
-  ldconfig
-)
-
-cmake_install gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64 -DCMAKE_INSTALL_PREFIX:PATH=/usr
-cmake_install glog -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX:PATH=/usr
-cmake_install snappy -DSNAPPY_BUILD_TESTS=OFF
-cmake_install fmt -DFMT_TEST=OFF
-cmake_install folly -DFOLLY_HAVE_INT128_T=ON
-
-cmake_install fizz/fizz -DBUILD_TESTS=OFF
-cmake_install wangle/wangle -DBUILD_TESTS=OFF
-cmake_install mvfst -DBUILD_TESTS=OFF
-cmake_install fbthrift -Denable_tests=OFF
-
-if $BUILD_DUCKDB ; then
-  echo 'Building DuckDB'
-  mkdir ~/duckdb-install && cd ~/duckdb-install
-  wget https://github.com/duckdb/duckdb/archive/refs/tags/v0.8.1.tar.gz
-  tar -xf v0.8.1.tar.gz
-  cd duckdb-0.8.1
-  mkdir build && cd build
-  CMAKE_FLAGS=(
-    "-DBUILD_UNITTESTS=OFF"
-    "-DENABLE_SANITIZER=OFF"
-    "-DENABLE_UBSAN=OFF"
-    "-DBUILD_SHELL=OFF"
-    "-DEXPORT_DLL_SYMBOLS=OFF"
-    "-DCMAKE_BUILD_TYPE=Release"
+function install_gflags {
+  # Remove an older version if present.
+  dnf remove -y gflags
+  wget_and_untar https://github.com/gflags/gflags/archive/v2.2.2.tar.gz gflags
+  (
+    cd gflags
+    cmake_install -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
   )
-  cmake ${CMAKE_FLAGS[*]}  ..
-  make install -j 16
-  rm -rf ~/duckdb-install
-fi
+}
 
-dnf clean all
+function install_glog {
+  wget_and_untar https://github.com/google/glog/archive/v0.6.0.tar.gz glog
+  (
+    cd glog
+    cmake_install -DBUILD_SHARED_LIBS=ON
+  )
+}
+
+function install_lzo {
+  wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz lzo
+  (
+    cd lzo
+    ./configure --prefix=/usr --enable-shared --disable-static --docdir=/usr/share/doc/lzo-2.10
+    make "-j$(nproc)"
+    make install
+  )
+}
+
+function install_boost {
+  wget_and_untar https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.gz boost
+  (
+   cd boost
+   ./bootstrap.sh --prefix=/usr/local
+   ./b2 "-j$(nproc)" -d0 install threading=multi
+  )
+}
+
+function install_snappy {
+  wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy
+  (
+    cd snappy
+    cmake_install -DSNAPPY_BUILD_TESTS=OFF
+  )
+}
+
+function install_fmt {
+  wget_and_untar https://github.com/fmtlib/fmt/archive/10.1.1.tar.gz fmt
+  (
+    cd fmt
+    cmake_install -DFMT_TEST=OFF
+  )
+}
+
+function install_protobuf {
+  wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protobuf-all-21.4.tar.gz protobuf
+  (
+    cd protobuf
+    ./configure --prefix=/usr
+    make "-j${NPROC}"
+    make install
+    ldconfig
+  )
+}
+
+FB_OS_VERSION="v2024.04.01.00"
+
+function install_fizz {
+  wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
+  (
+    cd fizz/fizz
+    cmake_install -DBUILD_TESTS=OFF
+  )
+}
+
+function install_folly {
+  wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
+  (
+    cd folly
+    cmake_install -DFOLLY_HAVE_INT128_T=ON
+  )
+}
+
+function install_wangle {
+  wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
+  (
+    cd wangle/wangle
+    cmake_install -DBUILD_TESTS=OFF
+  )
+}
+
+function install_fbthrift {
+  wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
+  (
+    cd fbthrift
+    cmake_install -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  )
+}
+
+function install_mvfst {
+  wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
+  (
+   cd mvfst
+   cmake_install -DBUILD_TESTS=OFF
+  )
+}
+
+function install_duckdb {
+  if $BUILD_DUCKDB ; then
+    echo 'Building DuckDB'
+    wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/v0.8.1.tar.gz duckdb
+    (
+      cd duckdb
+      cmake_install -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
+    )
+  fi
+}
+
+function install_velox_deps {
+  run_and_time install_velox_deps_from_dnf
+  run_and_time install_conda
+  run_and_time install_gflags
+  run_and_time install_glog
+  run_and_time install_lzo
+  run_and_time install_snappy
+  run_and_time install_boost
+  run_and_time install_protobuf
+  run_and_time install_fmt
+  run_and_time install_folly
+  run_and_time install_fizz
+  run_and_time install_wangle
+  run_and_time install_mvfst
+  run_and_time install_fbthrift
+  run_and_time install_duckdb
+}
+
+(return 2> /dev/null) && return # If script was sourced, don't run commands.
+
+(
+  if [[ $# -ne 0 ]]; then
+    # Activate gcc9; enable errors on unset variables afterwards.
+    source /opt/rh/gcc-toolset-9/enable || exit 1
+    set -u
+    for cmd in "$@"; do
+      run_and_time "${cmd}"
+    done
+    echo "All specified dependencies installed!"
+  else
+    if [ "${INSTALL_PREREQUISITES:-Y}" == "Y" ]; then
+      echo "Installing build dependencies"
+      run_and_time install_build_prerequisites
+    else
+      echo "Skipping installation of build dependencies since INSTALL_PREREQUISITES is not set"
+    fi
+    # Activate gcc9; enable errors on unset variables afterwards.
+    source /opt/rh/gcc-toolset-9/enable || exit 1
+    set -u
+    install_velox_deps
+    echo "All dependencies for Velox installed!"
+    dnf clean all
+  fi
+)
+

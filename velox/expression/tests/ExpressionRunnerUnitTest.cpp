@@ -63,8 +63,20 @@ TEST_F(ExpressionRunnerUnitTest, run) {
   saveVectorToFile(inputVector.get(), inputPath);
   saveVectorToFile(resultVector.get(), resultPath);
 
-  EXPECT_NO_THROW(ExpressionRunner::run(
-      inputPath, "length(c0)", "", resultPath, "verify", 0, "", ""));
+  for (bool useSeperatePoolForInput : {true, false}) {
+    LOG(INFO) << "Using useSeperatePoolForInput: " << useSeperatePoolForInput;
+    EXPECT_NO_THROW(ExpressionRunner::run(
+        inputPath,
+        "length(c0)",
+        "",
+        resultPath,
+        "verify",
+        0,
+        "",
+        "",
+        false,
+        useSeperatePoolForInput));
+  }
 }
 
 TEST_F(ExpressionRunnerUnitTest, persistAndReproComplexSql) {
@@ -117,8 +129,8 @@ TEST_F(ExpressionRunnerUnitTest, persistAndReproComplexSql) {
 }
 
 TEST_F(ExpressionRunnerUnitTest, primitiveConstantsInexpressibleInSql) {
-  auto varbinaryData = vectorMaker_.flatVector<StringView>(
-      {"12"_sv}, CppToType<Varbinary>::create());
+  auto varbinaryData =
+      vectorMaker_.flatVector<StringView>({"12"_sv}, VARBINARY());
   auto constantExpr = std::make_shared<const core::ConstantTypedExpr>(
       BaseVector::wrapInConstant(1, 0, varbinaryData));
 

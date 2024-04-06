@@ -22,74 +22,12 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
 
 namespace facebook::velox::connector::hive {
 
 class HiveTableHandle;
 class HiveColumnHandle;
-
-namespace {
-
-core::CallTypedExprPtr replaceInputs(
-    const core::CallTypedExpr* call,
-    std::vector<core::TypedExprPtr>&& inputs) {
-  return std::make_shared<core::CallTypedExpr>(
-      call->type(), std::move(inputs), call->name());
-}
-
-} // namespace
-
-core::TypedExprPtr HiveDataSource::extractFiltersFromRemainingFilter(
-    const core::TypedExprPtr& expr,
-    core::ExpressionEvaluator* evaluator,
-    bool negated,
-    SubfieldFilters& filters) {
-  auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
-  if (!call) {
-    return expr;
-  }
-  common::Filter* oldFilter = nullptr;
-  try {
-    common::Subfield subfield;
-    if (auto filter = exec::leafCallToSubfieldFilter(
-            *call, subfield, evaluator, negated)) {
-      if (auto it = filters.find(subfield); it != filters.end()) {
-        oldFilter = it->second.get();
-        filter = filter->mergeWith(oldFilter);
-      }
-      filters.insert_or_assign(std::move(subfield), std::move(filter));
-      return nullptr;
-    }
-  } catch (const VeloxException&) {
-    LOG(WARNING) << "Unexpected failure when extracting filter for: "
-                 << expr->toString();
-    if (oldFilter) {
-      LOG(WARNING) << "Merging with " << oldFilter->toString();
-    }
-  }
-  if (call->name() == "not") {
-    auto inner = extractFiltersFromRemainingFilter(
-        call->inputs()[0], evaluator, !negated, filters);
-    return inner ? replaceInputs(call, {inner}) : nullptr;
-  }
-  if ((call->name() == "and" && !negated) ||
-      (call->name() == "or" && negated)) {
-    auto lhs = extractFiltersFromRemainingFilter(
-        call->inputs()[0], evaluator, negated, filters);
-    auto rhs = extractFiltersFromRemainingFilter(
-        call->inputs()[1], evaluator, negated, filters);
-    if (!lhs) {
-      return rhs;
-    }
-    if (!rhs) {
-      return lhs;
-    }
-    return replaceInputs(call, {lhs, rhs});
-  }
-  return expr;
-}
 
 HiveDataSource::HiveDataSource(
     const RowTypePtr& outputType,
@@ -118,6 +56,10 @@ HiveDataSource::HiveDataSource(
 
     if (handle->columnType() == HiveColumnHandle::ColumnType::kPartitionKey) {
       partitionKeys_.emplace(handle->name(), handle);
+    }
+
+    if (handle->columnType() == HiveColumnHandle::ColumnType::kSynthesized) {
+      infoColumns_.emplace(handle->name(), handle);
     }
   }
 
@@ -150,7 +92,7 @@ HiveDataSource::HiveDataSource(
   if (hiveConfig_->isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx->sessionProperties())) {
     checkColumnNameLowerCase(outputType_);
-    checkColumnNameLowerCase(hiveTableHandle_->subfieldFilters());
+    checkColumnNameLowerCase(hiveTableHandle_->subfieldFilters(), infoColumns_);
     checkColumnNameLowerCase(hiveTableHandle_->remainingFilter());
   }
 
@@ -158,11 +100,16 @@ HiveDataSource::HiveDataSource(
   for (auto& [k, v] : hiveTableHandle_->subfieldFilters()) {
     filters.emplace(k.clone(), v->clone());
   }
+  double sampleRate = 1;
   auto remainingFilter = extractFiltersFromRemainingFilter(
       hiveTableHandle_->remainingFilter(),
       expressionEvaluator_,
       false,
-      filters);
+      filters,
+      sampleRate);
+  if (sampleRate != 1) {
+    randomSkip_ = std::make_shared<random::RandomSkipTracker>(sampleRate);
+  }
 
   std::vector<common::Subfield> remainingFilterSubfields;
   if (remainingFilter) {
@@ -206,6 +153,7 @@ HiveDataSource::HiveDataSource(
       filters,
       hiveTableHandle_->dataColumns(),
       partitionKeys_,
+      infoColumns_,
       pool_);
   if (remainingFilter) {
     metadataFilter_ = std::make_shared<common::MetadataFilter>(
@@ -230,11 +178,11 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
 }
 
 void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
-  VELOX_CHECK(
-      split_ == nullptr,
+  VELOX_CHECK_NULL(
+      split_,
       "Previous split has not been processed yet. Call next to process the split.");
   split_ = std::dynamic_pointer_cast<HiveConnectorSplit>(split);
-  VELOX_CHECK(split_, "Wrong type of split");
+  VELOX_CHECK_NOT_NULL(split_, "Wrong type of split");
 
   VLOG(1) << "Adding split " << split_->toString();
 
@@ -245,7 +193,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   splitReader_ = createSplitReader();
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
-  splitReader_->configureReaderOptions();
+  splitReader_->configureReaderOptions(randomSkip_);
   splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
 }
 
@@ -253,8 +201,9 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     uint64_t size,
     velox::ContinueFuture& /*future*/) {
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
+  VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
-  if (splitReader_ && splitReader_->emptySplit()) {
+  if (splitReader_->emptySplit()) {
     resetSplit();
     return nullptr;
   }
@@ -262,10 +211,6 @@ std::optional<RowVectorPtr> HiveDataSource::next(
   if (!output_) {
     output_ = BaseVector::create(readerOutputType_, 0, pool_);
   }
-
-  // TODO Check if remaining filter has a conjunct that doesn't depend on
-  // any column, e.g. rand() < 0.1. Evaluate that conjunct first, then scan
-  // only rows that passed.
 
   auto rowsScanned = splitReader_->next(size, output_);
   completedRows_ += rowsScanned;
@@ -380,14 +325,11 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
 void HiveDataSource::setFromDataSource(
     std::unique_ptr<DataSource> sourceUnique) {
   auto source = dynamic_cast<HiveDataSource*>(sourceUnique.get());
-  VELOX_CHECK(source, "Bad DataSource type");
+  VELOX_CHECK_NOT_NULL(source, "Bad DataSource type");
 
   split_ = std::move(source->split_);
-  if (source->splitReader_ && source->splitReader_->emptySplit()) {
-    runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
-    runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
-    return;
-  }
+  runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
+  runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
   scanSpec_ = std::move(source->scanSpec_);
   splitReader_ = std::move(source->splitReader_);
@@ -423,5 +365,32 @@ void HiveDataSource::resetSplit() {
   splitReader_->resetSplit();
   // Keep readers around to hold adaptation.
 }
+
+HiveDataSource::WaveDelegateHookFunction HiveDataSource::waveDelegateHook_;
+
+std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
+  VELOX_CHECK_NOT_NULL(waveDelegateHook_);
+  if (!waveDataSource_) {
+    waveDataSource_ = waveDelegateHook_(
+        hiveTableHandle_,
+        scanSpec_,
+        readerOutputType_,
+        &partitionKeys_,
+        fileHandleFactory_,
+        executor_,
+        connectorQueryCtx_,
+        hiveConfig_,
+        ioStats_,
+        remainingFilterExprSet_.get(),
+        metadataFilter_);
+  }
+  return waveDataSource_;
+}
+
+//  static
+void HiveDataSource::registerWaveDelegateHook(WaveDelegateHookFunction hook) {
+  waveDelegateHook_ = hook;
+}
+std::shared_ptr<wave::WaveDataSource> toWaveDataSource();
 
 } // namespace facebook::velox::connector::hive

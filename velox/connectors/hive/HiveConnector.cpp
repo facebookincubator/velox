@@ -54,7 +54,7 @@ namespace facebook::velox::connector::hive {
 HiveConnector::HiveConnector(
     const std::string& id,
     std::shared_ptr<const Config> config,
-    folly::Executor* FOLLY_NULLABLE executor)
+    folly::Executor* executor)
     : Connector(id),
       hiveConfig_(std::make_shared<HiveConfig>(config)),
       fileHandleFactory_(
@@ -130,7 +130,7 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
 }
 
 void HiveConnectorFactory::initialize() {
-  static bool once = []() {
+  [[maybe_unused]] static bool once = []() {
     dwio::common::registerFileSinks();
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();

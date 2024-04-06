@@ -41,6 +41,7 @@ void JoinSpillInputBenchmarkBase::setUp() {
   spillConfig.executor = executor_.get();
   spillConfig.compressionKind =
       stringToCompressionKind(FLAGS_spiller_benchmark_compression_kind);
+  spillConfig.maxFileSize = FLAGS_spiller_benchmark_max_spill_file_size;
   spillConfig.maxSpillRunRows = 0;
   spillConfig.fileCreateConfig = {};
 
@@ -49,7 +50,7 @@ void JoinSpillInputBenchmarkBase::setUp() {
       rowType_,
       HashBitRange{29, 29},
       &spillConfig,
-      FLAGS_spiller_benchmark_max_spill_file_size);
+      &spillStats_);
   spiller_->setPartitionsSpilled({0});
 }
 

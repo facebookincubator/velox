@@ -175,6 +175,15 @@ class HiveConfig {
   static constexpr const char* kSortWriterMaxOutputBytesSession =
       "sort_writer_max_output_bytes";
 
+  static constexpr const char* kS3UseProxyFromEnv =
+      "hive.s3.use-proxy-from-env";
+
+  /// Timestamp unit for Parquet write through Arrow bridge.
+  static constexpr const char* kParquetWriteTimestampUnit =
+      "hive.parquet.writer.timestamp-unit";
+  static constexpr const char* kParquetWriteTimestampUnitSession =
+      "hive.parquet.writer.timestamp_unit";
+
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* session) const;
 
@@ -241,6 +250,12 @@ class HiveConfig {
   uint64_t footerEstimatedSize() const;
 
   uint64_t filePreloadThreshold() const;
+
+  bool s3UseProxyFromEnv() const;
+
+  /// Returns the timestamp unit used when writing timestamps into Parquet
+  /// through Arrow bridge. 0: second, 3: milli, 6: micro, 9: nano.
+  uint8_t parquetWriteTimestampUnit(const Config* session) const;
 
   HiveConfig(std::shared_ptr<const Config> config) {
     VELOX_CHECK_NOT_NULL(

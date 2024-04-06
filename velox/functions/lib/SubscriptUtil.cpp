@@ -48,7 +48,7 @@ struct SimpleType<TypeKind::VARCHAR> {
 /// map value vector. This allows us to ensure that element_at is zero-copy.
 template <TypeKind kind>
 VectorPtr applyMapTyped(
-    bool triggeCaching,
+    bool triggerCaching,
     std::shared_ptr<LookupTableBase>& cachedLookupTablePtr,
     const SelectivityVector& rows,
     const VectorPtr& mapArg,
@@ -57,14 +57,15 @@ VectorPtr applyMapTyped(
   static constexpr vector_size_t kMinCachedMapSize = 100;
   using TKey = typename TypeTraits<kind>::NativeType;
 
-  if (triggeCaching) {
+  LookupTable<kind>* typedLookupTable = nullptr;
+  if (triggerCaching) {
     if (!cachedLookupTablePtr) {
       cachedLookupTablePtr =
           std::make_shared<LookupTable<kind>>(*context.pool());
     }
-  }
 
-  auto& typedLookupTable = cachedLookupTablePtr->typedTable<kind>();
+    typedLookupTable = cachedLookupTablePtr->typedTable<kind>();
+  }
 
   auto* pool = context.pool();
   BufferPtr indices = allocateIndices(rows.end(), pool);
@@ -102,18 +103,20 @@ VectorPtr applyMapTyped(
     size_t offsetEnd = offsetStart + size;
     bool found = false;
 
-    if (triggeCaching && size >= kMinCachedMapSize) {
+    if (triggerCaching && size >= kMinCachedMapSize) {
+      VELOX_DCHECK_NOT_NULL(typedLookupTable);
+
       // Create map for mapIndex if not created.
-      if (!typedLookupTable.containsMapAtIndex(mapIndex)) {
-        typedLookupTable.ensureMapAtIndex(mapIndex);
+      if (!typedLookupTable->containsMapAtIndex(mapIndex)) {
+        typedLookupTable->ensureMapAtIndex(mapIndex);
         // Materialize the map at index row.
-        auto& map = typedLookupTable.getMapAtIndex(mapIndex);
+        auto& map = typedLookupTable->getMapAtIndex(mapIndex);
         for (size_t offset = offsetStart; offset < offsetEnd; ++offset) {
           map.emplace(decodedMapKeys->valueAt<TKey>(offset), offset);
         }
       }
 
-      auto& map = typedLookupTable.getMapAtIndex(mapIndex);
+      auto& map = typedLookupTable->getMapAtIndex(mapIndex);
 
       // Fast lookup.
       auto value = map.find(searchKey);
@@ -172,9 +175,24 @@ struct MapKey {
   const vector_size_t baseIndex;
   const vector_size_t index;
 
+  size_t hash() const {
+    return baseVector->hashValueAt(baseIndex);
+  }
+
+  bool operator==(const MapKey& other) const {
+    return baseVector->equalValueAt(
+        other.baseVector, baseIndex, other.baseIndex);
+  }
+
   bool operator<(const MapKey& other) const {
     return baseVector->compare(other.baseVector, baseIndex, other.baseIndex) <
         0;
+  }
+};
+
+struct MapKeyHasher {
+  size_t operator()(const MapKey& key) const {
+    return key.hash();
   }
 };
 
@@ -219,37 +237,24 @@ VectorPtr applyMapComplexType(
   // Fast path for the case of a single map. It may be constant or dictionary
   // encoded. Sort map keys, then use binary search.
   if (baseMap->size() == 1) {
-    auto sortedKeyIndices = baseMap->sortedKeyIndices(0);
-
-    std::vector<MapKey> sortedKeys;
-    sortedKeys.reserve(sortedKeyIndices.size());
-    for (const auto& index : sortedKeyIndices) {
-      sortedKeys.emplace_back(
-          MapKey{mapKeysBase, mapKeysIndices[index], index});
+    folly::F14FastSet<MapKey, MapKeyHasher> set;
+    auto numKeys = rawSizes[0];
+    set.reserve(numKeys * 1.3);
+    for (auto i = 0; i < numKeys; ++i) {
+      set.insert(MapKey{mapKeysBase, mapKeysIndices[i], i});
     }
-
     rows.applyToSelected([&](vector_size_t row) {
       VELOX_CHECK_EQ(0, mapIndices[row]);
 
-      bool found = false;
       auto searchIndex = searchIndices[row];
-
-      auto it = std::lower_bound(
-          sortedKeys.begin(),
-          sortedKeys.end(),
-          MapKey{searchBase, searchIndex, row});
-
-      if (it != sortedKeys.end()) {
-        if (mapKeysBase->equalValueAt(searchBase, it->baseIndex, searchIndex)) {
-          rawIndices[row] = it->index;
-          found = true;
-        }
-      }
-
-      if (!found) {
+      auto it = set.find(MapKey{searchBase, searchIndex, row});
+      if (it != set.end()) {
+        rawIndices[row] = it->index;
+      } else {
         nullsBuilder.setNull(row);
       }
     });
+
   } else {
     // Search the key in each row.
     rows.applyToSelected([&](vector_size_t row) {
@@ -318,7 +323,7 @@ namespace {
 std::exception_ptr makeZeroSubscriptError() {
   try {
     VELOX_USER_FAIL("SQL array indices start at 1");
-  } catch (const std::exception& e) {
+  } catch (const std::exception&) {
     return std::current_exception();
   }
 }
@@ -326,7 +331,7 @@ std::exception_ptr makeZeroSubscriptError() {
 std::exception_ptr makeBadSubscriptError() {
   try {
     VELOX_USER_FAIL("Array subscript out of bounds.");
-  } catch (const std::exception& e) {
+  } catch (const std::exception&) {
     return std::current_exception();
   }
 }
@@ -334,7 +339,7 @@ std::exception_ptr makeBadSubscriptError() {
 std::exception_ptr makeNegativeSubscriptError() {
   try {
     VELOX_USER_FAIL("Array subscript is negative.");
-  } catch (const std::exception& e) {
+  } catch (const std::exception&) {
     return std::current_exception();
   }
 }

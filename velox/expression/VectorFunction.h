@@ -19,6 +19,7 @@
 #include <vector>
 #include "velox/core/Expressions.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/expression/FunctionMetadata.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/SimpleVector.h"
@@ -44,7 +45,7 @@ class VectorFunction {
   /// vector as flat or constant, but not dictionary encoded.
   ///
   /// Single-argument functions that specify null-in-null-out behavior, e.g.
-  /// isDefaultNullBehavior returns true, will never see a null row in 'rows'.
+  /// defaultNullBehavior is true, will never see a null row in 'rows'.
   /// Hence, they can safely assume that args[0] vector is flat or constant and
   /// has no nulls in specified positions.
   ///
@@ -82,17 +83,6 @@ class VectorFunction {
       EvalCtx& context,
       VectorPtr& result) const = 0;
 
-  virtual bool isDeterministic() const {
-    return true;
-  }
-
-  // Returns true if null in any argument always produces null result.
-  // In this case, "rows" in "apply" will point only to positions for
-  // which all arguments are not null.
-  virtual bool isDefaultNullBehavior() const {
-    return true;
-  }
-
   /// Returns true if (1) supports evaluation on all constant inputs of size >
   /// 1; (2) returns flat or constant result when inputs are all flat, all
   /// constant or a mix of flat and constant; (3) guarantees that if all inputs
@@ -126,6 +116,10 @@ class VectorFunction {
   virtual std::optional<std::vector<size_t>> propagateStringEncodingFrom()
       const {
     return std::nullopt;
+  }
+
+  virtual FunctionCanonicalName getCanonicalName() const {
+    return FunctionCanonicalName::kUnknown;
   }
 };
 
@@ -170,6 +164,7 @@ class ApplyNeverCalled final : public VectorFunction {
 class SimpleFunctionAdapterFactory {
  public:
   virtual std::unique_ptr<VectorFunction> createVectorFunction(
+      const std::vector<TypePtr>& inputTypes,
       const std::vector<VectorPtr>& constantInputs,
       const core::QueryConfig& config) const = 0;
   virtual ~SimpleFunctionAdapterFactory() = default;
@@ -183,7 +178,12 @@ std::optional<std::vector<FunctionSignaturePtr>> getVectorFunctionSignatures(
 /// Given name of vector function and argument types, returns
 /// the return type if function exists and have a signature that binds to the
 /// input types otherwise returns nullptr.
-std::shared_ptr<const Type> resolveVectorFunction(
+TypePtr resolveVectorFunction(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes);
+
+std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
+resolveVectorFunctionWithMetadata(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
 
@@ -199,23 +199,13 @@ std::shared_ptr<VectorFunction> getVectorFunction(
     const std::vector<VectorPtr>& constantInputs,
     const core::QueryConfig& config);
 
-struct VectorFunctionMetadata {
-  /// Boolean indicating whether this function supports flattening, i.e.
-  /// converting a set of nested calls into a single call.
-  ///
-  ///     f(a, f(b, f(c, d))) => f(a, b, c, d).
-  ///
-  /// For example, concat(string,...), concat(array,...), map_concat(map,...)
-  /// Presto functions support flattening. Similarly, built-in special format
-  /// AND and OR also support flattening.
-  ///
-  /// A function that supports flattening must have a signature with variadic
-  /// arguments of the same type. The result type must be the same as input
-  /// type.
-  bool supportsFlattening{false};
-
-  // TODO Add is-deterministic flag.
-};
+std::optional<
+    std::pair<std::shared_ptr<VectorFunction>, VectorFunctionMetadata>>
+getVectorFunctionWithMetadata(
+    const std::string& name,
+    const std::vector<TypePtr>& inputTypes,
+    const std::vector<VectorPtr>& constantInputs,
+    const core::QueryConfig& config);
 
 /// Registers stateless VectorFunction. The same instance will be used for all
 /// expressions.

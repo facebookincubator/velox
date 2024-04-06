@@ -20,6 +20,7 @@
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/process/ProcessBase.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/vector/VectorTypeUtils.h"
@@ -579,8 +580,7 @@ void HashTable<ignoreNullKeys>::arrayGroupProbe(HashLookup& lookup) {
     if (UNLIKELY(!group)) {
       group = insertEntry(lookup, index, row);
     }
-    groups[row] = group;
-    lookup.hits[row] = group; // NOLINT
+    groups[row] = group; // NOLINT
   }
 }
 
@@ -726,11 +726,18 @@ void HashTable<ignoreNullKeys>::allocateTables(uint64_t size) {
 }
 
 template <bool ignoreNullKeys>
-void HashTable<ignoreNullKeys>::clear() {
-  rows_->clear();
+void HashTable<ignoreNullKeys>::clear(bool freeTable) {
+  for (auto* rowContainer : allRows()) {
+    rowContainer->clear();
+  }
   if (table_) {
-    // All modes have 8 bytes per slot.
-    memset(table_, 0, capacity_ * sizeof(char*));
+    if (!freeTable) {
+      // All modes have 8 bytes per slot.
+      ::memset(table_, 0, capacity_ * sizeof(char*));
+    } else {
+      rows_->pool()->freeContiguous(tableAllocation_);
+      table_ = nullptr;
+    }
   }
   numDistinct_ = 0;
   numTombstones_ = 0;
@@ -857,6 +864,7 @@ bool HashTable<ignoreNullKeys>::canApplyParallelJoinBuild() const {
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::parallelJoinBuild() {
+  process::TraceContext trace("HashTable::parallelJoinBuild");
   TestValue::adjust(
       "facebook::velox::exec::HashTable::parallelJoinBuild", rows_->pool());
   VELOX_CHECK_LE(1 + otherTables_.size(), std::numeric_limits<uint8_t>::max());
@@ -1479,6 +1487,17 @@ void HashTable<ignoreNullKeys>::decideHashMode(
 }
 
 template <bool ignoreNullKeys>
+std::vector<RowContainer*> HashTable<ignoreNullKeys>::allRows() const {
+  std::vector<RowContainer*> rowContainers;
+  rowContainers.reserve(otherTables_.size() + 1);
+  rowContainers.push_back(rows_.get());
+  for (auto& other : otherTables_) {
+    rowContainers.push_back(other->rows_.get());
+  }
+  return rowContainers;
+}
+
+template <bool ignoreNullKeys>
 std::string HashTable<ignoreNullKeys>::toString() {
   std::stringstream out;
   out << "[HashTable keys: " << hashers_.size()
@@ -1605,7 +1624,8 @@ bool mayUseValueIds(const BaseHashTable& table) {
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::prepareJoinTable(
     std::vector<std::unique_ptr<BaseHashTable>> tables,
-    folly::Executor* executor) {
+    folly::Executor* executor,
+    int8_t spillInputStartPartitionBit) {
   buildExecutor_ = executor;
   otherTables_.reserve(tables.size());
   for (auto& table : tables) {
@@ -1648,6 +1668,7 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
   } else {
     decideHashMode(0);
   }
+  checkHashBitsOverlap(spillInputStartPartitionBit);
 }
 
 template <bool ignoreNullKeys>
@@ -1766,21 +1787,21 @@ int32_t HashTable<ignoreNullKeys>::listRows(
     uint64_t maxBytes,
     char** rows) {
   if (iter->hashTableIndex_ == -1) {
-    auto numRows = rows_->listRows<probeType>(
+    const auto numRows = rows_->listRows<probeType>(
         &iter->rowContainerIterator_, maxRows, maxBytes, rows);
-    if (numRows) {
+    if (numRows > 0) {
       return numRows;
     }
     iter->hashTableIndex_ = 0;
     iter->rowContainerIterator_.reset();
   }
   while (iter->hashTableIndex_ < otherTables_.size()) {
-    auto numRows =
+    const auto numRows =
         otherTables_[iter->hashTableIndex_]
             ->rows()
             ->template listRows<probeType>(
                 &iter->rowContainerIterator_, maxRows, maxBytes, rows);
-    if (numRows) {
+    if (numRows > 0) {
       return numRows;
     }
     ++iter->hashTableIndex_;
@@ -1976,11 +1997,20 @@ void populateLookupRows(
 }
 } // namespace
 
+std::string BaseHashTable::RowsIterator::toString() const {
+  return fmt::format(
+      "[hashTableIndex:{} rowContainerIter:{}",
+      hashTableIndex_,
+      rowContainerIterator_.toString());
+}
+
 void BaseHashTable::prepareForGroupProbe(
     HashLookup& lookup,
     const RowVectorPtr& input,
     SelectivityVector& rows,
-    bool ignoreNullKeys) {
+    bool ignoreNullKeys,
+    int8_t spillInputStartPartitionBit) {
+  checkHashBitsOverlap(spillInputStartPartitionBit);
   auto& hashers = lookup.hashers;
 
   for (auto& hasher : hashers) {
@@ -2013,7 +2043,8 @@ void BaseHashTable::prepareForGroupProbe(
       decideHashMode(input->size());
       // Do not forward 'ignoreNullKeys' to avoid redundant evaluation of
       // deselectRowsWithNulls.
-      prepareForGroupProbe(lookup, input, rows, false);
+      prepareForGroupProbe(
+          lookup, input, rows, false, spillInputStartPartitionBit);
       return;
     }
   }

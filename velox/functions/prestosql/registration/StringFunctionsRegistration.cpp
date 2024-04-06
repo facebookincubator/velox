@@ -36,6 +36,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   // Register string functions.
   registerFunction<ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<CodePointFunction, int32_t, Varchar>({prefix + "codepoint"});
+  registerFunction<HammingDistanceFunction, int64_t, Varchar, Varchar>(
+      {prefix + "hamming_distance"});
   registerFunction<LevenshteinDistanceFunction, int64_t, Varchar, Varchar>(
       {prefix + "levenshtein_distance"});
   registerFunction<LengthFunction, int64_t, Varchar>({prefix + "length"});
@@ -78,8 +80,6 @@ void registerSimpleFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "like", likeSignatures(), makeLike);
 
-  registerFunction<SplitPart, Varchar, Varchar, Varchar, int64_t>(
-      {prefix + "split_part"});
   registerFunction<Re2RegexpReplacePresto, Varchar, Varchar, Constant<Varchar>>(
       {prefix + "regexp_replace"});
   registerFunction<

@@ -13,14 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include <fmt/format.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
-
-#include <fmt/format.h>
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -36,7 +36,7 @@ struct TestParam {
   TypeKind comparisonType;
 };
 
-const std::unordered_set<TypeKind> kSupportedTypes = {
+const std::vector<TypeKind> kSupportedTypes = {
     TypeKind::BOOLEAN,
     TypeKind::TINYINT,
     TypeKind::SMALLINT,
@@ -49,8 +49,8 @@ const std::unordered_set<TypeKind> kSupportedTypes = {
 
 std::vector<TestParam> getTestParams() {
   std::vector<TestParam> params;
-  for (TypeKind valueType : kSupportedTypes) {
-    for (TypeKind comparisonType : kSupportedTypes) {
+  for (auto valueType : kSupportedTypes) {
+    for (auto comparisonType : kSupportedTypes) {
       params.push_back({valueType, comparisonType});
     }
   }
@@ -189,20 +189,7 @@ class MinMaxByAggregationTestBase : public AggregationTestBase {
       vector_size_t size,
       folly::Range<const int*> values);
 
-  const RowTypePtr rowType_{
-      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"},
-          {
-              BOOLEAN(),
-              TINYINT(),
-              SMALLINT(),
-              INTEGER(),
-              BIGINT(),
-              REAL(),
-              DOUBLE(),
-              VARCHAR(),
-              DATE(),
-              TIMESTAMP(),
-          })};
+  RowTypePtr rowType_;
   // Specify the number of values in each typed data vector in
   // 'dataVectorsByType_'.
   const int numValues_;
@@ -309,8 +296,15 @@ std::string asSql(bool value) {
 void MinMaxByAggregationTestBase::SetUp() {
   AggregationTestBase::SetUp();
   AggregationTestBase::disallowInputShuffle();
-
-  for (const TypeKind type : kSupportedTypes) {
+  std::vector<TypePtr> supportedTypes;
+  std::vector<std::string> columnNames;
+  int columnId = 0;
+  for (auto kind : kSupportedTypes) {
+    supportedTypes.push_back(createScalarType(kind));
+    columnNames.push_back("c" + std::to_string(columnId++));
+  }
+  rowType_ = ROW(std::move(columnNames), std::move(supportedTypes));
+  for (auto type : kSupportedTypes) {
     switch (type) {
       case TypeKind::BOOLEAN:
         dataVectorsByType_.emplace(type, buildDataVector<bool>(numValues_));
@@ -468,9 +462,7 @@ class MinMaxByGlobalByAggregationTest
           {},
           {"min_by(c0, c1)"},
           {},
-          testData.verifyDuckDbSql,
-          /*config*/ {},
-          /*testWithTableScan*/ false);
+          testData.verifyDuckDbSql);
     }
   }
 
@@ -566,9 +558,7 @@ class MinMaxByGlobalByAggregationTest
           {},
           {"max_by(c0, c1)"},
           {},
-          testData.verifyDuckDbSql,
-          /*config*/ {},
-          /*testWithTableScan*/ false);
+          testData.verifyDuckDbSql);
     }
   }
 };
@@ -628,8 +618,8 @@ TEST_P(
 
   auto rowType =
       ROW({"c0", "c1"},
-          {fromKindToScalerType(GetParam().valueType),
-           fromKindToScalerType(GetParam().comparisonType)});
+          {createScalarType(GetParam().valueType),
+           createScalarType(GetParam().comparisonType)});
 
   const bool isSmallInt = GetParam().comparisonType == TypeKind::TINYINT ||
       GetParam().comparisonType == TypeKind::SMALLINT;
@@ -652,7 +642,7 @@ TEST_P(
   for (int i = 0; i < kNumBatches; ++i) {
     // Generate a non-lazy vector so that it can be written out as a duckDB
     // table.
-    auto valueVector = fuzzer.fuzz(fromKindToScalerType(GetParam().valueType));
+    auto valueVector = fuzzer.fuzz(createScalarType(GetParam().valueType));
     auto comparisonVector = buildDataVector(
         GetParam().comparisonType,
         kBatchSize,
@@ -858,9 +848,7 @@ class MinMaxByGroupByAggregationTest
           {"c2"},
           {"min_by(c0, c1)"},
           {},
-          testData.verifyDuckDbSql,
-          /*config*/ {},
-          /*testWithTableScan*/ false);
+          testData.verifyDuckDbSql);
     }
   }
 
@@ -1011,9 +999,7 @@ class MinMaxByGroupByAggregationTest
           {"c2"},
           {"max_by(c0, c1)"},
           {},
-          testData.verifyDuckDbSql,
-          /*config*/ {},
-          /*testWithTableScan*/ false);
+          testData.verifyDuckDbSql);
     }
   }
 };
@@ -1068,8 +1054,8 @@ TEST_P(
 
   auto rowType =
       ROW({"c0", "c1", "c2"},
-          {fromKindToScalerType(GetParam().valueType),
-           fromKindToScalerType(GetParam().comparisonType),
+          {createScalarType(GetParam().valueType),
+           createScalarType(GetParam().comparisonType),
            INTEGER()});
 
   const bool isSmallInt = GetParam().comparisonType == TypeKind::TINYINT ||
@@ -1093,7 +1079,7 @@ TEST_P(
   for (int i = 0; i < kNumBatches; ++i) {
     // Generate a non-lazy vector so that it can be written out as a duckDB
     // table.
-    auto valueVector = fuzzer.fuzz(fromKindToScalerType(GetParam().valueType));
+    auto valueVector = fuzzer.fuzz(createScalarType(GetParam().valueType));
     auto groupByVector = makeFlatVector<int32_t>(kBatchSize);
     auto comparisonVector = buildDataVector(
         GetParam().comparisonType,
@@ -1370,7 +1356,6 @@ class MinMaxByNTest : public AggregationTestBase {
     AggregationTestBase::SetUp();
     AggregationTestBase::allowInputShuffle();
     AggregationTestBase::enableTestStreaming();
-    AggregationTestBase::disableTestIncremental();
   }
 };
 
@@ -1764,6 +1749,10 @@ TEST_F(MinMaxByNTest, sortedGroupBy) {
 }
 
 TEST_F(MinMaxByNTest, variableN) {
+  // Tests below check the error behavior on invalid inputs, so testIncremental
+  // is not needed for these cases.
+  AggregationTestBase::disableTestIncremental();
+
   auto data = makeRowVector({
       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
       makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
@@ -1819,6 +1808,8 @@ TEST_F(MinMaxByNTest, variableN) {
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
       "third argument of max_by/min_by must be a constant for all rows in a group");
+
+  AggregationTestBase::enableTestIncremental();
 }
 
 TEST_F(MinMaxByNTest, globalRow) {
@@ -2109,6 +2100,148 @@ TEST_F(MinMaxByNTest, stringComparison) {
     testReadFromFiles(
         {data}, {"c4"}, {"min_by(c3, c0, 2)", "max_by(c3, c0, 2)"}, {expected});
   }
+}
+
+TEST_F(MinMaxByNTest, incrementalWindow) {
+  // Test that min_by(x, x, 10) and max_by(x, x, 10) produce correct results
+  // when used in window operation with incremental frames.
+  std::vector<VectorPtr> inputs = {
+      makeFlatVector<int64_t>({1, 2}),
+      makeFlatVector<StringView>({"1"_sv, "2"_sv}),
+      makeArrayVector<StringView>({{"1"_sv}, {"2"_sv}}),
+      makeFlatVector<Timestamp>({Timestamp(0, 0), Timestamp(0, 1)}),
+      makeFlatVector<int64_t>({10, 10}),
+      makeFlatVector<bool>({false, false}),
+      makeFlatVector<int64_t>({0, 1})};
+  auto data = makeRowVector(inputs);
+  auto result = inputs;
+
+  // Test primitive type.
+  {
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .window(
+                {"max_by(c0, c0, c4) over (partition by c5 order by c6 asc)"})
+            .planNode();
+
+    result.push_back(makeArrayVector<int64_t>({{1}, {2, 1}}));
+    AssertQueryBuilder(plan).assertResults(makeRowVector(result));
+
+    plan =
+        PlanBuilder()
+            .values({data})
+            .window(
+                {"min_by(c0, c0, c4) over (partition by c5 order by c6 asc)"})
+            .planNode();
+    result.back() = makeArrayVector<int64_t>({{1}, {1, 2}});
+    AssertQueryBuilder(plan).assertResults(makeRowVector(result));
+  }
+
+  // Test varchar type.
+  {
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .window(
+                {"max_by(c1, c1, c4) over (partition by c5 order by c6 asc)"})
+            .planNode();
+
+    result.back() = makeArrayVector<StringView>({{"1"_sv}, {"2"_sv, "1"_sv}});
+    AssertQueryBuilder(plan).assertResults(makeRowVector(result));
+
+    plan =
+        PlanBuilder()
+            .values({data})
+            .window(
+                {"min_by(c1, c1, c4) over (partition by c5 order by c6 asc)"})
+            .planNode();
+
+    result.back() = makeArrayVector<StringView>({{"1"_sv}, {"1"_sv, "2"_sv}});
+    AssertQueryBuilder(plan).assertResults(makeRowVector(result));
+  }
+
+  // Test complex type.
+  {
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .window(
+                {"max_by(c2, c3, c4) over (partition by c5 order by c6 asc)"})
+            .planNode();
+
+    result.back() = makeNullableNestedArrayVector<StringView>(
+        {{{{{"1"_sv}}}}, {{{{"2"_sv}}, {{"1"_sv}}}}});
+    AssertQueryBuilder(plan).assertResults(makeRowVector(result));
+
+    plan =
+        PlanBuilder()
+            .values({data})
+            .window(
+                {"min_by(c2, c3, c4) over (partition by c5 order by c6 asc)"})
+            .planNode();
+
+    result.back() = makeNullableNestedArrayVector<StringView>(
+        {{{{{"1"_sv}}}}, {{{{"1"_sv}}, {{"2"_sv}}}}});
+    AssertQueryBuilder(plan).assertResults(makeRowVector(result));
+  }
+}
+
+TEST_F(MinMaxByNTest, peakMemory) {
+  auto data = makeRowVector({
+      // Each array has 100 elements.
+      makeArrayVector<int64_t>(
+          1'000,
+          [](auto /*row*/) { return 100; },
+          [](auto row) { return row; }),
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+      makeFlatVector<std::string>(
+          1'000,
+          [](auto row) {
+            return fmt::format("this is a very long string for row {}", row);
+          }),
+      makeFlatVector<std::string>(
+          1'000,
+          [](auto row) {
+            return fmt::format(
+                "this is another very long string for row {}", row);
+          }),
+  });
+
+  auto getPeakMemoryBytes = [&](const std::string& aggregate) {
+    core::PlanNodeId aggId;
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .singleAggregation({}, {aggregate})
+                    .capturePlanNodeId(aggId)
+                    .planNode();
+
+    std::shared_ptr<exec::Task> task;
+    auto results = AssertQueryBuilder(plan).copyResults(pool(), task);
+
+    auto planStats = toPlanStats(task->taskStats());
+    auto& aggrStats = planStats[aggId];
+
+    return aggrStats.peakMemoryBytes;
+  };
+
+  auto minByPeak = getPeakMemoryBytes("min_by(c0, c1, 2)");
+  auto maxByPeak = getPeakMemoryBytes("max_by(c0, c1, 2)");
+
+  EXPECT_EQ(minByPeak, maxByPeak);
+  EXPECT_LT(maxByPeak, 140000);
+
+  minByPeak = getPeakMemoryBytes("min_by(c2, c1, 2)");
+  maxByPeak = getPeakMemoryBytes("max_by(c2, c1, 2)");
+
+  EXPECT_EQ(minByPeak, maxByPeak);
+  EXPECT_LT(maxByPeak, 190000);
+
+  minByPeak = getPeakMemoryBytes("min_by(c2, c3, 2)");
+  maxByPeak = getPeakMemoryBytes("max_by(c2, c3, 2)");
+
+  EXPECT_EQ(minByPeak, maxByPeak);
+  EXPECT_LT(maxByPeak, 190000);
 }
 
 } // namespace

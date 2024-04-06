@@ -31,6 +31,10 @@ class OutputBufferManager;
 
 class HashJoinBridge;
 class NestedLoopJoinBridge;
+
+using ConnectorSplitPreloadFunc =
+    std::function<void(const std::shared_ptr<connector::ConnectorSplit>&)>;
+
 class Task : public std::enable_shared_from_this<Task> {
  public:
   /// Creates a task to execute a plan fragment, but doesn't start execution
@@ -120,6 +124,13 @@ class Task : public std::enable_shared_from_this<Task> {
   bool isGroupedExecution() const;
 
   bool isUngroupedExecution() const;
+
+  /// Returns true if this task has ungrouped execution split under grouped
+  /// execution mode.
+  ///
+  /// NOTE: calls this function after task has been started as the number of
+  /// ungrouped drivers is set during task startup.
+  bool hasMixedExecutionGroup() const;
 
   /// Starts executing the plan fragment specified in the constructor. If leaf
   /// nodes require splits (e.g. TableScan, Exchange, etc.), these splits can be
@@ -257,9 +268,12 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Information about an operator call that helps debugging stuck calls.
   struct OpCallInfo {
     size_t durationMs;
+    /// Thread id of where the operator got stuck.
     int32_t tid;
     int32_t opId;
     std::string taskId;
+    /// Call in the format of "<operatorType>.<nodeId>::<operatorMethod>".
+    std::string opCall;
   };
 
   /// Collect long running operator calls across all drivers in this task.
@@ -286,6 +300,17 @@ class Task : public std::enable_shared_from_this<Task> {
   uint32_t numOutputDrivers() const {
     return numDrivers(getOutputPipelineId());
   }
+
+  /// Stores the number of drivers in various states of execution.
+  struct DriverCounts {
+    uint32_t numQueuedDrivers{0};
+    uint32_t numOnThreadDrivers{0};
+    uint32_t numSuspendedDrivers{0};
+    std::unordered_map<BlockingReason, uint64_t> numBlockedDrivers;
+  };
+
+  /// Returns the number of drivers in various states of execution.
+  DriverCounts driverCounts() const;
 
   /// Returns the number of running drivers.
   uint32_t numRunningDrivers() const {
@@ -357,12 +382,14 @@ class Task : public std::enable_shared_from_this<Task> {
       exec::Split& split,
       ContinueFuture& future,
       int32_t maxPreloadSplits = 0,
-      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload =
-          nullptr);
+      const ConnectorSplitPreloadFunc& preload = nullptr);
 
-  void splitFinished();
+  void splitFinished(bool fromTableScan, int64_t splitWeight);
 
-  void multipleSplitsFinished(int32_t numSplits);
+  void multipleSplitsFinished(
+      bool fromTableScan,
+      int32_t numSplits,
+      int64_t splitsWeight);
 
   /// Adds a MergeSource for the specified splitGroupId and planNodeId.
   std::shared_ptr<MergeSource> addLocalMergeSource(
@@ -473,10 +500,6 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  std::shared_ptr<SpillOperatorGroup> getSpillOperatorGroupLocked(
-      uint32_t splitGroupId,
-      const core::PlanNodeId& planNodeId);
-
   /// Transitions this to kFinished state if all Drivers are
   /// finished. Otherwise sets a flag so that the last Driver to finish
   /// will transition the state.
@@ -485,6 +508,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Adds 'stats' to the cumulative total stats for the operator in the Task
   /// stats. Called from Drivers upon their closure.
   void addOperatorStats(OperatorStats& stats);
+
+  /// Adds per driver statistics.  Called from Drivers upon their closure.
+  void addDriverStats(int pipelineId, DriverStats stats);
 
   /// Returns kNone if no pause or terminate is requested. The thread count is
   /// incremented if kNone is returned. If something else is returned the
@@ -781,19 +807,20 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Retrieve a split or split future from the given split store structure.
   BlockingReason getSplitOrFutureLocked(
+      bool forTableScan,
       SplitsStore& splitsStore,
       exec::Split& split,
       ContinueFuture& future,
-      int32_t maxPreloadSplits = 0,
-      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload =
-          nullptr);
+      int32_t maxPreloadSplits,
+      const ConnectorSplitPreloadFunc& preload);
 
   /// Returns next split from the store. The caller must ensure the store is not
   /// empty.
   exec::Split getSplitLocked(
+      bool forTableScan,
       SplitsStore& splitsStore,
       int32_t maxPreloadSplits,
-      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload);
+      const ConnectorSplitPreloadFunc& preload);
 
   // Creates for the given split group and fills up the 'SplitGroupState'
   // structure, which stores inter-operator state (local exchange, bridges).

@@ -161,7 +161,8 @@ class OutputBufferManagerTest : public testing::Test {
          expectedEndMarker,
          &receivedData](
             std::vector<std::unique_ptr<folly::IOBuf>> pages,
-            int64_t inSequence) {
+            int64_t inSequence,
+            std::vector<int64_t> /*remainingBytes*/) {
           ASSERT_FALSE(receivedData) << "for destination " << destination;
           ASSERT_EQ(pages.size(), expectedGroups)
               << "for destination " << destination;
@@ -213,11 +214,13 @@ class OutputBufferManagerTest : public testing::Test {
   receiveEndMarker(int destination, int64_t sequence, bool& receivedEndMarker) {
     return [destination, sequence, &receivedEndMarker](
                std::vector<std::unique_ptr<folly::IOBuf>> pages,
-               int64_t inSequence) {
+               int64_t inSequence,
+               std::vector<int64_t> remainingBytes) {
       EXPECT_FALSE(receivedEndMarker) << "for destination " << destination;
       EXPECT_EQ(pages.size(), 1) << "for destination " << destination;
       EXPECT_TRUE(pages[0] == nullptr) << "for destination " << destination;
       EXPECT_EQ(inSequence, sequence) << "for destination " << destination;
+      EXPECT_TRUE(remainingBytes.empty());
       receivedEndMarker = true;
     };
   }
@@ -262,7 +265,8 @@ class OutputBufferManagerTest : public testing::Test {
     receivedData = false;
     return [destination, sequence, expectedGroups, &receivedData](
                std::vector<std::unique_ptr<folly::IOBuf>> pages,
-               int64_t inSequence) {
+               int64_t inSequence,
+               std::vector<int64_t> /*remainingBytes*/) {
       EXPECT_FALSE(receivedData) << "for destination " << destination;
       EXPECT_EQ(pages.size(), expectedGroups)
           << "for destination " << destination;
@@ -314,7 +318,8 @@ class OutputBufferManagerTest : public testing::Test {
           maxBytes,
           nextSequence,
           [&](std::vector<std::unique_ptr<folly::IOBuf>> pages,
-              int64_t inSequence) {
+              int64_t inSequence,
+              std::vector<int64_t> /*remainingBytes*/) {
             ASSERT_EQ(inSequence, nextSequence);
             for (int i = 0; i < pages.size(); ++i) {
               if (pages[i] != nullptr) {
@@ -332,6 +337,36 @@ class OutputBufferManagerTest : public testing::Test {
       }
     }
     bufferManager_->deleteResults(taskId, destination);
+    // out of order requests are allowed (fetch after delete)
+    {
+      struct Response {
+        std::vector<std::unique_ptr<folly::IOBuf>> pages;
+        int64_t sequence;
+        std::vector<int64_t> remainingBytes;
+      };
+      folly::Promise<Response> promise;
+      auto future = promise.getSemiFuture();
+      bufferManager_->getData(
+          taskId,
+          destination,
+          32'000'000,
+          nextSequence,
+          [&promise](
+              std::vector<std::unique_ptr<folly::IOBuf>> pages,
+              int64_t inSequence,
+              std::vector<int64_t> remainingBytes) {
+            promise.setValue(Response{
+                std::move(pages), inSequence, std::move(remainingBytes)});
+          });
+      future.wait();
+      ASSERT_TRUE(future.isReady());
+      auto& response = future.value();
+      ASSERT_EQ(response.sequence, nextSequence);
+      ASSERT_EQ(response.remainingBytes.size(), 0);
+      ASSERT_EQ(response.pages.size(), 1);
+      ASSERT_EQ(response.pages.at(0), nullptr);
+    }
+
     fetchedPages = nextSequence;
   }
 
@@ -449,6 +484,7 @@ TEST_F(OutputBufferManagerTest, arbitrayBuffer) {
     buffer.enqueue(std::move(page3));
     ASSERT_EQ(
         buffer.toString(), "[ARBITRARY_BUFFER PAGES[2] NO MORE DATA[false]]");
+    ASSERT_TRUE(buffer.getPages(0).empty());
     buffer.noMoreData();
     ASSERT_FALSE(buffer.empty());
     ASSERT_TRUE(buffer.hasNoMoreData());
@@ -470,7 +506,9 @@ TEST_F(OutputBufferManagerTest, arbitrayBuffer) {
     ASSERT_EQ(
         buffer.toString(), "[ARBITRARY_BUFFER PAGES[0] NO MORE DATA[true]]");
     buffer.noMoreData();
-    VELOX_ASSERT_THROW(buffer.getPages(0), "maxBytes can't be zero");
+    pages = buffer.getPages(0);
+    ASSERT_EQ(pages.size(), 1);
+    ASSERT_FALSE(pages[0]);
     // Verify the end marker is persistent.
     for (int i = 0; i < 3; ++i) {
       pages = buffer.getPages(100);
@@ -503,20 +541,23 @@ TEST_F(OutputBufferManagerTest, destinationBuffer) {
   {
     ArbitraryBuffer buffer;
     DestinationBuffer destinationBuffer;
-    VELOX_ASSERT_THROW(
-        destinationBuffer.loadData(&buffer, 0), "maxBytes can't be zero");
+    destinationBuffer.loadData(&buffer, 0);
     destinationBuffer.loadData(&buffer, 100);
     std::atomic<bool> notified{false};
-    destinationBuffer.getData(
+    auto buffers = destinationBuffer.getData(
         1'000'000,
         0,
         [&](std::vector<std::unique_ptr<folly::IOBuf>> buffers,
-            int64_t sequence) {
+            int64_t sequence,
+            std::vector<int64_t> remainingBytes) {
           ASSERT_EQ(buffers.size(), 1);
           ASSERT_TRUE(buffers[0].get() == nullptr);
+          ASSERT_EQ(sequence, 0);
+          ASSERT_TRUE(remainingBytes.empty());
           notified = true;
         },
         nullptr);
+    ASSERT_FALSE(buffers.immediate);
     ASSERT_TRUE(buffer.empty());
     ASSERT_FALSE(buffer.hasNoMoreData());
     ASSERT_FALSE(notified);
@@ -545,10 +586,13 @@ TEST_F(OutputBufferManagerTest, destinationBuffer) {
         1'000'000'000,
         0,
         [&](std::vector<std::unique_ptr<folly::IOBuf>> /*unused*/,
-            int64_t /*unused*/) { notified = true; },
+            int64_t /*unused*/,
+            std::vector<int64_t> /*remainingBytes*/) { notified = true; },
         []() { return true; });
-    for (const auto& buffer : buffers) {
-      numBytes += buffer->length();
+    ASSERT_TRUE(buffers.immediate);
+    ASSERT_TRUE(buffers.remainingBytes.empty());
+    for (const auto& iobuf : buffers.data) {
+      numBytes += iobuf->length();
     }
     ASSERT_GT(numBytes, 0);
     ASSERT_FALSE(notified);
@@ -565,16 +609,19 @@ TEST_F(OutputBufferManagerTest, destinationBuffer) {
         1'000'000,
         1,
         [&](std::vector<std::unique_ptr<folly::IOBuf>> buffers,
-            int64_t sequence) {
+            int64_t sequence,
+            std::vector<int64_t> remainingBytes) {
           ASSERT_EQ(sequence, 1);
           ASSERT_EQ(buffers.size(), 9);
+          ASSERT_TRUE(remainingBytes.empty());
           for (const auto& buffer : buffers) {
             numBytes += buffer->length();
           }
           notified = true;
         },
         []() { return true; });
-    ASSERT_TRUE(buffers.empty());
+    ASSERT_FALSE(buffers.immediate);
+    ASSERT_TRUE(buffers.data.empty());
     ASSERT_FALSE(notified);
 
     destinationBuffer.maybeLoadData(&buffer);
@@ -583,6 +630,99 @@ TEST_F(OutputBufferManagerTest, destinationBuffer) {
     ASSERT_TRUE(buffer.empty());
     ASSERT_FALSE(buffer.hasNoMoreData());
     ASSERT_EQ(numBytes, expectedNumBytes);
+  }
+
+  auto noNotify = [](std::vector<std::unique_ptr<folly::IOBuf>> /*buffers*/,
+                     int64_t /*sequence*/,
+                     std::vector<int64_t> /*remainingBytes*/) { FAIL(); };
+
+  {
+    ArbitraryBuffer buffer;
+    for (int i = 0; i < 10; ++i) {
+      buffer.enqueue(makeSerializedPage(rowType_, 100));
+    }
+    DestinationBuffer destinationBuffer;
+    destinationBuffer.loadData(&buffer, 1e9);
+    ASSERT_TRUE(buffer.empty());
+    int64_t sequence = 0;
+
+    auto buffers =
+        destinationBuffer.getData(1, sequence, noNotify, [] { return true; });
+    ASSERT_TRUE(buffers.immediate);
+    ASSERT_EQ(buffers.data.size(), 1);
+    ASSERT_GT(buffers.data[0]->length(), 0);
+    ASSERT_EQ(buffers.remainingBytes.size(), 9);
+    ++sequence;
+    ASSERT_EQ(destinationBuffer.acknowledge(sequence, false).size(), 1);
+
+    auto bytes = buffers.remainingBytes[0];
+    buffers = destinationBuffer.getData(
+        bytes, sequence, noNotify, [] { return true; });
+    ASSERT_TRUE(buffers.immediate);
+    ASSERT_EQ(buffers.data.size(), 1);
+    ASSERT_EQ(buffers.data[0]->length(), bytes);
+    ASSERT_EQ(buffers.remainingBytes.size(), 8);
+    ++sequence;
+    ASSERT_EQ(destinationBuffer.acknowledge(sequence, false).size(), 1);
+
+    bytes = buffers.remainingBytes[0];
+    auto bytes2 = buffers.remainingBytes[1];
+    buffers = destinationBuffer.getData(
+        bytes + 1, sequence, noNotify, [] { return true; });
+    ASSERT_TRUE(buffers.immediate);
+    ASSERT_EQ(buffers.data.size(), 2);
+    ASSERT_EQ(buffers.data[0]->length(), bytes);
+    ASSERT_EQ(buffers.data[1]->length(), bytes2);
+    ASSERT_EQ(buffers.remainingBytes.size(), 6);
+    sequence += 2;
+    ASSERT_EQ(destinationBuffer.acknowledge(sequence, false).size(), 2);
+
+    bytes = std::accumulate(
+        buffers.remainingBytes.begin(), buffers.remainingBytes.end(), 0ll);
+    buffers = destinationBuffer.getData(
+        bytes, sequence, noNotify, [] { return true; });
+    ASSERT_TRUE(buffers.immediate);
+    ASSERT_EQ(buffers.data.size(), 6);
+    ASSERT_EQ(buffers.remainingBytes.size(), 0);
+    sequence += 6;
+    ASSERT_EQ(destinationBuffer.acknowledge(sequence, false).size(), 6);
+
+    bool notified = false;
+    buffers = destinationBuffer.getData(
+        1,
+        sequence,
+        [&](std::vector<std::unique_ptr<folly::IOBuf>> buffers,
+            int64_t sequence2,
+            std::vector<int64_t> remainingBytes) {
+          ASSERT_EQ(buffers.size(), 1);
+          ASSERT_TRUE(buffers[0]);
+          ASSERT_EQ(sequence2, sequence);
+          ASSERT_TRUE(remainingBytes.empty());
+          notified = true;
+        },
+        [] { return true; });
+    ASSERT_FALSE(buffers.immediate);
+    ASSERT_FALSE(notified);
+    for (int i = 0; i < 10; ++i) {
+      buffer.enqueue(makeSerializedPage(rowType_, 100));
+    }
+    destinationBuffer.maybeLoadData(&buffer);
+    destinationBuffer.getAndClearNotify().notify();
+    ASSERT_TRUE(notified);
+  }
+
+  {
+    ArbitraryBuffer buffer;
+    for (int i = 0; i < 10; ++i) {
+      buffer.enqueue(makeSerializedPage(rowType_, 100));
+    }
+    DestinationBuffer destinationBuffer;
+    auto buffers = destinationBuffer.getData(
+        1, 0, noNotify, [] { return true; }, &buffer);
+    ASSERT_TRUE(buffers.immediate);
+    ASSERT_EQ(buffers.data.size(), 1);
+    ASSERT_GT(buffers.data[0]->length(), 0);
+    ASSERT_EQ(buffers.remainingBytes.size(), 9);
   }
 }
 
@@ -719,9 +859,7 @@ TEST_F(OutputBufferManagerTest, basicBroadcast) {
   acknowledge(taskId, 5, 3);
   EXPECT_FALSE(bufferManager_->isFinished(taskId));
   deleteResults(taskId, 5);
-  VELOX_ASSERT_THROW(
-      fetch(taskId, 5, 0, 1'000'000'000, 2),
-      "getData received after its buffer is deleted. Destination: 5, sequence: 0");
+  fetch(taskId, 5, 0, 1'000'000'000, 1, true);
 
   bufferManager_->updateOutputBuffers(taskId, 7, true);
   EXPECT_FALSE(bufferManager_->isFinished(taskId));
@@ -858,7 +996,8 @@ TEST_F(OutputBufferManagerTest, inactiveDestinationBuffer) {
         /*sequence=*/sequences[destination],
         [&, destination](
             std::vector<std::unique_ptr<folly::IOBuf>> pages,
-            int64_t sequence) {
+            int64_t sequence,
+            std::vector<int64_t> /*remainingBytes*/) {
           notifyCb(destination, std::move(pages), sequence);
         },
         [&, destination]() { return actives[destination].load(); }));
@@ -895,7 +1034,9 @@ TEST_F(OutputBufferManagerTest, inactiveDestinationBuffer) {
       /*destination=*/0,
       maxBytes,
       /*sequence=*/sequences[0],
-      [&](std::vector<std::unique_ptr<folly::IOBuf>> pages, int64_t sequence) {
+      [&](std::vector<std::unique_ptr<folly::IOBuf>> pages,
+          int64_t sequence,
+          std::vector<int64_t> /*remainingBytes*/) {
         notifyCb(0, std::move(pages), sequence);
       }));
   ASSERT_EQ(sequences[0], 2);
@@ -916,7 +1057,9 @@ TEST_F(OutputBufferManagerTest, inactiveDestinationBuffer) {
       /*destination=*/1,
       maxBytes,
       /*sequence=*/sequences[1],
-      [&](std::vector<std::unique_ptr<folly::IOBuf>> pages, int64_t sequence) {
+      [&](std::vector<std::unique_ptr<folly::IOBuf>> pages,
+          int64_t sequence,
+          std::vector<int64_t> /*remainingBytes*/) {
         notifyCb(1, std::move(pages), sequence);
       },
       [&]() { return actives[1].load(); }));
@@ -1296,9 +1439,9 @@ TEST_F(OutputBufferManagerTest, getDataOnFailedTask) {
       1,
       10,
       1,
-      [](std::vector<std::unique_ptr<folly::IOBuf>> pages, int64_t sequence) {
-        VELOX_UNREACHABLE();
-      }));
+      [](std::vector<std::unique_ptr<folly::IOBuf>> /*pages*/,
+         int64_t /*sequence*/,
+         std::vector<int64_t> /*remainingBytes*/) { VELOX_UNREACHABLE(); }));
 
   // Missing tasks should be ignored in this call.
   ASSERT_FALSE(bufferManager_->updateNumDrivers("test.0.2", 1));

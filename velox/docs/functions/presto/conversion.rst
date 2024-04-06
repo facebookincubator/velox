@@ -30,7 +30,7 @@ are supported if the conversion of their element types are supported. In additio
 supported conversions to/from JSON are listed in :doc:`json`.
 
 .. list-table::
-   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25
+   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25 25
    :header-rows: 1
 
    * -
@@ -45,6 +45,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - timestamp
      - timestamp with time zone
      - date
+     - interval day to second
      - decimal
    * - tinyint
      - Y
@@ -55,6 +56,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     -
      -
      -
      -
@@ -71,6 +73,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
      - Y
    * - integer
      - Y
@@ -81,6 +84,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     -
      -
      -
      -
@@ -97,6 +101,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
      - Y
    * - boolean
      - Y
@@ -107,6 +112,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     -
      -
      -
      -
@@ -124,6 +130,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     - Y
    * - double
      - Y
      - Y
@@ -133,6 +140,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     -
      -
      -
      -
@@ -149,6 +157,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      -
      - Y
+     -
      - Y
    * - timestamp
      -
@@ -163,6 +172,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      -
+     -
    * - timestamp with time zone
      -
      -
@@ -176,6 +186,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      -
      -
+     -
    * - date
      -
      -
@@ -184,8 +195,23 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     - Y
+     - Y
+     -
+     -
+     -
+     -
+   * - interval day to second
+     -
+     -
+     -
+     -
+     -
+     -
      -
      - Y
+     -
+     -
      -
      -
      -
@@ -198,6 +224,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     -
      -
      -
      -
@@ -263,7 +290,7 @@ supported cases.
   SELECT cast(nan() as bigint); -- 0
 
 
-From strings
+From VARCHAR
 ^^^^^^^^^^^^
 
 Casting a string to an integral type is allowed if the string represents an
@@ -337,7 +364,7 @@ Valid examples
   SELECT cast(0.5 as boolean); -- true
   SELECT cast(-0.5 as boolean); -- true
 
-From strings
+From VARCHAR
 ^^^^^^^^^^^^
 
 There is a set of strings allowed to be casted to boolean. Casting from other strings to boolean throws.
@@ -389,7 +416,7 @@ behavior.
   SELECT cast(1.7E308 as real); -- Presto returns Infinity but Velox throws
   SELECT cast(-1.7E308 as real); -- Presto returns -Infinity but Velox throws
 
-From strings
+From VARCHAR
 ^^^^^^^^^^^^
 
 Casting a string to real is allowed if the string represents an integral or
@@ -454,7 +481,7 @@ Invalid example
 
   SELECT cast(decimal '300.001' as tinyint); -- Out of range
 
-Cast to String
+Cast to VARCHAR
 --------------
 
 Casting from scalar types to string is allowed.
@@ -478,6 +505,7 @@ Valid examples
 
 From Floating-Point Types
 ^^^^^^^^^^^^^^^^^^^^^^^^^
+
 By default, casting a real or double to string returns standard notation if the magnitude of input value is greater than
 or equal to 10 :superscript:`-3` but less than 10 :superscript:`7`, and returns scientific notation otherwise.
 
@@ -525,6 +553,16 @@ Valid examples if legacy_cast = true,
   SELECT cast(real '-0.00012' as varchar); -- '-0.00011999999696854502'
 
 
+From DATE
+^^^^^^^^^
+
+Casting DATE to VARCHAR returns an ISO-8601 formatted string: YYYY-MM-DD.
+
+::
+
+    SELECT cast(date('2024-03-14') as varchar); -- '2024-03-14'
+
+
 From TIMESTAMP
 ^^^^^^^^^^^^^^
 
@@ -553,10 +591,26 @@ Valid examples if legacy_cast = true,
   SELECT cast(timestamp '384-01-01 08:00:00.000' as varchar); -- '384-01-01T08:00:00.000'
   SELECT cast(timestamp '-10-02-01 10:00:00.000' as varchar); -- '-10-02-01T10:00:00.000'
 
+From INTERVAL DAY TO SECOND
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Casting INTERVAL DAY TO SECOND to VARCHAR returns a string formatted as
+'[sign]D HH:MM:SS.ZZZ', where 'sign' is an optional '-' sign if interval is negative, D
+is the number of whole days in the interval, HH is then number of hours between 00 and
+24, MM is the number of minutes between 00 and 59, SS is the number of seconds between
+00 and 59, and zzz is the number of milliseconds between 000 and 999.
+
+::
+
+    SELECT cast(interval '1' day as varchar); -- '1 00:00:00.000'
+    SELECT cast(interval '123456' second as varchar); -- '1 10:17:36.000'
+    SELECT cast(now() - date('2024-03-01') as varchar); -- '35 09:15:54.092'
+    SELECT cast(date('2024-03-01') - now() as varchar); -- '-35 09:16:20.598'
+
 Cast to TIMESTAMP
 -----------------
 
-From strings
+From VARCHAR
 ^^^^^^^^^^^^
 
 Casting from a string to timestamp is allowed if the string represents a
@@ -578,7 +632,7 @@ Invalid example
 
   SELECT cast('2012-Oct-23' as timestamp); -- Invalid argument
 
-From date
+From DATE
 ^^^^^^^^^
 
 Casting from date to timestamp is allowed.
@@ -649,7 +703,7 @@ Valid examples
 Cast to Date
 ------------
 
-From strings
+From VARCHAR
 ^^^^^^^^^^^^
 
 Only ISO 8601 strings are supported: `[+-]YYYY-MM-DD`. Casting from invalid input values throws.
@@ -724,14 +778,15 @@ Invalid examples
   SELECT cast(123 as decimal(6, 4)); -- Out of range
   SELECT cast(123 as decimal(4, 2)); -- Out of range
 
-From double type
-^^^^^^^^^^^^^^^^
+From floating-point types
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Casting a double number to a decimal of given precision and scale is allowed
-if the input value can be represented by the precision and scale. When the
-given scale is less than the number of decimal places, the double value is
-rounded. The conversion precision is up to 15 as double provides 16(±1)
-significant decimal digits precision. Casting from invalid input values throws.
+Casting a floating-point number to a decimal of given precision and scale is allowed
+if the input value can be represented by the precision and scale. When the given
+scale is less than the number of decimal places, the floating-point value is rounded.
+The conversion precision is up to 15 for double and 6 for real according to the
+significant decimal digits precision they provide. Casting from NaN or infinite value
+throws.
 
 Valid example
 
@@ -741,6 +796,7 @@ Valid example
   SELECT cast(0.12 as decimal(4, 1)); -- decimal '0.1'
   SELECT cast(0.19 as decimal(4, 1)); -- decimal '0.2'
   SELECT cast(0.123456789123123 as decimal(38, 18)); -- decimal '0.123456789123123000'
+  SELECT cast(real '0.123456' as decimal(38, 18)); -- decimal '0.123456000000000000'
 
 Invalid example
 
@@ -809,3 +865,14 @@ Invalid example
   SELECT cast(' -3E+2' as decimal(12, 2)); -- Value is not a number
   SELECT cast('-3E+2.1' as decimal(12, 2)); -- Value is not a number
   SELECT cast('3E+' as decimal(12, 2)); -- Value is not a number
+
+Miscellaneous
+-------------
+
+.. function:: typeof(x) -> varchar
+
+    Returns the name of the type of x::
+
+        SELECT typeof(123); -- integer
+        SELECT typeof(1.5); -- double
+        SELECT typeof(array[1,2,3]); -- array(integer)

@@ -63,6 +63,8 @@ struct VectorValidateOptions {
   std::function<void(const BaseVector&)> callback;
 };
 
+class DecodedVector;
+
 /**
  * Base class for all columnar-based vectors of any type.
  */
@@ -198,12 +200,21 @@ class BaseVector {
   /**
    * Returns a smart pointer to the null bitmap data for this
    * vector. May hold nullptr if there are no nulls. Not const because
-   * some vectors may generate this on first access.
+   * some vectors may generate this on first access. For ConstantVector, this
+   * method returns a BufferPtr of only size 1. For DictionaryVector, this
+   * method returns a BufferPtr for only nulls in the top-level layer.
    */
   const BufferPtr& nulls() const {
     return nulls_;
   }
 
+  // Returns a pointer to the raw null bitmap buffer of this vector. Notice that
+  // users should not used this API to access nulls directly of a ConstantVector
+  // or DictionaryVector. If the vector is a ConstantVector, rawNulls_ is only
+  // of size 1. If the vector is a DictionaryVector, rawNulls_ points to a raw
+  // buffer of only nulls in the top-level layer. Nulls of a ConstantVector or
+  // DictionaryVector can be accessed through the isNullAt() API or
+  // DecodedVector.
   const uint64_t* rawNulls() const {
     return rawNulls_;
   }
@@ -375,6 +386,8 @@ class BaseVector {
     return this;
   }
 
+  static const VectorPtr& wrappedVectorShared(const VectorPtr& vector);
+
   // Returns the index to apply for 'index' in the vector returned by
   // wrappedVector(). Translates the index over any nesting of
   // dictionaries, sequences and constants.
@@ -382,7 +395,8 @@ class BaseVector {
     return index;
   }
 
-  /// Sets the null indicator at 'idx'.
+  /// Sets the null indicator at 'idx'. This API throws if the vector is a
+  /// ConstantVector.
   FOLLY_ALWAYS_INLINE virtual void setNull(vector_size_t idx, bool isNull) {
     VELOX_DCHECK(idx >= 0 && idx < length_);
     if (!nulls_ && !isNull) {
@@ -428,13 +442,12 @@ class BaseVector {
   }
 
   // Sets null when 'nulls' has a null value for active rows in 'rows'.
-  // Is a no-op 'nulls' is a nullptr or 'rows' has no selections.
-  virtual void addNulls(
-      const uint64_t* FOLLY_NULLABLE nulls,
-      const SelectivityVector& rows);
+  // Is a no-op 'nulls' is a nullptr or 'rows' has no selections. This API
+  // throws if the vector is a ConstantVector.
+  virtual void addNulls(const uint64_t* nulls, const SelectivityVector& rows);
 
   // Sets nulls for all active row in 'nullRows'. Is a no-op if nullRows has no
-  // selections.
+  // selections. This API throws if the vector is a ConstantVector.
   virtual void addNulls(const SelectivityVector& nullRows);
 
   // Clears nulls for all active rows in 'nonNullRows'
@@ -589,6 +602,12 @@ class BaseVector {
     return false;
   }
 
+  /// If 'vector' consists of a single value and is longer than one,
+  /// returns an equivalent constant vector, else nullptr.
+  static VectorPtr constantify(
+      const std::shared_ptr<BaseVector>& vector,
+      DecodedVector* decoded = nullptr);
+
   // Flattens the input vector and all of its children.
   static void flattenVector(VectorPtr& vector);
 
@@ -601,6 +620,10 @@ class BaseVector {
   // virtual and defined here because we must be able to access this in type
   // agnostic code without a switch on all data types.
   virtual const VectorPtr& valueVector() const {
+    VELOX_UNSUPPORTED("Vector is not a wrapper");
+  }
+
+  virtual VectorPtr& valueVector() {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
@@ -643,8 +666,12 @@ class BaseVector {
     return vector ? vector : create(type, 0, pool);
   }
 
+  // Set 'nulls' to be the nulls buffer of this vector. This API should not be
+  // used on ConstantVector.
   void setNulls(const BufferPtr& nulls);
 
+  // Reset the nulls buffer of this vector to be empty. This API should not be
+  // used on ConstantVector.
   void resetNulls() {
     setNulls(nullptr);
   }
@@ -766,14 +793,6 @@ class BaseVector {
   /// This method is provided to allow to easy invocation from LLDB.
   std::string toString(vector_size_t from, vector_size_t to) const {
     return toString(from, to, "\n");
-  }
-
-  void setCodegenOutput() {
-    isCodegenOutput_ = true;
-  }
-
-  bool isCodegenOutput() const {
-    return isCodegenOutput_;
   }
 
   /// Marks the vector as containing or being a lazy vector and being wrapped.
@@ -908,8 +927,6 @@ class BaseVector {
       const TypePtr& type,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
-
-  bool isCodegenOutput_ = false;
 
   friend class LazyVector;
 

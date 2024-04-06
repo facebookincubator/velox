@@ -82,6 +82,9 @@ Storage Adapters
 Hive Connector allows reading and writing files from a variety of distributed storage systems.
 The supported storage API are S3, HDFS, GCS, Linux FS.
 
+If file is not found when reading, `openFileForRead` API throws `VeloxRuntimeError` with `error_code::kFileNotFound`.
+This behavior is necessary to support the `ignore_missing_files` configuration property.
+
 S3 is supported using the `AWS SDK for C++ <https://github.com/aws/aws-sdk-cpp>`_ library.
 S3 supported schemes are `s3://` (Amazon S3, Minio), `s3a://` (Hadoop 3.x), `s3n://` (Deprecated in Hadoop 3.x),
 `oss://` (Alibaba cloud storage), and `cos://`, `cosn://` (Tencent cloud storage).
@@ -96,3 +99,25 @@ are `gs://`.
 
 ABS (Azure Blob Storage) is supported using the
 `Azure SDK for C++ <https://github.com/Azure/azure-sdk-for-cpp>`_ library. ABS supported schemes are `abfs(s)://`.
+
+S3 Storage adapter using a proxy
+********************************
+
+By default, the C++ AWS S3 client does not honor the configuration of the
+environment variables http_proxy, https_proxy, and no_proxy.
+The Java AWS S3 client supports this.
+The environment variables can be specified as lower case, upper case or both.
+In order to enable the use of a proxy the hive connector configuration variable
+`hive.s3.use-proxy-from-env` must be set to `true`. By default, the value
+is `false`.
+
+This is the behavior when the proxy settings are enabled:
+
+1. http_proxy/HTTP_PROXY, https_proxy/HTTPS_PROXY and no_proxy/NO_PROXY
+   environment variables are read. If lower case and upper case variables are set
+   lower case variables take precendence.
+2. The no_proxy/NO_PROXY content is scanned for exact and suffix matches.
+3. IP addresses, domains, subdomains, or IP ranges (CIDR) can be specified in no_proxy/NO_PROXY.
+4. The no_proxy/NO_PROXY list is comma separated.
+5. Use . or \*. to indicate domain suffix matching, e.g. `.foobar.com` will
+   match `test.foobar.com` or `foo.foobar.com`.

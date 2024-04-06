@@ -404,15 +404,11 @@ ExprPtr compileRewrittenExpression(
           trackCpuUsage);
     }
   } else if (auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
-    if (auto specialForm = getSpecialForm(
-            config,
-            call->name(),
-            resultType,
-            std::move(compiledInputs),
-            trackCpuUsage)) {
-      result = specialForm;
+    if (auto specialForm = specialFormRegistry().getSpecialForm(call->name())) {
+      result = specialForm->constructSpecialForm(
+          resultType, std::move(compiledInputs), trackCpuUsage, config);
     } else if (
-        auto func = getVectorFunction(
+        auto functionWithMetadata = getVectorFunctionWithMetadata(
             call->name(),
             inputTypes,
             getConstantInputs(compiledInputs),
@@ -420,7 +416,8 @@ ExprPtr compileRewrittenExpression(
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
-          func,
+          functionWithMetadata->first,
+          functionWithMetadata->second,
           call->name(),
           trackCpuUsage);
     } else if (
@@ -434,12 +431,14 @@ ExprPtr compileRewrittenExpression(
           simpleFunctionEntry->type(),
           resultType,
           folly::join(", ", inputTypes));
-      auto func_2 = simpleFunctionEntry->createFunction()->createVectorFunction(
-          getConstantInputs(compiledInputs), config);
+
+      auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
+          inputTypes, getConstantInputs(compiledInputs), config);
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
-          std::move(func_2),
+          std::move(func),
+          simpleFunctionEntry->metadata(),
           call->name(),
           trackCpuUsage);
     } else {

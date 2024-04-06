@@ -41,10 +41,18 @@ class DefaultBatchVectorSerializer : public BatchVectorSerializer {
     }
 
     StreamArena arena(pool_);
-    auto serializer = serde_->createSerializer(
+    auto serializer = serde_->createIterativeSerializer(
         asRowType(vector->type()), numRows, &arena, options_);
     serializer->append(vector, ranges, scratch);
     serializer->flush(stream);
+  }
+
+  void estimateSerializedSize(
+      VectorPtr vector,
+      const folly::Range<const IndexRange*>& ranges,
+      vector_size_t** sizes,
+      Scratch& scratch) override {
+    serde_->estimateSerializedSize(vector.get(), ranges, sizes, scratch);
   }
 
  private:
@@ -67,7 +75,7 @@ getNamedVectorSerdeImpl() {
 
 } // namespace
 
-void VectorSerializer::append(const RowVectorPtr& vector) {
+void IterativeVectorSerializer::append(const RowVectorPtr& vector) {
   const IndexRange allRows{0, vector->size()};
   Scratch scratch;
   append(vector, folly::Range(&allRows, 1), scratch);
@@ -144,7 +152,7 @@ void VectorStreamGroup::createStreamTree(
     RowTypePtr type,
     int32_t numRows,
     const VectorSerde::Options* options) {
-  serializer_ = serde_->createSerializer(type, numRows, this, options);
+  serializer_ = serde_->createIterativeSerializer(type, numRows, this, options);
 }
 
 void VectorStreamGroup::append(
@@ -171,7 +179,7 @@ void VectorStreamGroup::flush(OutputStream* out) {
 
 // static
 void VectorStreamGroup::estimateSerializedSize(
-    VectorPtr vector,
+    const BaseVector* vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes,
     Scratch& scratch) {
@@ -180,7 +188,7 @@ void VectorStreamGroup::estimateSerializedSize(
 
 // static
 void VectorStreamGroup::estimateSerializedSize(
-    VectorPtr vector,
+    const BaseVector* vector,
     folly::Range<const vector_size_t*> rows,
     vector_size_t** sizes,
     Scratch& scratch) {

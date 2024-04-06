@@ -56,20 +56,6 @@ class TypedDistinctAggregations : public DistinctAggregations {
         }};
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    for (auto i : indices) {
-      groups[i][nullByte_] |= nullMask_;
-      new (groups[i] + offset_) AccumulatorType(inputType_, allocator_);
-    }
-
-    for (auto i = 0; i < aggregates_.size(); ++i) {
-      const auto& aggregate = *aggregates_[i];
-      aggregate.function->initializeNewGroups(groups, indices);
-    }
-  }
-
   void addInput(
       char** groups,
       const RowVectorPtr& input,
@@ -122,11 +108,13 @@ class TypedDistinctAggregations : public DistinctAggregations {
           accumulator->extractValues(*(data->template as<FlatVector<T>>()), 0);
         }
 
-        rows.resize(data->size());
-        std::vector<VectorPtr> inputForAggregation_ =
-            makeInputForAggregation(data);
-        aggregate.function->addSingleGroupRawInput(
-            group, rows, inputForAggregation_, false);
+        if (data->size() > 0) {
+          rows.resize(data->size());
+          std::vector<VectorPtr> inputForAggregation =
+              makeInputForAggregation(data);
+          aggregate.function->addSingleGroupRawInput(
+              group, rows, inputForAggregation, false);
+        }
       }
 
       aggregate.function->extractValues(
@@ -135,6 +123,29 @@ class TypedDistinctAggregations : public DistinctAggregations {
       // Release memory back to HashStringAllocator to allow next
       // aggregate to re-use it.
       aggregate.function->destroy(groups);
+
+      // Overwrite empty groups over the destructed groups to keep the container
+      // in a well formed state.
+      raw_vector<int32_t> temp;
+      aggregate.function->initializeNewGroups(
+          groups.data(),
+          folly::Range<const int32_t*>(
+              iota(groups.size(), temp), groups.size()));
+    }
+  }
+
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    for (auto i : indices) {
+      groups[i][nullByte_] |= nullMask_;
+      new (groups[i] + offset_) AccumulatorType(inputType_, allocator_);
+    }
+
+    for (auto i = 0; i < aggregates_.size(); ++i) {
+      const auto& aggregate = *aggregates_[i];
+      aggregate.function->initializeNewGroups(groups, indices);
     }
   }
 

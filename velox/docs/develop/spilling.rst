@@ -210,22 +210,6 @@ spillable operators. The latter in turn frees up memory by spilling out (part)
 of its memory state to disk. The integration of spilling with the memory
 management system is under development.
 
-Velox can be configured to trigger spilling if the spillable operator's memory
-usage exceeds a configurable limit:
-
-.. code-block:: c++
-
-  uint64_t QueryConfig::aggregationSpillMemoryThreshold() const;
-
-  uint64_t QueryConfig::orderBySpillMemoryThreshold() const;
-
-  uint64_t QueryConfig::joinSpillMemoryThreshold() const;
-
-This allows us to run queries using limited amount of memory without the memory
-arbitration support. Note that the spilling itself can’t totally prevent out of
-memory as the last memory allocation that exceeds the memory limit, can be made
-from any operator in a query plan not always from the spillable one.
-
 Spill Parameters
 ----------------
 Spill File Size
@@ -369,14 +353,7 @@ other to ensure all operators spill the same set of partitions. If operators
 spill independently, it is possible to end up with all partitions being
 spilled. To build a hash table, we need all rows from one or more partitions.
 Unlike hash aggregation and order by, the hash join spilling is explicitly
-controlled by the hash build operators. A SpillOperatorGroup object coordinates
-the spilling on all the operators. The SpillOperatorGroup object is shared by
-all the hash build operators. It implements a recurring barrier function. When
-spilling gets triggered, the object starts a barrier to stop all the hash build
-operators executions. The last operator reaching the barrier acts as the
-coordinator. It collects spillable stats from the Spillers of all the
-operators, chooses a set of partitions to spill, and runs spilling on all the
-Spillers with the selected partitions.
+controlled by the hash build operators.
 
 .. image:: images/spill-hash-join-probe.png
    :width: 400

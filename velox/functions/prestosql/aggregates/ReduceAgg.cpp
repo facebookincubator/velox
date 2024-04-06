@@ -150,14 +150,6 @@ class ReduceAgg : public exec::Aggregate {
     return sizeof(ReduceAggAccumulator);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    for (auto i : indices) {
-      new (groups[i] + offset_) ReduceAggAccumulator();
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     VELOX_CHECK_NOT_NULL(result);
@@ -180,12 +172,6 @@ class ReduceAgg : public exec::Aggregate {
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     extractValues(groups, numGroups, result);
-  }
-
-  void destroy(folly::Range<char**> groups) override {
-    for (auto group : groups) {
-      value<ReduceAggAccumulator>(group)->destroy(allocator_);
-    }
   }
 
   void addRawInput(
@@ -298,7 +284,7 @@ class ReduceAgg : public exec::Aggregate {
     SelectivityVector remainingRows = rows;
     if (input->mayHaveNulls()) {
       DecodedVector decoded(*input, rows);
-      if (auto* rawNulls = decoded.nulls()) {
+      if (auto* rawNulls = decoded.nulls(&rows)) {
         remainingRows.deselectNulls(rawNulls, rows.begin(), rows.end());
       }
     }
@@ -322,6 +308,23 @@ class ReduceAgg : public exec::Aggregate {
           remainingRows.asRange().bits(),
           0,
           remainingRows.size());
+    }
+  }
+
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    for (auto i : indices) {
+      new (groups[i] + offset_) ReduceAggAccumulator();
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
+    for (auto group : groups) {
+      if (isInitialized(group)) {
+        value<ReduceAggAccumulator>(group)->destroy(allocator_);
+      }
     }
   }
 
@@ -786,7 +789,10 @@ class ReduceAgg : public exec::Aggregate {
 
 } // namespace
 
-void registerReduceAgg(const std::string& prefix) {
+void registerReduceAgg(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -810,7 +816,10 @@ void registerReduceAgg(const std::string& prefix) {
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         return std::make_unique<ReduceAgg>(resultType);
-      });
+      },
+      {false /*orderSensitive*/},
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -179,5 +179,4 @@ QueryTestResult runWriteTask(
     const std::string& kHiveConnectorId,
     bool enableSpilling,
     const RowVectorPtr& expectedResult = nullptr);
-
 } // namespace facebook::velox::exec::test

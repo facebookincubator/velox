@@ -191,7 +191,12 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
     ensureInputFits(input);
 
     SelectivityVector rows(numInput);
-    table_->prepareForGroupProbe(*lookup_, input, rows, false);
+    table_->prepareForGroupProbe(
+        *lookup_,
+        input,
+        rows,
+        false,
+        BaseHashTable::kNoSpillInputStartPartitionBit);
     table_->groupProbe(*lookup_);
 
     // Initialize new partitions.
@@ -282,8 +287,7 @@ void TopNRowNumber::noMoreInput() {
 
     VELOX_CHECK_NULL(merge_);
     auto spillPartition = spiller_->finishSpill();
-    merge_ = spillPartition.createOrderedReader(pool());
-    recordSpillStats(spiller_->stats());
+    merge_ = spillPartition.createOrderedReader(pool(), &spillStats_);
   } else {
     outputRows_.resize(outputBatchSize_);
   }
@@ -670,7 +674,7 @@ void TopNRowNumber::ensureInputFits(const RowVectorPtr& input) {
   }
 
   // Test-only spill path.
-  if (spillConfig_->testSpillPct > 0) {
+  if (testingTriggerSpill()) {
     spill();
     return;
   }
@@ -743,6 +747,7 @@ void TopNRowNumber::setupSpiller() {
       inputType_,
       spillCompareFlags_.size(),
       spillCompareFlags_,
-      &spillConfig_.value());
+      &spillConfig_.value(),
+      &spillStats_);
 }
 } // namespace facebook::velox::exec

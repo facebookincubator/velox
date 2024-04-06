@@ -35,10 +35,27 @@ void ArbitraryBuffer::enqueue(std::unique_ptr<SerializedPage> page) {
   pages_.push_back(std::shared_ptr<SerializedPage>(page.release()));
 }
 
+void ArbitraryBuffer::getAvailablePageSizes(std::vector<int64_t>& out) const {
+  out.reserve(out.size() + pages_.size());
+  for (const auto& page : pages_) {
+    if (page != nullptr) {
+      out.push_back(page->size());
+    }
+  }
+}
+
 std::vector<std::shared_ptr<SerializedPage>> ArbitraryBuffer::getPages(
     uint64_t maxBytes) {
-  VELOX_CHECK_GT(maxBytes, 0, "maxBytes can't be zero");
-
+  if (maxBytes == 0 && !pages_.empty() && pages_.front() == nullptr) {
+    // Always give out an end marker when this buffer is finished and fully
+    // consumed.  When multiple `DestinationBuffer' polling the same
+    // `ArbitraryBuffer', we can simplify the code in
+    // `DestinationBuffer::getData' since we will always get a null marker and
+    // not going through the callback path, eliminate the chance of getting
+    // stuck.
+    VELOX_CHECK_EQ(pages_.size(), 1);
+    return {nullptr};
+  }
   std::vector<std::shared_ptr<SerializedPage>> pages;
   uint64_t bytesRemoved{0};
   while (bytesRemoved < maxBytes && !pages_.empty()) {
@@ -90,7 +107,7 @@ void DestinationBuffer::Stats::recordDelete(const SerializedPage& data) {
   recordAcknowledge(data);
 }
 
-std::vector<std::unique_ptr<folly::IOBuf>> DestinationBuffer::getData(
+DestinationBuffer::Data DestinationBuffer::getData(
     uint64_t maxBytes,
     int64_t sequence,
     DataAvailableCallback notify,
@@ -102,41 +119,69 @@ std::vector<std::unique_ptr<folly::IOBuf>> DestinationBuffer::getData(
     loadData(arbitraryBuffer, maxBytes);
   }
 
-  if (sequence - sequence_ > data_.size()) {
-    VLOG(1) << this << " Out of order get: " << sequence << " over "
-            << sequence_ << " Setting second notify " << notifySequence_
-            << " / " << sequence;
+  if (sequence - sequence_ >= data_.size()) {
+    if (sequence - sequence_ > data_.size()) {
+      VLOG(1) << this << " Out of order get: " << sequence << " over "
+              << sequence_ << " Setting second notify " << notifySequence_
+              << " / " << sequence;
+    }
+    if (maxBytes == 0) {
+      std::vector<int64_t> remainingBytes;
+      if (arbitraryBuffer) {
+        arbitraryBuffer->getAvailablePageSizes(remainingBytes);
+      }
+      if (!remainingBytes.empty()) {
+        return {{}, std::move(remainingBytes), true};
+      }
+    }
     notify_ = std::move(notify);
     aliveCheck_ = std::move(activeCheck);
-    notifySequence_ = std::min(notifySequence_, sequence);
+    if (sequence - sequence_ > data_.size()) {
+      notifySequence_ = std::min(notifySequence_, sequence);
+    } else {
+      notifySequence_ = sequence;
+    }
     notifyMaxBytes_ = maxBytes;
     return {};
   }
 
-  if (sequence - sequence_ == data_.size()) {
-    notify_ = std::move(notify);
-    aliveCheck_ = std::move(activeCheck);
-    notifySequence_ = sequence;
-    notifyMaxBytes_ = maxBytes;
-    return {};
-  }
-
-  std::vector<std::unique_ptr<folly::IOBuf>> result;
+  std::vector<std::unique_ptr<folly::IOBuf>> data;
   uint64_t resultBytes = 0;
-  for (auto i = sequence - sequence_; i < data_.size(); ++i) {
-    // nullptr is used as end marker
+  auto i = sequence - sequence_;
+  if (maxBytes > 0) {
+    for (; i < data_.size(); ++i) {
+      // nullptr is used as end marker
+      if (data_[i] == nullptr) {
+        VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
+        data.push_back(nullptr);
+        break;
+      }
+      data.push_back(data_[i]->getIOBuf());
+      resultBytes += data_[i]->size();
+      if (resultBytes >= maxBytes) {
+        ++i;
+        break;
+      }
+    }
+  }
+  bool atEnd = false;
+  std::vector<int64_t> remainingBytes;
+  remainingBytes.reserve(data_.size() - i);
+  for (; i < data_.size(); ++i) {
     if (data_[i] == nullptr) {
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
-      result.push_back(nullptr);
+      atEnd = true;
       break;
     }
-    result.push_back(data_[i]->getIOBuf());
-    resultBytes += data_[i]->size();
-    if (resultBytes >= maxBytes) {
-      break;
-    }
+    remainingBytes.push_back(data_[i]->size());
   }
-  return result;
+  if (!atEnd && arbitraryBuffer) {
+    arbitraryBuffer->getAvailablePageSizes(remainingBytes);
+  }
+  if (data.empty() && remainingBytes.empty() && atEnd) {
+    data.push_back(nullptr);
+  }
+  return {std::move(data), std::move(remainingBytes), true};
 }
 
 void DestinationBuffer::enqueue(std::shared_ptr<SerializedPage> data) {
@@ -159,7 +204,9 @@ DataAvailable DestinationBuffer::getAndClearNotify() {
   DataAvailable result;
   result.callback = notify_;
   result.sequence = notifySequence_;
-  result.data = getData(notifyMaxBytes_, notifySequence_, nullptr, nullptr);
+  auto data = getData(notifyMaxBytes_, notifySequence_, nullptr, nullptr);
+  result.data = std::move(data.data);
+  result.remainingBytes = std::move(data.remainingBytes);
   clearNotify();
   return result;
 }
@@ -187,7 +234,6 @@ void DestinationBuffer::maybeLoadData(ArbitraryBuffer* buffer) {
     clearNotify();
     return;
   }
-  VELOX_CHECK_GT(notifyMaxBytes_, 0);
   loadData(buffer, notifyMaxBytes_);
 }
 
@@ -666,7 +712,7 @@ void OutputBuffer::getData(
     int64_t sequence,
     DataAvailableCallback notify,
     DataConsumerActiveCheckCallback activeCheck) {
-  std::vector<std::unique_ptr<folly::IOBuf>> data;
+  DestinationBuffer::Data data;
   std::vector<std::shared_ptr<SerializedPage>> freed;
   std::vector<ContinuePromise> promises;
   {
@@ -678,19 +724,21 @@ void OutputBuffer::getData(
 
     VELOX_CHECK_LT(destination, buffers_.size());
     auto* buffer = buffers_[destination].get();
-    VELOX_CHECK_NOT_NULL(
-        buffer,
-        "getData received after its buffer is deleted. Destination: {}, sequence: {}",
-        destination,
-        sequence);
-    freed = buffer->acknowledge(sequence, true);
-    updateAfterAcknowledgeLocked(freed, promises);
-    data = buffer->getData(
-        maxBytes, sequence, notify, activeCheck, arbitraryBuffer_.get());
+    if (buffer) {
+      freed = buffer->acknowledge(sequence, true);
+      updateAfterAcknowledgeLocked(freed, promises);
+      data = buffer->getData(
+          maxBytes, sequence, notify, activeCheck, arbitraryBuffer_.get());
+    } else {
+      data.data.emplace_back(nullptr);
+      data.immediate = true;
+      VLOG(1) << "getData received after deleteResults for destination "
+              << destination << " and sequence " << sequence;
+    }
   }
   releaseAfterAcknowledge(freed, promises);
-  if (!data.empty()) {
-    notify(std::move(data), sequence);
+  if (data.immediate) {
+    notify(std::move(data.data), sequence, std::move(data.remainingBytes));
   }
 }
 
@@ -745,6 +793,39 @@ int64_t OutputBuffer::getAverageBufferTimeMsLocked() const {
   return 0;
 }
 
+namespace {
+
+// Find out how many buffers hold 80% of the data. Useful to identify skew.
+int32_t countTopBuffers(
+    const std::vector<DestinationBuffer::Stats>& bufferStats,
+    int64_t totalBytes) {
+  std::vector<int64_t> bufferSizes;
+  bufferSizes.reserve(bufferStats.size());
+  for (auto i = 0; i < bufferStats.size(); ++i) {
+    const auto& stats = bufferStats[i];
+    bufferSizes.push_back(stats.bytesBuffered + stats.bytesSent);
+  }
+
+  // Sort descending.
+  std::sort(bufferSizes.begin(), bufferSizes.end(), std::greater<int64_t>());
+
+  const auto limit = totalBytes * 0.8;
+  int32_t numBuffers = 0;
+  int32_t runningTotal = 0;
+  for (auto size : bufferSizes) {
+    runningTotal += size;
+    numBuffers++;
+
+    if (runningTotal >= limit) {
+      break;
+    }
+  }
+
+  return numBuffers;
+}
+
+} // namespace
+
 OutputBuffer::Stats OutputBuffer::stats() {
   std::lock_guard<std::mutex> l(mutex_);
   std::vector<DestinationBuffer::Stats> bufferStats;
@@ -772,6 +853,7 @@ OutputBuffer::Stats OutputBuffer::stats() {
       numOutputRows_,
       numOutputPages_,
       getAverageBufferTimeMsLocked(),
+      countTopBuffers(bufferStats, numOutputBytes_),
       bufferStats);
 }
 

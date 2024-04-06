@@ -51,7 +51,6 @@ jobs:
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
-      CCACHE_BASEDIR: "${{ github.workspace }}"
       LINUX_DISTRO: "ubuntu"
     steps:
 
@@ -72,7 +71,7 @@ jobs:
           ref: "${{ inputs.ref || 'main' }}"
 
       - name: "Install dependencies"
-        run: cd  velox && source ./scripts/setup-ubuntu.sh
+        run: cd  velox && source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: "Build"
         run: |
@@ -110,8 +109,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache/"
-      CCACHE_BASEDIR: "${{ github.workspace }}"
+      CCACHE_DIR: "/__w/velox/velox/.ccache/"
       LINUX_DISTRO: "centos"
     steps:
 
@@ -145,9 +143,9 @@ jobs:
           cd  velox
           cp ./scripts/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          /opt/start-prestojava.sh > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
-          sleep 60          
+          sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
           mkdir -p /tmp/aggregate_fuzzer_repro/
           rm -rfv /tmp/aggregate_fuzzer_repro/*
@@ -183,7 +181,7 @@ jobs:
           ref: "${{ inputs.ref || 'main' }}"
 
       - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
+        run: source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Download spark aggregation fuzzer
         uses: actions/download-artifact@v3
@@ -224,7 +222,7 @@ jobs:
           ref: "${{ inputs.ref || 'main' }}"
 
       - name: "Install dependencies"
-        run: source ./scripts/setup-ubuntu.sh
+        run: source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Download join fuzzer
         uses: actions/download-artifact@v3

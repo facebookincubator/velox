@@ -288,6 +288,19 @@ std::string toAggregateCallSql(
   return sql.str();
 }
 
+std::string toWindowCallSql(
+    const core::CallTypedExprPtr& call,
+    bool ignoreNulls = false) {
+  std::stringstream sql;
+  sql << call->name() << "(";
+  toCallInputsSql(call->inputs(), sql);
+  sql << ")";
+  if (ignoreNulls) {
+    sql << " IGNORE NULLS";
+  }
+  return sql.str();
+}
+
 bool isSupportedDwrfType(const TypePtr& type) {
   if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown()) {
     return false;
@@ -384,6 +397,56 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   return sql.str();
 }
 
+namespace {
+
+void appendWindowFrame(
+    const core::WindowNode::Frame& frame,
+    std::stringstream& sql) {
+  // TODO: Add support for k Range Frames by retrieving the original range bound
+  // from WindowNode.
+  switch (frame.type) {
+    case core::WindowNode::WindowType::kRange:
+      sql << " RANGE";
+      break;
+    case core::WindowNode::WindowType::kRows:
+      sql << " ROWS";
+      break;
+    default:
+      VELOX_UNREACHABLE();
+  }
+  sql << " BETWEEN";
+
+  auto appendBound = [&sql](
+                         const core::WindowNode::BoundType& bound,
+                         const core::TypedExprPtr& value) {
+    switch (bound) {
+      case core::WindowNode::BoundType::kUnboundedPreceding:
+        sql << " UNBOUNDED PRECEDING";
+        break;
+      case core::WindowNode::BoundType::kUnboundedFollowing:
+        sql << " UNBOUNDED FOLLOWING";
+        break;
+      case core::WindowNode::BoundType::kCurrentRow:
+        sql << " CURRENT ROW";
+        break;
+      case core::WindowNode::BoundType::kPreceding:
+        sql << " " << value->toString() << " PRECEDING";
+        break;
+      case core::WindowNode::BoundType::kFollowing:
+        sql << " " << value->toString() << " FOLLOWING";
+        break;
+      default:
+        VELOX_UNREACHABLE();
+    }
+  };
+
+  appendBound(frame.startType, frame.startValue);
+  sql << " AND";
+  appendBound(frame.endType, frame.endValue);
+}
+
+} // namespace
+
 std::optional<std::string> PrestoQueryRunner::toSql(
     const std::shared_ptr<const core::WindowNode>& windowNode) {
   if (!isSupportedDwrfType(windowNode->sources()[0]->outputType())) {
@@ -404,31 +467,35 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   const auto& functions = windowNode->windowFunctions();
   for (auto i = 0; i < functions.size(); ++i) {
     appendComma(i, sql);
-    sql << toCallSql(functions[i].functionCall);
-  }
-  sql << " OVER (";
+    sql << toWindowCallSql(functions[i].functionCall, functions[i].ignoreNulls);
 
-  const auto& partitionKeys = windowNode->partitionKeys();
-  if (!partitionKeys.empty()) {
-    sql << "PARTITION BY ";
-    for (auto i = 0; i < partitionKeys.size(); ++i) {
-      appendComma(i, sql);
-      sql << partitionKeys[i]->name();
+    sql << " OVER (";
+
+    const auto& partitionKeys = windowNode->partitionKeys();
+    if (!partitionKeys.empty()) {
+      sql << "PARTITION BY ";
+      for (auto j = 0; j < partitionKeys.size(); ++j) {
+        appendComma(j, sql);
+        sql << partitionKeys[j]->name();
+      }
     }
-  }
 
-  const auto& sortingKeys = windowNode->sortingKeys();
-  const auto& sortingOrders = windowNode->sortingOrders();
+    const auto& sortingKeys = windowNode->sortingKeys();
+    const auto& sortingOrders = windowNode->sortingOrders();
 
-  if (!sortingKeys.empty()) {
-    sql << " order by ";
-    for (auto i = 0; i < sortingKeys.size(); ++i) {
-      appendComma(i, sql);
-      sql << sortingKeys[i]->name() << " " << sortingOrders[i].toString();
+    if (!sortingKeys.empty()) {
+      sql << " ORDER BY ";
+      for (auto j = 0; j < sortingKeys.size(); ++j) {
+        appendComma(j, sql);
+        sql << sortingKeys[j]->name() << " " << sortingOrders[j].toString();
+      }
     }
+
+    appendWindowFrame(functions[i].frame, sql);
+    sql << ")";
   }
 
-  sql << ") FROM tmp";
+  sql << " FROM tmp";
 
   return sql.str();
 }
@@ -437,6 +504,13 @@ std::multiset<std::vector<variant>> PrestoQueryRunner::execute(
     const std::string& sql,
     const std::vector<RowVectorPtr>& input,
     const RowTypePtr& resultType) {
+  return exec::test::materialize(executeVector(sql, input, resultType));
+}
+
+std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
+    const std::string& sql,
+    const std::vector<velox::RowVectorPtr>& input,
+    const velox::RowTypePtr& resultType) {
   auto inputType = asRowType(input[0]->type());
   if (inputType->size() == 0) {
     // The query doesn't need to read any columns, but it needs to see a
@@ -455,7 +529,7 @@ std::multiset<std::vector<variant>> PrestoQueryRunner::execute(
         nullptr,
         numInput,
         std::vector<VectorPtr>{column});
-    return execute(sql, {rowVector}, resultType);
+    return executeVector(sql, {rowVector}, resultType);
   }
 
   // Create tmp table in Presto using DWRF file format and add a single
@@ -494,9 +568,7 @@ std::multiset<std::vector<variant>> PrestoQueryRunner::execute(
   writeToFile(newFilePath, input, writerPool.get());
 
   // Run the query.
-  results = execute(sql);
-
-  return exec::test::materialize(results);
+  return execute(sql);
 }
 
 std::vector<RowVectorPtr> PrestoQueryRunner::execute(const std::string& sql) {
@@ -555,6 +627,10 @@ std::string PrestoQueryRunner::fetchNext(const std::string& nextUri) {
       nextUri,
       response.error.message);
   return response.text;
+}
+
+bool PrestoQueryRunner::supportsVeloxVectorResults() const {
+  return true;
 }
 
 } // namespace facebook::velox::exec::test

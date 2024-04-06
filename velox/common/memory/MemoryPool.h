@@ -80,33 +80,33 @@ using SetMemoryReclaimer = std::function<void(MemoryPool*)>;
 /// one per each query plan node. The task pool is the parent of all the node
 /// pools from the task's physical query plan fragment. The node pool is created
 /// by the first operator instantiated for the corresponding plan node. It is
-/// owned by Task via 'childPools_'
+/// owned by Task via 'childPools_'.
 ///
 /// The bottom level consists of per-operator pools. These are children of the
 /// node pool that corresponds to the plan node from which the operator is
 /// created. Operator and node pools are owned by the Task via 'childPools_'.
 ///
-/// The query pool is created from MemoryManager::getChild() as a child of a
-/// singleton root pool object (system pool). There is only one system pool for
-/// a velox process. Hence each query pool objects forms a subtree rooted from
-/// the system pool.
+/// The query pool is created from MemoryManager::addRootPool(), it has no
+/// parent and is the root node of its corresponding subtree. Each query pool is
+/// owned by QueryCtx (such as in Prestissimo), and the memory manager also
+/// tracks the current alive query pools in MemoryManager::pools_ through weak
+/// pointers.
 ///
 /// Each child pool object holds a shared reference to its parent pool object.
-/// The parent object tracks its child pool objects through the raw pool object
-/// pointer protected by a mutex. The child pool object destruction first
-/// removes its raw pointer from its parent through dropChild() and then drops
-/// the shared reference on the parent.
+/// The parent object tracks its child pool objects through weak pointers
+/// protected by a mutex. The child pool object destruction first removes its
+/// weak pointer from its parent through dropChild() and then drops the shared
+/// reference on the parent.
 ///
 /// NOTE: for the users that integrate at expression evaluation level, we don't
 /// need to build the memory pool hierarchy as described above. Users can either
-/// create a single memory pool from MemoryManager::getChild() to share with
+/// create a single memory pool from MemoryManager::addLeafPool() to share with
 /// all the concurrent expression evaluations or create one dedicated memory
 /// pool for each expression evaluation if they need per-expression memory quota
 /// enforcement.
 ///
 /// In addition to providing memory allocation functions, the memory pool object
-/// also provides memory usage accounting through MemoryUsageTracker. This will
-/// be merged into memory pool object later.
+/// also provides memory usage accounting.
 class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
  public:
   /// Defines the kinds of a memory pool.
@@ -414,7 +414,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual void abort(const std::exception_ptr& error) = 0;
 
   /// Returns true if this memory pool has been aborted.
-  virtual bool aborted() const = 0;
+  virtual bool aborted() const;
 
   /// The memory pool's execution stats.
   struct Stats {
@@ -497,14 +497,17 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
  protected:
   static constexpr uint64_t kMB = 1 << 20;
 
-  /// Invoked by addChild() to create a child memory pool object. 'parent' is
-  /// a shared pointer created from this.
+  /// Invoked by addLeafChild() and addAggregateChild() to create a child memory
+  /// pool object. 'parent' is a shared pointer created from this, ie,
+  /// shared_from_this().
   virtual std::shared_ptr<MemoryPool> genChild(
       std::shared_ptr<MemoryPool> parent,
       const std::string& name,
       Kind kind,
       bool threadSafe,
       std::unique_ptr<MemoryReclaimer> reclaimer) = 0;
+
+  virtual std::exception_ptr abortError() const;
 
   /// Invoked only on destruction to remove this memory pool from its parent's
   /// child memory pool tracking.
@@ -530,9 +533,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   std::exception_ptr abortError_{nullptr};
 
   mutable folly::SharedMutex poolMutex_;
-  // NOTE: we use raw pointer instead of weak pointer here to minimize
-  // visitChildren() cost as we don't have to upgrade the weak pointer and copy
-  // out the upgraded shared pointers.git
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> children_;
 
   friend class TestMemoryReclaimer;
@@ -645,8 +645,6 @@ class MemoryPoolImpl : public MemoryPool {
 
   void abort(const std::exception_ptr& error) override;
 
-  bool aborted() const override;
-
   std::string toString() const override {
     std::lock_guard<std::mutex> l(mutex_);
     return toStringLocked();
@@ -681,8 +679,16 @@ class MemoryPoolImpl : public MemoryPool {
 
   void testingSetCapacity(int64_t bytes);
 
+  MemoryManager* testingManager() const {
+    return manager_;
+  }
+
   MemoryAllocator* testingAllocator() const {
     return allocator_;
+  }
+
+  void testingCheckIfAborted() const {
+    checkIfAborted();
   }
 
   uint64_t testingMinReservationBytes() const {
@@ -692,7 +698,7 @@ class MemoryPoolImpl : public MemoryPool {
   /// Structure to store allocation details in debug mode.
   struct AllocationRecord {
     uint64_t size;
-    std::string callStack;
+    process::StackTrace callStack;
   };
 
   std::unordered_map<uint64_t, AllocationRecord>& testingDebugAllocRecords() {

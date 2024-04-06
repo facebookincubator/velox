@@ -134,6 +134,8 @@ TEST(LocalFile, writeAndRead) {
     {
       LocalWriteFile writeFile(filename);
       writeData(&writeFile, useIOBuf);
+      writeFile.close();
+      ASSERT_EQ(writeFile.size(), 15 + kOneMB);
     }
     LocalReadFile readFile(filename);
     readData(&readFile);
@@ -324,5 +326,7 @@ TEST(LocalFile, fileNotFound) {
   auto path = fmt::format("{}/file", tempFolder->path);
   auto localFs = filesystems::getFileSystem(path, nullptr);
   VELOX_ASSERT_RUNTIME_THROW_CODE(
-      localFs->openFileForRead(path), error_code::kFileNotFound);
+      localFs->openFileForRead(path),
+      error_code::kFileNotFound,
+      "No such file or directory");
 }
