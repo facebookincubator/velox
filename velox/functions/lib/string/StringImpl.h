@@ -711,9 +711,12 @@ FOLLY_ALWAYS_INLINE size_t initCapUnicode(
 template <bool ascii, typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool initCap(TOutString& output, const TInString& input) {
   if constexpr (ascii) {
+    // If the input string is ASCII, resize the output string to the same size as the input string
     output.resize(input.size());
     initCapAscii(output.data(), input.data(), input.size());
   } else {
+    // If the input string is Unicode, resize the output string to 4 times the size of the input string
+    // This is done to accommodate the worst-case scenario where each Unicode character takes up 4 bytes
     output.resize(input.size() * 4);
     auto size = initCapUnicode(
         output.data(), output.size(), input.data(), input.size());
