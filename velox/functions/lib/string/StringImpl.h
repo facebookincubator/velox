@@ -677,9 +677,8 @@ FOLLY_ALWAYS_INLINE size_t initCapUnicode(
   bool newWord = true;
 
   while (inputIdx < inputLength) {
-    utf8proc_int32_t nextCodePoint;
     int size;
-    nextCodePoint =
+    utf8proc_int32_t nextCodePoint =
         utf8proc_codepoint(&input[inputIdx], input + inputLength, size);
     if (UNLIKELY(nextCodePoint == -1)) {
       // invalid input string, copy the remaining of the input string as is to
