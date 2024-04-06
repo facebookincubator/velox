@@ -336,6 +336,9 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-type-limits \
          -Wno-stringop-overflow \
          -Wno-stringop-overread")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12.2)
+      set(KNOWN_COMPILER_SPECIFIC_WARNINGS "-Wno-return-type")
+    endif()
   endif()
 
   set(KNOWN_WARNINGS
