@@ -199,8 +199,6 @@ class InitCapFunction : public exec::VectorFunction {
       const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK(args.size() == 1);
-    VELOX_CHECK(args[0]->typeKind() == TypeKind::VARCHAR);
 
     // Read content before calling prepare results
     BaseVector* inputStringsVector = args[0].get();
