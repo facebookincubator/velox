@@ -820,38 +820,6 @@ void exportMaps(
   out.children = holder.getChildrenArrays();
 }
 
-template <TypeKind kind>
-void flattenAndExport(
-    const BaseVector& vec,
-    const Selection& rows,
-    const ArrowOptions& options,
-    ArrowArray& out,
-    memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
-  using NativeType = typename velox::TypeTraits<kind>::NativeType;
-  SelectivityVector allRows(vec.size());
-  DecodedVector decoded(vec, allRows);
-  auto flatVector = BaseVector::create<FlatVector<NativeType>>(
-      vec.type(), decoded.size(), pool);
-
-  if (decoded.mayHaveNulls()) {
-    allRows.applyToSelected([&](vector_size_t row) {
-      if (decoded.isNullAt(row)) {
-        flatVector->setNull(row, true);
-      } else {
-        flatVector->set(row, decoded.valueAt<NativeType>(row));
-      }
-    });
-    exportValidityBitmap(*flatVector, rows, options, out, pool, holder);
-    exportFlat(*flatVector, rows, options, out, pool, holder);
-  } else {
-    allRows.applyToSelected([&](vector_size_t row) {
-      flatVector->set(row, decoded.valueAt<NativeType>(row));
-    });
-    exportFlat(*flatVector, rows, options, out, pool, holder);
-  }
-}
-
 void exportDictionary(
     const BaseVector& vec,
     const Selection& rows,
@@ -881,12 +849,7 @@ void exportFlattenedVector(
     ArrowArray& out,
     memory::MemoryPool* pool,
     VeloxToArrowBridgeHolder& holder) {
-  VELOX_CHECK(
-      vec.valueVector() == nullptr || vec.wrappedVector()->isFlatEncoding(),
-      "An unsupported nested encoding was found.");
-  VELOX_CHECK(vec.isScalar(), "Flattening is only supported for scalar types.");
-  VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      flattenAndExport, vec.typeKind(), vec, rows, options, out, pool, holder);
+  exportToArrowImpl(*BaseVector::copy(vec), rows, options, out, pool);
 }
 
 void exportConstantValue(
@@ -1188,43 +1151,53 @@ void exportToArrow(
   auto bridgeHolder = std::make_unique<VeloxToArrowSchemaBridgeHolder>();
 
   if (vec->encoding() == VectorEncoding::Simple::DICTIONARY) {
-    arrowSchema.n_children = 0;
-    arrowSchema.children = nullptr;
     if (options.flattenDictionary) {
       // Dictionary data is flattened. Set the underlying data types.
       arrowSchema.dictionary = nullptr;
-      arrowSchema.format =
-          exportArrowFormatStr(type, options, bridgeHolder->formatBuffer);
+      exportToArrow(vec->valueVector(), arrowSchema, options);
     } else {
+      arrowSchema.n_children = 0;
+      arrowSchema.children = nullptr;
       arrowSchema.format = "i";
       bridgeHolder->dictionary = std::make_unique<ArrowSchema>();
       arrowSchema.dictionary = bridgeHolder->dictionary.get();
       exportToArrow(vec->valueVector(), *arrowSchema.dictionary, options);
     }
-  } else if (
-      vec->encoding() == VectorEncoding::Simple::CONSTANT &&
-      !options.flattenConstant) {
-    // Arrow REE spec available in
-    //  https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
-    arrowSchema.format = "+r";
-    arrowSchema.dictionary = nullptr;
+  } else if (vec->encoding() == VectorEncoding::Simple::CONSTANT) {
+    if (!options.flattenConstant) {
+      // Arrow REE spec available in
+      //  https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
+      arrowSchema.format = "+r";
+      arrowSchema.dictionary = nullptr;
 
-    // Set up the `values` child.
-    auto valuesChild = newArrowSchema();
-    const auto& valueVector = vec->valueVector();
+      // Set up the `values` child.
+      auto valuesChild = newArrowSchema();
+      const auto& valueVector = vec->valueVector();
 
-    // Contants of complex types are stored in the `values` vector.
-    if (valueVector != nullptr) {
-      exportToArrow(valueVector, *valuesChild, options);
+      // Contants of complex types are stored in the `values` vector.
+      if (valueVector != nullptr) {
+        exportToArrow(valueVector, *valuesChild, options);
+      } else {
+        valuesChild->format =
+            exportArrowFormatStr(type, options, bridgeHolder->formatBuffer);
+      }
+      valuesChild->name = "values";
+
+      bridgeHolder->setChildAtIndex(
+          0, newArrowSchema("i", "run_ends"), arrowSchema);
+      bridgeHolder->setChildAtIndex(1, std::move(valuesChild), arrowSchema);
     } else {
-      valuesChild->format =
-          exportArrowFormatStr(type, options, bridgeHolder->formatBuffer);
+      const auto& valueVector = vec->valueVector();
+      if (valueVector) {
+        exportToArrow(valueVector, arrowSchema, options);
+      } else {
+        arrowSchema.n_children = 0;
+        arrowSchema.children = nullptr;
+        arrowSchema.dictionary = nullptr;
+        arrowSchema.format =
+            exportArrowFormatStr(type, options, bridgeHolder->formatBuffer);
+      }
     }
-    valuesChild->name = "values";
-
-    bridgeHolder->setChildAtIndex(
-        0, newArrowSchema("i", "run_ends"), arrowSchema);
-    bridgeHolder->setChildAtIndex(1, std::move(valuesChild), arrowSchema);
   } else {
     arrowSchema.format =
         exportArrowFormatStr(type, options, bridgeHolder->formatBuffer);

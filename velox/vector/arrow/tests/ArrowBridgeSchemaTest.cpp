@@ -21,16 +21,27 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/arrow/Bridge.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
 namespace {
 
 static void mockRelease(ArrowSchema*) {}
 
-class ArrowBridgeSchemaExportTest : public testing::Test {
+class ArrowBridgeSchemaExportTest : public VectorTestBase,
+                                    public testing::TestWithParam<bool> {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
+  }
+
+  void SetUp() override {
+    auto flattenFlag = GetParam();
+    options_ = ArrowOptions();
+    if (flattenFlag) {
+      options_.flattenDictionary = true;
+      options_.flattenConstant = true;
+    }
   }
 
   void testScalarType(const TypePtr& type, const char* arrowFormat) {
@@ -77,7 +88,7 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     EXPECT_EQ(nullptr, arrowSchema.private_data);
   }
 
-  void verifyNestedType(const TypePtr& type, ArrowSchema* schema) {
+  void verifyNestedType(const TypePtr& type, const ArrowSchema* schema) {
     if (type->kind() == TypeKind::ARRAY) {
       EXPECT_STREQ("+l", schema->format);
     } else if (type->kind() == TypeKind::MAP) {
@@ -105,6 +116,47 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     }
   }
 
+  void testDictionary(const TypePtr& type, const char* arrowFormat) {
+    ArrowSchema arrowSchema;
+    vector_size_t size = 100;
+    auto vector = wrapInDictionary(
+        makeOddIndices(size / 2), BaseVector::create(type, size, pool_.get()));
+
+    velox::exportToArrow(vector, arrowSchema, options_);
+
+    if (options_.flattenDictionary) {
+      verifyFlattenDictionary(type, arrowFormat, arrowSchema);
+    } else {
+      verifyNonFlattenDictionary(arrowSchema);
+    }
+
+    arrowSchema.release(&arrowSchema);
+    EXPECT_EQ(nullptr, arrowSchema.release);
+    EXPECT_EQ(nullptr, arrowSchema.private_data);
+  }
+
+  void verifyNonFlattenDictionary(const ArrowSchema& arrowSchema) {
+    EXPECT_EQ(nullptr, arrowSchema.name);
+    EXPECT_NE(nullptr, arrowSchema.dictionary);
+    EXPECT_EQ(0, arrowSchema.n_children);
+    EXPECT_EQ(nullptr, arrowSchema.children);
+    EXPECT_STREQ("i", arrowSchema.format);
+  }
+
+  void verifyFlattenDictionary(
+      const TypePtr& type,
+      const char* arrowFormat,
+      const ArrowSchema& arrowSchema) {
+    EXPECT_EQ(nullptr, arrowSchema.name);
+    EXPECT_EQ(nullptr, arrowSchema.dictionary);
+
+    if (type->size() == 0) {
+      verifyScalarType(arrowSchema, arrowFormat);
+    } else {
+      verifyNestedType(type, &arrowSchema);
+    }
+  }
+
   void testConstant(const TypePtr& type, const char* arrowFormat) {
     ArrowSchema arrowSchema;
     const bool isScalar = (type->size() == 0);
@@ -121,7 +173,33 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
               BaseVector::create(type, 100, pool_.get()));
 
     velox::exportToArrow(constantVector, arrowSchema, options_);
+    if (options_.flattenConstant) {
+      verifyFlattenConstant(type, arrowFormat, arrowSchema);
+    } else {
+      verifyNonFlattenConstant(type, arrowFormat, arrowSchema);
+    }
 
+    arrowSchema.release(&arrowSchema);
+    EXPECT_EQ(nullptr, arrowSchema.release);
+    EXPECT_EQ(nullptr, arrowSchema.private_data);
+  }
+
+  void verifyFlattenConstant(
+      const TypePtr& type,
+      const char* arrowFormat,
+      const ArrowSchema& arrowSchema) {
+    if (type->size() == 0) {
+      verifyScalarType(arrowSchema, arrowFormat);
+    } else {
+      EXPECT_STREQ(arrowFormat, arrowSchema.format);
+      verifyNestedType(type, &arrowSchema);
+    }
+  }
+
+  void verifyNonFlattenConstant(
+      const TypePtr& type,
+      const char* arrowFormat,
+      const ArrowSchema& arrowSchema) {
     EXPECT_STREQ("+r", arrowSchema.format);
     EXPECT_EQ(nullptr, arrowSchema.name);
 
@@ -142,16 +220,12 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     // Validate values.
     EXPECT_NE(nullptr, arrowSchema.children[1]);
 
-    if (isScalar) {
+    if (type->size() == 0) {
       verifyScalarType(*arrowSchema.children[1], arrowFormat, "values");
     } else {
       EXPECT_STREQ(arrowFormat, arrowSchema.children[1]->format);
       verifyNestedType(type, arrowSchema.children[1]);
     }
-
-    arrowSchema.release(&arrowSchema);
-    EXPECT_EQ(nullptr, arrowSchema.release);
-    EXPECT_EQ(nullptr, arrowSchema.private_data);
   }
 
   void exportToArrow(const TypePtr& type, ArrowSchema& out) {
@@ -178,7 +252,7 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
       memory::memoryManager()->addLeafPool()};
 };
 
-TEST_F(ArrowBridgeSchemaExportTest, scalar) {
+TEST_P(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(TINYINT(), "c");
   testScalarType(SMALLINT(), "s");
   testScalarType(INTEGER(), "i");
@@ -210,7 +284,7 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(UNKNOWN(), "n");
 }
 
-TEST_F(ArrowBridgeSchemaExportTest, nested) {
+TEST_P(ArrowBridgeSchemaExportTest, nested) {
   // Array.
   testNestedType(ARRAY(INTEGER()));
   testNestedType(ARRAY(VARCHAR()));
@@ -244,7 +318,7 @@ TEST_F(ArrowBridgeSchemaExportTest, nested) {
           }));
 }
 
-TEST_F(ArrowBridgeSchemaExportTest, constant) {
+TEST_P(ArrowBridgeSchemaExportTest, constant) {
   testConstant(TINYINT(), "c");
   testConstant(INTEGER(), "i");
   testConstant(BOOLEAN(), "b");
@@ -262,8 +336,45 @@ TEST_F(ArrowBridgeSchemaExportTest, constant) {
   testConstant(ROW({UNKNOWN(), UNKNOWN()}), "+s");
 }
 
-class ArrowBridgeSchemaImportTest : public ArrowBridgeSchemaExportTest {
+TEST_P(ArrowBridgeSchemaExportTest, dictionary) {
+  testDictionary(TINYINT(), "c");
+  testDictionary(INTEGER(), "i");
+  testDictionary(BOOLEAN(), "b");
+  testDictionary(DOUBLE(), "g");
+  testDictionary(VARCHAR(), "u");
+  testDictionary(DATE(), "tdD");
+  testDictionary(INTERVAL_YEAR_MONTH(), "tiM");
+  testDictionary(UNKNOWN(), "n");
+
+  testDictionary(ARRAY(INTEGER()), "+l");
+  testDictionary(ARRAY(UNKNOWN()), "+l");
+  testDictionary(MAP(BOOLEAN(), REAL()), "+m");
+  testDictionary(MAP(UNKNOWN(), REAL()), "+m");
+  testDictionary(ROW({TIMESTAMP(), DOUBLE()}), "+s");
+  testDictionary(ROW({UNKNOWN(), UNKNOWN()}), "+s");
+}
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    ArrowBridgeSchemaExport,
+    ArrowBridgeSchemaExportTest,
+    testing::Values(true, false));
+
+class ArrowBridgeSchemaImportTest : public testing::Test {
  protected:
+  ArrowSchema makeArrowSchema(const char* format) {
+    return ArrowSchema{
+        .format = format,
+        .name = nullptr,
+        .metadata = nullptr,
+        .flags = 0,
+        .n_children = 0,
+        .children = nullptr,
+        .dictionary = nullptr,
+        .release = mockRelease,
+        .private_data = nullptr,
+    };
+  }
+
   TypePtr testSchemaImport(const char* format) {
     auto arrowSchema = makeArrowSchema(format);
     auto type = importFromArrow(arrowSchema);
