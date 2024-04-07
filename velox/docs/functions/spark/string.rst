@@ -82,7 +82,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
 .. spark:function:: left(string, length) -> string
 
-    Returns the leftmost length characters from the ``string``.
+    Returns the leftmost ``length`` characters from the ``string``.
     If ``length`` is less or equal than 0 the result is an empty string.
     If ``length`` is larger than the length of ``string``, return the original string.
 
