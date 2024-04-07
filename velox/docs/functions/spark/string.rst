@@ -84,6 +84,12 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
     Returns the leftmost length characters from the ``string``.
     If ``length`` is less or equal than 0 the result is an empty string.
+    If ``length`` is larger than the length of ``string``, return the original string.
+
+       SELECT left("example", 0); -- ""
+       SELECT left("example", 2); -- "ex"
+       SELECT left("example", 7); -- "example"
+       SELECT left("example", 20), -- "example"
 
 .. spark:function:: length(string) -> integer
 
@@ -160,8 +166,14 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
 .. spark:function:: right(string, length) -> string
 
-    Returns the rightmost length characters from the ``string``.
+    Returns the rightmost ``length`` characters from the ``string``.
     If ``length`` is less or equal than 0 the result is an empty string.
+    If ``length`` is larger than the length of ``string``, return the original string.
+
+       SELECT right("example", 0); -- ""
+       SELECT right("example", 2); -- "le"
+       SELECT right("example", 7); -- "example"
+       SELECT right("example", 20), -- "example"
 
 .. spark:function:: rpad(string, len, pad) -> string
     

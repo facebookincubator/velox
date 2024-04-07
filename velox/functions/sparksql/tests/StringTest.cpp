@@ -255,6 +255,9 @@ TEST_F(StringTest, left) {
                         const std::optional<int32_t>& length) {
     return evaluateOnce<std::string>("left(c0, c1)", str, length);
   };
+  EXPECT_EQ(left("", -2), "");
+  EXPECT_EQ(left("", 0), "");
+
   EXPECT_EQ(left("example", -2), "");
   EXPECT_EQ(left("example", 0), "");
   EXPECT_EQ(left("example", 2), "ex");
@@ -271,6 +274,9 @@ TEST_F(StringTest, right) {
                         const std::optional<int32_t>& length) {
     return evaluateOnce<std::string>("right(c0, c1)", str, length);
   };
+  EXPECT_EQ(right("", -2), "");
+  EXPECT_EQ(right("", 0), "");
+  
   EXPECT_EQ(right("example", -2), "");
   EXPECT_EQ(right("example", 0), "");
   EXPECT_EQ(right("example", 2), "le");
