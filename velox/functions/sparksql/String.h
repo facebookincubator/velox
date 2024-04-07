@@ -715,8 +715,9 @@ struct OverlayVarbinaryFunction : public OverlayFunctionBase {
 
 /// left function
 /// left(string, length) -> string
-/// Returns the leftmost length characters from the string
-/// Return an empty string if length is less or equal than 0
+/// Returns the leftmost length characters from the string.
+/// Return an empty string if length is less or equal than 0.
+/// Return the original string if length is larger than the string length.
 template <typename T>
 struct LeftFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -770,8 +771,9 @@ struct LeftFunction {
 
 /// right function
 /// right(string, length) -> string
-/// Returns the rightmost length characters from the string
-/// Return an empty string if length is less or equal than 0
+/// Returns the rightmost length characters from the string.
+/// Return an empty string if length is less or equal than 0.
+/// Return the original string if length is larger than the string length.
 template <typename T>
 struct RightFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
