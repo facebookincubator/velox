@@ -850,9 +850,13 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
   }
 
   FOLLY_ALWAYS_INLINE Timestamp
-  adjustByArithmetic(Timestamp timestamp, long intervalSeconds) {
-    long seconds = timestamp.getSeconds();
-    long truncedSeconds = (seconds / intervalSeconds) * intervalSeconds;
+  adjustByArithmetic(Timestamp timestamp, long intervalSeconds, const date::time_zone* timezone) {
+    long seconds = getSeconds(timestamp, timezone);
+    long s = seconds / intervalSeconds;
+    if (seconds < 0) {
+      s = s -1;
+    }
+    long truncedSeconds = s * intervalSeconds;
     return Timestamp(truncedSeconds, 0);
   }
 
@@ -872,26 +876,22 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
       return;
     }
 
-    if (timeZone_ == nullptr) {
-      switch (unit) {
-        case DateTimeUnit::kMinute:
-          result = adjustByArithmetic(timestamp, 60);
-          return;
-        case DateTimeUnit::kHour:
-          result = adjustByArithmetic(timestamp, 60 * 60);
-          return;
-        case DateTimeUnit::kDay:
-          result = adjustByArithmetic(timestamp, 24 * 60 * 60);
-          return;
-        default:
-          break;
-      }
+    switch (unit) {
+      case DateTimeUnit::kMinute:
+        result = adjustByArithmetic(timestamp, 60, timeZone_);
+        break;
+      case DateTimeUnit::kHour:
+        result = adjustByArithmetic(timestamp, 60 * 60, timeZone_);
+        break;
+      case DateTimeUnit::kDay:
+        result = adjustByArithmetic(timestamp, 24 * 60 * 60, timeZone_);
+        break;
+      default:
+        auto dateTime = getDateTime(timestamp, timeZone_);
+        adjustDateTime(dateTime, unit);
+        result = Timestamp(timegm(&dateTime), 0);
     }
 
-    auto dateTime = getDateTime(timestamp, timeZone_);
-    adjustDateTime(dateTime, unit);
-
-    result = Timestamp(timegm(&dateTime), 0);
     if (timeZone_ != nullptr) {
       result.toGMT(*timeZone_);
     }
