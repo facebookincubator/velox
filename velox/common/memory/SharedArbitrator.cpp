@@ -209,12 +209,6 @@ uint64_t SharedArbitrator::growCapacity(
   {
     std::lock_guard<std::mutex> l(mutex_);
     ++numReserves_;
-    if (running_) {
-      // NOTE: if there is a running memory arbitration, then we shall skip
-      // reserving the free memory for the newly created memory pool but let it
-      // grow its capacity on-demand later through the memory arbitration.
-      return 0;
-    }
     reserveBytes = decrementFreeCapacityLocked(bytesToReserve);
     pool->grow(reserveBytes);
     freeCapacity = freeCapacity_;
@@ -572,7 +566,8 @@ uint64_t SharedArbitrator::reclaim(
       << "Reclaimed from memory pool " << pool->name() << " with target of "
       << succinctBytes(targetBytes) << ", actually reclaimed "
       << succinctBytes(freedBytes) << " free memory and "
-      << succinctBytes(reclaimedBytes - freedBytes) << " used memory";
+      << succinctBytes(reclaimedBytes - freedBytes) << " used memory, spent "
+      << succinctMicros(reclaimDurationUs);
   return reclaimedBytes;
 }
 

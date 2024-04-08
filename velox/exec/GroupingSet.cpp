@@ -322,6 +322,8 @@ void initializeAggregates(
         rowColumn.offset(),
         rowColumn.nullByte(),
         rowColumn.nullMask(),
+        rowColumn.initializedByte(),
+        rowColumn.initializedMask(),
         rows.rowSizeOffset());
     ++i;
   }
@@ -373,6 +375,8 @@ void GroupingSet::createHashTable() {
         rowColumn.offset(),
         rowColumn.nullByte(),
         rowColumn.nullMask(),
+        rowColumn.initializedByte(),
+        rowColumn.initializedMask(),
         rows.rowSizeOffset());
 
     ++numColumns;
@@ -387,6 +391,8 @@ void GroupingSet::createHashTable() {
           rowColumn.offset(),
           rowColumn.nullByte(),
           rowColumn.nullMask(),
+          rowColumn.initializedByte(),
+          rowColumn.initializedMask(),
           rows.rowSizeOffset());
       ++numColumns;
     }
@@ -407,16 +413,20 @@ void GroupingSet::initializeGlobalAggregation() {
   lookup_->reset(1);
 
   // Row layout is:
-  //  - null flags - one bit per aggregate,
+  //  - alternating null flag, intialized flag - one bit per flag, one pair per
+  //                                             aggregation,
   //  - uint32_t row size,
   //  - fixed-width accumulators - one per aggregate
   //
   // Here we always make space for a row size since we only have one row and no
   // RowContainer.  The whole row is allocated to guarantee that alignment
   // requirements of all aggregate functions are satisfied.
-  int32_t rowSizeOffset = bits::nbytes(aggregates_.size());
+
+  // Allocate space for the null and initialized flags.
+  int32_t rowSizeOffset =
+      bits::nbytes(aggregates_.size() * RowContainer::kNumAccumulatorFlags);
   int32_t offset = rowSizeOffset + sizeof(int32_t);
-  int32_t nullOffset = 0;
+  int32_t accumulatorFlagsOffset = 0;
   int32_t alignment = 1;
 
   for (auto& aggregate : aggregates_) {
@@ -431,12 +441,14 @@ void GroupingSet::initializeGlobalAggregation() {
     function->setAllocator(&stringAllocator_);
     function->setOffsets(
         offset,
-        RowContainer::nullByte(nullOffset),
-        RowContainer::nullMask(nullOffset),
+        RowContainer::nullByte(accumulatorFlagsOffset),
+        RowContainer::nullMask(accumulatorFlagsOffset),
+        RowContainer::initializedByte(accumulatorFlagsOffset),
+        RowContainer::initializedMask(accumulatorFlagsOffset),
         rowSizeOffset);
 
     offset += accumulator.fixedWidthSize();
-    ++nullOffset;
+    accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
     alignment =
         RowContainer::combineAlignments(accumulator.alignment(), alignment);
   }
@@ -449,12 +461,14 @@ void GroupingSet::initializeGlobalAggregation() {
     sortedAggregations_->setAllocator(&stringAllocator_);
     sortedAggregations_->setOffsets(
         offset,
-        RowContainer::nullByte(nullOffset),
-        RowContainer::nullMask(nullOffset),
+        RowContainer::nullByte(accumulatorFlagsOffset),
+        RowContainer::nullMask(accumulatorFlagsOffset),
+        RowContainer::initializedByte(accumulatorFlagsOffset),
+        RowContainer::initializedMask(accumulatorFlagsOffset),
         rowSizeOffset);
 
     offset += accumulator.fixedWidthSize();
-    ++nullOffset;
+    accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
     alignment =
         RowContainer::combineAlignments(accumulator.alignment(), alignment);
   }
@@ -468,12 +482,14 @@ void GroupingSet::initializeGlobalAggregation() {
       aggregation->setAllocator(&stringAllocator_);
       aggregation->setOffsets(
           offset,
-          RowContainer::nullByte(nullOffset),
-          RowContainer::nullMask(nullOffset),
+          RowContainer::nullByte(accumulatorFlagsOffset),
+          RowContainer::nullMask(accumulatorFlagsOffset),
+          RowContainer::initializedByte(accumulatorFlagsOffset),
+          RowContainer::initializedMask(accumulatorFlagsOffset),
           rowSizeOffset);
 
       offset += accumulator.fixedWidthSize();
-      ++nullOffset;
+      accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
       alignment =
           RowContainer::combineAlignments(accumulator.alignment(), alignment);
     }

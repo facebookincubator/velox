@@ -35,7 +35,7 @@ source $SCRIPTDIR/setup-helper-functions.sh
 CPU_TARGET="${CPU_TARGET:-avx}"
 COMPILER_FLAGS=$(get_cxx_flags "$CPU_TARGET")
 export COMPILER_FLAGS
-FB_OS_VERSION=v2024.02.26.00
+FB_OS_VERSION=v2024.04.01.00
 FMT_VERSION=10.1.1
 BOOST_VERSION=boost-1.84.0
 NPROC=$(getconf _NPROCESSORS_ONLN)
@@ -159,8 +159,7 @@ function install_apt_deps {
   install_velox_deps_from_apt
 }
 
-# For backward compatibility, invoke install_apt_deps
-(return 2> /dev/null) && install_apt_deps && return # If script was sourced, don't run commands.
+(return 2> /dev/null) && return # If script was sourced, don't run commands.
 
 (
   if [[ $# -ne 0 ]]; then
