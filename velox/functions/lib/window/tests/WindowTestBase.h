@@ -212,13 +212,15 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       bool ascending,
       const std::string& function,
       const RangeFrameBound& startBound,
-      const RangeFrameBound& endBound);
+      const RangeFrameBound& endBound,
+      const int32_t size = 25);
 
   void rangeFrameTestImpl(
       bool ascending,
       const std::string& function,
       const RangeFrameBound& startBound,
       const RangeFrameBound& endBound,
-      bool unorderedColumns);
+      bool unorderedColumns,
+      const int32_t size = 25);
 };
 } // namespace facebook::velox::window::test

@@ -197,8 +197,8 @@ void WindowTestBase::rangeFrameTestImpl(
     const std::string& function,
     const RangeFrameBound& startBound,
     const RangeFrameBound& endBound,
-    bool unorderedColumns) {
-  auto size = 25;
+    bool unorderedColumns,
+    const int32_t size) {
   // For frames with k RANGE PRECEDING/FOLLOWING, Velox requires the application
   // to add columns with the range frame boundary value computed according
   // to the frame type.
@@ -304,9 +304,13 @@ void WindowTestBase::rangeFrameTest(
     bool ascending,
     const std::string& function,
     const RangeFrameBound& startBound,
-    const RangeFrameBound& endBound) {
-  rangeFrameTestImpl(ascending, function, startBound, endBound, false);
-  rangeFrameTestImpl(ascending, function, startBound, endBound, true);
+    const RangeFrameBound& endBound,
+    const int32_t size
+) {
+  rangeFrameTestImpl(ascending, function, startBound, endBound, false, size);
+  rangeFrameTestImpl(ascending, function, startBound, endBound, true, size);
+}
+
 void WindowTestBase::testSegmentTreeFrames(const std::string& function) {
   int64_t rowCount = 500;
   int64_t frame = 65;
