@@ -35,8 +35,6 @@ using namespace facebook::velox::common;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
-constexpr const char* kHiveConnectorId = "test-hive";
-
 class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
  protected:
   void SetUp() override {
@@ -85,8 +83,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       uint64_t writerFlushThreshold) {
     return std::make_unique<SpillConfig>(
         [&]() -> const std::string& { return spillPath; },
+        [&](uint64_t) {},
         "",
-        0,
         0,
         0,
         spillExecutor_.get(),
@@ -97,7 +95,6 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
         0,
         0,
         writerFlushThreshold,
-        0,
         "none");
   }
 
@@ -483,7 +480,12 @@ TEST_F(HiveDataSinkTest, basic) {
   ASSERT_TRUE(stats.empty()) << stats.toString();
   ASSERT_EQ(
       stats.toString(),
-      "numWrittenBytes 0B numWrittenFiles 0 spillRuns[0] spilledInputBytes[0B] spilledBytes[0B] spilledRows[0] spilledPartitions[0] spilledFiles[0] spillFillTimeUs[0us] spillSortTime[0us] spillSerializationTime[0us] spillDiskWrites[0] spillFlushTime[0us] spillWriteTime[0us] maxSpillExceededLimitCount[0]");
+      "numWrittenBytes 0B numWrittenFiles 0 spillRuns[0] spilledInputBytes[0B] "
+      "spilledBytes[0B] spilledRows[0] spilledPartitions[0] spilledFiles[0] "
+      "spillFillTimeUs[0us] spillSortTime[0us] spillSerializationTime[0us] "
+      "spillWrites[0] spillFlushTime[0us] spillWriteTime[0us] "
+      "maxSpillExceededLimitCount[0] spillReadBytes[0B] spillReads[0] "
+      "spillReadTime[0us] spillReadDeserializationTime[0us]");
 
   const int numBatches = 10;
   const auto vectors = createVectors(500, numBatches);
@@ -567,8 +569,8 @@ TEST_F(HiveDataSinkTest, abort) {
 }
 
 TEST_F(HiveDataSinkTest, memoryReclaim) {
-  const int numBatches = 20;
-  auto vectors = createVectors(500, 20);
+  const int numBatches = 200;
+  auto vectors = createVectors(500, 200);
 
   struct {
     dwio::common::FileFormat format;
@@ -581,7 +583,7 @@ TEST_F(HiveDataSinkTest, memoryReclaim) {
     std::string debugString() const {
       return fmt::format(
           "format: {}, sortWriter: {}, writerSpillEnabled: {}, writerFlushThreshold: {}, expectedWriterReclaimEnabled: {}, expectedWriterReclaimed: {}",
-          format,
+          dwio::common::toString(format),
           sortWriter,
           writerSpillEnabled,
           succinctBytes(writerFlushThreshold),
@@ -589,7 +591,7 @@ TEST_F(HiveDataSinkTest, memoryReclaim) {
           expectedWriterReclaimed);
     }
   } testSettings[] = {
-    //{dwio::common::FileFormat::DWRF, true, true, 1 << 30, true, true},
+    //    {dwio::common::FileFormat::DWRF, true, true, 1 << 30, true, true},
     {dwio::common::FileFormat::DWRF, true, true, 1, true, true},
     {dwio::common::FileFormat::DWRF, true, false, 1 << 30, false, false},
     {dwio::common::FileFormat::DWRF, true, false, 1, false, false},
@@ -672,31 +674,29 @@ TEST_F(HiveDataSinkTest, memoryReclaim) {
     for (int i = 0; i < numBatches; ++i) {
       dataSink->appendData(vectors[i]);
     }
-    memory::MemoryReclaimer::Stats stats;
-    uint64_t reclaimableBytes;
+    memory::MemoryArbitrator::Stats oldStats =
+        memory::memoryManager()->arbitrator()->stats();
+    uint64_t reclaimableBytes{0};
     if (testData.expectedWriterReclaimed) {
-      ASSERT_TRUE(root_->reclaimableBytes(reclaimableBytes));
+      reclaimableBytes = root_->reclaimableBytes().value();
       ASSERT_GT(reclaimableBytes, 0);
-      ASSERT_GT(root_->reclaim(256L << 20, 0, stats), 0);
-      ASSERT_GT(stats.reclaimExecTimeUs, 0);
-      ASSERT_GT(stats.reclaimedBytes, 0);
+      memory::testingRunArbitration();
+      memory::MemoryArbitrator::Stats curStats =
+          memory::memoryManager()->arbitrator()->stats();
+      ASSERT_GT(curStats.reclaimTimeUs - oldStats.reclaimTimeUs, 0);
+      ASSERT_GT(curStats.numReclaimedBytes - oldStats.numReclaimedBytes, 0);
       // We expect dwrf writer set numNonReclaimableAttempts counter.
-      ASSERT_LE(stats.numNonReclaimableAttempts, 1);
+      ASSERT_LE(
+          curStats.numNonReclaimableAttempts -
+              oldStats.numNonReclaimableAttempts,
+          1);
     } else {
-      ASSERT_FALSE(root_->reclaimableBytes(reclaimableBytes));
-      ASSERT_EQ(reclaimableBytes, 0);
-      ASSERT_EQ(root_->reclaim(256L << 20, 0, stats), 0);
-      ASSERT_EQ(stats.reclaimExecTimeUs, 0);
-      ASSERT_EQ(stats.reclaimedBytes, 0);
-      if (testData.expectedWriterReclaimEnabled) {
-        if (testData.sortWriter) {
-          ASSERT_GE(stats.numNonReclaimableAttempts, 1);
-        } else {
-          ASSERT_EQ(stats.numNonReclaimableAttempts, 1);
-        }
-      } else {
-        ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
-      }
+      ASSERT_FALSE(root_->reclaimableBytes().has_value());
+      memory::testingRunArbitration();
+      memory::MemoryArbitrator::Stats curStats =
+          memory::memoryManager()->arbitrator()->stats();
+      ASSERT_EQ(curStats.reclaimTimeUs - oldStats.reclaimTimeUs, 0);
+      ASSERT_EQ(curStats.numReclaimedBytes - oldStats.numReclaimedBytes, 0);
     }
     const auto partitions = dataSink->close();
     if (testData.sortWriter && testData.expectedWriterReclaimed) {
@@ -722,7 +722,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
     std::string debugString() const {
       return fmt::format(
           "format: {}, sortWriter: {}, writerSpillEnabled: {}, close: {}, expectedWriterReclaimEnabled: {}",
-          format,
+          dwio::common::toString(format),
           sortWriter,
           writerSpillEnabled,
           close,
@@ -821,9 +821,9 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
     }
 
     memory::MemoryReclaimer::Stats stats;
-    uint64_t reclaimableBytes;
+    uint64_t reclaimableBytes{0};
     if (testData.expectedWriterReclaimEnabled) {
-      ASSERT_TRUE(root_->reclaimableBytes(reclaimableBytes));
+      reclaimableBytes = root_->reclaimableBytes().value();
       if (testData.close) {
         // NOTE: file writer might not release all the memory on close
         // immediately.
@@ -832,8 +832,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
         ASSERT_EQ(reclaimableBytes, 0);
       }
     } else {
-      ASSERT_FALSE(root_->reclaimableBytes(reclaimableBytes));
-      ASSERT_EQ(reclaimableBytes, 0);
+      ASSERT_FALSE(root_->reclaimableBytes().has_value());
     }
     ASSERT_EQ(root_->reclaim(1L << 30, 0, stats), 0);
     ASSERT_EQ(stats.reclaimExecTimeUs, 0);
@@ -907,6 +906,6 @@ int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   // Signal handler required for ThreadDebugInfoTest
   facebook::velox::process::addDefaultFatalSignalHandler();
-  folly::init(&argc, &argv, false);
+  folly::Init init{&argc, &argv, false};
   return RUN_ALL_TESTS();
 }

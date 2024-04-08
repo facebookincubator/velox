@@ -22,6 +22,7 @@
 #include <optional>
 #include <queue>
 
+#include <fmt/format.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
@@ -79,33 +80,33 @@ using SetMemoryReclaimer = std::function<void(MemoryPool*)>;
 /// one per each query plan node. The task pool is the parent of all the node
 /// pools from the task's physical query plan fragment. The node pool is created
 /// by the first operator instantiated for the corresponding plan node. It is
-/// owned by Task via 'childPools_'
+/// owned by Task via 'childPools_'.
 ///
 /// The bottom level consists of per-operator pools. These are children of the
 /// node pool that corresponds to the plan node from which the operator is
 /// created. Operator and node pools are owned by the Task via 'childPools_'.
 ///
-/// The query pool is created from MemoryManager::getChild() as a child of a
-/// singleton root pool object (system pool). There is only one system pool for
-/// a velox process. Hence each query pool objects forms a subtree rooted from
-/// the system pool.
+/// The query pool is created from MemoryManager::addRootPool(), it has no
+/// parent and is the root node of its corresponding subtree. Each query pool is
+/// owned by QueryCtx (such as in Prestissimo), and the memory manager also
+/// tracks the current alive query pools in MemoryManager::pools_ through weak
+/// pointers.
 ///
 /// Each child pool object holds a shared reference to its parent pool object.
-/// The parent object tracks its child pool objects through the raw pool object
-/// pointer protected by a mutex. The child pool object destruction first
-/// removes its raw pointer from its parent through dropChild() and then drops
-/// the shared reference on the parent.
+/// The parent object tracks its child pool objects through weak pointers
+/// protected by a mutex. The child pool object destruction first removes its
+/// weak pointer from its parent through dropChild() and then drops the shared
+/// reference on the parent.
 ///
 /// NOTE: for the users that integrate at expression evaluation level, we don't
 /// need to build the memory pool hierarchy as described above. Users can either
-/// create a single memory pool from MemoryManager::getChild() to share with
+/// create a single memory pool from MemoryManager::addLeafPool() to share with
 /// all the concurrent expression evaluations or create one dedicated memory
 /// pool for each expression evaluation if they need per-expression memory quota
 /// enforcement.
 ///
 /// In addition to providing memory allocation functions, the memory pool object
-/// also provides memory usage accounting through MemoryUsageTracker. This will
-/// be merged into memory pool object later.
+/// also provides memory usage accounting.
 class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
  public:
   /// Defines the kinds of a memory pool.
@@ -375,21 +376,20 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual MemoryReclaimer* reclaimer() const = 0;
 
   /// Invoked by the memory arbitrator to enter memory arbitration processing.
-  /// It is a noop if 'reclaimer_' is not set, otherwise invoke the reclaimer's
+  /// It is a noop if 'reclaimer' is not set, otherwise invoke the reclaimer's
   /// corresponding method.
   virtual void enterArbitration() = 0;
 
   /// Invoked by the memory arbitrator to leave memory arbitration processing.
-  /// It is a noop if 'reclaimer_' is not set, otherwise invoke the reclaimer's
+  /// It is a noop if 'reclaimer' is not set, otherwise invoke the reclaimer's
   /// corresponding method.
   virtual void leaveArbitration() noexcept = 0;
 
-  /// Returns how many bytes is reclaimable from this memory pool. The function
-  /// returns true if this memory pool is reclaimable, and returns the estimated
-  /// reclaimable bytes in 'reclaimableBytes'. If 'reclaimer_' is not set, the
-  /// function returns false, otherwise invoke the reclaimer's corresponding
-  /// method.
-  virtual bool reclaimableBytes(uint64_t& reclaimableBytes) const = 0;
+  /// Function estimates the number of reclaimable bytes and returns in
+  /// 'reclaimableBytes'. If the 'reclaimer' is not set, the function returns
+  /// std::nullopt. Otherwise, it will invoke the corresponding method of the
+  /// reclaimer.
+  virtual std::optional<uint64_t> reclaimableBytes() const = 0;
 
   /// Invoked by the memory arbitrator to reclaim memory from this memory pool
   /// with specified reclaim target bytes. If 'targetBytes' is zero, then it
@@ -414,7 +414,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual void abort(const std::exception_ptr& error) = 0;
 
   /// Returns true if this memory pool has been aborted.
-  virtual bool aborted() const = 0;
+  virtual bool aborted() const;
 
   /// The memory pool's execution stats.
   struct Stats {
@@ -467,8 +467,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual std::string toString() const = 0;
 
   /// Invoked to generate a descriptive memory usage summary of the entire tree.
-  /// MemoryPoolImpl::treeMemoryUsage()
-  virtual std::string treeMemoryUsage() const = 0;
+  /// MemoryPoolImpl::treeMemoryUsage(). If 'skipEmptyPool' is true, then skip
+  /// print out the child memory pools with empty memory usage.
+  virtual std::string treeMemoryUsage(bool skipEmptyPool = true) const = 0;
 
   /// Indicates if this is a leaf memory pool or not.
   FOLLY_ALWAYS_INLINE bool isLeaf() const {
@@ -496,14 +497,17 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
  protected:
   static constexpr uint64_t kMB = 1 << 20;
 
-  /// Invoked by addChild() to create a child memory pool object. 'parent' is
-  /// a shared pointer created from this.
+  /// Invoked by addLeafChild() and addAggregateChild() to create a child memory
+  /// pool object. 'parent' is a shared pointer created from this, ie,
+  /// shared_from_this().
   virtual std::shared_ptr<MemoryPool> genChild(
       std::shared_ptr<MemoryPool> parent,
       const std::string& name,
       Kind kind,
       bool threadSafe,
       std::unique_ptr<MemoryReclaimer> reclaimer) = 0;
+
+  virtual std::exception_ptr abortError() const;
 
   /// Invoked only on destruction to remove this memory pool from its parent's
   /// child memory pool tracking.
@@ -529,9 +533,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   std::exception_ptr abortError_{nullptr};
 
   mutable folly::SharedMutex poolMutex_;
-  // NOTE: we use raw pointer instead of weak pointer here to minimize
-  // visitChildren() cost as we don't have to upgrade the weak pointer and copy
-  // out the upgraded shared pointers.git
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> children_;
 
   friend class TestMemoryReclaimer;
@@ -544,15 +545,23 @@ std::ostream& operator<<(std::ostream& os, const MemoryPool::Stats& stats);
 
 class MemoryPoolImpl : public MemoryPool {
  public:
+  /// The callback invoked on the root memory pool destruction. It is set by
+  /// memory manager to return back the allocated memory capacity.
   using DestructionCallback = std::function<void(MemoryPool*)>;
+  /// The callback invoked when the used memory reservation of the root memory
+  /// pool exceed its capacity. It is set by memory manager to grow the memory
+  /// pool capacity. The callback returns true if the capacity growth succeeds,
+  /// otherwise false.
+  using GrowCapacityCallback = std::function<bool(MemoryPool*, uint64_t)>;
 
   MemoryPoolImpl(
       MemoryManager* manager,
       const std::string& name,
       Kind kind,
       std::shared_ptr<MemoryPool> parent,
-      std::unique_ptr<MemoryReclaimer> reclaimer = nullptr,
-      DestructionCallback destructionCb = nullptr,
+      std::unique_ptr<MemoryReclaimer> reclaimer,
+      GrowCapacityCallback growCapacityCb,
+      DestructionCallback destructionCb,
       const Options& options = Options{});
 
   ~MemoryPoolImpl() override;
@@ -623,7 +632,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   void leaveArbitration() noexcept override;
 
-  bool reclaimableBytes(uint64_t& reclaimableBytes) const override;
+  std::optional<uint64_t> reclaimableBytes() const override;
 
   uint64_t reclaim(
       uint64_t targetBytes,
@@ -636,44 +645,50 @@ class MemoryPoolImpl : public MemoryPool {
 
   void abort(const std::exception_ptr& error) override;
 
-  bool aborted() const override;
-
   std::string toString() const override {
     std::lock_guard<std::mutex> l(mutex_);
     return toStringLocked();
   }
 
-  // Detailed debug pool state printout by traversing the pool structure from
-  // the root memory pool.
-  //
-  // Exceeded memory cap of 5.00MB when requesting 2.00MB
-  // default_root_1 usage 5.00MB peak 5.00MB
-  //     task.test_cursor 1 usage 5.00MB peak 5.00MB
-  //         node.N/A usage 0B peak 0B
-  //             op.N/A.0.0.CallbackSink usage 0B peak 0B
-  //         node.2 usage 4.00MB peak 4.00MB
-  //             op.2.0.0.Aggregation usage 3.77MB peak 3.77MB
-  //         node.1 usage 1.00MB peak 1.00MB
-  //             op.1.0.0.FilterProject usage 12.00KB peak 12.00KB
-  //         node.3 usage 0B peak 0B
-  //             op.3.0.0.OrderBy usage 0B peak 0B
-  //         node.0 usage 0B peak 0B
-  //             op.0.0.0.Values usage 0B peak 0B
-  //
-  // Top 5 leaf memory pool usages:
-  //     op.2.0.0.Aggregation usage 3.77MB peak 3.77MB
-  //     op.1.0.0.FilterProject usage 12.00KB peak 12.00KB
-  //     op.N/A.0.0.CallbackSink usage 0B peak 0B
-  //     op.3.0.0.OrderBy usage 0B peak 0B
-  //     op.0.0.0.Values usage 0B peak 0B
-  std::string treeMemoryUsage() const override;
+  /// Detailed debug pool state printout by traversing the pool structure from
+  /// the root memory pool.
+  ///
+  /// Exceeded memory cap of 5.00MB when requesting 2.00MB
+  /// default_root_1 usage 5.00MB peak 5.00MB
+  ///     task.test_cursor 1 usage 5.00MB peak 5.00MB
+  ///         node.N/A usage 0B peak 0B
+  ///             op.N/A.0.0.CallbackSink usage 0B peak 0B
+  ///         node.2 usage 4.00MB peak 4.00MB
+  ///             op.2.0.0.Aggregation usage 3.77MB peak 3.77MB
+  ///         node.1 usage 1.00MB peak 1.00MB
+  ///             op.1.0.0.FilterProject usage 12.00KB peak 12.00KB
+  ///         node.3 usage 0B peak 0B
+  ///             op.3.0.0.OrderBy usage 0B peak 0B
+  ///         node.0 usage 0B peak 0B
+  ///             op.0.0.0.Values usage 0B peak 0B
+  ///
+  /// Top 5 leaf memory pool usages:
+  ///     op.2.0.0.Aggregation usage 3.77MB peak 3.77MB
+  ///     op.1.0.0.FilterProject usage 12.00KB peak 12.00KB
+  ///     op.N/A.0.0.CallbackSink usage 0B peak 0B
+  ///     op.3.0.0.OrderBy usage 0B peak 0B
+  ///     op.0.0.0.Values usage 0B peak 0B
+  std::string treeMemoryUsage(bool skipEmptyPool = true) const override;
 
   Stats stats() const override;
 
   void testingSetCapacity(int64_t bytes);
 
+  MemoryManager* testingManager() const {
+    return manager_;
+  }
+
   MemoryAllocator* testingAllocator() const {
     return allocator_;
+  }
+
+  void testingCheckIfAborted() const {
+    checkIfAborted();
   }
 
   uint64_t testingMinReservationBytes() const {
@@ -683,7 +698,7 @@ class MemoryPoolImpl : public MemoryPool {
   /// Structure to store allocation details in debug mode.
   struct AllocationRecord {
     uint64_t size;
-    std::string callStack;
+    process::StackTrace callStack;
   };
 
   std::unordered_map<uint64_t, AllocationRecord>& testingDebugAllocRecords() {
@@ -824,7 +839,6 @@ class MemoryPoolImpl : public MemoryPool {
   // Tries to increment the reservation 'size' if it is within the limit and
   // returns true, otherwise the function returns false.
   bool maybeIncrementReservation(uint64_t size);
-  bool maybeIncrementReservationLocked(uint64_t size);
 
   // Release memory reservation for an allocation free or memory release with
   // specified 'size'. If 'releaseOnly' is true, then we only release the unused
@@ -962,6 +976,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   MemoryManager* const manager_;
   MemoryAllocator* const allocator_;
+  const GrowCapacityCallback growCapacityCb_;
   const DestructionCallback destructionCb_;
 
   // Regex for filtering on 'name_' when debug mode is enabled. This allows us
@@ -1058,3 +1073,14 @@ class StlAllocator {
   }
 };
 } // namespace facebook::velox::memory
+
+template <>
+struct fmt::formatter<facebook::velox::memory::MemoryPool::Kind>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::memory::MemoryPool::Kind s,
+      format_context& ctx) {
+    return formatter<std::string>::format(
+        facebook::velox::memory::MemoryPool::kindString(s), ctx);
+  }
+};

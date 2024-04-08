@@ -70,8 +70,6 @@ Blog posts are available [here](https://velox-lib.io/blog).
 
 ## Getting Started
 
-We provide scripts to help developers setup and install Velox dependencies.
-
 ### Get the Velox Source
 ```
 git clone --recursive https://github.com/facebookincubator/velox.git
@@ -80,10 +78,16 @@ cd velox
 git submodule sync --recursive
 git submodule update --init --recursive
 ```
+Once Velox is checked out, the first step is to install the dependencies.
+Details on the dependencies and how Velox manages some of them for you
+[can be found here](CMake/resolve_dependency_modules/README.md).
+
+Velox also provides the following scripts to help developers setup and install Velox
+dependencies for a given platform.
 
 ### Setting up on macOS
 
-Once you have checked out Velox, on an Intel MacOS machine you can setup and then build like so:
+On an Intel MacOS machine you can setup and then build like so:
 
 ```shell
 $ ./scripts/setup-macos.sh 
@@ -124,7 +128,7 @@ Run `make` in the root directory to compile the sources. For development, use
 an optimized version.  Use `make unittest` to build and run tests.
 
 Note that,
-* Velox requires C++17 , thus minimum supported compiler is GCC 5.0 and Clang 5.0.
+* Velox requires a compiler at the minimum GCC 9.0 or Clang 14.0.
 * Velox requires the CPU to support instruction sets:
   * bmi
   * bmi2

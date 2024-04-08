@@ -17,11 +17,21 @@
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
+// static
+void OutputBufferManager::initialize(const Options& options) {
+  std::lock_guard<std::mutex> l(initMutex_);
+  VELOX_CHECK(
+      instance_ == nullptr, "May initialize OutputBufferManager only once");
+  instance_ = std::make_shared<OutputBufferManager>(options);
+}
 
 // static
 std::weak_ptr<OutputBufferManager> OutputBufferManager::getInstance() {
-  static auto kInstance = std::make_shared<OutputBufferManager>();
-  return kInstance;
+  std::lock_guard<std::mutex> l(initMutex_);
+  if (!instance_) {
+    instance_ = std::make_shared<OutputBufferManager>(Options());
+  }
+  return instance_;
 }
 
 std::shared_ptr<OutputBuffer> OutputBufferManager::getBuffer(
@@ -94,9 +104,10 @@ bool OutputBufferManager::getData(
     int destination,
     uint64_t maxBytes,
     int64_t sequence,
-    DataAvailableCallback notify) {
+    DataAvailableCallback notify,
+    DataConsumerActiveCheckCallback activeCheck) {
   if (auto buffer = getBufferIfExists(taskId)) {
-    buffer->getData(destination, maxBytes, sequence, notify);
+    buffer->getData(destination, maxBytes, sequence, notify, activeCheck);
     return true;
   }
   return false;
@@ -132,10 +143,14 @@ bool OutputBufferManager::updateOutputBuffers(
   return false;
 }
 
-void OutputBufferManager::updateNumDrivers(
+bool OutputBufferManager::updateNumDrivers(
     const std::string& taskId,
     uint32_t newNumDrivers) {
-  getBuffer(taskId)->updateNumDrivers(newNumDrivers);
+  if (auto buffer = getBufferIfExists(taskId)) {
+    buffer->updateNumDrivers(newNumDrivers);
+    return true;
+  }
+  return false;
 }
 
 void OutputBufferManager::removeTask(const std::string& taskId) {
@@ -181,6 +196,15 @@ bool OutputBufferManager::isOverutilized(const std::string& taskId) {
     return buffer->isOverutilized();
   }
   return false;
+}
+
+std::optional<OutputBuffer::Stats> OutputBufferManager::stats(
+    const std::string& taskId) {
+  auto buffer = getBufferIfExists(taskId);
+  if (buffer != nullptr) {
+    return buffer->stats();
+  }
+  return std::nullopt;
 }
 
 } // namespace facebook::velox::exec

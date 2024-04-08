@@ -14,20 +14,21 @@
 
 add_library(
   velox_caching
+  AsyncDataCache.cpp
   CacheTTLController.cpp
   FileIds.cpp
-  StringIdMap.cpp
-  AsyncDataCache.cpp
   ScanTracker.cpp
   SsdCache.cpp
   SsdFile.cpp
-  SsdFileTracker.cpp)
+  SsdFileTracker.cpp
+  StringIdMap.cpp)
 target_link_libraries(
   velox_caching
   PUBLIC velox_common_base
          velox_exception
          velox_file
          velox_memory
+         velox_process
          Folly::folly
          fmt::fmt
          gflags::gflags

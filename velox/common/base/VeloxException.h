@@ -99,8 +99,14 @@ inline constexpr auto kMemAllocError = "MEM_ALLOC_ERROR"_fs;
 // Error caused by failing to allocate cache buffer space for IO.
 inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
 
+// An error raised when spill bytes exceeds limits.
+inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
+
 // Errors indicating file read corruptions.
 inline constexpr auto kFileCorruption = "FILE_CORRUPTION"_fs;
+
+// Errors indicating file not found.
+inline constexpr auto kFileNotFound = "FILE_NOT_FOUND"_fs;
 
 // We do not know how to classify it yet.
 inline constexpr auto kUnknown = "UNKNOWN"_fs;

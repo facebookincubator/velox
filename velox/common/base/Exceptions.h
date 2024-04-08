@@ -26,10 +26,10 @@
 #include <folly/Conv.h>
 #include <folly/Exception.h>
 #include <folly/Preprocessor.h>
+#include "FmtStdFormatters.h"
 #include "velox/common/base/VeloxException.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 namespace detail {
 
 struct VeloxCheckFailArgs {
@@ -157,7 +157,7 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
 } // namespace detail
 
 #define _VELOX_THROW_IMPL(                                               \
-    exception, expr_str, errorSource, errorCode, isRetriable, ...)       \
+    exception, exprStr, errorSource, errorCode, isRetriable, ...)        \
   {                                                                      \
     /* GCC 9.2.1 doesn't accept this code with constexpr. */             \
     static const ::facebook::velox::detail::VeloxCheckFailArgs           \
@@ -165,7 +165,7 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
             __FILE__,                                                    \
             __LINE__,                                                    \
             __FUNCTION__,                                                \
-            expr_str,                                                    \
+            exprStr,                                                     \
             errorSource,                                                 \
             errorCode,                                                   \
             isRetriable};                                                \
@@ -176,16 +176,11 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
             decltype(message)>::type>(veloxCheckFailArgs, message);      \
   }
 
-#define _VELOX_CHECK_AND_THROW_IMPL(                                     \
-    expr, expr_str, exception, errorSource, errorCode, isRetriable, ...) \
-  if (UNLIKELY(!(expr))) {                                               \
-    _VELOX_THROW_IMPL(                                                   \
-        exception,                                                       \
-        expr_str,                                                        \
-        errorSource,                                                     \
-        errorCode,                                                       \
-        isRetriable,                                                     \
-        __VA_ARGS__);                                                    \
+#define _VELOX_CHECK_AND_THROW_IMPL(                                           \
+    expr, exprStr, exception, errorSource, errorCode, isRetriable, ...)        \
+  if (UNLIKELY(!(expr))) {                                                     \
+    _VELOX_THROW_IMPL(                                                         \
+        exception, exprStr, errorSource, errorCode, isRetriable, __VA_ARGS__); \
   }
 
 #define _VELOX_THROW(exception, ...) \
@@ -193,10 +188,10 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
 
 DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
 
-#define _VELOX_CHECK_IMPL(expr, expr_str, ...)                      \
+#define _VELOX_CHECK_IMPL(expr, exprStr, ...)                       \
   _VELOX_CHECK_AND_THROW_IMPL(                                      \
       expr,                                                         \
-      expr_str,                                                     \
+      exprStr,                                                      \
       ::facebook::velox::VeloxRuntimeError,                         \
       ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
       ::facebook::velox::error_code::kInvalidState.c_str(),         \
@@ -235,10 +230,10 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
 #define _VELOX_CHECK_OP(expr1, expr2, op, ...) \
   _VELOX_CHECK_OP_HELPER(_VELOX_CHECK_IMPL, expr1, expr2, op, ##__VA_ARGS__)
 
-#define _VELOX_USER_CHECK_IMPL(expr, expr_str, ...)              \
+#define _VELOX_USER_CHECK_IMPL(expr, exprStr, ...)               \
   _VELOX_CHECK_AND_THROW_IMPL(                                   \
       expr,                                                      \
-      expr_str,                                                  \
+      exprStr,                                                   \
       ::facebook::velox::VeloxUserError,                         \
       ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
       ::facebook::velox::error_code::kInvalidArgument.c_str(),   \
@@ -260,6 +255,12 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
 #define VELOX_CHECK_NE(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, !=, ##__VA_ARGS__)
 #define VELOX_CHECK_NULL(e, ...) VELOX_CHECK(e == nullptr, ##__VA_ARGS__)
 #define VELOX_CHECK_NOT_NULL(e, ...) VELOX_CHECK(e != nullptr, ##__VA_ARGS__)
+
+#define VELOX_CHECK_OK(expr)                          \
+  do {                                                \
+    ::facebook::velox::Status _s = (expr);            \
+    _VELOX_CHECK_IMPL(_s.ok(), #expr, _s.toString()); \
+  } while (false)
 
 #define VELOX_UNSUPPORTED(...)                                   \
   _VELOX_THROW(                                                  \
@@ -283,6 +284,14 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
       ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
       ::facebook::velox::error_code::kSchemaMismatch.c_str(),    \
       /* isRetriable */ false,                                   \
+      ##__VA_ARGS__)
+
+#define VELOX_FILE_NOT_FOUND_ERROR(...)                             \
+  _VELOX_THROW(                                                     \
+      ::facebook::velox::VeloxRuntimeError,                         \
+      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
+      ::facebook::velox::error_code::kFileNotFound.c_str(),         \
+      /* isRetriable */ false,                                      \
       ##__VA_ARGS__)
 
 #define VELOX_UNREACHABLE(...)                                      \
@@ -311,6 +320,7 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
 #define VELOX_DCHECK_LE(e1, e2, ...) VELOX_CHECK(true)
 #define VELOX_DCHECK_EQ(e1, e2, ...) VELOX_CHECK(true)
 #define VELOX_DCHECK_NE(e1, e2, ...) VELOX_CHECK(true)
+#define VELOX_DCHECK_NULL(e, ...) VELOX_CHECK(true)
 #define VELOX_DCHECK_NOT_NULL(e, ...) VELOX_CHECK(true)
 #endif
 
@@ -390,5 +400,4 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError);
       /* isRetriable */ false,                                      \
       ##__VA_ARGS__)
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox

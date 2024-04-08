@@ -65,57 +65,6 @@
 #include "dbgen/dss.h" // @manual
 
 /*
- * txt_vp() --
- *		generate a verb phrase by
- *		1) selecting a verb phrase form
- *		2) parsing it to select parts of speech
- *		3) selecting appropriate words
- *		4) adding punctuation as required
- *
- *	Returns: length of generated phrase
- *	Called By: txt_sentence()
- *	Calls: pick_str()
- */
-static int txt_vp(char* dest, seed_t* seed) {
-  char syntax[MAX_GRAMMAR_LEN + 1], *cptr, *parse_target;
-  distribution* src;
-  int i, res = 0;
-
-  pick_str(&vp, seed, &syntax[0]);
-  parse_target = syntax;
-  while ((cptr = strtok(parse_target, " ")) != NULL) {
-    src = NULL;
-    switch (*cptr) {
-      case 'D':
-        src = &adverbs;
-        break;
-      case 'V':
-        src = &verbs;
-        break;
-      case 'X':
-        src = &auxillaries;
-        break;
-    } /* end of POS switch statement */
-    i = pick_str(src, seed, dest);
-    i = (int)strlen(DIST_MEMBER(src, i));
-    dest += i;
-    res += i;
-    if (*(++cptr)) /* miscelaneous fillagree, like punctuation */
-    {
-      dest += 1;
-      res += 1;
-      *dest = *cptr;
-    }
-    *dest = ' ';
-    dest++;
-    res++;
-    parse_target = NULL;
-  } /* end of while loop */
-
-  return (res);
-}
-
-/*
  * txt_np() --
  *		generate a noun phrase by
  *		1) selecting a noun phrase form
@@ -169,68 +118,6 @@ static int txt_np(char* dest, seed_t* seed) {
   return (res);
 }
 
-/*
- * txt_sentence() --
- *		generate a sentence by
- *		1) selecting a sentence form
- *		2) parsing it to select parts of speech or phrase types
- *		3) selecting appropriate words
- *		4) adding punctuation as required
- *
- *	Returns: length of generated sentence
- *	Called By: dbg_text()
- *	Calls: pick_str(), txt_np(), txt_vp()
- */
-static int txt_sentence(char* dest, seed_t* seed) {
-  char syntax[MAX_GRAMMAR_LEN + 1], *cptr;
-  int i, res = 0, len = 0;
-
-  pick_str(&grammar, seed, syntax);
-  cptr = syntax;
-
-next_token
-    : /* I hate goto's, but can't seem to have parent and child use strtok() */
-  while (*cptr && *cptr == ' ')
-    cptr++;
-  if (*cptr == '\0')
-    goto done;
-  switch (*cptr) {
-    case 'V':
-      len = txt_vp(dest, seed);
-      break;
-    case 'N':
-      len = txt_np(dest, seed);
-      break;
-    case 'P':
-      i = pick_str(&prepositions, seed, dest);
-      len = (int)strlen(DIST_MEMBER(&prepositions, i));
-      strcpy((dest + len), " the ");
-      len += 5;
-      len += txt_np(dest + len, seed);
-      break;
-    case 'T':
-      i = pick_str(
-          &terminators,
-          seed,
-          --dest); /*terminators should abut previous word */
-      len = (int)strlen(DIST_MEMBER(&terminators, i));
-      break;
-  } /* end of POS switch statement */
-  dest += len;
-  res += len;
-  cptr++;
-  if (*cptr && *cptr != ' ') /* miscelaneous fillagree, like punctuation */
-  {
-    dest += 1;
-    res += 1;
-    *dest = *cptr;
-  }
-  goto next_token;
-done:
-  *dest = '\0';
-  return (--res);
-}
-
 static char* gen_text(char* dest, seed_t* seed, distribution* s) {
   long i = 0;
   DSS_HUGE j;
@@ -277,7 +164,6 @@ static void gen_index(char** index, distribution* s) {
 
 static char*
 gen_text_index(char* dest, seed_t* seed, char** index, distribution* s) {
-  long i = 0;
   DSS_HUGE j;
 
   RANDOM(j, 1, s->list[s->count - 1].weight, seed);
@@ -357,9 +243,6 @@ static char* gen_terminator(char* dest, seed_t* seed) {
 }
 
 static char* gen_sentence(char* dest, seed_t* seed) {
-  const char* cptr;
-  int i;
-
   DSS_HUGE j;
   RANDOM(j, 1, grammar.list[grammar.count - 1].weight, seed);
   int index = 0;
@@ -367,7 +250,6 @@ static char* gen_sentence(char* dest, seed_t* seed) {
   index += grammar.list[1].weight < j;
   index += grammar.list[2].weight < j;
   index += grammar.list[3].weight < j;
-  cptr = grammar.list[index].text;
 
   if (index == 0) {
     dest = gen_np(dest, seed);
@@ -434,8 +316,7 @@ void free_text_pool() {
  *the last generated sentence as required
  */
 void dbg_text(char* tgt, int min, int max, seed_t* seed) {
-  DSS_HUGE hgLength = 0, hgOffset, wordlen = 0, s_len, needed;
-  char sentence[MAX_SENT_LEN + 1], *cp;
+  DSS_HUGE hgLength = 0, hgOffset;
 
   RANDOM(hgOffset, 0, txtBufferSize - max, seed);
   RANDOM(hgLength, min, max, seed);

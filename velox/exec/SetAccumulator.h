@@ -78,11 +78,39 @@ struct SetAccumulator {
       vector_size_t index,
       const DecodedVector& values,
       HashStringAllocator* allocator) {
+    VELOX_DCHECK(!arrayVector.isNullAt(index));
     const auto size = arrayVector.sizeAt(index);
     const auto offset = arrayVector.offsetAt(index);
 
     for (auto i = 0; i < size; ++i) {
       addValue(values, offset + i, allocator);
+    }
+  }
+
+  /// Adds non-null value if new. No-op if the value is NULL or was added
+  /// before.
+  void addNonNullValue(
+      const DecodedVector& decoded,
+      vector_size_t index,
+      HashStringAllocator* /*allocator*/) {
+    const auto cnt = uniqueValues.size();
+    if (!decoded.isNullAt(index)) {
+      uniqueValues.insert({decoded.valueAt<T>(index), cnt});
+    }
+  }
+
+  /// Adds new non-null values from an array.
+  void addNonNullValues(
+      const ArrayVector& arrayVector,
+      vector_size_t index,
+      const DecodedVector& values,
+      HashStringAllocator* allocator) {
+    VELOX_DCHECK(!arrayVector.isNullAt(index));
+    const auto size = arrayVector.sizeAt(index);
+    const auto offset = arrayVector.offsetAt(index);
+
+    for (auto i = 0; i < size; ++i) {
+      addNonNullValue(values, offset + i, allocator);
     }
   }
 
@@ -150,11 +178,43 @@ struct StringViewSetAccumulator {
       vector_size_t index,
       const DecodedVector& values,
       HashStringAllocator* allocator) {
+    VELOX_DCHECK(!arrayVector.isNullAt(index));
     const auto size = arrayVector.sizeAt(index);
     const auto offset = arrayVector.offsetAt(index);
 
     for (auto i = 0; i < size; ++i) {
       addValue(values, offset + i, allocator);
+    }
+  }
+
+  void addNonNullValue(
+      const DecodedVector& decoded,
+      vector_size_t index,
+      HashStringAllocator* allocator) {
+    const auto cnt = base.uniqueValues.size();
+    if (!decoded.isNullAt(index)) {
+      auto value = decoded.valueAt<StringView>(index);
+      if (!value.isInline()) {
+        if (base.uniqueValues.contains(value)) {
+          return;
+        }
+        value = strings.append(value, *allocator);
+      }
+      base.uniqueValues.insert({value, cnt});
+    }
+  }
+
+  void addNonNullValues(
+      const ArrayVector& arrayVector,
+      vector_size_t index,
+      const DecodedVector& values,
+      HashStringAllocator* allocator) {
+    VELOX_DCHECK(!arrayVector.isNullAt(index));
+    const auto size = arrayVector.sizeAt(index);
+    const auto offset = arrayVector.offsetAt(index);
+
+    for (auto i = 0; i < size; ++i) {
+      addNonNullValue(values, offset + i, allocator);
     }
   }
 
@@ -179,7 +239,7 @@ struct StringViewSetAccumulator {
 struct ComplexTypeSetAccumulator {
   /// A set of pointers to values stored in AddressableNonNullValueList.
   SetAccumulator<
-      HashStringAllocator::Position,
+      AddressableNonNullValueList::Entry,
       AddressableNonNullValueList::Hash,
       AddressableNonNullValueList::EqualTo>
       base;
@@ -203,12 +263,12 @@ struct ComplexTypeSetAccumulator {
         base.nullIndex = cnt;
       }
     } else {
-      auto position = values.append(decoded, index, allocator);
+      auto entry = values.append(decoded, index, allocator);
 
       if (!base.uniqueValues
-               .insert({position, base.nullIndex.has_value() ? cnt + 1 : cnt})
+               .insert({entry, base.nullIndex.has_value() ? cnt + 1 : cnt})
                .second) {
-        values.removeLast(position);
+        values.removeLast(entry);
       }
     }
   }
@@ -218,11 +278,40 @@ struct ComplexTypeSetAccumulator {
       vector_size_t index,
       const DecodedVector& values,
       HashStringAllocator* allocator) {
+    VELOX_DCHECK(!arrayVector.isNullAt(index));
     const auto size = arrayVector.sizeAt(index);
     const auto offset = arrayVector.offsetAt(index);
 
     for (auto i = 0; i < size; ++i) {
       addValue(values, offset + i, allocator);
+    }
+  }
+
+  void addNonNullValue(
+      const DecodedVector& decoded,
+      vector_size_t index,
+      HashStringAllocator* allocator) {
+    const auto cnt = base.uniqueValues.size();
+    if (!decoded.isNullAt(index)) {
+      auto entry = values.append(decoded, index, allocator);
+
+      if (!base.uniqueValues.insert({entry, cnt}).second) {
+        values.removeLast(entry);
+      }
+    }
+  }
+
+  void addNonNullValues(
+      const ArrayVector& arrayVector,
+      vector_size_t index,
+      const DecodedVector& values,
+      HashStringAllocator* allocator) {
+    VELOX_DCHECK(!arrayVector.isNullAt(index));
+    const auto size = arrayVector.sizeAt(index);
+    const auto offset = arrayVector.offsetAt(index);
+
+    for (auto i = 0; i < size; ++i) {
+      addNonNullValue(values, offset + i, allocator);
     }
   }
 

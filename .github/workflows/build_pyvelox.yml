@@ -46,13 +46,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # TODO: https://github.com/facebookincubator/velox/issues/9014
+  if: false
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-11]
+        os: [ubuntu-22.04]
     steps:
       - uses: actions/checkout@v3
         with:

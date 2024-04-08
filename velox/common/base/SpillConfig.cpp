@@ -13,43 +13,42 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::common {
 SpillConfig::SpillConfig(
     GetSpillDirectoryPathCB _getSpillDirPathCb,
+    UpdateAndCheckSpillLimitCB _updateAndCheckSpillLimitCb,
     std::string _fileNamePrefix,
     uint64_t _maxFileSize,
     uint64_t _writeBufferSize,
-    uint64_t _minSpillRunSize,
     folly::Executor* _executor,
     int32_t _minSpillableReservationPct,
     int32_t _spillableReservationGrowthPct,
     uint8_t _startPartitionBit,
-    uint8_t _joinPartitionBits,
+    uint8_t _numPartitionBits,
     int32_t _maxSpillLevel,
     uint64_t _maxSpillRunRows,
     uint64_t _writerFlushThresholdSize,
-    int32_t _testSpillPct,
     const std::string& _compressionKind,
     const std::string& _fileCreateConfig)
     : getSpillDirPathCb(std::move(_getSpillDirPathCb)),
+      updateAndCheckSpillLimitCb(std::move(_updateAndCheckSpillLimitCb)),
       fileNamePrefix(std::move(_fileNamePrefix)),
       maxFileSize(
           _maxFileSize == 0 ? std::numeric_limits<int64_t>::max()
                             : _maxFileSize),
       writeBufferSize(_writeBufferSize),
-      minSpillRunSize(_minSpillRunSize),
       executor(_executor),
       minSpillableReservationPct(_minSpillableReservationPct),
       spillableReservationGrowthPct(_spillableReservationGrowthPct),
       startPartitionBit(_startPartitionBit),
-      joinPartitionBits(_joinPartitionBits),
+      numPartitionBits(_numPartitionBits),
       maxSpillLevel(_maxSpillLevel),
       maxSpillRunRows(_maxSpillRunRows),
       writerFlushThresholdSize(_writerFlushThresholdSize),
-      testSpillPct(_testSpillPct),
       compressionKind(common::stringToCompressionKind(_compressionKind)),
       fileCreateConfig(_fileCreateConfig) {
   VELOX_USER_CHECK_GE(
@@ -58,8 +57,7 @@ SpillConfig::SpillConfig(
       "Spillable memory reservation growth pct should not be lower than minimum available pct");
 }
 
-int32_t SpillConfig::joinSpillLevel(uint8_t startBitOffset) const {
-  const auto numPartitionBits = joinPartitionBits;
+int32_t SpillConfig::spillLevel(uint8_t startBitOffset) const {
   VELOX_CHECK_LE(
       startBitOffset + numPartitionBits,
       64,
@@ -77,13 +75,13 @@ int32_t SpillConfig::joinSpillLevel(uint8_t startBitOffset) const {
   return deltaBits / numPartitionBits;
 }
 
-bool SpillConfig::exceedJoinSpillLevelLimit(uint8_t startBitOffset) const {
-  if (startBitOffset + joinPartitionBits > 64) {
+bool SpillConfig::exceedSpillLevelLimit(uint8_t startBitOffset) const {
+  if (startBitOffset + numPartitionBits > 64) {
     return true;
   }
   if (maxSpillLevel == -1) {
     return false;
   }
-  return joinSpillLevel(startBitOffset) > maxSpillLevel;
+  return spillLevel(startBitOffset) > maxSpillLevel;
 }
 } // namespace facebook::velox::common

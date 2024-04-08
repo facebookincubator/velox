@@ -22,10 +22,6 @@ namespace {
 
 class ArrayConstructor : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -95,11 +91,11 @@ class ArrayConstructor : public exec::VectorFunction {
         for (int i = 1; i < numArgs; i++) {
           targetRows.clearAll();
 
-          vector_size_t offset = baseOffset;
+          vector_size_t offset_2 = baseOffset;
           rows.applyToSelected([&](vector_size_t row) {
-            targetRows.setValid(offset + i, true);
-            toSourceRow[offset + i] = row;
-            offset += numArgs;
+            targetRows.setValid(offset_2 + i, true);
+            toSourceRow[offset_2 + i] = row;
+            offset_2 += numArgs;
           });
 
           targetRows.updateBounds();
@@ -147,9 +143,10 @@ class ArrayConstructor : public exec::VectorFunction {
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_array_constructor,
     ArrayConstructor::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<ArrayConstructor>());
 
 void registerArrayConstructor(const std::string& name) {

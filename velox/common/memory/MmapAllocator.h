@@ -26,6 +26,7 @@
 
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/MemoryAllocator.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/common/memory/MmapArena.h"
 
 namespace facebook::velox::memory {
@@ -50,7 +51,7 @@ class MmapAllocator : public MemoryAllocator {
  public:
   struct Options {
     ///  Capacity in bytes, default unlimited.
-    uint64_t capacity = kDefaultCapacityBytes;
+    uint64_t capacity{kMaxMemory};
 
     /// If set true, allocations larger than largest size class size will be
     /// delegated to ManagedMmapArena. Otherwise a system mmap call will be
@@ -102,8 +103,7 @@ class MmapAllocator : public MemoryAllocator {
 
   bool growContiguousWithoutRetry(
       MachinePageCount increment,
-      ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr) override;
+      ContiguousAllocation& allocation) override;
 
   void freeContiguous(ContiguousAllocation& allocation) override;
 
@@ -315,23 +315,19 @@ class MmapAllocator : public MemoryAllocator {
   };
 
   bool allocateNonContiguousWithoutRetry(
-      MachinePageCount numPages,
-      Allocation& out,
-      ReservationCallback reservationCB = nullptr,
-      MachinePageCount minSizeClass = 0) override;
+      const SizeMix& sizeMix,
+      Allocation& out) override;
 
   bool allocateContiguousWithoutRetry(
       MachinePageCount numPages,
       Allocation* collateral,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr,
       MachinePageCount maxPages = 0) override;
 
   bool allocateContiguousImpl(
       MachinePageCount numPages,
       Allocation* collateral,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB,
       MachinePageCount maxPages);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);

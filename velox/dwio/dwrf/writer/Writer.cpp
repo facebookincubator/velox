@@ -222,7 +222,7 @@ void Writer::ensureWriteFits(size_t appendBytes, size_t appendRows) {
 
   // Allows the memory arbitrator to reclaim memory from this file writer if the
   // memory reservation below has triggered memory arbitration.
-  exec::ReclaimableSectionGuard reclaimGuard(nonReclaimableSection_);
+  memory::ReclaimableSectionGuard reclaimGuard(nonReclaimableSection_);
 
   const size_t estimatedAppendMemoryBytes =
       std::max(appendBytes, context.estimateNextWriteSize(appendRows));
@@ -254,7 +254,7 @@ void Writer::ensureStripeFlushFits() {
 
   // Allows the memory arbitrator to reclaim memory from this file writer if the
   // memory reservation below has triggered memory arbitration.
-  exec::ReclaimableSectionGuard reclaimGuard(nonReclaimableSection_);
+  memory::ReclaimableSectionGuard reclaimGuard(nonReclaimableSection_);
 
   auto& context = getContext();
   const size_t estimateFlushMemoryBytes =
@@ -543,7 +543,7 @@ void Writer::flushStripe(bool close) {
   metrics.groupSize = 0;
   metrics.close = close;
 
-  LOG(INFO) << fmt::format(
+  VLOG(1) << fmt::format(
       "Stripe {}: Flush overhead = {}, data length = {}, pre flush mem = {}, post flush mem = {}. Closing = {}",
       metrics.stripeIndex,
       metrics.flushOverhead,

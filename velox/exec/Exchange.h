@@ -15,8 +15,12 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <random>
 #include "velox/exec/ExchangeClient.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OutputBufferManager.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 namespace facebook::velox::exec {
 
@@ -48,7 +52,10 @@ class Exchange : public SourceOperator {
         preferredOutputBatchBytes_{
             driverCtx->queryConfig().preferredOutputBatchBytes()},
         processSplits_{operatorCtx_->driverCtx()->driverId == 0},
-        exchangeClient_{std::move(exchangeClient)} {}
+        exchangeClient_{std::move(exchangeClient)} {
+    options_.compressionKind =
+        OutputBufferManager::getInstance().lock()->compressionKind();
+  }
 
   ~Exchange() override {
     close();
@@ -66,6 +73,12 @@ class Exchange : public SourceOperator {
   virtual VectorSerde* getSerde();
 
  private:
+  // Invoked to create exchange client for remote tasks.
+  // The function shuffles the source task ids first to randomize the source
+  // tasks we fetch data from. This helps to avoid different tasks fetching from
+  // the same source task in a distributed system.
+  void addTaskIds(std::vector<std::string>& taskIds);
+
   /// Fetches splits from the task until there are no more splits or task
   /// returns a future that will be complete when more splits arrive. Adds
   /// splits to exchangeClient_. Returns true if received a future from the task
@@ -96,6 +109,8 @@ class Exchange : public SourceOperator {
   std::shared_ptr<ExchangeClient> exchangeClient_;
   std::vector<std::unique_ptr<SerializedPage>> currentPages_;
   bool atEnd_{false};
+  std::default_random_engine rng_{std::random_device{}()};
+  serializer::presto::PrestoVectorSerde::PrestoOptions options_;
 };
 
 } // namespace facebook::velox::exec

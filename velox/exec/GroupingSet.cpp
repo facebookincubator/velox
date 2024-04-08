@@ -52,7 +52,8 @@ GroupingSet::GroupingSet(
     const std::optional<column_index_t>& groupIdChannel,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection,
-    OperatorCtx* operatorCtx)
+    OperatorCtx* operatorCtx,
+    folly::Synchronized<common::SpillStats>* spillStats)
     : preGroupedKeyChannels_(std::move(preGroupedKeys)),
       hashers_(std::move(hashers)),
       isGlobal_(hashers_.empty()),
@@ -62,9 +63,6 @@ GroupingSet::GroupingSet(
       aggregates_(std::move(aggregates)),
       masks_(extractMaskChannels(aggregates_)),
       ignoreNullKeys_(ignoreNullKeys),
-      spillMemoryThreshold_(operatorCtx->driverCtx()
-                                ->queryConfig()
-                                .aggregationSpillMemoryThreshold()),
       globalGroupingSets_(globalGroupingSets),
       groupIdChannel_(groupIdChannel),
       spillConfig_(spillConfig),
@@ -72,7 +70,8 @@ GroupingSet::GroupingSet(
       stringAllocator_(operatorCtx->pool()),
       rows_(operatorCtx->pool()),
       isAdaptive_(queryConfig_.hashAdaptivityEnabled()),
-      pool_(*operatorCtx->pool()) {
+      pool_(*operatorCtx->pool()),
+      spillStats_(spillStats) {
   VELOX_CHECK_NOT_NULL(nonReclaimableSection_);
   VELOX_CHECK(pool_.trackUsage());
   for (auto& hasher : hashers_) {
@@ -134,7 +133,8 @@ std::unique_ptr<GroupingSet> GroupingSet::createForMarkDistinct(
       /*groupIdColumn*/ std::nullopt,
       /*spillConfig*/ nullptr,
       nonReclaimableSection,
-      operatorCtx);
+      operatorCtx,
+      /*spillStats_*/ nullptr);
 };
 
 namespace {
@@ -224,7 +224,18 @@ void GroupingSet::addInputForActiveRows(
   TestValue::adjust(
       "facebook::velox::exec::GroupingSet::addInputForActiveRows", this);
 
-  table_->prepareForGroupProbe(*lookup_, input, activeRows_, ignoreNullKeys_);
+  table_->prepareForGroupProbe(
+      *lookup_,
+      input,
+      activeRows_,
+      ignoreNullKeys_,
+      BaseHashTable::kNoSpillInputStartPartitionBit);
+  if (lookup_->rows.empty()) {
+    // No rows to probe. Can happen when ignoreNullKeys_ is true and all rows
+    // have null keys.
+    return;
+  }
+
   table_->groupProbe(*lookup_);
   masks_.addInput(input, activeRows_);
 
@@ -311,6 +322,8 @@ void initializeAggregates(
         rowColumn.offset(),
         rowColumn.nullByte(),
         rowColumn.nullMask(),
+        rowColumn.initializedByte(),
+        rowColumn.initializedMask(),
         rows.rowSizeOffset());
     ++i;
   }
@@ -362,6 +375,8 @@ void GroupingSet::createHashTable() {
         rowColumn.offset(),
         rowColumn.nullByte(),
         rowColumn.nullMask(),
+        rowColumn.initializedByte(),
+        rowColumn.initializedMask(),
         rows.rowSizeOffset());
 
     ++numColumns;
@@ -376,6 +391,8 @@ void GroupingSet::createHashTable() {
           rowColumn.offset(),
           rowColumn.nullByte(),
           rowColumn.nullMask(),
+          rowColumn.initializedByte(),
+          rowColumn.initializedMask(),
           rows.rowSizeOffset());
       ++numColumns;
     }
@@ -396,16 +413,20 @@ void GroupingSet::initializeGlobalAggregation() {
   lookup_->reset(1);
 
   // Row layout is:
-  //  - null flags - one bit per aggregate,
+  //  - alternating null flag, intialized flag - one bit per flag, one pair per
+  //                                             aggregation,
   //  - uint32_t row size,
   //  - fixed-width accumulators - one per aggregate
   //
   // Here we always make space for a row size since we only have one row and no
   // RowContainer.  The whole row is allocated to guarantee that alignment
   // requirements of all aggregate functions are satisfied.
-  int32_t rowSizeOffset = bits::nbytes(aggregates_.size());
+
+  // Allocate space for the null and initialized flags.
+  int32_t rowSizeOffset =
+      bits::nbytes(aggregates_.size() * RowContainer::kNumAccumulatorFlags);
   int32_t offset = rowSizeOffset + sizeof(int32_t);
-  int32_t nullOffset = 0;
+  int32_t accumulatorFlagsOffset = 0;
   int32_t alignment = 1;
 
   for (auto& aggregate : aggregates_) {
@@ -420,12 +441,14 @@ void GroupingSet::initializeGlobalAggregation() {
     function->setAllocator(&stringAllocator_);
     function->setOffsets(
         offset,
-        RowContainer::nullByte(nullOffset),
-        RowContainer::nullMask(nullOffset),
+        RowContainer::nullByte(accumulatorFlagsOffset),
+        RowContainer::nullMask(accumulatorFlagsOffset),
+        RowContainer::initializedByte(accumulatorFlagsOffset),
+        RowContainer::initializedMask(accumulatorFlagsOffset),
         rowSizeOffset);
 
     offset += accumulator.fixedWidthSize();
-    ++nullOffset;
+    accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
     alignment =
         RowContainer::combineAlignments(accumulator.alignment(), alignment);
   }
@@ -438,12 +461,14 @@ void GroupingSet::initializeGlobalAggregation() {
     sortedAggregations_->setAllocator(&stringAllocator_);
     sortedAggregations_->setOffsets(
         offset,
-        RowContainer::nullByte(nullOffset),
-        RowContainer::nullMask(nullOffset),
+        RowContainer::nullByte(accumulatorFlagsOffset),
+        RowContainer::nullMask(accumulatorFlagsOffset),
+        RowContainer::initializedByte(accumulatorFlagsOffset),
+        RowContainer::initializedMask(accumulatorFlagsOffset),
         rowSizeOffset);
 
     offset += accumulator.fixedWidthSize();
-    ++nullOffset;
+    accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
     alignment =
         RowContainer::combineAlignments(accumulator.alignment(), alignment);
   }
@@ -457,12 +482,14 @@ void GroupingSet::initializeGlobalAggregation() {
       aggregation->setAllocator(&stringAllocator_);
       aggregation->setOffsets(
           offset,
-          RowContainer::nullByte(nullOffset),
-          RowContainer::nullMask(nullOffset),
+          RowContainer::nullByte(accumulatorFlagsOffset),
+          RowContainer::nullMask(accumulatorFlagsOffset),
+          RowContainer::initializedByte(accumulatorFlagsOffset),
+          RowContainer::initializedMask(accumulatorFlagsOffset),
           rowSizeOffset);
 
       offset += accumulator.fixedWidthSize();
-      ++nullOffset;
+      accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
       alignment =
           RowContainer::combineAlignments(accumulator.alignment(), alignment);
     }
@@ -554,10 +581,11 @@ bool GroupingSet::getGlobalAggregationOutput(
     }
 
     auto& function = aggregates_[i].function;
+    auto& resultVector = result->childAt(aggregates_[i].output);
     if (isPartial_) {
-      function->extractAccumulators(groups, 1, &result->childAt(i));
+      function->extractAccumulators(groups, 1, &resultVector);
     } else {
-      function->extractValues(groups, 1, &result->childAt(i));
+      function->extractValues(groups, 1, &resultVector);
     }
   }
 
@@ -583,24 +611,9 @@ bool GroupingSet::getDefaultGlobalGroupingSetOutput(
   if (iterator.allocationIndex != 0) {
     return false;
   }
-  // Global aggregates don't have grouping keys. But global grouping sets
-  // have null values in grouping keys and a groupId column as well. These
-  // key fields precede the aggregate columns in the result.
-  // This logic builds a row with just aggregate fields to reuse the global
-  // aggregate computation from the regular GroupingSet code-path.
-  auto outputType = asRowType(result->type());
-  auto firstAggregateCol = outputType->size() - aggregates_.size();
-  std::vector<std::string> names;
-  std::vector<TypePtr> types;
-  names.reserve(aggregates_.size());
-  types.reserve(aggregates_.size());
-  for (auto i = firstAggregateCol; i < outputType->size(); i++) {
-    names.push_back(outputType->nameOf(i));
-    types.push_back(outputType->childAt(i));
-  }
-  auto aggregatesType = ROW(std::move(names), std::move(types));
+
   auto globalAggregatesRow =
-      BaseVector::create<RowVector>(aggregatesType, 1, &pool_);
+      BaseVector::create<RowVector>(result->type(), 1, &pool_);
 
   VELOX_CHECK(getGlobalAggregationOutput(iterator, globalAggregatesRow));
 
@@ -608,10 +621,17 @@ bool GroupingSet::getDefaultGlobalGroupingSetOutput(
   const auto numGroupingSets = globalGroupingSets_.size();
   result->resize(numGroupingSets);
   VELOX_CHECK(groupIdChannel_.has_value());
-  // These first columns are for grouping keys (which could include the
+
+  // First columns in 'result' are for grouping keys (which could include the
   // GroupId column). For a global grouping set row :
   // i) Non-groupId grouping keys are null.
   // ii) GroupId column is populated with the global grouping set number.
+
+  column_index_t firstAggregateCol = result->type()->size();
+  for (const auto& aggregate : aggregates_) {
+    firstAggregateCol = std::min(firstAggregateCol, aggregate.output);
+  }
+
   for (auto i = 0; i < firstAggregateCol; i++) {
     auto column = result->childAt(i);
     if (i == groupIdChannel_.value()) {
@@ -630,13 +650,12 @@ bool GroupingSet::getDefaultGlobalGroupingSetOutput(
 
   // The remaining aggregate columns are filled from the computed global
   // aggregates.
-  for (auto i = firstAggregateCol; i < outputType->size(); i++) {
-    auto resultAggregateColumn = result->childAt(i);
+  for (const auto& aggregate : aggregates_) {
+    auto resultAggregateColumn = result->childAt(aggregate.output);
     resultAggregateColumn->resize(numGroupingSets);
-    auto sourceAggregateColumn =
-        globalAggregatesRow->childAt(i - firstAggregateCol);
-    for (auto j = 0; j < numGroupingSets; j++) {
-      resultAggregateColumn->copy(sourceAggregateColumn.get(), j, 0, 1);
+    auto sourceAggregateColumn = globalAggregatesRow->childAt(aggregate.output);
+    for (auto i = 0; i < numGroupingSets; i++) {
+      resultAggregateColumn->copy(sourceAggregateColumn.get(), i, 0, 1);
     }
   }
 
@@ -649,9 +668,8 @@ void GroupingSet::destroyGlobalAggregations() {
   }
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
     auto& function = aggregates_[i].function;
-    auto groups = lookup_->hits.data();
     if (function->accumulatorUsesExternalMemory()) {
-      auto groups = lookup_->hits.data();
+      auto* groups = lookup_->hits.data();
       function->destroy(folly::Range(groups, 1));
     }
   }
@@ -821,19 +839,13 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   const int64_t flatBytes = input->estimateFlatSize();
 
   // Test-only spill path.
-  if (spillConfig_->testSpillPct > 0 &&
-      (folly::hasher<uint64_t>()(++spillTestCounter_)) % 100 <=
-          spillConfig_->testSpillPct) {
-    spill();
+  if (testingTriggerSpill()) {
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
+    memory::testingRunArbitration(&pool_);
     return;
   }
 
   const auto currentUsage = pool_.currentBytes();
-  if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
-    spill();
-    return;
-  }
-
   const auto minReservationBytes =
       currentUsage * spillConfig_->minSpillableReservationPct / 100;
   const auto availableReservationBytes = pool_.availableReservation();
@@ -872,7 +884,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
       incrementBytes * 2,
       currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
   {
-    ReclaimableSectionGuard guard(nonReclaimableSection_);
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
     if (pool_.maybeReserve(targetIncrementBytes)) {
       return;
     }
@@ -893,17 +905,16 @@ void GroupingSet::ensureOutputFits() {
   }
 
   // Test-only spill path.
-  if (spillConfig_->testSpillPct > 0 &&
-      (folly::hasher<uint64_t>()(++spillTestCounter_)) % 100 <=
-          spillConfig_->testSpillPct) {
-    spill(RowContainerIterator{});
+  if (testingTriggerSpill()) {
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
+    memory::testingRunArbitration(&pool_);
     return;
   }
 
   const uint64_t outputBufferSizeToReserve =
       queryConfig_.preferredOutputBatchBytes() * 1.2;
   {
-    ReclaimableSectionGuard guard(nonReclaimableSection_);
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
     if (pool_.maybeReserve(outputBufferSizeToReserve)) {
       return;
     }
@@ -942,22 +953,22 @@ void GroupingSet::spill() {
   if (!hasSpilled()) {
     auto rows = table_->rows();
     VELOX_DCHECK(pool_.trackUsage());
+    VELOX_CHECK_EQ(numDistinctSpilledFiles_, 0);
     spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kAggregateInput,
         rows,
         makeSpillType(),
         rows->keyTypes().size(),
         std::vector<CompareFlags>(),
-        spillConfig_->getSpillDirPathCb,
-        spillConfig_->fileNamePrefix,
-        spillConfig_->writeBufferSize,
-        spillConfig_->compressionKind,
-        memory::spillMemoryPool(),
-        spillConfig_->executor,
-        spillConfig_->maxSpillRunRows,
-        spillConfig_->fileCreateConfig);
+        spillConfig_,
+        spillStats_);
+    VELOX_CHECK_EQ(spiller_->state().maxPartitions(), 1);
   }
   spiller_->spill();
+  if (isDistinct() && numDistinctSpilledFiles_ == 0) {
+    numDistinctSpilledFiles_ = spiller_->state().numFinishedFiles(0);
+    VELOX_CHECK_GT(numDistinctSpilledFiles_, 0);
+  }
   if (sortedAggregations_) {
     sortedAggregations_->clear();
   }
@@ -977,14 +988,8 @@ void GroupingSet::spill(const RowContainerIterator& rowIterator) {
       Spiller::Type::kAggregateOutput,
       rows,
       makeSpillType(),
-      spillConfig_->getSpillDirPathCb,
-      spillConfig_->fileNamePrefix,
-      spillConfig_->writeBufferSize,
-      spillConfig_->compressionKind,
-      memory::spillMemoryPool(),
-      spillConfig_->executor,
-      spillConfig_->maxSpillRunRows,
-      spillConfig_->fileCreateConfig);
+      spillConfig_,
+      spillStats_);
 
   spiller_->spill(rowIterator);
   table_->clear();
@@ -1024,7 +1029,7 @@ bool GroupingSet::getOutputWithSpill(
 
     VELOX_CHECK_NULL(merge_);
     auto spillPartition = spiller_->finishSpill();
-    merge_ = spillPartition.createOrderedReader(&pool_);
+    merge_ = spillPartition.createOrderedReader(&pool_, spillStats_);
   }
   VELOX_CHECK_EQ(spiller_->state().maxPartitions(), 1);
   if (merge_ == nullptr) {
@@ -1082,16 +1087,19 @@ bool GroupingSet::mergeNextWithoutAggregates(
     const RowVectorPtr& result) {
   VELOX_CHECK_NOT_NULL(merge_);
   VELOX_CHECK(isDistinct());
+  VELOX_CHECK_GT(numDistinctSpilledFiles_, 0);
 
   // We are looping over sorted rows produced by tree-of-losers. We logically
   // split the stream into runs of duplicate rows. As we process each run we
-  // track whether one of the values comes from stream 0, in which case we
-  // should not produce a result from that run. Otherwise, we produce a result
-  // at the end of the run (when we know for sure whether the run contains a row
-  // from stream 0 or not).
+  // track whether one of the values coming from distinct streams, in which case
+  // we should not produce a result from that run. Otherwise, we produce a
+  // result at the end of the run (when we know for sure whether the run
+  // contains a row from the distinct streams).
   //
-  // NOTE: stream 0 contains rows which has already been output as distinct
-  // before we trigger spilling.
+  // NOTE: the distinct stream refers to the stream that contains the spilled
+  // distinct hash table. A distinct stream contains rows which has already
+  // been output as distinct before we trigger spilling. A distinct stream id is
+  // less than 'numDistinctSpilledFiles_'.
   bool newDistinct{true};
   int32_t numOutputRows{0};
   while (numOutputRows < maxOutputRows) {
@@ -1100,7 +1108,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
     if (stream == nullptr) {
       break;
     }
-    if (stream->id() == 0) {
+    if (stream->id() < numDistinctSpilledFiles_) {
       newDistinct = false;
     }
     if (next.second) {

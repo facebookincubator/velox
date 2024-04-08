@@ -132,22 +132,24 @@ TEST_F(TopNRowNumberTest, largeOutput) {
         .assertResults(sql);
 
     // Spilling.
-    auto task =
-        AssertQueryBuilder(plan, duckDbQueryRunner_)
-            .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-            .config(core::QueryConfig::kTestingSpillPct, "100")
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
-            .spillDirectory(spillDirectory->path)
-            .assertResults(sql);
+    {
+      TestScopedSpillInjection scopedSpillInjection(100);
+      auto task =
+          AssertQueryBuilder(plan, duckDbQueryRunner_)
+              .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+              .config(core::QueryConfig::kSpillEnabled, "true")
+              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+              .spillDirectory(spillDirectory->path)
+              .assertResults(sql);
 
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    const auto& stats = taskStats.at(topNRowNumberId);
+      auto taskStats = exec::toPlanStats(task->taskStats());
+      const auto& stats = taskStats.at(topNRowNumberId);
 
-    ASSERT_GT(stats.spilledBytes, 0);
-    ASSERT_GT(stats.spilledRows, 0);
-    ASSERT_GT(stats.spilledFiles, 0);
-    ASSERT_GT(stats.spilledPartitions, 0);
+      ASSERT_GT(stats.spilledBytes, 0);
+      ASSERT_GT(stats.spilledRows, 0);
+      ASSERT_GT(stats.spilledFiles, 0);
+      ASSERT_GT(stats.spilledPartitions, 0);
+    }
 
     // No partitioning keys.
     plan = PlanBuilder()
@@ -212,24 +214,26 @@ TEST_F(TopNRowNumberTest, manyPartitions) {
     assertQuery(plan, sql);
 
     // Spilling.
-    auto task =
-        AssertQueryBuilder(plan, duckDbQueryRunner_)
-            .config(
-                core::QueryConfig::kPreferredOutputBatchBytes,
-                fmt::format("{}", outputBatchBytes))
-            .config(core::QueryConfig::kTestingSpillPct, "100")
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
-            .spillDirectory(spillDirectory->path)
-            .assertResults(sql);
+    {
+      TestScopedSpillInjection scopedSpillInjection(100);
+      auto task =
+          AssertQueryBuilder(plan, duckDbQueryRunner_)
+              .config(
+                  core::QueryConfig::kPreferredOutputBatchBytes,
+                  fmt::format("{}", outputBatchBytes))
+              .config(core::QueryConfig::kSpillEnabled, "true")
+              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+              .spillDirectory(spillDirectory->path)
+              .assertResults(sql);
 
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    const auto& stats = taskStats.at(topNRowNumberId);
+      auto taskStats = exec::toPlanStats(task->taskStats());
+      const auto& stats = taskStats.at(topNRowNumberId);
 
-    ASSERT_GT(stats.spilledBytes, 0);
-    ASSERT_GT(stats.spilledRows, 0);
-    ASSERT_GT(stats.spilledFiles, 0);
-    ASSERT_GT(stats.spilledPartitions, 0);
+      ASSERT_GT(stats.spilledBytes, 0);
+      ASSERT_GT(stats.spilledRows, 0);
+      ASSERT_GT(stats.spilledFiles, 0);
+      ASSERT_GT(stats.spilledPartitions, 0);
+    }
   };
 
   testLimit(1);
@@ -328,6 +332,52 @@ TEST_F(TopNRowNumberTest, planNodeValidation) {
 
   VELOX_ASSERT_THROW(
       plan({"a", "b"}, {"c"}, 0), "Limit must be greater than zero");
+}
+
+TEST_F(TopNRowNumberTest, maxSpillBytes) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto vectors = createVectors(rowType, 1024, 15 << 20);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .topNRowNumber({"c0"}, {"c1"}, 100, true)
+                  .planNode();
+  struct {
+    int32_t maxSpilledBytes;
+    bool expectedExceedLimit;
+    std::string debugString() const {
+      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+    }
+  } testSettings[] = {{1 << 30, false}, {13 << 20, true}, {0, false}};
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    try {
+      TestScopedSpillInjection scopedSpillInjection(100);
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->path)
+          .queryCtx(queryCtx)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+          .config(
+              core::QueryConfig::kMaxSpillBytes,
+              std::to_string(testData.maxSpilledBytes))
+          .copyResults(pool_.get());
+      ASSERT_FALSE(testData.expectedExceedLimit);
+    } catch (const VeloxRuntimeError& e) {
+      ASSERT_TRUE(testData.expectedExceedLimit);
+      ASSERT_NE(
+          e.message().find(
+              "Query exceeded per-query local spill limit of 13.00MB"),
+          std::string::npos);
+      ASSERT_EQ(
+          e.errorCode(), facebook::velox::error_code::kSpillLimitExceeded);
+    }
+  }
 }
 
 } // namespace

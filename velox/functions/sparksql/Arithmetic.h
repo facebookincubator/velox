@@ -21,7 +21,9 @@
 #include <system_error>
 #include <type_traits>
 
+#include "velox/common/base/Doubles.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/ToHex.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -122,11 +124,8 @@ inline int64_t safeDoubleToInt64(const double& arg) {
   }
   static const int64_t kMax = std::numeric_limits<int64_t>::max();
   static const int64_t kMin = std::numeric_limits<int64_t>::min();
-  // On some compilers if we cast 'kMax' to a double, we can get a number larger
-  // than 'kMax'. This will allow 'arg' values > 'kMax'. The workaround
-  // here is to use uint64_t to represent ('kMax' + 1), which can be represented
-  // exactly as double. We then check if the difference with 'arg' <= 1.
-  if ((static_cast<uint64_t>(kMax) + 1) - arg <= 1) {
+
+  if (arg >= kMinDoubleAboveInt64Max) {
     return kMax;
   }
   if (arg < kMin) {
@@ -271,12 +270,135 @@ struct CotFunction {
 };
 
 template <typename T>
+struct Atan2Function {
+  FOLLY_ALWAYS_INLINE void call(double& result, double y, double x) {
+    // Spark (as of Spark 3.5)'s atan2 SQL function is internally calculated by
+    // Math.atan2(y + 0.0, x + 0.0). We do the same here for compatibility.
+    //
+    // The sign (+/-) for 0.0 matters because it could make atan2 output
+    // different results. For example:
+
+    // * std::atan2(0.0, 0.0) = 0
+    // * std::atan2(0.0, -0.0) = 3.1415926535897931
+    // * std::atan2(-0.0, -0.0) = -3.1415926535897931
+    // * std::atan2(-0.0, 0.0) = 0
+
+    // By doing x + 0.0 or y + 0.0, we make sure all the -0s have been
+    // replaced by 0s before sending to atan2 function. So the function
+    // will always return atan2(0.0, 0.0) = 0 for atan2(+0.0/-0.0, +0.0/-0.0).
+    result = std::atan2(y + 0.0, x + 0.0);
+  }
+};
+
+template <typename T>
 struct Log10Function {
   FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
     if (a <= 0.0) {
       return false;
     }
     result = std::log10(a);
+    return true;
+  }
+};
+
+template <typename T>
+struct IsNanFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(bool& result, TInput a) {
+    result = std::isnan(a);
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void callNullable(bool& result, const TInput* a) {
+    if (a) {
+      call(result, *a);
+    } else {
+      result = false;
+    }
+  }
+};
+
+template <typename T>
+struct ToHexVarbinaryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varbinary>& input) {
+    ToHexUtil::toHex(input, result);
+  }
+};
+
+template <typename T>
+struct ToHexVarcharFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    ToHexUtil::toHex(input, result);
+  }
+};
+
+template <typename T>
+struct ToHexBigintFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<int64_t>& input) {
+    ToHexUtil::toHex(input, result);
+  }
+};
+
+namespace detail {
+FOLLY_ALWAYS_INLINE static int8_t fromHex(char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+
+  if (c >= 'A' && c <= 'F') {
+    return 10 + c - 'A';
+  }
+
+  if (c >= 'a' && c <= 'f') {
+    return 10 + c - 'a';
+  }
+  return -1;
+}
+} // namespace detail
+
+template <typename T>
+struct UnHexFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varbinary>& result,
+      const arg_type<Varchar>& input) {
+    const auto resultSize = (input.size() + 1) >> 1;
+    result.resize(resultSize);
+    const char* inputBuffer = input.data();
+    char* resultBuffer = result.data();
+
+    int32_t i = 0;
+    if ((input.size() & 0x01) != 0) {
+      const auto v = detail::fromHex(inputBuffer[0]);
+      if (v == -1) {
+        return false;
+      }
+      resultBuffer[0] = v;
+      i += 1;
+    }
+
+    while (i < input.size()) {
+      const auto first = detail::fromHex(inputBuffer[i]);
+      const auto second = detail::fromHex(inputBuffer[i + 1]);
+      if (first == -1 || second == -1) {
+        return false;
+      }
+      resultBuffer[(i + 1) / 2] = (first << 4) | second;
+      i += 2;
+    }
     return true;
   }
 };

@@ -31,6 +31,9 @@
 #ifdef VELOX_ENABLE_S3
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h" // @manual
 #endif
+#ifdef VELOX_ENABLE_ABFS
+#include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h" // @manual
+#endif
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 // Meta's buck build system needs this check.
@@ -51,7 +54,7 @@ namespace facebook::velox::connector::hive {
 HiveConnector::HiveConnector(
     const std::string& id,
     std::shared_ptr<const Config> config,
-    folly::Executor* FOLLY_NULLABLE executor)
+    folly::Executor* executor)
     : Connector(id),
       hiveConfig_(std::make_shared<HiveConfig>(config)),
       fileHandleFactory_(
@@ -79,25 +82,14 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  dwio::common::ReaderOptions options(connectorQueryCtx->memoryPool());
-  options.setMaxCoalesceBytes(hiveConfig_->maxCoalescedBytes());
-  options.setMaxCoalesceDistance(hiveConfig_->maxCoalescedDistanceBytes());
-  options.setFileColumnNamesReadAsLowerCase(
-      hiveConfig_->isFileColumnNamesReadAsLowerCase(
-          connectorQueryCtx->sessionProperties()));
-  options.setUseColumnNamesForColumnMapping(
-      hiveConfig_->isOrcUseColumnNames(connectorQueryCtx->sessionProperties()));
-
   return std::make_unique<HiveDataSource>(
       outputType,
       tableHandle,
       columnHandles,
       &fileHandleFactory_,
-      connectorQueryCtx->expressionEvaluator(),
-      connectorQueryCtx->cache(),
-      connectorQueryCtx->scanId(),
       executor_,
-      options);
+      connectorQueryCtx,
+      hiveConfig_);
 }
 
 std::unique_ptr<DataSink> HiveConnector::createDataSink(
@@ -138,7 +130,7 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
 }
 
 void HiveConnectorFactory::initialize() {
-  static bool once = []() {
+  [[maybe_unused]] static bool once = []() {
     dwio::common::registerFileSinks();
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
@@ -156,6 +148,9 @@ void HiveConnectorFactory::initialize() {
 #endif
 #ifdef VELOX_ENABLE_GCS
     filesystems::registerGCSFileSystem();
+#endif
+#ifdef VELOX_ENABLE_ABFS
+    filesystems::abfs::registerAbfsFileSystem();
 #endif
     return true;
   }();

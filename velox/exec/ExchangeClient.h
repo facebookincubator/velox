@@ -22,23 +22,36 @@ namespace facebook::velox::exec {
 
 // Handle for a set of producers. This may be shared by multiple Exchanges, one
 // per consumer thread.
-class ExchangeClient {
+class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
  public:
   static constexpr int32_t kDefaultMaxQueuedBytes = 32 << 20; // 32 MB.
-  static constexpr int32_t kDefaultMaxWaitSeconds = 2;
+  static constexpr std::chrono::seconds kRequestDataSizesMaxWait{2};
+  static constexpr std::chrono::milliseconds kRequestDataMaxWait{100};
   static inline const std::string kBackgroundCpuTimeMs = "backgroundCpuTimeMs";
 
   ExchangeClient(
       std::string taskId,
       int destination,
+      int64_t maxQueuedBytes,
       memory::MemoryPool* pool,
-      int64_t maxQueuedBytes)
+      folly::Executor* executor)
       : taskId_{std::move(taskId)},
         destination_(destination),
         maxQueuedBytes_{maxQueuedBytes},
         pool_(pool),
+        executor_(executor),
         queue_(std::make_shared<ExchangeQueue>()) {
     VELOX_CHECK_NOT_NULL(pool_);
+    VELOX_CHECK_NOT_NULL(executor_);
+    // NOTE: the executor is used to run async response callback from the
+    // exchange source. The provided executor must not be
+    // folly::InlineLikeExecutor, otherwise it might cause potential deadlock as
+    // the response callback in exchange client might call back into the
+    // exchange source under uncertain execution context. For instance, the
+    // exchange client might inline close the exchange source from a background
+    // thread of the exchange source, and the close needs to wait for this
+    // background thread to complete first.
+    VELOX_CHECK_NULL(dynamic_cast<const folly::InlineLikeExecutor*>(executor_));
     VELOX_CHECK_GE(
         destination, 0, "Exchange client destination must not be negative");
   }
@@ -73,7 +86,7 @@ class ExchangeClient {
   ///
   /// If no data is available returns empty list and sets 'atEnd' to true if no
   /// more data is expected. If data is still expected, sets 'atEnd' to false
-  /// and sets 'future' to a Future that will comlete when data arrives.
+  /// and sets 'future' to a Future that will complete when data arrives.
   ///
   /// The data may be compressed, in which case 'maxBytes' applies to compressed
   /// size.
@@ -82,44 +95,44 @@ class ExchangeClient {
 
   std::string toString() const;
 
-  std::string toJsonString() const;
+  folly::dynamic toJson() const;
 
  private:
-  // A list of sources to request data from and how much to request from each
-  // (in bytes).
   struct RequestSpec {
-    std::vector<std::shared_ptr<ExchangeSource>> sources;
+    std::shared_ptr<ExchangeSource> source;
+
+    // How much bytes to request from this source.  0 bytes means request data
+    // sizes only.
     int64_t maxBytes;
   };
 
-  int64_t getAveragePageSize();
+  struct ProducingSource {
+    std::shared_ptr<ExchangeSource> source;
+    std::vector<int64_t> remainingBytes;
+  };
 
-  int32_t getNumSourcesToRequestLocked(int64_t averagePageSize);
+  std::vector<RequestSpec> pickSourcesToRequestLocked();
 
-  RequestSpec pickSourcesToRequestLocked();
-
-  void pickSourcesToRequestLocked(
-      RequestSpec& requestSpec,
-      int32_t numToRequest,
-      std::queue<std::shared_ptr<ExchangeSource>>& sources);
-
-  int32_t countPendingSourcesLocked();
-
-  void request(const RequestSpec& requestSpec);
+  void request(std::vector<RequestSpec>&& requestSpecs);
 
   // Handy for ad-hoc logging.
   const std::string taskId_;
   const int destination_;
   const int64_t maxQueuedBytes_;
   memory::MemoryPool* const pool_;
-  std::shared_ptr<ExchangeQueue> queue_;
-  std::unordered_set<std::string> taskIds_;
+  folly::Executor* const executor_;
+  const std::shared_ptr<ExchangeQueue> queue_;
+
+  std::unordered_set<std::string> remoteTaskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
   bool closed_{false};
 
+  // Total number of bytes in flight.
+  int64_t totalPendingBytes_{0};
+
   // A queue of sources that have returned non-empty response from the latest
   // request.
-  std::queue<std::shared_ptr<ExchangeSource>> producingSources_;
+  std::queue<ProducingSource> producingSources_;
   // A queue of sources that returned empty response from the latest request.
   std::queue<std::shared_ptr<ExchangeSource>> emptySources_;
 };

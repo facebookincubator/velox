@@ -19,6 +19,7 @@
 #include "velox/common/caching/SsdCache.h"
 
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/caching/FileIds.h"
@@ -279,10 +280,10 @@ bool CoalescedLoad::loadOrFuture(folly::SemiFuture<bool>* wait) {
       entry->setExclusiveToShared();
     }
     setEndState(State::kLoaded);
-  } catch (std::exception& e) {
+  } catch (std::exception&) {
     try {
       setEndState(State::kCancelled);
-    } catch (std::exception& inner) {
+    } catch (std::exception&) {
       // May not throw from inside catch.
     }
     throw;
@@ -850,7 +851,7 @@ bool AsyncDataCache::removeFileEntries(
   for (auto& shard : shards_) {
     try {
       success &= shard->removeFileEntries(filesToRemove, filesRetained);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       VELOX_CACHE_LOG(ERROR)
           << "Error removing file entries from AsyncDataCache shard.";
       success = false;

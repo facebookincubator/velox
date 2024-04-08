@@ -97,10 +97,10 @@ Generic Configuration
      - The maximum size in bytes for the task's buffered output when output is partitioned using hash of partitioning keys. See PartitionedOutputNode::Kind::kPartitioned.
        The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
-   * - max_arbitrary_buffer_size
+   * - max_output_buffer_size
      - integer
      - 32MB
-     - The maximum size in bytes for the task's buffered output when output is distributed randomly among consumers. See PartitionedOutputNode::Kind::kArbitrary.
+     - The maximum size in bytes for the task's buffered output.
        The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
    * - min_table_rows_for_parallel_join_build
@@ -118,6 +118,12 @@ Generic Configuration
      - true
      - Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
        evalWithMemo are enabled.
+   * - max_shared_subexpr_results_cached
+     - integer
+     - 10
+     - For a given shared subexpression, the maximum distinct sets of inputs we cache results for. Lambdas can call
+       the same expression with different inputs many times, causing the results we cache to explode in size. Putting
+       a limit contains the memory usage.
    * - driver_cpu_time_slice_limit_ms
      - integer
      - 0
@@ -154,25 +160,6 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
-   * - cast_to_int_by_truncate
-     - bool
-     - false
-     - This flags forces the cast from float/double/decimal/string to integer to be performed by truncating the decimal part instead of rounding.
-   * - cast_string_to_date_is_iso_8601
-     - bool
-     - true
-     - If set, cast from string to date allows only ISO 8601 formatted strings: ``[+-](YYYY-MM-DD)``.
-       Otherwise, allows all patterns supported by Spark:
-         * ``[+-]yyyy*``
-         * ``[+-]yyyy*-[m]m``
-         * ``[+-]yyyy*-[m]m-[d]d``
-         * ``[+-]yyyy*-[m]m-[d]d *``
-         * ``[+-]yyyy*-[m]m-[d]dT*``
-       The asterisk ``*`` in ``yyyy*`` stands for any numbers.
-       For the last two patterns, the trailing ``*`` can represent none or any sequence of characters, e.g:
-         * "1970-01-01 123"
-         * "1970-01-01 (BC)"
-       Regardless of this setting's value, leading spaces will be trimmed.
 
 Memory Management
 -----------------
@@ -297,6 +284,12 @@ Spilling
      - integer
      - 0
      - The maximum allowed spill file size. Zero means unlimited.
+   * - max_spill_bytes
+     - integer
+     - 107374182400
+     - The max spill bytes limit set for each query. This is used to cap the storage used for spilling.
+       If it is zero, then there is no limit and spilling might exhaust the storage or takes too long to run.
+       The default value is set to 100 GB.
    * - spill_write_buffer_size
      - integer
      - 4MB
@@ -320,9 +313,9 @@ Spilling
      - integer
      - 29
      - The start partition bit which is used with `spiller_partition_bits` together to calculate the spilling partition number.
-   * - join_spiller_partition_bits
+   * - spiller_num_partition_bits
      - integer
-     - 2
+     - 3
      - The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
        value is 3, meaning we only support up to 8-way spill partitioning.ing.
    * - testing.spill_pct
@@ -364,29 +357,6 @@ Table Writer
      - task_writer_count
      - The number of parallel table writer threads per task for bucketed table writes. If not set, use 'task_writer_count' as default.
 
-Codegen Configuration
----------------------
-.. list-table::
-   :widths: 20 10 10 70
-   :header-rows: 1
-
-   * - Property Name
-     - Type
-     - Default Value
-     - Description
-   * - codegen.enabled
-     - boolean
-     - false
-     - Along with `codegen.configuration_file_path` enables codegen in task execution path.
-   * - codegen.configuration_file_path
-     - string
-     -
-     - A path to the file contaning codegen options.
-   * - codegen.lazy_loading
-     - boolean
-     - true
-     - Triggers codegen initialization tests upon loading if false. Otherwise skips them.
-
 Hive Connector
 --------------
 Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
@@ -426,16 +396,31 @@ Each query can override the config by setting corresponding query session proper
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
        the input column name and filter is also lower case to achive case-insensitive read.
+   * - partition_path_as_lower_case
+     -
+     - bool
+     - true
+     - If true, the partition directory will be converted to lowercase when executing a table write operation.
+   * - ignore_missing_files
+     -
+     - bool
+     - false
+     - If true, splits that refer to missing files don't generate errors and are processed as empty splits.
    * - max-coalesced-bytes
      -
      - integer
-     - 512kB
+     - 128MB
      - Maximum size in bytes to coalesce requests to be fetched in a single request.
    * - max-coalesced-distance-bytes
      -
      - integer
-     - 128MB
+     - 512KB
      - Maximum distance in bytes between chunks to be fetched that may be coalesced into a single request.
+   * - load-quantum
+     -
+     - integer
+     - 8MB
+     - Define the size of each coalesce load request. E.g. in Parquet scan, if it's bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk
    * - num-cached-file-handles
      -
      - integer
@@ -458,6 +443,18 @@ Each query can override the config by setting corresponding query session proper
      - string
      - 10MB
      - Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.
+   * - file-preload-threshold
+     -
+     - integer
+     - 8MB
+     - Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests.
+       The parameter controls the threshold when whole file is fetched.
+   * - footer-estimated-size
+     -
+     - integer
+     - 1MB
+     - Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later.
+       The parameter controls the size when footer is fetched each time. Bigger value can decrease the IO requests but may fetch more useless meta data.
    * - hive.orc.writer.stripe-max-size
      - orc_optimized_writer_max_stripe_size
      - string
@@ -468,6 +465,12 @@ Each query can override the config by setting corresponding query session proper
      - string
      - 16M
      - Maximum dictionary memory that can be used in orc writer.
+   * - hive.parquet.writer.timestamp-unit
+     - hive.parquet.writer.timestamp_unit
+     - tinyint
+     - 9
+     - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
+       Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -481,7 +484,7 @@ Each query can override the config by setting corresponding query session proper
      - Description
    * - hive.s3.use-instance-credentials
      - bool
-     - true
+     - false
      - Use the EC2 metadata service to retrieve API credentials. This works with IAM roles in EC2.
    * - hive.s3.aws-access-key
      - string
@@ -517,6 +520,10 @@ Each query can override the config by setting corresponding query session proper
      - string
      - velox-session
      - Session name associated with the IAM role.
+   * - hive.s3.use-proxy-from-env
+     - bool
+     - false
+     - Utilize the configuration of the environment variables http_proxy, https_proxy, and no_proxy for use with the S3 API.
 
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -600,3 +607,6 @@ Spark-specific Configuration
      - 4194304
      - The maximum number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function,
        the value of this config can not exceed the default value.
+   * - spark.partition_id
+     - integer
+     - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.

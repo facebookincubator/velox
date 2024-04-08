@@ -42,12 +42,12 @@ bool isPartialOutput(core::AggregationNode::Step step);
 
 class Aggregate {
  protected:
-  explicit Aggregate(TypePtr resultType) : resultType_(resultType) {}
+  explicit Aggregate(TypePtr resultType) : resultType_(std::move(resultType)) {}
 
  public:
   virtual ~Aggregate() {}
 
-  TypePtr resultType() const {
+  const TypePtr& resultType() const {
     return resultType_;
   }
 
@@ -105,6 +105,10 @@ class Aggregate {
   // @param offset Offset in bytes from the start of the row of the accumulator
   // @param nullByte Offset in bytes from the start of the row of the null flag
   // @param nullMask The specific bit in the nullByte that stores the null flag
+  // @param initializedByte Offset in bytes from the start of the row of the
+  // initialized flag
+  // @param initializedMask The specific bit in the initializedByte that stores
+  // the initialized flag
   // @param rowSizeOffset The offset of a uint32_t row size from the start of
   // the row. Only applies to accumulators that store variable size data out of
   // line. Fixed length accumulators do not use this. 0 if the row does not have
@@ -113,8 +117,16 @@ class Aggregate {
       int32_t offset,
       int32_t nullByte,
       uint8_t nullMask,
+      int32_t initializedByte,
+      int8_t initializedMask,
       int32_t rowSizeOffset) {
-    setOffsetsInternal(offset, nullByte, nullMask, rowSizeOffset);
+    setOffsetsInternal(
+        offset,
+        nullByte,
+        nullMask,
+        initializedByte,
+        initializedMask,
+        rowSizeOffset);
   }
 
   // Initializes null flags and accumulators for newly encountered groups.  This
@@ -124,7 +136,13 @@ class Aggregate {
   // @param indices Indices into 'groups' of the new entries.
   virtual void initializeNewGroups(
       char** groups,
-      folly::Range<const vector_size_t*> indices) = 0;
+      folly::Range<const vector_size_t*> indices) {
+    initializeNewGroupsInternal(groups, indices);
+
+    for (auto index : indices) {
+      groups[index][initializedByte_] |= initializedMask_;
+    }
+  }
 
   // Single Aggregate instance is able to take both raw data and
   // intermediate result as input based on the assumption that Partial
@@ -208,6 +226,10 @@ class Aggregate {
   // 'result' and its parts are expected to be singly referenced. If
   // other threads or operators hold references that they would use
   // after 'result' has been updated by this, effects will be unpredictable.
+  // This method should not have side effects, i.e., calling this method
+  // doesn't change the content of the accumulators. This is needed for an
+  // optimization in Window operator where aggregations for expanding frames are
+  // computed incrementally.
   virtual void
   extractValues(char** groups, int32_t numGroups, VectorPtr* result) = 0;
 
@@ -216,7 +238,7 @@ class Aggregate {
   // @param numGroups Number of groups to extract results from.
   // @param result The result vector to store the results in.
   //
-  // See comment on 'result' in extractValues().
+  // See comment on 'result' and side effects in extractValues().
   virtual void
   extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result) = 0;
 
@@ -238,8 +260,14 @@ class Aggregate {
   }
 
   // Frees any out of line storage for the accumulator in
-  // 'groups'. No-op for fixed length accumulators.
-  virtual void destroy(folly::Range<char**> /*groups*/) {}
+  // 'groups' and marks the aggregate as uninitialized.
+  virtual void destroy(folly::Range<char**> groups) {
+    destroyInternal(groups);
+
+    for (auto* group : groups) {
+      group[initializedByte_] &= ~initializedMask_;
+    }
+  }
 
   // Clears state between reuses, e.g. this is called before reusing
   // the aggregation operator's state after flushing a partial
@@ -290,9 +318,24 @@ class Aggregate {
       int32_t offset,
       int32_t nullByte,
       uint8_t nullMask,
+      int32_t initializedByte,
+      uint8_t initializedMask,
       int32_t rowSizeOffset);
 
   virtual void clearInternal();
+
+  // Initializes null flags and accumulators for newly encountered groups.  This
+  // function should be called only once for each group.
+  //
+  // @param groups Pointers to the start of the new group rows.
+  // @param indices Indices into 'groups' of the new entries.
+  virtual void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) = 0;
+
+  // Frees any out of line storage for the accumulator in
+  // 'groups'. No-op for fixed length accumulators.
+  virtual void destroyInternal(folly::Range<char**> groups) {}
 
   // Shorthand for maintaining accumulator variable length size in
   // accumulator update methods. Use like: { auto tracker =
@@ -304,6 +347,10 @@ class Aggregate {
 
   bool isNull(char* group) const {
     return numNulls_ && (group[nullByte_] & nullMask_);
+  }
+
+  bool isInitialized(char* group) const {
+    return group[initializedByte_] & initializedMask_;
   }
 
   // Sets null flag for all specified groups to true.
@@ -347,9 +394,11 @@ class Aggregate {
 
   template <typename T>
   void destroyAccumulator(char* group) const {
-    auto accumulator = value<T>(group);
-    std::destroy_at(accumulator);
-    memset(accumulator, 0, sizeof(T));
+    if (isInitialized(group)) {
+      auto accumulator = value<T>(group);
+      std::destroy_at(accumulator);
+      ::memset(accumulator, 0, sizeof(T));
+    }
   }
 
   template <typename T>
@@ -380,6 +429,9 @@ class Aggregate {
   // Byte position of null flag in group row.
   int32_t nullByte_;
   uint8_t nullMask_;
+  // Byte position of the initialized flag in group row.
+  int32_t initializedByte_;
+  uint8_t initializedMask_;
   // Offset of fixed length accumulator state in group row.
   int32_t offset_;
 
@@ -413,6 +465,11 @@ using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(
     const TypePtr& resultType,
     const core::QueryConfig& config)>;
 
+struct AggregateFunctionMetadata {
+  /// True if results of the aggregation depend on the order of inputs. For
+  /// example, array_agg is order sensitive while count is not.
+  bool orderSensitive{true};
+};
 /// Register an aggregate function with the specified name and signatures. If
 /// registerCompanionFunctions is true, also register companion aggregate and
 /// scalar functions with it. When functions with `name` already exist, if
@@ -422,8 +479,16 @@ AggregateRegistrationResult registerAggregateFunction(
     const std::string& name,
     const std::vector<std::shared_ptr<AggregateFunctionSignature>>& signatures,
     const AggregateFunctionFactory& factory,
-    bool registerCompanionFunctions = false,
-    bool overwrite = false);
+    bool registerCompanionFunctions,
+    bool overwrite);
+
+AggregateRegistrationResult registerAggregateFunction(
+    const std::string& name,
+    const std::vector<std::shared_ptr<AggregateFunctionSignature>>& signatures,
+    const AggregateFunctionFactory& factory,
+    const AggregateFunctionMetadata& metadata,
+    bool registerCompanionFunctions,
+    bool overwrite);
 
 // Register an aggregation function with multiple names. Returns a vector of
 // AggregateRegistrationResult, one for each name at the corresponding index.
@@ -431,8 +496,16 @@ std::vector<AggregateRegistrationResult> registerAggregateFunction(
     const std::vector<std::string>& names,
     const std::vector<std::shared_ptr<AggregateFunctionSignature>>& signatures,
     const AggregateFunctionFactory& factory,
-    bool registerCompanionFunctions = false,
-    bool overwrite = false);
+    bool registerCompanionFunctions,
+    bool overwrite);
+
+std::vector<AggregateRegistrationResult> registerAggregateFunction(
+    const std::vector<std::string>& names,
+    const std::vector<std::shared_ptr<AggregateFunctionSignature>>& signatures,
+    const AggregateFunctionFactory& factory,
+    const AggregateFunctionMetadata& metadata,
+    bool registerCompanionFunctions,
+    bool overwrite);
 
 /// Returns signatures of the aggregate function with the specified name.
 /// Returns empty std::optional if function with that name is not found.
@@ -449,6 +522,7 @@ AggregateFunctionSignatureMap getAggregateFunctionSignatures();
 struct AggregateFunctionEntry {
   std::vector<AggregateFunctionSignaturePtr> signatures;
   AggregateFunctionFactory factory;
+  AggregateFunctionMetadata metadata;
 };
 
 using AggregateFunctionMap = folly::Synchronized<

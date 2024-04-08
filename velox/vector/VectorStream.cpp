@@ -18,14 +18,48 @@
 #include "velox/common/base/RawVector.h"
 
 namespace facebook::velox {
-
-void VectorSerializer::append(const RowVectorPtr& vector) {
-  const IndexRange allRows{0, vector->size()};
-  Scratch scratch;
-  append(vector, folly::Range(&allRows, 1), scratch);
-}
-
 namespace {
+// An adapter class that can be used to convert a VectorSerializer into a
+// BatchVectorSerializer for VectorSerdes that don't want to implement a
+// separate serializer.
+class DefaultBatchVectorSerializer : public BatchVectorSerializer {
+ public:
+  DefaultBatchVectorSerializer(
+      memory::MemoryPool* pool,
+      VectorSerde* serde,
+      const VectorSerde::Options* options)
+      : pool_(pool), serde_(serde), options_(options) {}
+
+  void serialize(
+      const RowVectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      Scratch& scratch,
+      OutputStream* stream) override {
+    size_t numRows = 0;
+    for (const auto& range : ranges) {
+      numRows += range.size;
+    }
+
+    StreamArena arena(pool_);
+    auto serializer = serde_->createIterativeSerializer(
+        asRowType(vector->type()), numRows, &arena, options_);
+    serializer->append(vector, ranges, scratch);
+    serializer->flush(stream);
+  }
+
+  void estimateSerializedSize(
+      VectorPtr vector,
+      const folly::Range<const IndexRange*>& ranges,
+      vector_size_t** sizes,
+      Scratch& scratch) override {
+    serde_->estimateSerializedSize(vector.get(), ranges, sizes, scratch);
+  }
+
+ private:
+  memory::MemoryPool* const pool_;
+  VectorSerde* const serde_;
+  const VectorSerde::Options* const options_;
+};
 
 std::unique_ptr<VectorSerde>& getVectorSerdeImpl() {
   static std::unique_ptr<VectorSerde> serde;
@@ -40,6 +74,25 @@ getNamedVectorSerdeImpl() {
 }
 
 } // namespace
+
+void IterativeVectorSerializer::append(const RowVectorPtr& vector) {
+  const IndexRange allRows{0, vector->size()};
+  Scratch scratch;
+  append(vector, folly::Range(&allRows, 1), scratch);
+}
+
+void BatchVectorSerializer::serialize(
+    const RowVectorPtr& vector,
+    OutputStream* stream) {
+  const IndexRange allRows{0, vector->size()};
+  serialize(vector, folly::Range(&allRows, 1), stream);
+}
+
+std::unique_ptr<BatchVectorSerializer> VectorSerde::createBatchSerializer(
+    memory::MemoryPool* pool,
+    const Options* options) {
+  return std::make_unique<DefaultBatchVectorSerializer>(pool, this, options);
+}
 
 VectorSerde* getVectorSerde() {
   auto serde = getVectorSerdeImpl().get();
@@ -99,7 +152,7 @@ void VectorStreamGroup::createStreamTree(
     RowTypePtr type,
     int32_t numRows,
     const VectorSerde::Options* options) {
-  serializer_ = serde_->createSerializer(type, numRows, this, options);
+  serializer_ = serde_->createIterativeSerializer(type, numRows, this, options);
 }
 
 void VectorStreamGroup::append(
@@ -126,7 +179,7 @@ void VectorStreamGroup::flush(OutputStream* out) {
 
 // static
 void VectorStreamGroup::estimateSerializedSize(
-    VectorPtr vector,
+    const BaseVector* vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes,
     Scratch& scratch) {
@@ -135,7 +188,7 @@ void VectorStreamGroup::estimateSerializedSize(
 
 // static
 void VectorStreamGroup::estimateSerializedSize(
-    VectorPtr vector,
+    const BaseVector* vector,
     folly::Range<const vector_size_t*> rows,
     vector_size_t** sizes,
     Scratch& scratch) {

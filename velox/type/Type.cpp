@@ -14,12 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/type/Type.h"
+#include <velox/type/Type.h>
+
 #include <boost/algorithm/string.hpp>
+#include <fmt/format.h>
 #include <folly/Demangle.h>
 #include <re2/re2.h>
+
 #include <sstream>
 #include <typeindex>
+
 #include "velox/type/TimestampConversion.h"
 
 namespace std {
@@ -307,19 +311,6 @@ std::vector<TypeParameter> createTypeParameters(
   return parameters;
 }
 
-// Returns children names index name -> first idx of occurence.
-const folly::F14FastMap<std::string, uint32_t> createdChildrenIndex(
-    const std::vector<std::string>& names) {
-  folly::F14FastMap<std::string, uint32_t> index;
-  index.reserve(names.size());
-  for (uint32_t i = 0; i < names.size(); ++i) {
-    if (index.find(names[i]) == index.end()) {
-      index[names[i]] = i;
-    }
-  }
-  return index;
-}
-
 std::string namesAndTypesToString(
     const std::vector<std::string>& names,
     const std::vector<TypePtr>& types) {
@@ -351,9 +342,7 @@ std::string namesAndTypesToString(
 RowType::RowType(std::vector<std::string>&& names, std::vector<TypePtr>&& types)
     : names_{std::move(names)},
       children_{std::move(types)},
-      parameters_{createTypeParameters(children_)},
-      // TODO: lazily initialize index on first access instead.
-      childrenIndices_{createdChildrenIndex(names_)} {
+      parameters_{createTypeParameters(children_)} {
   VELOX_CHECK_EQ(
       names_.size(),
       children_.size(),
@@ -393,11 +382,11 @@ std::string makeFieldNotFoundErrorMessage(
 }
 } // namespace
 
-// Returns type of first child with matching name.
 const TypePtr& RowType::findChild(folly::StringPiece name) const {
-  auto idx = getChildIdxIfExists(std::string(name));
-  if (idx) {
-    return children_[*idx];
+  for (uint32_t i = 0; i < names_.size(); ++i) {
+    if (names_.at(i) == name) {
+      return children_.at(i);
+    }
   }
   VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
 }
@@ -417,10 +406,9 @@ bool RowType::isComparable() const {
 }
 
 bool RowType::containsChild(std::string_view name) const {
-  return getChildIdxIfExists(std::string(name)).has_value();
+  return std::find(names_.begin(), names_.end(), name) != names_.end();
 }
 
-// Returns index of first child with matching name.
 uint32_t RowType::getChildIdx(const std::string& name) const {
   auto index = getChildIdxIfExists(name);
   if (!index.has_value()) {
@@ -431,9 +419,10 @@ uint32_t RowType::getChildIdx(const std::string& name) const {
 
 std::optional<uint32_t> RowType::getChildIdxIfExists(
     const std::string& name) const {
-  const auto it = childrenIndices_.find(name);
-  if (it != childrenIndices_.end()) {
-    return it->second;
+  for (uint32_t i = 0; i < names_.size(); i++) {
+    if (names_.at(i) == name) {
+      return i;
+    }
   }
   return std::nullopt;
 }
@@ -445,7 +434,7 @@ bool RowType::equivalent(const Type& other) const {
   if (!Type::hasSameTypeId(other)) {
     return false;
   }
-  auto& otherTyped = other.asRow();
+  const auto& otherTyped = other.asRow();
   if (otherTyped.size() != size()) {
     return false;
   }
@@ -458,13 +447,20 @@ bool RowType::equivalent(const Type& other) const {
 }
 
 bool RowType::equals(const Type& other) const {
-  if (!this->equivalent(other)) {
+  if (&other == this) {
+    return true;
+  }
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
-  auto& otherTyped = other.asRow();
+  const auto& otherTyped = other.asRow();
+  if (otherTyped.size() != size()) {
+    return false;
+  }
   for (size_t i = 0; i < size(); ++i) {
     // todo: case sensitivity
-    if (nameOf(i) != otherTyped.nameOf(i)) {
+    if (nameOf(i) != otherTyped.nameOf(i) ||
+        *childAt(i) != *otherTyped.childAt(i)) {
       return false;
     }
   }
@@ -729,25 +725,21 @@ std::shared_ptr<const RowType> ROW(
 }
 
 std::shared_ptr<const RowType> ROW(std::vector<TypePtr>&& types) {
-  std::vector<std::string> names;
-  names.reserve(types.size());
-  for (auto& p : types) {
-    names.push_back("");
-  }
+  std::vector<std::string> names(types.size(), "");
   return TypeFactory<TypeKind::ROW>::create(std::move(names), std::move(types));
 }
 
 std::shared_ptr<const MapType> MAP(TypePtr keyType, TypePtr valType) {
   return std::make_shared<const MapType>(
       std::move(keyType), std::move(valType));
-};
+}
 
 std::shared_ptr<const FunctionType> FUNCTION(
     std::vector<TypePtr>&& argumentTypes,
     TypePtr returnType) {
   return std::make_shared<const FunctionType>(
       std::move(argumentTypes), std::move(returnType));
-};
+}
 
 #define VELOX_DEFINE_SCALAR_ACCESSOR(KIND)                   \
   std::shared_ptr<const ScalarType<TypeKind::KIND>> KIND() { \
@@ -905,37 +897,6 @@ exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
   return nullptr;
 }
 
-TypePtr fromKindToScalerType(TypeKind kind) {
-  switch (kind) {
-    case TypeKind::TINYINT:
-      return TINYINT();
-    case TypeKind::BOOLEAN:
-      return BOOLEAN();
-    case TypeKind::SMALLINT:
-      return SMALLINT();
-    case TypeKind::BIGINT:
-      return BIGINT();
-    case TypeKind::INTEGER:
-      return INTEGER();
-    case TypeKind::REAL:
-      return REAL();
-    case TypeKind::VARCHAR:
-      return VARCHAR();
-    case TypeKind::VARBINARY:
-      return VARBINARY();
-    case TypeKind::TIMESTAMP:
-      return TIMESTAMP();
-    case TypeKind::DOUBLE:
-      return DOUBLE();
-    case TypeKind::UNKNOWN:
-      return UNKNOWN();
-    default:
-      VELOX_UNSUPPORTED(
-          "Kind is not a scalar type: {}", mapTypeKindToName(kind));
-      return nullptr;
-  }
-}
-
 void toTypeSql(const TypePtr& type, std::ostream& out) {
   switch (type->kind()) {
     case TypeKind::ARRAY:
@@ -1004,15 +965,20 @@ std::string IntervalDayTimeType::valueToString(int64_t value) const {
 std::string IntervalYearMonthType::valueToString(int32_t value) const {
   std::ostringstream oss;
   auto sign = "";
-  if (value < 0) {
+  int64_t longValue = value;
+  if (longValue < 0) {
     sign = "-";
-    value = -value;
+    longValue = -longValue;
   }
-  oss << fmt::format("{}{}-{}", sign, value / 12, value % 12);
+  oss << fmt::format("{}{}-{}", sign, longValue / 12, longValue % 12);
   return oss.str();
 }
 
 std::string DateType::toString(int32_t days) const {
+  return DateType::toIso8601(days);
+}
+
+std::string DateType::toIso8601(int32_t days) {
   // Find the number of seconds for the days_;
   // Casting 86400 to int64 to handle overflows gracefully.
   int64_t daySeconds = days * (int64_t)(86400);
@@ -1023,7 +989,14 @@ std::string DateType::toString(int32_t days) const {
       days);
   TimestampToStringOptions options;
   options.mode = TimestampToStringOptions::Mode::kDateOnly;
-  return Timestamp::tmToString(tmValue, 0, options);
+  // Enable zero-padding for year, to ensure compliance with 'YYYY' format.
+  options.zeroPaddingYear = true;
+  std::string result;
+  result.resize(getMaxStringLength(options));
+  const auto view =
+      Timestamp::tmToStringView(tmValue, 0, options, result.data());
+  result.resize(view.size());
+  return result;
 }
 
 int32_t DateType::toDays(folly::StringPiece in) const {
@@ -1056,7 +1029,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"UNKNOWN", UNKNOWN()},
   };
   return kTypes;
-};
+}
 
 class DecimalParametricType {
  public:

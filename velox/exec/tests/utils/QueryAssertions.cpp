@@ -17,7 +17,9 @@
 #include <gtest/gtest.h>
 #include <chrono>
 
+#include "duckdb/common/types.hpp" // @manual
 #include "velox/duckdb/conversion/DuckConversion.h"
+#include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/vector/VectorTypeUtils.h"
@@ -37,6 +39,30 @@ template <TypeKind kind>
 ::duckdb::Value duckValueAt(const VectorPtr& vector, vector_size_t index) {
   using T = typename KindToFlatVector<kind>::WrapperType;
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
+}
+
+template <>
+::duckdb::Value duckValueAt<TypeKind::TINYINT>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  return ::duckdb::Value::TINYINT(
+      vector->as<SimpleVector<int8_t>>()->valueAt(index));
+}
+
+template <>
+::duckdb::Value duckValueAt<TypeKind::SMALLINT>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  return ::duckdb::Value::SMALLINT(
+      vector->as<SimpleVector<int16_t>>()->valueAt(index));
+}
+
+template <>
+::duckdb::Value duckValueAt<TypeKind::BOOLEAN>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  return ::duckdb::Value::BOOLEAN(
+      vector->as<SimpleVector<bool>>()->valueAt(index));
 }
 
 template <>
@@ -866,9 +892,9 @@ void DuckDbQueryRunner::createTable(
   auto res = con.Query(sql);
   verifyDuckDBResult(res, sql);
 
+  ::duckdb::Appender appender(con, name);
   for (auto& vector : data) {
     for (int32_t row = 0; row < vector->size(); row++) {
-      ::duckdb::Appender appender(con, name);
       appender.BeginRow();
       for (int32_t column = 0; column < rowType.size(); column++) {
         auto columnVector = vector->childAt(column);
@@ -995,6 +1021,19 @@ bool assertEqualResults(
   const auto& expectedType =
       (expected.size() == 0) ? nullptr : expected.at(0)->type();
   return assertEqualResults(expectedRows, expectedType, actual);
+}
+
+bool assertEqualResults(
+    const core::PlanNodePtr& plan1,
+    const core::PlanNodePtr& plan2) {
+  CursorParameters params1;
+  params1.planNode = plan1;
+  auto [cursor1, results1] = readCursor(params1, [](Task*) {});
+
+  CursorParameters params2;
+  params2.planNode = plan2;
+  auto [cursor2, results2] = readCursor(params2, [](Task*) {});
+  return assertEqualResults(results1, results2);
 }
 
 void assertEqualTypeAndNumRows(
@@ -1278,11 +1317,48 @@ void assertResultsOrdered(
   }
 }
 
+tsan_atomic<int32_t>& testingAbortPct() {
+  static tsan_atomic<int32_t> abortPct = 0;
+  return abortPct;
+}
+
+tsan_atomic<int32_t>& testingAbortCounter() {
+  static tsan_atomic<int32_t> counter = 0;
+  return counter;
+}
+
+TestScopedAbortInjection::TestScopedAbortInjection(
+    int32_t abortPct,
+    int32_t maxInjections) {
+  testingAbortPct() = abortPct;
+  testingAbortCounter() = maxInjections;
+}
+
+TestScopedAbortInjection::~TestScopedAbortInjection() {
+  testingAbortPct() = 0;
+  testingAbortCounter() = 0;
+}
+
+bool testingMaybeTriggerAbort(exec::Task* task) {
+  if (testingAbortPct() <= 0 || testingAbortCounter() <= 0) {
+    return false;
+  }
+
+  if ((folly::Random::rand32() % 100) < testingAbortPct()) {
+    if (testingAbortCounter()-- > 0) {
+      task->requestAbort();
+      return true;
+    }
+  }
+
+  return false;
+}
+
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
     std::function<void(exec::Task*)> addSplits,
     uint64_t maxWaitMicros) {
-  auto cursor = std::make_unique<TaskCursor>(params);
+  auto cursor = TaskCursor::create(params);
   // 'result' borrows memory from cursor so the life cycle must be shorter.
   std::vector<RowVectorPtr> result;
   auto* task = cursor->task().get();
@@ -1291,6 +1367,7 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
   while (cursor->moveNext()) {
     result.push_back(cursor->current());
     addSplits(task);
+    testingMaybeTriggerAbort(task);
   }
 
   if (!waitForTaskCompletion(task, maxWaitMicros)) {
@@ -1476,4 +1553,29 @@ void printResults(const RowVectorPtr& result, std::ostream& out) {
   }
 }
 
+std::unordered_map<std::string, OperatorStats> toOperatorStats(
+    const TaskStats& taskStats) {
+  std::unordered_map<std::string, OperatorStats> opStatsMap;
+
+  for (const auto& pipelineStats : taskStats.pipelineStats) {
+    for (const auto& opStats : pipelineStats.operatorStats) {
+      const auto& opType = opStats.operatorType;
+      auto it = opStatsMap.find(opType);
+      if (it != opStatsMap.end()) {
+        it->second.add(opStats);
+      } else {
+        opStatsMap.emplace(opType, opStats);
+      }
+    }
+  }
+  return opStatsMap;
+}
+
 } // namespace facebook::velox::exec::test
+
+template <>
+struct fmt::formatter<::duckdb::LogicalTypeId> : formatter<int> {
+  auto format(::duckdb::LogicalTypeId s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

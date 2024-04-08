@@ -40,7 +40,7 @@ template <typename Item>
 class AsyncSource {
  public:
   explicit AsyncSource(std::function<std::unique_ptr<Item>()> make)
-      : make_(make) {}
+      : make_(std::move(make)) {}
 
   // Makes an item if it is not already made. To be called on a background
   // executor.
@@ -60,7 +60,7 @@ class AsyncSource {
     try {
       CpuWallTimer timer(timing_);
       item = make();
-    } catch (std::exception& e) {
+    } catch (std::exception&) {
       std::lock_guard<std::mutex> l(mutex_);
       exception_ = std::current_exception();
     }
@@ -115,7 +115,7 @@ class AsyncSource {
     if (make) {
       try {
         return make();
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
         std::lock_guard<std::mutex> l(mutex_);
         exception_ = std::current_exception();
         throw;

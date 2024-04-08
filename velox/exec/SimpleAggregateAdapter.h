@@ -41,7 +41,8 @@ using optional_arg_type = OptionalAccessor<T>;
 template <typename FUNC>
 class SimpleAggregateAdapter : public Aggregate {
  public:
-  explicit SimpleAggregateAdapter(TypePtr resultType) : Aggregate(resultType) {}
+  explicit SimpleAggregateAdapter(TypePtr resultType)
+      : Aggregate(std::move(resultType)) {}
 
   // Assume most aggregate functions have fixed-size accumulators. Functions
   // that
@@ -67,17 +68,16 @@ class SimpleAggregateAdapter : public Aggregate {
   // there are a couple of differences in their implementations.
   // 1. When default_null_behavior_ is true, authors define
   //     void AccumulatorType::addInput(HashStringAllocator* allocator,
-  //     exec::arg_type<T1> arg1, ...) void
-  //     AccumulatorType::combine(HashStringAllocator* allocator,
-  //     exec::arg_type<IntermediateType> arg)
+  //                                    exec::arg_type<T1> arg1, ...)
+  //     void AccumulatorType::combine(HashStringAllocator* allocator,
+  //                                   exec::arg_type<IntermediateType> arg)
   // These functions only receive non-null input values. Input rows that contain
   // at least one NULL argument are ignored. The accumulator of a group is set
   // to non-null if at least one input is added to this group through addInput()
   // or combine(). Similarly, authors define
-  //     bool
-  //     AccumulatorType::writeIntermediateResult(exec::out_type<IntermediateType>&
-  //     out) bool AccumulatorType::writeFinalResult(exec::out_type<OutputType>&
-  //     out)
+  //     bool AccumulatorType::writeIntermediateResult(
+  //         exec::out_type<IntermediateType>&out)
+  //     bool AccumulatorType::writeFinalResult(exec::out_type<OutputType>&out)
   // These functions are only called on groups of non-null accumulators. Groups
   // that have NULL accumulators automatically become NULL in the result vector.
   // These functions also return a bool indicating whether the current group
@@ -85,18 +85,21 @@ class SimpleAggregateAdapter : public Aggregate {
   //
   // 2. When default_null_behavior_ is false, authors define
   //     bool AccumulatorType::addInput(HashStringAllocator* allocator,
-  //     exec::optional_arg_type<T1> arg1, ...) bool
-  //     AccumulatorType::combine(HashStringAllocator* allocator,
-  //     exec::optional_arg_type<IntermediateType> arg)
+  //                                    exec::optional_arg_type<T1> arg1, ...)
+  //     bool AccumulatorType::combine(
+  //         HashStringAllocator* allocator,
+  //         exec::optional_arg_type<IntermediateType> arg)
   // These functions receive both non-null and null inputs. They return a bool
   // indicating whether to set the current group's accumulator to non-null. If
   // the accumulator of a group is already non-NULL, returning false from
   // addInput() or combine() doesn't change this group's nullness. Authors also
   // define
-  //     bool AccumulatorType::writeIntermediateResult(bool nonNullGroup,
-  //     exec::out_type<IntermediateType>& out) bool
-  //     AccumulatorType::writeFinalResult(bool nonNullGroup,
-  //     exec::out_type<OutputType>& out)
+  //     bool AccumulatorType::writeIntermediateResult(
+  //         bool nonNullGroup,
+  //         exec::out_type<IntermediateType>& out)
+  //     bool AccumulatorType::writeFinalResult(
+  //         bool nonNullGroup,
+  //         exec::out_type<OutputType>& out)
   // These functions are called on groups of both non-null and null
   // accumulators. These functions also return a bool indicating whether the
   // current group should be a NULL in the result vector.
@@ -142,6 +145,18 @@ class SimpleAggregateAdapter : public Aggregate {
   struct support_to_intermediate<T, std::void_t<decltype(&T::toIntermediate)>>
       : std::true_type {};
 
+  // Whether the accumulator requires aligned access. If it is defined,
+  // SimpleAggregateAdapter::accumulatorAlignmentSize() returns
+  // alignof(typename FUNC::AccumulatorType).
+  // Otherwise, SimpleAggregateAdapter::accumulatorAlignmentSize() returns
+  // Aggregate::accumulatorAlignmentSize(), with a default value of 1.
+  template <typename T, typename = void>
+  struct accumulator_is_aligned : std::false_type {};
+
+  template <typename T>
+  struct accumulator_is_aligned<T, std::void_t<decltype(T::is_aligned_)>>
+      : std::integral_constant<bool, T::is_aligned_> {};
+
   static constexpr bool aggregate_default_null_behavior_ =
       aggregate_default_null_behavior<FUNC>::value;
 
@@ -157,6 +172,9 @@ class SimpleAggregateAdapter : public Aggregate {
   static constexpr bool support_to_intermediate_ =
       support_to_intermediate<FUNC>::value;
 
+  static constexpr bool accumulator_is_aligned_ =
+      accumulator_is_aligned<typename FUNC::AccumulatorType>::value;
+
   bool isFixedSize() const override {
     return accumulator_is_fixed_size_;
   }
@@ -169,13 +187,11 @@ class SimpleAggregateAdapter : public Aggregate {
     return sizeof(typename FUNC::AccumulatorType);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) typename FUNC::AccumulatorType(allocator_);
+  int32_t accumulatorAlignmentSize() const override {
+    if constexpr (accumulator_is_aligned_) {
+      return alignof(typename FUNC::AccumulatorType);
     }
+    return Aggregate::accumulatorAlignmentSize();
   }
 
   // Add raw input to accumulators. If the simple aggregation function has
@@ -328,16 +344,27 @@ class SimpleAggregateAdapter : public Aggregate {
     writer.finish();
   }
 
-  void destroy(folly::Range<char**> groups) override {
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + offset_) typename FUNC::AccumulatorType(allocator_);
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
     if constexpr (accumulator_custom_destroy_) {
       for (auto group : groups) {
         auto accumulator = value<typename FUNC::AccumulatorType>(group);
-        if (!isNull(group)) {
+        if (isInitialized(group) && !isNull(group)) {
           accumulator->destroy(allocator_);
         }
       }
+    } else {
+      destroyAccumulators<typename FUNC::AccumulatorType>(groups);
     }
-    destroyAccumulators<typename FUNC::AccumulatorType>(groups);
   }
 
  private:

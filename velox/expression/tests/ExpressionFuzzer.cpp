@@ -356,40 +356,9 @@ bool isDeterministic(
     return true;
   }
 
-  // Check if this is a simple function.
-  if (auto simpleFunctionEntry =
-          exec::simpleFunctions().resolveFunction(functionName, argTypes)) {
-    return simpleFunctionEntry->getMetadata().isDeterministic();
-  }
-
-  // Vector functions are a bit more complicated. We need to fetch the list of
-  // available signatures and check if any of them bind given the current
-  // input arg types. If it binds (if there's a match), we fetch the function
-  // and return the isDeterministic bool.
-  try {
-    if (auto vectorFunctionSignatures =
-            exec::getVectorFunctionSignatures(functionName)) {
-      core::QueryConfig config({});
-      for (const auto& signature : *vectorFunctionSignatures) {
-        if (exec::SignatureBinder(*signature, argTypes).tryBind()) {
-          if (auto vectorFunction =
-                  exec::getVectorFunction(functionName, argTypes, {}, config)) {
-            return vectorFunction->isDeterministic();
-          }
-        }
-      }
-    }
-  }
-  // TODO: Some stateful functions can only be built when constant arguments
-  // are passed, making the getVectorFunction() call above to throw. We only
-  // have a few of these functions, so for now we assume they are
-  // deterministic so they are picked for Fuzz testing. Once we make the
-  // isDeterministic() flag static (and hence we won't need to build the
-  // function object in here) we can clean up this code.
-  catch (const std::exception& e) {
-    LOG(WARNING) << "Unable to determine if '" << functionName
-                 << "' is deterministic or not. Assuming it is.";
-    return true;
+  if (auto typeAndMetadata =
+          resolveFunctionWithMetadata(functionName, argTypes)) {
+    return typeAndMetadata->second.deterministic;
   }
 
   // functionName must be a special form.
@@ -487,7 +456,7 @@ BufferPtr extractNonNullIndices(const RowVectorPtr& data) {
 
   for (auto& child : data->children()) {
     decoded.decode(*child);
-    auto* rawNulls = decoded.nulls();
+    auto* rawNulls = decoded.nulls(nullptr);
     if (rawNulls) {
       nonNullRows.deselectNulls(rawNulls, 0, data->size());
     }
@@ -730,10 +699,6 @@ ExpressionFuzzer::ExpressionFuzzer(
 
   // Register function override (for cases where we want to restrict the types
   // or parameters we pass to functions).
-  registerFuncOverride(
-      &ExpressionFuzzer::generateEmptyApproxSetArgs, "empty_approx_set");
-  registerFuncOverride(
-      &ExpressionFuzzer::generateRegexpReplaceArgs, "regexp_replace");
   registerFuncOverride(&ExpressionFuzzer::generateSwitchArgs, "switch");
 }
 
@@ -825,6 +790,12 @@ core::TypedExprPtr ExpressionFuzzer::generateArgColumn(const TypePtr& arg) {
   auto& listOfCandidateCols = state.typeToColumnNames_[arg->toString()];
   bool reuseColumn = options_.enableColumnReuse &&
       !listOfCandidateCols.empty() && vectorFuzzer_->coinToss(0.3);
+
+  if (!reuseColumn && options_.maxInputsThreshold.has_value() &&
+      state.inputRowTypes_.size() >= options_.maxInputsThreshold.value()) {
+    reuseColumn = !listOfCandidateCols.empty();
+  }
+
   if (!reuseColumn) {
     state.inputRowTypes_.emplace_back(arg);
     state.inputRowNames_.emplace_back(
@@ -959,28 +930,6 @@ core::TypedExprPtr ExpressionFuzzer::generateArg(
   }
 }
 
-// Specialization for the "empty_approx_set" function: first optional
-// parameter needs to be constant.
-std::vector<core::TypedExprPtr> ExpressionFuzzer::generateEmptyApproxSetArgs(
-    const CallableSignature& input) {
-  if (input.args.empty()) {
-    return {};
-  }
-  return {generateArgConstant(input.args[0])};
-}
-
-// Specialization for the "regexp_replace" function: second and third
-// (optional) parameters always need to be constant.
-std::vector<core::TypedExprPtr> ExpressionFuzzer::generateRegexpReplaceArgs(
-    const CallableSignature& input) {
-  std::vector<core::TypedExprPtr> inputExpressions = {
-      generateArg(input.args[0]), generateArgConstant(input.args[1])};
-  if (input.args.size() == 3) {
-    inputExpressions.emplace_back(generateArgConstant(input.args[2]));
-  }
-  return inputExpressions;
-}
-
 std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSwitchArgs(
     const CallableSignature& input) {
   VELOX_CHECK_EQ(
@@ -1004,20 +953,24 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSwitchArgs(
 }
 
 ExpressionFuzzer::FuzzedExpressionData ExpressionFuzzer::fuzzExpressions(
-    size_t numberOfExpressions) {
+    const RowTypePtr& outType) {
   state.reset();
   VELOX_CHECK_EQ(
       state.remainingLevelOfNesting_, std::max(1, options_.maxLevelOfNesting));
 
   std::vector<core::TypedExprPtr> expressions;
-  for (int i = 0; i < numberOfExpressions; i++) {
-    auto outType = fuzzReturnType();
-    expressions.push_back(generateExpression(outType));
+  for (int i = 0; i < outType->size(); i++) {
+    expressions.push_back(generateExpression(outType->childAt(i)));
   }
   return {
       std::move(expressions),
       ROW(std::move(state.inputRowNames_), std::move(state.inputRowTypes_)),
       std::move(state.expressionStats_)};
+}
+
+ExpressionFuzzer::FuzzedExpressionData ExpressionFuzzer::fuzzExpressions(
+    size_t numberOfExpressions) {
+  return fuzzExpressions(fuzzRowReturnType(numberOfExpressions));
 }
 
 ExpressionFuzzer::FuzzedExpressionData ExpressionFuzzer::fuzzExpression() {
@@ -1419,6 +1372,16 @@ TypePtr ExpressionFuzzer::fuzzReturnType() {
     rootType = typeFuzzer.fuzzReturnType();
   }
   return rootType;
+}
+
+RowTypePtr ExpressionFuzzer::fuzzRowReturnType(size_t size, char prefix) {
+  std::vector<TypePtr> children;
+  std::vector<std::string> names;
+  for (int i = 0; i < size; i++) {
+    children.push_back(fuzzReturnType());
+    names.push_back(fmt::format("{}{}", prefix, i));
+  }
+  return ROW(std::move(names), std::move(children));
 }
 
 } // namespace facebook::velox::test

@@ -32,8 +32,22 @@ void SpillInputStream::next(bool /*throwIfPastEnd*/) {
   const int32_t readBytes = std::min(size_ - offset_, buffer_->capacity());
   VELOX_CHECK_LT(0, readBytes, "Reading past end of spill file");
   setRange({buffer_->asMutable<uint8_t>(), readBytes, 0});
-  file_->pread(offset_, readBytes, buffer_->asMutable<char>());
+  uint64_t readTimeUs{0};
+  {
+    MicrosecondTimer timer{&readTimeUs};
+    file_->pread(offset_, readBytes, buffer_->asMutable<char>());
+  }
+  updateSpillStats(readBytes, readTimeUs);
   offset_ += readBytes;
+}
+
+void SpillInputStream::updateSpillStats(uint64_t readBytes, uint64_t readTimeUs)
+    const {
+  auto lockedStats = stats_->wlock();
+  lockedStats->spillReadBytes += readBytes;
+  lockedStats->spillReadTimeUs += readTimeUs;
+  ++(lockedStats->spillReads);
+  common::updateGlobalSpillReadStats(readBytes, readTimeUs);
 }
 
 std::unique_ptr<SpillWriteFile> SpillWriteFile::create(
@@ -73,13 +87,8 @@ uint64_t SpillWriteFile::size() const {
 }
 
 uint64_t SpillWriteFile::write(std::unique_ptr<folly::IOBuf> iobuf) {
-  uint64_t writtenBytes{0};
-  // TODO: extend velox file system to support write with a chained io buffers.
-  for (auto& range : *iobuf) {
-    writtenBytes += range.size();
-    file_->append(std::string_view(
-        reinterpret_cast<const char*>(range.data()), range.size()));
-  }
+  auto writtenBytes = iobuf->computeChainDataLength();
+  file_->append(std::move(iobuf));
   return writtenBytes;
 }
 
@@ -92,6 +101,7 @@ SpillWriter::SpillWriter(
     uint64_t targetFileSize,
     uint64_t writeBufferSize,
     const std::string& fileCreateConfig,
+    common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats)
     : type_(type),
@@ -102,6 +112,7 @@ SpillWriter::SpillWriter(
       targetFileSize_(targetFileSize),
       writeBufferSize_(writeBufferSize),
       fileCreateConfig_(fileCreateConfig),
+      updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
       pool_(pool),
       stats_(stats) {
   // NOTE: if the associated spilling operator has specified the sort
@@ -140,6 +151,10 @@ void SpillWriter::closeFile() {
   currentFile_.reset();
 }
 
+size_t SpillWriter::numFinishedFiles() const {
+  return finishedFiles_.size();
+}
+
 uint64_t SpillWriter::flush() {
   if (batch_ == nullptr) {
     return 0;
@@ -165,6 +180,7 @@ uint64_t SpillWriter::flush() {
     writtenBytes = file->write(std::move(iobuf));
   }
   updateWriteStats(writtenBytes, flushTimeUs, writeTimeUs);
+  updateAndCheckSpillLimitCb_(writtenBytes);
   return writtenBytes;
 }
 
@@ -178,7 +194,7 @@ uint64_t SpillWriter::write(
     MicrosecondTimer timer(&timeUs);
     if (batch_ == nullptr) {
       serializer::presto::PrestoVectorSerde::PrestoOptions options = {
-          kDefaultUseLosslessTimestamp, compressionKind_};
+          kDefaultUseLosslessTimestamp, compressionKind_, true /*nullsFirst*/};
       batch_ = std::make_unique<VectorStreamGroup>(pool_);
       batch_->createStreamTree(
           std::static_pointer_cast<const RowType>(rows->type()),
@@ -211,7 +227,7 @@ void SpillWriter::updateWriteStats(
   statsLocked->spilledBytes += spilledBytes;
   statsLocked->spillFlushTimeUs += flushTimeUs;
   statsLocked->spillWriteTimeUs += fileWriteTimeUs;
-  ++statsLocked->spillDiskWrites;
+  ++statsLocked->spillWrites;
   common::updateGlobalSpillWriteStats(
       spilledBytes, flushTimeUs, fileWriteTimeUs);
 }
@@ -266,7 +282,8 @@ std::vector<uint32_t> SpillWriter::testingSpilledFileIds() const {
 
 std::unique_ptr<SpillReadFile> SpillReadFile::create(
     const SpillFileInfo& fileInfo,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* stats) {
   return std::unique_ptr<SpillReadFile>(new SpillReadFile(
       fileInfo.id,
       fileInfo.path,
@@ -275,7 +292,8 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
       fileInfo.numSortKeys,
       fileInfo.sortFlags,
       fileInfo.compressionKind,
-      pool));
+      pool,
+      stats));
 }
 
 SpillReadFile::SpillReadFile(
@@ -286,7 +304,8 @@ SpillReadFile::SpillReadFile(
     uint32_t numSortKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
     common::CompressionKind compressionKind,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* stats)
     : id_(id),
       path_(path),
       size_(size),
@@ -294,24 +313,36 @@ SpillReadFile::SpillReadFile(
       numSortKeys_(numSortKeys),
       sortCompareFlags_(sortCompareFlags),
       compressionKind_(compressionKind),
-      readOptions_{kDefaultUseLosslessTimestamp, compressionKind_},
-      pool_(pool) {
+      readOptions_{
+          kDefaultUseLosslessTimestamp,
+          compressionKind_,
+          true /*nullsFirst*/},
+      pool_(pool),
+      stats_(stats) {
   constexpr uint64_t kMaxReadBufferSize =
       (1 << 20) - AlignedBuffer::kPaddedSize; // 1MB - padding.
   auto fs = filesystems::getFileSystem(path_, nullptr);
   auto file = fs->openFileForRead(path_);
   auto buffer = AlignedBuffer::allocate<char>(
       std::min<uint64_t>(size_, kMaxReadBufferSize), pool_);
-  input_ =
-      std::make_unique<SpillInputStream>(std::move(file), std::move(buffer));
+  input_ = std::make_unique<SpillInputStream>(
+      std::move(file), std::move(buffer), stats_);
 }
 
 bool SpillReadFile::nextBatch(RowVectorPtr& rowVector) {
   if (input_->atEnd()) {
     return false;
   }
-  VectorStreamGroup::read(
-      input_.get(), pool_, type_, &rowVector, &readOptions_);
+
+  uint64_t timeUs{0};
+  {
+    MicrosecondTimer timer{&timeUs};
+    VectorStreamGroup::read(
+        input_.get(), pool_, type_, &rowVector, &readOptions_);
+  }
+  stats_->wlock()->spillDeserializationTimeUs += timeUs;
+  common::updateGlobalSpillDeserializationTimeUs(timeUs);
+
   return true;
 }
 } // namespace facebook::velox::exec

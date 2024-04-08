@@ -17,6 +17,7 @@
 #include <velox/common/base/VeloxException.h>
 #include <velox/type/StringView.h>
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/lib/DateTimeFormatterBuilder.h"
 #include "velox/type/TimestampConversion.h"
@@ -77,13 +78,16 @@ class DateTimeFormatterTest : public testing::Test {
   DateTimeResult parseJoda(
       const std::string_view& input,
       const std::string_view& format) {
-    return buildJodaDateTimeFormatter(format)->parse(input);
+    return buildJodaDateTimeFormatter(format)->parse(input, true).value();
   }
 
   Timestamp parseMysql(
       const std::string_view& input,
       const std::string_view& format) {
-    return buildMysqlDateTimeFormatter(format)->parse(input).timestamp;
+    return buildMysqlDateTimeFormatter(format)
+        ->parse(input, true)
+        .value()
+        .timestamp;
   }
 
   // Parses and returns the timezone converted back to string, to ease
@@ -91,7 +95,8 @@ class DateTimeFormatterTest : public testing::Test {
   std::string parseTZ(
       const std::string_view& input,
       const std::string_view& format) {
-    auto result = buildJodaDateTimeFormatter(format)->parse(input);
+    auto result =
+        buildJodaDateTimeFormatter(format)->parse(input, true).value();
     if (result.timezoneId == 0) {
       return "+00:00";
     }
@@ -1000,6 +1005,17 @@ TEST_F(JodaDateTimeFormatterTest, parseHalfOfDay) {
   EXPECT_EQ(
       util::fromTimestampString("1970-01-01 12:00:00"),
       parseJoda("1 AM 12", "h a H").timestamp);
+
+  // Half of day still has effect even though hour or clockhour is not provided.
+  EXPECT_EQ(
+      util::fromTimestampString("1970-01-01 12:00:00"),
+      parseJoda("PM", "a").timestamp);
+  EXPECT_EQ(
+      util::fromTimestampString("1970-01-01 12:11:11"),
+      parseJoda("11:11 PM", "mm:ss a").timestamp);
+  EXPECT_EQ(
+      util::fromTimestampString("2018-04-28 12:59:30"),
+      parseJoda("2018-04-28 59:30 PM", "yyyy-MM-dd mm:ss a").timestamp);
 }
 
 TEST_F(JodaDateTimeFormatterTest, parseMinute) {
@@ -1386,6 +1402,16 @@ TEST_F(JodaDateTimeFormatterTest, formatResultSize) {
   EXPECT_EQ(buildJodaDateTimeFormatter("C")->maxResultSize(timezone), 3);
   // Needs to pad to make result contain 4 digits.
   EXPECT_EQ(buildJodaDateTimeFormatter("CCCC")->maxResultSize(timezone), 4);
+}
+
+TEST_F(JodaDateTimeFormatterTest, betterErrorMessaging) {
+  VELOX_ASSERT_THROW(
+      parseJoda("2057-02-29T14:48:14.891Z", "yyyy-MM-dd'T'HH:mm:ss.SSSZ"),
+      "Value 29 for dayOfMonth must be in the range [1,28] for year 2057 and month 2.");
+
+  VELOX_ASSERT_THROW(
+      parseJoda("2057-02-429T14:48:14.891Z", "yyyy-MM-D'T'HH:mm:ss.SSSZ"),
+      "Value 429 for dayOfMonth must be in the range [1,365] for year 2057 and month 2.");
 }
 
 class MysqlDateTimeTest : public DateTimeFormatterTest {};

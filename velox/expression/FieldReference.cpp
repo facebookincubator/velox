@@ -30,31 +30,6 @@ void FieldReference::computeDistinctFields() {
   }
 }
 
-// Fast path to avoid copying result.  An alternative way to do this is to
-// ensure that children has null if parent has nulls on corresponding rows,
-// whenever the RowVector is constructed or mutated (eager propagation of
-// nulls).  The current lazy propagation might still be better (more efficient)
-// when adding extra nulls.
-bool FieldReference::addNullsFast(
-    const SelectivityVector& rows,
-    EvalCtx& context,
-    VectorPtr& result,
-    const RowVector* row) {
-  if (result) {
-    return false;
-  }
-  auto& child =
-      inputs_.empty() ? context.getField(index_) : row->childAt(index_);
-  if (row->mayHaveNulls()) {
-    if (!child.unique()) {
-      return false;
-    }
-    addNulls(rows, row->rawNulls(), context, const_cast<VectorPtr&>(child));
-  }
-  result = child;
-  return true;
-}
-
 void FieldReference::apply(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -71,25 +46,14 @@ void FieldReference::apply(
   } else {
     inputs_[0]->eval(rows, context, input);
 
-    if (auto rowTry = input->as<RowVector>()) {
-      // Make sure output is not copied
-      if (rowTry->isCodegenOutput()) {
-        auto rowType = dynamic_cast<const RowType*>(rowTry->type().get());
-        index_ = rowType->getChildIdx(field_);
-        result = std::move(rowTry->childAt(index_));
-        VELOX_CHECK(result.unique());
-        return;
-      }
-    }
-
     decoded.decode(*input, rows);
     if (decoded.mayHaveNulls()) {
       nonNullRowsHolder.get(rows);
       nonNullRowsHolder->deselectNulls(
-          decoded.nulls(), rows.begin(), rows.end());
+          decoded.nulls(&rows), rows.begin(), rows.end());
       nonNullRows = nonNullRowsHolder.get();
       if (!nonNullRows->hasSelections()) {
-        addNulls(rows, decoded.nulls(), context, result);
+        addNulls(rows, decoded.nulls(&rows), context, result);
         return;
       }
     }
@@ -116,9 +80,6 @@ void FieldReference::apply(
     VELOX_CHECK(rowType);
     index_ = rowType->getChildIdx(field_);
   }
-  if (!useDecode && addNullsFast(rows, context, result, row)) {
-    return;
-  }
   VectorPtr child =
       inputs_.empty() ? context.getField(index_) : row->childAt(index_);
   if (child->encoding() == VectorEncoding::Simple::LAZY) {
@@ -144,7 +105,7 @@ void FieldReference::apply(
 
   // Check for nulls in the input struct. Propagate these nulls to 'result'.
   if (!inputs_.empty() && decoded.mayHaveNulls()) {
-    addNulls(rows, decoded.nulls(), context, result);
+    addNulls(rows, decoded.nulls(&rows), context, result);
   }
 }
 

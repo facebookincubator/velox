@@ -203,6 +203,7 @@ void SortedAggregations::initializeNewGroups(
   for (auto i : indices) {
     groups[i][nullByte_] |= nullMask_;
     new (groups[i] + offset_) RowPointers();
+    groups[i][initializedByte_] |= initializedMask_;
   }
 
   for (const auto& [sortingSpec, aggregates] : aggregates_) {
@@ -379,6 +380,10 @@ void SortedAggregations::extractValues(
     // For each group, sort inputs, add them to aggregate.
     for (auto* group : groups) {
       auto* accumulator = reinterpret_cast<RowPointers*>(group + offset_);
+      if (accumulator->size == 0) {
+        continue;
+      }
+
       groupRows.resize(accumulator->size);
       accumulator->read(folly::Range(groupRows.data(), groupRows.size()));
 

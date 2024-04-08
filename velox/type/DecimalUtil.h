@@ -18,8 +18,10 @@
 
 #include <string>
 #include "velox/common/base/CheckedArithmetic.h"
+#include "velox/common/base/CountBits.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/common/base/Status.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -146,12 +148,13 @@ class DecimalUtil {
   }
 
   template <typename TInput, typename TOutput>
-  inline static std::optional<TOutput> rescaleWithRoundUp(
+  inline static Status rescaleWithRoundUp(
       TInput inputValue,
       int fromPrecision,
       int fromScale,
       int toPrecision,
-      int toScale) {
+      int toScale,
+      TOutput& output) {
     int128_t rescaledValue = inputValue;
     auto scaleDifference = toScale - fromScale;
     bool isOverflow = false;
@@ -173,13 +176,14 @@ class DecimalUtil {
     }
     // Check overflow.
     if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
-      VELOX_USER_FAIL(
+      return Status::UserError(
           "Cannot cast DECIMAL '{}' to DECIMAL({}, {})",
           DecimalUtil::toString(inputValue, DECIMAL(fromPrecision, fromScale)),
           toPrecision,
           toScale);
     }
-    return static_cast<TOutput>(rescaledValue);
+    output = static_cast<TOutput>(rescaledValue);
+    return Status::OK();
   }
 
   template <typename TInput, typename TOutput>
@@ -200,6 +204,70 @@ class DecimalUtil {
     return static_cast<TOutput>(rescaledValue);
   }
 
+  /// Rescales a floating point value to decimal value of given precision and
+  /// scale. Returns error status if fails.
+  /// @tparam TInput Either float or double.
+  /// @tparam TOutput Either int64_t or int128_t.
+  template <typename TInput, typename TOutput>
+  inline static Status rescaleFloatingPoint(
+      TInput value,
+      int precision,
+      int scale,
+      TOutput& output) {
+    if (!std::isfinite(value)) {
+      return Status::UserError("The input value should be finite.");
+    }
+    if (value <= std::numeric_limits<TOutput>::min() ||
+        value >= std::numeric_limits<TOutput>::max()) {
+      return Status::UserError("Result overflows.");
+    }
+
+    uint8_t digits;
+    if constexpr (std::is_same_v<TInput, float>) {
+      // A float provides between 6 and 7 decimal digits, so at least 6 digits
+      // are precise.
+      digits = 6;
+    } else {
+      // A double provides from 15 to 17 decimal digits, so at least 15 digits
+      // are precise.
+      digits = 15;
+    }
+
+    // Calculate the precise fractional digits.
+    const auto integralValue = static_cast<uint128_t>(std::abs(value));
+    const auto integralDigits =
+        integralValue == 0 ? 0 : countDigits(integralValue);
+    const auto fractionDigits = std::max(digits - integralDigits, 0);
+
+    // Scales up the input value with all the precise fractional digits kept.
+    // Convert value as long double type because 1) double * int128_t returns
+    // int128_t and fractional digits are lost. 2) we could also convert the
+    // int128_t value as double to avoid 'double * int128_t', but double
+    // multiplication gives inaccurate result on large numbers. For example,
+    // -3333030000000000000 * 1e3 = -3333030000000000065536. No need to
+    // consider the result becoming infinite as DOUBLE_MAX * 10^38 <
+    // LONG_DOUBLE_MAX.
+    long double scaledValue = std::round(
+        (long double)value * DecimalUtil::kPowersOfTen[fractionDigits]);
+    if (scale > fractionDigits) {
+      scaledValue *= DecimalUtil::kPowersOfTen[scale - fractionDigits];
+    } else {
+      scaledValue /= DecimalUtil::kPowersOfTen[fractionDigits - scale];
+    }
+
+    const auto result = folly::tryTo<TOutput>(std::round(scaledValue));
+    if (result.hasError()) {
+      return Status::UserError("Result overflows.");
+    }
+    const TOutput rescaledValue = result.value();
+    if (!valueInPrecisionRange<TOutput>(rescaledValue, precision)) {
+      return Status::UserError(
+          "Result cannot fit in the given precision {}.", precision);
+    }
+    output = rescaledValue;
+    return Status::OK();
+  }
+
   template <typename R, typename A, typename B>
   inline static R divideWithRoundUp(
       R& r,
@@ -210,7 +278,7 @@ class DecimalUtil {
       uint8_t /*bRescale*/) {
     VELOX_USER_CHECK_NE(b, 0, "Division by zero");
     int resultSign = 1;
-    A unsignedDividendRescaled(a);
+    R unsignedDividendRescaled(a);
     if (a < 0) {
       resultSign = -1;
       unsignedDividendRescaled *= -1;

@@ -23,6 +23,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/testutil/ScopedTestTime.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -93,7 +94,6 @@ class AsyncDataCacheTest : public testing::Test {
       cache_->shutdown();
     }
     cache_.reset();
-    allocator_.reset();
 
     std::unique_ptr<SsdCache> ssdCache;
     if (ssdBytes > 0) {
@@ -113,10 +113,13 @@ class AsyncDataCacheTest : public testing::Test {
           ssdBytes / 20);
     }
 
-    memory::MmapAllocator::Options options;
-    options.capacity = maxBytes;
-    allocator_ = std::make_shared<memory::MmapAllocator>(options);
-    cache_ = AsyncDataCache::create(allocator_.get(), std::move(ssdCache));
+    memory::MemoryManagerOptions options;
+    options.useMmapAllocator = true;
+    options.allocatorCapacity = maxBytes;
+    options.trackDefaultUsage = true;
+    manager_ = std::make_unique<memory::MemoryManager>(options);
+    allocator_ = static_cast<memory::MmapAllocator*>(manager_->allocator());
+    cache_ = AsyncDataCache::create(allocator_, std::move(ssdCache));
     if (filenames_.empty()) {
       for (auto i = 0; i < kNumFiles; ++i) {
         auto name = fmt::format("testing_file_{}", i);
@@ -177,7 +180,7 @@ class AsyncDataCacheTest : public testing::Test {
     std::vector<std::thread> threads;
     threads.reserve(numThreads);
     for (int32_t i = 0; i < numThreads; ++i) {
-      threads.push_back(std::thread([this, i, func]() { func(i); }));
+      threads.push_back(std::thread([i, func]() { func(i); }));
     }
     for (auto& thread : threads) {
       thread.join();
@@ -204,6 +207,12 @@ class AsyncDataCacheTest : public testing::Test {
           return;
         }
       }
+    }
+  }
+
+  static void waitForSsdWriteToFinish(const SsdCache* ssdCache) {
+    while (ssdCache->writeInProgress()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
     }
   }
 
@@ -240,7 +249,8 @@ class AsyncDataCacheTest : public testing::Test {
   }
 
   std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
-  std::shared_ptr<memory::MemoryAllocator> allocator_;
+  std::unique_ptr<memory::MemoryManager> manager_;
+  memory::MemoryAllocator* allocator_;
   std::shared_ptr<AsyncDataCache> cache_;
   std::vector<StringIdLease> filenames_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
@@ -654,12 +664,7 @@ TEST_F(AsyncDataCacheTest, evictAccounting) {
   constexpr int64_t kMaxBytes = 64 << 20;
   FLAGS_velox_exception_user_stacktrace_enabled = false;
   initializeCache(kMaxBytes);
-  auto memoryManager =
-      std::make_unique<memory::MemoryManager>(memory::MemoryManagerOptions{
-          .capacity = (int64_t)allocator_->capacity(),
-          .trackDefaultUsage = true,
-          .allocator = allocator_.get()});
-  auto pool = memoryManager->addLeafPool("test");
+  auto pool = manager_->addLeafPool("test");
 
   // We make allocations that we exchange for larger ones later. This will evict
   // cache. We check that the evictions are not counted on the pool even if they
@@ -668,11 +673,11 @@ TEST_F(AsyncDataCacheTest, evictAccounting) {
   memory::ContiguousAllocation large;
   pool->allocateNonContiguous(1200, allocation);
   pool->allocateContiguous(1200, large);
-  EXPECT_EQ(memory::AllocationTraits::kPageSize * 2400, pool->currentBytes());
+  EXPECT_EQ(memory::AllocationTraits::pageBytes(2400), pool->currentBytes());
   loadLoop(0, kMaxBytes * 1.1);
   pool->allocateNonContiguous(2400, allocation);
   pool->allocateContiguous(2400, large);
-  EXPECT_EQ(memory::AllocationTraits::kPageSize * 4800, pool->currentBytes());
+  EXPECT_EQ(memory::AllocationTraits::pageBytes(4800), pool->currentBytes());
   auto stats = cache_->refreshStats();
   EXPECT_LT(0, stats.numEvict);
 }
@@ -878,7 +883,7 @@ TEST_F(AsyncDataCacheTest, cacheStats) {
       "Prefetch entries: 0 bytes: 0B\n"
       "Alloc Megaclocks 0\n"
       "Allocated pages: 0 cached pages: 0\n"
-      "Backing: Memory Allocator[MMAP capacity 16.00KB allocated pages 0 mapped pages 0 external mapped pages 0\n"
+      "Backing: Memory Allocator[MMAP total capacity 64.00MB free capacity 64.00MB allocated pages 0 mapped pages 0 external mapped pages 0\n"
       "[size 1: 0(0MB) allocated 0 mapped]\n"
       "[size 2: 0(0MB) allocated 0 mapped]\n"
       "[size 4: 0(0MB) allocated 0 mapped]\n"
@@ -1098,9 +1103,7 @@ DEBUG_ONLY_TEST_F(AsyncDataCacheTest, shrinkWithSsdWrite) {
   writeWaitFlag = false;
   writeWait.notifyAll();
   ssdWriteThread.join();
-  while (cache_->ssdCache()->writeInProgress()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
-  }
+  waitForSsdWriteToFinish(cache_->ssdCache());
 
   stats = cache_->refreshStats();
   ASSERT_GT(stats.numEntries, stats.numEmptyEntries);
@@ -1111,7 +1114,6 @@ DEBUG_ONLY_TEST_F(AsyncDataCacheTest, shrinkWithSsdWrite) {
   ASSERT_EQ(stats.numEmptyEntries, numEntries);
 }
 
-#ifndef NDEBUG
 DEBUG_ONLY_TEST_F(AsyncDataCacheTest, ttl) {
   constexpr uint64_t kRamBytes = 32 << 20;
   constexpr uint64_t kSsdBytes = 128UL << 20;
@@ -1130,11 +1132,11 @@ DEBUG_ONLY_TEST_F(AsyncDataCacheTest, ttl) {
 
   stt.setCurrentTestTimeSec(loadTime1);
   loadNFiles(filenames_.size() * 2 / 3, offsets);
+  waitForSsdWriteToFinish(cache_->ssdCache());
   auto statsT1 = cache_->refreshStats();
 
   stt.setCurrentTestTimeSec(loadTime2);
   loadNFiles(filenames_.size(), offsets);
-  auto statsT2 = cache_->refreshStats();
 
   runThreads(2, [&](int32_t /*i*/) {
     CacheTTLController::getInstance()->applyTTL(
@@ -1145,6 +1147,5 @@ DEBUG_ONLY_TEST_F(AsyncDataCacheTest, ttl) {
   EXPECT_EQ(statsTtl.numAgedOut, statsT1.numEntries);
   EXPECT_EQ(statsTtl.ssdStats->entriesAgedOut, statsT1.ssdStats->entriesCached);
 }
-#endif
 
 // TODO: add concurrent fuzzer test.

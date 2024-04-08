@@ -20,32 +20,31 @@
 
 #include <gtest/gtest.h>
 
-using namespace facebook::velox;
-
-static constexpr std::string_view kMinioConnectionString = "127.0.0.1:9000";
+namespace facebook::velox {
+namespace {
 
 class S3FileSystemTest : public S3Test {
  protected:
-  static void SetUpTestSuite() {
+  static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
-    if (minioServer_ == nullptr) {
-      minioServer_ = std::make_shared<MinioServer>(kMinioConnectionString);
-      minioServer_->start();
-    }
+  }
+
+  void SetUp() override {
+    S3Test::SetUp();
     auto hiveConfig = minioServer_->hiveConfig({{"hive.s3.log-level", "Info"}});
     filesystems::initializeS3(hiveConfig.get());
   }
 
   static void TearDownTestSuite() {
-    if (minioServer_ != nullptr) {
-      minioServer_->stop();
-      minioServer_ = nullptr;
-    }
     filesystems::finalizeS3();
   }
 };
+} // namespace
 
 TEST_F(S3FileSystemTest, writeAndRead) {
+  /// The hive config used for Minio defaults to turning
+  /// off using proxy settings if the environment provides them.
+  setenv("HTTP_PROXY", "http://test:test@127.0.0.1:8888", 1);
   const char* bucketName = "data";
   const char* file = "test.txt";
   const std::string filename = localPath(bucketName) + "/" + file;
@@ -117,16 +116,18 @@ TEST_F(S3FileSystemTest, missingFile) {
   addBucket(bucketName);
   auto hiveConfig = minioServer_->hiveConfig();
   filesystems::S3FileSystem s3fs(hiveConfig);
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_RUNTIME_THROW_CODE(
       s3fs.openFileForRead(s3File),
+      error_code::kFileNotFound,
       "Failed to get metadata for S3 object due to: 'Resource not found'. Path:'s3://data1/i-do-not-exist.txt', SDK Error Type:16, HTTP Status Code:404, S3 Service:'MinIO', Message:'No response body.'");
 }
 
 TEST_F(S3FileSystemTest, missingBucket) {
   auto hiveConfig = minioServer_->hiveConfig();
   filesystems::S3FileSystem s3fs(hiveConfig);
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_RUNTIME_THROW_CODE(
       s3fs.openFileForRead(kDummyPath),
+      error_code::kFileNotFound,
       "Failed to get metadata for S3 object due to: 'Resource not found'. Path:'s3://dummy/foo.txt', SDK Error Type:16, HTTP Status Code:404, S3 Service:'MinIO', Message:'No response body.'");
 }
 
@@ -251,3 +252,4 @@ TEST_F(S3FileSystemTest, writeFileAndRead) {
   // Verify the last chunk.
   ASSERT_EQ(readFile->pread(contentSize * 250'000, contentSize), dataContent);
 }
+} // namespace facebook::velox

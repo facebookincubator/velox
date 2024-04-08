@@ -16,6 +16,7 @@
 
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 
+#include "velox/common/process/TraceContext.h"
 #include "velox/dwio/common/ColumnLoader.h"
 
 namespace facebook::velox::dwio::common {
@@ -56,9 +57,15 @@ void SelectiveStructColumnReaderBase::next(
     uint64_t numValues,
     VectorPtr& result,
     const Mutation* mutation) {
+  process::TraceContext trace("SelectiveStructColumnReaderBase::next");
   if (children_.empty()) {
-    if (mutation && mutation->deletedRows) {
-      numValues -= bits::countBits(mutation->deletedRows, 0, numValues);
+    if (mutation) {
+      if (mutation->deletedRows) {
+        numValues -= bits::countBits(mutation->deletedRows, 0, numValues);
+      }
+      if (mutation->randomSkip) {
+        numValues *= mutation->randomSkip->sampleRate();
+      }
     }
 
     // no readers
@@ -85,7 +92,7 @@ void SelectiveStructColumnReaderBase::next(
     std::iota(&rows_[oldSize], &rows_[rows_.size()], oldSize);
   }
   mutation_ = mutation;
-  hasMutation_ = mutation && mutation->deletedRows;
+  hasMutation_ = mutation && (mutation->deletedRows || mutation->randomSkip);
   read(readOffset_, rows_, nullptr);
   getValues(outputRows(), &result);
 }
@@ -103,10 +110,27 @@ void SelectiveStructColumnReaderBase::read(
     VELOX_DCHECK(!nullsInReadRange_, "Only top level can have mutation");
     VELOX_DCHECK_EQ(
         rows.back(), rows.size() - 1, "Top level should have a dense row set");
-    bits::forEachUnsetBit(
-        mutation_->deletedRows, 0, rows.back() + 1, [&](auto i) {
-          addOutputRow(i);
-        });
+    if (mutation_->deletedRows) {
+      bits::forEachUnsetBit(
+          mutation_->deletedRows, 0, rows.back() + 1, [&](auto i) {
+            if (!mutation_->randomSkip || mutation_->randomSkip->testOne()) {
+              addOutputRow(i);
+            }
+          });
+    } else {
+      VELOX_CHECK(mutation_->randomSkip);
+      vector_size_t i = 0;
+      while (i <= rows.back()) {
+        auto skip = mutation_->randomSkip->nextSkip();
+        if (skip > rows.back() - i) {
+          mutation_->randomSkip->consume(rows.back() - i + 1);
+          break;
+        }
+        i += skip;
+        addOutputRow(i++);
+        mutation_->randomSkip->consume(skip + 1);
+      }
+    }
     if (outputRows_.empty()) {
       readOffset_ = offset + rows.back() + 1;
       return;
@@ -136,6 +160,7 @@ void SelectiveStructColumnReaderBase::read(
   VELOX_CHECK(!childSpecs.empty());
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     auto& childSpec = childSpecs[i];
+    VELOX_TRACE_HISTORY_PUSH("read %s", childSpec->fieldName().c_str());
     if (isChildConstant(*childSpec)) {
       continue;
     }
@@ -339,6 +364,7 @@ void SelectiveStructColumnReaderBase::getValues(
   }
   bool lazyPrepared = false;
   for (auto& childSpec : scanSpec_->children()) {
+    VELOX_TRACE_HISTORY_PUSH("getValues %s", childSpec->fieldName().c_str());
     if (!childSpec->projectOut()) {
       continue;
     }

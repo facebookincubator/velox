@@ -39,9 +39,20 @@ class AssertQueryBuilder {
   /// Default is 0.
   AssertQueryBuilder& destination(int32_t destination);
 
+  /// Use single-threaded execution to execute the Velox plan.
+  /// Default is false.
+  AssertQueryBuilder& singleThreaded(bool singleThreaded);
+
   /// Set configuration property. May be called multiple times to set multiple
   /// properties.
   AssertQueryBuilder& config(const std::string& key, const std::string& value);
+
+  template <typename T>
+  typename std::enable_if<std::is_arithmetic<T>::value, AssertQueryBuilder&>::
+      type
+      config(const std::string& key, const T& value) {
+    return config(key, std::to_string(value));
+  }
 
   /// Set multiple configuration properties.
   AssertQueryBuilder& configs(
@@ -107,7 +118,31 @@ class AssertQueryBuilder {
     return *this;
   }
 
-  // Methods to run the query and verify the results.
+  /// Methods to configure the group execution mode.
+  AssertQueryBuilder& executionStrategy(
+      core::ExecutionStrategy executionStrategy) {
+    params_.executionStrategy = executionStrategy;
+    return *this;
+  }
+
+  AssertQueryBuilder& numSplitGroups(int numSplitGroups) {
+    params_.numSplitGroups = numSplitGroups;
+    return *this;
+  }
+
+  AssertQueryBuilder& numConcurrentSplitGroups(
+      int32_t numConcurrentSplitGroups) {
+    params_.numConcurrentSplitGroups = numConcurrentSplitGroups;
+    return *this;
+  }
+
+  AssertQueryBuilder& groupedExecutionLeafNodeIds(
+      const std::unordered_set<core::PlanNodeId>& groupedExecutionLeafNodeIds) {
+    params_.groupedExecutionLeafNodeIds = groupedExecutionLeafNodeIds;
+    return *this;
+  }
+
+  /// Methods to run the query and verify the results.
 
   /// Run the query and verify results against DuckDB. Requires
   /// duckDbQueryRunner to be provided in the constructor.
@@ -147,7 +182,7 @@ class AssertQueryBuilder {
   // Used by the created task as the default driver executor.
   std::unique_ptr<folly::Executor> executor_{
       new folly::CPUThreadPoolExecutor(std::thread::hardware_concurrency())};
-  DuckDbQueryRunner* FOLLY_NULLABLE const duckDbQueryRunner_;
+  DuckDbQueryRunner* const duckDbQueryRunner_;
   CursorParameters params_;
   std::unordered_map<std::string, std::string> configs_;
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>

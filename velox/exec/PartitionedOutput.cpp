@@ -19,7 +19,6 @@
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
-
 namespace detail {
 BlockingReason Destination::advance(
     uint64_t maxBytes,
@@ -55,7 +54,11 @@ BlockingReason Destination::advance(
   if (!current_) {
     current_ = std::make_unique<VectorStreamGroup>(pool_);
     auto rowType = asRowType(output->type());
-    current_->createStreamTree(rowType, rowsInCurrent_);
+    serializer::presto::PrestoVectorSerde::PrestoOptions options;
+    options.compressionKind =
+        OutputBufferManager::getInstance().lock()->compressionKind();
+    options.minCompressionRatio = PartitionedOutput::minCompressionRatio();
+    current_->createStreamTree(rowType, rowsInCurrent_, &options);
   }
   current_->append(
       output, folly::Range(&rows_[firstRow], rowIdx_ - firstRow), scratch);
@@ -73,7 +76,7 @@ BlockingReason Destination::flush(
     OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     ContinueFuture* future) {
-  if (!current_) {
+  if (!current_ || rowsInCurrent_ == 0) {
     return BlockingReason::kNotBlocked;
   }
 
@@ -87,7 +90,7 @@ BlockingReason Destination::flush(
   const int64_t flushedRows = rowsInCurrent_;
 
   current_->flush(&stream);
-  current_.reset();
+  current_->clear();
 
   const int64_t flushedBytes = stream.tellp();
 
@@ -107,6 +110,18 @@ BlockingReason Destination::flush(
   return blocked ? BlockingReason::kWaitForConsumer
                  : BlockingReason::kNotBlocked;
 }
+
+void Destination::updateStats(Operator* op) {
+  VELOX_CHECK(finished_);
+  if (current_) {
+    const auto serializerStats = current_->runtimeStats();
+    auto lockedStats = op->stats().wlock();
+    for (auto& pair : serializerStats) {
+      lockedStats->addRuntimeStat(pair.first, pair.second);
+    }
+  }
+}
+
 } // namespace detail
 
 PartitionedOutput::PartitionedOutput(
@@ -209,7 +224,7 @@ void PartitionedOutput::estimateRowSizes() {
   auto numbers = iota(numInput, storage);
   for (int i = 0; i < output_->childrenSize(); ++i) {
     VectorStreamGroup::estimateSerializedSize(
-        output_->childAt(i),
+        output_->childAt(i).get(),
         folly::Range(numbers, numInput),
         sizePointers_.data(),
         scratch_);
@@ -289,7 +304,7 @@ void PartitionedOutput::collectNullRows() {
     auto& keyVector = input_->childAt(i);
     if (keyVector->mayHaveNulls()) {
       decodedVectors_[i].decode(*keyVector, rows_);
-      if (auto* rawNulls = decodedVectors_[i].nulls()) {
+      if (auto* rawNulls = decodedVectors_[i].nulls(&rows_)) {
         bits::orWithNegatedBits(
             nullRows_.asMutableRange().bits(), rawNulls, 0, size);
       }
@@ -366,6 +381,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
       }
       destination->flush(*bufferManager, bufferReleaseFn_, nullptr);
       destination->setFinished();
+      destination->updateStats(this);
     }
 
     bufferManager->noMoreData(operatorCtx_->task()->taskId());

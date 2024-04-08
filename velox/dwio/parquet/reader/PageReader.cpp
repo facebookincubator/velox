@@ -118,37 +118,7 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
   return copy->as<char>();
 }
 
-common::CompressionKind PageReader::thriftCodecToCompressionKind() {
-  switch (codec_) {
-    case thrift::CompressionCodec::UNCOMPRESSED:
-      return common::CompressionKind::CompressionKind_NONE;
-      break;
-    case thrift::CompressionCodec::SNAPPY:
-      return common::CompressionKind::CompressionKind_SNAPPY;
-      break;
-    case thrift::CompressionCodec::GZIP:
-      return common::CompressionKind::CompressionKind_GZIP;
-      break;
-    case thrift::CompressionCodec::LZO:
-      return common::CompressionKind::CompressionKind_LZO;
-      break;
-    case thrift::CompressionCodec::LZ4:
-      return common::CompressionKind::CompressionKind_LZ4;
-      break;
-    case thrift::CompressionCodec::ZSTD:
-      return common::CompressionKind::CompressionKind_ZSTD;
-      break;
-    case thrift::CompressionCodec::LZ4_RAW:
-      return common::CompressionKind::CompressionKind_LZ4;
-    default:
-      VELOX_UNSUPPORTED(
-          "Unsupported compression type: " +
-          facebook::velox::parquet::thrift::to_string(codec_));
-      break;
-  }
-}
-
-const char* FOLLY_NONNULL PageReader::decompressData(
+const char* PageReader::decompressData(
     const char* pageData,
     uint32_t compressedSize,
     uint32_t uncompressedSize) {
@@ -159,11 +129,11 @@ const char* FOLLY_NONNULL PageReader::decompressData(
       fmt::format("Page Reader: Stream {}", inputStream_->getName());
   std::unique_ptr<dwio::common::SeekableInputStream> decompressedStream =
       dwio::common::compression::createDecompressor(
-          thriftCodecToCompressionKind(),
+          codec_,
           std::move(inputStream),
           uncompressedSize,
           pool_,
-          getParquetDecompressionOptions(thriftCodecToCompressionKind()),
+          getParquetDecompressionOptions(codec_),
           streamDebugInfo,
           nullptr,
           true,
@@ -346,7 +316,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       dictionaryEncoding_ == Encoding::PLAIN_DICTIONARY ||
       dictionaryEncoding_ == Encoding::PLAIN);
 
-  if (codec_ != thrift::CompressionCodec::UNCOMPRESSED) {
+  if (codec_ != common::CompressionKind::CompressionKind_NONE) {
     pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
     pageData_ = decompressData(
         pageData_,
@@ -666,6 +636,16 @@ void PageReader::makeDecoder() {
       }
       break;
     case Encoding::DELTA_BINARY_PACKED:
+      switch (parquetType) {
+        case thrift::Type::INT32:
+        case thrift::Type::INT64:
+          deltaBpDecoder_ = std::make_unique<DeltaBpDecoder>(pageData_);
+          break;
+        default:
+          VELOX_UNSUPPORTED(
+              "DELTA_BINARY_PACKED decoder only supports INT32 and INT64");
+      }
+      break;
     default:
       VELOX_UNSUPPORTED("Encoding not supported yet: {}", encoding_);
   }
@@ -698,6 +678,8 @@ void PageReader::skip(int64_t numRows) {
     stringDecoder_->skip(toSkip);
   } else if (booleanDecoder_) {
     booleanDecoder_->skip(toSkip);
+  } else if (deltaBpDecoder_) {
+    deltaBpDecoder_->skip(toSkip);
   } else {
     VELOX_FAIL("No decoder to skip");
   }

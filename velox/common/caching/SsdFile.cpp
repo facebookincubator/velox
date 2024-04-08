@@ -15,12 +15,14 @@
  */
 
 #include "velox/common/caching/SsdFile.h"
+
 #include <folly/Executor.h>
 #include <folly/portability/SysUio.h>
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
+#include "velox/common/process/TraceContext.h"
 
 #include <fcntl.h>
 #ifdef linux
@@ -128,6 +130,7 @@ SsdFile::SsdFile(
       shardId_(shardId),
       checkpointIntervalBytes_(checkpointIntervalBytes),
       executor_(executor) {
+  process::TraceContext trace("SsdFile::SsdFile");
   int32_t oDirect = 0;
 #ifdef linux
   oDirect = FLAGS_ssd_odirect ? O_DIRECT : 0;
@@ -266,6 +269,7 @@ CoalesceIoStats SsdFile::load(
 void SsdFile::read(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers) {
+  process::TraceContext trace("SsdFile::read");
   readFile_->preadv(offset, buffers);
 }
 
@@ -307,6 +311,7 @@ std::optional<std::pair<uint64_t, int32_t>> SsdFile::getSpace(
 }
 
 bool SsdFile::growOrEvictLocked() {
+  process::TraceContext trace("SsdFile::growOrEvictLocked");
   if (numRegions_ < maxRegions_) {
     const auto newSize = (numRegions_ + 1) * kRegionSize;
     const auto rc = ::ftruncate(fd_, newSize);
@@ -360,14 +365,13 @@ void SsdFile::clearRegionEntriesLocked(const std::vector<int32_t>& regions) {
 }
 
 void SsdFile::write(std::vector<CachePin>& pins) {
+  process::TraceContext trace("SsdFile::write");
   // Sorts the pins by their file/offset. In this way what is adjacent in
   // storage is likely adjacent on SSD.
   std::sort(pins.begin(), pins.end());
-  uint64_t total = 0;
   for (const auto& pin : pins) {
     auto* entry = pin.checkedEntry();
     VELOX_CHECK_NULL(entry->ssdFile());
-    total += entry->size();
   }
 
   int32_t storeIndex = 0;
@@ -446,10 +450,11 @@ int32_t indexOfFirstMismatch(char* x, char* y, int n) {
 } // namespace
 
 void SsdFile::verifyWrite(AsyncDataCacheEntry& entry, SsdRun ssdRun) {
+  process::TraceContext trace("SsdFile::verifyWrite");
   auto testData = std::make_unique<char[]>(entry.size());
   const auto rc = ::pread(fd_, testData.get(), entry.size(), ssdRun.offset());
   VELOX_CHECK_EQ(rc, entry.size());
-  if (entry.tinyData() != 0) {
+  if (entry.tinyData() != nullptr) {
     if (::memcmp(testData.get(), entry.tinyData(), entry.size()) != 0) {
       VELOX_FAIL("bad read back");
     }
@@ -476,7 +481,7 @@ void SsdFile::verifyWrite(AsyncDataCacheEntry& entry, SsdRun ssdRun) {
 
 void SsdFile::updateStats(SsdCacheStats& stats) const {
   // Lock only in tsan build. Incrementing the counters has no synchronized
-  // emantics.
+  // semantics.
   std::shared_lock<std::shared_mutex> l(mutex_);
   stats.entriesWritten += stats_.entriesWritten;
   stats.bytesWritten += stats_.bytesWritten;
@@ -514,6 +519,7 @@ void SsdFile::clear() {
 }
 
 void SsdFile::deleteFile() {
+  process::TraceContext trace("SsdFile::deleteFile");
   if (fd_) {
     close(fd_);
     fd_ = 0;
@@ -653,10 +659,17 @@ inline const char* asChar(const T* ptr) {
 } // namespace
 
 void SsdFile::checkpoint(bool force) {
+  process::TraceContext trace("SsdFile::checkpoint");
   std::lock_guard<std::shared_mutex> l(mutex_);
   if (!force && (bytesAfterCheckpoint_ < checkpointIntervalBytes_)) {
     return;
   }
+
+  VELOX_SSD_CACHE_LOG(INFO)
+      << "Checkpointing shard " << shardId_ << ", force: " << force
+      << " bytesAfterCheckpoint: " << succinctBytes(bytesAfterCheckpoint_)
+      << " checkpointIntervalBytes: "
+      << succinctBytes(checkpointIntervalBytes_);
 
   checkpointDeleted_ = false;
   bytesAfterCheckpoint_ = 0;
@@ -750,7 +763,7 @@ void SsdFile::checkpoint(bool force) {
   } catch (const std::exception& e) {
     try {
       checkpointError(-1, e.what());
-    } catch (const std::exception& inner) {
+    } catch (const std::exception&) {
     }
     // Ignore nested exception.
   }
@@ -792,7 +805,7 @@ void SsdFile::initializeCheckpoint() {
                                  << e.what() << ": Starting without checkpoint";
       entries_.clear();
       deleteCheckpoint(true);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
     }
   }
 }

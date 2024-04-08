@@ -121,7 +121,8 @@ const core::QueryConfig& DriverCtx::queryConfig() const {
 velox::memory::MemoryPool* DriverCtx::addOperatorPool(
     const core::PlanNodeId& planNodeId,
     const std::string& operatorType) {
-  return task->addOperatorPool(planNodeId, pipelineId, driverId, operatorType);
+  return task->addOperatorPool(
+      planNodeId, splitGroupId, pipelineId, driverId, operatorType);
 }
 
 std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
@@ -135,25 +136,28 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
   }
   common::GetSpillDirectoryPathCB getSpillDirPathCb =
       [this]() -> const std::string& {
-    return this->task->getOrCreateSpillDirectory();
+    return task->getOrCreateSpillDirectory();
   };
   const auto& spillFilePrefix =
       fmt::format("{}_{}_{}", pipelineId, driverId, operatorId);
+  common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb =
+      [this](uint64_t bytes) {
+        task->queryCtx()->updateSpilledBytesAndCheckLimit(bytes);
+      };
   return common::SpillConfig(
-      getSpillDirPathCb,
+      std::move(getSpillDirPathCb),
+      std::move(updateAndCheckSpillLimitCb),
       spillFilePrefix,
       queryConfig.maxSpillFileSize(),
       queryConfig.spillWriteBufferSize(),
-      queryConfig.minSpillRunSize(),
       task->queryCtx()->spillExecutor(),
       queryConfig.minSpillableReservationPct(),
       queryConfig.spillableReservationGrowthPct(),
       queryConfig.spillStartPartitionBit(),
-      queryConfig.joinSpillPartitionBits(),
+      queryConfig.spillNumPartitionBits(),
       queryConfig.maxSpillLevel(),
       queryConfig.maxSpillRunRows(),
       queryConfig.writerFlushThresholdBytes(),
-      queryConfig.testingSpillPct(),
       queryConfig.spillCompressionKind(),
       queryConfig.spillFileCreateConfig());
 }
@@ -188,7 +192,7 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
         auto& driver = state->driver_;
         auto& task = driver->task();
 
-        std::lock_guard<std::mutex> l(task->mutex());
+        std::lock_guard<std::timed_mutex> l(task->mutex());
         if (!driver->state().isTerminated) {
           state->operator_->recordBlockingTime(
               state->sinceMicros_, state->reason_);
@@ -209,7 +213,7 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
                   "A ContinueFuture for task {} was realized with error: {}",
                   state->driver_->task()->taskId(),
                   e.what())
-            } catch (const VeloxException& eNew) {
+            } catch (const VeloxException&) {
               state->driver_->task()->setError(std::current_exception());
             }
           });
@@ -389,7 +393,10 @@ size_t OpCallStatusRaw::callDuration() const {
 /*static*/ std::string OpCallStatusRaw::formatCall(
     Operator* op,
     const char* operatorMethod) {
-  return fmt::format("{}::{}", op ? op->operatorType() : "N/A", operatorMethod);
+  return op
+      ? fmt::format(
+            "{}.{}::{}", op->operatorType(), op->planNodeId(), operatorMethod)
+      : fmt::format("null::{}", operatorMethod);
 }
 
 CpuWallTiming Driver::processLazyTiming(
@@ -517,12 +524,8 @@ StopReason Driver::runInternal(
 
         if (FOLLY_UNLIKELY(shouldYield())) {
           recordYieldCount();
-          stop = StopReason::kYield;
-          future = ContinueFuture{folly::Unit{}};
-          blockingState = std::make_shared<BlockingState>(
-              self, std::move(future), op, blockingReason_);
           guard.notThrown();
-          return stop;
+          return StopReason::kYield;
         }
 
         // In case we are blocked, this index will point to the operator, whose
@@ -721,11 +724,11 @@ StopReason Driver::runInternal(
         }
       }
     }
-  } catch (velox::VeloxException& e) {
+  } catch (velox::VeloxException&) {
     task()->setError(std::current_exception());
     // The CancelPoolGuard will close 'self' and remove from Task.
     return StopReason::kAlreadyTerminated;
-  } catch (std::exception& e) {
+  } catch (std::exception&) {
     task()->setError(std::current_exception());
     // The CancelGuard will close 'self' and remove from Task.
     return StopReason::kAlreadyTerminated;
@@ -791,7 +794,7 @@ void Driver::run(std::shared_ptr<Driver> self) {
     case StopReason::kAtEnd:
       return;
     default:
-      VELOX_CHECK(false, "Unhandled stop reason");
+      VELOX_FAIL("Unhandled stop reason");
   }
 }
 
@@ -823,6 +826,19 @@ void Driver::closeOperators() {
   }
 }
 
+void Driver::updateStats() {
+  DriverStats stats;
+  if (state_.totalPauseTimeMs > 0) {
+    stats.runtimeStats[DriverStats::kTotalPauseTime] = RuntimeMetric(
+        1'000'000 * state_.totalPauseTimeMs, RuntimeCounter::Unit::kNanos);
+  }
+  if (state_.totalOffThreadTimeMs > 0) {
+    stats.runtimeStats[DriverStats::kTotalOffThreadTime] = RuntimeMetric(
+        1'000'000 * state_.totalOffThreadTimeMs, RuntimeCounter::Unit::kNanos);
+  }
+  task()->addDriverStats(ctx_->pipelineId, std::move(stats));
+}
+
 void Driver::close() {
   if (closed_) {
     // Already closed.
@@ -832,6 +848,7 @@ void Driver::close() {
     LOG(FATAL) << "Driver::close is only allowed from the Driver's thread";
   }
   closeOperators();
+  updateStats();
   closed_ = true;
   Task::removeDriver(ctx_->task, this);
 }
@@ -840,6 +857,7 @@ void Driver::closeByTask() {
   VELOX_CHECK(isOnThread());
   VELOX_CHECK(isTerminated());
   closeOperators();
+  updateStats();
   closed_ = true;
 }
 
@@ -956,10 +974,10 @@ std::string Driver::toString() const {
   return out.str();
 }
 
-std::string Driver::toJsonString() const {
+folly::dynamic Driver::toJson() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["blockingReason"] = blockingReasonToString(blockingReason_);
-  obj["state"] = state_.toJsonString();
+  obj["state"] = state_.toJson();
   obj["closed"] = closed_.load();
   obj["queueTimeStartMicros"] = queueTimeStartMicros_;
   const auto ocs = opCallStatus();
@@ -972,11 +990,11 @@ std::string Driver::toJsonString() const {
   folly::dynamic operatorsObj = folly::dynamic::object;
   int index = 0;
   for (auto& op : operators_) {
-    operatorsObj[std::to_string(index++)] = op->toString();
+    operatorsObj[std::to_string(index++)] = op->toJson();
   }
-  obj["operatorsObj"] = operatorsObj;
+  obj["operators"] = operatorsObj;
 
-  return folly::toPrettyJson(obj);
+  return obj;
 }
 
 SuspendedSection::SuspendedSection(Driver* driver) : driver_(driver) {

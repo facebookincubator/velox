@@ -19,14 +19,12 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include "folly/ssl/OpenSSLHash.h"
-#pragma GCC diagnostic pop
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/lib/ToHex.h"
 
 namespace facebook::velox::functions {
 
@@ -218,10 +216,6 @@ struct HmacMd5Function {
   }
 };
 
-FOLLY_ALWAYS_INLINE unsigned char toHex(unsigned char c) {
-  return c < 10 ? (c + '0') : (c + 'A' - 10);
-}
-
 template <typename T>
 struct ToHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -229,27 +223,7 @@ struct ToHexFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varbinary>& result,
       const arg_type<Varchar>& input) {
-    static const char* const kHexTable =
-        "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
-        "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
-        "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
-        "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
-        "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
-        "C0C1C2C3C4C5C6C7C8C9CACBCCCDCECFD0D1D2D3D4D5D6D7D8D9DADBDCDDDEDF"
-        "E0E1E2E3E4E5E6E7E8E9EAEBECEDEEEFF0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF";
-
-    const auto inputSize = input.size();
-    result.resize(inputSize * 2);
-
-    const unsigned char* inputBuffer =
-        reinterpret_cast<const unsigned char*>(input.data());
-    char* resultBuffer = result.data();
-
-    for (auto i = 0; i < inputSize; ++i) {
-      resultBuffer[i * 2] = kHexTable[inputBuffer[i] * 2];
-      resultBuffer[i * 2 + 1] = kHexTable[inputBuffer[i] * 2 + 1];
-    }
+    ToHexUtil::toHex(input, result);
   }
 };
 
@@ -423,6 +397,20 @@ struct ToIEEE754Bits64 {
 };
 
 template <typename T>
+struct FromIEEE754Bits64 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Varbinary>& input) {
+    static constexpr auto kTypeLength = sizeof(int64_t);
+    VELOX_USER_CHECK_EQ(input.size(), kTypeLength, "Expected 8-byte input");
+    memcpy(&result, input.data(), kTypeLength);
+    result = folly::Endian::big(result);
+  }
+};
+
+template <typename T>
 struct ToIEEE754Bits32 {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -433,6 +421,23 @@ struct ToIEEE754Bits32 {
     auto value = folly::Endian::big(input);
     result.setNoCopy(
         StringView(reinterpret_cast<const char*>(&value), kTypeLength));
+  }
+};
+
+template <typename T>
+struct FromIEEE754Bits32 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<float>& result,
+      const arg_type<Varbinary>& input) {
+    static constexpr auto kTypeLength = sizeof(int32_t);
+    VELOX_USER_CHECK_EQ(
+        input.size(),
+        kTypeLength,
+        "Input floating-point value must be exactly 4 bytes long");
+    memcpy(&result, input.data(), kTypeLength);
+    result = folly::Endian::big(result);
   }
 };
 

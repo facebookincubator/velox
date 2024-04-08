@@ -377,7 +377,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& bucketedBy,
     const std::vector<std::string>& sortBy,
     const dwio::common::FileFormat fileFormat,
-    const std::vector<std::string>& aggregates) {
+    const std::vector<std::string>& aggregates,
+    const std::string& connectorId) {
   VELOX_CHECK_NOT_NULL(planNode_, "TableWrite cannot be the source node");
   auto rowType = planNode_->outputType();
 
@@ -414,7 +415,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       common::CompressionKind_NONE);
 
   auto insertHandle =
-      std::make_shared<core::InsertTableHandle>(kHiveConnectorId, hiveHandle);
+      std::make_shared<core::InsertTableHandle>(connectorId, hiveHandle);
 
   std::shared_ptr<core::AggregationNode> aggregationNode;
   if (!aggregates.empty()) {
@@ -760,10 +761,15 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
     agg.distinct = untypedExpr.distinct;
 
     if (!untypedExpr.orderBy.empty()) {
-      VELOX_CHECK(
-          step == core::AggregationNode::Step::kSingle,
-          "Aggregations over sorted inputs cannot be split into partial and final: {}.",
-          aggregate)
+      auto* entry = exec::getAggregateFunctionEntry(agg.call->name());
+      const auto& metadata = entry->metadata;
+      if (metadata.orderSensitive) {
+        VELOX_CHECK(
+            step == core::AggregationNode::Step::kSingle,
+            "Order sensitive aggregation over sorted inputs cannot be split "
+            "into partial and final: {}.",
+            aggregate)
+      }
     }
 
     for (const auto& [keyExpr, order] : untypedExpr.orderBy) {

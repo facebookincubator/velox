@@ -44,7 +44,16 @@ enum class TpchBenchmarkCase {
   TpchQuery16Supplier,
   TpchQuery20,
 };
+}
 
+template <>
+struct fmt::formatter<TpchBenchmarkCase> : fmt::formatter<int> {
+  auto format(const TpchBenchmarkCase& s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+
+namespace {
 class LikeFunctionsBenchmark : public FunctionBaseTest,
                                public FunctionBenchmarkBase {
  public:
@@ -233,7 +242,7 @@ BENCHMARK(tpchQuery20) {
 } // namespace
 
 int main(int argc, char* argv[]) {
-  folly::init(&argc, &argv, true);
+  folly::Init init{&argc, &argv, true};
   memory::MemoryManager::initialize({});
   benchmark = std::make_unique<LikeFunctionsBenchmark>();
   folly::runBenchmarks();

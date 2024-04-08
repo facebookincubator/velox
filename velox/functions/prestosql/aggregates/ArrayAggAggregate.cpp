@@ -15,9 +15,8 @@
  */
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/lib/aggregates/ValueList.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/ValueList.h"
-#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
 namespace {
@@ -90,14 +89,6 @@ class ArrayAggAggregate : public exec::Aggregate {
         offsets,
         sizes,
         loadedElements);
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    for (auto index : indices) {
-      new (groups[index] + offset_) ArrayAccumulator();
-    }
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -213,9 +204,20 @@ class ArrayAggAggregate : public exec::Aggregate {
     });
   }
 
-  void destroy(folly::Range<char**> groups) override {
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    for (auto index : indices) {
+      new (groups[index] + offset_) ArrayAccumulator();
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
     for (auto group : groups) {
-      value<ArrayAccumulator>(group)->elements.free(allocator_);
+      if (isInitialized(group)) {
+        value<ArrayAccumulator>(group)->elements.free(allocator_);
+      }
     }
   }
 
@@ -239,7 +241,8 @@ class ArrayAggAggregate : public exec::Aggregate {
 
 void registerArrayAggAggregate(
     const std::string& prefix,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("E")
@@ -262,7 +265,8 @@ void registerArrayAggAggregate(
         return std::make_unique<ArrayAggAggregate>(
             resultType, config.prestoArrayAggIgnoreNulls());
       },
-      withCompanionFunctions);
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

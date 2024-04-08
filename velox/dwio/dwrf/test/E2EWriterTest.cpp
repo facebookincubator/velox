@@ -245,8 +245,8 @@ class E2EWriterTest : public testing::Test {
     static const std::string emptySpillFolder = "";
     return common::SpillConfig(
         [&]() -> const std::string& { return emptySpillFolder; },
+        [&](uint64_t) {},
         "fakeSpillConfig",
-        0,
         0,
         0,
         nullptr,
@@ -257,7 +257,6 @@ class E2EWriterTest : public testing::Test {
         0,
         0,
         writerFlushThresholdSize,
-        0,
         "none");
   }
 
@@ -1654,7 +1653,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
     // Expect a throw if we don't set the non-reclaimable section.
     VELOX_ASSERT_THROW(writer->write(vectors[0]), "");
     {
-      exec::NonReclaimableSectionGuard nonReclaimableGuard(
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
           &nonReclaimableSection);
       for (size_t i = 0; i < vectors.size(); ++i) {
         writer->write(vectors[i]);
@@ -1753,7 +1752,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnFlush) {
         }));
 
     {
-      exec::NonReclaimableSectionGuard nonReclaimableGuard(
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
           &nonReclaimableSection);
       for (size_t i = 0; i < vectors.size(); ++i) {
         writer->write(vectors[i]);
@@ -1833,7 +1832,7 @@ TEST_F(E2EWriterTest, memoryReclaimAfterClose) {
     writer->flush();
 
     {
-      exec::NonReclaimableSectionGuard nonReclaimableGuard(
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
           &nonReclaimableSection);
       for (size_t i = 0; i < vectors.size(); ++i) {
         writer->write(vectors[i]);
@@ -1908,27 +1907,25 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimDuringInit) {
     SCOPED_TESTVALUE_SET(
         "facebook::velox::memory::MemoryPoolImpl::reserveThreadSafe",
         std::function<void(MemoryPool*)>([&](MemoryPool* /*unused*/) {
-          uint64_t reclaimableBytes{0};
-          ASSERT_EQ(
-              writerPool->reclaimableBytes(reclaimableBytes), reclaimable);
+          auto reclaimableBytesOpt = writerPool->reclaimableBytes();
+          ASSERT_EQ(reclaimableBytesOpt.has_value(), reclaimable);
 
           memory::MemoryReclaimer::Stats stats;
           writerPool->reclaim(1L << 30, 0, stats);
           if (reclaimable) {
-            ASSERT_GE(reclaimableBytes, 0);
+            ASSERT_GE(reclaimableBytesOpt.value(), 0);
             // We can't reclaim during writer init.
             ASSERT_EQ(stats.numNonReclaimableAttempts, 1);
             ASSERT_EQ(stats.reclaimedBytes, 0);
             ASSERT_EQ(stats.reclaimExecTimeUs, 0);
           } else {
-            ASSERT_EQ(reclaimableBytes, 0);
             ASSERT_EQ(stats, memory::MemoryReclaimer::Stats{});
           }
         }));
 
     std::unique_ptr<dwrf::Writer> writer;
     {
-      exec::NonReclaimableSectionGuard nonReclaimableGuard(
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
           &nonReclaimableSection);
       std::thread writerThread([&]() {
         writer =
@@ -1991,7 +1988,7 @@ TEST_F(E2EWriterTest, memoryReclaimThreshold) {
         std::make_unique<dwrf::Writer>(std::move(sink), options, dwrfPool);
 
     {
-      exec::NonReclaimableSectionGuard nonReclaimableGuard(
+      memory::NonReclaimableSectionGuard nonReclaimableGuard(
           &nonReclaimableSection);
       for (size_t i = 0; i < vectors.size(); ++i) {
         writer->write(vectors[i]);

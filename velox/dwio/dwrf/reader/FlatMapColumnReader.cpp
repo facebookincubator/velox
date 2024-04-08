@@ -686,7 +686,7 @@ void FlatMapStructEncodingColumnReader<T>::next(
   if (rowVector) {
     // Track children vectors in a local variable because readNulls may reset
     // the parent vector.
-    result->resize(numValues, false);
+    rowVector->unsafeResize(numValues, false);
     children = rowVector->children();
     DWIO_ENSURE_EQ(children.size(), keyNodes_.size());
   }
@@ -768,7 +768,7 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
-    folly::Executor* FOLLY_NULLABLE executor,
+    folly::Executor* executor,
     size_t decodingParallelismFactor,
     FlatMapContext flatMapContext) {
   if (isRequiringStructEncoding(requestedType, stripe.getRowReaderOptions())) {

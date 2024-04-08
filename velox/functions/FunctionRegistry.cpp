@@ -32,19 +32,6 @@
 namespace facebook::velox {
 namespace {
 
-exec::TypeSignature typeToTypeSignature(std::shared_ptr<const Type> type) {
-  std::vector<exec::TypeSignature> children;
-  if (type->size()) {
-    children.reserve(type->size());
-    for (auto i = 0; i < type->size(); i++) {
-      children.emplace_back(typeToTypeSignature(type->childAt(i)));
-    }
-  }
-  const std::string& kindName = type->kindName();
-  return exec::TypeSignature(
-      boost::algorithm::to_lower_copy(kindName), std::move(children));
-}
-
 void populateSimpleFunctionSignatures(FunctionSignatureMap& map) {
   const auto& simpleFunctions = exec::simpleFunctions();
   for (const auto& functionName : simpleFunctions.getFunctionNames()) {
@@ -83,7 +70,7 @@ void clearFunctionRegistry() {
       [](auto& functionMap) { functionMap.clear(); });
 }
 
-std::shared_ptr<const Type> resolveFunction(
+TypePtr resolveFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   // Check if this is a simple function.
@@ -95,7 +82,20 @@ std::shared_ptr<const Type> resolveFunction(
   return resolveVectorFunction(functionName, argTypes);
 }
 
-std::shared_ptr<const Type> resolveFunctionOrCallableSpecialForm(
+std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
+resolveFunctionWithMetadata(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes) {
+  if (auto resolvedFunction =
+          exec::simpleFunctions().resolveFunction(functionName, argTypes)) {
+    return std::pair<TypePtr, exec::VectorFunctionMetadata>{
+        resolvedFunction->type(), resolvedFunction->metadata()};
+  }
+
+  return exec::resolveVectorFunctionWithMetadata(functionName, argTypes);
+}
+
+TypePtr resolveFunctionOrCallableSpecialForm(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   if (auto returnType = resolveCallableSpecialForm(functionName, argTypes)) {
@@ -105,13 +105,13 @@ std::shared_ptr<const Type> resolveFunctionOrCallableSpecialForm(
   return resolveFunction(functionName, argTypes);
 }
 
-std::shared_ptr<const Type> resolveCallableSpecialForm(
+TypePtr resolveCallableSpecialForm(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   return exec::resolveTypeForSpecialForm(functionName, argTypes);
 }
 
-std::shared_ptr<const Type> resolveSimpleFunction(
+TypePtr resolveSimpleFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   if (auto resolvedFunction =
@@ -122,10 +122,17 @@ std::shared_ptr<const Type> resolveSimpleFunction(
   return nullptr;
 }
 
-std::shared_ptr<const Type> resolveVectorFunction(
+TypePtr resolveVectorFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   return exec::resolveVectorFunction(functionName, argTypes);
+}
+
+std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
+resolveVectorFunctionWithMetadata(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes) {
+  return exec::resolveVectorFunctionWithMetadata(functionName, argTypes);
 }
 
 } // namespace facebook::velox

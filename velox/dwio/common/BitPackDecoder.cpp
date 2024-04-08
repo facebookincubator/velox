@@ -35,7 +35,7 @@ auto as4x64(__m256i x) {
 }
 
 template <typename T>
-void store8Ints(__m256i eightInts, int32_t i, T* FOLLY_NONNULL result) {
+void store8Ints(__m256i eightInts, int32_t i, T* result) {
   if (sizeof(T) == 4) {
     _mm256_storeu_si256(reinterpret_cast<__m256i*>(result + i), eightInts);
   } else {
@@ -213,7 +213,6 @@ void unpack(
     }
     return;
   }
-  auto FOLLY_NONNULL lastSafe = bufferEnd - sizeof(uint64_t);
   int32_t numSafeRows = numRows;
   bool anyUnsafe = false;
   if (bufferEnd) {
@@ -281,15 +280,15 @@ void unpack(
   if (anyUnsafe) {
     auto lastSafeWord = bufferEnd - sizeof(uint64_t);
     VELOX_DCHECK(lastSafeWord);
-    for (auto i = numSafeRows; i < numRows; ++i) {
-      auto bit = bitOffset + (rows[i]) * bitWidth;
+    for (auto i_2 = numSafeRows; i_2 < numRows; ++i_2) {
+      auto bit = bitOffset + (rows[i_2]) * bitWidth;
       auto byte = bit / 8;
       auto shift = bit & 7;
-      result[i] = safeLoadBits(
-                      reinterpret_cast<const char*>(bits) + byte,
-                      shift,
-                      bitWidth,
-                      lastSafeWord) &
+      result[i_2] = safeLoadBits(
+                        reinterpret_cast<const char*>(bits) + byte,
+                        shift,
+                        bitWidth,
+                        lastSafeWord) &
           mask;
     }
   }

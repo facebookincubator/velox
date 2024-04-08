@@ -23,8 +23,10 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::parquet {
 
@@ -93,11 +95,16 @@ struct WriterOptions {
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
   double bufferGrowRatio = 1.5;
   common::CompressionKind compression = common::CompressionKind_NONE;
+  arrow::Encoding::type encoding = arrow::Encoding::PLAIN;
   velox::memory::MemoryPool* memoryPool;
   // The default factory allows the writer to construct the default flush
   // policy with the configs in its ctor.
   std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicyFactory;
   std::shared_ptr<CodecOptions> codecOptions;
+  std::unordered_map<std::string, common::CompressionKind>
+      columnCompressionsMap;
+  uint8_t parquetWriteTimestampUnit =
+      static_cast<uint8_t>(TimestampUnit::kNano);
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.
@@ -139,6 +146,9 @@ class Writer : public dwio::common::Writer {
   void abort() override;
 
  private:
+  // Sets the memory reclaimers for all the memory pools used by this writer.
+  void setMemoryReclaimers();
+
   // Pool for 'stream_'.
   std::shared_ptr<memory::MemoryPool> pool_;
   std::shared_ptr<memory::MemoryPool> generalPool_;
@@ -151,6 +161,8 @@ class Writer : public dwio::common::Writer {
   std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
 
   const RowTypePtr schema_;
+
+  ArrowOptions options_{.flattenDictionary = true, .flattenConstant = true};
 };
 
 class ParquetWriterFactory : public dwio::common::WriterFactory {

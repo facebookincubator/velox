@@ -14,25 +14,27 @@
  * limitations under the License.
  */
 #include "velox/common/memory/AllocationPool.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/TestValue.h"
 
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 
 class AllocationPoolTest : public testing::Test {
  protected:
   void SetUp() override {
-    allocator_ = std::make_shared<memory::MallocAllocator>(8L << 30);
-    manager_ =
-        std::make_shared<memory::MemoryManager>(memory::MemoryManagerOptions{
-            .capacity = (int64_t)allocator_->capacity(),
-            .allocator = allocator_.get()});
+    manager_ = std::make_shared<memory::MemoryManager>(
+        memory::MemoryManagerOptions{.allocatorCapacity = 8L << 30});
 
     root_ = manager_->addRootPool("allocationPoolTestRoot");
     pool_ = root_->addLeafChild("leaf");
+
+    TestValue::enable();
   }
 
   // Writes a byte at pointer so we see RSS change.
@@ -40,7 +42,6 @@ class AllocationPoolTest : public testing::Test {
     *reinterpret_cast<char*>(ptr) = 1;
   }
 
-  std::shared_ptr<memory::MemoryAllocator> allocator_;
   std::shared_ptr<memory::MemoryManager> manager_;
   std::shared_ptr<memory::MemoryPool> root_;
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -110,4 +111,46 @@ TEST_F(AllocationPoolTest, hugePages) {
   allocationPool.reset();
   // Should be empty after destruction.
   EXPECT_EQ(0, pool_->currentBytes());
+}
+
+// This test relies on TestValue, so needs to be run in debug mode.
+DEBUG_ONLY_TEST_F(AllocationPoolTest, oomCleanUp) {
+  // Test that when an OOM happens while growing an allocation in the
+  // AllocationPool, the AllocationPool is still in a valid state.
+  auto test = [&](int32_t alignment) {
+    auto allocationPool = std::make_unique<memory::AllocationPool>(pool_.get());
+    // Ensure we're beyond the huge page threshod.
+    allocationPool->setHugePageThreshold(32 << 10);
+    allocationPool->allocateFixed(32 << 10, alignment);
+
+    // Allocate some memory so we have a large allocation.
+    allocationPool->allocateFixed(1 << 20, alignment);
+
+    {
+      static const std::string kErrorMessage = "Simulate OOM for testing.";
+      // Trigger an OOM.
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::memory::MemoryPoolImpl::reserveThreadSafe",
+          std::function<void(memory::MemoryPool*)>(
+              [&](memory::MemoryPool* /*unused*/) {
+                VELOX_FAIL(kErrorMessage);
+              }));
+      VELOX_ASSERT_THROW(
+          allocationPool->allocateFixed(
+              allocationPool->testingFreeAddressableBytes(), alignment),
+          kErrorMessage);
+    }
+
+    // Ensure the last range in the pool is still consistent, e.g.
+    // currentOffset_ isn't pointing into unallocated memory.
+    ASSERT_EQ(
+        allocationPool->rangeAt(allocationPool->numRanges() - 1).size(),
+        1 << 20);
+  };
+
+  // Test with an alignment of 1.
+  test(1);
+  // Test with an alignment of 2 (this goes through a different code path in
+  // allocateFixed).
+  test(2);
 }

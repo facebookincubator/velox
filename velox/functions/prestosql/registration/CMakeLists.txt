@@ -15,8 +15,11 @@
 add_library(
   velox_functions_prestosql
   ArithmeticFunctionsRegistration.cpp
+  ArrayConcatRegistration.cpp
   ArrayFunctionsRegistration.cpp
+  ArrayNGramsRegistration.cpp
   BinaryFunctionsRegistration.cpp
+  BitwiseFunctionsRegistration.cpp
   CheckedArithmeticRegistration.cpp
   ComparisonFunctionsRegistration.cpp
   DateTimeFunctionsRegistration.cpp
@@ -24,11 +27,9 @@ add_library(
   HyperLogFunctionsRegistration.cpp
   JsonFunctionsRegistration.cpp
   MapFunctionsRegistration.cpp
-  StringFunctionsRegistration.cpp
-  BitwiseFunctionsRegistration.cpp
-  URLFunctionsRegistration.cpp
   RegistrationFunctions.cpp
-  ArrayConcatRegistration.cpp)
+  StringFunctionsRegistration.cpp
+  URLFunctionsRegistration.cpp)
 
 # GCC 12 has a bug where it does not respect "pragma ignore" directives and ends
 # up failing compilation in an openssl header included by a hash-related

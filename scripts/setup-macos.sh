@@ -34,27 +34,9 @@ source $SCRIPTDIR/setup-helper-functions.sh
 NPROC=$(getconf _NPROCESSORS_ONLN)
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_DEPS="ninja flex bison cmake ccache protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
-
-function run_and_time {
-  time "$@" || (echo "Failed to run $* ." ; exit 1 )
-  { echo "+ Finished running $*"; } 2> /dev/null
-}
-
-function prompt {
-  (
-    while true; do
-      local input="${PROMPT_ALWAYS_RESPOND:-}"
-      echo -n "$(tput bold)$* [Y, n]$(tput sgr0) "
-      [[ -z "${input}" ]] && read input
-      if [[ "${input}" == "Y" || "${input}" == "y" || "${input}" == "" ]]; then
-        return 0
-      elif [[ "${input}" == "N" || "${input}" == "n" ]]; then
-        return 1
-      fi
-    done
-  ) 2> /dev/null
-}
+MACOS_VELOX_DEPS="flex bison protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl libsodium"
+MACOS_BUILD_DEPS="ninja cmake ccache"
+FB_OS_VERSION="v2024.04.01.00"
 
 function update_brew {
   DEFAULT_BREW_PATH=/usr/local/bin/brew
@@ -67,35 +49,66 @@ function update_brew {
   $BREW_PATH developer off
 }
 
-function install_build_prerequisites {
-  for pkg in ${MACOS_DEPS}
-  do
-    if [[ "${pkg}" =~ ^([0-9a-z-]*):([0-9](\.[0-9\])*)$ ]];
-    then
-      pkg=${BASH_REMATCH[1]}
-      ver=${BASH_REMATCH[2]}
-      echo "Installing '${pkg}' at '${ver}'"
-      tap="velox/local-${pkg}"
-      brew tap-new "${tap}"
-      brew extract "--version=${ver}" "${pkg}" "${tap}"
-      brew install "${tap}/${pkg}@${ver}" || ( echo "Failed to install ${tap}/${pkg}@${ver}" ; exit 1 )
-    else
-      ( brew install --formula "${pkg}" && echo "Installation of ${pkg} is successful" || brew upgrade --formula "$pkg" ) || ( echo "Failed to install ${pkg}" ; exit 1 )
-    fi
-  done
+function install_from_brew {
+  pkg=$1
+  if [[ "${pkg}" =~ ^([0-9a-z-]*):([0-9](\.[0-9\])*)$ ]];
+  then
+    pkg=${BASH_REMATCH[1]}
+    ver=${BASH_REMATCH[2]}
+    echo "Installing '${pkg}' at '${ver}'"
+    tap="velox/local-${pkg}"
+    brew tap-new "${tap}"
+    brew extract "--version=${ver}" "${pkg}" "${tap}"
+    brew install "${tap}/${pkg}@${ver}" || ( echo "Failed to install ${tap}/${pkg}@${ver}" ; exit 1 )
+  else
+    ( brew install --formula "${pkg}" && echo "Installation of ${pkg} is successful" || brew upgrade --formula "$pkg" ) || ( echo "Failed to install ${pkg}" ; exit 1 )
+  fi
+}
 
+function install_build_prerequisites {
+  for pkg in ${MACOS_BUILD_DEPS}
+  do
+    install_from_brew ${pkg}
+  done
   pip3 install --user cmake-format regex
 }
 
+function install_velox_deps_from_brew {
+  for pkg in ${MACOS_VELOX_DEPS}
+  do
+    install_from_brew ${pkg}
+  done
+}
+
 function install_fmt {
-  github_checkout fmtlib/fmt 8.0.1
+  github_checkout fmtlib/fmt 10.1.1
   cmake_install -DFMT_TEST=OFF
 }
 
 function install_folly {
-  github_checkout facebook/folly "v2022.11.14.00"
-  OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+  github_checkout facebook/folly "${FB_OS_VERSION}"
   cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+}
+
+function install_fizz {
+  github_checkout facebookincubator/fizz "${FB_OS_VERSION}"
+  cmake_install -DBUILD_TESTS=OFF -S fizz
+}
+
+function install_wangle {
+  github_checkout facebook/wangle "${FB_OS_VERSION}"
+  cmake_install -DBUILD_TESTS=OFF -S wangle
+}
+
+function install_mvfst {
+    github_checkout facebook/mvfst "${FB_OS_VERSION}"
+    cmake_install -DBUILD_TESTS=OFF
+}
+
+
+function install_fbthrift {
+  github_checkout facebook/fbthrift "${FB_OS_VERSION}"
+  cmake_install -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_double_conversion {
@@ -114,29 +127,38 @@ function install_re2 {
 }
 
 function install_velox_deps {
-  if [ "${INSTALL_PREREQUISITES:-Y}" == "Y" ]; then
-    run_and_time install_build_prerequisites
-  fi
+  run_and_time install_velox_deps_from_brew
   run_and_time install_ranges_v3
-  run_and_time install_fmt
   run_and_time install_double_conversion
   run_and_time install_re2
+  run_and_time install_fmt
+  run_and_time install_folly
+  run_and_time install_fizz
+  run_and_time install_wangle
+  run_and_time install_mvfst
+  run_and_time install_fbthrift
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
 
 (
-  echo "Installing mac dependencies"
   update_brew
   if [[ $# -ne 0 ]]; then
     for cmd in "$@"; do
       run_and_time "${cmd}"
     done
+    echo "All specified dependencies installed!"
   else
+    if [ "${INSTALL_PREREQUISITES:-Y}" == "Y" ]; then
+      echo "Installing build dependencies"
+      run_and_time install_build_prerequisites
+    else
+      echo "Skipping installation of build dependencies since INSTALL_PREREQUISITES is not set"
+    fi
     install_velox_deps
+    echo "All deps for Velox installed! Now try \"make\""
   fi
 )
 
-echo "All deps for Velox installed! Now try \"make\""
 echo 'To add cmake-format bin to your $PATH, consider adding this to your ~/.profile:'
 echo 'export PATH=$HOME/bin:$HOME/Library/Python/3.7/bin:$PATH'

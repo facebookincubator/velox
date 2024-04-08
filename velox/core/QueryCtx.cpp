@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/core/QueryCtx.h"
+#include "velox/common/base/SpillConfig.h"
 
 namespace facebook::velox::core {
 
@@ -77,6 +79,16 @@ QueryCtx::QueryCtx(
   // name is unique.
   static std::atomic<int64_t> seqNum{0};
   return fmt::format("query.{}.{}", queryId.c_str(), seqNum++);
+}
+
+void QueryCtx::updateSpilledBytesAndCheckLimit(uint64_t bytes) {
+  const auto numSpilledBytes = numSpilledBytes_.fetch_add(bytes) + bytes;
+  if (queryConfig_.maxSpillBytes() > 0 &&
+      numSpilledBytes > queryConfig_.maxSpillBytes()) {
+    VELOX_SPILL_LIMIT_EXCEEDED(fmt::format(
+        "Query exceeded per-query local spill limit of {}",
+        succinctBytes(queryConfig_.maxSpillBytes())));
+  }
 }
 
 } // namespace facebook::velox::core

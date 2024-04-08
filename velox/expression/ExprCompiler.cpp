@@ -188,9 +188,9 @@ std::vector<ExprPtr> compileInputs(
       if (flattenIf.has_value()) {
         std::vector<TypedExprPtr> flat;
         flattenInput(input, flattenIf.value(), flat);
-        for (auto& input : flat) {
+        for (auto& input_2 : flat) {
           compiledInputs.push_back(compileExpression(
-              input,
+              input_2,
               scope,
               config,
               pool,
@@ -396,22 +396,19 @@ ExprPtr compileRewrittenExpression(
     if (FOLLY_UNLIKELY(*resultType == *compiledInputs[0]->type())) {
       result = compiledInputs[0];
     } else {
-      result = std::make_shared<CastExpr>(
+      result = getSpecialForm(
+          config,
+          cast->nullOnFailure() ? "try_cast" : "cast",
           resultType,
-          std::move(compiledInputs[0]),
-          trackCpuUsage,
-          cast->nullOnFailure());
+          std::move(compiledInputs),
+          trackCpuUsage);
     }
   } else if (auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
-    if (auto specialForm = getSpecialForm(
-            config,
-            call->name(),
-            resultType,
-            std::move(compiledInputs),
-            trackCpuUsage)) {
-      result = specialForm;
+    if (auto specialForm = specialFormRegistry().getSpecialForm(call->name())) {
+      result = specialForm->constructSpecialForm(
+          resultType, std::move(compiledInputs), trackCpuUsage, config);
     } else if (
-        auto func = getVectorFunction(
+        auto functionWithMetadata = getVectorFunctionWithMetadata(
             call->name(),
             inputTypes,
             getConstantInputs(compiledInputs),
@@ -419,7 +416,8 @@ ExprPtr compileRewrittenExpression(
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
-          func,
+          functionWithMetadata->first,
+          functionWithMetadata->second,
           call->name(),
           trackCpuUsage);
     } else if (
@@ -433,12 +431,14 @@ ExprPtr compileRewrittenExpression(
           simpleFunctionEntry->type(),
           resultType,
           folly::join(", ", inputTypes));
+
       auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
-          getConstantInputs(compiledInputs), config);
+          inputTypes, getConstantInputs(compiledInputs), config);
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
           std::move(func),
+          simpleFunctionEntry->metadata(),
           call->name(),
           trackCpuUsage);
     } else {

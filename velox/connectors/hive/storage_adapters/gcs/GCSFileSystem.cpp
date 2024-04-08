@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/gcs/GCSUtil.h"
@@ -47,14 +48,17 @@ inline void checkGCSStatus(
     const std::string& bucket,
     const std::string& key) {
   if (!outcome.ok()) {
-    auto error = outcome.error_info();
-    VELOX_FAIL(
+    const auto errMsg = fmt::format(
         "{} due to: Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'",
         errorMsgPrefix,
         gcsURI(bucket, key),
-        error.domain(),
+        outcome.error_info().domain(),
         getErrorStringFromGCSError(outcome.code()),
         outcome.message());
+    if (outcome.code() == gc::StatusCode::kNotFound) {
+      VELOX_FILE_NOT_FOUND_ERROR(errMsg);
+    }
+    VELOX_FAIL(errMsg);
   }
 }
 
@@ -402,5 +406,5 @@ void GCSFileSystem::rmdir(std::string_view path) {
   VELOX_UNSUPPORTED("rmdir for GCS not implemented");
 }
 
-}; // namespace filesystems
-}; // namespace facebook::velox
+} // namespace filesystems
+} // namespace facebook::velox

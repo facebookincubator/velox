@@ -22,13 +22,35 @@ set -eufx -o pipefail
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
+CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
+MACHINE=$(uname -m)
 
-function install_aws-sdk-cpp {
+function install_aws_deps {
   local AWS_REPO_NAME="aws/aws-sdk-cpp"
   local AWS_SDK_VERSION="1.11.169"
 
   github_checkout $AWS_REPO_NAME $AWS_SDK_VERSION --depth 1 --recurse-submodules
-  cmake_install -DCMAKE_BUILD_TYPE=Debug -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
+  cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
+  # Dependencies for S3 testing
+  # We need this specific version of Minio for testing.
+  if [[ "$OSTYPE" == linux-gnu* ]]; then
+    wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio-20220526054841.0.0.x86_64.rpm
+    rpm -i minio-20220526054841.0.0.x86_64.rpm
+    rm minio-20220526054841.0.0.x86_64.rpm
+  fi
+  # minio will have to approved under the Privacy & Security on MacOS on first use.
+  if [[ "$OSTYPE" == darwin* ]]; then
+    if [ "$MACHINE" = "x86_64" ]; then
+      wget https://dl.min.io/server/minio/release/darwin-arm64/archive/minio.RELEASE.2022-05-26T05-48-41Z -O minio
+      chmod +x ./minio
+      sudo mv ./minio /usr/local/bin/
+    fi
+    if [ "$MACHINE" = "arm64" ]; then
+      wget https://dl.min.io/server/minio/release/darwin-arm64/archive/minio.RELEASE.2022-05-26T05-48-41Z -O minio
+      chmod +x ./minio
+      sudo mv ./minio /usr/local/bin/
+    fi
+  fi
 }
 
 function install_gcs-sdk-cpp {
@@ -36,7 +58,7 @@ function install_gcs-sdk-cpp {
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
   # abseil-cpp
-  github_checkout abseil/abseil-cpp 20230125.3 --depth 1
+  github_checkout abseil/abseil-cpp 20240116.1 --depth 1
   sed -i 's/^#define ABSL_OPTION_USE_\(.*\) 2/#define ABSL_OPTION_USE_\1 0/' "absl/base/options.h"
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DABSL_BUILD_TESTING=OFF
@@ -49,12 +71,12 @@ function install_gcs-sdk-cpp {
     -DCRC32C_USE_GLOG=OFF
 
   # nlohmann json
-  github_checkout nlohmann/json v3.11.2 --depth 1
+  github_checkout nlohmann/json v3.11.3 --depth 1
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DJSON_BuildTests=OFF
 
   # google-cloud-cpp
-  github_checkout googleapis/google-cloud-cpp v2.10.1 --depth 1
+  github_checkout googleapis/google-cloud-cpp v2.22.0 --depth 1
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_INSTALL_MESSAGE=NEVER \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
@@ -62,6 +84,9 @@ function install_gcs-sdk-cpp {
 }
 
 function install_azure-storage-sdk-cpp {
+  # Disable VCPKG to install additional static dependencies under the VCPKG installed path
+  # instead of using system pre-installed dependencies.
+  export AZURE_SDK_DISABLE_AUTO_VCPKG=ON
   vcpkg_commit_id=7a6f366cefd27210f6a8309aed10c31104436509
   github_checkout azure/azure-sdk-for-cpp azure-storage-files-datalake_12.8.0
   sed -i "s/set(VCPKG_COMMIT_STRING .*)/set(VCPKG_COMMIT_STRING $vcpkg_commit_id)/" cmake-modules/AzureVcpkg.cmake
@@ -76,25 +101,25 @@ function install_azure-storage-sdk-cpp {
     sed -i "s/\"version-string\"/\"builtin-baseline\": \"$vcpkg_commit_id\",\"version-string\"/" vcpkg.json
     sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" vcpkg.json
   fi
-  cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+  cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 
   cd -
   # install azure-storage-common
   cd sdk/storage/azure-storage-common
-  cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+  cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 
   cd -
   # install azure-storage-blobs
   cd sdk/storage/azure-storage-blobs
-  cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+  cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 
   cd -
   # install azure-storage-files-datalake
   cd sdk/storage/azure-storage-files-datalake
-  cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+  cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 }
 
-function install_libhdfs3 {
+function install_hdfs_deps {
   github_checkout apache/hawq master
   cd $DEPENDENCY_DIR/hawq/depends/libhdfs3
   if [[ "$OSTYPE" == darwin* ]]; then
@@ -105,6 +130,9 @@ function install_libhdfs3 {
   if [[ "$OSTYPE" == linux-gnu* ]]; then
     sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" ./CMakeLists.txt
     sed -i "s/dumpversion/dumpfullversion/" ./CMake/Platform.cmake
+    # Dependencies for Hadoop testing
+    wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-2.10.1/hadoop-2.10.1.tar.gz hadoop
+    cp -a hadoop /usr/local/
   fi
   cmake_install
 }
@@ -178,10 +206,10 @@ if [ $install_gcs -eq 1 ]; then
   install_gcs-sdk-cpp
 fi
 if [ $install_aws -eq 1 ]; then
-  install_aws-sdk-cpp
+  install_aws_deps
 fi
 if [ $install_hdfs -eq 1 ]; then
-  install_libhdfs3
+  install_hdfs_deps
 fi
 if [ $install_abfs -eq 1 ]; then
   install_azure-storage-sdk-cpp

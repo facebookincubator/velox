@@ -39,6 +39,7 @@ add_library(
   ExecutorBarrier.cpp
   FileSink.cpp
   FlatMapHelper.cpp
+  OnDemandUnitLoader.cpp
   InputStream.cpp
   IntDecoder.cpp
   MetadataFilter.cpp
@@ -74,7 +75,6 @@ target_link_libraries(
   velox_exception
   velox_expression
   velox_memory
-  velox_exec
   Boost::regex
   Folly::folly
   glog::glog)

@@ -27,8 +27,8 @@ TEST(SpillConfig, spillLevel) {
   const uint8_t kNumPartitionsBits = 3;
   const SpillConfig config(
       []() { return ""; },
+      [&](uint64_t) {},
       "fakeSpillPath",
-      0,
       0,
       0,
       nullptr,
@@ -36,7 +36,6 @@ TEST(SpillConfig, spillLevel) {
       0,
       kInitialBitOffset,
       kNumPartitionsBits,
-      0,
       0,
       0,
       0,
@@ -63,10 +62,9 @@ TEST(SpillConfig, spillLevel) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     if (testData.expectedLevel == -1) {
-      ASSERT_ANY_THROW(config.joinSpillLevel(testData.bitOffset));
+      ASSERT_ANY_THROW(config.spillLevel(testData.bitOffset));
     } else {
-      ASSERT_EQ(
-          config.joinSpillLevel(testData.bitOffset), testData.expectedLevel);
+      ASSERT_EQ(config.spillLevel(testData.bitOffset), testData.expectedLevel);
     }
   }
 }
@@ -113,8 +111,8 @@ TEST(SpillConfig, spillLevelLimit) {
         testData.startBitOffset, testData.startBitOffset + testData.numBits);
     const SpillConfig config(
         []() { return ""; },
+        [&](uint64_t) {},
         "fakeSpillPath",
-        0,
         0,
         0,
         nullptr,
@@ -125,12 +123,11 @@ TEST(SpillConfig, spillLevelLimit) {
         testData.maxSpillLevel,
         0,
         0,
-        0,
         "none");
 
     ASSERT_EQ(
         testData.expectedExceeds,
-        config.exceedJoinSpillLevelLimit(testData.bitOffset));
+        config.exceedSpillLevelLimit(testData.bitOffset));
   }
 }
 
@@ -160,8 +157,8 @@ TEST(SpillConfig, spillableReservationPercentages) {
     auto createConfigFn = [&]() {
       const SpillConfig config(
           [&]() -> const std::string& { return emptySpillFolder; },
+          [&](uint64_t) {},
           "spillableReservationPercentages",
-          0,
           0,
           0,
           nullptr,
@@ -171,7 +168,6 @@ TEST(SpillConfig, spillableReservationPercentages) {
           0,
           0,
           1'000'000,
-          0,
           0,
           "none");
     };

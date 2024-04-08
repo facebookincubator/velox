@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/RandomUtil.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
@@ -65,12 +66,13 @@ class ReaderBase {
       std::unique_ptr<dwio::common::BufferedInput> input,
       std::shared_ptr<dwio::common::encryption::DecrypterFactory>
           decryptorFactory = nullptr,
-      uint64_t directorySizeGuess =
-          dwio::common::ReaderOptions::kDefaultDirectorySizeGuess,
+      uint64_t footerEstimatedSize =
+          dwio::common::ReaderOptions::kDefaultFooterEstimatedSize,
       uint64_t filePreloadThreshold =
           dwio::common::ReaderOptions::kDefaultFilePreloadThreshold,
       dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF,
-      bool fileColumnNamesReadAsLowerCase = false);
+      bool fileColumnNamesReadAsLowerCase = false,
+      std::shared_ptr<random::RandomSkipTracker> randomSkip = nullptr);
 
   ReaderBase(
       memory::MemoryPool& pool,
@@ -147,8 +149,8 @@ class ReaderBase {
     return *handler_;
   }
 
-  uint64_t getDirectorySizeGuess() const {
-    return directorySizeGuess_;
+  uint64_t getFooterEstimatedSize() const {
+    return footerEstimatedSize_;
   }
 
   uint64_t getFileLength() const {
@@ -231,6 +233,10 @@ class ReaderBase {
     return postScript_->format();
   }
 
+  const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
+    return randomSkip_;
+  }
+
  private:
   static std::shared_ptr<const Type> convertType(
       const FooterWrapper& footer,
@@ -245,12 +251,13 @@ class ReaderBase {
   // Keeps factory alive for possibly async prefetch.
   std::shared_ptr<dwio::common::encryption::DecrypterFactory> decryptorFactory_;
   std::unique_ptr<encryption::DecryptionHandler> handler_;
-  const uint64_t directorySizeGuess_{
-      dwio::common::ReaderOptions::kDefaultDirectorySizeGuess};
+  const uint64_t footerEstimatedSize_{
+      dwio::common::ReaderOptions::kDefaultFooterEstimatedSize};
   const uint64_t filePreloadThreshold_{
       dwio::common::ReaderOptions::kDefaultFilePreloadThreshold};
 
   std::unique_ptr<dwio::common::BufferedInput> input_;
+  const std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   RowTypePtr schema_;
   // Lazily populated
   mutable std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;

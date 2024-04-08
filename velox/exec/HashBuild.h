@@ -19,7 +19,6 @@
 #include "velox/exec/HashTable.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Spill.h"
-#include "velox/exec/SpillOperatorGroup.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/UnorderedStreamReader.h"
 #include "velox/exec/VectorHasher.h"
@@ -42,23 +41,26 @@ class HashBuild final : public Operator {
   enum class State {
     /// The running state.
     kRunning = 1,
+    /// The yield state that voluntarily yield cpu after running too long when
+    /// processing input from spilled file.
+    kYield = 2,
     /// The state that waits for the pending group spill to finish. This state
     /// only applies if disk spilling is enabled.
-    kWaitForSpill = 2,
+    kWaitForSpill = 3,
     /// The state that waits for the hash tables to be merged together.
-    kWaitForBuild = 3,
+    kWaitForBuild = 4,
     /// The state that waits for the hash probe to finish before start to build
     /// the hash table for one of previously spilled partition. This state only
     /// applies if disk spilling is enabled.
-    kWaitForProbe = 4,
+    kWaitForProbe = 5,
     /// The finishing state.
-    kFinish = 5,
+    kFinish = 6,
   };
   static std::string stateName(State state);
 
   HashBuild(
       int32_t operatorId,
-      DriverCtx* FOLLY_NONNULL driverCtx,
+      DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
   void initialize() override;
@@ -75,14 +77,16 @@ class HashBuild final : public Operator {
 
   void noMoreInput() override;
 
-  BlockingReason isBlocked(ContinueFuture* FOLLY_NONNULL future) override;
+  BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
+
+  bool canReclaim() const override;
 
   void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
       override;
 
-  void abort() override;
+  void close() override;
 
  private:
   void setState(State state);
@@ -98,9 +102,7 @@ class HashBuild final : public Operator {
   // Invoked when operator has finished processing the build input and wait for
   // all the other drivers to finish the processing. The last driver that
   // reaches to the hash build barrier, is responsible to build the hash table
-  // merged from all the other drivers. If the disk spilling is enabled, the
-  // last driver will also restart 'spillGroup_' and add a new hash build
-  // barrier for the next round of hash table build operation if it needs.
+  // merged from all the other drivers.
   bool finishHashBuild();
 
   // Invoked after the hash table has been built. It waits for any spill data to
@@ -112,14 +114,8 @@ class HashBuild final : public Operator {
   void postHashBuildProcess();
 
   bool spillEnabled() const {
-    return spillConfig_.has_value();
+    return canReclaim();
   }
-
-  const common::SpillConfig* spillConfig() const {
-    return spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
-  }
-
-  void recordSpillStats();
 
   // Indicates if the input is read from spill data or not.
   bool isInputFromSpill() const;
@@ -142,26 +138,13 @@ class HashBuild final : public Operator {
 
   // Invoked to ensure there is a sufficient memory to process 'input' by
   // reserving a sufficient amount of memory in advance if disk spilling is
-  // enabled. The function returns true if the disk spilling is not enabled, or
-  // the memory reservation succeeds. If the memory reservation fails, the
-  // function will trigger a group spill which needs coordination among the
-  // other build drivers in the same group. The function returns true if the
-  // group spill has been inline executed which could happen if there is only
-  // one driver in the group, or it happens that all the other drivers have
-  // also requested group spill and this driver is the last one to reach the
-  // group spill barrier. Otherwise, the function returns false to wait for the
-  // group spill to run. The operator will transition to 'kWaitForSpill' state
-  // accordingly.
-  bool ensureInputFits(RowVectorPtr& input);
+  // enabled.
+  void ensureInputFits(RowVectorPtr& input);
 
   // Invoked to ensure there is sufficient memory to build the join table with
   // the specified 'numRows' if spilling is enabled. The function throws to fail
   // the query if the memory reservation fails.
   void ensureTableFits(uint64_t numRows);
-
-  // Invoked to reserve memory for 'input' if disk spilling is enabled. The
-  // function returns true on success, otherwise false.
-  bool reserveMemory(const RowVectorPtr& input);
 
   // Invoked to compute spill partitions numbers for each row 'input' and spill
   // rows to spiller directly if the associated partition(s) is spilling. The
@@ -190,28 +173,6 @@ class HashBuild final : public Operator {
       vector_size_t numInput,
       const SpillPartitionNumSet& spillPartitions);
 
-  // Invoked to send group spill request to 'spillGroup_'. The function returns
-  // true if group spill has been inline executed, otherwise returns false. In
-  // the latter case, the operator will transition to 'kWaitForSpill' state and
-  // 'input' will be saved in 'input_' to be processed after the group spill has
-  // been executed.
-  bool requestSpill(RowVectorPtr& input);
-
-  // Invoked to check if it needs to wait for any pending group spill to run.
-  // The function returns true if it needs to wait, otherwise false. The latter
-  // case is either because there is no pending group spill or this operator is
-  // the last one to reach to the group spill barrier and execute the group
-  // spill inline.
-  bool waitSpill(RowVectorPtr& input);
-
-  // The callback registered to 'spillGroup_' to run group spill on
-  // 'spillOperators'.
-  void runSpill(const std::vector<Operator*>& spillOperators);
-
-  // Invoked by 'runSpill' to sum up the spill targets from all the operators in
-  // 'numRows' and 'numBytes'.
-  void addAndClearSpillTarget(uint64_t& numRows, uint64_t& numBytes);
-
   // Invoked to reset the operator state to restore previously spilled data. It
   // setup (recursive) spiller and spill input reader from 'spillInput' received
   // from 'joinBride_'. 'spillInput' contains a shard of previously spilled
@@ -236,9 +197,6 @@ class HashBuild final : public Operator {
 
   void addRuntimeStats();
 
-  // Invoked to check if it needs to trigger spilling for test purpose only.
-  bool testingTriggerSpill();
-
   // Indicates if this hash build operator is under non-reclaimable state or
   // not.
   bool nonReclaimableState() const;
@@ -249,20 +207,34 @@ class HashBuild final : public Operator {
 
   const bool nullAware_;
 
+  // Sets to true for join type which needs right side join processing. The hash
+  // table spiller then needs to record the probed flag, and the spilled input
+  // reader also needs to restore the recorded probed flag. This is used to
+  // support probe side spilling to record if a spilled row has been probed or
+  // not.
+  const bool needProbedFlagSpill_;
+
   std::shared_ptr<HashJoinBridge> joinBridge_;
 
-  // The maximum memory usage that a hash build can hold before spilling.
-  // If it is zero, then there is no such limit.
-  const uint64_t spillMemoryThreshold_;
-
   bool exceededMaxSpillLevelLimit_{false};
-
-  std::shared_ptr<SpillOperatorGroup> spillGroup_;
 
   State state_{State::kRunning};
 
   // The row type used for hash table build and disk spilling.
   RowTypePtr tableType_;
+
+  // Used to serialize access to internal state including 'table_' and
+  // 'spiller_'. This is only required when variables are accessed
+  // concurrently, that is, when a thread tries to close the operator while
+  // another thread is building the hash table. Refer to 'close()' and
+  // finishHashBuild()' for more details.
+  std::mutex mutex_;
+
+  // Indicates if the intermediate state ('table_' and 'spiller_') has
+  // been cleared. This can happen either when the operator is closed or when
+  // the last hash build operator transfers ownership of them to itself while
+  // building the final hash table.
+  bool stateCleared_{false};
 
   // Container for the rows being accumulated.
   std::unique_ptr<BaseHashTable> table_;
@@ -294,18 +266,24 @@ class HashBuild final : public Operator {
   // at least one entry with null join keys.
   bool joinHasNullKeys_{false};
 
-  // Counts input batches and triggers spilling if folly hash of this % 100 <=
-  // 'testSpillPct_';.
-  uint64_t spillTestCounter_{0};
+  // The type used to spill hash table which might attach a boolean column to
+  // record the probed flag if 'needProbedFlagSpill_' is true.
+  RowTypePtr spillType_;
+  // Specifies the column index in 'spillType_' which records the probed flag
+  // for each spilled row.
+  column_index_t spillProbedFlagChannel_;
+  // Used to set the probed flag vector at the build side which is always false.
+  std::shared_ptr<ConstantVector<bool>> spillProbedFlagVector_;
 
-  // The spill targets set by 'requestSpill()' to request group spill.
-  uint64_t numSpillRows_{0};
-  uint64_t numSpillBytes_{0};
-
+  // This can be nullptr if either spilling is not allowed or it has been
+  // transferred to the last hash build operator while in kWaitForBuild state or
+  // it has been cleared to set up a new one for recursive spilling.
   std::unique_ptr<Spiller> spiller_;
 
   // Used to read input from previously spilled data for restoring.
   std::unique_ptr<UnorderedStreamReader<BatchStream>> spillInputReader_;
+  // Vector used to read from spilled input with type of 'spillType_'.
+  RowVectorPtr spillInput_;
 
   // Reusable memory for spill partition calculation for input data.
   std::vector<uint32_t> spillPartitions_;
@@ -333,3 +311,12 @@ inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
   return os;
 }
 } // namespace facebook::velox::exec
+
+template <>
+struct fmt::formatter<facebook::velox::exec::HashBuild::State>
+    : formatter<std::string> {
+  auto format(facebook::velox::exec::HashBuild::State s, format_context& ctx) {
+    return formatter<std::string>::format(
+        facebook::velox::exec::HashBuild::stateName(s), ctx);
+  }
+};

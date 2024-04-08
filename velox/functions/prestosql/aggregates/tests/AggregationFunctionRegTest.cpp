@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/exec/Aggregate.h"
+#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 
 namespace facebook::velox::aggregate::test {
@@ -51,6 +52,75 @@ TEST_F(AggregationFunctionRegTest, prefix) {
       EXPECT_EQ(1, aggrFuncMapBase.count(entry.first.substr(prefix.size())));
     }
   });
+}
+
+TEST_F(AggregationFunctionRegTest, orderSensitive) {
+  // Remove all functions and check for no entries.
+  clearAndCheckRegistry();
+
+  std::set<std::string> nonOrderSensitiveFunctions = {
+      "sum",
+      "avg",
+      "min",
+      "max",
+      "count",
+      "arbitrary",
+      "bool_and",
+      "bool_or",
+      "bitwise_and_agg",
+      "bitwise_or_agg",
+      "every",
+      "checksum",
+      "count_if",
+      "geometric_mean",
+      "histogram",
+      "reduce_agg",
+      "any_value"};
+  aggregate::prestosql::registerAllAggregateFunctions();
+  exec::aggregateFunctions().withRLock([&](const auto& aggrFuncMap) {
+    for (const auto& entry : aggrFuncMap) {
+      if (!entry.second.metadata.orderSensitive) {
+        EXPECT_EQ(1, nonOrderSensitiveFunctions.erase(entry.first));
+      }
+    }
+  });
+  EXPECT_EQ(0, nonOrderSensitiveFunctions.size());
+
+  // Test some but not all order sensitive functions
+  std::set<std::string> orderSensitiveFunctions = {
+      "array_agg", "map_agg", "map_union", "set_agg"};
+  exec::aggregateFunctions().withRLock([&](const auto& aggrFuncMap) {
+    for (const auto& entry : aggrFuncMap) {
+      if (entry.second.metadata.orderSensitive) {
+        orderSensitiveFunctions.erase(entry.first);
+      }
+    }
+  });
+  EXPECT_EQ(0, orderSensitiveFunctions.size());
+}
+
+TEST_F(AggregationFunctionRegTest, prestoSupportedSignatures) {
+  // Remove all functions and check for no entries.
+  clearAndCheckRegistry();
+
+  // Register without prefix and all signatures
+  aggregate::prestosql::registerAllAggregateFunctions("", true, false);
+  auto aggrFuncMapBase = exec::aggregateFunctions().copy();
+  EXPECT_EQ(aggrFuncMapBase[kBitwiseAnd].signatures.size(), 4);
+  EXPECT_EQ(aggrFuncMapBase[kBitwiseOr].signatures.size(), 4);
+  EXPECT_EQ(aggrFuncMapBase[kBitwiseXor].signatures.size(), 4);
+
+  // Register without prefix and only those signatures that are supported by
+  // Presto.
+  clearAndCheckRegistry();
+  aggregate::prestosql::registerAllAggregateFunctions("", true, true);
+  aggrFuncMapBase = exec::aggregateFunctions().copy();
+  EXPECT_EQ(aggrFuncMapBase[kBitwiseAnd].signatures.size(), 1);
+  EXPECT_EQ(aggrFuncMapBase[kBitwiseOr].signatures.size(), 1);
+  EXPECT_EQ(aggrFuncMapBase[kBitwiseXor].signatures.size(), 1);
+
+  // Revert to previous state.
+  clearAndCheckRegistry();
 }
 
 } // namespace facebook::velox::aggregate::test

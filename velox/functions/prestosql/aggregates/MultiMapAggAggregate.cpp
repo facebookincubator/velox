@@ -16,8 +16,8 @@
 #include "velox/exec/AddressableNonNullValueList.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Strings.h"
+#include "velox/functions/lib/aggregates/ValueList.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/ValueList.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -138,7 +138,7 @@ struct MultiMapAccumulator {
 
 struct ComplexTypeMultiMapAccumulator {
   MultiMapAccumulator<
-      HashStringAllocator::Position,
+      AddressableNonNullValueList::Entry,
       AddressableNonNullValueList::Hash,
       AddressableNonNullValueList::EqualTo>
       base;
@@ -168,9 +168,9 @@ struct ComplexTypeMultiMapAccumulator {
       const DecodedVector& decodedValues,
       vector_size_t index,
       HashStringAllocator& allocator) {
-    const auto position = serializedKeys.append(decodedKeys, index, &allocator);
+    const auto entry = serializedKeys.append(decodedKeys, index, &allocator);
 
-    auto& values = insertKey(position);
+    auto& values = insertKey(entry);
     values.appendValue(decodedValues, index, &allocator);
   }
 
@@ -182,19 +182,18 @@ struct ComplexTypeMultiMapAccumulator {
       vector_size_t valueIndex,
       vector_size_t numValues,
       HashStringAllocator& allocator) {
-    const auto position =
-        serializedKeys.append(decodedKeys, keyIndex, &allocator);
+    const auto entry = serializedKeys.append(decodedKeys, keyIndex, &allocator);
 
-    auto& values = insertKey(position);
+    auto& values = insertKey(entry);
     for (auto i = 0; i < numValues; ++i) {
       values.appendValue(decodedValues, valueIndex + i, &allocator);
     }
   }
 
-  ValueList& insertKey(HashStringAllocator::Position position) {
-    auto result = base.keys.insert({position, ValueList()});
+  ValueList& insertKey(const AddressableNonNullValueList::Entry& key) {
+    auto result = base.keys.insert({key, ValueList()});
     if (!result.second) {
-      serializedKeys.removeLast(position);
+      serializedKeys.removeLast(key);
     }
 
     return result.first->second;
@@ -253,16 +252,6 @@ class MultiMapAggAggregate : public exec::Aggregate {
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(AccumulatorType);
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    const auto& type = resultType()->childAt(0);
-    for (auto index : indices) {
-      new (groups[index] + offset_) AccumulatorType(type, allocator_);
-    }
-    setAllNulls(groups, indices);
   }
 
   void addRawInput(
@@ -433,11 +422,24 @@ class MultiMapAggAggregate : public exec::Aggregate {
     extractValues(groups, numGroups, result);
   }
 
-  void destroy(folly::Range<char**> groups) override {
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    const auto& type = resultType()->childAt(0);
+    for (auto index : indices) {
+      new (groups[index] + offset_) AccumulatorType(type, allocator_);
+    }
+    setAllNulls(groups, indices);
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
     for (auto* group : groups) {
-      auto accumulator = value<AccumulatorType>(group);
-      accumulator->free(*allocator_);
-      destroyAccumulator<AccumulatorType>(group);
+      if (isInitialized(group)) {
+        auto accumulator = value<AccumulatorType>(group);
+        accumulator->free(*allocator_);
+        destroyAccumulator<AccumulatorType>(group);
+      }
     }
   }
 
@@ -478,7 +480,10 @@ class MultiMapAggAggregate : public exec::Aggregate {
 
 } // namespace
 
-void registerMultiMapAggAggregate(const std::string& prefix) {
+void registerMultiMapAggAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("K")
@@ -536,7 +541,9 @@ void registerMultiMapAggAggregate(const std::string& prefix) {
             VELOX_UNREACHABLE(
                 "Unexpected type {}", mapTypeKindToName(typeKind));
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 #include "velox/type/Timestamp.h"
+#include <charconv>
 #include <chrono>
+#include "velox/common/base/CountBits.h"
 #include "velox/external/date/tz.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -62,7 +64,7 @@ void Timestamp::toGMT(const date::time_zone& zone) {
       sysTime;
   try {
     sysTime = zone.to_sys(localTime);
-  } catch (const date::ambiguous_local_time& error) {
+  } catch (const date::ambiguous_local_time&) {
     // If the time is ambiguous, pick the earlier possibility to be consistent
     // with Presto.
     sysTime = zone.to_sys(localTime, date::choose::earliest);
@@ -108,9 +110,10 @@ void validateTimePoint(const std::chrono::time_point<
 } // namespace
 
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
-Timestamp::toTimePoint() const {
+Timestamp::toTimePoint(bool allowOverflow) const {
   using namespace std::chrono;
-  auto tp = time_point<system_clock, milliseconds>(milliseconds(toMillis()));
+  auto tp = time_point<system_clock, milliseconds>(
+      milliseconds(allowOverflow ? toMillisAllowOverflow() : toMillis()));
   validateTimePoint(tp);
   return tp;
 }
@@ -131,6 +134,20 @@ void Timestamp::toTimezone(int16_t tzID) {
     // Other ids go this path.
     toTimezone(*date::locate_zone(util::getTimeZoneName(tzID)));
   }
+}
+
+const date::time_zone& Timestamp::defaultTimezone() {
+  static const date::time_zone* kDefault = ({
+    // TODO: We are hard-coding PST/PDT here to be aligned with the current
+    // behavior in DWRF reader/writer.  Once they are fixed, we can use
+    // date::current_zone() here.
+    //
+    // See https://github.com/facebookincubator/velox/issues/8127
+    auto* tz = date::locate_zone("America/Los_Angeles");
+    VELOX_CHECK_NOT_NULL(tz);
+    tz;
+  });
+  return *kDefault;
 }
 
 namespace {
@@ -170,23 +187,6 @@ void appendSmallInt(int n, std::string& out) {
   VELOX_DCHECK_LE(n, 61);
   out.append(intToStr[n], 2);
 }
-
-std::string::size_type getCapacity(const TimestampToStringOptions& options) {
-  auto precisionWidth = static_cast<int8_t>(options.precision);
-  switch (options.mode) {
-    case TimestampToStringOptions::Mode::kDateOnly:
-      // yyyy-mm-dd
-      return 10;
-    case TimestampToStringOptions::Mode::kTimeOnly:
-      // hh:mm:ss.precision
-      return 9 + precisionWidth;
-    case TimestampToStringOptions::Mode::kFull:
-      return 26 + precisionWidth;
-    default:
-      VELOX_UNREACHABLE();
-  }
-}
-
 } // namespace
 
 bool Timestamp::epochToUtc(int64_t epoch, std::tm& tm) {
@@ -234,64 +234,159 @@ bool Timestamp::epochToUtc(int64_t epoch, std::tm& tm) {
   return true;
 }
 
-std::string Timestamp::tmToString(
+StringView Timestamp::tmToStringView(
     const std::tm& tmValue,
     uint64_t nanos,
-    const TimestampToStringOptions& options) {
+    const TimestampToStringOptions& options,
+    char* const startPosition) {
   VELOX_DCHECK_GE(nanos, 0);
   VELOX_DCHECK_LT(nanos, 1'000'000'000);
-  auto precisionWidth = static_cast<int8_t>(options.precision);
-  std::string out;
-  out.reserve(getCapacity(options));
 
+  const auto appendDigits = [](const int value,
+                               const std::optional<uint32_t> minWidth,
+                               char* const position) {
+    const auto numDigits = countDigits(value);
+    uint32_t offset = 0;
+    // Append leading zeros when there is the requirement for minumum width.
+    if (minWidth.has_value() && numDigits < minWidth.value()) {
+      const auto leadingZeros = minWidth.value() - numDigits;
+      std::memset(position, '0', leadingZeros);
+      offset += leadingZeros;
+    }
+    const auto [endPosition, errorCode] =
+        std::to_chars(position + offset, position + offset + numDigits, value);
+    VELOX_DCHECK_EQ(
+        errorCode,
+        std::errc(),
+        "Failed to convert value to varchar: {}.",
+        std::make_error_code(errorCode).message());
+    offset += numDigits;
+    return offset;
+  };
+
+  char* writePosition = startPosition;
   if (options.mode != TimestampToStringOptions::Mode::kTimeOnly) {
-    int n = kTmYearBase + tmValue.tm_year;
-    bool negative = n < 0;
+    int year = kTmYearBase + tmValue.tm_year;
+    const bool leadingPositiveSign = options.leadingPositiveSign && year > 9999;
+    const bool negative = year < 0;
+
+    // Sign.
     if (negative) {
-      out += '-';
-      n = -n;
-    }
-    while (n > 0) {
-      out += '0' + n % 10;
-      n /= 10;
-    }
-    auto zeroPaddingYearSize = negative + 4;
-    if (options.zeroPaddingYear && out.size() < zeroPaddingYearSize) {
-      while (out.size() < zeroPaddingYearSize) {
-        out += '0';
-      }
-    }
-    std::reverse(out.begin() + negative, out.end());
-    out += '-';
-    appendSmallInt(1 + tmValue.tm_mon, out);
-    out += '-';
-    appendSmallInt(tmValue.tm_mday, out);
-    if (options.mode == TimestampToStringOptions::Mode::kDateOnly) {
-      return out;
+      *writePosition++ = '-';
+      year = -year;
+    } else if (leadingPositiveSign) {
+      *writePosition++ = '+';
     }
 
-    out += options.dateTimeSeparator;
+    // Year.
+    writePosition += appendDigits(
+        year,
+        options.zeroPaddingYear ? std::optional<uint32_t>(4) : std::nullopt,
+        writePosition);
+
+    // Month.
+    *writePosition++ = '-';
+    writePosition += appendDigits(1 + tmValue.tm_mon, 2, writePosition);
+
+    // Day.
+    *writePosition++ = '-';
+    writePosition += appendDigits(tmValue.tm_mday, 2, writePosition);
+
+    if (options.mode == TimestampToStringOptions::Mode::kDateOnly) {
+      return StringView(startPosition, writePosition - startPosition);
+    }
+    *writePosition++ = options.dateTimeSeparator;
   }
 
-  appendSmallInt(tmValue.tm_hour, out);
-  out += ':';
-  appendSmallInt(tmValue.tm_min, out);
-  out += ':';
-  appendSmallInt(tmValue.tm_sec, out);
-  out += '.';
-  int offset = out.size();
+  // Hour.
+  writePosition += appendDigits(tmValue.tm_hour, 2, writePosition);
+
+  // Minute.
+  *writePosition++ = ':';
+  writePosition += appendDigits(tmValue.tm_min, 2, writePosition);
+
+  // Second.
+  *writePosition++ = ':';
+  writePosition += appendDigits(tmValue.tm_sec, 2, writePosition);
+
   if (options.precision == TimestampToStringOptions::Precision::kMilliseconds) {
     nanos /= 1'000'000;
+  } else if (
+      options.precision == TimestampToStringOptions::Precision::kMicroseconds) {
+    nanos /= 1'000;
   }
-  while (nanos > 0) {
-    out += '0' + nanos % 10;
-    nanos /= 10;
+  if (options.skipTrailingZeros && nanos == 0) {
+    return StringView(startPosition, writePosition - startPosition);
   }
-  while (out.size() - offset < precisionWidth) {
-    out += '0';
+
+  // Fractional part.
+  *writePosition++ = '.';
+  // Append leading zeros.
+  const auto numDigits = countDigits(nanos);
+  const auto precisionWidth = static_cast<int8_t>(options.precision);
+  std::memset(writePosition, '0', precisionWidth - numDigits);
+  writePosition += precisionWidth - numDigits;
+
+  // Append the remaining numeric digits.
+  if (options.skipTrailingZeros) {
+    std::optional<uint32_t> nonZeroOffset = std::nullopt;
+    int32_t offset = numDigits - 1;
+    // Write non-zero digits from end to start.
+    while (nanos > 0) {
+      if (nonZeroOffset.has_value() || nanos % 10 != 0) {
+        *(writePosition + offset) = '0' + nanos % 10;
+        if (!nonZeroOffset.has_value()) {
+          nonZeroOffset = offset;
+        }
+      }
+      --offset;
+      nanos /= 10;
+    }
+    writePosition += nonZeroOffset.value() + 1;
+  } else {
+    const auto [position, errorCode] =
+        std::to_chars(writePosition, writePosition + numDigits, nanos);
+    VELOX_DCHECK_EQ(
+        errorCode,
+        std::errc(),
+        "Failed to convert fractional part to chars: {}.",
+        std::make_error_code(errorCode).message());
+    writePosition = position;
   }
-  std::reverse(out.begin() + offset, out.end());
-  return out;
+  return StringView(startPosition, writePosition - startPosition);
+}
+
+StringView Timestamp::tsToStringView(
+    const Timestamp& ts,
+    const TimestampToStringOptions& options,
+    char* const startPosition) {
+  std::tm tmValue;
+  VELOX_USER_CHECK(
+      epochToUtc(ts.getSeconds(), tmValue),
+      "Can't convert seconds to time: {}",
+      ts.getSeconds());
+  const uint64_t nanos = ts.getNanos();
+  return tmToStringView(tmValue, nanos, options, startPosition);
+}
+
+std::string::size_type getMaxStringLength(
+    const TimestampToStringOptions& options) {
+  const auto precisionWidth = static_cast<int8_t>(options.precision);
+  switch (options.mode) {
+    case TimestampToStringOptions::Mode::kDateOnly:
+      // Date format is %y-mm-dd, where y has 10 digits at maximum for int32.
+      // Possible sign is considered.
+      return 17;
+    case TimestampToStringOptions::Mode::kTimeOnly:
+      // hh:mm:ss.precision
+      return 9 + precisionWidth;
+    case TimestampToStringOptions::Mode::kFull:
+      // Timestamp format is %y-%m-%dT%h:%m:%s.precision, where y has 10 digits
+      // at maximum for int32. Possible sign is considered.
+      return 27 + precisionWidth;
+    default:
+      VELOX_UNREACHABLE();
+  }
 }
 
 void parseTo(folly::StringPiece in, ::facebook::velox::Timestamp& out) {

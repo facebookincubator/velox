@@ -121,13 +121,15 @@ class MergeExchangeSource : public MergeSource {
       const std::string& taskId,
       int destination,
       int64_t maxQueuedBytes,
-      memory::MemoryPool* pool)
+      memory::MemoryPool* pool,
+      folly::Executor* executor)
       : mergeExchange_(mergeExchange),
-        client_(std::make_unique<ExchangeClient>(
-            taskId,
+        client_(std::make_shared<ExchangeClient>(
+            mergeExchange->taskId(),
             destination,
+            maxQueuedBytes,
             pool,
-            maxQueuedBytes)) {
+            executor)) {
     client_->addRemoteTaskId(taskId);
     client_->noMoreRemoteTasks();
   }
@@ -165,6 +167,7 @@ class MergeExchangeSource : public MergeSource {
 
       auto lockedStats = mergeExchange_->stats().wlock();
       lockedStats->addInputVector(data->estimateFlatSize(), data->size());
+      lockedStats->rawInputPositions += data->size();
     }
 
     // Since VectorStreamGroup::read() may cause inputStream to be at end,
@@ -187,7 +190,7 @@ class MergeExchangeSource : public MergeSource {
 
  private:
   MergeExchange* const mergeExchange_;
-  std::unique_ptr<ExchangeClient> client_;
+  std::shared_ptr<ExchangeClient> client_;
   std::optional<ByteInputStream> inputStream_;
   std::unique_ptr<SerializedPage> currentPage_;
   bool atEnd_ = false;
@@ -210,9 +213,10 @@ std::shared_ptr<MergeSource> MergeSource::createMergeExchangeSource(
     const std::string& taskId,
     int destination,
     int64_t maxQueuedBytes,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    folly::Executor* executor) {
   return std::make_shared<MergeExchangeSource>(
-      mergeExchange, taskId, destination, maxQueuedBytes, pool);
+      mergeExchange, taskId, destination, maxQueuedBytes, pool, executor);
 }
 
 namespace {

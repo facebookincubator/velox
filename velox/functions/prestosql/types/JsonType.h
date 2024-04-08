@@ -16,41 +16,10 @@
 #pragma once
 
 #include "velox/expression/CastExpr.h"
+#include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
-
-/// Custom operator for casts from and to Json type.
-class JsonCastOperator : public exec::CastOperator {
- public:
-  static const std::shared_ptr<const CastOperator>& get() {
-    static const std::shared_ptr<const CastOperator> instance{
-        new JsonCastOperator()};
-
-    return instance;
-  }
-
-  bool isSupportedFromType(const TypePtr& other) const override;
-
-  bool isSupportedToType(const TypePtr& other) const override;
-
-  void castTo(
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const SelectivityVector& rows,
-      const TypePtr& resultType,
-      VectorPtr& result) const override;
-
-  void castFrom(
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const SelectivityVector& rows,
-      const TypePtr& resultType,
-      VectorPtr& result) const override;
-
- private:
-  JsonCastOperator() = default;
-};
 
 /// Represents JSON as a string.
 class JsonType : public VarcharType {
@@ -61,10 +30,6 @@ class JsonType : public VarcharType {
     static const std::shared_ptr<const JsonType> instance{new JsonType()};
 
     return instance;
-  }
-
-  static const std::shared_ptr<const exec::CastOperator>& getCastOperator() {
-    return JsonCastOperator::get();
   }
 
   bool equivalent(const Type& other) const override {
@@ -104,19 +69,6 @@ struct JsonT {
 };
 
 using Json = CustomType<JsonT>;
-
-class JsonTypeFactories : public CustomTypeFactories {
- public:
-  JsonTypeFactories() = default;
-
-  TypePtr getType() const override {
-    return JSON();
-  }
-
-  exec::CastOperatorPtr getCastOperator() const override {
-    return JsonCastOperator::get();
-  }
-};
 
 void registerJsonType();
 

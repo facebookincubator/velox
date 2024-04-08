@@ -23,6 +23,7 @@
 #include "velox/common/base/CompareFlags.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/expression/CastTypeChecker.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/DecodedVector.h"
@@ -238,9 +239,7 @@ class SkipNullsIterator {
   using reference = value_type;
 
  public:
-  SkipNullsIterator<BaseIterator>(
-      const BaseIterator& begin,
-      const BaseIterator& end)
+  SkipNullsIterator(const BaseIterator& begin, const BaseIterator& end)
       : iter_(begin), end_(end) {}
 
   // Given an element, return an iterator to the first not-null element starting
@@ -673,12 +672,20 @@ class ArrayView {
         "efficient to use the standard iterator interface.");
   }
 
-  const BaseVector* elementsVector() const {
+  const BaseVector* elementsVectorBase() const {
     return reader_->baseVector();
+  }
+
+  bool isFlatElements() const {
+    return reader_->decoded_.isIdentityMapping();
   }
 
   vector_size_t offset() const {
     return offset_;
+  }
+
+  TypeKind elementKind() const {
+    return elementsVectorBase()->typeKind();
   }
 
  private:
@@ -1109,6 +1116,10 @@ class GenericView {
     return decoded_.base()->type();
   }
 
+  std::string toString() const {
+    return decoded_.toString(index_);
+  }
+
   // If conversion is invalid, behavior is undefined. However, debug time
   // checks will throw an exception.
   template <typename ToType>
@@ -1119,11 +1130,19 @@ class GenericView {
             "castTo type is not compatible with type of vector, vector type is {}",
             type()->toString()));
 
-    // TODO: We can distinguish if this is a null-free or not null-free
-    // generic. And based on that determine if we want to call operator[] or
-    // readNullFree. For now we always return nullable.
-    return ensureReader<ToType>()->operator[](
-        index_); // We pass the non-decoded index.
+    // If its a primitive type, then the casted reader always exists at
+    // castReaders_[0], and is set in Vector readers.
+    if constexpr (SimpleTypeTrait<ToType>::isPrimitiveType) {
+      return reinterpret_cast<VectorReader<ToType>*>(castReaders_[0].get())
+          ->
+          operator[](index_);
+    } else {
+      // TODO: We can distinguish if this is a null-free or not null-free
+      // generic. And based on that determine if we want to call operator[] or
+      // readNullFree. For now we always return nullable.
+      return ensureReader<ToType>()->operator[](
+          index_); // We pass the non-decoded index.
+    }
   }
 
   template <typename ToType>
@@ -1136,7 +1155,6 @@ class GenericView {
         index_); // We pass the non-decoded index.
   }
 
- private:
   template <typename B>
   VectorReader<B>* ensureReader() const {
     static_assert(
@@ -1147,7 +1165,6 @@ class GenericView {
     // the user is always casting to the same type.
     // Types are divided into three sets, for 1, and 2 we do not do the check,
     // since no two types can ever refer to the same vector.
-
     if constexpr (!HasGeneric<B>::value()) {
       // Two types with no generic can never represent same vector.
       return ensureReaderImpl<B, 0>();
@@ -1174,6 +1191,7 @@ class GenericView {
     }
   }
 
+ private:
   template <typename B, size_t I>
   VectorReader<B>* ensureReaderImpl() const {
     auto* reader = static_cast<VectorReader<B>*>(castReaders_[I].get());

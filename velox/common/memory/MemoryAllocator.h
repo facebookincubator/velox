@@ -23,13 +23,13 @@
 #include <mutex>
 #include <unordered_set>
 
+#include <fmt/format.h>
 #include <gflags/gflags.h>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/time/Timer.h"
 
-DECLARE_bool(velox_use_malloc);
 DECLARE_int32(velox_memory_pool_mb);
 DECLARE_bool(velox_time_allocations);
 
@@ -206,28 +206,11 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 
   static std::string kindString(Kind kind);
 
-  /// Returns the process-wide default instance or an application-supplied
-  /// custom instance set via setDefaultInstance().
-  static MemoryAllocator* getInstance();
-
-  /// Overrides the process-wide default instance. The caller keeps ownership
-  /// and must not destroy the instance until it is empty. Calling this with
-  /// nullptr restores the initial process-wide default instance.
-  static void setDefaultInstance(MemoryAllocator* instance);
-
-  /// Creates a default MemoryAllocator instance but does not set this to
-  /// process default.
-  static std::shared_ptr<MemoryAllocator> createDefaultInstance();
-
-  static void testingDestroyInstance();
-
   virtual ~MemoryAllocator() = default;
 
   static constexpr int32_t kMaxSizeClasses = 12;
   static constexpr uint16_t kMinAlignment = alignof(max_align_t);
   static constexpr uint16_t kMaxAlignment = 64;
-  static constexpr uint64_t kDefaultCapacityBytes =
-      std::numeric_limits<int64_t>::max();
 
   /// Returns the kind of this memory allocator. For AsyncDataCache, it returns
   /// the kind of the delegated memory allocator underneath.
@@ -238,7 +221,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// the same as 'this'.
   virtual void registerCache(const std::shared_ptr<Cache>& cache) = 0;
 
-  using ReservationCallback = std::function<void(int64_t, bool)>;
+  using ReservationCallback = std::function<void(uint64_t, bool)>;
 
   /// Returns the capacity of the allocator in bytes.
   virtual size_t capacity() const = 0;
@@ -421,20 +404,36 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
  protected:
   explicit MemoryAllocator() = default;
 
+  /// Represents a mix of blocks of different sizes for covering a single
+  /// allocation.
+  struct SizeMix {
+    // Index into 'sizeClassSizes_'
+    std::vector<int32_t> sizeIndices;
+    // Number of items of the class of the corresponding element in
+    // '"sizeIndices'.
+    std::vector<int32_t> sizeCounts;
+    // Number of valid elements in 'sizeCounts' and 'sizeIndices'.
+    int32_t numSizes{0};
+    // Total number of pages.
+    int32_t totalPages{0};
+
+    SizeMix() {
+      sizeIndices.reserve(kMaxSizeClasses);
+      sizeCounts.reserve(kMaxSizeClasses);
+    }
+  };
+
   /// The actual memory allocation function implementation without retry
   /// attempts by making space from cache.
   virtual bool allocateContiguousWithoutRetry(
       MachinePageCount numPages,
       Allocation* collateral,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr,
       MachinePageCount maxPages = 0) = 0;
 
   virtual bool allocateNonContiguousWithoutRetry(
-      MachinePageCount numPages,
-      Allocation& out,
-      ReservationCallback reservationCB,
-      MachinePageCount minSizeClass) = 0;
+      const SizeMix& sizeMix,
+      Allocation& out) = 0;
 
   virtual void* allocateBytesWithoutRetry(
       uint64_t bytes,
@@ -444,8 +443,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 
   virtual bool growContiguousWithoutRetry(
       MachinePageCount increment,
-      ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr) = 0;
+      ContiguousAllocation& allocation) = 0;
 
   // 'Cache' getter. The cache is only responsible for freeing up memory space
   // by shrinking itself when there is not enough space upon allocating. The
@@ -456,20 +454,6 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   static MachinePageCount roundUpToSizeClassSize(
       size_t bytes,
       const std::vector<MachinePageCount>& sizes);
-
-  // Represents a mix of blocks of different sizes for covering a single
-  // allocation.
-  struct SizeMix {
-    // Index into 'sizeClassSizes_'
-    std::array<int32_t, kMaxSizeClasses> sizeIndices{};
-    // Number of items of the class of the corresponding element in
-    // '"sizeIndices'.
-    std::array<int32_t, kMaxSizeClasses> sizeCounts{};
-    // Number of valid elements in 'sizeCounts' and 'sizeIndices'.
-    int32_t numSizes{0};
-    // Total number of pages.
-    int32_t totalPages{0};
-  };
 
   // Returns a mix of standard sizes and allocation counts for covering
   // 'numPages' worth of memory. 'minSizeClass' is the size of the
@@ -488,8 +472,8 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     return true;
   }
 
-  // If 'data' is sufficiently large, enables/disables adaptive  huge pages for
-  // the address raneg.
+  // If 'data' is sufficiently large, enables/disables adaptive  huge pages
+  // for the address range.
   void useHugePages(const ContiguousAllocation& data, bool enable);
 
   // The machine page counts corresponding to different sizes in order
@@ -497,17 +481,17 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   const std::vector<MachinePageCount>
       sizeClassSizes_{1, 2, 4, 8, 16, 32, 64, 128, 256};
 
-  // Tracks the number of allocated pages. Allocated pages are the memory pages
-  // that are currently being used.
+  // Tracks the number of allocated pages. Allocated pages are the memory
+  // pages that are currently being used.
   std::atomic<MachinePageCount> numAllocated_{0};
 
   // Tracks the number of mapped pages. Mapped pages are the memory pages that
   // meet following requirements:
   // 1. They are obtained from the operating system from mmap calls directly,
   // without going through std::malloc.
-  // 2. They are currently being allocated (used) or they were allocated (used)
-  // and freed in the past but haven't been returned to the operating system by
-  // 'this' (via madvise calls).
+  // 2. They are currently being allocated (used) or they were allocated
+  // (used) and freed in the past but haven't been returned to the operating
+  // system by 'this' (via madvise calls).
   std::atomic<MachinePageCount> numMapped_{0};
 
   // Indicates if the failure injection is persistent or transient.
@@ -517,15 +501,16 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   bool isPersistentFailureInjection_{false};
 
   Stats stats_;
-
- private:
-  static std::mutex initMutex_;
-  // Singleton instance.
-  static std::shared_ptr<MemoryAllocator> instance_;
-  // Application-supplied custom implementation of MemoryAllocator to be
-  // returned by getInstance().
-  static MemoryAllocator* customInstance_;
 };
 
 std::ostream& operator<<(std::ostream& out, const MemoryAllocator::Kind& kind);
 } // namespace facebook::velox::memory
+template <>
+struct fmt::formatter<facebook::velox::memory::MemoryAllocator::InjectedFailure>
+    : fmt::formatter<int> {
+  auto format(
+      facebook::velox::memory::MemoryAllocator::InjectedFailure s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

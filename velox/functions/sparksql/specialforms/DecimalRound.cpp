@@ -91,15 +91,16 @@ class DecimalRoundFunction : public exec::VectorFunction {
  private:
   inline TResult applyRound(const TInput& input) const {
     if (scale_ >= 0) {
-      const auto rescaledValue =
-          DecimalUtil::rescaleWithRoundUp<TInput, TResult>(
-              input,
-              inputPrecision_,
-              inputScale_,
-              resultPrecision_,
-              resultScale_);
-      VELOX_DCHECK(rescaledValue.has_value());
-      return rescaledValue.value();
+      TResult rescaledValue;
+      const auto status = DecimalUtil::rescaleWithRoundUp<TInput, TResult>(
+          input,
+          inputPrecision_,
+          inputScale_,
+          resultPrecision_,
+          resultScale_,
+          rescaledValue);
+      VELOX_DCHECK(status.ok());
+      return rescaledValue;
     } else {
       TResult rescaledValue;
       DecimalUtil::divideWithRoundUp<TResult, TInput, int128_t>(
@@ -162,7 +163,7 @@ std::shared_ptr<exec::VectorFunction> createDecimalRound(
     }
   }
 }
-}; // namespace
+} // namespace
 
 std::pair<uint8_t, uint8_t>
 DecimalRoundCallToSpecialForm::getResultPrecisionScale(
@@ -241,6 +242,7 @@ exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
       type,
       std::move(args),
       std::move(decimalRound),
+      exec::VectorFunctionMetadata{},
       kRoundDecimal,
       trackCpuUsage);
 }

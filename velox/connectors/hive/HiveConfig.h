@@ -110,12 +110,24 @@ class HiveConfig {
   static constexpr const char* kFileColumnNamesReadAsLowerCaseSession =
       "file_column_names_read_as_lower_case";
 
-  /// Sets the max coalesce bytes for a request.
+  static constexpr const char* kPartitionPathAsLowerCaseSession =
+      "partition_path_as_lower_case";
+
+  static constexpr const char* kIgnoreMissingFilesSession =
+      "ignore_missing_files";
+
+  /// The max coalesce bytes for a request.
   static constexpr const char* kMaxCoalescedBytes = "max-coalesced-bytes";
 
-  /// Sets the max coalesce distance bytes for combining requests.
+  /// The max coalesce distance bytes for combining requests.
   static constexpr const char* kMaxCoalescedDistanceBytes =
       "max-coalesced-distance-bytes";
+
+  /// The number of prefetch rowgroups
+  static constexpr const char* kPrefetchRowGroups = "prefetch-rowgroups";
+
+  /// The total size in bytes for a direct coalesce request.
+  static constexpr const char* kLoadQuantum = "load-quantum";
 
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
@@ -123,6 +135,15 @@ class HiveConfig {
   /// Enable file handle cache.
   static constexpr const char* kEnableFileHandleCache =
       "file-handle-cache-enabled";
+
+  /// The size in bytes to be fetched with Meta data together, used when the
+  /// data after meta data will be used later. Optimization to decrease small IO
+  /// request
+  static constexpr const char* kFooterEstimatedSize = "footer-estimated-size";
+
+  /// The threshold of file size in bytes when the whole file is fetched with
+  /// meta data together. Optimization to decrease the small IO requests
+  static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
   /// Maximum stripe size in orc writer.
   static constexpr const char* kOrcWriterMaxStripeSize =
@@ -136,6 +157,12 @@ class HiveConfig {
   static constexpr const char* kOrcWriterMaxDictionaryMemorySession =
       "orc_optimized_writer_max_dictionary_memory";
 
+  /// Config used to create write files. This config is provided to underlying
+  /// file system through hive connector and data sink. The config is free form.
+  /// The form should be defined by the underlying file system.
+  static constexpr const char* kWriteFileCreateConfig =
+      "hive.write_file_create_config";
+
   /// Maximum number of rows for sort writer in one batch of output.
   static constexpr const char* kSortWriterMaxOutputRows =
       "sort-writer-max-output-rows";
@@ -148,10 +175,14 @@ class HiveConfig {
   static constexpr const char* kSortWriterMaxOutputBytesSession =
       "sort_writer_max_output_bytes";
 
-  /// Config used to create sink files. This config is provided to underlying
-  /// file system and the config is free form. The form should be defined by
-  /// the underlying file system.
-  static constexpr const char* kFileCreateConfig = "file-create-config";
+  static constexpr const char* kS3UseProxyFromEnv =
+      "hive.s3.use-proxy-from-env";
+
+  /// Timestamp unit for Parquet write through Arrow bridge.
+  static constexpr const char* kParquetWriteTimestampUnit =
+      "hive.parquet.writer.timestamp-unit";
+  static constexpr const char* kParquetWriteTimestampUnitSession =
+      "hive.parquet.writer.timestamp_unit";
 
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* session) const;
@@ -188,9 +219,17 @@ class HiveConfig {
 
   bool isFileColumnNamesReadAsLowerCase(const Config* session) const;
 
+  bool isPartitionPathAsLowerCase(const Config* session) const;
+
+  bool ignoreMissingFiles(const Config* session) const;
+
   int64_t maxCoalescedBytes() const;
 
   int32_t maxCoalescedDistanceBytes() const;
+
+  int32_t prefetchRowGroups() const;
+
+  int32_t loadQuantum() const;
 
   int32_t numCacheFileHandles() const;
 
@@ -198,15 +237,25 @@ class HiveConfig {
 
   uint64_t fileWriterFlushThresholdBytes() const;
 
-  uint64_t getOrcWriterMaxStripeSize(const Config* session) const;
+  uint64_t orcWriterMaxStripeSize(const Config* session) const;
 
-  uint64_t getOrcWriterMaxDictionaryMemory(const Config* session) const;
+  uint64_t orcWriterMaxDictionaryMemory(const Config* session) const;
+
+  std::string writeFileCreateConfig() const;
 
   uint32_t sortWriterMaxOutputRows(const Config* session) const;
 
   uint64_t sortWriterMaxOutputBytes(const Config* session) const;
 
-  std::string fileCreateConfig(const Config* session) const;
+  uint64_t footerEstimatedSize() const;
+
+  uint64_t filePreloadThreshold() const;
+
+  bool s3UseProxyFromEnv() const;
+
+  /// Returns the timestamp unit used when writing timestamps into Parquet
+  /// through Arrow bridge. 0: second, 3: milli, 6: micro, 9: nano.
+  uint8_t parquetWriteTimestampUnit(const Config* session) const;
 
   HiveConfig(std::shared_ptr<const Config> config) {
     VELOX_CHECK_NOT_NULL(

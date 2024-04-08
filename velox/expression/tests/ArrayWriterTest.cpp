@@ -316,12 +316,16 @@ TEST_F(ArrayWriterTest, testVarChar) {
         stringWriter,
         "test a long string, a bit longer than that, longer, and longer");
   }
+
+  arrayWriter.push_back("new_feature"_sv);
+
   vectorWriter.commit();
   auto expected = std::vector<std::vector<std::optional<StringView>>>{
       {"hi"_sv,
        std::nullopt,
        "welcome"_sv,
-       "test a long string, a bit longer than that, longer, and longer"_sv}};
+       "test a long string, a bit longer than that, longer, and longer"_sv,
+       "new_feature"_sv}};
   assertEqualVectors(result, makeNullableArrayVector(expected));
 }
 
@@ -853,7 +857,6 @@ TEST_F(ArrayWriterTest, nestedArrayWriteThenCommitNull) {
     auto& nestedArray = current.add_item();
     nestedArray.push_back(1);
     nestedArray.push_back(2);
-
     writer.commitNull();
   }
 
@@ -970,6 +973,7 @@ using UDT2TypeRegistrar = OpaqueCustomTypeRegister<UDT2, kName>;
 
 TEST_F(ArrayWriterTest, copyFromArrayOfOpaqueUDT) {
   UDT2TypeRegistrar::registerType();
+  auto guard = folly::makeGuard([&] { UDT2TypeRegistrar::unregisterType(); });
 
   using out_t = Array<UDT2TypeRegistrar::SimpleType>;
 
@@ -1017,6 +1021,7 @@ struct CopyFromArrayOfUDTFunc {
 
 TEST_F(ArrayWriterTest, copyFromNestedArrayOfOpaqueUDT) {
   UDT2TypeRegistrar::registerType();
+  auto guard = folly::makeGuard([&] { UDT2TypeRegistrar::unregisterType(); });
   registerFunction<CopyFromArrayOfUDTFunc, copy_from_udt_t>(
       {"copy_udt2_array"});
 

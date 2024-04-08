@@ -18,6 +18,14 @@ Mathematical Functions
 
     Returns inverse hyperbolic sine of ``x``.
 
+.. spark:function:: atan2(y, x) -> double
+
+    Returns the arc tangent of ``y / x``. For compatibility with Spark, returns 0 for the following corner cases:
+    * atan2(0.0, 0.0)
+    * atan2(-0.0, -0.0)
+    * atan2(-0.0, 0.0)
+    * atan2(0.0, -0.0)
+
 .. spark:function:: atanh(x) -> double
 
     Returns inverse hyperbolic tangent of ``x``.
@@ -93,12 +101,29 @@ Mathematical Functions
     Returns ``x`` rounded down to the nearest integer.
     Supported types are: BIGINT and DOUBLE.
 
+.. spark:function:: hex(x) -> varchar
+
+    Converts ``x`` to hexadecimal.
+    Supported types are: BIGINT, VARBINARY and VARCHAR.
+    If the argument is a VARCHAR or VARBINARY, the result is string where each input byte is represented using 2 hex characters.
+    If the argument is a positive BIGINT, the result is a hex representation of the number (up to 16 characters),
+    if the argument is a negative BIGINT, the result is a hex representation of the number which will be treated as two's complement. ::
+
+        SELECT hex("Spark SQL"); -- 537061726B2053514C
+        SELECT hex(17); -- 11
+        SELECT hex(-1); -- FFFFFFFFFFFFFFFF
+
+
 .. spark:function:: hypot(a, b) -> double
 
     Returns the square root of `a` squared plus `b` squared.
 
+.. spark:function:: isnan(x) -> boolean
 
-.. function:: log1p(x) -> double
+    Returns true if x is Nan, or false otherwise. Returns false is x is NULL.
+    Supported types are: REAL, DOUBLE.
+
+.. spark::function:: log1p(x) -> double
 
     Returns the natural logarithm of the “given value ``x`` plus one”.
     Return NULL if x is less than or equal to -1.
@@ -138,7 +163,7 @@ Mathematical Functions
 .. spark:function:: pmod(n, m) -> [same as n]
 
     Returns the positive remainder of n divided by m.
-    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT and DOUBLE.
+    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
 
 .. spark:function:: power(x, p) -> double
 
@@ -150,14 +175,13 @@ Mathematical Functions
 
         SELECT rand(); -- 0.9629742951434543
 
-.. spark:function:: rand(seed, partitionIndex) -> double
+.. spark:function:: rand(seed) -> double
 
     Returns a random value with uniformly distributed values in [0, 1) using a seed formed
-    by combining user-specified ``seed`` and framework provided ``partitionIndex``. The
+    by combining user-specified ``seed`` and the configuration `spark.partition_id`. The
     framework is responsible for deterministic partitioning of the data and assigning unique
-    ``partitionIndex`` to each thread (in a deterministic way).
-    ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``. ``partitionIndex``
-    cannot be NULL. ::
+    `spark.partition_id` to each thread (in a deterministic way) .
+    ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``. ::
 
         SELECT rand(0);    -- 0.5488135024422883
         SELECT rand(NULL); -- 0.5488135024422883
@@ -166,9 +190,9 @@ Mathematical Functions
 
     An alias for ``rand()``.
 
-.. spark:function:: random(seed, partitionIndex) -> double
+.. spark:function:: random(seed) -> double
 
-    An alias for ``rand(seed, partitionIndex)``.
+    An alias for ``rand(seed)``.
 
 .. spark:function:: remainder(n, m) -> [same as n]
 
@@ -208,3 +232,17 @@ Mathematical Functions
 .. spark:function:: unaryminus(x) -> [same as x]
 
     Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+
+.. spark:function:: unhex(x) -> varbinary
+
+    Converts hexadecimal varchar ``x`` to varbinary.
+    ``x`` is considered case insensitive and expected to contain only hexadecimal characters 0-9 and A-F.
+    If ``x`` contains non-hexadecimal character, the function returns NULL.
+    When ``x`` contains an even number of characters, each pair is converted to a single byte. The number of bytes in the result is half the number of bytes in the input.
+    When ``x`` contains an odd number of characters, the first character is decoded into the first byte of the result and the remaining pairs of characters are decoded into subsequent bytes. This behavior matches Spark 3.3.2 and newer. ::
+
+        SELECT unhex("23"); -- #
+        SELECT unhex("f"); -- \x0F
+        SELECT unhex("b2323"); -- \x0B##
+        SELECT unhex("G"); -- NULL
+        SELECT unhex("G23"); -- NULL

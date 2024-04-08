@@ -17,6 +17,7 @@
 #include "velox/expression/EvalCtx.h"
 #include <exception>
 #include "velox/common/testutil/TestValue.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/PeeledEncoding.h"
 
@@ -28,7 +29,13 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
     : execCtx_(execCtx),
       exprSet_(exprSet),
       row_(row),
-      cacheEnabled_(execCtx->exprEvalCacheEnabled()) {
+      cacheEnabled_(execCtx->exprEvalCacheEnabled()),
+      maxSharedSubexprResultsCached_(
+          execCtx->queryCtx()
+              ? execCtx->queryCtx()
+                    ->queryConfig()
+                    .maxSharedSubexprResultsCached()
+              : core::QueryConfig({}).maxSharedSubexprResultsCached()) {
   // TODO Change the API to replace raw pointers with non-const references.
   // Sanity check inputs to prevent crashes.
   VELOX_CHECK_NOT_NULL(execCtx);
@@ -49,7 +56,13 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx)
     : execCtx_(execCtx),
       exprSet_(nullptr),
       row_(nullptr),
-      cacheEnabled_(execCtx->exprEvalCacheEnabled()) {
+      cacheEnabled_(execCtx->exprEvalCacheEnabled()),
+      maxSharedSubexprResultsCached_(
+          execCtx->queryCtx()
+              ? execCtx->queryCtx()
+                    ->queryConfig()
+                    .maxSharedSubexprResultsCached()
+              : core::QueryConfig({}).maxSharedSubexprResultsCached()) {
   VELOX_CHECK_NOT_NULL(execCtx);
 }
 
@@ -77,7 +90,7 @@ void EvalCtx::ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size)
     vector = std::make_shared<ErrorVector>(
         pool(),
         OpaqueType::create<void>(),
-        AlignedBuffer::allocate<bool>(size, pool(), true) /*nulls*/,
+        AlignedBuffer::allocate<bool>(size, pool(), false) /*nulls*/,
         size /*length*/,
         AlignedBuffer::allocate<ErrorVector::value_type>(
             size, pool(), ErrorVector::value_type()),
@@ -89,10 +102,10 @@ void EvalCtx::ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size)
         size /*representedBytes*/);
   } else if (vector->size() < size) {
     vector->resize(size, false);
-  }
-  // Set all new positions to null, including the one to be set.
-  for (auto i = oldSize; i < size; ++i) {
-    vector->setNull(i, true);
+    // Set all new positions to null, including the one to be set.
+    for (auto i = oldSize; i < size; ++i) {
+      vector->setNull(i, true);
+    }
   }
 }
 

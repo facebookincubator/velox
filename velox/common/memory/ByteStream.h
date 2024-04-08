@@ -227,6 +227,10 @@ class ByteOutputStream {
 
   void operator=(const ByteOutputStream& other) = delete;
 
+  // Forcing a move constructor to be able to return ByteOutputStream objects
+  // from a function.
+  ByteOutputStream(ByteOutputStream&&) = default;
+
   /// Sets 'this' to range over 'range'. If this is for purposes of writing,
   /// lastWrittenPosition specifies the end of any pre-existing content in
   /// 'range'.
@@ -242,7 +246,16 @@ class ByteOutputStream {
     return ranges_;
   }
 
+  /// Prepares 'this' for writing. Can be called several times,
+  /// e.g. PrestoSerializer resets these. The memory formerly backing
+  /// 'ranges_' is not owned and the caller needs to recycle or free
+  /// this independently.
   void startWrite(int32_t initialSize) {
+    ranges_.clear();
+    isReversed_ = false;
+    allocatedBytes_ = 0;
+    current_ = nullptr;
+    lastRangeEnd_ = 0;
     extend(initialSize);
   }
 
@@ -273,9 +286,10 @@ class ByteOutputStream {
           values.size() * sizeof(T)));
       return;
     }
-    auto target = reinterpret_cast<T*>(current_->buffer + current_->position);
-    auto end = target + values.size();
-    auto valuePtr = &values[0];
+
+    auto* target = reinterpret_cast<T*>(current_->buffer + current_->position);
+    const auto* end = target + values.size();
+    auto* valuePtr = &values[0];
     while (target != end) {
       *target = *valuePtr;
       ++target;
@@ -337,8 +351,8 @@ class ByteOutputStream {
   std::string toString() const;
 
  private:
-  /// Returns a range of 'size' items of T. If there is no contiguous space in
-  /// 'this', uses 'scratch' to make a temp block that is appended to 'this' in
+  // Returns a range of 'size' items of T. If there is no contiguous space in
+  // 'this', uses 'scratch' to make a temp block that is appended to 'this' in
   template <typename T>
   T* getAppendWindow(int32_t size, ScratchPtr<T>& scratchPtr) {
     const int32_t bytes = sizeof(T) * size;
@@ -352,11 +366,19 @@ class ByteOutputStream {
           current_->buffer + current_->position - bytes);
     }
     // If the tail is not large enough, make  temp of the right size
-    // in scratch.
+    // in scratch. Extend the stream so that there is guaranteed space to copy
+    // the scratch to the stream. This copy takes place in destruction of
+    // AppendWindow and must not allocate so that it is noexcept.
+    ensureSpace(bytes);
     return scratchPtr.get(size);
   }
 
   void extend(int32_t bytes);
+
+  // Calls extend() enough times to make sure 'bytes' bytes can be
+  // appended without new allocation. Does not change the append
+  // position.
+  void ensureSpace(int32_t bytes);
 
   int32_t newRangeSize(int32_t bytes) const;
 
@@ -404,11 +426,17 @@ class AppendWindow {
   AppendWindow(ByteOutputStream& stream, Scratch& scratch)
       : stream_(stream), scratchPtr_(scratch) {}
 
-  ~AppendWindow() {
+  ~AppendWindow() noexcept {
     if (scratchPtr_.size()) {
-      stream_.appendStringView(std::string_view(
-          reinterpret_cast<const char*>(scratchPtr_.get()),
-          scratchPtr_.size() * sizeof(T)));
+      try {
+        stream_.appendStringView(std::string_view(
+            reinterpret_cast<const char*>(scratchPtr_.get()),
+            scratchPtr_.size() * sizeof(T)));
+      } catch (const std::exception& e) {
+        // This is impossible because construction ensures there is space for
+        // the bytes in the stream.
+        LOG(FATAL) << "throw from AppendWindo append: " << e.what();
+      }
     }
   }
 

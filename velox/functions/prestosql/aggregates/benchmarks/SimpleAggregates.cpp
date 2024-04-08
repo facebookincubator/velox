@@ -36,7 +36,7 @@ namespace {
 
 class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
  public:
-  explicit SimpleAggregatesBenchmark() {
+  SimpleAggregatesBenchmark() {
     OperatorTestBase::SetUpTestCase();
     HiveConnectorTestBase::SetUp();
 
@@ -268,10 +268,11 @@ BENCHMARK_DRAW_LINE();
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
-  memory::MemoryManager::initialize({});
+  folly::Init init{&argc, &argv};
+  OperatorTestBase::SetUpTestCase();
   benchmark = std::make_unique<SimpleAggregatesBenchmark>();
   folly::runBenchmarks();
   benchmark.reset();
+  OperatorTestBase::TearDownTestCase();
   return 0;
 }

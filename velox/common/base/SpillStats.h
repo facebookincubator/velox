@@ -44,8 +44,9 @@ struct SpillStats {
   uint64_t spillSortTimeUs{0};
   /// The time spent on serializing rows for spilling.
   uint64_t spillSerializationTimeUs{0};
-  /// The number of disk writes to spill rows.
-  uint64_t spillDiskWrites{0};
+  /// The number of spill writer flushes, equivalent to number of write calls to
+  /// underlying filesystem.
+  uint64_t spillWrites{0};
   /// The time spent on copy out serialized rows for disk write. If compression
   /// is enabled, this includes the compression time.
   uint64_t spillFlushTimeUs{0};
@@ -54,6 +55,15 @@ struct SpillStats {
   /// The number of times that an hash build operator exceeds the max spill
   /// limit.
   uint64_t spillMaxLevelExceededCount{0};
+  /// The number of bytes read from spilled files.
+  uint64_t spillReadBytes{0};
+  /// The number of spill reader reads, equivalent to the number of read calls
+  /// to the underlying filesystem.
+  uint64_t spillReads{0};
+  /// The time spent on read data from spilled files.
+  uint64_t spillReadTimeUs{0};
+  /// The time spent on deserializing rows read from spilled files.
+  uint64_t spillDeserializationTimeUs{0};
 
   SpillStats(
       uint64_t _spillRuns,
@@ -65,10 +75,14 @@ struct SpillStats {
       uint64_t _spillFillTimeUs,
       uint64_t _spillSortTimeUs,
       uint64_t _spillSerializationTimeUs,
-      uint64_t _spillDiskWrites,
+      uint64_t _spillWrites,
       uint64_t _spillFlushTimeUs,
       uint64_t _spillWriteTimeUs,
-      uint64_t _spillMaxLevelExceededCount);
+      uint64_t _spillMaxLevelExceededCount,
+      uint64_t _spillReadBytes,
+      uint64_t _spillReads,
+      uint64_t _spillReadTimeUs,
+      uint64_t _spillDeserializationTimeUs);
 
   SpillStats() = default;
 
@@ -125,7 +139,13 @@ void updateGlobalSpillWriteStats(
     uint64_t flushTimeUs,
     uint64_t writeTimeUs);
 
-/// Increment the spill memory bytes.
+/// Updates the stats for disk read including the number of disk reads, the
+/// amount of data read in bytes, and the time it takes to read from the disk.
+void updateGlobalSpillReadStats(
+    uint64_t spillReadBytes,
+    uint64_t spillRadTimeUs);
+
+/// Increments the spill memory bytes.
 void updateGlobalSpillMemoryBytes(uint64_t spilledInputBytes);
 
 /// Increments the spilled files by one.
@@ -135,6 +155,19 @@ void incrementGlobalSpilledFiles();
 void updateGlobalMaxSpillLevelExceededCount(
     uint64_t maxSpillLevelExceededCount);
 
+/// Increments the spill read deserialization time.
+void updateGlobalSpillDeserializationTimeUs(uint64_t timeUs);
+
 /// Gets the cumulative global spill stats.
 SpillStats globalSpillStats();
 } // namespace facebook::velox::common
+
+template <>
+struct fmt::formatter<facebook::velox::common::SpillStats>
+    : fmt::formatter<std::string> {
+  auto format(
+      const facebook::velox::common::SpillStats& s,
+      format_context& ctx) {
+    return formatter<std::string>::format(s.toString(), ctx);
+  }
+};

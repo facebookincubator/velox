@@ -40,11 +40,17 @@ constexpr folly::StringPiece kMetricMemoryReclaimExecTimeMs{
 constexpr folly::StringPiece kMetricMemoryReclaimedBytes{
     "velox.memory_reclaim_bytes"};
 
-constexpr folly::StringPiece kMetricMemoryReclaimWaitTimeMs{
-    "velox.memory_reclaim_wait_ms"};
+constexpr folly::StringPiece kMetricMemoryReclaimCount{
+    "velox.memory_reclaim_count"};
 
-constexpr folly::StringPiece kMetricMemoryReclaimWaitTimeoutCount{
-    "velox.memory_reclaim_wait_timeout_count"};
+constexpr folly::StringPiece kMetricTaskMemoryReclaimCount{
+    "velox.task_memory_reclaim_count"};
+
+constexpr folly::StringPiece kMetricTaskMemoryReclaimWaitTimeMs{
+    "velox.task_memory_reclaim_wait_ms"};
+
+constexpr folly::StringPiece kMetricTaskMemoryReclaimWaitTimeoutCount{
+    "velox.task_memory_reclaim_wait_timeout_count"};
 
 constexpr folly::StringPiece kMetricMemoryNonReclaimableCount{
     "velox.memory_non_reclaimable_count"};
@@ -57,6 +63,12 @@ constexpr folly::StringPiece kMetricMemoryPoolReservationLeakBytes{
 
 constexpr folly::StringPiece kMetricArbitratorRequestsCount{
     "velox.arbitrator_requests_count"};
+
+constexpr folly::StringPiece kMetricArbitratorLocalArbitrationCount{
+    "velox.arbitrator_local_arbitration_count"};
+
+constexpr folly::StringPiece kMetricArbitratorGlobalArbitrationCount{
+    "velox.arbitrator_global_arbitration_count"};
 
 constexpr folly::StringPiece kMetricArbitratorAbortedCount{
     "velox.arbitrator_aborted_count"};
@@ -93,12 +105,15 @@ constexpr folly::StringPiece kMetricSpillSortTimeMs{"velox.spill_sort_time_ms"};
 constexpr folly::StringPiece kMetricSpillSerializationTimeMs{
     "velox.spill_serialization_time_ms"};
 
-constexpr folly::StringPiece kMetricSpillDiskWritesCount{
-    "velox.spill_disk_writes_count"};
+constexpr folly::StringPiece kMetricSpillWritesCount{
+    "velox.spill_writes_count"};
 
 constexpr folly::StringPiece kMetricSpillFlushTimeMs{
     "velox.spill_flush_time_ms"};
 
 constexpr folly::StringPiece kMetricSpillWriteTimeMs{
     "velox.spill_write_time_ms"};
+
+constexpr folly::StringPiece kMetricFileWriterEarlyFlushedRawBytes{
+    "velox.file_writer_early_flushed_raw_bytes"};
 } // namespace facebook::velox

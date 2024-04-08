@@ -62,12 +62,7 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
 
     // Global aggregation.
     testAggregations(
-        vectors,
-        {},
-        {agg(c1)},
-        fmt::format("SELECT {} FROM tmp", agg(c1)),
-        /*config*/ {},
-        testWithTableScan);
+        vectors, {}, {agg(c1)}, fmt::format("SELECT {} FROM tmp", agg(c1)));
 
     // Group by aggregation.
     testAggregations(
@@ -76,19 +71,12 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
         },
         {"p0"},
         {agg(c1)},
-        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", agg(c1)),
-        /*config*/ {},
-        testWithTableScan);
+        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", agg(c1)));
 
     // Masked aggregations.
     auto maskedAgg = agg(c1) + " filter (where mask)";
     testAggregations(
-        vectors,
-        {},
-        {maskedAgg},
-        fmt::format("SELECT {} FROM tmp", maskedAgg),
-        /*config*/ {},
-        testWithTableScan);
+        vectors, {}, {maskedAgg}, fmt::format("SELECT {} FROM tmp", maskedAgg));
 
     testAggregations(
         [&](auto& builder) {
@@ -96,9 +84,7 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
         },
         {"p0"},
         {maskedAgg},
-        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", maskedAgg),
-        /*config*/ {},
-        testWithTableScan);
+        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", maskedAgg));
 
     // Encodings: use filter to wrap aggregation inputs in a dictionary.
     testAggregations(
@@ -110,17 +96,14 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
         {"p0"},
         {agg(c1)},
         fmt::format(
-            "SELECT c0 % 11, {} FROM tmp WHERE c0 % 2 = 0 GROUP BY 1", agg(c1)),
-        /*config*/ {},
-        testWithTableScan);
+            "SELECT c0 % 11, {} FROM tmp WHERE c0 % 2 = 0 GROUP BY 1",
+            agg(c1)));
 
     testAggregations(
         [&](auto& builder) { builder.values(vectors).filter("c0 % 2 = 0"); },
         {},
         {agg(c1)},
-        fmt::format("SELECT {} FROM tmp WHERE c0 % 2 = 0", agg(c1)),
-        /*config*/ {},
-        testWithTableScan);
+        fmt::format("SELECT {} FROM tmp WHERE c0 % 2 = 0", agg(c1)));
   }
 };
 
@@ -764,6 +747,39 @@ TEST_F(MinMaxNTest, real) {
 TEST_F(MinMaxNTest, double) {
   testNumericGlobal<double>();
   testNumericGroupBy<double>();
+}
+
+TEST_F(MinMaxNTest, incrementalWindow) {
+  // SELECT
+  //  c0, c1, c2, c3,
+  //  max(c0, c1) over (partition by c2 order by c3 asc)
+  // FROM (
+  //  VALUES
+  //      (1, 10, false, 0),
+  //      (2, 10, false, 1)
+  // ) AS t(c0, c1, c2, c3)
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeFlatVector<int64_t>({10, 10}),
+      makeFlatVector<bool>({false, false}),
+      makeFlatVector<int64_t>({0, 1}),
+  });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({"max(c0, c1) over (partition by c2 order by c3 asc)"})
+          .planNode();
+
+  // Expected result: {1, 10, false, 0, [1]}, {2, 10, false, 1, [2, 1]}.
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeFlatVector<int64_t>({10, 10}),
+      makeFlatVector<bool>({false, false}),
+      makeFlatVector<int64_t>({0, 1}),
+      makeArrayVector<int64_t>({{1}, {2, 1}}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 } // namespace

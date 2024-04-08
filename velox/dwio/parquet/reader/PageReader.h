@@ -22,6 +22,7 @@
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
+#include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 #include "velox/dwio/parquet/reader/StringDecoder.h"
@@ -39,7 +40,7 @@ class PageReader {
       std::unique_ptr<dwio::common::SeekableInputStream> stream,
       memory::MemoryPool& pool,
       ParquetTypeWithIdPtr fileType,
-      thrift::CompressionCodec::type codec,
+      common::CompressionKind codec,
       int64_t chunkSize)
       : pool_(pool),
         inputStream_(std::move(stream)),
@@ -57,7 +58,7 @@ class PageReader {
   PageReader(
       std::unique_ptr<dwio::common::SeekableInputStream> stream,
       memory::MemoryPool& pool,
-      thrift::CompressionCodec::type codec,
+      common::CompressionKind codec,
       int64_t chunkSize)
       : pool_(pool),
         inputStream_(std::move(stream)),
@@ -87,8 +88,8 @@ class PageReader {
       int32_t begin,
       int32_t end,
       int32_t maxItems,
-      int32_t* FOLLY_NULLABLE lengths,
-      uint64_t* FOLLY_NULLABLE nulls,
+      int32_t* lengths,
+      uint64_t* nulls,
       int32_t nullsStartIndex) const;
 
   /// Applies 'visitor' to values in the ColumnChunk of 'this'. The
@@ -122,6 +123,10 @@ class PageReader {
     dictionaryValues_.reset();
   }
 
+  bool isDeltaBinaryPacked() const {
+    return encoding_ == thrift::Encoding::DELTA_BINARY_PACKED;
+  }
+
   /// Returns the range of repdefs for the top level rows covered by the last
   /// decoderepDefs().
   std::pair<int32_t, int32_t> repDefRange() const {
@@ -143,7 +148,7 @@ class PageReader {
 
   // If the current page has nulls, returns a nulls bitmap owned by 'this'. This
   // is filled for 'numRows' bits.
-  const uint64_t* FOLLY_NULLABLE readNulls(int32_t numRows, BufferPtr& buffer);
+  const uint64_t* readNulls(int32_t numRows, BufferPtr& buffer);
 
   // Skips the define decoder, if any, for 'numValues' top level
   // rows. Returns the number of non-nulls skipped. The range is the
@@ -196,15 +201,13 @@ class PageReader {
   // Returns a pointer to contiguous space for the next 'size' bytes
   // from current position. Copies data into 'copy' if the range
   // straddles buffers. Allocates or resizes 'copy' as needed.
-  const char* FOLLY_NONNULL readBytes(int32_t size, BufferPtr& copy);
-
-  common::CompressionKind thriftCodecToCompressionKind();
+  const char* readBytes(int32_t size, BufferPtr& copy);
 
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
   // producing up to 'uncompressedSize' bytes. The start of the decoding
   // result is returned. an intermediate copy may be made in 'decompresseddata_'
-  const char* FOLLY_NONNULL decompressData(
-      const char* FOLLY_NONNULL pageData,
+  const char* decompressData(
+      const char* pageData,
       uint32_t compressedSize,
       uint32_t uncompressedSize);
 
@@ -252,10 +255,8 @@ class PageReader {
           !std::is_same_v<typename Visitor::DataType, folly::StringPiece> &&
               !std::is_same_v<typename Visitor::DataType, int8_t>,
           int>::type = 0>
-  void callDecoder(
-      const uint64_t* FOLLY_NULLABLE nulls,
-      bool& nullsFromFastPath,
-      Visitor visitor) {
+  void
+  callDecoder(const uint64_t* nulls, bool& nullsFromFastPath, Visitor visitor) {
     if (nulls) {
       nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor) &&
           (!this->type_->type()->isLongDecimal()) &&
@@ -264,6 +265,9 @@ class PageReader {
       if (isDictionary()) {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
+        nullsFromFastPath = false;
+        deltaBpDecoder_->readWithVisitor<true>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<true>(
             nulls, visitor, nullsFromFastPath);
@@ -272,6 +276,8 @@ class PageReader {
       if (isDictionary()) {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
+        deltaBpDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<false>(
             nulls, visitor, !this->type_->type()->isShortDecimal());
@@ -284,10 +290,8 @@ class PageReader {
       typename std::enable_if<
           std::is_same_v<typename Visitor::DataType, folly::StringPiece>,
           int>::type = 0>
-  void callDecoder(
-      const uint64_t* FOLLY_NULLABLE nulls,
-      bool& nullsFromFastPath,
-      Visitor visitor) {
+  void
+  callDecoder(const uint64_t* nulls, bool& nullsFromFastPath, Visitor visitor) {
     if (nulls) {
       if (isDictionary()) {
         nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor);
@@ -312,10 +316,8 @@ class PageReader {
       typename std::enable_if<
           std::is_same_v<typename Visitor::DataType, int8_t>,
           int>::type = 0>
-  void callDecoder(
-      const uint64_t* FOLLY_NULLABLE nulls,
-      bool& nullsFromFastPath,
-      Visitor visitor) {
+  void
+  callDecoder(const uint64_t* nulls, bool& nullsFromFastPath, Visitor visitor) {
     VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded")
     if (nulls) {
       nullsFromFastPath = false;
@@ -346,10 +348,10 @@ class PageReader {
   const int32_t maxDefine_;
   const bool isTopLevel_;
 
-  const thrift::CompressionCodec::type codec_;
+  const common::CompressionKind codec_;
   const int64_t chunkSize_;
-  const char* FOLLY_NULLABLE bufferStart_{nullptr};
-  const char* FOLLY_NULLABLE bufferEnd_{nullptr};
+  const char* bufferStart_{nullptr};
+  const char* bufferEnd_{nullptr};
   BufferPtr tempNulls_;
   BufferPtr nullsInReadRange_;
   BufferPtr multiPageNulls_;
@@ -414,7 +416,7 @@ class PageReader {
 
   // First byte of decompressed encoded data. Contains the encoded data as a
   // contiguous run of bytes.
-  const char* FOLLY_NULLABLE pageData_{nullptr};
+  const char* pageData_{nullptr};
 
   // Dictionary contents.
   dwio::common::DictionaryValues dictionary_;
@@ -432,7 +434,7 @@ class PageReader {
   // Below members Keep state between calls to readWithVisitor().
 
   // Original rows in Visitor.
-  const vector_size_t* FOLLY_NULLABLE visitorRows_{nullptr};
+  const vector_size_t* visitorRows_{nullptr};
   int32_t numVisitorRows_{0};
 
   // 'rowOfPage_' at the start of readWithVisitor().
@@ -452,7 +454,7 @@ class PageReader {
 
   //  Temporary for rewriting rows to access in readWithVisitor when moving
   //  between pages. Initialized from the visitor.
-  raw_vector<vector_size_t>* FOLLY_NULLABLE rowsCopy_{nullptr};
+  raw_vector<vector_size_t>* rowsCopy_{nullptr};
 
   // If 'rowsCopy_' is used, this is the difference between the rows in
   // 'rowsCopy_' and the row numbers in 'rows' given to readWithVisitor().
@@ -476,6 +478,7 @@ class PageReader {
   std::unique_ptr<RleBpDataDecoder> dictionaryIdDecoder_;
   std::unique_ptr<StringDecoder> stringDecoder_;
   std::unique_ptr<BooleanDecoder> booleanDecoder_;
+  std::unique_ptr<DeltaBpDecoder> deltaBpDecoder_;
   // Add decoders for other encodings here.
 };
 

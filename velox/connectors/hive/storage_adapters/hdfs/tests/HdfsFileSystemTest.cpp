@@ -218,20 +218,14 @@ TEST_F(HdfsFileSystemTest, oneFsInstanceForOneEndpoint) {
 }
 
 TEST_F(HdfsFileSystemTest, missingFileViaFileSystem) {
-  try {
-    auto memConfig =
-        std::make_shared<const core::MemConfig>(configurationValues);
-    auto hdfsFileSystem =
-        filesystems::getFileSystem(fullDestinationPath, memConfig);
-    auto readFile = hdfsFileSystem->openFileForRead(
-        "hdfs://localhost:7777/path/that/does/not/exist");
-    FAIL() << "expected VeloxException";
-  } catch (VeloxException const& error) {
-    EXPECT_THAT(
-        error.message(),
-        testing::HasSubstr(
-            "Unable to get file path info for file: /path/that/does/not/exist. got error: FileNotFoundException: Path /path/that/does/not/exist does not exist."));
-  }
+  auto memConfig = std::make_shared<const core::MemConfig>(configurationValues);
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath, memConfig);
+  VELOX_ASSERT_RUNTIME_THROW_CODE(
+      hdfsFileSystem->openFileForRead(
+          "hdfs://localhost:7777/path/that/does/not/exist"),
+      error_code::kFileNotFound,
+      "Unable to get file path info for file: /path/that/does/not/exist. got error: FileNotFoundException: Path /path/that/does/not/exist does not exist.");
 }
 
 TEST_F(HdfsFileSystemTest, missingHost) {
@@ -427,6 +421,20 @@ TEST_F(HdfsFileSystemTest, writeFlushFailures) {
   VELOX_ASSERT_THROW(
       writeFile->flush(),
       "Cannot flush HDFS file because file handle is null, file path: /a.txt");
+}
+
+TEST_F(HdfsFileSystemTest, writeWithParentDirNotExist) {
+  std::string path = "/parent/directory/that/does/not/exist/a.txt";
+  auto writeFile = openFileForWrite(path);
+  std::string data = "abcdefghijk";
+  writeFile->append(data);
+  writeFile->flush();
+  ASSERT_EQ(writeFile->size(), 0);
+  writeFile->append(data);
+  writeFile->append(data);
+  writeFile->flush();
+  writeFile->close();
+  ASSERT_EQ(writeFile->size(), data.size() * 3);
 }
 
 TEST_F(HdfsFileSystemTest, readFailures) {

@@ -54,6 +54,12 @@ String Functions
     empty string. When `replace` is an empty string invalid characters are
     removed.
 
+.. function:: hamming_distance(string1, string2) -> bigint
+
+    Returns the Hamming distance of ``string1`` and ``string2``,
+    i.e. the number of positions at which the corresponding characters are different.
+    Note that the two strings must have the same length.
+
 .. function:: length(string) -> bigint
 
     Returns the length of ``string`` in characters.
@@ -102,7 +108,12 @@ String Functions
 .. function:: reverse(string) -> varchar
     :noindex:
 
-    Reverses ``string``.
+    Returns input string with characters in reverse order.
+
+.. function:: reverse(varbinary) -> varbinary
+    :noindex:
+
+    Returns input binary with bytes in reversed order.
 
 .. function:: rpad(string, size, padstring) -> varchar
 
@@ -150,7 +161,8 @@ String Functions
     each pair into key and value. Note that ``entryDelimiter`` and ``keyValueDelimiter`` are
     interpreted literally, i.e., as full string matches.
 
-    entryDelimiter and keyValueDelimiter must not be empty and must not be the same.
+    ``entryDelimiter`` and ``keyValueDelimiter`` must not be empty and must not be the same.
+    ``entryDelimiter`` is allowed to be the trailing character.
 
     Raises an error if there are duplicate keys.
 

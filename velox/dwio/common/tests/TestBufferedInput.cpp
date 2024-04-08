@@ -32,7 +32,7 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
   MOCK_METHOD(
       std::string_view,
       pread,
-      (uint64_t offset, uint64_t length, void* FOLLY_NONNULL buf),
+      (uint64_t offset, uint64_t length, void* buf),
       (const, override));
 
   MOCK_METHOD(bool, shouldCoalesce, (), (const, override));
@@ -116,12 +116,6 @@ class TestBufferedInput : public testing::Test {
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
 };
 } // namespace
-
-TEST_F(TestBufferedInput, AllowMoveConstructor) {
-  auto readFileMock = std::make_shared<ReadFileMock>();
-  BufferedInput a(readFileMock, *pool_);
-  BufferedInput b(std::move(a));
-}
 
 TEST_F(TestBufferedInput, ZeroLengthStream) {
   auto readFile =

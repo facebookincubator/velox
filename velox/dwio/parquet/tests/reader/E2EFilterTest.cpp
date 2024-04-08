@@ -129,6 +129,22 @@ TEST_F(E2EFilterTest, integerDirect) {
       20);
 }
 
+TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
+  options_.enableDictionary = false;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::DELTA_BINARY_PACKED;
+
+  testWithTypes(
+      "short_val:smallint,"
+      "int_val:int,"
+      "long_val:bigint,"
+      "long_null:bigint",
+      [&]() { makeAllNulls("long_null"); },
+      true,
+      {"short_val", "int_val", "long_val"},
+      20);
+}
+
 TEST_F(E2EFilterTest, compression) {
   for (const auto compression :
        {common::CompressionKind_SNAPPY,
@@ -568,7 +584,7 @@ TEST_F(E2EFilterTest, largeMetadata) {
       test::BatchMaker::createBatch(rowType_, 1000, *leafPool_, nullptr, 0)));
   writeToMemory(rowType_, batches, false);
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
-  readerOpts.setDirectorySizeGuess(1024);
+  readerOpts.setFooterEstimatedSize(1024);
   readerOpts.setFilePreloadThreshold(1024 * 8);
   dwio::common::RowReaderOptions rowReaderOpts;
   std::string_view data(sinkPtr_->data(), sinkPtr_->size());
@@ -612,7 +628,7 @@ TEST_F(E2EFilterTest, combineRowGroup) {
       std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
   auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
-  EXPECT_EQ(parquetReader.numberOfRowGroups(), 1);
+  EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 1);
   EXPECT_EQ(parquetReader.numberOfRows(), 5);
 }
 
@@ -667,6 +683,6 @@ TEST_F(E2EFilterTest, configurableWriteSchema) {
 // Define main so that gflags get processed.
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::init(&argc, &argv, false);
+  folly::Init init{&argc, &argv, false};
   return RUN_ALL_TESTS();
 }

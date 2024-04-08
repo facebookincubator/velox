@@ -18,6 +18,7 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -47,10 +48,17 @@ int main(int argc, char** argv) {
   // rlike, md5 and upper
   std::unordered_set<std::string> skipFunctions = {
       "regexp_extract",
+      // https://github.com/facebookincubator/velox/issues/8438
+      "regexp_replace",
       "rlike",
       "chr",
       "replace",
       "might_contain",
       "unix_timestamp"};
-  return FuzzerRunner::run(FLAGS_seed, skipFunctions);
+
+  // Required by spark_partition_id function.
+  std::unordered_map<std::string, std::string> queryConfigs = {
+      {facebook::velox::core::QueryConfig::kSparkPartitionId, "123"}};
+
+  return FuzzerRunner::run(FLAGS_seed, skipFunctions, queryConfigs);
 }

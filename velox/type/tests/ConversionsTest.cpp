@@ -17,6 +17,7 @@
 #include "gtest/gtest.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/CppToType.h"
 
 using namespace facebook::velox;
 
@@ -42,13 +43,14 @@ class ConversionsTest : public testing::Test {
 
     auto cast = [&](TFrom input) -> TTo {
       if (truncate & legacyCast) {
-        return Converter<toTypeKind, void, true, true>::cast(input);
+        return Converter<toTypeKind, void, TruncateLegacyCastPolicy>::cast(
+            input);
       } else if (!truncate & legacyCast) {
-        return Converter<toTypeKind, void, false, true>::cast(input);
+        return Converter<toTypeKind, void, LegacyCastPolicy>::cast(input);
       } else if (truncate & !legacyCast) {
-        return Converter<toTypeKind, void, true, false>::cast(input);
+        return Converter<toTypeKind, void, TruncateCastPolicy>::cast(input);
       } else {
-        return Converter<toTypeKind, void, false, false>::cast(input);
+        return Converter<toTypeKind, void, DefaultCastPolicy>::cast(input);
       }
     };
 
@@ -920,20 +922,41 @@ TEST_F(ConversionsTest, toRealAndDouble) {
     // When TRUNCATE = false.
     testConversion<std::string, float>(
         {
-            "1.7E308",
-            "1.",
-            "1",
-            "infinity",
-            "-infinity",
-            "InfiNiTy",
-            "-InfiNiTy",
-            "nan",
-            "nAn",
+            "1.7E308",   "1.",           "1",
+            ".1324",     "1.2345678E19", "1.2345678E8",
+            "1.0E7",     "12345.0",      "0.001",
+            "1.2E-4",    "0.0",          "-0.0",
+            "-1.2E-4",   "-0.001",       "-12345.0",
+            "-1.0E7",    "-1.2345678E8", "-1.2345678E19",
+            " 123",      "123 ",         " 123 ",
+            "infinity",  "-infinity",    "InfiNiTy",
+            "-InfiNiTy", "Inf",          "-Inf",
+            "nan",       "nAn",
         },
         {
             kInf,
             1.0,
             1.0,
+            0.1324,
+            12345678000000000000.0,
+            123456780.0,
+            10'000'000.0,
+            12345.0,
+            0.001,
+            0.00012,
+            0.0,
+            -0.0,
+            -0.00012,
+            -0.001,
+            -12345.0,
+            -10'000'000.0,
+            -123456780.0,
+            -12345678000000000000.0,
+            123.0,
+            123.0,
+            123.0,
+            kInf,
+            -kInf,
             kInf,
             -kInf,
             kInf,
@@ -948,6 +971,19 @@ TEST_F(ConversionsTest, toRealAndDouble) {
         {
             "1.2a",
             "1.2.3",
+            "1.2EE4",
+            "123.4f",
+            "123.4F",
+            "123.4d",
+            "123.4D",
+            "In",
+            "Infx",
+            "-Infx",
+            "nanx",
+            "na",
+            "infinit",
+            "infinityx",
+            "-infinityx",
         },
         {},
         /*truncate*/ false,

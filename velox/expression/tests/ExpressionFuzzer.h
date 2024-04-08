@@ -90,6 +90,13 @@ class ExpressionFuzzer {
     //   "width_bucket",
     //   "array_sort(array(T),constant function(T,T,bigint)) -> array(T)"}
     std::unordered_set<std::string> skipFunctions;
+
+    // When set, when the input size of the generated expressions reaches
+    // maxInputsThreshold, fuzzing input columns will reuse one of the existing
+    // columns if any is already generated with the same type.
+    // This can be used to control the size of the input of the fuzzer
+    // expression.
+    std::optional<int32_t> maxInputsThreshold = std::nullopt;
   };
 
   ExpressionFuzzer(
@@ -114,6 +121,9 @@ class ExpressionFuzzer {
 
   /// Fuzz a set of expressions.
   FuzzedExpressionData fuzzExpressions(size_t expressionCount);
+
+  /// Fuzz a set of expressions given a output row type.
+  FuzzedExpressionData fuzzExpressions(const RowTypePtr& outType);
 
   // Fuzz a single expression and return it along with the input row type.
   FuzzedExpressionData fuzzExpression();
@@ -176,6 +186,11 @@ class ExpressionFuzzer {
     return supportedFunctions_;
   }
 
+  // Generate a random return type.
+  TypePtr fuzzReturnType();
+
+  RowTypePtr fuzzRowReturnType(size_t size, char prefix = 'p');
+
  private:
   // Either generates a new expression of the required return type or if
   // already generated expressions of the same return type exist then there is
@@ -198,9 +213,6 @@ class ExpressionFuzzer {
       const std::string& funcName);
 
   void appendConjunctSignatures();
-
-  // Generate a random return type.
-  TypePtr fuzzReturnType();
 
   core::TypedExprPtr generateArgConstant(const TypePtr& arg);
 
@@ -226,21 +238,6 @@ class ExpressionFuzzer {
       uint32_t numVarArgs = 0);
 
   core::TypedExprPtr generateArg(const TypePtr& arg, bool isConstant);
-
-  /// Specialization for the "like" function: second and third (optional)
-  /// parameters always need to be constant.
-  std::vector<core::TypedExprPtr> generateLikeArgs(
-      const CallableSignature& input);
-
-  /// Specialization for the "empty_approx_set" function: first optional
-  /// parameter needs to be constant.
-  std::vector<core::TypedExprPtr> generateEmptyApproxSetArgs(
-      const CallableSignature& input);
-
-  /// Specialization for the "regexp_replace" function: second and third
-  /// (optional) parameters always need to be constant.
-  std::vector<core::TypedExprPtr> generateRegexpReplaceArgs(
-      const CallableSignature& input);
 
   // Return a vector of expressions for each argument of callable in order.
   std::vector<core::TypedExprPtr> getArgsForCallable(
@@ -413,8 +410,8 @@ class ExpressionFuzzer {
         typeToColumnNames_;
 
     /// The remaining levels of expression nesting. It's initialized by
-    /// FLAGS_max_level_of_nesting and updated in generateExpression(). When its
-    /// value decreases to 0, we don't generate subexpressions anymore.
+    /// FLAGS_max_level_of_nesting and updated in generateExpression(). When
+    /// its value decreases to 0, we don't generate subexpressions anymore.
     int32_t remainingLevelOfNesting_;
 
   } state;

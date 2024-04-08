@@ -1415,6 +1415,27 @@ TEST_F(StringFunctionsTest, reverse) {
   EXPECT_EQ(reverse(invalidIncompleteString), "\xa0\xed");
 }
 
+TEST_F(StringFunctionsTest, varbinaryReverse) {
+  // Reversing binary string with multi-byte unicode characters doesn't preserve
+  // the characters.
+  auto input =
+      makeFlatVector<std::string>({"hi", "", "\u4FE1 \u7231"}, VARBINARY());
+
+  // \u4FE1 character is 3 bytes: \xE4\xBF\xA1
+  // \u7231 character is 3 bytes: \xE7\x88\xB1
+  auto expected = makeFlatVector<std::string>(
+      {"ih", "", "\xB1\x88\xE7 \xA1\xBF\xE4"}, VARBINARY());
+  auto result = evaluate("reverse(c0)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+
+  // Reversing same string as varchar preserves the characters.
+  input = makeFlatVector<std::string>({"hi", "", "\u4FE1 \u7231"}, VARCHAR());
+  expected = makeFlatVector<std::string>(
+      {"ih", "", "\xE7\x88\xB1 \xE4\xBF\xA1"}, VARCHAR());
+  result = evaluate("reverse(c0)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+}
+
 TEST_F(StringFunctionsTest, toUtf8) {
   const auto toUtf8 = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("to_utf8(c0)", value);
@@ -1840,4 +1861,89 @@ TEST_F(StringFunctionsTest, varbinaryLength) {
   auto expected = makeFlatVector<int64_t>({2, 0, 22});
   auto result = evaluate("length(c0)", makeRowVector({vector}));
   test::assertEqualVectors(expected, result);
+}
+
+TEST_F(StringFunctionsTest, hammingDistance) {
+  const auto hammingDistance = [&](std::optional<std::string> left,
+                                   std::optional<std::string> right) {
+    return evaluateOnce<int64_t>("hamming_distance(c0, c1)", left, right);
+  };
+
+  EXPECT_EQ(hammingDistance("", ""), 0);
+  EXPECT_EQ(hammingDistance(" ", " "), 0);
+  EXPECT_EQ(hammingDistance("6", "6"), 0);
+  EXPECT_EQ(hammingDistance("z", "z"), 0);
+  EXPECT_EQ(hammingDistance("a", "b"), 1);
+  EXPECT_EQ(hammingDistance("b", "B"), 1);
+  EXPECT_EQ(hammingDistance("hello", "hello"), 0);
+  EXPECT_EQ(hammingDistance("hello", "jello"), 1);
+  EXPECT_EQ(hammingDistance("like", "hate"), 3);
+  EXPECT_EQ(hammingDistance("hello", "world"), 4);
+  EXPECT_EQ(hammingDistance("Customs", "Luptoki"), 4);
+  EXPECT_EQ(hammingDistance("This is lame", "Why to slam "), 8);
+  EXPECT_EQ(
+      hammingDistance(
+          "The quick brown fox jumps over the lazy dog",
+          "The quick green dog jumps over the grey pot"),
+      10);
+
+  EXPECT_EQ(hammingDistance("hello na\u00EFve world", "hello naive world"), 1);
+  EXPECT_EQ(
+      hammingDistance(
+          "The quick b\u0155\u00F6wn fox jumps over the laz\uFF59 dog",
+          "The quick br\u006Fwn fox jumps over the la\u1E91y dog"),
+      4);
+  EXPECT_EQ(
+      hammingDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u4EF0,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(
+      hammingDistance(
+          "\u4F11\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(hammingDistance("\u0001", "\u0001"), 0);
+  EXPECT_EQ(hammingDistance("\u0001", "\u0002"), 1);
+  // Test equal null characters on ASCII path.
+  EXPECT_EQ(
+      hammingDistance(std::string("\u0000", 1), std::string("\u0000", 1)), 0);
+  // Test null and non-null character on ASCII path.
+  EXPECT_EQ(hammingDistance(std::string("\u0000", 1), "\u0001"), 1);
+  // Test null and non-null character on non-ASCII path.
+  EXPECT_EQ(hammingDistance(std::string("\u0000", 1), "\u7231"), 1);
+  // Test equal null characters on non-ASCII path.
+  EXPECT_EQ(
+      hammingDistance(
+          std::string("\u7231\u0000", 2), std::string("\u7231\u0000", 2)),
+      0);
+  // Test invalid UTF-8 characters.
+  EXPECT_EQ(hammingDistance("\xFF\xFF", "\xF0\x82"), 0);
+
+  VELOX_ASSERT_THROW(
+      hammingDistance("\u0000", "\u0001"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("hello", ""),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("", "hello"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("hello", "o"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("h", "hello"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("hello na\u00EFve world", "hello na:ive world"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u4FE1\u5FF5\u5E0C\u671B"),
+      "The input strings to hamming_distance function must have the same length");
+  // Test invalid UTF-8 characters.
+  VELOX_ASSERT_THROW(
+      hammingDistance("\xFF\x82\xFF", "\xF0\x82"),
+      "The input strings to hamming_distance function must have the same length");
 }

@@ -254,6 +254,9 @@ For aggregaiton functions of default-null behavior, the author defines an
     // Optional. Default is false.
     static constexpr bool use_external_memory_ = true;
 
+    // Optional. Default is false.
+    static constexpr bool is_aligned_ = true;
+
     explicit AccumulatorType(HashStringAllocator* allocator);
 
     void addInput(HashStringAllocator* allocator, exec::arg_type<T1> value1, ...);
@@ -274,7 +277,9 @@ The author defines an optional flag `is_fixed_size_` indicating whether the
 every accumulator takes fixed amount of memory. This flag is true by default.
 Next, the author defines another optional flag `use_external_memory_`
 indicating whether the accumulator uses memory that is not tracked by Velox.
-This flag is false by default.
+This flag is false by default. Then, the author can define an optional flag
+`is_aligned_` indicating whether the accumulator requires aligned
+access. This flag is false by default.
 
 The author defines a constructor that takes a single argument of
 `HashStringAllocator*`. This constructor is called before aggregation starts to
@@ -282,6 +287,9 @@ initialize all accumulators.
 
 The author can also optionally define a `destroy` function that is called when
 *this* accumulator object is destructed.
+
+Notice that `writeIntermediateResult` and `writeFinalResult` are expected to not
+modify contents in the accumulator.
 
 addInput
 """"""""
@@ -342,6 +350,9 @@ For aggregaiton functions of non-default-null behavior, the author defines an
     // Optional. Default is false.
     static constexpr bool use_external_memory_ = true;
 
+    // Optional. Default is false.
+    static constexpr bool is_aligned_ = true;
+
     explicit AccumulatorType(HashStringAllocator* allocator);
 
     bool addInput(HashStringAllocator* allocator, exec::optional_arg_type<T1> value1, ...);
@@ -358,12 +369,15 @@ For aggregaiton functions of non-default-null behavior, the author defines an
     void destroy(HashStringAllocator* allocator);
   };
 
-The definition of `is_fixed_size_`, `use_external_memory_`, the constructor,
-and the `destroy` method are exactly the same as those for default-null
-behavior.
+The definition of `is_fixed_size_`, `use_external_memory_`,
+`is_aligned_`, the constructor, and the `destroy` method are exactly
+the same as those for default-null behavior.
 
 On the other hand, the C++ function signatures of `addInput`, `combine`,
 `writeIntermediateResult`, and `writeFinalResult` are different.
+
+Same as the case for default-null behavior, `writeIntermediateResult` and
+`writeFinalResult` are expected to not modify contents in the accumulator.
 
 addInput
 """"""""
@@ -457,7 +471,21 @@ location of the accumulator.
       // @param offset Offset in bytes from the start of the row of the accumulator
       // @param nullByte Offset in bytes from the start of the row of the null flag
       // @param nullMask The specific bit in the nullByte that stores the null flag
-      void setOffsets(int32_t offset, int32_t nullByte, uint8_t nullMask)
+      // @param initializedByte Offset in bytes from the start of the row of the
+      // initialized flag
+      // @param initializedMask The specific bit in the initializedByte that stores
+      // the initialized flag
+      // @param rowSizeOffset The offset of a uint32_t row size from the start of
+      // the row. Only applies to accumulators that store variable size data out of
+      // line. Fixed length accumulators do not use this. 0 if the row does not have
+      // a size field.
+      void setOffsets(
+        int32_t offset,
+        int32_t nullByte,
+        uint8_t nullMask,
+        int32_t initializedByte,
+        int8_t initializedMask,
+        int32_t rowSizeOffset)
 
 The base class implements the setOffsets method by storing the offsets in member variables.
 
@@ -466,8 +494,19 @@ The base class implements the setOffsets method by storing the offsets in member
       // Byte position of null flag in group row.
       int32_t nullByte_;
       uint8_t nullMask_;
+      // Byte position of the initialized flag in group row.
+      int32_t initializedByte_;
+      uint8_t initializedMask_;
       // Offset of fixed length accumulator state in group row.
       int32_t offset_;
+
+      // Offset of uint32_t row byte size of row. 0 if there are no
+      // variable width fields or accumulators on the row.  The size is
+      // capped at 4G and will stay at 4G and not wrap around if growing
+      // past this. This serves to track the batch size when extracting
+      // rows. A size in excess of 4G would finish the batch in any case,
+      // so larger values need not be represented.
+      int32_t rowSizeOffset_ = 0;
 
 Typically, an aggregate function doesn’t use the offsets directly. Instead, it uses helper methods from the base class.
 
@@ -495,14 +534,14 @@ To manipulate the null flags:
 Initialization
 ^^^^^^^^^^^^^^
 
-Once you have accumulatorFixedWidthSize(), the next method to implement is initializeNewGroups().
+Once you have accumulatorFixedWidthSize(), the next method to implement is initializeNewGroupsInternal().
 
 .. code-block:: c++
 
       // Initializes null flags and accumulators for newly encountered groups.
       // @param groups Pointers to the start of the new group rows.
       // @param indices Indices into 'groups' of the new entries.
-      virtual void initializeNewGroups(
+      virtual void initializeNewGroupsInternal(
           char** groups,
           folly::Range<const vector_size_t*> indices) = 0;
 
@@ -511,7 +550,7 @@ This method is called by the HashAggregation operator every time it encounters n
 GroupBy aggregation
 ^^^^^^^^^^^^^^^^^^^
 
-At this point you have accumulatorFixedWidthSize() and initializeNewGroups() methods implemented. Now, we can proceed to implementing the end-to-end group-by aggregation. We need the following pieces:
+At this point you have accumulatorFixedWidthSize() and initializeNewGroupsInternal() methods implemented. Now, we can proceed to implementing the end-to-end group-by aggregation. We need the following pieces:
 
 * Logic for adding raw input to the accumulator:
     * addRawInput() method.
@@ -605,6 +644,7 @@ After implementing the addRawInput() method, we proceed to adding logic for extr
 .. code-block:: c++
 
       // Extracts partial results (used for partial and intermediate aggregations).
+      // This method is expected to not modify contents in accumulators.
       // @param groups Pointers to the start of the group rows.
       // @param numGroups Number of groups to extract results from.
       // @param result The result vector to store the results in.
@@ -625,7 +665,8 @@ Next, we implement the extractValues() method that extracts final results from t
 
 .. code-block:: c++
 
-      // Extracts final results (used for final and single aggregations).
+      // Extracts final results (used for final and single aggregations). This method
+      // is expected to not modify contents in accumulators.
       // @param groups Pointers to the start of the group rows.
       // @param numGroups Number of groups to extract results from.
       // @param result The result vector to store the results in.

@@ -118,6 +118,7 @@ class SpillWriter {
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       const std::string& fileCreateConfig,
+      common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats);
 
@@ -133,6 +134,9 @@ class SpillWriter {
   /// Closes the current output file if any. Subsequent calls to write will
   /// start a new one.
   void finishFile();
+
+  /// Returns the number of current finished files.
+  size_t numFinishedFiles() const;
 
   /// Finishes this file writer and returns the written spill files info.
   ///
@@ -181,6 +185,10 @@ class SpillWriter {
   const uint64_t targetFileSize_;
   const uint64_t writeBufferSize_;
   const std::string fileCreateConfig_;
+
+  // Updates the aggregated spill bytes of this query, and throws if exceeds
+  // the max spill bytes limit.
+  common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
 
@@ -199,10 +207,14 @@ class SpillWriter {
 class SpillInputStream : public ByteInputStream {
  public:
   /// Reads from 'input' using 'buffer' for buffering reads.
-  SpillInputStream(std::unique_ptr<ReadFile>&& file, BufferPtr buffer)
+  SpillInputStream(
+      std::unique_ptr<ReadFile>&& file,
+      BufferPtr buffer,
+      folly::Synchronized<common::SpillStats>* stats)
       : file_(std::move(file)),
         size_(file_->size()),
-        buffer_(std::move(buffer)) {
+        buffer_(std::move(buffer)),
+        stats_(stats) {
     next(true);
   }
 
@@ -212,11 +224,13 @@ class SpillInputStream : public ByteInputStream {
   }
 
  private:
+  void updateSpillStats(uint64_t readBytes, uint64_t readTimeUs) const;
   void next(bool throwIfPastEnd) override;
 
   const std::unique_ptr<ReadFile> file_;
   const uint64_t size_;
   const BufferPtr buffer_;
+  folly::Synchronized<common::SpillStats>* const stats_;
 
   // Offset of first byte not in 'buffer_'
   uint64_t offset_ = 0;
@@ -233,7 +247,8 @@ class SpillReadFile {
  public:
   static std::unique_ptr<SpillReadFile> create(
       const SpillFileInfo& fileInfo,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      folly::Synchronized<common::SpillStats>* stats);
 
   uint32_t id() const {
     return id_;
@@ -267,7 +282,8 @@ class SpillReadFile {
       uint32_t numSortKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
       common::CompressionKind compressionKind,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      folly::Synchronized<common::SpillStats>* stats);
 
   // The spill file id which is monotonically increasing and unique for each
   // associated spill partition.
@@ -282,6 +298,7 @@ class SpillReadFile {
   const common::CompressionKind compressionKind_;
   const serializer::presto::PrestoVectorSerde::PrestoOptions readOptions_;
   memory::MemoryPool* const pool_;
+  folly::Synchronized<common::SpillStats>* const stats_;
 
   std::unique_ptr<SpillInputStream> input_;
 };

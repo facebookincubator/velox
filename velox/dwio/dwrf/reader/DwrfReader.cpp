@@ -15,6 +15,9 @@
  */
 
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
+
+#include <chrono>
+
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
@@ -25,7 +28,6 @@ namespace facebook::velox::dwrf {
 
 using dwio::common::ColumnSelector;
 using dwio::common::FileFormat;
-using dwio::common::InputStream;
 using dwio::common::ReaderOptions;
 using dwio::common::RowReaderOptions;
 
@@ -35,6 +37,8 @@ DwrfRowReader::DwrfRowReader(
     : StripeReaderBase(reader),
       options_(opts),
       executor_{options_.getDecodingExecutor()},
+      decodingTimeUsCallback_{options_.getDecodingTimeUsCallback()},
+      stripeCountCallback_{options_.getStripeCountCallback()},
       columnSelector_{std::make_shared<ColumnSelector>(
           ColumnSelector::apply(opts.getSelector(), reader->getSchema()))} {
   if (executor_) {
@@ -72,6 +76,9 @@ DwrfRowReader::DwrfRowReader(
   // case, set stripeCeiling_ == firstStripe_ == numberOfStripes
   if (stripeCeiling_ == 0) {
     stripeCeiling_ = firstStripe_;
+  }
+  if (stripeCountCallback_) {
+    stripeCountCallback_(stripeCeiling_ - firstStripe_);
   }
 
   if (currentStripe_ == 0) {
@@ -269,18 +276,23 @@ void DwrfRowReader::readNext(
     const dwio::common::Mutation* mutation,
     VectorPtr& result) {
   if (!selectiveColumnReader_) {
-    const auto startTime = std::chrono::high_resolution_clock::now();
+    std::optional<std::chrono::steady_clock::time_point> startTime;
+    if (decodingTimeUsCallback_) {
+      // We'll use wall time since we have parallel decoding.
+      // If we move to sequential decoding only, we can use CPU time.
+      startTime.emplace(std::chrono::steady_clock::now());
+    }
     // TODO: Move row number appending logic here.  Currently this is done in
     // the wrapper reader.
     VELOX_CHECK(
         mutation == nullptr,
         "Mutation pushdown is only supported in selective reader");
     columnReader_->next(rowsToRead, result);
-    auto reportDecodingTimeMsMetric = options_.getDecodingTimeMsCallback();
-    if (reportDecodingTimeMsMetric) {
-      auto decodingTime = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::high_resolution_clock::now() - startTime);
-      reportDecodingTimeMsMetric(decodingTime.count());
+    if (startTime.has_value()) {
+      decodingTimeUsCallback_(
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - startTime.value())
+              .count());
     }
     return;
   }
@@ -365,22 +377,35 @@ int64_t DwrfRowReader::nextRowNumber() {
   auto strideSize = getReader().getFooter().rowIndexStride();
   while (currentStripe_ < stripeCeiling_) {
     if (currentRowInStripe_ == 0) {
+      if (getReader().randomSkip()) {
+        auto numStripeRows =
+            getReader().getFooter().stripes(currentStripe_).numberOfRows();
+        auto skip = getReader().randomSkip()->nextSkip();
+        if (skip >= numStripeRows) {
+          getReader().randomSkip()->consume(numStripeRows);
+          auto numStrides = (numStripeRows + strideSize - 1) / strideSize;
+          skippedStrides_ += numStrides;
+          goto advanceToNextStripe;
+        }
+      }
       startNextStripe();
     }
     checkSkipStrides(strideSize);
     if (currentRowInStripe_ < rowsInCurrentStripe_) {
       return firstRowOfStripe_[currentStripe_] + currentRowInStripe_;
     }
+  advanceToNextStripe:
     ++currentStripe_;
     currentRowInStripe_ = 0;
     newStripeReadyForRead_ = false;
   }
+  atEnd_ = true;
   return kAtEnd;
 }
 
 int64_t DwrfRowReader::nextReadSize(uint64_t size) {
   VELOX_DCHECK_GT(size, 0);
-  if (nextRowNumber() == kAtEnd) {
+  if (atEnd_) {
     return kAtEnd;
   }
   auto rowsToRead = std::min(size, rowsInCurrentStripe_ - currentRowInStripe_);
@@ -769,11 +794,12 @@ DwrfReader::DwrfReader(
           options.getMemoryPool(),
           std::move(input),
           options.getDecrypterFactory(),
-          options.getDirectorySizeGuess(),
+          options.getFooterEstimatedSize(),
           options.getFilePreloadThreshold(),
           options.getFileFormat() == FileFormat::ORC ? FileFormat::ORC
                                                      : FileFormat::DWRF,
-          options.isFileColumnNamesReadAsLowerCase())),
+          options.isFileColumnNamesReadAsLowerCase(),
+          options.randomSkip())),
       options_(options) {
   // If we are not using column names to map table columns to file columns, then
   // we use indices. In that case we need to ensure the names completely match,
@@ -1055,8 +1081,8 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   auto footerLength = readerBase.getPostScript().footerLength();
-  if (memory < footerLength + readerBase.getDirectorySizeGuess()) {
-    memory = footerLength + readerBase.getDirectorySizeGuess();
+  if (memory < footerLength + readerBase.getFooterEstimatedSize()) {
+    memory = footerLength + readerBase.getFooterEstimatedSize();
   }
 
   // Account for firstRowOfStripe.

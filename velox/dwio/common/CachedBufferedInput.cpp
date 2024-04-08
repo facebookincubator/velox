@@ -157,7 +157,7 @@ int32_t adjustedReadPct(const cache::TrackingData& trackingData) {
 void CachedBufferedInput::load(const LogType) {
   // 'requests_ is cleared on exit.
   auto requests = std::move(requests_);
-  cache::SsdFile* FOLLY_NULLABLE ssdFile = nullptr;
+  cache::SsdFile* ssdFile = nullptr;
   auto ssdCache = cache_->ssdCache();
   if (ssdCache) {
     ssdFile = &ssdCache->file(fileNum_);
@@ -517,9 +517,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
 }
 
 bool CachedBufferedInput::prefetch(Region region) {
-  int32_t numPages =
-      bits::roundUp(region.length, memory::AllocationTraits::kPageSize) /
-      memory::AllocationTraits::kPageSize;
+  int32_t numPages = memory::AllocationTraits::numPages(region.length);
   if (!shouldPreload(numPages)) {
     return false;
   }

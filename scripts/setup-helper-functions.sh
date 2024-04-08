@@ -15,6 +15,27 @@
 
 # github_checkout $REPO $VERSION $GIT_CLONE_PARAMS clones or re-uses an existing clone of the
 # specified repo, checking out the requested version.
+
+function run_and_time {
+  time "$@" || (echo "Failed to run $* ." ; exit 1 )
+  { echo "+ Finished running $*"; } 2> /dev/null
+}
+
+function prompt {
+  (
+    while true; do
+      local input="${PROMPT_ALWAYS_RESPOND:-}"
+      echo -n "$(tput bold)$* [Y, n]$(tput sgr0) "
+      [[ -z "${input}" ]] && read input
+      if [[ "${input}" == "Y" || "${input}" == "y" || "${input}" == "" ]]; then
+        return 0
+      elif [[ "${input}" == "N" || "${input}" == "n" ]]; then
+        return 1
+      fi
+    done
+  ) 2> /dev/null
+}
+
 function github_checkout {
   local REPO=$1
   shift
@@ -22,20 +43,20 @@ function github_checkout {
   shift
   local GIT_CLONE_PARAMS=$@
   local DIRNAME=$(basename $REPO)
+  SUDO="${SUDO:-""}"
   cd "${DEPENDENCY_DIR}"
   if [ -z "${DIRNAME}" ]; then
     echo "Failed to get repo name from ${REPO}"
     exit 1
   fi
   if [ -d "${DIRNAME}" ] && prompt "${DIRNAME} already exists. Delete?"; then
-    rm -rf "${DIRNAME}"
+    ${SUDO} rm -rf "${DIRNAME}"
   fi
   if [ ! -d "${DIRNAME}" ]; then
     git clone -q -b $VERSION $GIT_CLONE_PARAMS "https://github.com/${REPO}.git"
   fi
   cd "${DIRNAME}"
 }
-
 
 # get_cxx_flags [$CPU_ARCH]
 # Sets and exports the variable VELOX_CXX_FLAGS with appropriate compiler flags.
@@ -119,11 +140,22 @@ function get_cxx_flags {
 
 }
 
+function wget_and_untar {
+  local URL=$1
+  local DIR=$2
+  mkdir -p "${DIR}"
+  pushd "${DIR}"
+  curl -L "${URL}" > $2.tar.gz
+  tar -xz --strip-components=1 -f $2.tar.gz
+  popd
+}
+
 function cmake_install {
   local NAME=$(basename "$(pwd)")
   local BINARY_DIR=_build
+  SUDO="${SUDO:-""}"
   if [ -d "${BINARY_DIR}" ] && prompt "Do you want to rebuild ${NAME}?"; then
-    rm -rf "${BINARY_DIR}"
+    ${SUDO} rm -rf "${BINARY_DIR}"
   fi
   mkdir -p "${BINARY_DIR}"
   CPU_TARGET="${CPU_TARGET:-unknown}"
@@ -139,6 +171,6 @@ function cmake_install {
     -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
     -DBUILD_TESTING=OFF \
     "$@"
-  ninja -C "${BINARY_DIR}" install
+  ${SUDO} ninja -C "${BINARY_DIR}" install
 }
 

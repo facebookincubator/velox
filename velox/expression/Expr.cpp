@@ -128,12 +128,14 @@ Expr::Expr(
     TypePtr type,
     std::vector<std::shared_ptr<Expr>>&& inputs,
     std::shared_ptr<VectorFunction> vectorFunction,
+    VectorFunctionMetadata metadata,
     std::string name,
     bool trackCpuUsage)
     : type_(std::move(type)),
       inputs_(std::move(inputs)),
       name_(std::move(name)),
       vectorFunction_(std::move(vectorFunction)),
+      vectorFunctionMetadata_{std::move(metadata)},
       specialForm_{false},
       supportsFlatNoNullsFastPath_{
           vectorFunction_->supportsFlatNoNullsFastPath() &&
@@ -143,7 +145,7 @@ Expr::Expr(
   constantInputs_.reserve(inputs_.size());
   inputIsConstant_.reserve(inputs_.size());
   for (auto& expr : inputs_) {
-    if (auto constantExpr = std::dynamic_pointer_cast<ConstantExpr>(expr)) {
+    if (auto constantExpr = expr->as<ConstantExpr>()) {
       constantInputs_.emplace_back(constantExpr->value());
       inputIsConstant_.push_back(true);
     } else {
@@ -192,7 +194,7 @@ bool Expr::allSupportFlatNoNullsFastPath(
 
 void Expr::clearMetaData() {
   metaDataComputed_ = false;
-  for (auto child : inputs_) {
+  for (auto& child : inputs_) {
     child->clearMetaData();
   }
   propagatesNulls_ = false;
@@ -237,7 +239,7 @@ void Expr::computeMetadata() {
   // An expression is deterministic if it is a deterministic function call or a
   // special form, and all its inputs are also deterministic.
   if (vectorFunction_) {
-    deterministic_ = vectorFunction_->isDeterministic();
+    deterministic_ = vectorFunctionMetadata_.deterministic;
   } else {
     VELOX_CHECK(isSpecialForm());
     deterministic_ = true;
@@ -257,7 +259,7 @@ void Expr::computeMetadata() {
       !is<CastExpr>()) {
     as<SpecialForm>()->computePropagatesNulls();
   } else {
-    if (vectorFunction_ && !vectorFunction_->isDefaultNullBehavior()) {
+    if (vectorFunction_ && !vectorFunctionMetadata_.defaultNullBehavior) {
       propagatesNulls_ = false;
     } else {
       // Logic for handling default-null vector functions.
@@ -394,7 +396,7 @@ bool Expr::evalArgsDefaultNulls(
       auto& arg = inputValues_[i];
       if (arg->mayHaveNulls()) {
         decoded.get()->decode(*arg, rows.rows());
-        flatNulls = decoded.get()->nulls();
+        flatNulls = decoded.get()->nulls(&rows.rows());
       }
       // A null with no error deselects the row.
       // An error adds itself to argument errors.
@@ -506,7 +508,7 @@ void Expr::evalSimplifiedImpl(
   }
 
   MutableRemainingRows remainingRows(rows, context);
-  const bool defaultNulls = vectorFunction_->isDefaultNullBehavior();
+  const bool defaultNulls = vectorFunctionMetadata_.defaultNullBehavior;
   auto evalArg = [&](int32_t i) {
     auto& inputValue = inputValues_[i];
     inputs_[i]->evalSimplified(remainingRows.rows(), context, inputValue);
@@ -533,7 +535,7 @@ void Expr::evalSimplifiedImpl(
   try {
     vectorFunction_->apply(
         remainingRows.rows(), inputValues_, type(), context, result);
-  } catch (const VeloxException& ve) {
+  } catch (const VeloxException&) {
     throw;
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(e.what());
@@ -552,14 +554,14 @@ namespace {
 class ExprExceptionContext {
  public:
   ExprExceptionContext(
-      const Expr* FOLLY_NONNULL expr,
-      const RowVector* FOLLY_NONNULL vector,
-      const ExprSet* FOLLY_NULLABLE parentExprSet)
+      const Expr* expr,
+      const RowVector* vector,
+      const ExprSet* parentExprSet)
       : expr_(expr), vector_(vector), parentExprSet_(parentExprSet) {}
 
   /// Persist data and sql on disk. Data will be persisted in $basePath/vector
   /// and sql will be persisted in $basePath/sql
-  void persistDataAndSql(const char* FOLLY_NONNULL basePath) {
+  void persistDataAndSql(const char* basePath) {
     // Exception already persisted or failed to persist. We don't persist again
     // in this situation.
     if (!dataPath_.empty()) {
@@ -620,11 +622,11 @@ class ExprExceptionContext {
     }
   }
 
-  const Expr* FOLLY_NONNULL expr() const {
+  const Expr* expr() const {
     return expr_;
   }
 
-  const RowVector* FOLLY_NONNULL vector() const {
+  const RowVector* vector() const {
     return vector_;
   }
 
@@ -642,15 +644,15 @@ class ExprExceptionContext {
 
  private:
   /// The expression.
-  const Expr* FOLLY_NONNULL expr_;
+  const Expr* expr_;
 
   /// The input vector, i.e. EvalCtx::row(). In some cases, input columns are
   /// re-used for results. Hence, 'vector' may no longer contain input data at
   /// the time of exception.
-  const RowVector* FOLLY_NONNULL vector_;
+  const RowVector* vector_;
 
   // The parent ExprSet that is executing this expression.
-  const ExprSet* FOLLY_NULLABLE parentExprSet_;
+  const ExprSet* parentExprSet_;
 
   /// Path of the file storing the serialized 'vector'. Used to avoid
   /// serializing vector repeatedly in cases when multiple rows generate
@@ -869,8 +871,32 @@ void Expr::evaluateSharedSubexpr(
         context.getField(field->index(context)).get());
   }
 
+  // Find the cached results for the same inputs, or create an entry if one
+  // doesn't exist.
+  auto sharedSubexprResultsIter =
+      sharedSubexprResults_.find(expressionInputFields);
+  if (sharedSubexprResultsIter == sharedSubexprResults_.end()) {
+    auto maxSharedSubexprResultsCached = context.execCtx()
+                                             ->queryCtx()
+                                             ->queryConfig()
+                                             .maxSharedSubexprResultsCached();
+    if (sharedSubexprResults_.size() < maxSharedSubexprResultsCached) {
+      // If we have room left in the cache, add it.
+      sharedSubexprResultsIter =
+          sharedSubexprResults_
+              .insert(
+                  std::pair(std::move(expressionInputFields), SharedResults()))
+              .first;
+    } else {
+      // Otherwise, simply evaluate it and return without caching the results.
+      eval(rows, context, result);
+
+      return;
+    }
+  }
+
   auto& [sharedSubexprRows, sharedSubexprValues] =
-      sharedSubexprResults_[expressionInputFields];
+      sharedSubexprResultsIter->second;
 
   if (sharedSubexprValues == nullptr) {
     eval(rows, context, result);
@@ -929,7 +955,16 @@ void Expr::evaluateSharedSubexpr(
   context.deselectErrors(*missingRows);
 
   sharedSubexprRows->select(*missingRows);
-  context.moveOrCopyResult(sharedSubexprValues, rows, result);
+
+  if (context.errors()) {
+    LocalSelectivityVector rowsWithoutErrorsHolder(context, rows);
+    auto* rowsWithoutErrors = rowsWithoutErrorsHolder.get();
+    context.deselectErrors(*rowsWithoutErrors);
+
+    context.moveOrCopyResult(sharedSubexprValues, *rowsWithoutErrors, result);
+  } else {
+    context.moveOrCopyResult(sharedSubexprValues, rows, result);
+  }
 }
 
 SelectivityVector* singleRow(
@@ -1087,7 +1122,7 @@ bool Expr::removeSureNulls(
 
     if (values->mayHaveNulls()) {
       LocalDecodedVector decoded(context, *values, rows);
-      if (auto* rawNulls = decoded->nulls()) {
+      if (auto* rawNulls = decoded->nulls(&rows)) {
         if (!result) {
           result = nullHolder.get(rows);
         }
@@ -1098,14 +1133,14 @@ bool Expr::removeSureNulls(
   }
   if (result) {
     result->updateBounds();
-    return true;
+    return result->countSelected() != rows.countSelected();
   }
   return false;
 }
 
 void Expr::addNulls(
     const SelectivityVector& rows,
-    const uint64_t* FOLLY_NULLABLE rawNulls,
+    const uint64_t* rawNulls,
     EvalCtx& context,
     VectorPtr& result) const {
   EvalCtx::addNulls(rows, rawNulls, context, type(), result);
@@ -1282,7 +1317,7 @@ void computeIsAsciiForInputs(
       auto* vector =
           inputValues[index]->template as<SimpleVector<StringView>>();
 
-      VELOX_CHECK(vector);
+      VELOX_CHECK(vector, inputValues[index]->toString());
       vector->computeAndSetIsAscii(rows);
     }
   }
@@ -1362,7 +1397,7 @@ void Expr::evalAll(
 }
 
 bool Expr::throwArgumentErrors(const EvalCtx& context) const {
-  bool defaultNulls = vectorFunction_->isDefaultNullBehavior();
+  bool defaultNulls = vectorFunctionMetadata_.defaultNullBehavior;
   return context.throwOnError() &&
       (!defaultNulls ||
        (supportsFlatNoNullsFastPath() && context.inputFlatNoNulls()));
@@ -1379,7 +1414,7 @@ void Expr::evalAllImpl(
     return;
   }
   bool tryPeelArgs = deterministic_ ? true : false;
-  bool defaultNulls = vectorFunction_->isDefaultNullBehavior();
+  bool defaultNulls = vectorFunctionMetadata_.defaultNullBehavior;
 
   // Tracks what subset of rows shall un-evaluated inputs and current expression
   // evaluates. Initially points to rows.
@@ -1417,7 +1452,7 @@ void Expr::evalAllImpl(
 
   // Write non-selected rows in remainingRows as nulls in the result if some
   // rows have been skipped.
-  if (remainingRows.mayHaveChanged()) {
+  if (remainingRows.hasChanged()) {
     addNulls(rows, remainingRows.rows().asRange().bits(), context, result);
   }
   releaseInputValues(context);
@@ -1435,7 +1470,7 @@ bool Expr::applyFunctionWithPeeling(
       inputValues_,
       applyRows,
       localDecoded,
-      vectorFunction_->isDefaultNullBehavior(),
+      vectorFunctionMetadata_.defaultNullBehavior,
       peeledVectors);
   if (!peeledEncoding) {
     return false;
@@ -1485,7 +1520,7 @@ void Expr::applyFunction(
 
   try {
     vectorFunction_->apply(rows, inputValues_, type(), context, result);
-  } catch (const VeloxException& ve) {
+  } catch (const VeloxException&) {
     throw;
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(e.what());
@@ -1502,7 +1537,7 @@ void Expr::applyFunction(
         // should only apply when the UDF is buggy (hopefully rarely).
         VELOX_USER_FAIL(
             "Function neither returned results nor threw exception.");
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
         context.setErrors(remainingRows.rows(), std::current_exception());
       }
     }
@@ -1618,7 +1653,7 @@ bool Expr::isConstant() const {
     return false;
   }
   for (auto& input : inputs_) {
-    if (!dynamic_cast<ConstantExpr*>(input.get())) {
+    if (!input->is<ConstantExpr>()) {
       return false;
     }
   }

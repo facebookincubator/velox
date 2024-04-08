@@ -114,6 +114,12 @@ inline uint64_t hashOne(T value) {
   return XXH64(&value, sizeof(T), 0);
 }
 
+// Use timestamp.toMillis() to compute hash value.
+template <>
+inline uint64_t hashOne<Timestamp>(Timestamp value) {
+  return hashOne(value.toMillis());
+}
+
 template <>
 inline uint64_t hashOne<StringView>(StringView value) {
   return XXH64(value.data(), value.size(), 0);
@@ -140,16 +146,6 @@ class ApproxDistinctAggregate : public exec::Aggregate {
 
   bool isFixedSize() const override {
     return false;
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      auto group = groups[i];
-      new (group + offset_) HllAccumulator(allocator_);
-    }
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -197,10 +193,6 @@ class ApproxDistinctAggregate : public exec::Aggregate {
           }
           result->setNoCopy(index, serialized);
         });
-  }
-
-  void destroy(folly::Range<char**> groups) override {
-    destroyAccumulators<HllAccumulator>(groups);
   }
 
   void addRawInput(
@@ -299,6 +291,21 @@ class ApproxDistinctAggregate : public exec::Aggregate {
       auto accumulator = value<HllAccumulator>(group);
       accumulator->mergeWith(serialized, allocator_);
     });
+  }
+
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      auto group = groups[i];
+      new (group + offset_) HllAccumulator(allocator_);
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
+    destroyAccumulators<HllAccumulator>(groups);
   }
 
  private:
@@ -420,7 +427,8 @@ exec::AggregateRegistrationResult registerApproxDistinct(
     const std::string& name,
     bool hllAsFinalResult,
     bool hllAsRawInput,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   auto returnType = hllAsFinalResult ? "hyperloglog" : "bigint";
 
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -490,23 +498,29 @@ exec::AggregateRegistrationResult registerApproxDistinct(
             hllAsFinalResult,
             hllAsRawInput);
       },
-      withCompanionFunctions);
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace
 
 void registerApproxDistinctAggregates(
     const std::string& prefix,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerCustomType(
       prefix + "hyperloglog",
       std::make_unique<const HyperLogLogTypeFactories>());
   registerApproxDistinct(
-      prefix + kApproxDistinct, false, false, withCompanionFunctions);
+      prefix + kApproxDistinct,
+      false,
+      false,
+      withCompanionFunctions,
+      overwrite);
   // approx_set and merge are already companion functions themselves. Don't
   // register companion functions for them.
-  registerApproxDistinct(prefix + kApproxSet, true, false, false);
-  registerApproxDistinct(prefix + kMerge, true, true, false);
+  registerApproxDistinct(prefix + kApproxSet, true, false, false, overwrite);
+  registerApproxDistinct(prefix + kMerge, true, true, false, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

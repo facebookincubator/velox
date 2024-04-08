@@ -1,6 +1,9 @@
-=================================
-Expression and Aggregation Fuzzer
-=================================
+==========================================
+Expression, Aggregation, and Window Fuzzer
+==========================================
+
+Expression Fuzzer
+-----------------
 
 Velox allows users to define UDFs (user-defined functions) and UDAFs
 (user-defined aggregate functions) and provides a fuzzer tools to test the
@@ -18,13 +21,19 @@ expression fuzzer evaluates each expression twice and asserts the results to be
 the same: using regular evaluation path and using simplified evaluation that
 flattens all input vectors before evaluating an expression.
 
+Aggregation Fuzzer
+------------------
+
 The Aggregation Fuzzer tests the HashAggregation operator, the StreamingAggregation
 operator and UDAFs by generating random aggregations and evaluating these on
 random input vectors.
 
 The Aggregation Fuzzer tests global aggregations (no grouping keys), group-by
 aggregations (one or more grouping keys), distinct aggregations(no aggregates),
-aggregations with and without masks.
+aggregations with and without masks, aggregations over sorted and distinct inputs.
+
+The Aggregation Fuzzer includes testing of spilling and abandoning partial
+aggregation.
 
 The results of aggregations using functions supported by DuckDB are compared
 with DuckDB results.
@@ -52,10 +61,71 @@ using OrderBy and StreamingAggregation.
 Fuzzer iterations alternate between generating plans using Values or TableScan
 nodes.
 
+Many functions work well with random input data. However, some functions have
+restrictions on the input values and random data tend to violate these causing
+failures and preventing the fuzzer from exercising the aggregation beyond the
+initial sanity checks.
+
+For example, “min” function has 2 signatures:
+
+.. code-block::
+
+    min(x) → [same as x]
+    Returns the minimum value of all input values.
+
+    min(x, n) → array<[same as x]>
+    Returns n smallest values of all input values of x. n must be a positive integer and not exceed 10,000.
+
+The second signature, let's call it min_n, has 2 arguments. The first argument
+is the value and the second is a constant number of minimum values to return.
+Most of the time, randomly generated value for the second argument doesn’t fall
+into [1, 10’000] range and aggregation fails:
+
+.. code-block::
+
+    VeloxUserError
+    Error Source: USER
+    Error Code: INVALID_ARGUMENT
+    Reason: (3069436511015786487 vs. 10000) second argument of max/min must be less than or equal to 10000
+    Retriable: False
+    Expression: newN <= 10'000
+    Function: checkAndSetN
+    File: /Users/mbasmanova/cpp/velox-1/velox/functions/prestosql/aggregates/MinMaxAggregates.cpp
+    Line: 574
+
+Similarly, approx_distinct function has a signature that allows to specify max
+standard error in the range of [0.0040625, 0.26000]. Random values for 'e' have
+near zero chance to fall into this range.
+
+To enable effective testing of these functions, Aggregation Fuzzer allows
+registering custom input generators for individual functions.
+
 When testing aggregate functions whose results depend on the order of inputs
 (e.g. map_agg, map_union, arbitrary, etc.), the Fuzzer verifies that all plans
 succeed or fail with compatible user exceptions. When plans succeed, the Fuzzer
 verifies that number of result rows is the same across all plans.
+
+Additionally, Fuzzer tests order-sensitive functions using aggregations over
+sorted inputs. When inputs are sorted, the results are deterministic and therefore
+can be verified.
+
+Fuzzer also supports specifying custom result verifiers. For example, array_agg
+results can be verified by first sorting the result arrays. Similarly, map_agg
+results can be partially verified by transforming result maps into sorted arrays
+of map keys. approx_distinct can be verified by comparing the results with
+count(distinct).
+
+A custom verifier may work by comparing results of executing two logically
+equivalent Velox plans or results of executing Velox plan and equivalent query
+in Reference DB. These verifiers using transform the results to make them
+deterministic, then compare. This is used to verify array_agg, set_agg,
+set_union, map_agg, and similar functions.
+
+A custom verifier may also work by analyzing the results of single execution
+of a Velox plan. For example, approx_distinct verifies the results by
+computing count(distinct) on input data and checking whether the results
+of approx_distinct are within expected error bound. Verifier for approx_percentile
+works similarly.
 
 At the end of the run, Fuzzer prints out statistics that show what has been
 tested:
@@ -70,6 +140,25 @@ tested:
     Total distinct aggregations: 519 (9.13%)
     Total aggregations verified against DuckDB: 2537 (44.63%)
     Total failed aggregations: 1061 (18.67%)
+
+Window Fuzzer
+-------------
+
+The Window fuzzer tests the Window operator with window and aggregation
+functions by generating random window queries and evaluating them on
+random input vectors. Results of the window queries can be compared to
+Presto as the source of truth.
+
+For each window operation, fuzzer generates multiple logically equivalent
+plans and verifies that results match. These plans include
+
+- Values -> Window
+- TableScan -> PartitionBy -> Window
+- Values -> OrderBy -> Window (streaming)
+- TableScan -> OrderBy -> Window (streaming)
+
+Window fuzzer currently doesn't use any custom result verifiers. Functions
+that require custom result verifiers are left unverified.
 
 How to integrate
 ---------------------------------------
@@ -94,18 +183,13 @@ aggregate functions supported by the engine, and call
 .. _AggregationFuzzerTest.cpp: https://github.com/facebookincubator/velox/blob/main/velox/exec/tests/AggregationFuzzerTest.cpp
 
 Aggregation Fuzzer allows to indicate functions whose results depend on the
-order of inputs and optionally provide an expression to apply to the result to
-make it stable. For example, the results of array_agg can be stabilized by
-applying array_sort on top: array_sort(array_map(x)) and the results of map_agg
-can be stabilized using array_sort(map_keys(map_agg(k, v))). Order-dependent
-functions are tested to ensure no crashes or failures. The results of
-order-dependent functions with stabilizing expressions are further verified for
-correctness by ensuring that results of logically equivalent plans match.
+order of inputs and optionally provide custom result verifiers. The Fuzzer
+also allows to provide custom input generators for individual functions.
 
 How to run
 ----------------------------
 
-Fuzzers support a number of powerful command line arguments.
+All fuzzers support a number of powerful command line arguments.
 
 * ``–-steps``: How many iterations to run. Each iteration generates and evaluates one expression or aggregation. Default is 10.
 
@@ -119,7 +203,11 @@ Fuzzers support a number of powerful command line arguments.
 
 * ``–-batch_size``: The size of input vectors to generate. Default is 100.
 
-There are also arguments that toggle certain fuzzer features:
+* ``--null_ratio``: Chance of adding a null constant to the plan, or null value in a vector (expressed as double from 0 to 1). Default is 0.1.
+
+* ``--max_num_varargs``: The maximum number of variadic arguments fuzzer will generate for functions that accept variadic arguments. Fuzzer will generate up to max_num_varargs arguments for the variadic list in addition to the required arguments by the function. Default is 10.
+
+Below are arguments that toggle certain fuzzer features in Expression Fuzzer:
 
 * ``--retry_with_try``: Retry failed expressions by wrapping it using a try() statement. Default is false.
 
@@ -141,21 +229,19 @@ There are also arguments that toggle certain fuzzer features:
 
 * ``--max_expression_trees_per_step``: This sets an upper limit on the number of expression trees to generate per step. These trees would be executed in the same ExprSet and can re-use already generated columns and subexpressions (if re-use is enabled). Default is 1.
 
-In addition, Aggregation Fuzzer also supports tuning parameters:
-
-* ``--num_batches``: The number of input vectors of size `--batch_size` to generate. Default is 10.
-
-* ``--max_num_varargs``: The maximum number of variadic arguments fuzzer will generate for functions that accept variadic arguments. Fuzzer will generate up to max_num_varargs arguments for the variadic list in addition to the required arguments by the function. Default is 10.
-
-* ``--null_ratio``: Chance of adding a null constant to the plan, or null value in a vector (expressed as double from 0 to 1). Default is 0.1.
-
 * ``--velox_fuzzer_max_level_of_nesting``: Max levels of expression nesting. Default is 10 and minimum is 1.
 
+In addition, Aggregation Fuzzer supports the tuning parameter:
+
 * ``--num_batches``: The number of input vectors of size `--batch_size` to generate. Default is 10.
+
+Window Fuzzer supports verifying window query results against reference DB:
+
+* ``--enable_window_reference_verification``: When true, the results of the window aggregation are compared to reference DB results. Default is false.
 
 If running from CLion IDE, add ``--logtostderr=1`` to see the full output.
 
-An example set of arguments to run the fuzzer with all features enabled is as follows:
+An example set of arguments to run the expression fuzzer with all features enabled is as follows:
 ``--duration_sec 60
 --enable_variadic_signatures
 --lazy_vector_generation_ratio 0.2
@@ -235,6 +321,8 @@ ExpressionRunner supports the following flags:
 
 * ``--sql_path`` path to expression SQL that was created by the Fuzzer
 
+* ``--registry`` function registry to use for evaluating expression. One of "presto" (default) or "spark".
+
 * ``--complex_constant_path`` optional path to complex constants that aren't accurately expressable in SQL (Array, Map, Structs, ...). This is used with SQL file to reproduce the exact expression, not needed when the expression doesn't contain complex constants.
 
 * ``--lazy_column_list_path`` optional path for the file stored on-disk which contains a vector of column indices that specify which columns of the input row vector should be wrapped in lazy. This is used when the failing test included input columns that were lazy vector.
@@ -254,6 +342,10 @@ ExpressionRunner supports the following flags:
 * ``--num_rows`` optional number of rows to process in common and simplified modes. Default: 10. 0 means all rows. This flag is ignored in 'verify' mode.
 
 * ``--store_result_path`` optional directory path for storing the results of evaluating SQL expression or query in 'common', 'simplified' or 'query' modes.
+
+* ``--findMinimalSubExpression`` optional Whether to find minimum failing subexpression on result mismatch. Set to false by default.
+
+* ``--useSeperatePoolForInput`` optional If true (default), expression evaluator and input vectors use different memory pools. This helps trigger code-paths that can depend on vectors having different pools. For eg, when copying a flat string vector copies of the strings stored in the string buffers need to be created. If however, the pools were the same between the vectors then the buffers can simply be shared between them instead.
 
 Example command:
 

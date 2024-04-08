@@ -55,8 +55,8 @@ class ThriftTransportTest : public testing::Test {
   static constexpr uint32_t batchSize_ = 20;
   std::vector<uint8_t> input_;
   std::vector<uint8_t> output_;
-  const char* FOLLY_NULLABLE bufferStart_{nullptr};
-  const char* FOLLY_NULLABLE bufferEnd_{nullptr};
+  const char* bufferStart_{nullptr};
+  const char* bufferEnd_{nullptr};
   std::shared_ptr<SeekableInputStream> inputStream_;
   std::shared_ptr<ThriftTransport> transport_;
 };
@@ -106,6 +106,6 @@ TEST_F(ThriftTransportTest, bufferedOutOfBoundry) {
 // Define main so that gflags get processed.
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::init(&argc, &argv, false);
+  folly::Init init{&argc, &argv, false};
   return RUN_ALL_TESTS();
 }
