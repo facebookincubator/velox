@@ -25,6 +25,15 @@ The code used in this tutorial is available in `velox/exec/tests/VeloxIn10MinDem
 
 Let’s get started.
 
+Before running code examples below, you'll need to run a bit of boilerplate first:
+
+.. code-block:: c++
+
+    registerTypeResolver();
+    registerAllScalarFunctions();
+
+.. code-block::
+
 Vectors
 -------
 
