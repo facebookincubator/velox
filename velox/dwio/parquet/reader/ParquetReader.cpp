@@ -307,18 +307,24 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         case thrift::ConvertedType::MAP: {
           VELOX_CHECK_EQ(children.size(), 1);
           const auto& child = children[0];
-          auto childrenForCurrentElement =
-              std::move(*(ParquetTypeWithId*)child.get()).moveChildren();
-          auto currentElementType = child->type();
           if (schemaElement.converted_type == thrift::ConvertedType::LIST &&
               child->type()->kind() == TypeKind::MAP) {
-            currentElementType =
-                TypeFactory<TypeKind::ARRAY>::create(child->type());
-            childrenForCurrentElement = std::move(children);
+            // This is a special case when we have LIST of MAP
+            return std::make_unique<ParquetTypeWithId>(
+                std::move(TypeFactory<TypeKind::ARRAY>::create(child->type())),
+                std::move(children),
+                curSchemaIdx, // TODO: there are holes in the ids
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                maxRepeat + 1,
+                maxDefine);
           }
           return std::make_unique<ParquetTypeWithId>(
-              currentElementType,
-              std::move(childrenForCurrentElement),
+              child->type(),
+              std::move(*(ParquetTypeWithId*)child.get()).moveChildren(),
               curSchemaIdx, // TODO: there are holes in the ids
               maxSchemaElementIdx,
               ParquetTypeWithId::kNonLeaf, // columnIdx,
