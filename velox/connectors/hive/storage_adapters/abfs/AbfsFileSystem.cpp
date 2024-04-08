@@ -61,10 +61,11 @@ class AbfsReadFile::Impl {
   }
 
   void initialize(const FileOptions& options) {
-    if (options.values.count("fileSize") > 0) {
-      length_ = !options.values.at("fileSize").empty()
-          ? std::stoull(options.values.at("fileSize"))
-          : -1;
+    if (options.values.count(FileOptions::kFileSize) > 0) {
+      VELOX_CHECK(
+          !options.values.at(FileOptions::kFileSize).empty(),
+          "Invalid file size");
+      length_ = std::stoull(options.values.at(FileOptions::kFileSize));
     }
     if (length_ != -1) {
       return;

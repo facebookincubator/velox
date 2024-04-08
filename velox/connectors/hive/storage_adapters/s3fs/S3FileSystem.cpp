@@ -80,10 +80,11 @@ class S3ReadFile final : public ReadFile {
   // Gets the length of the file.
   // Checks if there are any issues reading the file.
   void initialize(const filesystems::FileOptions& options) {
-    if (options.values.count("fileSize") > 0) {
-      length_ = !options.values.at("fileSize").empty()
-          ? std::stoull(options.values.at("fileSize"))
-          : -1;
+    if (options.values.count(FileOptions::kFileSize) > 0) {
+      VELOX_CHECK(
+          !options.values.at(FileOptions::kFileSize).empty(),
+          "Invalid file size");
+      length_ = std::stoull(options.values.at(FileOptions::kFileSize));
     }
     // Make it a no-op if invoked twice.
     if (length_ != -1) {

@@ -40,6 +40,7 @@ struct FileOptions {
   /// inside this property there could be things like block size, encoding, and
   /// etc.
   static constexpr folly::StringPiece kFileCreateConfig{"file-create-config"};
+  static constexpr folly::StringPiece kFileSize{"file-size"};
 
   std::unordered_map<std::string, std::string> values;
   memory::MemoryPool* pool{nullptr};
