@@ -192,6 +192,15 @@ bool isLeftNullAwareJoinWithFilter(
       joinNode->isNullAware() && (joinNode->filter() != nullptr);
 }
 
+bool canDropDuplicates(
+    const std::shared_ptr<const core::HashJoinNode>& joinNode) {
+  // Left semi and anti join with no extra filter only needs to know whether
+  // there is a match. Hence, no need to store entries with duplicate keys.
+  return !joinNode->filter() &&
+      (joinNode->isLeftSemiFilterJoin() || joinNode->isLeftSemiProjectJoin() ||
+       joinNode->isAntiJoin());
+}
+
 uint64_t HashJoinMemoryReclaimer::reclaim(
     memory::MemoryPool* pool,
     uint64_t targetBytes,

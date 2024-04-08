@@ -67,7 +67,11 @@ HashBuild::HashBuild(
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
-      keyChannelMap_(joinNode_->rightKeys().size()) {
+      keyChannelMap_(joinNode_->rightKeys().size()),
+      abandonBuildNoDupHashMinRows_(
+          driverCtx->queryConfig().abandonBuildNoDupHashMinRows()),
+      abandonBuildNoDupHashMinPct_(
+          driverCtx->queryConfig().abandonBuildNoDupHashMinPct()) {
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
 
@@ -91,9 +95,11 @@ HashBuild::HashBuild(
     types.emplace_back(inputType->childAt(channel));
   }
 
+  dropDuplicates_ = canDropDuplicates(joinNode_);
+
   // Identify the non-key build side columns and make a decoder for each.
   const int32_t numDependents = inputType->size() - numKeys;
-  if (numDependents > 0) {
+  if (!dropDuplicates_ && numDependents > 0) {
     // Number of join keys (numKeys) may be less then number of input columns
     // (inputType->size()). In this case numDependents is negative and cannot be
     // used to call 'reserve'. This happens when we join different probe side
@@ -102,12 +108,16 @@ HashBuild::HashBuild(
     dependentChannels_.reserve(numDependents);
     decoders_.reserve(numDependents);
   }
-  for (auto i = 0; i < inputType->size(); ++i) {
-    if (keyChannelMap_.find(i) == keyChannelMap_.end()) {
-      dependentChannels_.emplace_back(i);
-      decoders_.emplace_back(std::make_unique<DecodedVector>());
-      names.emplace_back(inputType->nameOf(i));
-      types.emplace_back(inputType->childAt(i));
+  if (!dropDuplicates_) {
+    // For left semi and anti join with no extra filter, hash table does not
+    // store dependent columns.
+    for (auto i = 0; i < inputType->size(); ++i) {
+      if (keyChannelMap_.find(i) == keyChannelMap_.end()) {
+        dependentChannels_.emplace_back(i);
+        decoders_.emplace_back(std::make_unique<DecodedVector>());
+        names.emplace_back(inputType->nameOf(i));
+        types.emplace_back(inputType->childAt(i));
+      }
     }
   }
 
@@ -155,11 +165,6 @@ void HashBuild::setupTable() {
             .minTableRowsForParallelJoinBuild(),
         pool());
   } else {
-    // (Left) semi and anti join with no extra filter only needs to know whether
-    // there is a match. Hence, no need to store entries with duplicate keys.
-    const bool dropDuplicates = !joinNode_->filter() &&
-        (joinNode_->isLeftSemiFilterJoin() ||
-         joinNode_->isLeftSemiProjectJoin() || isAntiJoin(joinType_));
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
     if (isLeftNullAwareJoinWithFilter(joinNode_)) {
@@ -168,7 +173,7 @@ void HashBuild::setupTable() {
       table_ = HashTable<false>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          !dropDuplicates, // allowDuplicates
+          !dropDuplicates_, // allowDuplicates
           needProbedFlag, // hasProbedFlag
           operatorCtx_->driverCtx()
               ->queryConfig()
@@ -179,7 +184,7 @@ void HashBuild::setupTable() {
       table_ = HashTable<true>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          !dropDuplicates, // allowDuplicates
+          !dropDuplicates_, // allowDuplicates
           needProbedFlag, // hasProbedFlag
           operatorCtx_->driverCtx()
               ->queryConfig()
@@ -187,6 +192,8 @@ void HashBuild::setupTable() {
           pool());
     }
   }
+  lookup_ = std::make_unique<HashLookup>(table_->hashers());
+  lookup_->reset(1);
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
 }
 
@@ -379,6 +386,35 @@ void HashBuild::addInput(RowVectorPtr input) {
   spillInput(input);
   if (!activeRows_.hasSelections()) {
     return;
+  }
+
+  numInputRows_ += activeRows_.countSelected();
+
+  if (dropDuplicates_ && !abandonBuildNoDupHash_) {
+    const bool abandonEarly = abandonBuildNoDupHashEarly(table_->numDistinct());
+    if (abandonEarly) {
+      // The hash table is no longer directly constructed in addInput. The data
+      // that was previously inserted into the hash table is already in the
+      // RowContainer.
+      addRuntimeStat("abandonBuildNoDupHash", RuntimeCounter(1));
+      abandonBuildNoDupHash_ = true;
+      table_->joinTableMayHaveDuplicates();
+    } else {
+      // Before this step, all rows containing null keys that need to be
+      // excluded have already been excluded. The ignoreNullKeys parameter is
+      // no longer effective.
+      table_->prepareForGroupProbe(
+          *lookup_,
+          input,
+          activeRows_,
+          false,
+          BaseHashTable::kNoSpillInputStartPartitionBit);
+      if (lookup_->rows.empty()) {
+        return;
+      }
+      table_->groupProbe(*lookup_);
+      return;
+    }
   }
 
   if (analyzeKeys_ && hashes_.size() < activeRows_.end()) {
@@ -744,6 +780,7 @@ bool HashBuild::finishHashBuild() {
         std::move(otherTables),
         allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
                                : nullptr,
+        dropDuplicates_,
         isInputFromSpill() ? spillConfig()->startPartitionBit
                            : BaseHashTable::kNoSpillInputStartPartitionBit);
   }
@@ -878,6 +915,7 @@ void HashBuild::setupSpillInput(HashJoinBridge::SpillInput spillInput) {
   setupTable();
   setupSpiller(spillInput.spillPartition.get());
   stateCleared_ = false;
+  numInputRows_ = 0;
 
   // Start to process spill input.
   processSpillInput();
@@ -1179,5 +1217,11 @@ void HashBuild::close() {
     spiller_.reset();
     table_.reset();
   }
+}
+
+bool HashBuild::abandonBuildNoDupHashEarly(int64_t numDistinct) const {
+  VELOX_CHECK(dropDuplicates_);
+  return numInputRows_ > abandonBuildNoDupHashMinRows_ &&
+      100 * numDistinct / numInputRows_ >= abandonBuildNoDupHashMinPct_;
 }
 } // namespace facebook::velox::exec

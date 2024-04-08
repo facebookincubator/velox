@@ -6836,6 +6836,81 @@ TEST_F(HashJoinTest, reclaimFromJoinBuilderWithMultiDrivers) {
   ASSERT_GT(arbitrator->stats().numReclaimedBytes, 0);
 }
 
+TEST_F(HashJoinTest, semiJoinAbandonBuildNoDupHashEarly) {
+  auto probeVectors = makeBatches(3, [&](int32_t /*unused*/) {
+    return makeRowVector({
+        makeFlatVector<int64_t>({1, 2, 2, 3, 3, 3, 4, 5, 5, 6, 7}),
+        makeFlatVector<int64_t>({10, 20, 21, 30, 31, 32, 40, 50, 51, 60, 70}),
+    });
+  });
+
+  auto buildVectors = makeBatches(3, [&](int32_t /*unused*/) {
+    return makeRowVector({
+        makeFlatVector<int64_t>({1, 1, 3, 4, 5, 5, 7, 8}),
+        makeFlatVector<int64_t>({100, 101, 300, 400, 500, 501, 700, 800}),
+    });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors)
+                  .project({"c0 AS t0", "c1 AS t1"})
+                  .hashJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors)
+                          .project({"c0 AS u0", "c1 AS u1"})
+                          .planNode(),
+                      "",
+                      {"t0", "t1", "match"},
+                      core::JoinType::kLeftSemiProject)
+                  .planNode();
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .config(core::QueryConfig::kAbandonBuildNoDupHashMinRows, "1")
+      .config(core::QueryConfig::kAbandonBuildNoDupHashMinPct, "10")
+      .planNode(plan)
+      .referenceQuery(
+          "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0) FROM t")
+      .run();
+}
+
+TEST_F(HashJoinTest, antiJoinAbandomBuildNoDupHashEarly) {
+  auto probeVectors = makeBatches(64, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeNullableFlatVector<int32_t>({std::nullopt, 1, 2, 3, 4, 5, 6}),
+            makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6}),
+        });
+  });
+  auto buildVectors = makeBatches(64, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeNullableFlatVector<int32_t>({std::nullopt, 2, 3, 4, 6, 7, 8}),
+            makeFlatVector<int32_t>({0, 2, 3, 4, 6, 7, 8}),
+        });
+  });
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .config(core::QueryConfig::kAbandonBuildNoDupHashMinRows, "1")
+      .config(core::QueryConfig::kAbandonBuildNoDupHashMinPct, "10")
+      .numDrivers(numDrivers_)
+      .probeKeys({"t0"})
+      .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+      .joinType(core::JoinType::kAnti)
+      .joinOutputLayout({"t0", "t1"})
+      .referenceQuery(
+          "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0)")
+      .run();
+}
+
 DEBUG_ONLY_TEST_F(
     HashJoinTest,
     failedToReclaimFromHashJoinBuildersInNonReclaimableSection) {

@@ -1876,13 +1876,18 @@ void HashProbe::prepareTableSpill(
     names.emplace_back(tableInputType->nameOf(channel));
     types.emplace_back(tableInputType->childAt(channel));
   }
-  const auto numDependents = tableInputType->size() - numKeys;
-  for (auto i = 0; i < tableInputType->size(); ++i) {
-    if (keyChannelMap.find(i) == keyChannelMap.end()) {
-      names.emplace_back(tableInputType->nameOf(i));
-      types.emplace_back(tableInputType->childAt(i));
+  if (!canDropDuplicates(joinNode_)) {
+    // For left semi and anti join with no extra filter, hash table does not
+    // store dependent columns.
+    const auto numDependents = tableInputType->size() - numKeys;
+    for (auto i = 0; i < tableInputType->size(); ++i) {
+      if (keyChannelMap.find(i) == keyChannelMap.end()) {
+        names.emplace_back(tableInputType->nameOf(i));
+        types.emplace_back(tableInputType->childAt(i));
+      }
     }
   }
+
   tableSpillType_ = hashJoinTableSpillType(
       ROW(std::move(names), std::move(types)), joinType_);
 }
