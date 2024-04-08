@@ -311,7 +311,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               child->type()->kind() == TypeKind::MAP) {
             // This is a special case when we have LIST of MAP
             return std::make_unique<ParquetTypeWithId>(
-                std::move(TypeFactory<TypeKind::ARRAY>::create(child->type())),
+                TypeFactory<TypeKind::ARRAY>::create(child->type()),
                 std::move(children),
                 curSchemaIdx, // TODO: there are holes in the ids
                 maxSchemaElementIdx,
