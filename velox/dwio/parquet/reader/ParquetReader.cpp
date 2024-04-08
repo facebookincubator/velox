@@ -307,11 +307,12 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         case thrift::ConvertedType::MAP: {
           VELOX_CHECK_EQ(children.size(), 1);
           const auto& child = children[0];
+          auto type = child->type();
           if (schemaElement.converted_type == thrift::ConvertedType::LIST &&
-              child->type()->kind() == TypeKind::MAP) {
+              type->kind() == TypeKind::MAP) {
             // This is a special case when we have LIST of MAP
             return std::make_unique<ParquetTypeWithId>(
-                TypeFactory<TypeKind::ARRAY>::create(child->type()),
+                TypeFactory<TypeKind::ARRAY>::create(type),
                 std::move(children),
                 curSchemaIdx, // TODO: there are holes in the ids
                 maxSchemaElementIdx,
@@ -323,7 +324,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 maxDefine);
           }
           return std::make_unique<ParquetTypeWithId>(
-              child->type(),
+              std::move(type),
               std::move(*(ParquetTypeWithId*)child.get()).moveChildren(),
               curSchemaIdx, // TODO: there are holes in the ids
               maxSchemaElementIdx,
