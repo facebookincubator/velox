@@ -67,7 +67,11 @@ HashBuild::HashBuild(
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
-      keyChannelMap_(joinNode_->rightKeys().size()) {
+      keyChannelMap_(joinNode_->rightKeys().size()),
+      abandonBuildNoDupHashMinRows_(
+          driverCtx->queryConfig().abandonBuildNoDupHashMinRows()),
+      abandonBuildNoDupHashMinPct_(
+          driverCtx->queryConfig().abandonBuildNoDupHashMinPct()) {
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
 
@@ -145,6 +149,7 @@ void HashBuild::setupTable() {
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
       joinNode_->isRightSemiProjectJoin()) {
     // Do not ignore null keys.
+    ignoreNullKeys_ = false;
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
         dependentTypes,
@@ -157,7 +162,7 @@ void HashBuild::setupTable() {
   } else {
     // (Left) semi and anti join with no extra filter only needs to know whether
     // there is a match. Hence, no need to store entries with duplicate keys.
-    const bool dropDuplicates = !joinNode_->filter() &&
+    dropDuplicates_ = !joinNode_->filter() &&
         (joinNode_->isLeftSemiFilterJoin() ||
          joinNode_->isLeftSemiProjectJoin() || isAntiJoin(joinType_));
     // Right semi join needs to tag build rows that were probed.
@@ -165,10 +170,11 @@ void HashBuild::setupTable() {
     if (isLeftNullAwareJoinWithFilter(joinNode_)) {
       // We need to check null key rows in build side in case of null-aware anti
       // or left semi project join with filter set.
+      ignoreNullKeys_ = false;
       table_ = HashTable<false>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          !dropDuplicates, // allowDuplicates
+          !dropDuplicates_, // allowDuplicates
           needProbedFlag, // hasProbedFlag
           operatorCtx_->driverCtx()
               ->queryConfig()
@@ -179,7 +185,7 @@ void HashBuild::setupTable() {
       table_ = HashTable<true>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          !dropDuplicates, // allowDuplicates
+          !dropDuplicates_, // allowDuplicates
           needProbedFlag, // hasProbedFlag
           operatorCtx_->driverCtx()
               ->queryConfig()
@@ -187,6 +193,8 @@ void HashBuild::setupTable() {
           pool());
     }
   }
+  lookup_ = std::make_unique<HashLookup>(table_->hashers());
+  lookup_->reset(1);
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
 }
 
@@ -379,6 +387,29 @@ void HashBuild::addInput(RowVectorPtr input) {
   spillInput(input);
   if (!activeRows_.hasSelections()) {
     return;
+  }
+
+  numInputRows_ += input->size();
+
+  if (dropDuplicates_) {
+    const bool abandonEarly = abandonBuildNoDupHashEarly(table_->numDistinct());
+    if (abandonEarly) {
+      // The hash table is no longer directly constructed in addInput. The data
+      // that was previously inserted into the hash table is already in the
+      // RowContainer.
+      addRuntimeStat("abandonBuildNoDupHash", RuntimeCounter(1));
+      dropDuplicates_ = false;
+      table_->joinTableMayHaveDuplicates();
+    } else {
+      table_->prepareForGroupProbe(
+          *lookup_,
+          input,
+          activeRows_,
+          ignoreNullKeys_,
+          BaseHashTable::kNoSpillInputStartPartitionBit);
+      table_->groupProbe(*lookup_);
+      return;
+    }
   }
 
   if (analyzeKeys_ && hashes_.size() < activeRows_.end()) {
@@ -869,6 +900,7 @@ void HashBuild::setupSpillInput(HashJoinBridge::SpillInput spillInput) {
   setupTable();
   setupSpiller(spillInput.spillPartition.get());
   stateCleared_ = false;
+  numInputRows_ = 0;
 
   // Start to process spill input.
   processSpillInput();
@@ -1170,5 +1202,11 @@ void HashBuild::close() {
     spiller_.reset();
     table_.reset();
   }
+}
+
+bool HashBuild::abandonBuildNoDupHashEarly(int64_t numDistinct) const {
+  VELOX_CHECK(dropDuplicates_);
+  return numInputRows_ > abandonBuildNoDupHashMinRows_ &&
+      100 * numDistinct / numInputRows_ >= abandonBuildNoDupHashMinPct_;
 }
 } // namespace facebook::velox::exec

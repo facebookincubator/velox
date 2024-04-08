@@ -55,7 +55,8 @@ HashTable<ignoreNullKeys>::HashTable(
     memory::MemoryPool* pool)
     : BaseHashTable(std::move(hashers)),
       minTableSizeForParallelJoinBuild_(minTableSizeForParallelJoinBuild),
-      isJoinBuild_(isJoinBuild) {
+      isJoinBuild_(isJoinBuild),
+      joinBuildNoDuplicates_(!allowDuplicates) {
   std::vector<TypePtr> keys;
   for (auto& hasher : hashers_) {
     keys.push_back(hasher->type());
@@ -1512,7 +1513,9 @@ void HashTable<ignoreNullKeys>::decideHashMode(
     return;
   }
   disableRangeArrayHash_ |= disableRangeArrayHash;
-  if (numDistinct_ && !isJoinBuild_) {
+  if (numDistinct_ && (!isJoinBuild_ || joinBuildNoDuplicates_)) {
+    // If the join type is left semi and anti, allowDuplicates_ will be false,
+    // and join build is building hash table while adding input rows.
     if (!analyze()) {
       setHashMode(HashMode::kHash, numNew, spillInputStartPartitionBit);
       return;
