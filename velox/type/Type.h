@@ -664,7 +664,7 @@ class DecimalType : public ScalarType<KIND> {
  public:
   static_assert(KIND == TypeKind::BIGINT || KIND == TypeKind::HUGEINT);
   static constexpr uint8_t kMaxPrecision = KIND == TypeKind::BIGINT ? 18 : 38;
-  static constexpr uint8_t kMinPrecision = KIND == TypeKind::BIGINT ? 0 : 19;
+  static constexpr uint8_t kMinPrecision = KIND == TypeKind::BIGINT ? 1 : 19;
 
   inline bool equivalent(const Type& other) const override {
     if (!Type::hasSameTypeId(other)) {
@@ -1265,6 +1265,10 @@ class DateType : public IntegerType {
   }
 
   std::string toString(int32_t days) const;
+
+  /// Returns a date, represented as days since epoch,
+  /// as an ISO 8601-formatted string.
+  static std::string toIso8601(int32_t days);
 
   int32_t toDays(folly::StringPiece in) const;
 

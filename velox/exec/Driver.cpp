@@ -308,7 +308,8 @@ void Driver::pushdownFilters(int operatorIndex) {
       }
 
       const auto& identityProjections = prevOp->identityProjections();
-      auto inputChannel = getIdentityProjection(identityProjections, channel);
+      const auto inputChannel =
+          getIdentityProjection(identityProjections, channel);
       if (!inputChannel.has_value()) {
         // Filter channel is not an identity projection.
         VELOX_CHECK(
@@ -828,10 +829,14 @@ void Driver::closeOperators() {
 
 void Driver::updateStats() {
   DriverStats stats;
-  stats.runtimeStats[DriverStats::kTotalPauseTime] = RuntimeMetric(
-      1'000'000 * state_.totalPauseTimeMs, RuntimeCounter::Unit::kNanos);
-  stats.runtimeStats[DriverStats::kTotalOffThreadTime] = RuntimeMetric(
-      1'000'000 * state_.totalOffThreadTimeMs, RuntimeCounter::Unit::kNanos);
+  if (state_.totalPauseTimeMs > 0) {
+    stats.runtimeStats[DriverStats::kTotalPauseTime] = RuntimeMetric(
+        1'000'000 * state_.totalPauseTimeMs, RuntimeCounter::Unit::kNanos);
+  }
+  if (state_.totalOffThreadTimeMs > 0) {
+    stats.runtimeStats[DriverStats::kTotalOffThreadTime] = RuntimeMetric(
+        1'000'000 * state_.totalOffThreadTimeMs, RuntimeCounter::Unit::kNanos);
+  }
   task()->addDriverStats(ctx_->pipelineId, std::move(stats));
 }
 
@@ -893,7 +898,7 @@ std::unordered_set<column_index_t> Driver::canPushdownFilters(
   for (auto i = 0; i < channels.size(); ++i) {
     auto channel = channels[i];
     for (auto j = filterSourceIndex - 1; j >= 0; --j) {
-      auto prevOp = operators_[j].get();
+      auto* prevOp = operators_[j].get();
 
       if (j == 0) {
         // Source operator.
@@ -904,7 +909,8 @@ std::unordered_set<column_index_t> Driver::canPushdownFilters(
       }
 
       const auto& identityProjections = prevOp->identityProjections();
-      auto inputChannel = getIdentityProjection(identityProjections, channel);
+      const auto inputChannel =
+          getIdentityProjection(identityProjections, channel);
       if (!inputChannel.has_value()) {
         // Filter channel is not an identity projection.
         if (prevOp->canAddDynamicFilter()) {
