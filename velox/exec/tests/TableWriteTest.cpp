@@ -63,9 +63,8 @@ std::string testModeString(TestMode mode) {
       return "PARTITIONED";
     case TestMode::kBucketed:
       return "BUCKETED";
-
-      VELOX_UNREACHABLE();
   }
+  VELOX_UNREACHABLE();
 }
 
 static std::shared_ptr<core::AggregationNode> generateAggregationNode(
