@@ -73,12 +73,7 @@ class GCSReadFile final : public ReadFile {
   // Gets the length of the file.
   // Checks if there are any issues reading the file.
   void initialize(const filesystems::FileOptions& options) {
-    if (options.values.count(FileOptions::kFileSize) > 0) {
-      VELOX_CHECK(
-          !options.values.at(FileOptions::kFileSize).empty(),
-          "Invalid file size");
-      length_ = std::stoull(options.values.at(FileOptions::kFileSize));
-    }
+    length_ = options.getFileSize();
     // Make it a no-op if invoked twice.
     if (length_ != -1) {
       return;

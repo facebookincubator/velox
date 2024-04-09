@@ -40,10 +40,17 @@ struct FileOptions {
   /// inside this property there could be things like block size, encoding, and
   /// etc.
   static constexpr folly::StringPiece kFileCreateConfig{"file-create-config"};
-  static constexpr folly::StringPiece kFileSize{"file-size"};
 
   std::unordered_map<std::string, std::string> values;
   memory::MemoryPool* pool{nullptr};
+  std::optional<int64_t> fileSize{std::nullopt};
+
+  int64_t getFileSize() const {
+    if (fileSize.has_value()) {
+      return fileSize.value();
+    }
+    return -1;
+  }
 };
 
 /// An abstract FileSystem

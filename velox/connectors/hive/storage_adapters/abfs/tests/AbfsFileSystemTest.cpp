@@ -33,6 +33,7 @@
 #include "velox/exec/tests/utils/TempFilePath.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::filesystems;
 using namespace facebook::velox::filesystems::abfs;
 using ::facebook::velox::common::Region;
 
@@ -165,6 +166,17 @@ void readData(ReadFile* readFile) {
           reinterpret_cast<const char*>(iobufs[1].writableData()),
           iobufs[1].length()),
       "ccccc");
+}
+
+TEST_F(AbfsFileSystemTest, openFileForReadWithOptions) {
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{"fs.azure.account.key.test.dfs.core.windows.net",
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
+  FileOptions options;
+  options.fileSize = 15 + kOneMB;
+  auto readFile = abfs->openFileForRead(fullFilePath, options);
+  readData(readFile.get());
 }
 
 TEST_F(AbfsFileSystemTest, readFile) {
