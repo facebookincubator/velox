@@ -233,6 +233,10 @@ Mathematical Functions
 
     Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
 
+.. spark:function:: unbase64(x) -> varbinary
+
+    Converts a base64 encoded string ``x`` to binary.
+
 .. spark:function:: unhex(x) -> varbinary
 
     Converts hexadecimal varchar ``x`` to varbinary.

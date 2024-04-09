@@ -23,7 +23,6 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/Repeat.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
-#include "velox/functions/prestosql/BinaryFunctions.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
@@ -53,11 +52,6 @@ namespace facebook::velox::functions {
 extern void registerElementAtFunction(
     const std::string& name,
     bool enableCaching);
-
-inline void registerFromBase64Function(const std::string& prefix) {
-  registerFunction<FromBase64Function, Varbinary, Varchar >(
-      {prefix + "unbase64"});
-}
 
 template <typename T>
 inline void registerArrayRemoveFunctions(const std::string& prefix) {
