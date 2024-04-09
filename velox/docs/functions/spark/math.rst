@@ -49,6 +49,10 @@ Mathematical Functions
         SELECT CAST(99999999999999999999999999999999.99998 as DECIMAL(38, 6)) + CAST(-99999999999999999999999999999999.99999 as DECIMAL(38, 5)); -- DECIMAL(38, 6) -0.000010
         SELECT CAST(-99999999999999999999999999999999990.0 as DECIMAL(38, 3)) + CAST(-0.00001 as DECIMAL(38, 7)); -- DECIMAL(38, 6) NULL
 
+.. spark:function:: base64(x) -> varchar
+
+    Converts ``x`` to a base64 string.
+
 .. spark:function:: bin(x) -> varchar
 
     Returns the string representation of the long value ``x`` represented in binary.
