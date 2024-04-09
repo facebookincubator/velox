@@ -201,6 +201,19 @@ class AggregationTest : public OperatorTestBase {
     EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
   }
 
+  void testVarchartoTimestamp(Timestamp ts, std::string tsString) {
+    auto stringVector = makeFlatVector<std::string>({tsString});
+    auto timestampVector = makeFlatVector<Timestamp>({ts});
+    auto vectors = makeRowVector({"c1", "c2"}, {stringVector, timestampVector});
+    createDuckDbTable({vectors});
+
+    auto op = PlanBuilder()
+                  .values({vectors})
+                  .project({"c1", "cast(c1 as timestamp)"})
+                  .planNode();
+    assertQuery(op, "select c1,c2 from tmp");
+  }
+
   void testMultiKey(
       const std::vector<RowVectorPtr>& vectors,
       bool ignoreNullKeys,
@@ -501,6 +514,23 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
       readCursor(params, [](Task*) {}),
       "Aggregate function signature is not supported: test_aggregate(). "
       "Supported signatures: (smallint,varchar) -> tinyint -> bigint.");
+}
+
+
+TEST_F(AggregationTest, castVarcharToTimestamp) {
+
+  testVarchartoTimestamp(Timestamp(-946684800, 0), "1940-01-02 00:00:00");
+  testVarchartoTimestamp(Timestamp(0, 0), "1970-01-01 00:00:00");
+  testVarchartoTimestamp(Timestamp(0, 365), "1970-01-01 00:00:00");
+  testVarchartoTimestamp(Timestamp(0, 65873), "1970-01-01 00:00:00.000065");
+  testVarchartoTimestamp(Timestamp(94668480000, 0), "4969-12-04 00:00:00");
+  testVarchartoTimestamp(Timestamp(946729316, 129999999), "2000-01-01 12:21:56.129999");
+  testVarchartoTimestamp(Timestamp(946729316, 129990000), "2000-01-01 12:21:56.12999");
+  testVarchartoTimestamp(Timestamp(946729316, 129900000), "2000-01-01 12:21:56.1299");
+  testVarchartoTimestamp(Timestamp(946729316, 129000000), "2000-01-01 12:21:56.129");
+  testVarchartoTimestamp(Timestamp(946729316, 129010000), "2000-01-01 12:21:56.12901");
+  testVarchartoTimestamp(Timestamp(946729316, 129001000), "2000-01-01 12:21:56.129001");
+  testVarchartoTimestamp(Timestamp(-50049331200, 726600000), "0384-01-01 08:00:00.7266");
 }
 
 TEST_F(AggregationTest, missingLambdaFunction) {

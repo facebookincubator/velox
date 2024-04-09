@@ -291,6 +291,32 @@ VectorPtr CastExpr::castFromIntervalDayTime(
   }
 }
 
+VectorPtr CastExpr::castVarcharToTimestamp(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context) {
+  VectorPtr castResult;
+  context.ensureWritable(rows, TIMESTAMP(), castResult);
+  (*castResult).clearNulls(rows);
+  auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
+  auto* inputVector = input.as<SimpleVector<StringView>>();
+  const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
+  const auto sessionTzName = queryConfig.sessionTimezone();
+  const auto* timeZone =
+      (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty())
+      ? date::locate_zone(sessionTzName)
+      : nullptr;
+  applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+    auto timestamp = hooks_->castStringToTimestamp(inputVector->valueAt(row));
+    if (timeZone) {
+      timestamp.toGMT(*timeZone);
+    }
+    resultFlatVector->set(row, timestamp);
+  });
+
+  return castResult;
+}
+
 namespace {
 void propagateErrorsOrSetNulls(
     bool setNullInResultAtError,
@@ -732,6 +758,8 @@ void CastExpr::applyPeeled(
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
   } else if (toType->isLongDecimal()) {
     result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
+  } else if (fromType->isVarchar() && toType->isTimestamp()) {
+    result = castVarcharToTimestamp(rows, input, context);
   } else if (fromType->isDecimal()) {
     switch (toType->kind()) {
       case TypeKind::VARCHAR:
