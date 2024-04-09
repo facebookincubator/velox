@@ -27,7 +27,7 @@ std::unique_ptr<VectorSerde> getSerde(const remote::PageFormat& format) {
 
     case remote::PageFormat::SPARK_UNSAFE_ROW:
       return std::make_unique<serializer::spark::UnsafeRowVectorSerde>();
-    
+
     default:
       VELOX_NOT_SUPPORTED();
   }
