@@ -118,7 +118,7 @@ jobs:
           mkdir -p /tmp/signatures
 
       - name: Checkout Main
-        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.even_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         uses: actions/checkout@v4
         with:
           # hardcode ref without broken pr
@@ -126,7 +126,7 @@ jobs:
           path: velox_main
 
       - name: Build PyVelox
-        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.even_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
         run: |
           python3 -m venv .venv
@@ -135,7 +135,7 @@ jobs:
           make python-build
 
       - name: Create Baseline Signatures
-        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.even_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
         run: |
           source .venv/bin/activate
@@ -144,7 +144,7 @@ jobs:
           python3 scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
 
       - name: Save Function Signature Stash
-        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.even_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         uses: assignUser/stash/save@v1
         with:
           path: /tmp/signatures
@@ -171,9 +171,16 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      # TODO: Add step to save ccache
+      - name: Save ccache
+        # see https://github.com/actions/upload-artifact/issues/543
+        continue-on-error: true
+        uses: assignUser/stash/save@v1
+        with:
+          path: "${{ env.CCACHE_DIR }}"
+          key: ccache-fuzzer-centos
 
       - name: Build PyVelox
+        if: ${{ github.even_name != 'schedule' }}
         env:
           VELOX_BUILD_DIR: "_build/debug"
         run: |
@@ -190,6 +197,7 @@ jobs:
           python3 scripts/signature.py gh_bias_check presto spark
 
       - name: Upload Signature Artifacts
+        if: ${{ github.even_name != 'schedule' }}
         uses: actions/upload-artifact@v4
         with:
           name: signatures
