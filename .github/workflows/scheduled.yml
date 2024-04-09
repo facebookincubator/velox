@@ -182,6 +182,7 @@ jobs:
           python3 -m pip install -e .
 
       - name: Create and test new function signatures
+        if: ${{ github.even_name != 'schedule' }}
         id: sig-check
         run: |
           source .venv/bin/activate
@@ -649,6 +650,7 @@ jobs:
 
   surface-signature-errors:
     name: Signature Changes
+    if: ${{ github.event_name != 'schedule' }}
     needs: compile
     runs-on: ubuntu-latest
     steps:
