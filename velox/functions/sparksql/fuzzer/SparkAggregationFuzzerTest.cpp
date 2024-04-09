@@ -22,6 +22,8 @@
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
 #include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
+#include "velox/exec/fuzzer/TransformResultVerifier.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 DEFINE_int64(
@@ -48,12 +50,19 @@ int main(int argc, char** argv) {
   // experience, and initialize glog and gflags.
   folly::Init init(&argc, &argv);
 
+  facebook::velox::functions::prestosql::registerInternalFunctions();
   facebook::velox::memory::MemoryManager::initialize({});
 
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable. Constant argument of bloom_filter_agg cause
   // fuzzer test fail.
   std::unordered_set<std::string> skipFunctions = {"bloom_filter_agg"};
+
+  using facebook::velox::exec::test::TransformResultVerifier;
+
+  auto makeArrayVerifier = []() {
+    return TransformResultVerifier::create("\"$internal$canonicalize\"({})");
+  };
 
   // The results of the following functions depend on the order of input
   // rows. For some functions, the result can be transformed to a value that
@@ -71,7 +80,9 @@ int main(int argc, char** argv) {
           {"max_by", nullptr},
           {"min_by", nullptr},
           {"skewness", nullptr},
-          {"kurtosis", nullptr}};
+          {"kurtosis", nullptr},
+          {"collect_list", makeArrayVerifier()},
+      };
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
   auto duckQueryRunner =
