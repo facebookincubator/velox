@@ -19,7 +19,6 @@
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/RepeatedColumnReader.h"
-#include "velox/dwio/parquet/reader/RowIndexColumnReader.h"
 
 namespace facebook::velox::common {
 class ScanSpec;
@@ -39,19 +38,11 @@ StructColumnReader::StructColumnReader(
     if (childSpecs[i]->isConstant()) {
       continue;
     }
-    if (childSpecs[i]->isRowIndexCol()) {
-      auto childRequestedType =
-          requestedType_->childByName(childSpec->fieldName());
-      auto child = std::make_unique<RowIndexColumnReader>(
-          childRequestedType, params, scanSpec);
-      addChild(std::move(child));
-    } else {
-      auto childFileType = fileType_->childByName(childSpec->fieldName());
-      auto childRequestedType =
-          requestedType_->childByName(childSpec->fieldName());
-      addChild(ParquetColumnReader::build(
-          childRequestedType, childFileType, params, *childSpec));
-    }
+    auto childFileType = fileType_->childByName(childSpec->fieldName());
+    auto childRequestedType =
+        requestedType_->childByName(childSpec->fieldName());
+    addChild(ParquetColumnReader::build(
+        childRequestedType, childFileType, params, *childSpec));
 
     childSpecs[i]->setSubscript(children_.size() - 1);
   }
@@ -144,9 +135,6 @@ void StructColumnReader::enqueueRowGroup(
       listChild->enqueueRowGroup(index, input);
     } else if (auto mapChild = dynamic_cast<MapColumnReader*>(child)) {
       mapChild->enqueueRowGroup(index, input);
-    } else if (
-        auto rowIndexChild = dynamic_cast<RowIndexColumnReader*>(child)) {
-      continue;
     } else {
       child->formatData().as<ParquetData>().enqueueRowGroup(index, input);
     }

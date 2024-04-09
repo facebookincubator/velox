@@ -193,16 +193,15 @@ void SplitReader::prepareSplit(
 
   auto fileType = baseReader_->rowType();
   auto columnTypes = adaptColumns(fileType, baseReaderOpts_.getFileSchema());
-  auto requestColumnNames = fileType->names();
-  auto requestColumnTypes = columnTypes;
-  appendRowIndexColumnIfNeed(fileType, requestColumnNames, requestColumnTypes);
+  auto columnNames = fileType->names();
+
+  setRowIndexColumnInfoIfNeed(fileType, columnNames, columnTypes);
   configureRowReaderOptions(
       baseRowReaderOpts_,
       hiveTableHandle_->tableParameters(),
       scanSpec_,
       metadataFilter,
-      ROW(std::vector<std::string>(requestColumnNames),
-          std::move(requestColumnTypes)),
+      ROW(std::vector<std::string>(columnNames), std::move(columnTypes)),
       hiveSplit_);
   // NOTE: we firstly reset the finished 'baseRowReader_' of previous split
   // before setting up for the next one to avoid doubling the peak memory usage.
@@ -210,20 +209,25 @@ void SplitReader::prepareSplit(
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 
-void SplitReader::appendRowIndexColumnIfNeed(
+void SplitReader::setRowIndexColumnInfoIfNeed(
     const RowTypePtr& fileType,
     std::vector<std::string>& columnNames,
     std::vector<facebook::velox::TypePtr>& columnTypes) {
   auto rowIndexMetaColIdx =
       readerOutputType_->getChildIdxIfExists(kSparkReservedTmpMetaRowIndex);
   if (rowIndexMetaColIdx.has_value() &&
-      !fileType->containsChild(kSparkReservedTmpMetaRowIndex)) {
-    auto rowIndexMetaColType = readerOutputType_->childAt(
-        readerOutputType_->getChildIdx(kSparkReservedTmpMetaRowIndex));
-    columnNames.push_back(kSparkReservedTmpMetaRowIndex);
-    columnTypes.push_back(rowIndexMetaColType);
-    auto scanSpec = scanSpec_->childByName(kSparkReservedTmpMetaRowIndex);
-    scanSpec->setIsRowIndexCol(true);
+      !fileType->containsChild(kSparkReservedTmpMetaRowIndex) &&
+      hiveSplit_->partitionKeys.find(kSparkReservedTmpMetaRowIndex) ==
+          hiveSplit_->partitionKeys.end()) {
+    dwio::common::RowNumberColumnInfo rowNumberColumnInfo;
+    rowNumberColumnInfo.insertPosition = rowIndexMetaColIdx.value();
+    rowNumberColumnInfo.name = kSparkReservedTmpMetaRowIndex;
+    baseRowReaderOpts_.setRowNumberColumnInfo(rowNumberColumnInfo);
+    auto rowIndexColumnScanSpec =
+        scanSpec_->childByName(kSparkReservedTmpMetaRowIndex);
+    if (rowIndexColumnScanSpec) {
+      scanSpec_->removeChild(rowIndexColumnScanSpec);
+    }
   }
 }
 

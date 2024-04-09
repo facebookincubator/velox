@@ -106,6 +106,11 @@ struct TableParameter {
       "serialization.null.format";
 };
 
+struct RowNumberColumnInfo {
+  column_index_t insertPosition;
+  std::string name;
+};
+
 /**
  * Options for creating a RowReader.
  */
@@ -129,6 +134,8 @@ class RowReaderOptions {
   std::shared_ptr<folly::Executor> decodingExecutor_;
   size_t decodingParallelismFactor_{0};
   bool appendRowNumberColumn_ = false;
+  std::optional<RowNumberColumnInfo> rowNumberColumnInfo_ = std::nullopt;
+
   // Function to populate metrics related to feature projection stats
   // in Koski. This gets fired in FlatMapColumnReader.
   // This is a bit of a hack as there is (by design) no good way
@@ -336,6 +343,15 @@ class RowReaderOptions {
 
   bool getAppendRowNumberColumn() const {
     return appendRowNumberColumn_;
+  }
+
+  void setRowNumberColumnInfo(
+      std::optional<RowNumberColumnInfo> rowNumberColumnInfo) {
+    rowNumberColumnInfo_ = rowNumberColumnInfo;
+  }
+
+  std::optional<RowNumberColumnInfo> getRowNumberColumnInfo() const {
+    return rowNumberColumnInfo_;
   }
 
   void setKeySelectionCallback(
