@@ -64,7 +64,7 @@ std::string testModeString(TestMode mode) {
     case TestMode::kBucketed:
       return "BUCKETED";
     default:
-      return "UNKNOWN";
+      VELOX_UNREACHABLE();
   }
 }
 

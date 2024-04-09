@@ -20,8 +20,6 @@
 
 namespace facebook::velox::functions {
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wreturn-type"
 std::unique_ptr<VectorSerde> getSerde(const remote::PageFormat& format) {
   switch (format) {
     case remote::PageFormat::PRESTO_PAGE:
@@ -29,8 +27,9 @@ std::unique_ptr<VectorSerde> getSerde(const remote::PageFormat& format) {
 
     case remote::PageFormat::SPARK_UNSAFE_ROW:
       return std::make_unique<serializer::spark::UnsafeRowVectorSerde>();
+    
+    default:
+      VELOX_NOT_SUPPORTED();
   }
 }
-#pragma GCC diagnostic pop
-
 } // namespace facebook::velox::functions
