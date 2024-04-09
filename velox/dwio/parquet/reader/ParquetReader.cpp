@@ -309,6 +309,21 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           VELOX_CHECK_EQ(children.size(), 1);
           const auto& child = children[0];
           auto type = child->type();
+          if (schemaElement.converted_type == thrift::ConvertedType::LIST &&
+              type->kind() == TypeKind::MAP) {
+            // This is a special case when we have LIST of MAP
+            return std::make_unique<ParquetTypeWithId>(
+                TypeFactory<TypeKind::ARRAY>::create(type),
+                std::move(children),
+                curSchemaIdx, // TODO: there are holes in the ids
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                maxRepeat + 1,
+                maxDefine);
+          }
           return std::make_unique<ParquetTypeWithId>(
               std::move(type),
               std::move(*(ParquetTypeWithId*)child.get()).moveChildren(),
