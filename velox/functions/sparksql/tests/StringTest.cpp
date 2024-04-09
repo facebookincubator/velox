@@ -867,24 +867,24 @@ TEST_F(StringTest, initCap) {
   const auto initCap = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t>("initCap(c0)", arg);
   };
-  // unicode only
+  // unicode only.
   EXPECT_EQ(
       initcap("àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"),
       "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ");
   EXPECT_EQ(initcap("αβγδεζηθικλμνξοπρςστυφχψ"), "Αβγδεζηθικλμνξοπρςστυφχψ");
-  // Mix of ascii and unicode
+  // Mix of ascii and unicode.
   EXPECT_EQ(initcap("αβγδεζ world"), "Αβγδεζ World");
   EXPECT_EQ(initcap("αfoo wβ"), "Αfoo Wβ");
-  // Ascii only
+  // Ascii only.
   EXPECT_EQ(initcap("hello world"), "Hello World");
   EXPECT_EQ(initcap("HELLO WORLD"), "Hello World");
   EXPECT_EQ(initcap("1234"), "1234");
   EXPECT_EQ(initcap("a b c d"), "A B C D");
   EXPECT_EQ(initcap("abcd"), "Abcd");
-  // numbers
+  // numbers.
   EXPECT_EQ(initcap("123"), "123");
   EXPECT_EQ(initcap("1abc"), "1abc");
-  // edge cases
+  // edge cases.
   EXPECT_EQ(initcap(""), "");
   EXPECT_EQ(initcap(std::nullopt), std::nullopt);
 }

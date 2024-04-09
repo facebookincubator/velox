@@ -200,7 +200,7 @@ class InitCapFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
 
-    // Read content before calling prepare results
+    // Read content before calling prepare results.
     BaseVector* inputStringsVector = args[0].get();
     exec::LocalDecodedVector inputHolder(context, *inputStringsVector, rows);
     auto decodedInput = inputHolder.get();
@@ -230,7 +230,7 @@ class InitCapFunction : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // initcap(varchar) -> varchar
+    // initcap(varchar) -> varchar.
     return {exec::FunctionSignatureBuilder()
                 .returnType("varchar")
                 .argumentType("varchar")
