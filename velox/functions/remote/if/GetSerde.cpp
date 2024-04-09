@@ -29,7 +29,7 @@ std::unique_ptr<VectorSerde> getSerde(const remote::PageFormat& format) {
       return std::make_unique<serializer::spark::UnsafeRowVectorSerde>();
 
     default:
-      VELOX_NOT_SUPPORTED();
+      VELOX_UNSUPPORTED();
   }
 }
 } // namespace facebook::velox::functions
