@@ -118,6 +118,16 @@ Array Functions
         SELECT array_sort(array(NULL, 1, NULL)); -- [1, NULL, NULL]
         SELECT array_sort(array(NULL, 2, 1)); -- [1, 2, NULL]
 
+.. spark:function:: array_shuffle(array(E), seed) -> array(E)
+
+    Generates a random permutation of the given ``array`` using a seed derived 
+    from the user-specified ``seed`` and the configuration `spark.partition_id`.
+    ``seed`` must be constant. ::
+
+        SELECT array_shuffle(ARRAY [1, 2, 3], 0); -- [3, 1, 2]
+        SELECT array_shuffle(ARRAY [0, 0, 0], 0); -- [0, 0, 0]
+        SELECT array_shuffle(ARRAY [1, NULL, 1, NULL, 2], 0); -- [2, NULL, NULL, NULL, 1]
+
 .. spark:function:: concat(array(E), array(E1), ..., array(En)) -> array(E, E1, ..., En)
 
     Returns the concatenation of array(E), array(E1), ..., array(En). ::

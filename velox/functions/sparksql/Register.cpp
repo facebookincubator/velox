@@ -335,6 +335,8 @@ void registerFunctions(const std::string& prefix) {
       makeRepeatAllowNegativeCount,
       repeatMetadata());
 
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_shuffle, prefix + "array_shuffle");
+
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int32_t, Date>({prefix + "year"});

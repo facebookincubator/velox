@@ -15,30 +15,52 @@
  */
 #include "velox/functions/lib/ArrayShuffleBase.h"
 
-namespace facebook::velox::functions {
+namespace facebook::velox::functions::sparksql {
 namespace {
 class ArrayShuffleFunction : public ArrayShuffleBaseFunction {
+ public:
+  explicit ArrayShuffleFunction(int64_t seed)
+      : randGen_(std::make_shared<std::mt19937>(seed)) {}
+
+  static std::shared_ptr<exec::VectorFunction> create(
+      const std::string& /*name*/,
+      const std::vector<exec::VectorFunctionArg>& inputArgs,
+      const core::QueryConfig& config) {
+    VELOX_CHECK_GE(inputArgs.size(), 2);
+    VELOX_CHECK_EQ(inputArgs[1].type->kind(), TypeKind::BIGINT);
+
+    const auto seed = inputArgs[1]
+                          .constantValue->template as<ConstantVector<int64_t>>()
+                          ->valueAt(0);
+    const int32_t partitionId = config.sparkPartitionId();
+
+    return std::make_shared<ArrayShuffleFunction>(seed + partitionId);
+  }
+
  protected:
   std::shared_ptr<std::mt19937> getRandGen() const override {
-    return std::make_shared<std::mt19937>(std::random_device{}());
+    return randGen_;
   }
+
+ private:
+  std::shared_ptr<std::mt19937> randGen_;
 };
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-  return {// array(T) -> array(T)
-          exec::FunctionSignatureBuilder()
+  return {exec::FunctionSignatureBuilder()
               .typeVariable("T")
               .returnType("array(T)")
               .argumentType("array(T)")
+              .constantArgumentType("bigint")
               .build()};
 }
 
 } // namespace
 
 // Register function.
-VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(
     udf_array_shuffle,
     signatures(),
     exec::VectorFunctionMetadataBuilder().deterministic(false).build(),
-    std::make_unique<ArrayShuffleFunction>());
-} // namespace facebook::velox::functions
+    ArrayShuffleFunction::create);
+} // namespace facebook::velox::functions::sparksql
