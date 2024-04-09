@@ -30,7 +30,7 @@ General Aggregate Functions
     In Spark implementation, ``estimatedNumItems`` and ``numBits`` are used to decide the number of hash functions and bloom filter capacity.
     In Velox implementation, ``estimatedNumItems`` is not used.
 
-    ``hash`` cannot be null.
+    ``hash`` can be null.
     ``numBits`` specifies max capacity of the bloom filter, which allows to trade accuracy for memory.
     In Spark, the value of ``numBits`` is automatically capped at config value 67,108,864.
     In Velox, the value of ``numBits`` is automatically capped at the value of spark.bloom_filter.max_num_bits configuration property.
