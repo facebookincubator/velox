@@ -922,12 +922,14 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
-  FOLLY_ALWAYS_INLINE Timestamp
-  adjustByArithmetic(Timestamp timestamp, long intervalSeconds, const date::time_zone* timezone) {
+  FOLLY_ALWAYS_INLINE Timestamp adjustByArithmetic(
+      Timestamp timestamp,
+      long intervalSeconds,
+      const date::time_zone* timezone) {
     long seconds = getSeconds(timestamp, timezone);
     long s = seconds / intervalSeconds;
     if (seconds < 0) {
-      s = s -1;
+      s = s - 1;
     }
     long truncedSeconds = s * intervalSeconds;
     return Timestamp(truncedSeconds, 0);
