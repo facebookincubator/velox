@@ -43,11 +43,8 @@ struct FileOptions {
 
   std::unordered_map<std::string, std::string> values;
   memory::MemoryPool* pool{nullptr};
-  std::optional<int64_t> fileSize{std::nullopt};
-
-  std::optional<int64_t> getFileSize() const {
-    return fileSize;
-  }
+  std::optional<int64_t> fileSize{
+      std::nullopt}; // If specified then can be trusted to be the file size.
 };
 
 /// An abstract FileSystem

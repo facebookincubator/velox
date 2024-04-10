@@ -61,11 +61,10 @@ class AbfsReadFile::Impl {
   }
 
   void initialize(const FileOptions& options) {
-    auto fileSize = options.getFileSize();
-
-    if (fileSize.has_value()) {
-      VELOX_CHECK_GE(fileSize.value(), 0, "Length must be non-negative");
-      length_ = fileSize.value();
+    if (options.fileSize.has_value()) {
+      VELOX_CHECK_GE(
+          options.fileSize.value(), 0, "File size must be non-negative");
+      length_ = options.fileSize.value();
     }
 
     if (length_ != -1) {
