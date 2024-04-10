@@ -77,7 +77,8 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
 .. spark:function:: initcap(str) -> string
 
-    Translate the first letter of each word to upper case in the sentence.
+    Translate the first letter of each word to upper case in the sentence. All other
+    characters will be made lowercase.
 
         SELECT initcap('foo bar'); -- Foo Bar
         SELECT initcap('FOO BAR'); -- Foo Bar

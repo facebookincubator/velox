@@ -157,7 +157,7 @@ void encodeDigestToBase16(uint8_t* output, int digestSize) {
 
 class InitCapFunction : public exec::VectorFunction {
  private:
-  /// String encoding wrappable function
+  // String encoding wrappable function.
   template <bool isAscii>
   struct ApplyInternal {
     static void apply(

@@ -147,7 +147,7 @@ TEST_F(StringImplTest, lowerUnicode) {
 }
 
 TEST_F(StringImplTest, initCapUnicode) {
-  for (auto& testCase : getInitCapUnicodeTestData()) {
+  for (const auto& testCase : getInitCapUnicodeTestData()) {
     auto input = StringView(std::get<0>(testCase));
     auto& expectedInitCap = std::get<1>(testCase);
 
@@ -162,7 +162,7 @@ TEST_F(StringImplTest, initCapUnicode) {
 }
 
 TEST_F(StringImplTest, initCapAscii) {
-  for (auto& testCase : getInitCapAsciiTestData()) {
+  for (const auto& testCase : getInitCapAsciiTestData()) {
     auto input = StringView(std::get<0>(testCase));
     auto& expectedInitCap = std::get<1>(testCase);
 

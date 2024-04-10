@@ -681,7 +681,7 @@ FOLLY_ALWAYS_INLINE size_t initCapUnicode(
     utf8proc_int32_t nextCodePoint =
         utf8proc_codepoint(&input[inputIdx], input + inputLength, size);
     if (UNLIKELY(nextCodePoint == -1)) {
-      // invalid input string, copy the remaining of the input string as is to
+      // Invalid input string, copy the remaining of the input string as is to
       // the output.
       std::memcpy(&output[outputIdx], &input[inputIdx], inputLength - inputIdx);
       outputIdx += inputLength - inputIdx;
@@ -695,10 +695,11 @@ FOLLY_ALWAYS_INLINE size_t initCapUnicode(
     newWord = utf8proc_category(nextCodePoint) ==
         UTF8PROC_CATEGORY_ZS; // Check if it's a space character.
 
-    assert(
+  VELOX_USER_CHECK(
         (outputIdx + utf8proc_codepoint_length(modifiedCodePoint)) <
-            outputLength &&
-        "access out of bound");
+            outputLength,
+	  "access out of bound, index {}",
+	outputIdx);
 
     auto newSize = utf8proc_encode_char(
         modifiedCodePoint,
