@@ -249,6 +249,7 @@ class TableWriteTest : public HiveConnectorTestBase {
   }
 
   void TearDown() override {
+    waitForAllTasksToBeDeleted();
     HiveConnectorTestBase::TearDown();
   }
 
