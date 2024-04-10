@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Run this inside the CUDA container:
+# docker-compose run -e NUM_THREADS=$(nproc) --rm ubuntu-cuda-cpp
+
 # Run a GPU build and test
 pushd "$(dirname ${0})"
 
