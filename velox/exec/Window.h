@@ -147,9 +147,6 @@ class Window : public Operator {
   // operator and functions. This structure is owned by the WindowBuild.
   std::unique_ptr<WindowPartition> currentPartition_;
 
-  // The min average frame size can use segment tree.
-  int32_t minFrameSizeUseSegmentTree_;
-
   // Whether turn on the optimization of segment tree.
   bool enableSegmentTreeOpt_;
 

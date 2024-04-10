@@ -20,6 +20,4 @@ namespace facebook::velox::exec {
 
 void registerAggregateWindowFunction(const std::string& name);
 
-enum class FramePart : uint8_t { FULL = 0, LEFT = 1, RIGHT = 2 };
-
 } // namespace facebook::velox::exec

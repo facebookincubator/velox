@@ -82,7 +82,6 @@ class WindowFunction {
   /// This function is invoked when the WindowFunction was created.
   virtual void initialize(
       const WindowFrame& windowFrame,
-      vector_size_t minFrameSizeUseSegmentTree,
       bool enableSegmentTreeOpt) {};
 
   /// This function is invoked by the Window operator when it

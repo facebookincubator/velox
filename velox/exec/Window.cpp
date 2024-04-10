@@ -37,8 +37,6 @@ Window::Window(
       numInputColumns_(windowNode->inputType()->size()),
       windowNode_(windowNode),
       currentPartition_(nullptr),
-      minFrameSizeUseSegmentTree_(
-          driverCtx->queryConfig().minFrameSizeUseSegmentTree()),
       enableSegmentTreeOpt_(
           driverCtx->queryConfig().enableWindowSegmentTreeOpt()),
       stringAllocator_(pool()) {
@@ -190,7 +188,6 @@ void Window::createWindowFunctions() {
         createWindowFrame(windowNode_, windowNodeFunction.frame, inputType));
 
     windowFunctions_.back()->initialize(windowFrames_.back(),
-                                       minFrameSizeUseSegmentTree_,
                                        enableSegmentTreeOpt_);
   }
 }
