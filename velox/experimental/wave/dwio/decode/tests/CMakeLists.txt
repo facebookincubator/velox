@@ -14,7 +14,7 @@
 
 add_executable(velox_wave_decode_test GpuDecoderTest.cu)
 
-add_test(velox_wave_common_test velox_wave_common_test)
+add_test(velox_wave_decode_test velox_wave_decode_test)
 
 target_link_libraries(
   velox_wave_decode_test
