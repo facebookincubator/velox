@@ -55,6 +55,12 @@ constexpr folly::StringPiece kMetricTaskMemoryReclaimWaitTimeoutCount{
 constexpr folly::StringPiece kMetricMemoryNonReclaimableCount{
     "velox.memory_non_reclaimable_count"};
 
+constexpr folly::StringPiece kMetricMemoryPoolInitialCapacityBytes{
+    "velox.memory_pool_initial_capacity_bytes"};
+
+constexpr folly::StringPiece kMetricMemoryPoolCapacityGrowCount{
+    "velox.memory_pool_capacity_growth_count"};
+
 constexpr folly::StringPiece kMetricMemoryPoolUsageLeakBytes{
     "velox.memory_pool_usage_leak_bytes"};
 
@@ -113,4 +119,7 @@ constexpr folly::StringPiece kMetricSpillFlushTimeMs{
 
 constexpr folly::StringPiece kMetricSpillWriteTimeMs{
     "velox.spill_write_time_ms"};
+
+constexpr folly::StringPiece kMetricFileWriterEarlyFlushedRawBytes{
+    "velox.file_writer_early_flushed_raw_bytes"};
 } // namespace facebook::velox

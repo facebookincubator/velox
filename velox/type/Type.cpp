@@ -14,12 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/type/Type.h"
+#include <velox/type/Type.h>
+
 #include <boost/algorithm/string.hpp>
+#include <fmt/format.h>
 #include <folly/Demangle.h>
 #include <re2/re2.h>
+
 #include <sstream>
 #include <typeindex>
+
 #include "velox/type/TimestampConversion.h"
 
 namespace std {
@@ -971,6 +975,10 @@ std::string IntervalYearMonthType::valueToString(int32_t value) const {
 }
 
 std::string DateType::toString(int32_t days) const {
+  return DateType::toIso8601(days);
+}
+
+std::string DateType::toIso8601(int32_t days) {
   // Find the number of seconds for the days_;
   // Casting 86400 to int64 to handle overflows gracefully.
   int64_t daySeconds = days * (int64_t)(86400);
@@ -981,6 +989,8 @@ std::string DateType::toString(int32_t days) const {
       days);
   TimestampToStringOptions options;
   options.mode = TimestampToStringOptions::Mode::kDateOnly;
+  // Enable zero-padding for year, to ensure compliance with 'YYYY' format.
+  options.zeroPaddingYear = true;
   std::string result;
   result.resize(getMaxStringLength(options));
   const auto view =
