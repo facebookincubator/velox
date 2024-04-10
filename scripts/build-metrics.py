@@ -1,5 +1,7 @@
+import argparse
+import sys
 import uuid
-from os.path import splitext
+from os.path import splitext, join
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -67,7 +69,7 @@ class BinarySizeAdapter(BenchmarkAdapter):
         return results
 
 
-class BuildTimeAdapter(BenchmarkAdapter):
+class NinjaLogAdapter(BenchmarkAdapter):
     """
     Adapter to extract compile and link times from a .ninja_log.
     Will calculate aggregates for total, compile, link and wall time.
@@ -165,5 +167,88 @@ class BuildTimeAdapter(BenchmarkAdapter):
 
 
 # find velox -type f -name '*.o' -exec ls -l -BB {} \; | awk '{print $5, $9}' |  sed 's|CMakeFiles/.*dir/||g' > /tmp/object-size
-BuildTimeAdapter(command=["true"])()
-# BinarySizeAdapter(command=["true"])()
+
+
+def upload(args):
+    print("Uploading Build Metrics")
+    pr_number = int(args.pr_number) if args.pr_number else None
+    run_reason = "pull request" if pr_number else "commit"
+    run_name = f"{run_reason}: {args.sha}"
+    sizes = BinarySizeAdapter(
+        command=["true"],
+        size_file = join(args.base_path, args.size_file),
+        result_fields_override={
+            "run_id": args.run_id,
+            "run_name": run_name,
+            "run_reason": run_reason,
+            "github": {
+                #TODO change
+                "repository": "https://github.com/assignUser/velox",
+                "pr_number": pr_number,
+                "commit": args.sha
+            },
+        },
+    )
+    sizes()
+    times = NinjaLogAdapter( 
+        command=["true"],
+        ninja_log = join(args.base_path, args.ninja_log),
+        result_fields_override={
+            "run_id": args.run_id,
+            "run_name": run_name,
+            "run_reason": run_reason,
+            "github": {
+                #TODO change
+                "repository": "https://github.com/assignUser/velox",
+                "pr_number": pr_number,
+                "commit": args.sha
+            }
+        }
+    )
+    times()
+
+
+def parse_args(args):
+    parser = argparse.ArgumentParser(description="Velox Build Metric Utility.")
+    parser.set_defaults(func=lambda _: parser.print_help())
+
+    subparsers = parser.add_subparsers(help="Please specify one of the subcommands.")
+
+    upload_parser = subparsers.add_parser(
+        "upload", help="Parse and upload build metrics"
+    )
+    upload_parser.set_defaults(func= upload)
+    upload_parser.add_argument(
+        "--ninja_log", default=".ninja_log", help="Name of the ninja log file."
+    )
+    upload_parser.add_argument(
+        "--size_file",
+        default="object_sizes",
+        help="Name of the file containing size information.",
+    )
+    upload_parser.add_argument(
+        "--run_id",
+        required=True,
+        help="A Conbench run ID unique to this build.",
+    )
+    upload_parser.add_argument(
+        "--sha",
+        required=True,
+        help="HEAD sha for the result upload to conbench.",
+    )
+    upload_parser.add_argument(
+        "--pr_number",
+        required=True,
+        help="PR number for the result upload to conbench.",
+    )
+    upload_parser.add_argument(
+        "base_path",
+        default="/tmp/metrics",
+        help="Path in which the .ninja_log and sizes_file are found.",
+    )
+    
+    return parser.parse_args()
+
+if __name__ == "__main__":
+    args = parse_args(sys.argv[1:])
+    args.func(args)
