@@ -8,13 +8,21 @@ from benchadapt.adapters import BenchmarkAdapter
 
 
 class BinarySizeAdapter(BenchmarkAdapter):
+    """
+    Adapter to track build artifact sizes in conbench.
+    Expects the `size_file` to be formatted like this:
+    <size in bytes> <path/to/binary|arbitrary_name>
+
+    Suite meta data will be library, object or executable
+    based on file ending.
+    """
+
     size_file: Path
 
     def __init__(
         self,
         command: List[str],
-        # TODO remove default path
-        size_file: str = "/tmp/object-size",
+        size_file: str,
         result_fields_override: Dict[str, Any] = {},
         result_fields_append: Dict[str, Any] = {},
     ) -> None:
@@ -44,11 +52,6 @@ class BinarySizeAdapter(BenchmarkAdapter):
 
             parsed_size = BenchmarkResult(
                 run_reason="merge",
-                # TODO remove, added via envvars
-                github={
-                    "repository": "https://github.com/facebookincubator/velox",
-                    "commit": "e29cde7b220ac507f7c55e3101f47836a67c51f1",
-                },
                 batch_id=batch_id,
                 stats={
                     "data": [size],
@@ -65,13 +68,20 @@ class BinarySizeAdapter(BenchmarkAdapter):
 
 
 class BuildTimeAdapter(BenchmarkAdapter):
+    """
+    Adapter to extract compile and link times from a .ninja_log.
+    Will calculate aggregates for total, compile, link and wall time.
+    Suite metadata will be set based on binary ending to object, library or executable.
+
+    Only files in paths beginning with velox/ will be tracked to avoid dependencies.
+    """
+
     ninja_log: Path
 
     def __init__(
         self,
         command: List[str],
-        # TODO remove default path
-        ninja_log: str = "_build/release/.ninja_log",
+        ninja_log: str,
         result_fields_override: Dict[str, Any] = {},
         result_fields_append: Dict[str, Any] = {},
     ) -> None:
@@ -123,11 +133,6 @@ class BuildTimeAdapter(BenchmarkAdapter):
 
             time_result = BenchmarkResult(
                 run_reason="merge",
-                # TODO remove, added via envvars
-                github={
-                    "repository": "https://github.com/facebookincubator/velox",
-                    "commit": "c329af5d37547f8ab3e88129b7aa166294e9d75c",
-                },
                 batch_id=batch_id,
                 stats={
                     "data": [duration],
@@ -144,11 +149,6 @@ class BuildTimeAdapter(BenchmarkAdapter):
         for total_name, total in totals.items():
             total_result = BenchmarkResult(
                 run_reason="merge",
-                # TODO remove, added via envvars
-                github={
-                    "repository": "https://github.com/facebookincubator/velox",
-                    "commit": "c329af5d37547f8ab3e88129b7aa166294e9d75c",
-                },
                 batch_id=batch_id,
                 stats={
                     "data": [total],
