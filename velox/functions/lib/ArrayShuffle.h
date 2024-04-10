@@ -39,8 +39,11 @@ namespace facebook::velox::functions {
 //   dictionaryIndices=[1,2,0])
 // Possible Output: ArrayVector[{5,4},{2,1,3},{1,3,2}]
 //
-class ArrayShuffleBaseFunction : public exec::VectorFunction {
+class ArrayShuffleFunction : public exec::VectorFunction {
  public:
+  explicit ArrayShuffleFunction(int32_t seed)
+      : randGen_(std::make_unique<std::mt19937>(seed)) {}
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -73,8 +76,6 @@ class ArrayShuffleBaseFunction : public exec::VectorFunction {
     vector_size_t* rawOffsets = offsets->asMutable<vector_size_t>();
     vector_size_t* rawSizes = sizes->asMutable<vector_size_t>();
 
-    auto randGen = getRandGen();
-
     vector_size_t newOffset = 0;
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       vector_size_t arrayRow = decodedArg->index(row);
@@ -83,7 +84,7 @@ class ArrayShuffleBaseFunction : public exec::VectorFunction {
 
       std::iota(rawIndices + newOffset, rawIndices + newOffset + size, offset);
       std::shuffle(
-          rawIndices + newOffset, rawIndices + newOffset + size, *randGen);
+          rawIndices + newOffset, rawIndices + newOffset + size, *randGen_);
 
       rawSizes[row] = size;
       rawOffsets[row] = newOffset;
@@ -104,8 +105,8 @@ class ArrayShuffleBaseFunction : public exec::VectorFunction {
     context.moveOrCopyResult(localResult, rows, result);
   }
 
- protected:
-  virtual std::shared_ptr<std::mt19937> getRandGen() const = 0;
+ private:
+  std::unique_ptr<std::mt19937> randGen_;
 };
 
 } // namespace facebook::velox::functions

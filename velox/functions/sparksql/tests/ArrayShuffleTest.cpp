@@ -22,8 +22,6 @@ namespace {
 
 using namespace facebook::velox::test;
 
-using facebook::velox::functions::test::FunctionBaseTest;
-
 class ArrayShuffleTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>

@@ -13,16 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/lib/ArrayShuffleBase.h"
+#include "velox/functions/lib/ArrayShuffle.h"
 
 namespace facebook::velox::functions {
 namespace {
-class ArrayShuffleFunction : public ArrayShuffleBaseFunction {
- protected:
-  std::shared_ptr<std::mt19937> getRandGen() const override {
-    return std::make_shared<std::mt19937>(std::random_device{}());
-  }
-};
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   return {// array(T) -> array(T)
@@ -40,5 +34,5 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_array_shuffle,
     signatures(),
     exec::VectorFunctionMetadataBuilder().deterministic(false).build(),
-    std::make_unique<ArrayShuffleFunction>());
+    std::make_unique<ArrayShuffleFunction>(std::random_device{}()));
 } // namespace facebook::velox::functions
