@@ -76,7 +76,7 @@ concurrency:
 
 env:
   # Run for 15 minute on PRs
-  DURATION: "${{ inputs.duration || ( github.event_name == 'pull_request' && 900 || 1800 )}}"
+  DURATION: "${{ inputs.duration || ( github.event_name != 'schedule' && 900 || 1800 )}}"
   # minimize artifact duration for PRs, keep them a bit longer for nightly runs
   RETENTION: "${{ github.event_name == 'pull_request' && 1 || 3 }}"
 
@@ -321,7 +321,7 @@ jobs:
           # Run for 30 minutes instead of 15, when files relevant to presto are touched
           pr_duration: "${{ steps.changes.outputs.presto == 'true' && 1800 || 900 }}"
           # Run for 60 minutes if its a scheduled run
-          other_duration: "${{ inputs.duration || 3600 }}"
+          other_duration: "${{ inputs.duration || (github.event_name == 'push' && 1800 || 3600) }}"
           is_pr: "${{ github.event_name == 'pull_request' }}"
         run: |
 
