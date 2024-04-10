@@ -39,6 +39,10 @@ class ArbitraryAggregate : public SimpleNumericAggregate<T, T, T> {
     return sizeof(T);
   }
 
+  int32_t accumulatorAlignmentSize() const override {
+    return 1;
+  }
+
   void initializeNewGroups(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
@@ -135,6 +139,14 @@ class ArbitraryAggregate : public SimpleNumericAggregate<T, T, T> {
     *exec::Aggregate::value<T>(group) = value;
   }
 };
+
+/// Override 'accumulatorAlignmentSize' for UnscaledLongDecimal values as it
+/// uses int128_t type. Some CPUs don't support misaligned access to int128_t
+/// type.
+template <>
+inline int32_t ArbitraryAggregate<int128_t>::accumulatorAlignmentSize() const {
+  return static_cast<int32_t>(sizeof(int128_t));
+}
 
 // Arbitrary for non-numeric types. We always keep the first (non-NULL) element
 // seen. Arbitrary (x) will produce partial and final aggregations of type x.
