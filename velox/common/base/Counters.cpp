@@ -135,6 +135,10 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricArbitratorFreeCapacityBytes, facebook::velox::StatType::AVG);
 
+  DEFINE_METRIC(
+      kMetricArbitratorFreeReservedCapacityBytes,
+      facebook::velox::StatType::AVG);
+
   // Tracks the leaf memory pool usage leak in bytes.
   DEFINE_METRIC(
       kMetricMemoryPoolUsageLeakBytes, facebook::velox::StatType::SUM);
@@ -146,7 +150,6 @@ void registerVeloxMetrics() {
   // The distribution of a root memory pool's initial capacity in range of [0,
   // 256MB] with 32 buckets. It is configured to report the capacity at P50,
   // P90, P99, and P100 percentiles.
-
   DEFINE_HISTOGRAM_METRIC(
       kMetricMemoryPoolInitialCapacityBytes,
       8L << 20,

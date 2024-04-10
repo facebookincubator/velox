@@ -115,7 +115,10 @@ class FakeTestArbitrator : public MemoryArbitrator {
              .memoryPoolTransferCapacity = config.memoryPoolTransferCapacity}) {
   }
 
-  uint64_t growCapacity(MemoryPool* /*unused*/, uint64_t /*unused*/) override {
+  uint64_t growCapacity(
+      MemoryPool* /*unused*/,
+      uint64_t /*unused*/,
+      bool /*unused*/) override {
     VELOX_NYI();
   }
 

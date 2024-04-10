@@ -145,6 +145,8 @@ struct MemoryManagerOptions {
   /// reservation capacity for system usage.
   int64_t arbitratorCapacity{kMaxMemory};
 
+  int64_t arbitratorReservedCapacity{0};
+
   /// The string kind of memory arbitrator used in the memory manager.
   ///
   /// NOTE: the arbitrator will only be created if its kind is set explicitly.
