@@ -210,6 +210,7 @@ class ConstantVector final : public SimpleVector<T> {
   }
 
   uint64_t estimateCompactSize() const override {
+    LOG(ERROR) << "Constant Vector estimateCompactSize call. estimateRowSize():" << estimateRowSize();
     return 1 * estimateRowSize();
   }
 

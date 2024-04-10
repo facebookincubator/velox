@@ -166,6 +166,7 @@ class DictionaryVector : public SimpleVector<T> {
         used[rawIndices[i]] = true;
       }
     }
+    LOG(ERROR) << "Dictionary Vector estimateCompactSize call. uniqueIds:" << uniqueIds << ", estimateRowSize():" << estimateRowSize();
     return uniqueIds * estimateRowSize();
   }
 
