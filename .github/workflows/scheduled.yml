@@ -26,6 +26,19 @@ on:
       - "scripts/setup-helper-functions.sh"
       - ".github/workflows/scheduled.yml"
 
+  push:
+    branches:
+      - "main"
+    paths:
+      - "velox/**"
+      - "!velox/docs/**"
+      - "CMakeLists.txt"
+      - "CMake/**"
+      - "third_party/**"
+      - "scripts/setup-ubuntu.sh"
+      - "scripts/setup-helper-functions.sh"
+      - ".github/workflows/scheduled.yml"
+
   schedule:
     - cron: '0 3 * * *'
 
@@ -70,6 +83,8 @@ env:
 jobs:
   compile:
     name: Build
+    # prevent errors when forks ff their main branch
+    if: ${{ github.repository == "facebookincubator/velox" }}
     runs-on: 16-core
     container: ghcr.io/facebookincubator/velox-dev:centos8
     timeout-minutes: 120
