@@ -285,7 +285,7 @@ __global__ void probe<true>(
       j = (j + sizeof(uint32_t)) & tableSizeMask;
       cmpMask = 0xffffffff;
     }
-  end:
+  end: continue;
   }
 }
 
@@ -614,7 +614,7 @@ __global__ void probePartitioned<true>(
       j = (j + sizeof(uint32_t)) & tableSizeMask;
       cmpMask = 0xffffffff;
     }
-  end:
+  end: continue;
   }
 }
 
