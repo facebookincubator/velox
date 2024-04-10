@@ -150,8 +150,7 @@ jobs:
         if: ${{ github.even_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         uses: actions/checkout@v4
         with:
-          # hardcode ref without broken pr
-          ref: 'main'
+          ref: ${{ steps.get-head.outputs.head_main || 'main' }}
           path: velox_main
 
       - name: Build PyVelox
