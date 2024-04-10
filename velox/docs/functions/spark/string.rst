@@ -84,7 +84,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
     Returns the leftmost ``length`` characters from the ``string``.
     If ``length`` is less or equal than 0 the result is an empty string.
-    If ``length`` is larger than the length of ``string``, return the original string.
+    If ``length`` is larger than the length of ``string`` the result is ``string``.
 
        SELECT left("example", 0); -- ""
        SELECT left("example", 2); -- "ex"
@@ -168,7 +168,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
     Returns the rightmost ``length`` characters from the ``string``.
     If ``length`` is less or equal than 0 the result is an empty string.
-    If ``length`` is larger than the length of ``string``, return the original string.
+    If ``length`` is larger than the length of ``string`` the result is ``string``.
 
        SELECT right("example", 0); -- ""
        SELECT right("example", 2); -- "le"
