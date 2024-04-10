@@ -448,6 +448,16 @@ uint64_t RowVector::estimateFlatSize() const {
   return total;
 }
 
+uint64_t RowVector::estimateCompactSize() const {
+  uint64_t total = BaseVector::retainedSize();
+  for (const auto& child : children_) {
+    if (child) {
+      total += child->estimateCompactSize();
+    }
+  }
+  return total;
+}
+
 void RowVector::prepareForReuse() {
   BaseVector::prepareForReuse();
   for (auto& child : children_) {
@@ -979,6 +989,10 @@ uint64_t ArrayVector::estimateFlatSize() const {
       sizes_->capacity() + elements_->estimateFlatSize();
 }
 
+uint64_t ArrayVector::estimateCompactSize() const {
+  return BaseVector::retainedSize() + offsets_->capacity() + sizes_->capacity() + elements_->estimateCompactSize();
+}
+
 namespace {
 void zeroOutBuffer(BufferPtr buffer) {
   memset(buffer->asMutable<char>(), 0, buffer->size());
@@ -1281,6 +1295,10 @@ uint64_t MapVector::estimateFlatSize() const {
   return BaseVector::retainedSize() + offsets_->capacity() +
       sizes_->capacity() + keys_->estimateFlatSize() +
       values_->estimateFlatSize();
+}
+
+uint64_t MapVector::estimateCompactSize() const {
+  return BaseVector::retainedSize() + offsets_->capacity() + sizes_->capacity() + keys_->estimateCompactSize() + values_->estimateCompactSize();
 }
 
 void MapVector::prepareForReuse() {
