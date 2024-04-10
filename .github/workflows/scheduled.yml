@@ -762,7 +762,11 @@ jobs:
           rm -rfv /tmp/aggregate_fuzzer_repro/*
           chmod -R 777 /tmp/aggregate_fuzzer_repro
           chmod +x velox_aggregation_fuzzer_test
+          echo "signatures folder"
+          ls /tmp/signatures/
+          echo "Biased functions:"
           cat /tmp/signatures/presto_aggregate_bias_functions
+          echo "Running Fuzzer"
           ./velox_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec $DURATION \

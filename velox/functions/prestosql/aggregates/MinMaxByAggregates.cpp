@@ -1140,6 +1140,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(
                            .argumentType("C")
                            .build());
   const std::vector<std::string> supportedCompareTypes = {
+      "boolean",
       "tinyint",
       "smallint",
       "integer",
