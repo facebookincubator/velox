@@ -804,7 +804,11 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
 
   VELOX_CHECK_NULL(parent_);
 
+<<<<<<< HEAD
   ++numCapacityGrowths_;
+=======
+  ++numCapacityGrowth_;
+>>>>>>> 23d76d58f ([WIP]add reserved query capacity)
   if (growCapacityCb_(requestor, size)) {
     TestValue::adjust(
         "facebook::velox::memory::MemoryPoolImpl::incrementReservationThreadSafe::AfterGrowCallback",

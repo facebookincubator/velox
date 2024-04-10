@@ -93,7 +93,8 @@ class NoopArbitrator : public MemoryArbitrator {
 
   // Noop arbitrator has no memory capacity limit so no operation needed for
   // memory pool capacity reserve.
-  uint64_t growCapacity(MemoryPool* pool, uint64_t /*unused*/) override {
+  uint64_t growCapacity(MemoryPool* pool, uint64_t /*unused*/, bool /*unused*/)
+      override {
     pool->grow(pool->maxCapacity());
     return pool->maxCapacity();
   }

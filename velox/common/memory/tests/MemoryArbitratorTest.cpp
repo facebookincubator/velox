@@ -124,9 +124,11 @@ TEST_F(MemoryArbitrationTest, queryMemoryCapacity) {
         manager.addRootPool("root-1", 8L << 20, MemoryReclaimer::create());
     ASSERT_EQ(rootPool->capacity(), 1 << 20);
     ASSERT_EQ(
-        manager.arbitrator()->growCapacity(rootPool.get(), 1 << 20), 1 << 20);
+        manager.arbitrator()->growCapacity(rootPool.get(), 1 << 20, true),
+        1 << 20);
     ASSERT_EQ(
-        manager.arbitrator()->growCapacity(rootPool.get(), 6 << 20), 2 << 20);
+        manager.arbitrator()->growCapacity(rootPool.get(), 6 << 20, true),
+        2 << 20);
     auto leafPool = rootPool->addLeafChild("leaf-1.0");
     void* buffer;
     VELOX_ASSERT_THROW(
@@ -203,7 +205,10 @@ class FakeTestArbitrator : public MemoryArbitrator {
     return "USER";
   }
 
-  uint64_t growCapacity(MemoryPool* /*unused*/, uint64_t /*unused*/) override {
+  uint64_t growCapacity(
+      MemoryPool* /*unused*/,
+      uint64_t /*unused*/,
+      bool /*unused*/) override {
     VELOX_NYI();
     return 0;
   }

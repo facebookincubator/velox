@@ -41,7 +41,8 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   static void unregisterFactory();
 
-  uint64_t growCapacity(MemoryPool* pool, uint64_t targetBytes) final;
+  uint64_t growCapacity(MemoryPool* pool, uint64_t targetBytes, bool useReserve)
+      final;
 
   bool growCapacity(
       MemoryPool* pool,
@@ -186,11 +187,13 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // arbitrator might have less free available capacity. The function returns
   // the actual decremented free capacity bytes.
   uint64_t decrementFreeCapacity(uint64_t bytes);
-  uint64_t decrementFreeCapacityLocked(uint64_t bytes);
+  uint64_t decrementFreeCapacityLocked(uint64_t bytes, bool useReserve);
 
   // Increment free capacity by 'bytes'.
   void incrementFreeCapacity(uint64_t bytes);
   void incrementFreeCapacityLocked(uint64_t bytes);
+  uint64_t incrementFreeReservedCapacity(uint64_t bytes);
+  uint64_t incrementFreeReservedCapacityLocked(uint64_t bytes);
 
   std::string toStringLocked() const;
 
@@ -200,6 +203,7 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   void incrementLocalArbitrationCount();
 
   mutable std::mutex mutex_;
+  uint64_t freeReservedCapacity_{0};
   uint64_t freeCapacity_{0};
   // Indicates if there is a running arbitration request or not.
   bool running_{false};

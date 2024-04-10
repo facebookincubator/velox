@@ -209,9 +209,15 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   pools_.emplace(poolName, pool);
   VELOX_CHECK_EQ(pool->capacity(), 0);
   arbitrator_->growCapacity(
-      pool.get(), std::min<uint64_t>(poolInitCapacity_, maxCapacity));
+      pool.get(),
+      //      std::min<uint64_t>b(poolInitCapacity_, maxCapacity),
+      64ULL << 20,
+      /*useReserve*/ true);
+  const int capacity = pool->capacity();
+  VELOX_MEM_LOG(INFO) << "memory pool " << pool->name() << " initial capacity "
+                      << succinctBytes(capacity);
   RECORD_HISTOGRAM_METRIC_VALUE(
-      kMetricMemoryPoolInitialCapacityBytes, pool->capacity());
+      kMetricMemoryPoolInitialCapacityBytes, capacity);
   return pool;
 }
 

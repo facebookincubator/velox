@@ -57,9 +57,14 @@ class MemoryArbitrator {
     /// manager.
     int64_t capacity;
 
+    uint64_t reservedCapacity{6ULL << 30};
+
+    /// The min reserved capacity for each query.
+    uint64_t minReservedCapacity{64UL << 20};
+
     /// The minimal memory capacity to transfer out of or into a memory pool
     /// during the memory arbitration.
-    uint64_t memoryPoolTransferCapacity{32 << 20};
+    uint64_t memoryPoolTransferCapacity{128 << 20};
 
     /// Specifies the max time to wait for memory reclaim by arbitration. The
     /// memory reclaim might fail if the max time has exceeded. This prevents
@@ -123,7 +128,8 @@ class MemoryArbitrator {
   /// grow the memory pool's capacity based on the free available memory
   /// capacity in the arbitrator, and returns the actual growed capacity in
   /// bytes.
-  virtual uint64_t growCapacity(MemoryPool* pool, uint64_t bytes) = 0;
+  virtual uint64_t
+  growCapacity(MemoryPool* pool, uint64_t bytes, bool useReserve) = 0;
 
   /// Invoked by the memory manager to grow a memory pool's capacity.
   /// 'pool' is the memory pool to request to grow. 'candidates' is a list
@@ -239,12 +245,19 @@ class MemoryArbitrator {
  protected:
   explicit MemoryArbitrator(const Config& config)
       : capacity_(config.capacity),
+        minReservedCapacity_(config.minReservedCapacity),
+        reservedCapacity_(config.reservedCapacity),
         memoryPoolTransferCapacity_(config.memoryPoolTransferCapacity),
         memoryReclaimWaitMs_(config.memoryReclaimWaitMs),
         arbitrationStateCheckCb_(config.arbitrationStateCheckCb),
-        checkUsageLeak_(config.checkUsageLeak) {}
+        checkUsageLeak_(config.checkUsageLeak) {
+    VELOX_CHECK_LT(reservedCapacity_, capacity_);
+    VELOX_CHECK_EQ(reservedCapacity_ % minReservedCapacity_, 0);
+  }
 
   const uint64_t capacity_;
+  const uint64_t minReservedCapacity_;
+  const uint64_t reservedCapacity_;
   const uint64_t memoryPoolTransferCapacity_;
   const uint64_t memoryReclaimWaitMs_;
   const MemoryArbitrationStateCheckCB arbitrationStateCheckCb_;
