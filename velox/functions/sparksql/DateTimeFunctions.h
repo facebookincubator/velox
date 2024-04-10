@@ -321,7 +321,8 @@ struct ToUtcTimestampFunction {
         ? tzID_
         : util::getTimeZoneID(
               std::string_view(timezone.data(), timezone.size()), false);
-    VELOX_USER_CHECK(fromTimezoneID != -1, "Unknown time zone: '{}'", timezone);
+    VELOX_USER_CHECK_NE(
+        fromTimezoneID, -1, "Unknown time zone: '{}'", timezone);
     result.toGMT(*fromTimezoneID);
   }
 
@@ -353,7 +354,7 @@ struct FromUtcTimestampFunction {
         ? tzID_
         : util::getTimeZoneID(
               std::string_view(timezone.data(), timezone.size()), false);
-    VELOX_USER_CHECK(toTimezoneID != -1, "Unknown time zone: '{}'", timezone);
+    VELOX_USER_CHECK_NE(toTimezoneID, -1, "Unknown time zone: '{}'", timezone);
     result.toTimezone(*toTimezoneID);
   }
 
