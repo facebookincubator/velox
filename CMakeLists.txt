@@ -335,8 +335,7 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-format-overflow \
          -Wno-strict-aliasing \
          -Wno-type-limits \
-         -Wno-stringop-overflow \
-         -Wno-stringop-overread")
+         -Wno-stringop-overflow")
   endif()
 
   set(KNOWN_WARNINGS
