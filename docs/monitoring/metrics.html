@@ -239,6 +239,12 @@ to report the count at P50, P90, P99, and P100 percentiles.</p></td>
 <td><p>Sum</p></td>
 <td><p>The root memory pool reservation leak in bytes.</p></td>
 </tr>
+<tr class="row-even"><td><p>memory_allocator_double_free_count</p></td>
+<td><p>Count</p></td>
+<td><p>Tracks the count of double frees in memory allocator, indicating the
+possibility of buffer ownership issues when a buffer is freed more
+than once.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
