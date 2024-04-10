@@ -357,29 +357,6 @@ Table Writer
      - task_writer_count
      - The number of parallel table writer threads per task for bucketed table writes. If not set, use 'task_writer_count' as default.
 
-Codegen Configuration
----------------------
-.. list-table::
-   :widths: 20 10 10 70
-   :header-rows: 1
-
-   * - Property Name
-     - Type
-     - Default Value
-     - Description
-   * - codegen.enabled
-     - boolean
-     - false
-     - Along with `codegen.configuration_file_path` enables codegen in task execution path.
-   * - codegen.configuration_file_path
-     - string
-     -
-     - A path to the file contaning codegen options.
-   * - codegen.lazy_loading
-     - boolean
-     - true
-     - Triggers codegen initialization tests upon loading if false. Otherwise skips them.
-
 Hive Connector
 --------------
 Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
@@ -470,13 +447,13 @@ Each query can override the config by setting corresponding query session proper
      -
      - integer
      - 8MB
-     - Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests. 
-       The parameter controls the threshold when whole file is fetched. 
+     - Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests.
+       The parameter controls the threshold when whole file is fetched.
    * - footer-estimated-size
      -
      - integer
      - 1MB
-     - Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later. 
+     - Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later.
        The parameter controls the size when footer is fetched each time. Bigger value can decrease the IO requests but may fetch more useless meta data.
    * - hive.orc.writer.stripe-max-size
      - orc_optimized_writer_max_stripe_size
@@ -543,6 +520,10 @@ Each query can override the config by setting corresponding query session proper
      - string
      - velox-session
      - Session name associated with the IAM role.
+   * - hive.s3.use-proxy-from-env
+     - bool
+     - false
+     - Utilize the configuration of the environment variables http_proxy, https_proxy, and no_proxy for use with the S3 API.
 
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

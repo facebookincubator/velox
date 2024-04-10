@@ -29,13 +29,11 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
-DEFINE_bool(
-    velox_testing_enable_arbitration,
-    false,
-    "Enable to turn on arbitration for tests by default");
 
 using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::memory;
@@ -43,6 +41,13 @@ using namespace facebook::velox::memory;
 namespace facebook::velox::exec::test {
 
 OperatorTestBase::OperatorTestBase() {
+  // Overloads the memory pools used by VectorTestBase to work with memory
+  // arbitrator.
+  rootPool_ = memory::memoryManager()->addRootPool(
+      "", memory::kMaxMemory, exec::MemoryReclaimer::create());
+  pool_ = rootPool_->addLeafChild("", true, exec::MemoryReclaimer::create());
+  vectorMaker_ = velox::test::VectorMaker(pool_.get());
+
   parse::registerTypeResolver();
 }
 
@@ -59,18 +64,7 @@ void OperatorTestBase::SetUpTestCase() {
   FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
   FLAGS_velox_memory_leak_check_enabled = true;
   memory::SharedArbitrator::registerFactory();
-  MemoryManagerOptions options;
-  options.allocatorCapacity = 8L << 30;
-  if (FLAGS_velox_testing_enable_arbitration) {
-    options.arbitratorCapacity = 6L << 30;
-    options.arbitratorKind = "SHARED";
-    options.checkUsageLeak = true;
-    options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
-  }
-  memory::MemoryManager::testingSetInstance(options);
-  asyncDataCache_ =
-      cache::AsyncDataCache::create(memory::memoryManager()->allocator());
-  cache::AsyncDataCache::setInstance(asyncDataCache_.get());
+  resetMemory();
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   TestValue::enable();
@@ -82,6 +76,24 @@ void OperatorTestBase::TearDownTestCase() {
   memory::SharedArbitrator::unregisterFactory();
 }
 
+void OperatorTestBase::resetMemory() {
+  if (asyncDataCache_ != nullptr) {
+    asyncDataCache_->clear();
+    asyncDataCache_.reset();
+  }
+  MemoryManagerOptions options;
+  options.allocatorCapacity = 8L << 30;
+  options.arbitratorCapacity = 6L << 30;
+  options.memoryPoolInitCapacity = 512 << 20;
+  options.arbitratorKind = "SHARED";
+  options.checkUsageLeak = true;
+  options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
+  memory::MemoryManager::testingSetInstance(options);
+  asyncDataCache_ =
+      cache::AsyncDataCache::create(memory::memoryManager()->allocator());
+  cache::AsyncDataCache::setInstance(asyncDataCache_.get());
+}
+
 void OperatorTestBase::SetUp() {
   if (!isRegisteredVectorSerde()) {
     this->registerVectorSerde();
@@ -90,7 +102,11 @@ void OperatorTestBase::SetUp() {
   ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
 }
 
-void OperatorTestBase::TearDown() {}
+void OperatorTestBase::TearDown() {
+  pool_.reset();
+  rootPool_.reset();
+  resetMemory();
+}
 
 std::shared_ptr<Task> OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,

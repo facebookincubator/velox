@@ -79,16 +79,6 @@ void AggregationTestBase::TearDown() {
   OperatorTestBase::TearDown();
 }
 
-void AggregationTestBase::SetUpTestCase() {
-  FLAGS_velox_testing_enable_arbitration = true;
-  OperatorTestBase::SetUpTestCase();
-}
-
-void AggregationTestBase::TearDownTestCase() {
-  FLAGS_velox_testing_enable_arbitration = false;
-  OperatorTestBase::TearDownTestCase();
-}
-
 void AggregationTestBase::testAggregations(
     const std::vector<RowVectorPtr>& data,
     const std::vector<std::string>& groupingKeys,
@@ -135,8 +125,43 @@ int64_t spilledBytes(const exec::Task& task) {
       spilledBytes += op.spilledBytes;
     }
   }
-
   return spilledBytes;
+}
+
+// Returns total spilled rows inside 'task'.
+int64_t spilledRows(const exec::Task& task) {
+  auto stats = task.taskStats();
+  int64_t spilledRows = 0;
+  for (auto& pipeline : stats.pipelineStats) {
+    for (auto op : pipeline.operatorStats) {
+      spilledRows += op.spilledRows;
+    }
+  }
+  return spilledRows;
+}
+
+// Returns total spilled input bytes inside 'task'.
+int64_t spilledInputBytes(const exec::Task& task) {
+  auto stats = task.taskStats();
+  int64_t spilledInputBytes = 0;
+  for (auto& pipeline : stats.pipelineStats) {
+    for (auto op : pipeline.operatorStats) {
+      spilledInputBytes += op.spilledInputBytes;
+    }
+  }
+  return spilledInputBytes;
+}
+
+// Returns total spilled files inside 'task'.
+int64_t spilledFiles(const exec::Task& task) {
+  auto stats = task.taskStats();
+  int64_t spilledFiles = 0;
+  for (auto& pipeline : stats.pipelineStats) {
+    for (auto op : pipeline.operatorStats) {
+      spilledFiles += op.spilledFiles;
+    }
+  }
+  return spilledFiles;
 }
 
 // Add a BIGINT column of 4 distinct values to data.
@@ -384,11 +409,22 @@ void AggregationTestBase::testAggregationsWithCompanion(
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    auto inputRows = toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
+    const auto inputRows =
+        toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
     if (inputRows > 1) {
-      EXPECT_LT(0, spilledBytes(*task));
+      EXPECT_LT(0, spilledBytes(*task))
+          << "inputRows: " << inputRows
+          << " spilledRows: " << spilledRows(*task)
+          << " spilledInputBytes: " << spilledInputBytes(*task)
+          << " spilledFiles: " << spilledFiles(*task)
+          << " injectedSpills: " << exec::injectedSpillCount();
     } else {
-      EXPECT_EQ(0, spilledBytes(*task));
+      EXPECT_EQ(0, spilledBytes(*task))
+          << "inputRows: " << inputRows
+          << " spilledRows: " << spilledRows(*task)
+          << " spilledInputBytes: " << spilledInputBytes(*task)
+          << " spilledFiles: " << spilledFiles(*task)
+          << " injectedSpills: " << exec::injectedSpillCount();
     }
   }
 
@@ -808,13 +844,23 @@ void AggregationTestBase::testAggregationsImpl(
     // Expect > 0 spilled bytes unless there was no input.
     auto inputRows = toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
     if (inputRows > 1) {
-      EXPECT_LT(0, spilledBytes(*task));
+      EXPECT_LT(0, spilledBytes(*task))
+          << "inputRows: " << inputRows
+          << " spilledRows: " << spilledRows(*task)
+          << " spilledInputBytes: " << spilledInputBytes(*task)
+          << " spilledFiles: " << spilledFiles(*task)
+          << " injectedSpills: " << exec::injectedSpillCount();
       ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
       ASSERT_GT(memory::spillMemoryPool()->stats().peakBytes, 0);
       ASSERT_GE(
           memory::spillMemoryPool()->stats().peakBytes, peakSpillMemoryUsage);
     } else {
-      EXPECT_EQ(0, spilledBytes(*task));
+      EXPECT_EQ(0, spilledBytes(*task))
+          << "inputRows: " << inputRows
+          << " spilledRows: " << spilledRows(*task)
+          << " spilledInputBytes: " << spilledInputBytes(*task)
+          << " spilledFiles: " << spilledFiles(*task)
+          << " injectedSpills: " << exec::injectedSpillCount();
     }
   }
 
@@ -1140,7 +1186,7 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
       finalType,
       queryConfig);
   func->setAllocator(&allocator);
-  func->setOffsets(kOffset, 0, 1, kRowSizeOffset);
+  func->setOffsets(kOffset, 0, 1, 0, 2, kRowSizeOffset);
 
   VELOX_CHECK(intermediateType->equivalent(
       *func->intermediateType(functionName, inputTypes)));

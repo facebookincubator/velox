@@ -14,12 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/type/Type.h"
+#include <velox/type/Type.h>
+
 #include <boost/algorithm/string.hpp>
+#include <fmt/format.h>
 #include <folly/Demangle.h>
 #include <re2/re2.h>
+
 #include <sstream>
 #include <typeindex>
+
 #include "velox/type/TimestampConversion.h"
 
 namespace std {
@@ -430,7 +434,7 @@ bool RowType::equivalent(const Type& other) const {
   if (!Type::hasSameTypeId(other)) {
     return false;
   }
-  auto& otherTyped = other.asRow();
+  const auto& otherTyped = other.asRow();
   if (otherTyped.size() != size()) {
     return false;
   }
@@ -443,13 +447,20 @@ bool RowType::equivalent(const Type& other) const {
 }
 
 bool RowType::equals(const Type& other) const {
-  if (!this->equivalent(other)) {
+  if (&other == this) {
+    return true;
+  }
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
-  auto& otherTyped = other.asRow();
+  const auto& otherTyped = other.asRow();
+  if (otherTyped.size() != size()) {
+    return false;
+  }
   for (size_t i = 0; i < size(); ++i) {
     // todo: case sensitivity
-    if (nameOf(i) != otherTyped.nameOf(i)) {
+    if (nameOf(i) != otherTyped.nameOf(i) ||
+        *childAt(i) != *otherTyped.childAt(i)) {
       return false;
     }
   }
@@ -886,37 +897,6 @@ exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
   return nullptr;
 }
 
-TypePtr fromKindToScalerType(TypeKind kind) {
-  switch (kind) {
-    case TypeKind::TINYINT:
-      return TINYINT();
-    case TypeKind::BOOLEAN:
-      return BOOLEAN();
-    case TypeKind::SMALLINT:
-      return SMALLINT();
-    case TypeKind::BIGINT:
-      return BIGINT();
-    case TypeKind::INTEGER:
-      return INTEGER();
-    case TypeKind::REAL:
-      return REAL();
-    case TypeKind::VARCHAR:
-      return VARCHAR();
-    case TypeKind::VARBINARY:
-      return VARBINARY();
-    case TypeKind::TIMESTAMP:
-      return TIMESTAMP();
-    case TypeKind::DOUBLE:
-      return DOUBLE();
-    case TypeKind::UNKNOWN:
-      return UNKNOWN();
-    default:
-      VELOX_UNSUPPORTED(
-          "Kind is not a scalar type: {}", mapTypeKindToName(kind));
-      return nullptr;
-  }
-}
-
 void toTypeSql(const TypePtr& type, std::ostream& out) {
   switch (type->kind()) {
     case TypeKind::ARRAY:
@@ -995,6 +975,10 @@ std::string IntervalYearMonthType::valueToString(int32_t value) const {
 }
 
 std::string DateType::toString(int32_t days) const {
+  return DateType::toIso8601(days);
+}
+
+std::string DateType::toIso8601(int32_t days) {
   // Find the number of seconds for the days_;
   // Casting 86400 to int64 to handle overflows gracefully.
   int64_t daySeconds = days * (int64_t)(86400);
@@ -1005,6 +989,8 @@ std::string DateType::toString(int32_t days) const {
       days);
   TimestampToStringOptions options;
   options.mode = TimestampToStringOptions::Mode::kDateOnly;
+  // Enable zero-padding for year, to ensure compliance with 'YYYY' format.
+  options.zeroPaddingYear = true;
   std::string result;
   result.resize(getMaxStringLength(options));
   const auto view =

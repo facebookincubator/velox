@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -36,6 +37,10 @@ class OpaqueCustomTypeRegister {
   static bool registerType() {
     return facebook::velox::registerCustomType(
         customTypeName, std::make_unique<const TypeFactory>());
+  }
+
+  static bool unregisterType() {
+    return facebook::velox::unregisterCustomType(customTypeName);
   }
 
   // Type used in the simple function interface as CustomType<TypeT>.

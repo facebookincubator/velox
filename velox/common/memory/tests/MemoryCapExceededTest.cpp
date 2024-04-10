@@ -37,6 +37,7 @@ class MemoryCapExceededTest : public OperatorTestBase,
   }
 
   void TearDown() override {
+    waitForAllTasksToBeDeleted();
     OperatorTestBase::TearDown();
     FLAGS_velox_suppress_memory_capacity_exceeding_error_message = false;
   }
@@ -96,8 +97,8 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
                   .orderBy({"c0"}, false)
                   .planNode();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  queryCtx->testingOverrideMemoryPool(
-      memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
   CursorParameters params;
   params.planNode = plan;
   params.queryCtx = queryCtx;
@@ -154,8 +155,8 @@ TEST_P(MemoryCapExceededTest, multipleDrivers) {
                   .singleAggregation({"c0"}, {"sum(c1)"})
                   .planNode();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  queryCtx->testingOverrideMemoryPool(
-      memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
 
   const int32_t numDrivers = 10;
   CursorParameters params;

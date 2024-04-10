@@ -123,6 +123,16 @@ class BaseHashTable {
 
   static constexpr int8_t kNoSpillInputStartPartitionBit = -1;
 
+  /// The name of the runtime stats collected and reported by operators that use
+  /// the HashTable (HashBuild, HashAggregation).
+  static inline const std::string kCapacity{"hashtable.capacity"};
+  static inline const std::string kNumRehashes{"hashtable.numRehashes"};
+  static inline const std::string kNumDistinct{"hashtable.numDistinct"};
+  static inline const std::string kNumTombstones{"hashtable.numTombstones"};
+
+  /// The same as above but only reported by the HashBuild operator.
+  static inline const std::string kBuildWallNanos{"hashtable.buildWallNanos"};
+
   /// Returns the string of the given 'mode'.
   static std::string modeString(HashMode mode);
 
@@ -155,6 +165,8 @@ class BaseHashTable {
     void reset() {
       *this = {};
     }
+
+    std::string toString() const;
   };
 
   struct NullKeyRowsIterator {

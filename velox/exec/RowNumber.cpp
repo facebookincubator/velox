@@ -116,7 +116,6 @@ void RowNumber::noMoreInput() {
 
   if (inputSpiller_ != nullptr) {
     inputSpiller_->finishSpill(spillInputPartitionSet_);
-    recordSpillStats(inputSpiller_->stats());
     removeEmptyPartitions(spillInputPartitionSet_);
     restoreNextSpillPartition();
   }
@@ -128,12 +127,13 @@ void RowNumber::restoreNextSpillPartition() {
   }
 
   auto it = spillInputPartitionSet_.begin();
-  spillInputReader_ = it->second->createUnorderedReader(pool());
+  spillInputReader_ = it->second->createUnorderedReader(pool(), &spillStats_);
 
   // Find matching partition for the hash table.
   auto hashTableIt = spillHashTablePartitionSet_.find(it->first);
   if (hashTableIt != spillHashTablePartitionSet_.end()) {
-    spillHashTableReader_ = hashTableIt->second->createUnorderedReader(pool());
+    spillHashTableReader_ =
+        hashTableIt->second->createUnorderedReader(pool(), &spillStats_);
 
     RowVectorPtr data;
     while (spillHashTableReader_->nextBatch(data)) {
@@ -390,11 +390,11 @@ SpillPartitionNumSet RowNumber::spillHashTable() {
       table_->rows(),
       tableType,
       spillPartitionBits_,
-      &spillConfig);
+      &spillConfig,
+      &spillStats_);
 
   hashTableSpiller->spill();
   hashTableSpiller->finishSpill(spillHashTablePartitionSet_);
-  recordSpillStats(hashTableSpiller->stats());
 
   table_->clear();
   pool()->release();
@@ -412,7 +412,8 @@ void RowNumber::setupInputSpiller(
       Spiller::Type::kHashJoinProbe,
       inputType_,
       spillPartitionBits_,
-      &spillConfig);
+      &spillConfig,
+      &spillStats_);
   inputSpiller_->setPartitionsSpilled(spillPartitionSet);
 
   const auto& hashers = table_->hashers();

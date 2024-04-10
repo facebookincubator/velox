@@ -122,7 +122,7 @@ class SplitReader {
       std::vector<facebook::velox::TypePtr>& columnTypes);
 
   void setPartitionValue(
-      common::ScanSpec* FOLLY_NONNULL spec,
+      common::ScanSpec* spec,
       const std::string& partitionKey,
       const std::optional<std::string>& value) const;
 

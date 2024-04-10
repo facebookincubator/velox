@@ -37,7 +37,7 @@ static VectorPtr variantToConstantVector(
     facebook::velox::memory::MemoryPool* pool) {
   using NativeType = typename TypeTraits<T>::NativeType;
 
-  TypePtr typePtr = fromKindToScalerType(T);
+  TypePtr typePtr = createScalarType(T);
   if (!variant.hasValue()) {
     return std::make_shared<ConstantVector<NativeType>>(
         pool,
@@ -91,7 +91,7 @@ static VectorPtr variantsToFlatVector(
   constexpr bool kNeedsHolder =
       (T == TypeKind::VARCHAR || T == TypeKind::VARBINARY);
 
-  TypePtr type = fromKindToScalerType(T);
+  TypePtr type = createScalarType(T);
   auto result =
       BaseVector::create<FlatVector<NativeType>>(type, variants.size(), pool);
 

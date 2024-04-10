@@ -22,6 +22,7 @@
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/Repeat.h"
+#include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
@@ -51,6 +52,32 @@ namespace facebook::velox::functions {
 extern void registerElementAtFunction(
     const std::string& name,
     bool enableCaching);
+
+template <typename T>
+inline void registerArrayRemoveFunctions(const std::string& prefix) {
+  registerFunction<ArrayRemoveFunction, Array<T>, Array<T>, T>(
+      {prefix + "array_remove"});
+}
+
+inline void registerArrayRemoveFunctions(const std::string& prefix) {
+  registerArrayRemoveFunctions<int8_t>(prefix);
+  registerArrayRemoveFunctions<int16_t>(prefix);
+  registerArrayRemoveFunctions<int32_t>(prefix);
+  registerArrayRemoveFunctions<int64_t>(prefix);
+  registerArrayRemoveFunctions<int128_t>(prefix);
+  registerArrayRemoveFunctions<float>(prefix);
+  registerArrayRemoveFunctions<double>(prefix);
+  registerArrayRemoveFunctions<bool>(prefix);
+  registerArrayRemoveFunctions<Timestamp>(prefix);
+  registerArrayRemoveFunctions<Date>(prefix);
+  registerArrayRemoveFunctions<Varbinary>(prefix);
+  registerArrayRemoveFunctions<Generic<T1>>(prefix);
+  registerFunction<
+      ArrayRemoveFunctionString,
+      Array<Varchar>,
+      Array<Varchar>,
+      Varchar>({prefix + "array_remove"});
+}
 
 static void workAroundRegistrationMacro(const std::string& prefix) {
   // VELOX_REGISTER_VECTOR_FUNCTION must be invoked in the same namespace as the
@@ -82,6 +109,7 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_not, prefix + "not");
   registerIsNullFunction(prefix + "isnull");
   registerIsNotNullFunction(prefix + "isnotnull");
+  registerArrayRemoveFunctions(prefix);
 }
 
 namespace sparksql {
@@ -202,19 +230,29 @@ void registerFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_regexp_split, prefix + "split");
 
   exec::registerStatefulVectorFunction(
-      prefix + "least", leastSignatures(), makeLeast);
+      prefix + "least",
+      leastSignatures(),
+      makeLeast,
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
   exec::registerStatefulVectorFunction(
-      prefix + "greatest", greatestSignatures(), makeGreatest);
+      prefix + "greatest",
+      greatestSignatures(),
+      makeGreatest,
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
   exec::registerStatefulVectorFunction(
-      prefix + "hash", hashSignatures(), makeHash);
+      prefix + "hash", hashSignatures(), makeHash, hashMetadata());
   exec::registerStatefulVectorFunction(
-      prefix + "hash_with_seed", hashWithSeedSignatures(), makeHashWithSeed);
+      prefix + "hash_with_seed",
+      hashWithSeedSignatures(),
+      makeHashWithSeed,
+      hashMetadata());
   exec::registerStatefulVectorFunction(
-      prefix + "xxhash64", xxhash64Signatures(), makeXxHash64);
+      prefix + "xxhash64", xxhash64Signatures(), makeXxHash64, hashMetadata());
   exec::registerStatefulVectorFunction(
       prefix + "xxhash64_with_seed",
       xxhash64WithSeedSignatures(),
-      makeXxHash64WithSeed);
+      makeXxHash64WithSeed,
+      hashMetadata());
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
 
   // Register 'in' functions.
@@ -271,7 +309,8 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "array_repeat",
       repeatSignatures(),
-      makeRepeatAllowNegativeCount);
+      makeRepeatAllowNegativeCount,
+      repeatMetadata());
 
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
@@ -339,6 +378,13 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<MinuteFunction, int32_t, Timestamp>({prefix + "minute"});
 
   registerFunction<SecondFunction, int32_t, Timestamp>({prefix + "second"});
+
+  registerFunction<MakeYMIntervalFunction, IntervalYearMonth>(
+      {prefix + "make_ym_interval"});
+  registerFunction<MakeYMIntervalFunction, IntervalYearMonth, int32_t>(
+      {prefix + "make_ym_interval"});
+  registerFunction<MakeYMIntervalFunction, IntervalYearMonth, int32_t, int32_t>(
+      {prefix + "make_ym_interval"});
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_make_timestamp, prefix + "make_timestamp");
 

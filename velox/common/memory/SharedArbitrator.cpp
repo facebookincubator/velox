@@ -209,12 +209,6 @@ uint64_t SharedArbitrator::growCapacity(
   {
     std::lock_guard<std::mutex> l(mutex_);
     ++numReserves_;
-    if (running_) {
-      // NOTE: if there is a running memory arbitration, then we shall skip
-      // reserving the free memory for the newly created memory pool but let it
-      // grow its capacity on-demand later through the memory arbitration.
-      return 0;
-    }
     reserveBytes = decrementFreeCapacityLocked(bytesToReserve);
     pool->grow(reserveBytes);
     freeCapacity = freeCapacity_;
@@ -354,7 +348,7 @@ bool SharedArbitrator::ensureCapacity(
   if (checkCapacityGrowth(*requestor, targetBytes)) {
     return true;
   }
-  const uint64_t reclaimedBytes = reclaim(requestor, targetBytes);
+  const uint64_t reclaimedBytes = reclaim(requestor, targetBytes, true);
   // NOTE: return the reclaimed bytes back to the arbitrator and let the memory
   // arbitration process to grow the requestor's memory capacity accordingly.
   incrementFreeCapacity(reclaimedBytes);
@@ -432,6 +426,7 @@ bool SharedArbitrator::arbitrateMemory(
   }
 
   VELOX_CHECK_LT(freedBytes, growTarget);
+  incrementGlobalArbitrationCount();
   freedBytes += reclaimUsedMemoryFromCandidatesBySpill(
       requestor, candidates, growTarget - freedBytes);
   if (requestor->aborted()) {
@@ -499,7 +494,7 @@ uint64_t SharedArbitrator::reclaimUsedMemoryFromCandidatesBySpill(
     const int64_t bytesToReclaim = std::max<int64_t>(
         targetBytes - freedBytes, memoryPoolTransferCapacity_);
     VELOX_CHECK_GT(bytesToReclaim, 0);
-    freedBytes += reclaim(candidate.pool, bytesToReclaim);
+    freedBytes += reclaim(candidate.pool, bytesToReclaim, false);
     if ((freedBytes >= targetBytes) ||
         (requestor != nullptr && requestor->aborted())) {
       break;
@@ -523,7 +518,7 @@ uint64_t SharedArbitrator::reclaimUsedMemoryFromCandidatesByAbort(
       VELOX_MEM_POOL_ABORTED(fmt::format(
           "Memory pool aborted to reclaim used memory, current usage {}",
           succinctBytes(candidate.currentBytes)));
-    } catch (VeloxRuntimeError& ex) {
+    } catch (VeloxRuntimeError&) {
       abort(candidate.pool, std::current_exception());
     }
     freedBytes += candidate.pool->shrink();
@@ -536,7 +531,8 @@ uint64_t SharedArbitrator::reclaimUsedMemoryFromCandidatesByAbort(
 
 uint64_t SharedArbitrator::reclaim(
     MemoryPool* pool,
-    uint64_t targetBytes) noexcept {
+    uint64_t targetBytes,
+    bool isLocalArbitration) noexcept {
   uint64_t reclaimDurationUs{0};
   uint64_t reclaimedBytes{0};
   uint64_t freedBytes{0};
@@ -547,6 +543,9 @@ uint64_t SharedArbitrator::reclaim(
     try {
       freedBytes = pool->shrink(targetBytes);
       if (freedBytes < targetBytes) {
+        if (isLocalArbitration) {
+          incrementLocalArbitrationCount();
+        }
         pool->reclaim(
             targetBytes - freedBytes, memoryReclaimWaitMs_, reclaimerStats);
       }
@@ -570,7 +569,8 @@ uint64_t SharedArbitrator::reclaim(
       << "Reclaimed from memory pool " << pool->name() << " with target of "
       << succinctBytes(targetBytes) << ", actually reclaimed "
       << succinctBytes(freedBytes) << " free memory and "
-      << succinctBytes(reclaimedBytes - freedBytes) << " used memory";
+      << succinctBytes(reclaimedBytes - freedBytes) << " used memory, spent "
+      << succinctMicros(reclaimDurationUs);
   return reclaimedBytes;
 }
 
@@ -710,7 +710,7 @@ SharedArbitrator::ScopedArbitration::~ScopedArbitration() {
   RECORD_HISTOGRAM_METRIC_VALUE(
       kMetricArbitratorArbitrationTimeMs, arbitrationTimeUs / 1'000);
   addThreadLocalRuntimeStat(
-      "memoryArbitrationWallNanos",
+      kMemoryArbitrationWallNanos,
       RuntimeCounter(arbitrationTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
   arbitrator_->arbitrationTimeUs_ += arbitrationTimeUs;
   arbitrator_->finishArbitration();
@@ -776,5 +776,17 @@ void SharedArbitrator::registerFactory() {
 
 void SharedArbitrator::unregisterFactory() {
   MemoryArbitrator::unregisterFactory(kind_);
+}
+
+void SharedArbitrator::incrementGlobalArbitrationCount() {
+  RECORD_METRIC_VALUE(kMetricArbitratorGlobalArbitrationCount);
+  addThreadLocalRuntimeStat(
+      kGlobalArbitrationCount, RuntimeCounter(1, RuntimeCounter::Unit::kNone));
+}
+
+void SharedArbitrator::incrementLocalArbitrationCount() {
+  RECORD_METRIC_VALUE(kMetricArbitratorLocalArbitrationCount);
+  addThreadLocalRuntimeStat(
+      kLocalArbitrationCount, RuntimeCounter(1, RuntimeCounter::Unit::kNone));
 }
 } // namespace facebook::velox::memory

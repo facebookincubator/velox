@@ -48,16 +48,30 @@ class QueryConfig {
 
   explicit QueryConfig(std::unordered_map<std::string, std::string>&& values);
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   static constexpr const char* kCodegenEnabled = "codegen.enabled";
-
-  /// Maximum memory that a query can use on a single host.
-  static constexpr const char* kQueryMaxMemoryPerNode =
-      "query_max_memory_per_node";
 
   static constexpr const char* kCodegenConfigurationFilePath =
       "codegen.configuration_file_path";
 
   static constexpr const char* kCodegenLazyLoading = "codegen.lazy_loading";
+
+  bool codegenEnabled() const {
+    return get<bool>(kCodegenEnabled, false);
+  }
+
+  std::string codegenConfigurationFilePath() const {
+    return get<std::string>(kCodegenConfigurationFilePath, "");
+  }
+
+  bool codegenLazyLoading() const {
+    return get<bool>(kCodegenLazyLoading, true);
+  }
+#endif
+
+  /// Maximum memory that a query can use on a single host.
+  static constexpr const char* kQueryMaxMemoryPerNode =
+      "query_max_memory_per_node";
 
   /// User provided session timezone. Stores a string with the actual timezone
   /// name, e.g: "America/Los_Angeles".
@@ -202,21 +216,6 @@ class QueryConfig {
   static constexpr const char* kTopNRowNumberSpillEnabled =
       "topn_row_number_spill_enabled";
 
-  /// The max memory that a final aggregation can use before spilling. If it 0,
-  /// then there is no limit.
-  static constexpr const char* kAggregationSpillMemoryThreshold =
-      "aggregation_spill_memory_threshold";
-
-  /// The max memory that a hash join can use before spilling. If it 0, then
-  /// there is no limit.
-  static constexpr const char* kJoinSpillMemoryThreshold =
-      "join_spill_memory_threshold";
-
-  /// The max memory that an order by can use before spilling. If it 0, then
-  /// there is no limit.
-  static constexpr const char* kOrderBySpillMemoryThreshold =
-      "order_by_spill_memory_threshold";
-
   /// The max row numbers to fill and spill for each spill run. This is used to
   /// cap the memory used for spilling. If it is zero, then there is no limit
   /// and spilling might run out of memory.
@@ -241,15 +240,6 @@ class QueryConfig {
 
   /// The max allowed spill file size. If it is zero, then there is no limit.
   static constexpr const char* kMaxSpillFileSize = "max_spill_file_size";
-
-  /// The min spill run size limit used to select partitions for spilling. The
-  /// spiller tries to spill a previously spilled partitions if its data size
-  /// exceeds this limit, otherwise it spills the partition with most data.
-  /// If the limit is zero, then the spiller always spill a previously spilled
-  /// partition if it has any data. This is to avoid spill from a partition with
-  /// a small amount of data which might result in generating too many small
-  /// spilled files.
-  static constexpr const char* kMinSpillRunSize = "min_spill_run_size";
 
   static constexpr const char* kSpillCompressionKind =
       "spill_compression_codec";
@@ -395,21 +385,6 @@ class QueryConfig {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinPct, 80);
   }
 
-  uint64_t aggregationSpillMemoryThreshold() const {
-    static constexpr uint64_t kDefault = 0;
-    return get<uint64_t>(kAggregationSpillMemoryThreshold, kDefault);
-  }
-
-  uint64_t joinSpillMemoryThreshold() const {
-    static constexpr uint64_t kDefault = 0;
-    return get<uint64_t>(kJoinSpillMemoryThreshold, kDefault);
-  }
-
-  uint64_t orderBySpillMemoryThreshold() const {
-    static constexpr uint64_t kDefault = 0;
-    return get<uint64_t>(kOrderBySpillMemoryThreshold, kDefault);
-  }
-
   uint64_t maxSpillRunRows() const {
     static constexpr uint64_t kDefault = 12UL << 20;
     return get<uint64_t>(kMaxSpillRunRows, kDefault);
@@ -497,18 +472,6 @@ class QueryConfig {
 
   bool isMatchStructByName() const {
     return get<bool>(kCastMatchStructByName, false);
-  }
-
-  bool codegenEnabled() const {
-    return get<bool>(kCodegenEnabled, false);
-  }
-
-  std::string codegenConfigurationFilePath() const {
-    return get<std::string>(kCodegenConfigurationFilePath, "");
-  }
-
-  bool codegenLazyLoading() const {
-    return get<bool>(kCodegenLazyLoading, true);
   }
 
   bool adjustTimestampToTimezone() const {
@@ -614,11 +577,6 @@ class QueryConfig {
   uint64_t maxSpillFileSize() const {
     constexpr uint64_t kDefaultMaxFileSize = 0;
     return get<uint64_t>(kMaxSpillFileSize, kDefaultMaxFileSize);
-  }
-
-  uint64_t minSpillRunSize() const {
-    constexpr uint64_t kDefaultMinSpillRunSize = 256 << 20; // 256MB.
-    return get<uint64_t>(kMinSpillRunSize, kDefaultMinSpillRunSize);
   }
 
   std::string spillCompressionKind() const {
