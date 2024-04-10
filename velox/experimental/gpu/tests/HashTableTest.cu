@@ -35,19 +35,6 @@ namespace {
 
 constexpr int kBlockSize = 256;
 
-__device__ uint32_t jenkinsRevMix32(uint32_t key) {
-  key += (key << 12); // key *= (1 + (1 << 12))
-  key ^= (key >> 22);
-  key += (key << 4); // key *= (1 + (1 << 4))
-  key ^= (key >> 9);
-  key += (key << 10); // key *= (1 + (1 << 10))
-  key ^= (key >> 2);
-  // key *= (1 + (1 << 7)) * (1 + (1 << 12))
-  key += (key << 7);
-  key += (key << 12);
-  return key;
-}
-
 __device__ uint64_t twangMix64(uint64_t key) {
   key = (~key) + (key << 21); // key *= (1 << 21) - 1; key -= 1;
   key = key ^ (key >> 24);
