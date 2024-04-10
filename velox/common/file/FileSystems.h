@@ -45,11 +45,8 @@ struct FileOptions {
   memory::MemoryPool* pool{nullptr};
   std::optional<int64_t> fileSize{std::nullopt};
 
-  int64_t getFileSize() const {
-    if (fileSize.has_value()) {
-      return fileSize.value();
-    }
-    return -1;
+  std::optional<int64_t> getFileSize() const {
+    return fileSize;
   }
 };
 

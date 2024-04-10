@@ -61,10 +61,17 @@ class AbfsReadFile::Impl {
   }
 
   void initialize(const FileOptions& options) {
-    length_ = options.getFileSize();
+    auto fileSize = options.getFileSize();
+
+    if (fileSize.has_value()) {
+      VELOX_CHECK_GE(fileSize.value(), 0, "Length must be non-negative");
+      length_ = fileSize.value();
+    }
+
     if (length_ != -1) {
       return;
     }
+
     try {
       auto properties = fileClient_->GetProperties();
       length_ = properties.Value.BlobSize;

@@ -80,7 +80,13 @@ class S3ReadFile final : public ReadFile {
   // Gets the length of the file.
   // Checks if there are any issues reading the file.
   void initialize(const filesystems::FileOptions& options) {
-    length_ = options.getFileSize();
+    auto fileSize = options.getFileSize();
+
+    if (fileSize.has_value()) {
+      VELOX_CHECK_GE(fileSize.value(), 0, "Length must be non-negative");
+      length_ = fileSize.value();
+    }
+
     // Make it a no-op if invoked twice.
     if (length_ != -1) {
       return;

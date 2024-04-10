@@ -179,6 +179,18 @@ TEST_F(AbfsFileSystemTest, openFileForReadWithOptions) {
   readData(readFile.get());
 }
 
+TEST_F(AbfsFileSystemTest, openFileForReadWithInvalidOptions) {
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{"fs.azure.account.key.test.dfs.core.windows.net",
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
+  FileOptions options;
+  options.fileSize = -kOneMB;
+  VELOX_ASSERT_THROW(
+      abfs->openFileForRead(fullFilePath, options),
+      "Length must be non-negative");
+}
+
 TEST_F(AbfsFileSystemTest, readFile) {
   auto hiveConfig = AbfsFileSystemTest::hiveConfig(
       {{"fs.azure.account.key.test.dfs.core.windows.net",
