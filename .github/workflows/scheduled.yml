@@ -105,12 +105,26 @@ jobs:
 
     steps:
 
+      - name: Get latest commit from main
+        if: ${{ github.event_name != 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        id: get-head
+        run: |
+          if [ '${{ github.event_name = 'push' }}' == "true" ]; then
+            # get the parent commit of the current one to get the relevant function signatures
+            head_main=$(gh api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
+          else
+            head_main=$(gh api -H "Accept: application/vnd.github.sha" /repos/facebookincubator/velox/commits/heads/main)
+          fi
+          echo "head_main=$head_main" >> $GITHUB_OUTPUT
+
       - name: Get Function Signature Stash
         uses: assignUser/stash/restore@v1
         id: get-sig
         with:
           path: /tmp/signatures
-          key: function-signatures
+          key: function-signatures-${{ steps.get-head.outputs.head_main || github.sha }}
 
       - name: Restore ccache
         uses: assignUser/stash/restore@v1
@@ -159,11 +173,11 @@ jobs:
           python3 scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
 
       - name: Save Function Signature Stash
-        if: ${{ github.even_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.even_name == 'pull_request' && steps.get-sig.outputs.stash-hit != 'true' }}
         uses: assignUser/stash/save@v1
         with:
           path: /tmp/signatures
-          key: function-signatures
+          key: function-signatures-${{ steps.get-head.outputs.head_main }}
 
       - name: Checkout Contender
         uses: actions/checkout@v4
@@ -219,6 +233,25 @@ jobs:
           name: signatures
           path: /tmp/signatures
           retention-days: "${{ env.RETENTION }}"
+
+      - name: Prepare signatures
+        working-directory: /tmp/signatures
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          # Remove irrelevant artifacts
+          rm *_bias_functions
+          rm *_signatures_main.json
+          # Rename signature files as 'main' files
+          for f in *_signatures_contender.json; do
+            mv "$f" "${f/_contender.json/_main.json}"
+          done
+
+      - name: Save Function Signature Stash
+        if: ${{ github.even_name == 'push' }}
+        uses: assignUser/stash/save@v1
+        with:
+          path: /tmp/signatures
+          key: function-signatures-${{ github.sha }}
 
       - name: Upload presto fuzzer
         uses: actions/upload-artifact@v4
