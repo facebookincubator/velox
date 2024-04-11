@@ -131,6 +131,10 @@ void makeBitpackDict(
 class GpuDecoderTest : public ::testing::Test {
  protected:
   void SetUp() override {
+    if (int device; cudaGetDevice(&device) != cudaSuccess) {
+      GTEST_SKIP() << "No CUDA detected, skipping all tests";
+    }
+
     CUDA_CHECK_FATAL(cudaEventCreate(&startEvent_));
     CUDA_CHECK_FATAL(cudaEventCreate(&stopEvent_));
   }
