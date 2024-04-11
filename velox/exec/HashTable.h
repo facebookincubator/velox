@@ -446,7 +446,7 @@ class HashTable : public BaseHashTable {
       memory::MemoryPool* pool,
       const std::shared_ptr<velox::HashStringAllocator>& stringArena = nullptr);
 
-  ~HashTable() {
+  ~HashTable() override {
     if (otherTables_.size() > 0) {
       rows_->clearNextRowVectors();
       for (auto i = 0; i < otherTables_.size(); ++i) {
