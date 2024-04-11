@@ -15,17 +15,104 @@
  */
 #pragma once
 
+#include <common/memory/HashStringAllocator.h>
 #include <exec/SimpleAggregateAdapter.h>
 #include <type/SimpleFunctionApi.h>
+#include <type/StringView.h>
+#include <optional>
+#include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
+#include "velox/functions/lib/aggregates/ValueSet.h"
+
+// This is used for ValueSet
+using namespace facebook::velox::aggregate;
 
 namespace facebook::velox::functions::aggregate {
+
+template <typename T>
+constexpr bool isNumeric() {
+  return std::is_same_v<T, bool> || std::is_same_v<T, int8_t> ||
+      std::is_same_v<T, int16_t> || std::is_same_v<T, int32_t> ||
+      std::is_same_v<T, int64_t> || std::is_same_v<T, float> ||
+      std::is_same_v<T, double> || std::is_same_v<T, Timestamp>;
+}
+
+struct ComplexStore {
+  ValueSet valueSet_;
+  HashStringAllocator::Position position_;
+
+  explicit ComplexStore(HashStringAllocator* allocator)
+      : valueSet_(allocator) {}
+
+  void Store(const BaseVector& vector, vector_size_t index) {
+    valueSet_.write(vector, index, position_);
+  }
+
+  void Store(const StringView& value) {
+    valueSet_.write(value);
+  }
+};
+
+template <typename T, typename = void>
+struct AccumulatorInternalTypeTraits {};
+
+template <typename T>
+struct AccumulatorInternalTypeTraits<
+    T,
+    std::enable_if_t<isNumeric<T>(), void>> {
+  using AccumulatorInternalType = T;
+};
+
+template <typename T>
+struct AccumulatorInternalTypeTraits<
+    T,
+    std::enable_if_t<!isNumeric<T>(), void>> {
+  using AccumulatorInternalType = ComplexStore;
+};
+
+template <typename C, typename V, bool isMin>
 class MinMaxByAggregate {
  public:
-  // Type(s) of input vector(s) wrapped in Row.
-  using InputType = Row<Generic<T1>, Orderable<Generic<T2>>>;
-  using IntermediateType = Row<Generic<T1>, Orderable<Generic<T2>>>;
-  using OutputType = Array<Generic<T1>>;
+  using InputType = Row<Any, Orderable<T1>>;
+  using IntermediateType = Row<Any, Orderable<T1>>;
+  using OutputType = Array<Any>;
 
-  struct AccumulatorType {};
+  using ValueAccumulatorType =
+      typename AccumulatorInternalTypeTraits<V>::AccumulatorType;
+  using ComparisonAccumulatorType =
+      typename AccumulatorInternalTypeTraits<C>::AccumulatorType;
+
+  struct AccumulatorType {
+    std::optional<ValueAccumulatorType> value_;
+    std::optional<ComparisonAccumulatorType> comparisons_;
+
+    explicit AccumulatorType(HashStringAllocator* allocator);
+
+    void addInput(
+        HashStringAllocator* allocator,
+        exec::arg_type<Any> value,
+        exec::arg_type<Orderable<T1>> comparison) {}
+
+   private:
+    void storeValue(
+        HashStringAllocator* allocator,
+        const exec::arg_type<Any>& value) {
+      if constexpr (isNumeric<V>()) {
+        value_.emplace(value.castTo<V>());
+        return;
+      }
+
+      if (!value_.has_value()) {
+        value_.emplace(allocator);
+      }
+
+      // We can store StringView type more optimally compared to complex types
+      if constexpr (std::is_same_v<V, StringView>) {
+        value_.value().Store(value.castTo<StringView>());
+        return;
+      }
+
+      value_.value().Store(*value.base(), value.decodedIndex());
+    }
+  };
 };
 } // namespace facebook::velox::functions::aggregate
