@@ -47,8 +47,8 @@ class RowsStreamingWindowPartition : public WindowPartition {
     return partitionStartRows_[currentPartition_];
   }
 
-  // Indicates support for row-level streaming processing.
-  bool supportRowLevelStreaming() const override {
+  // Indicates support for rows streaming processing.
+  bool supportRowsStreaming() const override {
     return true;
   }
 
@@ -80,7 +80,7 @@ class RowsStreamingWindowPartition : public WindowPartition {
   // Stores new rows added to the WindowPartition.
   std::vector<char*> sortedRows_;
 
-  // Indices of the start row (in sortedRows_) of each partitial partition.
+  // Indices of the start row (in sortedRows_) of each partial partition.
   std::vector<vector_size_t> partitionStartRows_;
 
   // Current partial partition being output.

@@ -88,7 +88,7 @@ class Window : public Operator {
     const std::optional<FrameChannelArg> end;
   };
 
-  bool supportRowLevelStreaming();
+  bool supportRowsStreaming();
 
   // Creates WindowFunction and frame objects for this operator.
   void createWindowFunctions();
