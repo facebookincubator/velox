@@ -54,7 +54,7 @@ class WindowPartition {
     return 0;
   }
 
-  virtual bool supportRowLevelStreaming() const {
+  virtual bool supportRowsStreaming() const {
     return false;
   };
 

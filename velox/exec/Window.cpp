@@ -42,7 +42,7 @@ Window::Window(
   auto* spillConfig =
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   if (windowNode->inputsSorted()) {
-    if (supportRowLevelStreaming()) {
+    if (supportRowsStreaming()) {
       windowBuild_ = std::make_unique<RowsStreamingWindowBuild>(
           windowNode_, pool(), spillConfig, &nonReclaimableSection_);
     } else {
@@ -196,7 +196,7 @@ void Window::createWindowFunctions() {
 
 // Support 'rank' and
 // 'row_number' functions and the agg window function with default frame.
-bool Window::supportRowLevelStreaming() {
+bool Window::supportRowsStreaming() {
   for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
     const auto& functionName = windowNodeFunction.functionCall->name();
     auto windowFunctionMetadata =
@@ -611,7 +611,7 @@ vector_size_t Window::callApplyLoop(
           result);
       resultIndex += rowsForCurrentPartition;
       numOutputRowsLeft -= rowsForCurrentPartition;
-      if (currentPartition_->supportRowLevelStreaming()) {
+      if (currentPartition_->supportRowsStreaming()) {
         if (currentPartition_->processFinished()) {
           callResetPartition();
           if (currentPartition_ &&
@@ -671,7 +671,7 @@ RowVectorPtr Window::getOutput() {
     }
   }
 
-  if (currentPartition_->supportRowLevelStreaming() &&
+  if (currentPartition_->supportRowsStreaming() &&
       partitionOffset_ == currentPartition_->numRows()) {
     if (!currentPartition_->buildNextRows()) {
       return nullptr;
