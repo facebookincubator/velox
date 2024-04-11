@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/TableScan.h"
+#include <folly/synchronization/Baton.h>
 #include <atomic>
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1361,16 +1362,10 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   createDuckDbTable(vectors);
 
   auto executors = ioExecutor_.get();
-  std::atomic<bool> stop = false;
-  std::atomic<int32_t> finishedCount = 0;
+  std::vector<folly::Baton<>> batons(executors->numThreads());
   // Simulate a busy IO thread pool by blocking all threads.
   for (int32_t i = 0; i < executors->numThreads(); ++i) {
-    executors->add([&stop, &finishedCount]() {
-      while (!stop) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      }
-      ++finishedCount;
-    });
+    executors->add([&batons, i]() { batons[i].wait(); });
   }
   ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
   auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp", 2);
@@ -1384,9 +1379,8 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   // promptly match the count of created tasks.
   ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
   // Clean blocking items in the IO thread pool.
-  stop = true;
-  while (finishedCount != executors->numThreads()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  for (int i = 0; i < executors->numThreads(); ++i) {
+    batons[i].post();
   }
 }
 
