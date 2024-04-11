@@ -31,7 +31,8 @@ permissions:
 jobs:
   metrics:
     name: Linux release with adapters
-    runs-on: 8-core
+    #if: ${{ github.repository == 'facebookincubator/velox' }}
+    runs-on: ubuntu-latest #8-core
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
@@ -53,7 +54,7 @@ jobs:
 
       - name: Make Release Build
         env:
-          MAKEFLAGS: 'NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4'
+          MAKEFLAGS: 'NUM_THREADS=4 MAX_HIGH_MEM_JOBS=2 MAX_LINK_JOBS=2'
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DVELOX_ENABLE_BENCHMARKS=ON"
