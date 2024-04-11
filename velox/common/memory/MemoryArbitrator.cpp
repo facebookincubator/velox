@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/memory/Memory.h"
 
@@ -117,7 +118,9 @@ class NoopArbitrator : public MemoryArbitrator {
   // memory pool capacity shrink.
   uint64_t shrinkCapacity(
       const std::vector<std::shared_ptr<MemoryPool>>& /* unused */,
-      uint64_t /* unused */) override {
+      uint64_t /* unused */,
+      bool /* unused */,
+      bool /* unused */) override {
     return 0;
   }
 
@@ -177,6 +180,15 @@ uint64_t MemoryReclaimer::run(
   RECORD_HISTOGRAM_METRIC_VALUE(
       kMetricMemoryReclaimExecTimeMs, execTimeUs / 1'000);
   RECORD_METRIC_VALUE(kMetricMemoryReclaimedBytes, reclaimedBytes);
+  RECORD_METRIC_VALUE(kMetricMemoryReclaimCount, 1);
+  addThreadLocalRuntimeStat(
+      "memoryReclaimWallNanos",
+      RuntimeCounter(execTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
+  addThreadLocalRuntimeStat(
+      "memoryReclaimCount", RuntimeCounter(1, RuntimeCounter::Unit::kNone));
+  addThreadLocalRuntimeStat(
+      "reclaimedMemoryBytes",
+      RuntimeCounter(reclaimedBytes, RuntimeCounter::Unit::kBytes));
   return reclaimedBytes;
 }
 
@@ -458,17 +470,34 @@ bool underMemoryArbitration() {
   return memoryArbitrationContext() != nullptr;
 }
 
-void testingRunArbitration(uint64_t targetBytes, MemoryManager* manager) {
+void testingRunArbitration(
+    uint64_t targetBytes,
+    bool allowSpill,
+    MemoryManager* manager) {
   if (manager == nullptr) {
     manager = memory::memoryManager();
   }
-  manager->shrinkPools(targetBytes);
+  manager->shrinkPools(targetBytes, allowSpill);
 }
 
-void testingRunArbitration(MemoryPool* pool, uint64_t targetBytes) {
+void testingRunArbitration(
+    MemoryPool* pool,
+    uint64_t targetBytes,
+    bool allowSpill) {
   pool->enterArbitration();
-  static_cast<MemoryPoolImpl*>(pool)->testingManager()->shrinkPools(
-      targetBytes);
-  pool->leaveArbitration();
+  // Seraliazes the testing arbitration injection to make sure that the previous
+  // op has left arbitration section before starting the next one. This is
+  // guaranteed by the production code for operation triggered arbitration.
+  static std::mutex lock;
+  {
+    std::lock_guard<std::mutex> l(lock);
+    static_cast<MemoryPoolImpl*>(pool)->testingManager()->shrinkPools(
+        targetBytes, allowSpill);
+    pool->leaveArbitration();
+  }
+  // This function is simulating an operator triggered arbitration which
+  // would check if the query has been aborted after finish arbitration by the
+  // memory pool capacity grow path.
+  static_cast<MemoryPoolImpl*>(pool)->testingCheckIfAborted();
 }
 } // namespace facebook::velox::memory

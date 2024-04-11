@@ -151,11 +151,11 @@ class SimpleAggregateAdapter : public Aggregate {
   // Otherwise, SimpleAggregateAdapter::accumulatorAlignmentSize() returns
   // Aggregate::accumulatorAlignmentSize(), with a default value of 1.
   template <typename T, typename = void>
-  struct aligned_accumulator : std::false_type {};
+  struct accumulator_is_aligned : std::false_type {};
 
   template <typename T>
-  struct aligned_accumulator<T, std::void_t<decltype(T::aligned_accumulator_)>>
-      : std::integral_constant<bool, T::aligned_accumulator_> {};
+  struct accumulator_is_aligned<T, std::void_t<decltype(T::is_aligned_)>>
+      : std::integral_constant<bool, T::is_aligned_> {};
 
   static constexpr bool aggregate_default_null_behavior_ =
       aggregate_default_null_behavior<FUNC>::value;
@@ -172,7 +172,8 @@ class SimpleAggregateAdapter : public Aggregate {
   static constexpr bool support_to_intermediate_ =
       support_to_intermediate<FUNC>::value;
 
-  static constexpr bool aligned_accumulator_ = aligned_accumulator<FUNC>::value;
+  static constexpr bool accumulator_is_aligned_ =
+      accumulator_is_aligned<typename FUNC::AccumulatorType>::value;
 
   bool isFixedSize() const override {
     return accumulator_is_fixed_size_;
@@ -187,19 +188,10 @@ class SimpleAggregateAdapter : public Aggregate {
   }
 
   int32_t accumulatorAlignmentSize() const override {
-    if constexpr (aligned_accumulator_) {
+    if constexpr (accumulator_is_aligned_) {
       return alignof(typename FUNC::AccumulatorType);
     }
     return Aggregate::accumulatorAlignmentSize();
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) typename FUNC::AccumulatorType(allocator_);
-    }
   }
 
   // Add raw input to accumulators. If the simple aggregation function has
@@ -352,16 +344,27 @@ class SimpleAggregateAdapter : public Aggregate {
     writer.finish();
   }
 
-  void destroy(folly::Range<char**> groups) override {
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + offset_) typename FUNC::AccumulatorType(allocator_);
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
     if constexpr (accumulator_custom_destroy_) {
       for (auto group : groups) {
         auto accumulator = value<typename FUNC::AccumulatorType>(group);
-        if (!isNull(group)) {
+        if (isInitialized(group) && !isNull(group)) {
           accumulator->destroy(allocator_);
         }
       }
+    } else {
+      destroyAccumulators<typename FUNC::AccumulatorType>(groups);
     }
-    destroyAccumulators<typename FUNC::AccumulatorType>(groups);
   }
 
  private:

@@ -268,8 +268,18 @@ TEST_F(DateTimeFunctionsTest, parseDatetimeSignatures) {
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfXxxSignatures) {
-  for (const auto& name :
-       {"day_of_year", "doy", "day_of_month", "day_of_week", "dow"}) {
+  for (const auto& name : {"day", "day_of_month"}) {
+    SCOPED_TRACE(name);
+    auto signatures = getSignatureStrings(name);
+    ASSERT_EQ(4, signatures.size());
+
+    ASSERT_EQ(1, signatures.count("(timestamp with time zone) -> bigint"));
+    ASSERT_EQ(1, signatures.count("(date) -> bigint"));
+    ASSERT_EQ(1, signatures.count("(timestamp) -> bigint"));
+    ASSERT_EQ(1, signatures.count("(interval day to second) -> bigint"));
+  }
+
+  for (const auto& name : {"day_of_year", "doy", "day_of_week", "dow"}) {
     SCOPED_TRACE(name);
     auto signatures = getSignatureStrings(name);
     ASSERT_EQ(3, signatures.size());
@@ -804,6 +814,24 @@ TEST_F(DateTimeFunctionsTest, dayOfMonthDate) {
   EXPECT_EQ(2, day(-18262));
 }
 
+TEST_F(DateTimeFunctionsTest, dayOfMonthInterval) {
+  const auto day = [&](int64_t millis) {
+    auto result = evaluateOnce<int64_t, int64_t>(
+        "day_of_month(c0)", {millis}, {INTERVAL_DAY_TIME()});
+
+    auto result2 = evaluateOnce<int64_t, int64_t>(
+        "day(c0)", {millis}, {INTERVAL_DAY_TIME()});
+
+    EXPECT_EQ(result, result2);
+    return result;
+  };
+
+  EXPECT_EQ(1, day(kMillisInDay));
+  EXPECT_EQ(1, day(kMillisInDay + kMillisInHour));
+  EXPECT_EQ(10, day(10 * kMillisInDay + 7 * kMillisInHour));
+  EXPECT_EQ(-10, day(-10 * kMillisInDay - 7 * kMillisInHour));
+}
+
 TEST_F(DateTimeFunctionsTest, plusMinusDateIntervalYearMonth) {
   const auto makeInput = [&](const std::string& date, int32_t interval) {
     return makeRowVector({
@@ -879,6 +907,66 @@ TEST_F(DateTimeFunctionsTest, plusMinusDateIntervalDayTime) {
 
   EXPECT_THROW(plus(baseDate, partDay), VeloxUserError);
   EXPECT_THROW(minus(baseDate, partDay), VeloxUserError);
+}
+
+TEST_F(DateTimeFunctionsTest, timestampMinusIntervalYearMonth) {
+  const auto minus = [&](std::optional<std::string> timestamp,
+                         std::optional<int32_t> interval) {
+    return evaluateOnce<std::string>(
+        "date_format(date_parse(c0, '%Y-%m-%d %H:%i:%s') - c1, '%Y-%m-%d %H:%i:%s')",
+        makeRowVector({
+            makeNullableFlatVector<std::string>({timestamp}, VARCHAR()),
+            makeNullableFlatVector<int32_t>({interval}, INTERVAL_YEAR_MONTH()),
+        }));
+  };
+
+  EXPECT_EQ("2001-01-03 04:05:06", minus("2001-02-03 04:05:06", 1));
+  EXPECT_EQ("2000-04-03 04:05:06", minus("2001-02-03 04:05:06", 10));
+  EXPECT_EQ("1999-06-03 04:05:06", minus("2001-02-03 04:05:06", 20));
+
+  // Some special dates.
+  EXPECT_EQ("2001-04-30 04:05:06", minus("2001-05-31 04:05:06", 1));
+  EXPECT_EQ("2001-03-30 04:05:06", minus("2001-04-30 04:05:06", 1));
+  EXPECT_EQ("2001-02-28 04:05:06", minus("2001-03-30 04:05:06", 1));
+  EXPECT_EQ("2000-02-29 04:05:06", minus("2000-03-30 04:05:06", 1));
+  EXPECT_EQ("2000-01-29 04:05:06", minus("2000-02-29 04:05:06", 1));
+}
+
+TEST_F(DateTimeFunctionsTest, timestampPlusIntervalYearMonth) {
+  const auto plus = [&](std::optional<std::string> timestamp,
+                        std::optional<int32_t> interval) {
+    // timestamp + interval.
+    auto result1 = evaluateOnce<std::string>(
+        "date_format(date_parse(c0, '%Y-%m-%d %H:%i:%s') + c1, '%Y-%m-%d %H:%i:%s')",
+        makeRowVector(
+            {makeNullableFlatVector<std::string>({timestamp}, VARCHAR()),
+             makeNullableFlatVector<int32_t>(
+                 {interval}, INTERVAL_YEAR_MONTH())}));
+
+    // interval + timestamp.
+    auto result2 = evaluateOnce<std::string>(
+        "date_format(c1 + date_parse(c0, '%Y-%m-%d %H:%i:%s'), '%Y-%m-%d %H:%i:%s')",
+        makeRowVector(
+            {makeNullableFlatVector<std::string>({timestamp}, VARCHAR()),
+             makeNullableFlatVector<int32_t>(
+                 {interval}, INTERVAL_YEAR_MONTH())}));
+
+    // They should be the same.
+    EXPECT_EQ(result1, result2);
+
+    return result1;
+  };
+
+  EXPECT_EQ("2001-02-03 04:05:06", plus("2001-01-03 04:05:06", 1));
+  EXPECT_EQ("2001-02-03 04:05:06", plus("2000-04-03 04:05:06", 10));
+  EXPECT_EQ("2001-02-03 04:05:06", plus("1999-06-03 04:05:06", 20));
+
+  // Some special dates.
+  EXPECT_EQ("2001-06-30 04:05:06", plus("2001-05-31 04:05:06", 1));
+  EXPECT_EQ("2001-05-30 04:05:06", plus("2001-04-30 04:05:06", 1));
+  EXPECT_EQ("2001-02-28 04:05:06", plus("2001-01-31 04:05:06", 1));
+  EXPECT_EQ("2000-02-29 04:05:06", plus("2000-01-31 04:05:06", 1));
+  EXPECT_EQ("2000-02-29 04:05:06", plus("2000-01-29 04:05:06", 1));
 }
 
 TEST_F(DateTimeFunctionsTest, plusMinusTimestampIntervalDayTime) {
@@ -3907,4 +3995,22 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeDouble) {
       "2021-06-15 09:11:45.000",
   });
   assertEqualVectors(expected, actual);
+}
+
+TEST_F(DateTimeFunctionsTest, toISO8601Date) {
+  const auto toISO8601 = [&](const char* dateString) {
+    return evaluateOnce<std::string, int32_t>(
+        "to_iso8601(c0)", {DATE()->toDays(dateString)}, {DATE()});
+  };
+
+  EXPECT_EQ("1970-01-01", toISO8601("1970-01-01"));
+  EXPECT_EQ("2020-02-05", toISO8601("2020-02-05"));
+  EXPECT_EQ("1919-11-28", toISO8601("1919-11-28"));
+  EXPECT_EQ("4653-07-01", toISO8601("4653-07-01"));
+  EXPECT_EQ("1844-10-14", toISO8601("1844-10-14"));
+  EXPECT_EQ("0001-01-01", toISO8601("1-01-01"));
+  EXPECT_EQ("9999-12-31", toISO8601("9999-12-31"));
+  EXPECT_EQ("872343-04-19", toISO8601("872343-04-19"));
+  EXPECT_EQ("-3492-10-05", toISO8601("-3492-10-05"));
+  EXPECT_EQ("-0653-07-12", toISO8601("-653-07-12"));
 }

@@ -414,7 +414,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual void abort(const std::exception_ptr& error) = 0;
 
   /// Returns true if this memory pool has been aborted.
-  virtual bool aborted() const = 0;
+  virtual bool aborted() const;
 
   /// The memory pool's execution stats.
   struct Stats {
@@ -448,6 +448,11 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// The number of internal memory reservation collisions caused by
     /// concurrent memory requests.
     uint64_t numCollisions{0};
+    /// The number of memory capacity growth attempts through the memory
+    /// arbitration.
+    ///
+    /// NOTE: this only applies for the root memory pool.
+    uint64_t numCapacityGrowths{0};
 
     bool operator==(const Stats& rhs) const;
 
@@ -506,6 +511,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
       Kind kind,
       bool threadSafe,
       std::unique_ptr<MemoryReclaimer> reclaimer) = 0;
+
+  virtual std::exception_ptr abortError() const;
 
   /// Invoked only on destruction to remove this memory pool from its parent's
   /// child memory pool tracking.
@@ -643,8 +650,6 @@ class MemoryPoolImpl : public MemoryPool {
 
   void abort(const std::exception_ptr& error) override;
 
-  bool aborted() const override;
-
   std::string toString() const override {
     std::lock_guard<std::mutex> l(mutex_);
     return toStringLocked();
@@ -687,6 +692,10 @@ class MemoryPoolImpl : public MemoryPool {
     return allocator_;
   }
 
+  void testingCheckIfAborted() const {
+    checkIfAborted();
+  }
+
   uint64_t testingMinReservationBytes() const {
     return minReservationBytes_;
   }
@@ -694,7 +703,7 @@ class MemoryPoolImpl : public MemoryPool {
   /// Structure to store allocation details in debug mode.
   struct AllocationRecord {
     uint64_t size;
-    std::string callStack;
+    process::StackTrace callStack;
   };
 
   std::unordered_map<uint64_t, AllocationRecord>& testingDebugAllocRecords() {
@@ -1013,20 +1022,26 @@ class MemoryPoolImpl : public MemoryPool {
 
   // Stats counters.
   // The number of memory allocations.
-  std::atomic<uint64_t> numAllocs_{0};
+  std::atomic_uint64_t numAllocs_{0};
 
   // The number of memory frees.
-  std::atomic<uint64_t> numFrees_{0};
+  std::atomic_uint64_t numFrees_{0};
 
   // The number of external memory reservations made through maybeReserve().
-  std::atomic<uint64_t> numReserves_{0};
+  std::atomic_uint64_t numReserves_{0};
 
   // The number of external memory releases made through release().
-  std::atomic<uint64_t> numReleases_{0};
+  std::atomic_uint64_t numReleases_{0};
 
   // The number of internal memory reservation collisions caused by concurrent
   // memory reservation requests.
-  std::atomic<uint64_t> numCollisions_{0};
+  std::atomic_uint64_t numCollisions_{0};
+
+  // The number of memory capacity growth attempts through the memory
+  // arbitration.
+  //
+  // NOTE: this only applies for root memory pool.
+  std::atomic_uint64_t numCapacityGrowths_{0};
 
   // Mutex for 'debugAllocRecords_'.
   std::mutex debugAllocMutex_;

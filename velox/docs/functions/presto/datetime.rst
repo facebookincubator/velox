@@ -106,6 +106,10 @@ Date and Time Functions
     Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
     using ``string`` for the time zone.
 
+.. function:: to_iso8601(x) -> varchar
+
+    Formats ``x`` as an ISO 8601 string. Supported types for ``x`` are: DATE.
+
 .. function:: to_unixtime(timestamp) -> double
 
     Returns ``timestamp`` as a UNIX timestamp.
@@ -251,6 +255,8 @@ arbitrary large timestamps.
 .. function:: day(x) -> bigint
 
     Returns the day of the month from ``x``.
+
+    The supported types for ``x`` are DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND.
 
 .. function:: day_of_month(x) -> bigint
 

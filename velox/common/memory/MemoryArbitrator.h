@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Portability.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/time/Timer.h"
@@ -151,10 +152,16 @@ class MemoryArbitrator {
   /// of memory pools by reclaiming free and used memory. The freed memory
   /// capacity is given back to the arbitrator.  If 'targetBytes' is zero, then
   /// try to reclaim all the memory from 'pools'. The function returns the
-  /// actual freed memory capacity in bytes.
+  /// actual freed memory capacity in bytes. If 'allowSpill' is true, it
+  /// reclaims the used memory by spilling. If 'allowAbort' is true, it reclaims
+  /// the used memory by aborting the queries with the most memory usage. If
+  /// both are true, it first reclaims the used memory by spilling and then
+  /// abort queries to reach the reclaim target.
   virtual uint64_t shrinkCapacity(
       const std::vector<std::shared_ptr<MemoryPool>>& pools,
-      uint64_t targetBytes) = 0;
+      uint64_t targetBytes,
+      bool allowSpill = true,
+      bool allowAbort = false) = 0;
 
   /// The internal execution stats of the memory arbitrator.
   struct Stats {
@@ -356,6 +363,45 @@ class MemoryReclaimer {
   MemoryReclaimer() = default;
 };
 
+/// The object is used to set/clear non-reclaimable section of an operation in
+/// the middle of its execution. It allows the memory arbitrator to reclaim
+/// memory from a running operator which is waiting for memory arbitration.
+/// 'nonReclaimableSection' points to the corresponding flag of the associated
+/// operator.
+class ReclaimableSectionGuard {
+ public:
+  explicit ReclaimableSectionGuard(tsan_atomic<bool>* nonReclaimableSection)
+      : nonReclaimableSection_(nonReclaimableSection),
+        oldNonReclaimableSectionValue_(*nonReclaimableSection_) {
+    *nonReclaimableSection_ = false;
+  }
+
+  ~ReclaimableSectionGuard() {
+    *nonReclaimableSection_ = oldNonReclaimableSectionValue_;
+  }
+
+ private:
+  tsan_atomic<bool>* const nonReclaimableSection_;
+  const bool oldNonReclaimableSectionValue_;
+};
+
+class NonReclaimableSectionGuard {
+ public:
+  explicit NonReclaimableSectionGuard(tsan_atomic<bool>* nonReclaimableSection)
+      : nonReclaimableSection_(nonReclaimableSection),
+        oldNonReclaimableSectionValue_(*nonReclaimableSection_) {
+    *nonReclaimableSection_ = true;
+  }
+
+  ~NonReclaimableSectionGuard() {
+    *nonReclaimableSection_ = oldNonReclaimableSectionValue_;
+  }
+
+ private:
+  tsan_atomic<bool>* const nonReclaimableSection_;
+  const bool oldNonReclaimableSectionValue_;
+};
+
 /// The memory arbitration context which is set on per-thread local variable by
 /// memory arbitrator. It is used to indicate a running thread is under memory
 /// arbitration processing or not. This helps to enable sanity check such as all
@@ -387,14 +433,20 @@ bool underMemoryArbitration();
 /// The function triggers memory arbitration by shrinking memory pools from
 /// 'manager' by invoking shrinkPools API. If 'manager' is not set, then it
 /// shrinks from the process wide memory manager. If 'targetBytes' is zero, then
-/// reclaims all the memory from 'manager' if possible.
+/// it reclaims all the memory from 'manager' if possible. If 'allowSpill' is
+/// true, then it allows to reclaim the used memory by spilling.
 class MemoryManager;
 void testingRunArbitration(
     uint64_t targetBytes = 0,
+    bool allowSpill = true,
     MemoryManager* manager = nullptr);
 
 /// The function triggers memory arbitration by shrinking memory pools from
 /// 'manager' of 'pool' by invoking its shrinkPools API. If 'targetBytes' is
-/// zero, then reclaims all the memory from 'manager' if possible.
-void testingRunArbitration(MemoryPool* pool, uint64_t targetBytes = 0);
+/// zero, then it reclaims all the memory from 'manager' if possible. If
+/// 'allowSpill' is true, then it allows to reclaim the used memory by spilling.
+void testingRunArbitration(
+    MemoryPool* pool,
+    uint64_t targetBytes = 0,
+    bool allowSpill = true);
 } // namespace facebook::velox::memory

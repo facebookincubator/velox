@@ -18,18 +18,19 @@
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
@@ -456,8 +457,14 @@ class TestBadMemoryTranslator : public exec::Operator::PlanNodeTranslator {
   }
 };
 } // namespace
+
 class TaskTest : public HiveConnectorTestBase {
  protected:
+  void TearDown() override {
+    waitForAllTasksToBeDeleted();
+    HiveConnectorTestBase::TearDown();
+  }
+
   static std::pair<std::shared_ptr<exec::Task>, std::vector<RowVectorPtr>>
   executeSingleThreaded(
       core::PlanFragment plan,
@@ -1303,7 +1310,7 @@ DEBUG_ONLY_TEST_F(TaskTest, raceBetweenTaskPauseAndTerminate) {
     try {
       while (cursor->moveNext()) {
       };
-    } catch (VeloxRuntimeError& ex) {
+    } catch (VeloxRuntimeError&) {
     }
   });
 
@@ -1335,6 +1342,109 @@ DEBUG_ONLY_TEST_F(TaskTest, raceBetweenTaskPauseAndTerminate) {
   ASSERT_EQ(task->numRunningDrivers(), 0);
 
   taskThread.join();
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+  });
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {data, data});
+
+  core::PlanNodeId scanNodeId;
+  auto plan = PlanBuilder()
+                  .tableScan(asRowType(data->type()))
+                  .capturePlanNodeId(scanNodeId)
+                  .project({"c0 % 5 as k", "c0"})
+                  .planFragment();
+
+  CursorParameters params;
+  params.planNode = plan.planNode;
+  params.queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
+  // The queue size in the executor is 3, so we will have 1 driver queued.
+  params.maxDrivers = 4;
+
+  auto cursor = TaskCursor::create(params);
+  auto task = cursor->task();
+
+  // Mutex used to pause drivers' execution, so they appear 'on thread'.
+  std::shared_mutex pauseDriverRunInternal;
+  pauseDriverRunInternal.lock();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal",
+      std::function<void(Driver*)>([&](Driver*) {
+        pauseDriverRunInternal.lock_shared();
+        pauseDriverRunInternal.unlock_shared();
+      }));
+
+  // Run the task in this thread using cursor.
+  std::thread taskThread([&]() {
+    try {
+      while (cursor->moveNext()) {
+      };
+    } catch (VeloxRuntimeError& ex) {
+    }
+  });
+
+  // Convenience functtor allowing us to ensure the drivers are in the certain
+  // state.
+  Task::DriverCounts driverCounts;
+  auto waitForConditionFunc = [&](auto conditionFunc) {
+    // In case things go wrong, we want to bail out sooner and don't wait until
+    // the test times out, hence we limit waiting time for the condition.
+    size_t numTries{0};
+    while (numTries++ < 20) {
+      driverCounts = task->driverCounts();
+      if (conditionFunc()) {
+        break;
+      }
+      /* sleep override */
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  };
+
+  // Wait till 3 drivers are on thread. They will be paused at the start with
+  // the help of the testvalue.
+  waitForConditionFunc(
+      [&]() { return (driverCounts.numOnThreadDrivers == 3); });
+  // Expect 3 drivers on the thread.
+  ASSERT_EQ(driverCounts.numOnThreadDrivers, 3);
+  ASSERT_EQ(driverCounts.numQueuedDrivers, 1);
+  ASSERT_EQ(driverCounts.numSuspendedDrivers, 0);
+  ASSERT_EQ(driverCounts.numBlockedDrivers.size(), 0);
+
+  // Allow drivers to proceed, all will be blocked as there are no splits
+  // supplied yet.
+  pauseDriverRunInternal.unlock();
+  waitForConditionFunc([&]() {
+    if (driverCounts.numBlockedDrivers.size() > 0) {
+      auto it = driverCounts.numBlockedDrivers.begin();
+      return (it->first == BlockingReason::kWaitForSplit && it->second == 4);
+    }
+    return false;
+  });
+  // Expect all drivers are blocked on waiting for the splits.
+  ASSERT_EQ(driverCounts.numOnThreadDrivers, 0);
+  ASSERT_EQ(driverCounts.numQueuedDrivers, 0);
+  ASSERT_EQ(driverCounts.numSuspendedDrivers, 0);
+  ASSERT_EQ(driverCounts.numBlockedDrivers.size(), 1);
+  auto it = driverCounts.numBlockedDrivers.begin();
+  ASSERT_EQ(it->first, BlockingReason::kWaitForSplit);
+  ASSERT_EQ(it->second, 4);
+
+  // Now add a split, finalize splits and wait for the task to finish.
+  auto split = exec::Split(makeHiveConnectorSplit(
+      filePath->path, 0, std::numeric_limits<uint64_t>::max(), 1));
+  task->addSplit(scanNodeId, std::move(split));
+  task->noMoreSplits(scanNodeId);
+  taskThread.join();
+  waitForConditionFunc(
+      [&]() { return (driverCounts.numOnThreadDrivers == 0); });
+  // Expect no drivers in any of the counters.
+  ASSERT_EQ(driverCounts.numOnThreadDrivers, 0);
+  ASSERT_EQ(driverCounts.numQueuedDrivers, 0);
+  ASSERT_EQ(driverCounts.numSuspendedDrivers, 0);
+  ASSERT_EQ(driverCounts.numBlockedDrivers.size(), 0);
 }
 
 TEST_F(TaskTest, driverCreationMemoryAllocationCheck) {
@@ -1442,7 +1552,6 @@ TEST_F(TaskTest, spillDirNotCreated) {
       {{core::QueryConfig::kSpillEnabled, "true"},
        {core::QueryConfig::kJoinSpillEnabled, "true"}});
   params.maxDrivers = 1;
-  TestScopedSpillInjection scopedSpillInjection(100);
 
   auto cursor = TaskCursor::create(params);
   auto* task = cursor->task().get();
@@ -1453,14 +1562,14 @@ TEST_F(TaskTest, spillDirNotCreated) {
   while (cursor->moveNext()) {
   }
   ASSERT_TRUE(waitForTaskCompletion(task, 5'000'000));
-  EXPECT_EQ(exec::TaskState::kFinished, task->state());
+  ASSERT_EQ(exec::TaskState::kFinished, task->state());
   auto taskStats = exec::toPlanStats(task->taskStats());
   auto& stats = taskStats.at(hashJoinNodeId);
   ASSERT_EQ(stats.spilledRows, 0);
   // Check for spill folder without destroying the Task object to ensure its
   // destructor has not removed the directory if it was created earlier.
   auto fs = filesystems::getFileSystem(tmpDirectoryPath, nullptr);
-  EXPECT_FALSE(fs->exists(tmpDirectoryPath));
+  ASSERT_FALSE(fs->exists(tmpDirectoryPath));
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
@@ -1543,11 +1652,21 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
   task->start(4, 1);
 
   const int numReclaims{10};
+  const uint64_t queryCapacity = task->pool()->parent()->capacity();
   for (int i = 0; i < numReclaims; ++i) {
     MemoryReclaimer::Stats stats;
     task->pool()->reclaim(1000, 1UL << 30, stats);
   }
-  const auto taskStats = task->taskStats();
+  const int64_t reclaimedQueryCapacity =
+      queryCapacity - task->pool()->parent()->capacity();
+  ASSERT_GE(reclaimedQueryCapacity, 0);
+  auto* arbitrator = dynamic_cast<memory::SharedArbitrator*>(
+      memory::memoryManager()->arbitrator());
+  if (arbitrator != nullptr) {
+    arbitrator->testingFreeCapacity(reclaimedQueryCapacity);
+  }
+
+  auto taskStats = task->taskStats();
   ASSERT_EQ(taskStats.memoryReclaimCount, numReclaims);
   ASSERT_GT(taskStats.memoryReclaimMs, 0);
 
@@ -1556,6 +1675,111 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
   ASSERT_TRUE(waitForTaskAborted(task.get()));
   task.reset();
   waitForAllTasksToBeDeleted();
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
+  auto rowType = ROW({"c0", "c1"}, {INTEGER(), DOUBLE()});
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 32;
+  VectorFuzzer fuzzer(opts, pool_.get());
+  std::vector<RowVectorPtr> valueInputs;
+  for (int32_t i = 0; i < 4; ++i) {
+    valueInputs.push_back(fuzzer.fuzzRow(rowType));
+  }
+
+  const auto plan =
+      PlanBuilder()
+          .values(valueInputs)
+          .partitionedOutput({}, 1, std::vector<std::string>{"c0"})
+          .planFragment();
+
+  std::atomic_bool taskPauseWaitFlag{true};
+  folly::EventCount taskPauseWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(const exec::Values*)>([&](const exec::Values* values) {
+        if (taskPauseWaitFlag.exchange(false)) {
+          taskPauseWait.notifyAll();
+        }
+        // Inject some delay for task pause stats verification.
+        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // NOLINT
+      }));
+
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "taskPauseTime", 1UL << 30, exec::MemoryReclaimer::create());
+  auto queryCtx = std::make_shared<core::QueryCtx>(
+      driverExecutor_.get(),
+      core::QueryConfig{{}},
+      std::unordered_map<std::string, std::shared_ptr<Config>>{},
+      nullptr,
+      std::move(queryPool),
+      nullptr);
+  auto task = Task::create("task", std::move(plan), 0, std::move(queryCtx));
+  task->start(4, 1);
+
+  // Wait for the task driver starts to run.
+  taskPauseWait.await([&]() { return !taskPauseWaitFlag.load(); });
+  // Pause the task
+  task->requestPause().wait();
+  // Inject some delay for task pause stats verification.
+  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  // Resume the task.
+  Task::resume(task);
+  // Inject some delay for task resume to run for a while.
+  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  // Fail the task to finish test.
+  task->requestAbort();
+  ASSERT_TRUE(waitForTaskAborted(task.get()));
+
+  auto taskStats = task->taskStats();
+  ASSERT_EQ(taskStats.pipelineStats.size(), 1);
+  ASSERT_EQ(taskStats.pipelineStats[0].driverStats.size(), 1);
+  const auto& driverStats = taskStats.pipelineStats[0].driverStats[0];
+  const auto& totalPauseTime =
+      driverStats.runtimeStats.at(DriverStats::kTotalPauseTime);
+  ASSERT_EQ(totalPauseTime.count, 1);
+  ASSERT_GE(totalPauseTime.sum, 0);
+  const auto& totalOffThreadTime =
+      driverStats.runtimeStats.at(DriverStats::kTotalOffThreadTime);
+  ASSERT_EQ(totalOffThreadTime.count, 1);
+  ASSERT_GE(totalOffThreadTime.sum, 0);
+
+  task.reset();
+  waitForAllTasksToBeDeleted();
+}
+
+TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatVector<int64_t>(50, folly::identity),
+  });
+  const auto plan =
+      PlanBuilder()
+          .tableScan(asRowType(data->type()))
+          .partitionedOutput({}, 1, std::vector<std::string>{"c0"})
+          .planFragment();
+  auto task = Task::create(
+      "task",
+      std::move(plan),
+      0,
+      std::make_shared<core::QueryCtx>(driverExecutor_.get()));
+  task->start(4, 1);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  task->testingVisitDrivers(
+      [](Driver* driver) { VELOX_CHECK(!driver->isOnThread()); });
+  // Sleep a bit to make sure off thread time is not zero.
+  std::this_thread::sleep_for(std::chrono::milliseconds{2});
+  task->requestAbort();
+  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  auto taskStats = task->taskStats();
+  ASSERT_EQ(taskStats.pipelineStats.size(), 1);
+  ASSERT_EQ(taskStats.pipelineStats[0].driverStats.size(), 4);
+  const auto& driverStats = taskStats.pipelineStats[0].driverStats[0];
+  ASSERT_EQ(driverStats.runtimeStats.count(DriverStats::kTotalPauseTime), 0);
+  const auto& totalOffThreadTime =
+      driverStats.runtimeStats.at(DriverStats::kTotalOffThreadTime);
+  ASSERT_EQ(totalOffThreadTime.count, 1);
+  ASSERT_GE(totalOffThreadTime.sum, 0);
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, driverEnqueAfterFailedAndPausedTask) {

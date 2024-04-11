@@ -31,7 +31,6 @@ TEST(SpillConfig, spillLevel) {
       "fakeSpillPath",
       0,
       0,
-      0,
       nullptr,
       0,
       0,
@@ -63,10 +62,9 @@ TEST(SpillConfig, spillLevel) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     if (testData.expectedLevel == -1) {
-      ASSERT_ANY_THROW(config.joinSpillLevel(testData.bitOffset));
+      ASSERT_ANY_THROW(config.spillLevel(testData.bitOffset));
     } else {
-      ASSERT_EQ(
-          config.joinSpillLevel(testData.bitOffset), testData.expectedLevel);
+      ASSERT_EQ(config.spillLevel(testData.bitOffset), testData.expectedLevel);
     }
   }
 }
@@ -117,7 +115,6 @@ TEST(SpillConfig, spillLevelLimit) {
         "fakeSpillPath",
         0,
         0,
-        0,
         nullptr,
         0,
         0,
@@ -130,7 +127,7 @@ TEST(SpillConfig, spillLevelLimit) {
 
     ASSERT_EQ(
         testData.expectedExceeds,
-        config.exceedJoinSpillLevelLimit(testData.bitOffset));
+        config.exceedSpillLevelLimit(testData.bitOffset));
   }
 }
 
@@ -162,7 +159,6 @@ TEST(SpillConfig, spillableReservationPercentages) {
           [&]() -> const std::string& { return emptySpillFolder; },
           [&](uint64_t) {},
           "spillableReservationPercentages",
-          0,
           0,
           0,
           nullptr,

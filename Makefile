@@ -78,7 +78,7 @@ clean:					#: Delete all build artifacts
 
 cmake:					#: Use CMake to create a Makefile build system
 	mkdir -p $(BUILD_BASE_DIR)/$(BUILD_DIR) && \
-	cmake -B \
+	cmake  -B \
 		"$(BUILD_BASE_DIR)/$(BUILD_DIR)" \
 		${CMAKE_FLAGS} \
 		$(GENERATOR) \
@@ -167,9 +167,6 @@ circleci-container:			#: Build the linux container for CircleCi
 check-container:
 	$(MAKE) linux-container CONTAINER_NAME=check
 
-velox-torcharrow-container:
-	$(MAKE) linux-container CONTAINER_NAME=velox-torcharrow
-
 linux-container:
 	rm -rf /tmp/docker && \
 	mkdir -p /tmp/docker && \
@@ -186,8 +183,8 @@ python-clean:
 	DEBUG=1 ${PYTHON_EXECUTABLE} setup.py clean
 
 python-build:
-	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=4 ${PYTHON_EXECUTABLE} -m pip install -e .$(extras) --verbose
+	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=${NUM_THREADS} ${PYTHON_EXECUTABLE} -m pip install -e .$(extras) --verbose
 
-python-test: 
+python-test:
 	$(MAKE) python-build extras="[tests]"
 	DEBUG=1 ${PYTHON_EXECUTABLE} -m unittest -v

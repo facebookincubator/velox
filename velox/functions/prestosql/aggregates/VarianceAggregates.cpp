@@ -146,15 +146,6 @@ class VarianceAggregate : public exec::Aggregate {
     return sizeof(VarianceAccumulator);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) VarianceAccumulator();
-    }
-  }
-
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto rowVector = (*result)->as<RowVector>();
@@ -376,6 +367,15 @@ class VarianceAggregate : public exec::Aggregate {
     return exec::Aggregate::value<VarianceAccumulator>(group);
   }
 
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + offset_) VarianceAccumulator();
+    }
+  }
+
  private:
   // partial
   template <bool tableHasNulls = true>
@@ -467,7 +467,8 @@ void checkSumCountRowType(
 template <template <typename TInput> class TClass>
 exec::AggregateRegistrationResult registerVariance(
     const std::string& name,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> inputTypes = {
       "smallint", "integer", "bigint", "real", "double"};
@@ -517,24 +518,28 @@ exec::AggregateRegistrationResult registerVariance(
           return std::make_unique<TClass<int64_t>>(resultType);
         }
       },
-      withCompanionFunctions);
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace
 
 void registerVarianceAggregates(
     const std::string& prefix,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerVariance<StdDevSampAggregate>(
-      prefix + kStdDev, withCompanionFunctions);
+      prefix + kStdDev, withCompanionFunctions, overwrite);
   registerVariance<StdDevPopAggregate>(
-      prefix + kStdDevPop, withCompanionFunctions);
+      prefix + kStdDevPop, withCompanionFunctions, overwrite);
   registerVariance<StdDevSampAggregate>(
-      prefix + kStdDevSamp, withCompanionFunctions);
+      prefix + kStdDevSamp, withCompanionFunctions, overwrite);
   registerVariance<VarSampAggregate>(
-      prefix + kVariance, withCompanionFunctions);
-  registerVariance<VarPopAggregate>(prefix + kVarPop, withCompanionFunctions);
-  registerVariance<VarSampAggregate>(prefix + kVarSamp, withCompanionFunctions);
+      prefix + kVariance, withCompanionFunctions, overwrite);
+  registerVariance<VarPopAggregate>(
+      prefix + kVarPop, withCompanionFunctions, overwrite);
+  registerVariance<VarSampAggregate>(
+      prefix + kVarSamp, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

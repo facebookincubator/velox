@@ -76,15 +76,6 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     return false;
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) BloomFilterAccumulator(allocator_);
-    }
-  }
-
   static FOLLY_ALWAYS_INLINE void checkBloomFilterNotNull(
       DecodedVector& decoded,
       vector_size_t idx) {
@@ -205,6 +196,16 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     extractValues(groups, numGroups, result);
   }
 
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + offset_) BloomFilterAccumulator(allocator_);
+    }
+  }
+
  private:
   void decodeArguments(
       const SelectivityVector& rows,
@@ -289,7 +290,8 @@ class BloomFilterAggAggregate : public exec::Aggregate {
 
 exec::AggregateRegistrationResult registerBloomFilterAggAggregate(
     const std::string& name,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .argumentType("bigint")
@@ -320,6 +322,7 @@ exec::AggregateRegistrationResult registerBloomFilterAggAggregate(
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         return std::make_unique<BloomFilterAggAggregate>(resultType, config);
       },
-      withCompanionFunctions);
+      withCompanionFunctions,
+      overwrite);
 }
 } // namespace facebook::velox::functions::aggregate::sparksql

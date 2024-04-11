@@ -21,6 +21,18 @@ namespace facebook::velox::exec {
 
 class OutputBufferManager {
  public:
+  /// Options for shuffle. This is initialized once and affects both
+  /// PartitionedOutput and Exchange. This can be used for controlling
+  /// compression, protocol version and other matters where shuffle sides should
+  /// agree.
+  struct Options {
+    common::CompressionKind compressionKind{
+        common::CompressionKind::CompressionKind_NONE};
+  };
+
+  OutputBufferManager(Options options)
+      : compressionKind_(options.compressionKind) {}
+
   void initializeTask(
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
@@ -65,15 +77,17 @@ class OutputBufferManager {
   /// The sequence number of the data must be >= 'sequence'. If there is no
   /// buffer associated with the given taskId, returns false. If there is no
   /// data, 'notify' will be registered and called when there is data or the
-  /// source is at end, the function returns true. Existing data with a sequence
-  /// number < sequence is deleted. The caller is expected to increment the
-  /// sequence number between calls by the number of items received. In this way
-  /// the next call implicitly acknowledges receipt of the results from the
-  /// previous. The acknowledge method is offered for an early ack, so that the
-  /// producer can continue before the consumer is done processing the received
-  /// data. If not null, 'activeCheck' is used to check if data consumer is
-  /// currently active or not. This only applies for arbitrary output buffer for
-  /// now.
+  /// source is at end, the function returns true. If deleteResults was
+  /// previously called for the destination, 'notify' will be called immediately
+  /// with a list of pages containing a single "end of data" marker. Existing
+  /// data with a sequence number < sequence is deleted. The caller is expected
+  /// to increment the sequence number between calls by the number of items
+  /// received. In this way the next call implicitly acknowledges receipt of the
+  /// results from the previous. The acknowledge method is offered for an early
+  /// ack, so that the producer can continue before the consumer is done
+  /// processing the received data. If not null, 'activeCheck' is used to check
+  /// if data consumer is currently active or not. This only applies for
+  /// arbitrary output buffer for now.
   bool getData(
       const std::string& taskId,
       int destination,
@@ -83,6 +97,10 @@ class OutputBufferManager {
       DataConsumerActiveCheckCallback activeCheck = nullptr);
 
   void removeTask(const std::string& taskId);
+
+  /// Initializes singleton with 'options'. May be called once before
+  /// getInstance().
+  static void initialize(const Options& options);
 
   static std::weak_ptr<OutputBufferManager> getInstance();
 
@@ -117,10 +135,20 @@ class OutputBufferManager {
   // Returns NULL if task not found.
   std::shared_ptr<OutputBuffer> getBufferIfExists(const std::string& taskId);
 
+  void testingSetCompression(common::CompressionKind kind) {
+    *const_cast<common::CompressionKind*>(&compressionKind_) = kind;
+  }
+
+  common::CompressionKind compressionKind() const {
+    return compressionKind_;
+  }
+
  private:
   // Retrieves the set of buffers for a query.
   // Throws an exception if buffer doesn't exist.
   std::shared_ptr<OutputBuffer> getBuffer(const std::string& taskId);
+
+  const common::CompressionKind compressionKind_;
 
   folly::Synchronized<
       std::unordered_map<std::string, std::shared_ptr<OutputBuffer>>,
@@ -129,5 +157,8 @@ class OutputBufferManager {
 
   std::function<std::unique_ptr<OutputStreamListener>()> listenerFactory_{
       nullptr};
+
+  inline static std::shared_ptr<OutputBufferManager> instance_;
+  inline static std::mutex initMutex_;
 };
 } // namespace facebook::velox::exec

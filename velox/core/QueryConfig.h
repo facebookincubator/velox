@@ -48,16 +48,30 @@ class QueryConfig {
 
   explicit QueryConfig(std::unordered_map<std::string, std::string>&& values);
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   static constexpr const char* kCodegenEnabled = "codegen.enabled";
-
-  /// Maximum memory that a query can use on a single host.
-  static constexpr const char* kQueryMaxMemoryPerNode =
-      "query_max_memory_per_node";
 
   static constexpr const char* kCodegenConfigurationFilePath =
       "codegen.configuration_file_path";
 
   static constexpr const char* kCodegenLazyLoading = "codegen.lazy_loading";
+
+  bool codegenEnabled() const {
+    return get<bool>(kCodegenEnabled, false);
+  }
+
+  std::string codegenConfigurationFilePath() const {
+    return get<std::string>(kCodegenConfigurationFilePath, "");
+  }
+
+  bool codegenLazyLoading() const {
+    return get<bool>(kCodegenLazyLoading, true);
+  }
+#endif
+
+  /// Maximum memory that a query can use on a single host.
+  static constexpr const char* kQueryMaxMemoryPerNode =
+      "query_max_memory_per_node";
 
   /// User provided session timezone. Stores a string with the actual timezone
   /// name, e.g: "America/Los_Angeles".
@@ -202,21 +216,6 @@ class QueryConfig {
   static constexpr const char* kTopNRowNumberSpillEnabled =
       "topn_row_number_spill_enabled";
 
-  /// The max memory that a final aggregation can use before spilling. If it 0,
-  /// then there is no limit.
-  static constexpr const char* kAggregationSpillMemoryThreshold =
-      "aggregation_spill_memory_threshold";
-
-  /// The max memory that a hash join can use before spilling. If it 0, then
-  /// there is no limit.
-  static constexpr const char* kJoinSpillMemoryThreshold =
-      "join_spill_memory_threshold";
-
-  /// The max memory that an order by can use before spilling. If it 0, then
-  /// there is no limit.
-  static constexpr const char* kOrderBySpillMemoryThreshold =
-      "order_by_spill_memory_threshold";
-
   /// The max row numbers to fill and spill for each spill run. This is used to
   /// cap the memory used for spilling. If it is zero, then there is no limit
   /// and spilling might run out of memory.
@@ -242,15 +241,6 @@ class QueryConfig {
   /// The max allowed spill file size. If it is zero, then there is no limit.
   static constexpr const char* kMaxSpillFileSize = "max_spill_file_size";
 
-  /// The min spill run size limit used to select partitions for spilling. The
-  /// spiller tries to spill a previously spilled partitions if its data size
-  /// exceeds this limit, otherwise it spills the partition with most data.
-  /// If the limit is zero, then the spiller always spill a previously spilled
-  /// partition if it has any data. This is to avoid spill from a partition with
-  /// a small amount of data which might result in generating too many small
-  /// spilled files.
-  static constexpr const char* kMinSpillRunSize = "min_spill_run_size";
-
   static constexpr const char* kSpillCompressionKind =
       "spill_compression_codec";
 
@@ -267,9 +257,15 @@ class QueryConfig {
   static constexpr const char* kSpillFileCreateConfig =
       "spill_file_create_config";
 
+  /// Default offset spill start partition bit.
   static constexpr const char* kSpillStartPartitionBit =
       "spiller_start_partition_bit";
 
+  /// Default number of spill partition bits.
+  static constexpr const char* kSpillNumPartitionBits =
+      "spiller_num_partition_bits";
+
+  /// !!! DEPRECATED: do not use.
   static constexpr const char* kJoinSpillPartitionBits =
       "join_spiller_partition_bits";
 
@@ -303,6 +299,9 @@ class QueryConfig {
   /// The max number of bits to use for the bloom filter.
   static constexpr const char* kSparkBloomFilterMaxNumBits =
       "spark.bloom_filter.max_num_bits";
+
+  /// The current spark partition id.
+  static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
@@ -384,21 +383,6 @@ class QueryConfig {
 
   int32_t abandonPartialTopNRowNumberMinPct() const {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinPct, 80);
-  }
-
-  uint64_t aggregationSpillMemoryThreshold() const {
-    static constexpr uint64_t kDefault = 0;
-    return get<uint64_t>(kAggregationSpillMemoryThreshold, kDefault);
-  }
-
-  uint64_t joinSpillMemoryThreshold() const {
-    static constexpr uint64_t kDefault = 0;
-    return get<uint64_t>(kJoinSpillMemoryThreshold, kDefault);
-  }
-
-  uint64_t orderBySpillMemoryThreshold() const {
-    static constexpr uint64_t kDefault = 0;
-    return get<uint64_t>(kOrderBySpillMemoryThreshold, kDefault);
   }
 
   uint64_t maxSpillRunRows() const {
@@ -490,18 +474,6 @@ class QueryConfig {
     return get<bool>(kCastMatchStructByName, false);
   }
 
-  bool codegenEnabled() const {
-    return get<bool>(kCodegenEnabled, false);
-  }
-
-  std::string codegenConfigurationFilePath() const {
-    return get<std::string>(kCodegenConfigurationFilePath, "");
-  }
-
-  bool codegenLazyLoading() const {
-    return get<bool>(kCodegenLazyLoading, true);
-  }
-
   bool adjustTimestampToTimezone() const {
     return get<bool>(kAdjustTimestampToTimezone, false);
   }
@@ -562,7 +534,7 @@ class QueryConfig {
   }
 
   int32_t maxSpillLevel() const {
-    return get<int32_t>(kMaxSpillLevel, 4);
+    return get<int32_t>(kMaxSpillLevel, 1);
   }
 
   /// Returns the start partition bit which is used with
@@ -574,16 +546,28 @@ class QueryConfig {
     return get<uint8_t>(kSpillStartPartitionBit, kDefaultStartBit);
   }
 
-  /// Returns the number of bits used to calculate the spilling partition
-  /// number for hash join. The number of spilling partitions will be power of
-  /// two.
+  /// Returns the number of bits used to calculate the spill partition number
+  /// for hash join. The number of spill partitions will be power of two.
   ///
   /// NOTE: as for now, we only support up to 8-way spill partitioning.
+  ///
+  /// DEPRECATED.
   uint8_t joinSpillPartitionBits() const {
     constexpr uint8_t kDefaultBits = 3;
     constexpr uint8_t kMaxBits = 3;
     return std::min(
         kMaxBits, get<uint8_t>(kJoinSpillPartitionBits, kDefaultBits));
+  }
+
+  /// Returns the number of bits used to calculate the spill partition number
+  /// for hash join and RowNumber. The number of spill partitions will be power
+  /// of tow.
+  /// NOTE: as for now, we only support up to 8-way spill partitioning.
+  uint8_t spillNumPartitionBits() const {
+    constexpr uint8_t kDefaultBits = 3;
+    constexpr uint8_t kMaxBits = 3;
+    return std::min(
+        kMaxBits, get<uint8_t>(kSpillNumPartitionBits, kDefaultBits));
   }
 
   uint64_t writerFlushThresholdBytes() const {
@@ -593,11 +577,6 @@ class QueryConfig {
   uint64_t maxSpillFileSize() const {
     constexpr uint64_t kDefaultMaxFileSize = 0;
     return get<uint64_t>(kMaxSpillFileSize, kDefaultMaxFileSize);
-  }
-
-  uint64_t minSpillRunSize() const {
-    constexpr uint64_t kDefaultMinSpillRunSize = 256 << 20; // 256MB.
-    return get<uint64_t>(kMinSpillRunSize, kDefaultMinSpillRunSize);
   }
 
   std::string spillCompressionKind() const {
@@ -663,6 +642,14 @@ class QueryConfig {
         kDefault,
         "{} cannot exceed the default value",
         kSparkBloomFilterMaxNumBits);
+    return value;
+  }
+
+  int32_t sparkPartitionId() const {
+    auto id = get<int32_t>(kSparkPartitionId);
+    VELOX_CHECK(id.has_value(), "Spark partition id is not set.");
+    auto value = id.value();
+    VELOX_CHECK_GE(value, 0, "Invalid Spark partition id.");
     return value;
   }
 

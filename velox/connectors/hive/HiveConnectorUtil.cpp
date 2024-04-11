@@ -180,6 +180,7 @@ void addSubfields(
       if (stringKey) {
         deduplicate(stringSubscripts);
         filter = std::make_unique<common::BytesValues>(stringSubscripts, false);
+        spec.setFlatMapFeatureSelection(std::move(stringSubscripts));
       } else {
         deduplicate(longSubscripts);
         if (keyType->isReal()) {
@@ -189,6 +190,11 @@ void addSubfields(
         } else {
           filter = common::createBigintValues(longSubscripts, false);
         }
+        std::vector<std::string> features;
+        for (auto num : longSubscripts) {
+          features.push_back(std::to_string(num));
+        }
+        spec.setFlatMapFeatureSelection(std::move(features));
       }
       keys->setFilter(std::move(filter));
       break;
@@ -444,10 +450,10 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
 
 void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
-    const std::shared_ptr<HiveConfig>& hiveConfig,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
     const Config* sessionProperties,
-    const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
-    const std::shared_ptr<HiveConnectorSplit>& hiveSplit) {
+    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit) {
   configureReaderOptions(
       readerOptions,
       hiveConfig,
@@ -459,10 +465,10 @@ void configureReaderOptions(
 
 void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
-    const std::shared_ptr<HiveConfig>& hiveConfig,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
     const Config* sessionProperties,
     const RowTypePtr& fileSchema,
-    const std::shared_ptr<HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const std::unordered_map<std::string, std::string>& tableParameters) {
   readerOptions.setLoadQuantum(hiveConfig->loadQuantum());
   readerOptions.setMaxCoalesceBytes(hiveConfig->maxCoalescedBytes());
@@ -474,6 +480,7 @@ void configureReaderOptions(
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFooterEstimatedSize(hiveConfig->footerEstimatedSize());
   readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
+  readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
 
   if (readerOptions.getFileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
@@ -495,10 +502,10 @@ void configureReaderOptions(
 void configureRowReaderOptions(
     dwio::common::RowReaderOptions& rowReaderOptions,
     const std::unordered_map<std::string, std::string>& tableParameters,
-    std::shared_ptr<common::ScanSpec> scanSpec,
-    std::shared_ptr<common::MetadataFilter> metadataFilter,
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    const std::shared_ptr<common::MetadataFilter>& metadataFilter,
     const RowTypePtr& rowType,
-    std::shared_ptr<HiveConnectorSplit> hiveSplit) {
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit) {
   auto skipRowsIt =
       tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
   if (skipRowsIt != tableParameters.end()) {
@@ -510,9 +517,16 @@ void configureRowReaderOptions(
 
   std::vector<std::string> columnNames;
   for (auto& spec : scanSpec->children()) {
-    if (!spec->isConstant()) {
-      columnNames.push_back(spec->fieldName());
+    if (spec->isConstant()) {
+      continue;
     }
+    std::string name = spec->fieldName();
+    if (!spec->flatMapFeatureSelection().empty()) {
+      name += "#[";
+      name += folly::join(',', spec->flatMapFeatureSelection());
+      name += ']';
+    }
+    columnNames.push_back(std::move(name));
   }
   std::shared_ptr<dwio::common::ColumnSelector> cs;
   if (columnNames.empty()) {
@@ -555,13 +569,15 @@ bool applyPartitionFilter(
 } // namespace
 
 bool testFilters(
-    common::ScanSpec* scanSpec,
-    dwio::common::Reader* reader,
+    const common::ScanSpec* scanSpec,
+    const dwio::common::Reader* reader,
     const std::string& filePath,
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKey,
-    std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         partitionKeysHandle) {
+  VELOX_CHECK_EQ(partitionKey.size(), partitionKeysHandle.size());
+
   auto totalRows = reader->numberOfRows();
   const auto& fileTypeWithId = reader->typeWithId();
   const auto& rowType = reader->rowType();
@@ -572,8 +588,11 @@ bool testFilters(
         // If missing column is partition key.
         auto iter = partitionKey.find(name);
         if (iter != partitionKey.end() && iter->second.has_value()) {
+          auto handlesIter = partitionKeysHandle.find(name);
+          VELOX_CHECK(handlesIter != partitionKeysHandle.end());
+
           return applyPartitionFilter(
-              (*partitionKeysHandle)[name]->dataType()->kind(),
+              handlesIter->second->dataType()->kind(),
               iter->second.value(),
               child->filter());
         }

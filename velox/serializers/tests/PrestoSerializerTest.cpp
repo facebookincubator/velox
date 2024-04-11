@@ -62,7 +62,7 @@ class PrestoSerializerTest
       rawRowSizes[i] = &rowSizes[i];
     }
     serde_->estimateSerializedSize(
-        rowVector,
+        rowVector.get(),
         folly::Range(rows.data(), numRows),
         rawRowSizes.data(),
         scratch);
@@ -87,16 +87,26 @@ class PrestoSerializerTest
       std::ostream* output,
       const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions,
       std::optional<folly::Range<const IndexRange*>> indexRanges = std::nullopt,
-      std::optional<folly::Range<const vector_size_t*>> rows = std::nullopt) {
+      std::optional<folly::Range<const vector_size_t*>> rows = std::nullopt,
+      std::unique_ptr<IterativeVectorSerializer>* reuseSerializer = nullptr,
+      std::unique_ptr<StreamArena>* reuseArena = nullptr) {
     auto streamInitialSize = output->tellp();
     sanityCheckEstimateSerializedSize(rowVector);
 
-    auto arena = std::make_unique<StreamArena>(pool_.get());
+    std::unique_ptr<StreamArena> arena;
     auto rowType = asRowType(rowVector->type());
     auto numRows = rowVector->size();
     auto paramOptions = getParamSerdeOptions(serdeOptions);
-    auto serializer = serde_->createIterativeSerializer(
-        rowType, numRows, arena.get(), &paramOptions);
+    std::unique_ptr<IterativeVectorSerializer> serializer;
+    if (reuseSerializer && *reuseSerializer) {
+      arena = std::move(*reuseArena);
+      serializer = std::move(*reuseSerializer);
+      serializer->clear();
+    } else {
+      arena = std::make_unique<StreamArena>(pool_.get());
+      serializer = serde_->createIterativeSerializer(
+          rowType, numRows, arena.get(), &paramOptions);
+    }
     vector_size_t sizeEstimate = 0;
 
     Scratch scratch;
@@ -104,19 +114,19 @@ class PrestoSerializerTest
       raw_vector<vector_size_t*> sizes(indexRanges.value().size());
       std::fill(sizes.begin(), sizes.end(), &sizeEstimate);
       serde_->estimateSerializedSize(
-          rowVector, indexRanges.value(), sizes.data(), scratch);
+          rowVector.get(), indexRanges.value(), sizes.data(), scratch);
       serializer->append(rowVector, indexRanges.value(), scratch);
     } else if (rows.has_value()) {
       raw_vector<vector_size_t*> sizes(rows.value().size());
       std::fill(sizes.begin(), sizes.end(), &sizeEstimate);
       serde_->estimateSerializedSize(
-          rowVector, rows.value(), sizes.data(), scratch);
+          rowVector.get(), rows.value(), sizes.data(), scratch);
       serializer->append(rowVector, rows.value(), scratch);
     } else {
       vector_size_t* sizes = &sizeEstimate;
       IndexRange range{0, rowVector->size()};
       serde_->estimateSerializedSize(
-          rowVector,
+          rowVector.get(),
           folly::Range<const IndexRange*>(&range, 1),
           &sizes,
           scratch);
@@ -133,6 +143,10 @@ class PrestoSerializerTest
       EXPECT_EQ(size, out.tellp() - streamInitialSize);
     } else {
       EXPECT_GE(size, out.tellp() - streamInitialSize);
+    }
+    if (reuseSerializer) {
+      *reuseArena = std::move(arena);
+      *reuseSerializer = std::move(serializer);
     }
     return {static_cast<int64_t>(size), sizeEstimate};
   }
@@ -218,9 +232,18 @@ class PrestoSerializerTest
       VectorPtr vector,
       const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions =
           nullptr) {
+    std::unique_ptr<IterativeVectorSerializer> reuseSerializer;
+    std::unique_ptr<StreamArena> reuseArena;
     auto rowVector = makeRowVector({vector});
     std::ostringstream out;
-    serialize(rowVector, &out, serdeOptions);
+    serialize(
+        rowVector,
+        &out,
+        serdeOptions,
+        std::nullopt,
+        std::nullopt,
+        &reuseSerializer,
+        &reuseArena);
 
     auto rowType = asRowType(rowVector->type());
     auto deserialized = deserialize(rowType, out.str(), serdeOptions);
@@ -236,7 +259,14 @@ class PrestoSerializerTest
     std::vector<std::string> serialized;
     for (const auto& split : splits) {
       std::ostringstream out;
-      serialize(split, &out, serdeOptions);
+      serialize(
+          split,
+          &out,
+          serdeOptions,
+          std::nullopt,
+          std::nullopt,
+          &reuseSerializer,
+          &reuseArena);
       serialized.push_back(out.str());
     }
 
@@ -257,12 +287,16 @@ class PrestoSerializerTest
         makeIndices(rowVector->size() / 2, [&](auto row) { return row * 2; });
     auto odd = makeIndices(
         (rowVector->size() - 1) / 2, [&](auto row) { return (row * 2) + 1; });
-    testSerializeRows(rowVector, even, serdeOptions);
-    auto oddStats = testSerializeRows(rowVector, odd, serdeOptions);
+    testSerializeRows(
+        rowVector, even, serdeOptions, &reuseSerializer, &reuseArena);
+    auto oddStats = testSerializeRows(
+        rowVector, odd, serdeOptions, &reuseSerializer, &reuseArena);
     auto wrappedRowVector = wrapChildren(rowVector);
-    auto wrappedStats = testSerializeRows(wrappedRowVector, odd, serdeOptions);
+    auto wrappedStats = testSerializeRows(
+        wrappedRowVector, odd, serdeOptions, &reuseSerializer, &reuseArena);
     EXPECT_EQ(oddStats.estimatedSize, wrappedStats.estimatedSize);
-    EXPECT_EQ(oddStats.actualSize, wrappedStats.actualSize);
+    // The second serialization may come out smaller if encoding is better.
+    EXPECT_GE(oddStats.actualSize, wrappedStats.actualSize);
   }
 
   void testLexer(
@@ -278,12 +312,20 @@ class PrestoSerializerTest
   SerializeStats testSerializeRows(
       const RowVectorPtr& rowVector,
       BufferPtr indices,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions*
-          serdeOptions) {
+      const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions,
+      std::unique_ptr<IterativeVectorSerializer>* reuseSerializer,
+      std::unique_ptr<StreamArena>* reuseArena) {
     std::ostringstream out;
     auto rows = folly::Range<const vector_size_t*>(
         indices->as<vector_size_t>(), indices->size() / sizeof(vector_size_t));
-    auto stats = serialize(rowVector, &out, serdeOptions, std::nullopt, rows);
+    auto stats = serialize(
+        rowVector,
+        &out,
+        serdeOptions,
+        std::nullopt,
+        rows,
+        reuseSerializer,
+        reuseArena);
 
     auto rowType = asRowType(rowVector->type());
     auto deserialized = deserialize(rowType, out.str(), serdeOptions);
@@ -380,21 +422,16 @@ class PrestoSerializerTest
       const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions =
           nullptr) {
     std::vector<std::string> pieces;
+    std::vector<std::string> reusedPieces;
     auto rowType = ROW({{"f", vectors[0]->type()}});
     auto concatenation = BaseVector::create(rowType, 0, pool_.get());
     auto arena = std::make_unique<StreamArena>(pool_.get());
     auto paramOptions = getParamSerdeOptions(serdeOptions);
     auto serializer = serde_->createIterativeSerializer(
         rowType, 10, arena.get(), &paramOptions);
+    auto reusedSerializer = serde_->createIterativeSerializer(
+        rowType, 10, arena.get(), &paramOptions);
 
-    for (const auto& vector : vectors) {
-      auto data = makeRowVector({"f"}, {vector});
-      concatenation->append(data.get());
-      std::ostringstream out;
-      serializeBatch(data, &out, &paramOptions);
-      pieces.push_back(out.str());
-      serializer->append(data);
-    }
     facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
     std::ostringstream allOut;
     OStreamOutputStream allOutStream(&allOut, &listener);
@@ -404,7 +441,8 @@ class PrestoSerializerTest
     assertEqualVectors(allDeserialized, concatenation);
     RowVectorPtr deserialized =
         BaseVector::create<RowVector>(rowType, 0, pool_.get());
-    for (auto& piece : pieces) {
+    for (auto pieceIdx = 0; pieceIdx < pieces.size(); ++pieceIdx) {
+      auto piece = pieces[pieceIdx];
       auto byteStream = toByteStream(piece);
       serde_->deserialize(
           &byteStream,
@@ -413,8 +451,41 @@ class PrestoSerializerTest
           &deserialized,
           deserialized->size(),
           &paramOptions);
+
+      RowVectorPtr single =
+          BaseVector::create<RowVector>(rowType, 0, pool_.get());
+      byteStream = toByteStream(piece);
+      serde_->deserialize(
+          &byteStream, pool_.get(), rowType, &single, 0, &paramOptions);
+      assertEqualVectors(single->childAt(0), vectors[pieceIdx]);
+
+      RowVectorPtr single2 =
+          BaseVector::create<RowVector>(rowType, 0, pool_.get());
+      byteStream = toByteStream(reusedPieces[pieceIdx]);
+      serde_->deserialize(
+          &byteStream, pool_.get(), rowType, &single2, 0, &paramOptions);
+      assertEqualVectors(single2->childAt(0), vectors[pieceIdx]);
     }
     assertEqualVectors(concatenation, deserialized);
+  }
+  int64_t randInt(int64_t min, int64_t max) {
+    return min + folly::Random::rand64(rng_) % (max - min);
+  }
+
+  void randomOptions(VectorFuzzer::Options& options, bool isFirst) {
+    options.nullRatio = randInt(1, 10) < 3 ? 0.0 : randInt(1, 10) / 10.0;
+    options.stringLength = randInt(1, 100);
+    options.stringVariableLength = true;
+    options.containerLength = randInt(1, 50);
+    options.containerVariableLength = true;
+    options.complexElementsMaxSize = 20000;
+    options.maxConstantContainerSize = 2;
+    options.normalizeMapKeys = randInt(0, 20) < 16;
+    if (isFirst) {
+      options.timestampPrecision =
+          static_cast<VectorFuzzer::Options::TimestampPrecision>(randInt(0, 3));
+    }
+    options.allowLazyVector = false;
   }
 
   void serializeBatch(
@@ -664,7 +735,27 @@ class PrestoSerializerTest
         alphabetSize / factor);
   }
 
+  RowVectorPtr makeEmptyTestVector() {
+    return makeRowVector(
+        {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"},
+        {makeFlatVector<bool>({}),
+         makeFlatVector<int8_t>({}),
+         makeFlatVector<int16_t>({}),
+         makeFlatVector<int32_t>({}),
+         makeFlatVector<int64_t>({}),
+         makeFlatVector<float>({}),
+         makeFlatVector<double>({}),
+         makeFlatVector<StringView>({}),
+         makeFlatVector<Timestamp>({}),
+         makeRowVector(
+             {"1", "2"},
+             {makeFlatVector<StringView>({}), makeFlatVector<int32_t>({})}),
+         makeArrayVector<int32_t>({}),
+         makeMapVector<StringView, int32_t>({})});
+  }
+
   std::unique_ptr<serializer::presto::PrestoVectorSerde> serde_;
+  folly::Random::DefaultGenerator rng_;
 };
 
 TEST_P(PrestoSerializerTest, basic) {
@@ -699,7 +790,7 @@ TEST_P(PrestoSerializerTest, dictionaryWithExtraNulls) {
 }
 
 TEST_P(PrestoSerializerTest, emptyPage) {
-  auto rowVector = makeRowVector(ROW({"a"}, {BIGINT()}), 0);
+  auto rowVector = makeEmptyTestVector();
 
   std::ostringstream out;
   serialize(rowVector, &out, nullptr);
@@ -707,6 +798,50 @@ TEST_P(PrestoSerializerTest, emptyPage) {
   auto rowType = asRowType(rowVector->type());
   auto deserialized = deserialize(rowType, out.str(), nullptr);
   assertEqualVectors(deserialized, rowVector);
+}
+
+TEST_P(PrestoSerializerTest, serializeNoRowsSelected) {
+  std::ostringstream out;
+  facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+  OStreamOutputStream output(&out, &listener);
+  auto paramOptions = getParamSerdeOptions(nullptr);
+  auto arena = std::make_unique<StreamArena>(pool_.get());
+  auto rowVector = makeRowVector(
+      {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"},
+      {makeFlatVector<bool>({true, false, true, false}),
+       makeFlatVector<int8_t>({1, 2, 3, 4}),
+       makeFlatVector<int16_t>({5, 6, 7, 8}),
+       makeFlatVector<int32_t>({9, 10, 11, 12}),
+       makeFlatVector<int64_t>({13, 14, 15, 16}),
+       makeFlatVector<float>({17.0, 18.0, 19.0, 20.0}),
+       makeFlatVector<double>({21.0, 22.0, 23.0, 24.0}),
+       makeFlatVector<StringView>({"25", "26", "27", "28"}),
+       makeFlatVector<Timestamp>({{29, 30}, {32, 32}, {33, 34}, {35, 36}}),
+       makeRowVector(
+           {"1", "2"},
+           {makeFlatVector<StringView>({"37", "38", "39", "40"}),
+            makeFlatVector<int32_t>({41, 42, 43, 44})}),
+       makeArrayVector<int32_t>({{45, 46}, {47, 48}, {49, 50}, {51, 52}}),
+       makeMapVector<StringView, int32_t>(
+           {{{"53", 54}, {"55", 56}},
+            {{"57", 58}, {"59", 60}},
+            {{"61", 62}, {"63", 64}},
+            {{"65", 66}, {"67", 68}}})});
+  const IndexRange noRows{0, 0};
+
+  auto serializer = serde_->createIterativeSerializer(
+      asRowType(rowVector->type()),
+      rowVector->size(),
+      arena.get(),
+      &paramOptions);
+
+  serializer->append(rowVector, folly::Range(&noRows, 1));
+  serializer->flush(&output);
+
+  auto expected = makeEmptyTestVector();
+  auto rowType = asRowType(expected->type());
+  auto deserialized = deserialize(rowType, out.str(), nullptr);
+  assertEqualVectors(deserialized, expected);
 }
 
 TEST_P(PrestoSerializerTest, emptyArray) {
@@ -1002,6 +1137,55 @@ TEST_P(PrestoSerializerTest, dictionaryEncodingTurnedOff) {
   ASSERT_EQ(deserialized->childAt(9)->encoding(), VectorEncoding::Simple::FLAT);
 }
 
+TEST_P(PrestoSerializerTest, emptyVectorBatchVectorSerializer) {
+  // Serialize an empty RowVector.
+  auto rowVector = makeEmptyTestVector();
+
+  std::ostringstream out;
+  serializeBatch(rowVector, &out, nullptr);
+
+  auto rowType = asRowType(rowVector->type());
+  auto deserialized = deserialize(rowType, out.str(), nullptr);
+  assertEqualVectors(deserialized, rowVector);
+}
+
+TEST_P(PrestoSerializerTest, serializeNoRowsSelectedBatchVectorSerializer) {
+  std::ostringstream out;
+  facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+  OStreamOutputStream output(&out, &listener);
+  auto paramOptions = getParamSerdeOptions(nullptr);
+  auto serializer = serde_->createBatchSerializer(pool_.get(), &paramOptions);
+  auto rowVector = makeRowVector(
+      {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"},
+      {makeFlatVector<bool>({true, false, true, false}),
+       makeFlatVector<int8_t>({1, 2, 3, 4}),
+       makeFlatVector<int16_t>({5, 6, 7, 8}),
+       makeFlatVector<int32_t>({9, 10, 11, 12}),
+       makeFlatVector<int64_t>({13, 14, 15, 16}),
+       makeFlatVector<float>({17.0, 18.0, 19.0, 20.0}),
+       makeFlatVector<double>({21.0, 22.0, 23.0, 24.0}),
+       makeFlatVector<StringView>({"25", "26", "27", "28"}),
+       makeFlatVector<Timestamp>({{29, 30}, {32, 32}, {33, 34}, {35, 36}}),
+       makeRowVector(
+           {"1", "2"},
+           {makeFlatVector<StringView>({"37", "38", "39", "40"}),
+            makeFlatVector<int32_t>({41, 42, 43, 44})}),
+       makeArrayVector<int32_t>({{45, 46}, {47, 48}, {49, 50}, {51, 52}}),
+       makeMapVector<StringView, int32_t>(
+           {{{"53", 54}, {"55", 56}},
+            {{"57", 58}, {"59", 60}},
+            {{"61", 62}, {"63", 64}},
+            {{"65", 66}, {"67", 68}}})});
+  const IndexRange noRows{0, 0};
+
+  serializer->serialize(rowVector, folly::Range(&noRows, 1), &output);
+
+  auto expected = makeEmptyTestVector();
+  auto rowType = asRowType(expected->type());
+  auto deserialized = deserialize(rowType, out.str(), nullptr);
+  assertEqualVectors(deserialized, expected);
+}
+
 TEST_P(PrestoSerializerTest, lazy) {
   constexpr int kSize = 1000;
   auto rowVector = makeTestVector(kSize);
@@ -1020,7 +1204,7 @@ TEST_P(PrestoSerializerTest, ioBufRoundTrip) {
   opts.nullRatio = 0.1;
   VectorFuzzer fuzzer(opts, pool_.get());
 
-  const size_t numRounds = 100;
+  const size_t numRounds = 200;
 
   for (size_t i = 0; i < numRounds; ++i) {
     auto rowType = fuzzer.randRowType();
@@ -1121,6 +1305,36 @@ TEST_P(PrestoSerializerTest, encodedConcatenation) {
     for (auto i = 0; i < permutations.size(); ++i) {
       serializer::presto::PrestoVectorSerde::PrestoOptions opts;
       opts.nullsFirst = i % 2 == 0;
+
+      testEncodedConcatenation(permutations[i], &opts);
+    }
+  }
+}
+
+TEST_P(PrestoSerializerTest, encodedConcatenation2) {
+  // Slow test, run only for no compression.
+  if (GetParam() != common::CompressionKind::CompressionKind_NONE) {
+    return;
+  }
+  VectorFuzzer::Options options;
+  VectorFuzzer fuzzer(options, pool_.get());
+  for (auto nthType = 0; nthType < 20; ++nthType) {
+    auto type = (fuzzer.randRowType());
+
+    std::vector<VectorPtr> vectors;
+    for (auto nth = 0; nth < 3; ++nth) {
+      randomOptions(options, 0 == nth);
+      fuzzer.setOptions(options);
+      vectors.push_back(fuzzer.fuzzInputRow(type));
+    }
+    std::vector<std::vector<VectorPtr>> permutations;
+    std::vector<VectorPtr> temp;
+    makePermutations(vectors, 3, temp, permutations);
+    for (auto i = 0; i < permutations.size(); ++i) {
+      serializer::presto::PrestoVectorSerde::PrestoOptions opts;
+      opts.useLosslessTimestamp = true;
+      opts.nullsFirst = i % 2 == 0;
+
       testEncodedConcatenation(permutations[i], &opts);
     }
   }
@@ -1313,4 +1527,346 @@ TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
     auto data = fuzzer.fuzz(type);
     testRoundTripSingleColumn(data);
   }
+}
+
+class PrestoSerializerBatchEstimateSizeTest : public testing::Test,
+                                              public VectorTestBase {
+ protected:
+  static void SetUpTestSuite() {
+    if (!isRegisteredVectorSerde()) {
+      serializer::presto::PrestoVectorSerde::registerVectorSerde();
+    }
+
+    memory::MemoryManager::testingSetInstance({});
+  }
+
+  void SetUp() override {
+    serde_ = std::make_unique<serializer::presto::PrestoVectorSerde>();
+    serializer_ = serde_->createBatchSerializer(pool_.get(), &paramOptions_);
+  }
+
+  void testEstimateSerializedSize(
+      VectorPtr input,
+      const std::vector<IndexRange>& ranges,
+      const std::vector<vector_size_t>& expectedSizes) {
+    ASSERT_EQ(ranges.size(), expectedSizes.size());
+
+    // Wrap the input a RowVector to better emulate production.
+    auto row = makeRowVector({input});
+
+    std::vector<vector_size_t> sizes(ranges.size(), 0);
+    std::vector<vector_size_t*> sizesPtrs(ranges.size());
+    for (int i = 0; i < ranges.size(); i++) {
+      sizesPtrs[i] = &sizes[i];
+    }
+
+    Scratch scratch;
+    serializer_->estimateSerializedSize(row, ranges, sizesPtrs.data(), scratch);
+
+    for (int i = 0; i < expectedSizes.size(); i++) {
+      // Add 4 bytes for each row in the wrapper. This is needed because we wrap
+      // the input in a RowVector.
+      ASSERT_EQ(sizes[i], expectedSizes[i] + 4 * ranges[i].size)
+          << "Mismatched estimated size for range" << i << " "
+          << ranges[i].begin << ":" << ranges[i].size;
+    }
+  }
+
+  void testEstimateSerializedSize(
+      const VectorPtr& vector,
+      vector_size_t totalExpectedSize) {
+    // The whole Vector is a single range.
+    testEstimateSerializedSize(
+        vector, {{0, vector->size()}}, {totalExpectedSize});
+    // Split the Vector into two equal ranges.
+    testEstimateSerializedSize(
+        vector,
+        {{0, vector->size() / 2}, {vector->size() / 2, vector->size() / 2}},
+        {totalExpectedSize / 2, totalExpectedSize / 2});
+    // Split the Vector into three ranges of 1/4, 1/2, 1/4.
+    testEstimateSerializedSize(
+        vector,
+        {{0, vector->size() / 4},
+         {vector->size() / 4, vector->size() / 2},
+         {vector->size() * 3 / 4, vector->size() / 4}},
+        {totalExpectedSize / 4, totalExpectedSize / 2, totalExpectedSize / 4});
+  }
+
+  std::unique_ptr<serializer::presto::PrestoVectorSerde> serde_;
+  std::unique_ptr<BatchVectorSerializer> serializer_;
+  serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions_;
+};
+
+TEST_F(PrestoSerializerBatchEstimateSizeTest, flat) {
+  auto flatBoolVector =
+      makeFlatVector<bool>(32, [](vector_size_t row) { return row % 2 == 0; });
+
+  // Bools are 1 byte each.
+  // 32 * 1 = 32
+  testEstimateSerializedSize(flatBoolVector, 32);
+
+  auto flatIntVector =
+      makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
+
+  // Ints are 4 bytes each.
+  // 4 * 32 = 128
+  testEstimateSerializedSize(flatIntVector, 128);
+
+  auto flatDoubleVector =
+      makeFlatVector<double>(32, [](vector_size_t row) { return row; });
+
+  // Doubles are 8 bytes each.
+  // 8 * 32 = 256
+  testEstimateSerializedSize(flatDoubleVector, 256);
+
+  auto flatStringVector = makeFlatVector<std::string>(
+      32, [](vector_size_t row) { return fmt::format("{}", row); });
+
+  // Strings are variable length, the first 10 are 1 byte each, the rest are 2
+  // bytes.  Plus 4 bytes for the length of each string.
+  // 10 * 1 + 22 * 2 + 4 * 32 = 182
+  testEstimateSerializedSize(flatStringVector, {{0, 32}}, {182});
+  testEstimateSerializedSize(flatStringVector, {{0, 16}, {16, 16}}, {86, 96});
+  testEstimateSerializedSize(
+      flatStringVector, {{0, 8}, {8, 16}, {24, 8}}, {40, 94, 48});
+
+  auto flatVectorWithNulls = makeFlatVector<double>(
+      32,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row % 4 == 0; });
+
+  // Doubles are 8 bytes each, and only non-null doubles are counted. In
+  // addition there's a null bit per row.
+  // 8 * 24 + (32 / 8) = 196
+  testEstimateSerializedSize(flatVectorWithNulls, {{0, 32}}, {196});
+  testEstimateSerializedSize(
+      flatVectorWithNulls, {{0, 16}, {16, 16}}, {98, 98});
+  testEstimateSerializedSize(
+      flatVectorWithNulls, {{0, 8}, {8, 16}, {24, 8}}, {49, 98, 49});
+}
+
+TEST_F(PrestoSerializerBatchEstimateSizeTest, array) {
+  std::vector<vector_size_t> offsets{
+      0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30};
+  auto elements =
+      makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
+  auto arrayVector = makeArrayVector(offsets, elements);
+
+  // The ints in the array are 4 bytes each, and the array length is another 4
+  // bytes per row.
+  // 4 * 32 + 4 * 16 = 192
+  testEstimateSerializedSize(arrayVector, 192);
+
+  std::vector<vector_size_t> offsetsWithEmptyOrNulls{
+      0, 4, 4, 8, 8, 12, 12, 16, 16, 20, 20, 24, 24, 28, 28, 32};
+  auto arrayVectorWithEmptyArrays =
+      makeArrayVector(offsetsWithEmptyOrNulls, elements);
+
+  // The ints in the array are 4 bytes each, and the array length is another 4
+  // bytes per row.
+  // 4 * 32 + 4 * 16 = 192
+  testEstimateSerializedSize(arrayVectorWithEmptyArrays, 192);
+
+  std::vector<vector_size_t> nullOffsets{1, 3, 5, 7, 9, 11, 13, 15};
+  auto arrayVectorWithNulls =
+      makeArrayVector(offsetsWithEmptyOrNulls, elements, nullOffsets);
+
+  // The ints in the array are 4 bytes each, and the array length is another 4
+  // bytes per non-null row, and 1 null bit per row.
+  // 4 * 32 + 4 * 8 + 16 / 8 = 162
+  testEstimateSerializedSize(arrayVectorWithNulls, {{0, 16}}, {162});
+  testEstimateSerializedSize(arrayVectorWithNulls, {{0, 8}, {8, 8}}, {81, 81});
+  testEstimateSerializedSize(
+      arrayVectorWithNulls, {{0, 4}, {4, 8}, {8, 4}}, {41, 81, 41});
+}
+
+TEST_F(PrestoSerializerBatchEstimateSizeTest, map) {
+  std::vector<vector_size_t> offsets{
+      0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30};
+  auto keys =
+      makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
+  auto values =
+      makeFlatVector<double>(32, [](vector_size_t row) { return row; });
+  auto mapVector = makeMapVector(offsets, keys, values);
+
+  // The ints in the map are 4 bytes each, the doubles are 8 bytes, and the map
+  // length is another 4 bytes per row.
+  // 4 * 32 + 8 * 32 + 4 * 16 = 448
+  testEstimateSerializedSize(mapVector, 448);
+
+  std::vector<vector_size_t> offsetsWithEmptyOrNulls{
+      0, 4, 4, 8, 8, 12, 12, 16, 16, 20, 20, 24, 24, 28, 28, 32};
+  auto mapVectorWithEmptyMaps =
+      makeMapVector(offsetsWithEmptyOrNulls, keys, values);
+
+  // The ints in the map are 4 bytes each, the doubles are 8 bytes, and the map
+  // length is another 4 bytes per row.
+  // 4 * 32 + 8 * 32 + 4 * 16 = 448
+  testEstimateSerializedSize(mapVectorWithEmptyMaps, 448);
+
+  std::vector<vector_size_t> nullOffsets{1, 3, 5, 7, 9, 11, 13, 15};
+  auto mapVectorWithNulls =
+      makeMapVector(offsetsWithEmptyOrNulls, keys, values, nullOffsets);
+
+  // The ints in the map are 4 bytes each, the doubles are 8 bytes, and the map
+  // length is another 4 bytes per non-null row, and 1 null bit per row.
+  // 4 * 32 + 8 * 32 + 4 * 8 + 16 / 8 = 216
+  testEstimateSerializedSize(mapVectorWithNulls, {{0, 16}}, {418});
+  testEstimateSerializedSize(mapVectorWithNulls, {{0, 8}, {8, 8}}, {209, 209});
+  testEstimateSerializedSize(
+      mapVectorWithNulls, {{0, 4}, {4, 8}, {12, 4}}, {105, 209, 105});
+}
+
+TEST_F(PrestoSerializerBatchEstimateSizeTest, row) {
+  auto field1 =
+      makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
+  auto field2 =
+      makeFlatVector<double>(32, [](vector_size_t row) { return row; });
+  auto rowVector = makeRowVector({field1, field2});
+
+  // The ints in the row are 4 bytes each, the doubles are 8 bytes, and the
+  // offsets are 4 bytes per row.
+  // 4 * 32 + 8 * 32 + 4 * 32 = 512
+  testEstimateSerializedSize(rowVector, 512);
+
+  auto rowVectorWithNulls =
+      makeRowVector({field1, field2}, [](auto row) { return row % 4 == 0; });
+
+  // The ints in the row are 4 bytes each, the doubles are 8 bytes, and the
+  // offsets are 4 bytes per row, and 1 null bit per row.
+  // 4 * 24 + 8 * 24 + 4 * 32 + 32 / 8 = 420
+  testEstimateSerializedSize(rowVectorWithNulls, 420);
+}
+
+TEST_F(PrestoSerializerBatchEstimateSizeTest, constant) {
+  auto flatVector =
+      makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
+  auto constantInt = BaseVector::wrapInConstant(32, 0, flatVector);
+
+  // The single constant int is 4 bytes.
+  testEstimateSerializedSize(constantInt, {{0, 32}}, {4});
+  testEstimateSerializedSize(constantInt, {{0, 16}, {16, 16}}, {4, 4});
+  testEstimateSerializedSize(
+      constantInt, {{0, 8}, {8, 16}, {24, 8}}, {4, 4, 4});
+
+  auto nullConstant = BaseVector::createNullConstant(BIGINT(), 32, pool_.get());
+
+  // The single constant null is 1 byte (for the bit mask).
+  testEstimateSerializedSize(nullConstant, {{0, 32}}, {1});
+  testEstimateSerializedSize(nullConstant, {{0, 16}, {16, 16}}, {1, 1});
+  testEstimateSerializedSize(
+      nullConstant, {{0, 8}, {8, 16}, {24, 8}}, {1, 1, 1});
+
+  std::vector<vector_size_t> offsets{
+      0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30};
+  auto arrayVector = makeArrayVector(offsets, flatVector);
+  auto constantArray = BaseVector::wrapInConstant(32, 0, arrayVector);
+
+  // The single constant array is 4 bytes for the length, and 4 bytes for each
+  // of the 2 integer elements.
+  // 4 + 2 * 4 = 12
+  testEstimateSerializedSize(constantArray, {{0, 32}}, {12});
+  testEstimateSerializedSize(constantArray, {{0, 16}, {16, 16}}, {12, 12});
+  testEstimateSerializedSize(
+      constantArray, {{0, 8}, {8, 16}, {24, 8}}, {12, 12, 12});
+
+  auto arrayVectorWithConstantElements = makeArrayVector(offsets, constantInt);
+  auto constantArrayWithConstantElements =
+      BaseVector::wrapInConstant(32, 0, arrayVectorWithConstantElements);
+
+  // The single constant array is 4 bytes for the length, and 4 bytes for each
+  // of the 2 integer elements (encodings for children of encoded complex types
+  // are not currently preserved).
+  // 4 + 2 * 4 = 12
+  testEstimateSerializedSize(
+      constantArrayWithConstantElements, {{0, 32}}, {12});
+  testEstimateSerializedSize(
+      constantArrayWithConstantElements, {{0, 16}, {16, 16}}, {12, 12});
+  testEstimateSerializedSize(
+      constantArrayWithConstantElements,
+      {{0, 8}, {8, 16}, {24, 8}},
+      {12, 12, 12});
+}
+
+TEST_F(PrestoSerializerBatchEstimateSizeTest, dictionary) {
+  auto indices = makeIndices(32, [](auto row) { return (row * 2) % 32; });
+  auto flatVector =
+      makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
+  auto dictionaryInts =
+      BaseVector::wrapInDictionary(nullptr, indices, 32, flatVector);
+
+  // The indices are 4 bytes, and the dictionary entries are 4 bytes each.
+  // 4 * 32 + 4 * 16 = 192
+  testEstimateSerializedSize(dictionaryInts, {{0, 32}}, {192});
+  testEstimateSerializedSize(dictionaryInts, {{0, 16}, {16, 16}}, {128, 128});
+  testEstimateSerializedSize(
+      dictionaryInts, {{0, 8}, {8, 16}, {24, 8}}, {64, 128, 64});
+
+  auto flatVectorWithNulls = makeFlatVector<double>(
+      32,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row % 4 == 0; });
+  auto dictionaryNullElements =
+      BaseVector::wrapInDictionary(nullptr, indices, 32, flatVectorWithNulls);
+
+  // The indices are 4 bytes, half the dictionary entries are 8 byte doubles.
+  // Note that the bytes for the null bits in the entries are not accounted for,
+  // this is a limitation of having non-contiguous ranges selected from the
+  // dictionary values.
+  // 4 * 32 + 8 * 8 = 192
+  testEstimateSerializedSize(dictionaryNullElements, {{0, 32}}, {192});
+  testEstimateSerializedSize(
+      dictionaryNullElements, {{0, 16}, {16, 16}}, {128, 128});
+  testEstimateSerializedSize(
+      dictionaryNullElements, {{0, 8}, {8, 16}, {24, 8}}, {64, 128, 64});
+
+  auto arrayIndices = makeIndices(16, [](auto row) { return (row * 2) % 16; });
+  std::vector<vector_size_t> offsets{
+      0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30};
+  auto arrayVector = makeArrayVector(offsets, flatVector);
+  auto dictionaryArray =
+      BaseVector::wrapInDictionary(nullptr, arrayIndices, 16, arrayVector);
+
+  // The indices are 4 bytes, and the dictionary entries are 4 bytes length + 4
+  // bytes for each of the 2 array elements.
+  // 4 * 16 + 4 * 8 + 2 * 8 * 4 = 160
+  testEstimateSerializedSize(dictionaryArray, {{0, 16}}, {160});
+  testEstimateSerializedSize(dictionaryArray, {{0, 8}, {8, 8}}, {128, 128});
+  testEstimateSerializedSize(
+      dictionaryArray, {{0, 4}, {4, 8}, {12, 4}}, {64, 128, 64});
+
+  auto constantInt = BaseVector::wrapInConstant(32, 0, flatVector);
+  auto arrayVectorWithConstantElements = makeArrayVector(offsets, constantInt);
+  auto dictionaryArrayWithConstantElements = BaseVector::wrapInDictionary(
+      nullptr, arrayIndices, 16, arrayVectorWithConstantElements);
+
+  // The indices are 4 bytes, and the dictionary entries are 4 bytes length + 4
+  // bytes for each of the 2 array elements (encodings for children of encoded
+  // complex types are not currently preserved).
+  // 4 * 16 + 4 * 8 + 2 * 8 * 4 = 160
+  testEstimateSerializedSize(
+      dictionaryArrayWithConstantElements, {{0, 16}}, {160});
+  testEstimateSerializedSize(
+      dictionaryArrayWithConstantElements, {{0, 8}, {8, 8}}, {128, 128});
+  testEstimateSerializedSize(
+      dictionaryArrayWithConstantElements,
+      {{0, 4}, {4, 8}, {12, 4}},
+      {64, 128, 64});
+
+  auto dictionaryWithNulls = BaseVector::wrapInDictionary(
+      makeNulls(32, [](auto row) { return row % 2 == 0; }),
+      indices,
+      32,
+      flatVector);
+
+  // When nulls are present in the dictionary, currently we flatten the data. So
+  // there are 4 bytes per row.  Null bits are only accounted for the null
+  // elements because the non-null elements in the wrapped vector or
+  // non-contiguous.
+  // 4 * 16 + 16 / 8 = 66
+  testEstimateSerializedSize(dictionaryWithNulls, {{0, 32}}, {66});
+  testEstimateSerializedSize(
+      dictionaryWithNulls, {{0, 16}, {16, 16}}, {33, 33});
+  testEstimateSerializedSize(
+      dictionaryWithNulls, {{0, 8}, {8, 16}, {24, 8}}, {17, 33, 17});
 }

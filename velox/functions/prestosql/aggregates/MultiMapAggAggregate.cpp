@@ -16,8 +16,8 @@
 #include "velox/exec/AddressableNonNullValueList.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Strings.h"
+#include "velox/functions/lib/aggregates/ValueList.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/ValueList.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -254,16 +254,6 @@ class MultiMapAggAggregate : public exec::Aggregate {
     return sizeof(AccumulatorType);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    const auto& type = resultType()->childAt(0);
-    for (auto index : indices) {
-      new (groups[index] + offset_) AccumulatorType(type, allocator_);
-    }
-    setAllNulls(groups, indices);
-  }
-
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
@@ -432,11 +422,24 @@ class MultiMapAggAggregate : public exec::Aggregate {
     extractValues(groups, numGroups, result);
   }
 
-  void destroy(folly::Range<char**> groups) override {
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    const auto& type = resultType()->childAt(0);
+    for (auto index : indices) {
+      new (groups[index] + offset_) AccumulatorType(type, allocator_);
+    }
+    setAllNulls(groups, indices);
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
     for (auto* group : groups) {
-      auto accumulator = value<AccumulatorType>(group);
-      accumulator->free(*allocator_);
-      destroyAccumulator<AccumulatorType>(group);
+      if (isInitialized(group)) {
+        auto accumulator = value<AccumulatorType>(group);
+        accumulator->free(*allocator_);
+        destroyAccumulator<AccumulatorType>(group);
+      }
     }
   }
 
@@ -479,7 +482,8 @@ class MultiMapAggAggregate : public exec::Aggregate {
 
 void registerMultiMapAggAggregate(
     const std::string& prefix,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("K")
@@ -538,7 +542,8 @@ void registerMultiMapAggAggregate(
                 "Unexpected type {}", mapTypeKindToName(typeKind));
         }
       },
-      withCompanionFunctions);
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

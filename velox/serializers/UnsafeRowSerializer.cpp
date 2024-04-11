@@ -21,7 +21,7 @@
 namespace facebook::velox::serializer::spark {
 
 void UnsafeRowVectorSerde::estimateSerializedSize(
-    VectorPtr /* vector */,
+    const BaseVector* /* vector */,
     const folly::Range<const IndexRange*>& /* ranges */,
     vector_size_t** /* sizes */,
     Scratch& /*scratch*/) {
@@ -94,7 +94,7 @@ class UnsafeRowVectorSerializer : public IterativeVectorSerializer {
   }
 
  private:
-  memory::MemoryPool* const FOLLY_NONNULL pool_;
+  memory::MemoryPool* const pool_;
   std::vector<BufferPtr> buffers_;
 };
 

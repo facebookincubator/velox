@@ -66,7 +66,7 @@ OrderBy::OrderBy(
       pool(),
       &nonReclaimableSection_,
       spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
-      operatorCtx_->driverCtx()->queryConfig().orderBySpillMemoryThreshold());
+      &spillStats_);
 }
 
 void OrderBy::addInput(RowVectorPtr input) {
@@ -91,7 +91,6 @@ void OrderBy::noMoreInput() {
   Operator::noMoreInput();
   sortBuffer_->noMoreInput();
   maxOutputRows_ = outputBatchRows(sortBuffer_->estimateOutputRowSize());
-  recordSpillStats();
 }
 
 RowVectorPtr OrderBy::getOutput() {
@@ -107,13 +106,5 @@ RowVectorPtr OrderBy::getOutput() {
 void OrderBy::close() {
   Operator::close();
   sortBuffer_.reset();
-}
-
-void OrderBy::recordSpillStats() {
-  VELOX_CHECK_NOT_NULL(sortBuffer_);
-  auto spillStats = sortBuffer_->spilledStats();
-  if (spillStats.has_value()) {
-    Operator::recordSpillStats(spillStats.value());
-  }
 }
 } // namespace facebook::velox::exec

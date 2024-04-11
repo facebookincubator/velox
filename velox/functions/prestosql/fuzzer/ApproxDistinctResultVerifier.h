@@ -55,7 +55,27 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
     expected_ = AssertQueryBuilder(plan).copyResults(input[0]->pool());
     groupingKeys_ = groupingKeys;
     name_ = aggregateName;
-    error_ = extractError(aggregate, input[0]);
+    error_ = extractError(aggregate.call, input[0]);
+    verifyWindow_ = false;
+  }
+
+  // Compute count_distinct(x) over 'input' over 'frame'.
+  void initializeWindow(
+      const std::vector<RowVectorPtr>& input,
+      const std::vector<std::string>& partitionByKeys,
+      const core::WindowNode::Function& function,
+      const std::string& frame,
+      const std::string& windowName) override {
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .window({makeCountDistinctWindowCall(function, frame)})
+                    .planNode();
+
+    expected_ = AssertQueryBuilder(plan).copyResults(input[0]->pool());
+    groupingKeys_ = partitionByKeys;
+    name_ = windowName;
+    error_ = extractError(function.functionCall, input[0]);
+    verifyWindow_ = true;
   }
 
   bool compare(
@@ -78,6 +98,11 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
                             .values({result})
                             .appendColumns({"'actual' as label"})
                             .planNode();
+
+    if (verifyWindow_) {
+      return verifyWindow(
+          expectedSource, actualSource, planNodeIdGenerator, result->pool());
+    }
 
     auto mapAgg = fmt::format("map_agg(label, {}) as m", name_);
     auto plan = PlanBuilder(planNodeIdGenerator)
@@ -134,6 +159,64 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
     return largeGaps.empty();
   }
 
+  // For approx_distinct in window operations, input sets for rows in the same
+  // partition are correlated. Since the error bound of approx_distinct only
+  // applies to independent input sets, we only take one max gap in each
+  // partition when checking the error bound.
+  bool verifyWindow(
+      core::PlanNodePtr& expectedSource,
+      core::PlanNodePtr& actualSource,
+      std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator,
+      memory::MemoryPool* pool) {
+    auto mapAgg = fmt::format("map_agg(label, {}) as m", name_);
+
+    auto keys = groupingKeys_;
+    keys.push_back("row_number");
+
+    // Calculate the gap between each actual and the corresponding expected
+    // counts.
+    auto projections = keys;
+    projections.push_back(
+        "cast(abs(m['actual'] - m['expected']) as double) / cast(m['expected'] as double) as gap");
+
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .localPartition({}, {expectedSource, actualSource})
+            .singleAggregation(keys, {mapAgg})
+            .project(projections)
+            // groupingKeys_ are the partition-by keys for window operations.
+            // The error bound of approx_distinct is for independent input sets,
+            // while input sets in the same partition are correlated. So we only
+            // take one max gap in each partition.
+            .singleAggregation(groupingKeys_, {"max(gap)"})
+            .planNode();
+    auto combined = AssertQueryBuilder(plan).copyResults(pool);
+    const auto numGroups = combined->size();
+
+    std::vector<double> largeGaps;
+    for (auto i = 0; i < numGroups; ++i) {
+      const auto gap =
+          combined->children().back()->as<SimpleVector<double>>()->valueAt(i);
+      if (gap > 2 * error_) {
+        largeGaps.push_back(gap);
+        LOG(ERROR) << fmt::format(
+            "approx_distinct(x, {}) is more than 2 stddev away from "
+            "count(distinct x) at {}. Difference: {}. This is unusual, but doesn't necessarily "
+            "indicate a bug.",
+            error_,
+            combined->toString(i),
+            gap);
+      }
+    }
+
+    // We expect large deviations (>2 stddev) in < 5% of values.
+    if (numGroups >= 50) {
+      return largeGaps.size() <= 3;
+    }
+
+    return largeGaps.empty();
+  }
+
   void reset() override {
     expected_.reset();
   }
@@ -142,9 +225,9 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
   static constexpr double kDefaultError = 0.023;
 
   static double extractError(
-      const core::AggregationNode::Aggregate& aggregate,
+      const core::CallTypedExprPtr& call,
       const RowVectorPtr& input) {
-    const auto& args = aggregate.call->inputs();
+    const auto& args = call->inputs();
 
     if (args.size() == 1) {
       return kDefaultError;
@@ -176,10 +259,31 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
     return countDistinctCall;
   }
 
+  static std::string makeCountDistinctWindowCall(
+      const core::WindowNode::Function& function,
+      const std::string& frame) {
+    const auto& args = function.functionCall->inputs();
+    VELOX_CHECK_GE(args.size(), 1)
+
+    auto inputField = core::TypedExprs::asFieldAccess(args[0]);
+    VELOX_CHECK_NOT_NULL(inputField)
+
+    std::string countDistinctCall =
+        fmt::format("\"$internal$count_distinct\"({})", inputField->name());
+
+    if (function.ignoreNulls) {
+      countDistinctCall += " ignore nulls";
+    }
+    countDistinctCall += " over(" + frame + ")";
+
+    return countDistinctCall;
+  }
+
   RowVectorPtr expected_;
   std::vector<std::string> groupingKeys_;
   std::string name_;
   double error_;
+  bool verifyWindow_{false};
 };
 
 } // namespace facebook::velox::exec::test

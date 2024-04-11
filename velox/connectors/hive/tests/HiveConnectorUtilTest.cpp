@@ -118,6 +118,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_EQ(
       readerOptions.getFilePreloadThreshold(),
       hiveConfig->filePreloadThreshold());
+  EXPECT_EQ(readerOptions.prefetchRowGroups(), hiveConfig->prefetchRowGroups());
 
   // Modify field delimiter and change the file format.
   clearDynamicParameters(FileFormat::TEXT);
@@ -183,6 +184,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   customHiveConfigProps[hive::HiveConfig::kOrcUseColumnNames] = "true";
   customHiveConfigProps[hive::HiveConfig::kFooterEstimatedSize] = "1111";
   customHiveConfigProps[hive::HiveConfig::kFilePreloadThreshold] = "9999";
+  customHiveConfigProps[hive::HiveConfig::kPrefetchRowGroups] = "10";
   hiveConfig = std::make_shared<hive::HiveConfig>(
       std::make_shared<core::MemConfig>(customHiveConfigProps));
   performConfigure();
@@ -203,6 +205,24 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_EQ(
       readerOptions.getFilePreloadThreshold(),
       hiveConfig->filePreloadThreshold());
+  EXPECT_EQ(readerOptions.prefetchRowGroups(), hiveConfig->prefetchRowGroups());
+}
+
+TEST_F(HiveConnectorUtilTest, configureRowReaderOptions) {
+  auto split =
+      std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::UNKNOWN);
+  auto rowType = ROW({{"float_features", MAP(INTEGER(), REAL())}});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*rowType);
+  auto* float_features = spec->childByName("float_features");
+  float_features->childByName(common::ScanSpec::kMapKeysFieldName)
+      ->setFilter(common::createBigintValues({1, 3}, false));
+  float_features->setFlatMapFeatureSelection({"1", "3"});
+  RowReaderOptions options;
+  configureRowReaderOptions(options, {}, spec, nullptr, rowType, split);
+  auto& nodes = options.getSelector()->getProjection();
+  ASSERT_EQ(nodes.size(), 1);
+  ASSERT_EQ(nodes[0].expression, "[1,3]");
 }
 
 } // namespace facebook::velox::connector

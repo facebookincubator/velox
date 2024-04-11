@@ -63,6 +63,8 @@ struct VectorValidateOptions {
   std::function<void(const BaseVector&)> callback;
 };
 
+class DecodedVector;
+
 /**
  * Base class for all columnar-based vectors of any type.
  */
@@ -442,9 +444,7 @@ class BaseVector {
   // Sets null when 'nulls' has a null value for active rows in 'rows'.
   // Is a no-op 'nulls' is a nullptr or 'rows' has no selections. This API
   // throws if the vector is a ConstantVector.
-  virtual void addNulls(
-      const uint64_t* FOLLY_NULLABLE nulls,
-      const SelectivityVector& rows);
+  virtual void addNulls(const uint64_t* nulls, const SelectivityVector& rows);
 
   // Sets nulls for all active row in 'nullRows'. Is a no-op if nullRows has no
   // selections. This API throws if the vector is a ConstantVector.
@@ -602,6 +602,12 @@ class BaseVector {
     return false;
   }
 
+  /// If 'vector' consists of a single value and is longer than one,
+  /// returns an equivalent constant vector, else nullptr.
+  static VectorPtr constantify(
+      const std::shared_ptr<BaseVector>& vector,
+      DecodedVector* decoded = nullptr);
+
   // Flattens the input vector and all of its children.
   static void flattenVector(VectorPtr& vector);
 
@@ -614,6 +620,10 @@ class BaseVector {
   // virtual and defined here because we must be able to access this in type
   // agnostic code without a switch on all data types.
   virtual const VectorPtr& valueVector() const {
+    VELOX_UNSUPPORTED("Vector is not a wrapper");
+  }
+
+  virtual VectorPtr& valueVector() {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
@@ -785,14 +795,6 @@ class BaseVector {
     return toString(from, to, "\n");
   }
 
-  void setCodegenOutput() {
-    isCodegenOutput_ = true;
-  }
-
-  bool isCodegenOutput() const {
-    return isCodegenOutput_;
-  }
-
   /// Marks the vector as containing or being a lazy vector and being wrapped.
   /// Should only be used if 'this' is lazy or has a nested lazy vector.
   /// Returns true if this is the first time it was wrapped, else returns false.
@@ -925,8 +927,6 @@ class BaseVector {
       const TypePtr& type,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
-
-  bool isCodegenOutput_ = false;
 
   friend class LazyVector;
 

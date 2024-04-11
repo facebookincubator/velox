@@ -95,9 +95,11 @@ class WindowFuzzer : public AggregationFuzzerBase {
 
   void addWindowFunctionSignatures(const WindowFunctionMap& signatureMap);
 
-  const std::string generateFrameClause();
+  // Return a randomly generated frame clause string together with a boolean
+  // flag indicating whether it is a ROWS frame.
+  std::tuple<std::string, bool> generateFrameClause();
 
-  const std::string generateOrderByClause(
+  std::string generateOrderByClause(
       const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders);
 
   std::string getFrame(
@@ -118,7 +120,18 @@ class WindowFuzzer : public AggregationFuzzerBase {
       const std::string& functionCall,
       const std::vector<RowVectorPtr>& input,
       bool customVerification,
+      const std::shared_ptr<ResultVerifier>& customVerifier,
       bool enableWindowVerification);
+
+  void testAlternativePlans(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
+      const std::string& frame,
+      const std::string& functionCall,
+      const std::vector<RowVectorPtr>& input,
+      bool customVerification,
+      const std::shared_ptr<ResultVerifier>& customVerifier,
+      const velox::test::ResultOrError& expected);
 
   const std::unordered_set<std::string> orderDependentFunctions_;
 

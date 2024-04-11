@@ -491,7 +491,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, timeLimitInGetOutput) {
   // Count how many times we bailed from getOutput.
   size_t numBailed{0};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::TableScan::getOutput::bail",
+      "facebook::velox::exec::TableScan::getOutput::yield",
       std::function<void(const TableScan*)>(
           ([&](const TableScan* /*tableScan*/) { ++numBailed; })));
 
@@ -1585,6 +1585,18 @@ TEST_F(TableScanTest, emptyFile) {
   } catch (const VeloxException& e) {
     EXPECT_EQ("ORC file is empty", e.message());
   }
+}
+
+TEST_F(TableScanTest, preloadEmptySplit) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+  auto emptyVector = makeVectors(1, 0, rowType);
+  auto vector = makeVectors(1, 1'000, rowType);
+  auto filePaths = makeFilePaths(2);
+  writeToFile(filePaths[0]->path, vector[0]);
+  writeToFile(filePaths[1]->path, emptyVector[0]);
+  createDuckDbTable(vector);
+  auto op = tableScanNode(rowType);
+  assertQuery(op, filePaths, "SELECT * FROM tmp", 1);
 }
 
 TEST_F(TableScanTest, partitionedTableVarcharKey) {

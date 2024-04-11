@@ -22,6 +22,7 @@ add_library(
   AggregationMasks.cpp
   AggregateWindow.cpp
   ArrowStream.cpp
+  AssignUniqueId.cpp
   ContainerRowSerde.cpp
   DistinctAggregations.cpp
   Driver.cpp
@@ -54,20 +55,20 @@ add_library(
   Operator.cpp
   OperatorUtils.cpp
   OrderBy.cpp
-  PartitionedOutput.cpp
   OutputBuffer.cpp
   OutputBufferManager.cpp
+  PartitionedOutput.cpp
+  PartitionFunction.cpp
   PlanNodeStats.cpp
+  PrefixSort.cpp
   ProbeOperatorState.cpp
   RowContainer.cpp
   RowNumber.cpp
-  SharedArbitrator.cpp
   SortBuffer.cpp
   SortedAggregations.cpp
   SortWindowBuild.cpp
   Spill.cpp
   SpillFile.cpp
-  SpillOperatorGroup.cpp
   Spiller.cpp
   StreamingAggregation.cpp
   StreamingWindowBuild.cpp
@@ -84,9 +85,7 @@ add_library(
   Window.cpp
   WindowBuild.cpp
   WindowFunction.cpp
-  WindowPartition.cpp
-  AssignUniqueId.cpp
-  PartitionFunction.cpp)
+  WindowPartition.cpp)
 
 target_link_libraries(
   velox_exec

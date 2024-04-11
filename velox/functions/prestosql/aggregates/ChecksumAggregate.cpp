@@ -40,15 +40,6 @@ class ChecksumAggregate : public exec::Aggregate {
     return sizeof(int64_t);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      *value<int64_t>(groups[i]) = 0;
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto* vector = (*result)->asUnchecked<FlatVector<StringView>>();
@@ -194,6 +185,16 @@ class ChecksumAggregate : public exec::Aggregate {
     safeAdd(*value<int64_t>(group), result);
   }
 
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      *value<int64_t>(groups[i]) = 0;
+    }
+  }
+
  private:
   FOLLY_ALWAYS_INLINE void computeHash(char* group, const int64_t hash) {
     *value<int64_t>(group) += hash * XXH_PRIME64_1;
@@ -232,7 +233,8 @@ class ChecksumAggregate : public exec::Aggregate {
 
 void registerChecksumAggregate(
     const std::string& prefix,
-    bool withCompanionFunctions) {
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -260,7 +262,9 @@ void registerChecksumAggregate(
 
         return std::make_unique<ChecksumAggregate>(VARBINARY());
       },
-      withCompanionFunctions);
+      {false /*orderSensitive*/},
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

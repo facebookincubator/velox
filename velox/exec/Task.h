@@ -125,6 +125,13 @@ class Task : public std::enable_shared_from_this<Task> {
 
   bool isUngroupedExecution() const;
 
+  /// Returns true if this task has ungrouped execution split under grouped
+  /// execution mode.
+  ///
+  /// NOTE: calls this function after task has been started as the number of
+  /// ungrouped drivers is set during task startup.
+  bool hasMixedExecutionGroup() const;
+
   /// Starts executing the plan fragment specified in the constructor. If leaf
   /// nodes require splits (e.g. TableScan, Exchange, etc.), these splits can be
   /// added before or after calling start().
@@ -293,6 +300,17 @@ class Task : public std::enable_shared_from_this<Task> {
   uint32_t numOutputDrivers() const {
     return numDrivers(getOutputPipelineId());
   }
+
+  /// Stores the number of drivers in various states of execution.
+  struct DriverCounts {
+    uint32_t numQueuedDrivers{0};
+    uint32_t numOnThreadDrivers{0};
+    uint32_t numSuspendedDrivers{0};
+    std::unordered_map<BlockingReason, uint64_t> numBlockedDrivers;
+  };
+
+  /// Returns the number of drivers in various states of execution.
+  DriverCounts driverCounts() const;
 
   /// Returns the number of running drivers.
   uint32_t numRunningDrivers() const {
@@ -482,10 +500,6 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  std::shared_ptr<SpillOperatorGroup> getSpillOperatorGroupLocked(
-      uint32_t splitGroupId,
-      const core::PlanNodeId& planNodeId);
-
   /// Transitions this to kFinished state if all Drivers are
   /// finished. Otherwise sets a flag so that the last Driver to finish
   /// will transition the state.
@@ -494,6 +508,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Adds 'stats' to the cumulative total stats for the operator in the Task
   /// stats. Called from Drivers upon their closure.
   void addOperatorStats(OperatorStats& stats);
+
+  /// Adds per driver statistics.  Called from Drivers upon their closure.
+  void addDriverStats(int pipelineId, DriverStats stats);
 
   /// Returns kNone if no pause or terminate is requested. The thread count is
   /// incremented if kNone is returned. If something else is returned the

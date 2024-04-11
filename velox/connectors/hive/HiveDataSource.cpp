@@ -167,22 +167,22 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
   return SplitReader::create(
       split_,
       hiveTableHandle_,
-      scanSpec_,
-      readerOutputType_,
       &partitionKeys_,
-      fileHandleFactory_,
-      executor_,
       connectorQueryCtx_,
       hiveConfig_,
-      ioStats_);
+      readerOutputType_,
+      ioStats_,
+      fileHandleFactory_,
+      executor_,
+      scanSpec_);
 }
 
 void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
-  VELOX_CHECK(
-      split_ == nullptr,
+  VELOX_CHECK_NULL(
+      split_,
       "Previous split has not been processed yet. Call next to process the split.");
   split_ = std::dynamic_pointer_cast<HiveConnectorSplit>(split);
-  VELOX_CHECK(split_, "Wrong type of split");
+  VELOX_CHECK_NOT_NULL(split_, "Wrong type of split");
 
   VLOG(1) << "Adding split " << split_->toString();
 
@@ -201,8 +201,9 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     uint64_t size,
     velox::ContinueFuture& /*future*/) {
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
+  VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
-  if (splitReader_ && splitReader_->emptySplit()) {
+  if (splitReader_->emptySplit()) {
     resetSplit();
     return nullptr;
   }
@@ -324,14 +325,11 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
 void HiveDataSource::setFromDataSource(
     std::unique_ptr<DataSource> sourceUnique) {
   auto source = dynamic_cast<HiveDataSource*>(sourceUnique.get());
-  VELOX_CHECK(source, "Bad DataSource type");
+  VELOX_CHECK_NOT_NULL(source, "Bad DataSource type");
 
   split_ = std::move(source->split_);
-  if (source->splitReader_ && source->splitReader_->emptySplit()) {
-    runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
-    runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
-    return;
-  }
+  runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
+  runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
   scanSpec_ = std::move(source->scanSpec_);
   splitReader_ = std::move(source->splitReader_);
@@ -367,5 +365,32 @@ void HiveDataSource::resetSplit() {
   splitReader_->resetSplit();
   // Keep readers around to hold adaptation.
 }
+
+HiveDataSource::WaveDelegateHookFunction HiveDataSource::waveDelegateHook_;
+
+std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
+  VELOX_CHECK_NOT_NULL(waveDelegateHook_);
+  if (!waveDataSource_) {
+    waveDataSource_ = waveDelegateHook_(
+        hiveTableHandle_,
+        scanSpec_,
+        readerOutputType_,
+        &partitionKeys_,
+        fileHandleFactory_,
+        executor_,
+        connectorQueryCtx_,
+        hiveConfig_,
+        ioStats_,
+        remainingFilterExprSet_.get(),
+        metadataFilter_);
+  }
+  return waveDataSource_;
+}
+
+//  static
+void HiveDataSource::registerWaveDelegateHook(WaveDelegateHookFunction hook) {
+  waveDelegateHook_ = hook;
+}
+std::shared_ptr<wave::WaveDataSource> toWaveDataSource();
 
 } // namespace facebook::velox::connector::hive

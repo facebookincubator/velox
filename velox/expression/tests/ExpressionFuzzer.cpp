@@ -356,40 +356,9 @@ bool isDeterministic(
     return true;
   }
 
-  // Check if this is a simple function.
-  if (auto simpleFunctionEntry =
-          exec::simpleFunctions().resolveFunction(functionName, argTypes)) {
-    return simpleFunctionEntry->getMetadata().isDeterministic();
-  }
-
-  // Vector functions are a bit more complicated. We need to fetch the list of
-  // available signatures and check if any of them bind given the current
-  // input arg types. If it binds (if there's a match), we fetch the function
-  // and return the isDeterministic bool.
-  try {
-    if (auto vectorFunctionSignatures =
-            exec::getVectorFunctionSignatures(functionName)) {
-      core::QueryConfig config({});
-      for (const auto& signature : *vectorFunctionSignatures) {
-        if (exec::SignatureBinder(*signature, argTypes).tryBind()) {
-          if (auto vectorFunction =
-                  exec::getVectorFunction(functionName, argTypes, {}, config)) {
-            return vectorFunction->isDeterministic();
-          }
-        }
-      }
-    }
-  }
-  // TODO: Some stateful functions can only be built when constant arguments
-  // are passed, making the getVectorFunction() call above to throw. We only
-  // have a few of these functions, so for now we assume they are
-  // deterministic so they are picked for Fuzz testing. Once we make the
-  // isDeterministic() flag static (and hence we won't need to build the
-  // function object in here) we can clean up this code.
-  catch (const std::exception& e) {
-    LOG(WARNING) << "Unable to determine if '" << functionName
-                 << "' is deterministic or not. Assuming it is.";
-    return true;
+  if (auto typeAndMetadata =
+          resolveFunctionWithMetadata(functionName, argTypes)) {
+    return typeAndMetadata->second.deterministic;
   }
 
   // functionName must be a special form.
@@ -959,28 +928,6 @@ core::TypedExprPtr ExpressionFuzzer::generateArg(
   } else {
     return generateArg(arg);
   }
-}
-
-// Specialization for the "empty_approx_set" function: first optional
-// parameter needs to be constant.
-std::vector<core::TypedExprPtr> ExpressionFuzzer::generateEmptyApproxSetArgs(
-    const CallableSignature& input) {
-  if (input.args.empty()) {
-    return {};
-  }
-  return {generateArgConstant(input.args[0])};
-}
-
-// Specialization for the "regexp_replace" function: second and third
-// (optional) parameters always need to be constant.
-std::vector<core::TypedExprPtr> ExpressionFuzzer::generateRegexpReplaceArgs(
-    const CallableSignature& input) {
-  std::vector<core::TypedExprPtr> inputExpressions = {
-      generateArg(input.args[0]), generateArgConstant(input.args[1])};
-  if (input.args.size() == 3) {
-    inputExpressions.emplace_back(generateArgConstant(input.args[2]));
-  }
-  return inputExpressions;
 }
 
 std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSwitchArgs(
