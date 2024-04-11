@@ -64,6 +64,7 @@ std::string testModeString(TestMode mode) {
     case TestMode::kBucketed:
       return "BUCKETED";
   }
+  VELOX_UNREACHABLE();
 }
 
 static std::shared_ptr<core::AggregationNode> generateAggregationNode(
@@ -248,6 +249,7 @@ class TableWriteTest : public HiveConnectorTestBase {
   }
 
   void TearDown() override {
+    waitForAllTasksToBeDeleted();
     HiveConnectorTestBase::TearDown();
   }
 
