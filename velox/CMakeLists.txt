@@ -64,6 +64,7 @@ if(${VELOX_ENABLE_DUCKDB})
 endif()
 
 if(${VELOX_ENABLE_GPU})
+  add_subdirectory(experimental/cudf)
   add_subdirectory(experimental/gpu)
   add_subdirectory(experimental/wave)
 endif()
