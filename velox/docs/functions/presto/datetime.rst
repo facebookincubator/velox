@@ -108,15 +108,12 @@ Date and Time Functions
 
 .. function:: to_iso8601(x) -> varchar
 
-    Formats ``x`` as an ISO 8601 string. Supported types for ``x`` are: DATE.
+    Formats ``x`` as an ISO 8601 string. Supported types for ``x`` are: ``date``, ``timestamp``.
 
 .. function:: to_unixtime(timestamp) -> double
 
     Returns ``timestamp`` as a UNIX timestamp.
 
-.. function:: to_iso8601(x) -> varchar
-
-    Formats timestamp ``x`` as an ISO 8601 string.
 Truncation Function
 -------------------
 
