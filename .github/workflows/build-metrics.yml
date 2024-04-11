@@ -96,7 +96,7 @@ jobs:
           CONBENCH_PROJECT_REPOSITORY: "${{ github.repository }}"
           CONBENCH_PROJECT_COMMIT: "${{ inputs.ref || github.sha }}"
         run: |
-          ./velox/scripts/build-metrics.py upload \
+          ./scripts/build-metrics.py upload \
             --run_id "bm-testing-GHA-${{ github.run_id }}-${{ github.run_attempt }}" \
             --pr_number "${{ steps.extract.outputs.pr_number }}" \
             --sha "${{ inputs.ref || github.sha }}"
