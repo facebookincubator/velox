@@ -804,14 +804,7 @@ void HashBuild::ensureTableFits(uint64_t numRows) {
 void HashBuild::ensureNextRowVectorFits(
     uint64_t numRows,
     const std::vector<HashBuild*>& otherBuilds) {
-  if (!spillEnabled() || spiller_ == nullptr || spiller_->isAllSpilled()) {
-    return;
-  }
-
-  // Test-only spill path.
-  if (testingTriggerSpill()) {
-    Operator::ReclaimableSectionGuard guard(this);
-    memory::testingRunArbitration(pool());
+  if (!spillEnabled()) {
     return;
   }
 

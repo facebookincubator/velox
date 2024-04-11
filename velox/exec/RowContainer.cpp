@@ -468,6 +468,9 @@ void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
         for (auto& next : *vector) {
           getNextRowVector(next) = nullptr;
         }
+        // Because of 'parallelJoinBuild', the memory for the next row vector
+        // may not be allocated from the RowContainer to which the row belongs,
+        // hence we need to release memory through the vector's allocator.
         auto allocator = vector->get_allocator().allocator();
         std::destroy_at(vector);
         allocator->free(HashStringAllocator::headerOf(vector));
