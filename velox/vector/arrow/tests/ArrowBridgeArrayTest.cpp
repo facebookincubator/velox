@@ -869,6 +869,54 @@ TEST_F(ArrowBridgeArrayExportTest, mapNested) {
   EXPECT_EQ(values.Value(1), 0);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, mapTimestamp) {
+  const auto keys =
+      vectorMaker_.flatVector<int32_t>(5, [](vector_size_t i) { return i; });
+  auto values = vectorMaker_.flatVector<Timestamp>(
+      5, [](vector_size_t row) { return Timestamp(row, row); });
+  const auto offsets = makeBuffer<vector_size_t>({1, 4, 2});
+  const auto sizes = makeBuffer<vector_size_t>({1, 1, 1});
+  const auto type = MAP(INTEGER(), TIMESTAMP());
+  auto vec = std::make_shared<MapVector>(
+      pool_.get(), type, nullptr, 3, offsets, sizes, keys, values);
+  auto array = toArrow(vec, options_, pool_.get());
+  ASSERT_OK(array->ValidateFull());
+  EXPECT_EQ(array->null_count(), 0);
+  ASSERT_EQ(
+      *array->type(),
+      *arrow::map(arrow::int32(), arrow::timestamp(arrow::TimeUnit::NANO)));
+  {
+    auto& mapArray = static_cast<const arrow::MapArray&>(*array);
+    auto& values = static_cast<const arrow::TimestampArray&>(*mapArray.items());
+    ASSERT_EQ(values.length(), 3);
+    EXPECT_EQ(values.Value(0), 1'000'000'001L);
+    EXPECT_EQ(values.Value(1), 4'000'000'004L);
+    EXPECT_EQ(values.Value(2), 2'000'000'002L);
+  }
+
+  // Nullable timestamp vector.
+  values = vectorMaker_.flatVector<Timestamp>(
+      5,
+      [](vector_size_t row) { return Timestamp(row, row); },
+      [](vector_size_t row) { return row % 2 == 1; });
+  vec = std::make_shared<MapVector>(
+      pool_.get(), type, nullptr, 3, offsets, sizes, keys, values);
+  array = toArrow(vec, options_, pool_.get());
+  ASSERT_OK(array->ValidateFull());
+  EXPECT_EQ(array->null_count(), 0);
+  ASSERT_EQ(
+      *array->type(),
+      *arrow::map(arrow::int32(), arrow::timestamp(arrow::TimeUnit::NANO)));
+  {
+    auto& mapArray = static_cast<const arrow::MapArray&>(*array);
+    auto& values = static_cast<const arrow::TimestampArray&>(*mapArray.items());
+    ASSERT_EQ(values.length(), 3);
+    EXPECT_TRUE(values.IsNull(0));
+    EXPECT_EQ(values.Value(1), 4'000'000'004L);
+    EXPECT_EQ(values.Value(2), 2'000'000'002L);
+  }
+}
+
 TEST_F(ArrowBridgeArrayExportTest, dictionarySimple) {
   auto vec = BaseVector::wrapInDictionary(
       nullptr,
@@ -1093,6 +1141,10 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         std::is_same_v<TInput, int64_t> && std::is_same_v<TOutput, Timestamp>) {
       assertTimestampVectorContent(
           inputValues, output, arrowArray.null_count, format);
+    } else if constexpr (
+        std::is_same_v<TInput, int128_t> && std::is_same_v<TOutput, int64_t>) {
+      assertShortDecimalVectorContent(
+          inputValues, output, arrowArray.null_count);
     } else {
       assertVectorContent(inputValues, output, arrowArray.null_count);
     }
@@ -1172,10 +1224,13 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     testArrowImport<double>("g", {-99.9, 4.3, 31.1, 129.11, -12});
     testArrowImport<float>("f", {-99.9, 4.3, 31.1, 129.11, -12});
 
-    for (const std::string& tsString : {"tss:", "tsm:", "tsu:", "tsn:"}) {
+    for (const auto tsString : {"tss:", "tsm:", "tsu:", "tsn:"}) {
       testArrowImport<Timestamp, int64_t>(
-          tsString.data(), {0, std::nullopt, Timestamp::kMaxSeconds});
+          tsString, {0, std::nullopt, Timestamp::kMaxSeconds});
     }
+
+    testArrowImport<int64_t, int128_t>(
+        "d:5,2", {1, -1, 0, 12345, -12345, std::nullopt});
   }
 
   template <typename TOutput, typename TInput>
@@ -1256,6 +1311,24 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
   }
 
  private:
+  // Creates short decimals from int128 and asserts the content of actual vector
+  // with the expected values.
+  void assertShortDecimalVectorContent(
+      const std::vector<std::optional<int128_t>>& expectedValues,
+      const VectorPtr& actual,
+      size_t nullCount) {
+    std::vector<std::optional<int64_t>> decValues;
+    decValues.reserve(expectedValues.size());
+    for (const auto& value : expectedValues) {
+      if (value) {
+        decValues.emplace_back(static_cast<int64_t>(*value));
+      } else {
+        decValues.emplace_back(std::nullopt);
+      }
+    }
+    assertVectorContent(decValues, actual, nullCount);
+  }
+
   // Creates timestamp from bigint and asserts the content of actual vector with
   // the expected timestamp values.
   void assertTimestampVectorContent(

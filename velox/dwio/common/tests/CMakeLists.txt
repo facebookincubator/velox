@@ -23,7 +23,9 @@ add_executable(
   DataBufferTests.cpp
   DecoderUtilTest.cpp
   ExecutorBarrierTest.cpp
+  OnDemandUnitLoaderTests.cpp
   LocalFileSinkTest.cpp
+  MemorySinkTest.cpp
   LoggedExceptionTest.cpp
   ParallelForTest.cpp
   RangeTests.cpp

@@ -46,6 +46,17 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     exec::ExchangeSource::registerFactory(createLocalExchangeSource);
   }
 
+  void TearDown() override {
+    waitForAllTasksToBeDeleted();
+
+    // There might be lingering exchange source on executor even after all tasks
+    // are deleted. This can cause memory leak because exchange source holds
+    // reference to memory pool. We need to make sure they are properly cleaned.
+    testingShutdownLocalExchangeSource();
+    vectors_.clear();
+    HiveConnectorTestBase::TearDown();
+  }
+
   static std::string makeTaskId(const std::string& prefix, int num) {
     return fmt::format("local://{}-{}", prefix, num);
   }
@@ -1367,7 +1378,7 @@ class TestCustomExchange : public exec::Exchange {
  public:
   TestCustomExchange(
       int32_t operatorId,
-      DriverCtx* FOLLY_NONNULL ctx,
+      DriverCtx* ctx,
       const std::shared_ptr<const TestCustomExchangeNode>& customExchangeNode,
       std::shared_ptr<ExchangeClient> exchangeClient)
       : exec::Exchange(

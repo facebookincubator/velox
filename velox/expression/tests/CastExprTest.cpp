@@ -48,11 +48,6 @@ struct ErrorOnOddFunctionElseUnknown {
 class CastExprTest : public functions::test::CastBaseTest {
  protected:
   CastExprTest() {
-    exec::registerVectorFunction(
-        "testing_dictionary",
-        TestingDictionaryFunction::signatures(),
-        std::make_unique<TestingDictionaryFunction>());
-
     registerFunction<ErrorOnOddFunctionElseUnknown, UnknownValue, int32_t>(
         {"error_on_odd_else_unknown"});
   }
@@ -2383,10 +2378,6 @@ class TestingDictionaryToFewerRowsFunction : public exec::VectorFunction {
  public:
   TestingDictionaryToFewerRowsFunction() {}
 
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -2429,7 +2420,8 @@ TEST_F(CastExprTest, dictionaryEncodedNestedInput) {
   exec::registerVectorFunction(
       "add_dict",
       TestingDictionaryToFewerRowsFunction::signatures(),
-      std::make_unique<TestingDictionaryToFewerRowsFunction>());
+      std::make_unique<TestingDictionaryToFewerRowsFunction>(),
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
 
   auto elements = makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6});
   auto elementsInDict = BaseVector::wrapInDictionary(
@@ -2590,5 +2582,35 @@ TEST_F(CastExprTest, skipCastEvaluation) {
     assertEqualVectors(result, expected);
   }
 }
+
+TEST_F(CastExprTest, intervalDayTimeToVarchar) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(
+          {kMillisInDay,
+           kMillisInHour,
+           kMillisInMinute,
+           kMillisInSecond,
+           5 * kMillisInDay + 14 * kMillisInHour + 20 * kMillisInMinute +
+               52 * kMillisInSecond + 88},
+          INTERVAL_DAY_TIME()),
+  });
+
+  auto result = evaluate("cast(c0 as varchar)", data);
+  auto expected = makeFlatVector<std::string>({
+      "1 00:00:00.000",
+      "0 01:00:00.000",
+      "0 00:01:00.000",
+      "0 00:00:01.000",
+      "5 14:20:52.088",
+  });
+
+  assertEqualVectors(result, expected);
+
+  // Reverse cast is not supported.
+  VELOX_ASSERT_THROW(
+      evaluate("cast('5 14:20:52.088' as interval day to second)", data),
+      "Cast from VARCHAR to INTERVAL DAY TO SECOND is not supported");
+}
+
 } // namespace
 } // namespace facebook::velox::test

@@ -53,6 +53,11 @@ General Aggregate Functions
 
     ``hash`` cannot be null.
 
+.. spark:function:: collect_list(x) -> array<[same as x]>
+
+    Returns an array created from the input ``x`` elements. Ignores null
+    inputs, and returns an empty array when all inputs are null.
+
 .. spark:function:: first(x) -> x
 
     Returns the first value of `x`.
@@ -60,6 +65,12 @@ General Aggregate Functions
 .. spark:function:: first_ignore_null(x) -> x
 
     Returns the first non-null value of `x`.
+
+.. spark:function:: kurtosis(x) -> double
+
+    Returns the Pearson's kurtosis of all input values. When the count of `x` is not empty,
+    a non-null output will be generated. When the value of `m2` in the accumulator is 0, a null
+    output will be generated.
 
 .. spark:function:: last(x) -> x
 

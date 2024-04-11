@@ -25,6 +25,7 @@
 #include "velox/core/QueryConfig.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
@@ -384,6 +385,7 @@ class ISimpleFunctionMetadata {
   virtual TypePtr tryResolveReturnType() const = 0;
   virtual std::string getName() const = 0;
   virtual bool isDeterministic() const = 0;
+  virtual bool defaultNullBehavior() const = 0;
   virtual uint32_t priority() const = 0;
   virtual const std::shared_ptr<exec::FunctionSignature> signature() const = 0;
   virtual const TypePtr& resultPhysicalType() const = 0;
@@ -455,6 +457,10 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
     return udf_is_deterministic<Fun>();
   }
 
+  bool defaultNullBehavior() const final {
+    return defaultNullBehavior_;
+  }
+
   static constexpr bool isVariadic() {
     if constexpr (num_args == 0) {
       return false;
@@ -464,7 +470,9 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
   }
 
   explicit SimpleFunctionMetadata(
-      const std::vector<exec::SignatureVariable>& constraints) {
+      bool defaultNullBehavior,
+      const std::vector<exec::SignatureVariable>& constraints)
+      : defaultNullBehavior_{defaultNullBehavior} {
     auto analysis = analyzeSignatureTypes(constraints);
 
     buildSignature(analysis);
@@ -600,6 +608,7 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
     signature_ = builder.build();
   }
 
+  const bool defaultNullBehavior_;
   exec::FunctionSignaturePtr signature_;
   uint32_t priority_;
   TypePtr resultPhysicalType_;

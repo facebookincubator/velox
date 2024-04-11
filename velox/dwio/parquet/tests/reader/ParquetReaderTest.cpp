@@ -765,6 +765,32 @@ TEST_F(ParquetReaderTest, varcharFilters) {
       "nation.parquet", rowType, std::move(filters), expected);
 }
 
+TEST_F(ParquetReaderTest, readDifferentEncodingsWithFilter) {
+  FilterMap filters;
+  filters.insert({"n_1", exec::equal(1)});
+  auto rowType = ROW({"n_0", "n_1", "n_2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4, 1, 2, 3, 4, 6, 9}),
+      makeFlatVector<int32_t>(10, [](auto /*row*/) { return 1; }),
+      makeNullableFlatVector<std::string>(
+          {"A",
+           "B",
+           std::nullopt,
+           std::nullopt,
+           "A",
+           "B",
+           std::nullopt,
+           std::nullopt,
+           "F",
+           std::nullopt}),
+  });
+  assertReadWithFilters(
+      "different_encodings_with_filter.parquet",
+      rowType,
+      std::move(filters),
+      expected);
+}
+
 // This test is to verify filterRowGroups() doesn't throw the fileOffset Velox
 // check failure
 TEST_F(ParquetReaderTest, filterRowGroups) {
@@ -915,6 +941,31 @@ TEST_F(ParquetReaderTest, testEmptyRowGroups) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   auto expected = makeRowVector({makeFlatVector<int32_t>({0, 3, 3, 3, 3})});
+
+  assertReadWithReaderAndExpected(fileSchema, *rowReader, expected, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, testEnumType) {
+  // enum_type.parquet contains 1 column (ENUM) with 3 rows.
+  const std::string sample(getExampleFilePath("enum_type.parquet"));
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 3ULL);
+
+  auto rowType = reader->typeWithId();
+  EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(rowType->size(), 1ULL);
+
+  EXPECT_EQ(rowType->childAt(0)->type()->kind(), TypeKind::VARCHAR);
+
+  auto fileSchema = ROW({"test"}, {VARCHAR()});
+  auto rowReaderOpts = getReaderOpts(fileSchema);
+  rowReaderOpts.setScanSpec(makeScanSpec(fileSchema));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto expected =
+      makeRowVector({makeFlatVector<StringView>({"FOO", "BAR", "FOO"})});
 
   assertReadWithReaderAndExpected(fileSchema, *rowReader, expected, *leafPool_);
 }

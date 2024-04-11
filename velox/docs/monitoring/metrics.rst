@@ -83,6 +83,9 @@ Memory Management
      - The distribution of cache shrink latency in range of [0, 100s] with 10
        buckets. It is configured to report the latency at P50, P90, P99, and
        P100 percentiles.
+   * - memory_reclaim_count
+     - Count
+     - The count of operator memory reclaims.
    * - memory_reclaim_exec_ms
      - Histogram
      - The distribution of memory reclaim execution time in range of [0, 600s]
@@ -91,14 +94,17 @@ Memory Management
    * - memory_reclaim_bytes
      - Sum
      - The sum of reclaimed memory bytes.
-   * - memory_reclaim_wait_ms
-     - Histogram
-     - The distribution of memory reclaim wait time in range of [0, 60s] with 10
-       buckets. It is configured to report latency at P50, P90, P99, and P100
-       percentiles.
-   * - memory_reclaim_wait_timeout_count
+   * - task_memory_reclaim_count
      - Count
-     - The number of times that the memory reclaim wait timeouts.
+     - The count of task memory reclaims.
+   * - task_memory_reclaim_wait_ms
+     - Histogram
+     - The distribution of task memory reclaim wait time in range of [0, 60s]
+       with 10 buckets. It is configured to report latency at P50, P90, P99,
+       and P100 percentiles.
+   * - task_memory_reclaim_wait_timeout_count
+     - Count
+     - The number of times that the task memory reclaim wait timeouts.
    * - memory_non_reclaimable_count
      - Count
      - The number of times that the memory reclaim fails because the operator is executing a
@@ -111,6 +117,18 @@ Memory Management
      - Count
      - The number of times a memory arbitration request was initiated by a
        memory pool attempting to grow its capacity.
+   * - arbitrator_local_arbitration_count
+     - Count
+     - The number of arbitration that reclaims the used memory from the query which initiates
+       the memory arbitration request itself. It ensures the memory arbitration request won't
+       exceed its per-query memory capacity limit.
+   * - arbitrator_global_arbitration_count
+     - Count
+     - The number of arbitration which ensures the total allocated query capacity won't exceed
+       the arbitrator capacity limit. It may or may not reclaim memory from the query which
+       initiate the memory arbitration request. This indicates the velox runtime doesn't have
+       enough memory to run all the queries at their peak memory usage. We have to trigger
+       spilling to let them run through completion.
    * - arbitrator_aborted_count
      - Count
      - The number of times a query level memory pool is aborted as a result of
@@ -138,6 +156,16 @@ Memory Management
      - Average
      - The average of total free memory capacity which is managed by the
        memory arbitrator.
+   * - memory_pool_initial_capacity_bytes
+     - Histogram
+     - The distribution of a root memory pool's initial capacity in range of [0 256MB]
+       with 32 buckets. It is configured to report the capacity at P50, P90, P99,
+       and P100 percentiles.
+   * - memory_pool_capacity_growth_count
+     - Histogram
+     - The distribution of a root memory pool cappacity growth attemps through
+       memory arbitration in range of [0, 256] with 32 buckets. It is configured
+       to report the count at P50, P90, P99, and P100 percentiles.
    * - memory_pool_usage_leak_bytes
      - Sum
      - The leaf memory pool usage leak in bytes.
@@ -147,6 +175,11 @@ Memory Management
    * - memory_pool_capacity_leak_bytes
      - Sum
      - The root memory pool reservation leak in bytes.
+   * - memory_allocator_double_free_count
+     - Count
+     - Tracks the count of double frees in memory allocator, indicating the
+       possibility of buffer ownership issues when a buffer is freed more
+       than once.
 
 Spilling
 --------
@@ -204,6 +237,9 @@ Spilling
      - The distribution of the amount of time spent on writing spilled rows to
        disk in range of [0, 600s] with 20 buckets. It is configured to report the
        latency at P50, P90, P99, and P100 percentiles.
+   * - file_writer_early_flushed_raw_bytes
+     - Sum
+     - Number of bytes pre-maturely flushed from file writers because of memory reclaiming.
 
 Hive Connector
 --------------

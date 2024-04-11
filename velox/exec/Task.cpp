@@ -874,6 +874,10 @@ void Task::resume(std::shared_ptr<Task> self) {
           }
           VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
           if (!driver->state().hasBlockingFuture) {
+            if (driver->state().endExecTimeMs != 0) {
+              driver->state().totalPauseTimeMs +=
+                  getCurrentTimeMs() - driver->state().endExecTimeMs;
+            }
             // Do not continue a Driver that is blocked on external
             // event. The Driver gets enqueued by the promise realization.
             Driver::enqueue(driver);
@@ -1624,12 +1628,16 @@ std::vector<Operator*> Task::findPeerOperators(
   std::vector<Operator*> peers;
   const auto operatorId = caller->operatorId();
   const auto& operatorType = caller->operatorType();
+  const auto splitGroupId = caller->splitGroupId();
   std::lock_guard<std::timed_mutex> l(mutex_);
   for (auto& driver : drivers_) {
     if (driver == nullptr) {
       continue;
     }
     if (driver->driverCtx()->pipelineId != pipelineId) {
+      continue;
+    }
+    if (driver->driverCtx()->splitGroupId != splitGroupId) {
       continue;
     }
     Operator* peer = driver->findOperator(operatorId);
@@ -1990,6 +1998,12 @@ void Task::addOperatorStats(OperatorStats& stats) {
       .add(stats);
 }
 
+void Task::addDriverStats(int pipelineId, DriverStats stats) {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  VELOX_CHECK(0 <= pipelineId && pipelineId < taskStats_.pipelineStats.size());
+  taskStats_.pipelineStats[pipelineId].driverStats.push_back(std::move(stats));
+}
+
 TaskStats Task::taskStats() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
 
@@ -2097,6 +2111,29 @@ uint64_t Task::timeSinceTerminationMs() const {
     return 0UL;
   }
   return getCurrentTimeMs() - taskStats_.terminationTimeMs;
+}
+
+Task::DriverCounts Task::driverCounts() const {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+
+  Task::DriverCounts ret;
+  for (auto& driver : drivers_) {
+    if (driver) {
+      if (driver->state().isEnqueued) {
+        ++ret.numQueuedDrivers;
+      } else if (driver->state().isSuspended) {
+        ++ret.numSuspendedDrivers;
+      } else if (driver->isOnThread()) {
+        ++ret.numOnThreadDrivers;
+      } else {
+        const auto blockingReason = driver->blockingReason();
+        if (blockingReason != BlockingReason::kNotBlocked) {
+          ++ret.numBlockedDrivers[driver->blockingReason()];
+        }
+      }
+    }
+  }
+  return ret;
 }
 
 void Task::onTaskCompletion() {
@@ -2688,7 +2725,7 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   }
   VELOX_CHECK(paused || maxWaitMs != 0);
   if (!paused) {
-    RECORD_METRIC_VALUE(kMetricMemoryReclaimWaitTimeoutCount, 1);
+    RECORD_METRIC_VALUE(kMetricTaskMemoryReclaimWaitTimeoutCount, 1);
     VELOX_FAIL(
         "Memory reclaim failed to wait for task {} to pause after {} with max timeout {}",
         task->taskId(),
@@ -2697,8 +2734,9 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   }
 
   stats.reclaimWaitTimeUs += reclaimWaitTimeUs;
+  RECORD_METRIC_VALUE(kMetricTaskMemoryReclaimCount, 1);
   RECORD_HISTOGRAM_METRIC_VALUE(
-      kMetricMemoryReclaimWaitTimeMs, reclaimWaitTimeUs / 1'000);
+      kMetricTaskMemoryReclaimWaitTimeMs, reclaimWaitTimeUs / 1'000);
 
   // Don't reclaim from a cancelled task as it will terminate soon.
   if (task->isCancelled()) {

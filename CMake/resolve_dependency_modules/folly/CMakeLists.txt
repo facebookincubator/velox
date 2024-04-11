@@ -14,9 +14,9 @@
 project(Folly)
 cmake_minimum_required(VERSION 3.14)
 
-set(VELOX_FOLLY_BUILD_VERSION v2023.12.04.00)
+set(VELOX_FOLLY_BUILD_VERSION v2024.04.01.00)
 set(VELOX_FOLLY_BUILD_SHA256_CHECKSUM
-    ed66d435eacb8065ade2fac310c452ef288998e16fd73a95a7db4bdbbb4eea5d)
+    e0c8386eea1a317ff17f1edc36c29362db94aeca8689659f1c530ea777779409)
 set(VELOX_FOLLY_SOURCE_URL
     "https://github.com/facebook/folly/releases/download/${VELOX_FOLLY_BUILD_VERSION}/folly-${VELOX_FOLLY_BUILD_VERSION}.tar.gz"
 )

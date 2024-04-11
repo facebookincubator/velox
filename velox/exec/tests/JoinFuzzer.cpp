@@ -301,6 +301,14 @@ std::vector<RowVectorPtr> JoinFuzzer::generateProbeInput(
   std::vector<std::string> names = keyNames;
   std::vector<TypePtr> types = keyTypes;
 
+  bool keyTypesAllBool = true;
+  for (const auto& type : keyTypes) {
+    if (!type->isBoolean()) {
+      keyTypesAllBool = false;
+      break;
+    }
+  }
+
   // Add up to 3 payload columns.
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
@@ -311,7 +319,15 @@ std::vector<RowVectorPtr> JoinFuzzer::generateProbeInput(
   const auto inputType = ROW(std::move(names), std::move(types));
   std::vector<RowVectorPtr> input;
   for (auto i = 0; i < FLAGS_num_batches; ++i) {
-    input.push_back(vectorFuzzer_.fuzzInputRow(inputType));
+    if (keyTypesAllBool) {
+      // Joining on just boolean keys creates so many hits it explodes the
+      // output size, reduce the batch size to 10% to control the output size
+      // while still covering this case.
+      input.push_back(
+          vectorFuzzer_.fuzzRow(inputType, FLAGS_batch_size / 10, false));
+    } else {
+      input.push_back(vectorFuzzer_.fuzzInputRow(inputType));
+    }
   }
   return input;
 }
@@ -389,15 +405,14 @@ std::vector<RowVectorPtr> flatten(const std::vector<RowVectorPtr>& vectors) {
 }
 
 RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
-  LOG(ERROR) << "Executing query plan with "
-             << executionStrategyToString(plan.executionStrategy)
-             << " strategy["
-             << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
-                     ? plan.numGroups
-                     : 0)
-             << " groups]" << (injectSpill ? " and spilling injection" : "")
-             << ": " << std::endl
-             << plan.plan->toString(true, true);
+  LOG(INFO) << "Executing query plan with "
+            << executionStrategyToString(plan.executionStrategy) << " strategy["
+            << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
+                    ? plan.numGroups
+                    : 0)
+            << " groups]" << (injectSpill ? " and spilling injection" : "")
+            << ": " << std::endl
+            << plan.plan->toString(true, true);
 
   AssertQueryBuilder builder(plan.plan);
   for (const auto& [planNodeId, nodeSplits] : plan.splits) {
@@ -418,7 +433,7 @@ RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
     builder.config(core::QueryConfig::kSpillEnabled, "true")
         .config(core::QueryConfig::kAggregationSpillEnabled, "true")
         .spillDirectory(spillDirectory->path);
-    spillPct = 100;
+    spillPct = 10;
   }
 
   ScopedOOMInjector oomInjector(
@@ -980,7 +995,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
   for (auto i = 0; i < altPlans.size(); ++i) {
     LOG(INFO) << "Testing plan #" << i;
     auto actual = execute(altPlans[i], /*injectSpill=*/false);
-    if (actual != nullptr) {
+    if (actual != nullptr && expected != nullptr) {
       VELOX_CHECK(
           assertEqualResults({expected}, {actual}),
           "Logically equivalent plans produced different results");
@@ -1000,10 +1015,17 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
       LOG(INFO) << "Testing plan #" << i << " with spilling";
       actual = execute(altPlans[i], /*=injectSpill=*/true);
-      if (actual != nullptr) {
-        VELOX_CHECK(
-            assertEqualResults({expected}, {actual}),
-            "Logically equivalent plans produced different results");
+      if (actual != nullptr && expected != nullptr) {
+        try {
+          VELOX_CHECK(
+              assertEqualResults({expected}, {actual}),
+              "Logically equivalent plans produced different results");
+        } catch (const VeloxException& e) {
+          LOG(ERROR) << "Expected\n"
+                     << expected->toString(0, expected->size()) << "\nActual\n"
+                     << actual->toString(0, actual->size());
+          throw;
+        }
       } else {
         VELOX_CHECK(
             FLAGS_enable_oom_injection, "Got unexpected nullptr for results");
@@ -1190,9 +1212,10 @@ std::vector<std::vector<RowVectorPtr>> JoinFuzzer::splitInputByGroup(
 }
 
 void JoinFuzzer::go() {
-  VELOX_CHECK(
+  VELOX_USER_CHECK(
       FLAGS_steps > 0 || FLAGS_duration_sec > 0,
       "Either --steps or --duration_sec needs to be greater than zero.")
+  VELOX_USER_CHECK_GE(FLAGS_batch_size, 10, "Batch size must be at least 10.");
 
   const auto startTime = std::chrono::system_clock::now();
   size_t iteration = 0;

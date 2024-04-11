@@ -155,6 +155,17 @@ void SpillState::finishFile(uint32_t partition) {
   writer->finishFile();
 }
 
+size_t SpillState::numFinishedFiles(uint32_t partition) const {
+  if (!isPartitionSpilled(partition)) {
+    return 0;
+  }
+  const auto* writer = partitionWriter(partition);
+  if (writer == nullptr) {
+    return 0;
+  }
+  return writer->numFinishedFiles();
+}
+
 SpillFiles SpillState::finish(uint32_t partition) {
   auto* writer = partitionWriter(partition);
   if (writer == nullptr) {
@@ -228,13 +239,15 @@ std::string SpillPartition::toString() const {
 }
 
 std::unique_ptr<UnorderedStreamReader<BatchStream>>
-SpillPartition::createUnorderedReader(memory::MemoryPool* pool) {
+SpillPartition::createUnorderedReader(
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* spillStats) {
   VELOX_CHECK_NOT_NULL(pool);
   std::vector<std::unique_ptr<BatchStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
-    streams.push_back(
-        FileSpillBatchStream::create(SpillReadFile::create(fileInfo, pool)));
+    streams.push_back(FileSpillBatchStream::create(
+        SpillReadFile::create(fileInfo, pool, spillStats)));
   }
   files_.clear();
   return std::make_unique<UnorderedStreamReader<BatchStream>>(
@@ -242,12 +255,14 @@ SpillPartition::createUnorderedReader(memory::MemoryPool* pool) {
 }
 
 std::unique_ptr<TreeOfLosers<SpillMergeStream>>
-SpillPartition::createOrderedReader(memory::MemoryPool* pool) {
+SpillPartition::createOrderedReader(
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* spillStats) {
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
-    streams.push_back(
-        FileSpillMergeStream::create(SpillReadFile::create(fileInfo, pool)));
+    streams.push_back(FileSpillMergeStream::create(
+        SpillReadFile::create(fileInfo, pool, spillStats)));
   }
   files_.clear();
   // Check if the partition is empty or not.
@@ -280,38 +295,51 @@ SpillPartitionIdSet toSpillPartitionIdSet(
   return partitionIdSet;
 }
 
-tsan_atomic<int32_t>& testingSpillPct() {
-  static tsan_atomic<int32_t> spillPct = 0;
-  return spillPct;
+namespace {
+tsan_atomic<uint32_t>& maxSpillInjections() {
+  static tsan_atomic<uint32_t> maxInjections{0};
+  return maxInjections;
 }
+} // namespace
 
-tsan_atomic<int32_t>& testingSpillCounter() {
-  static tsan_atomic<int32_t> spillCounter = 0;
-  return spillCounter;
+tsan_atomic<uint32_t>& testingSpillPct() {
+  static tsan_atomic<uint32_t> spillPct{0};
+  return spillPct;
 }
 
 TestScopedSpillInjection::TestScopedSpillInjection(
     int32_t spillPct,
-    int32_t maxInjections) {
-  VELOX_CHECK_EQ(testingSpillCounter(), 0);
+    uint32_t maxInjections) {
+  VELOX_CHECK_EQ(injectedSpillCount(), 0);
   testingSpillPct() = spillPct;
-  testingSpillCounter() = maxInjections;
+  maxSpillInjections() = maxInjections;
+  injectedSpillCount() = 0;
 }
 
 TestScopedSpillInjection::~TestScopedSpillInjection() {
   testingSpillPct() = 0;
-  testingSpillCounter() = 0;
+  injectedSpillCount() = 0;
+  maxSpillInjections() = 0;
+}
+
+tsan_atomic<uint32_t>& injectedSpillCount() {
+  static tsan_atomic<uint32_t> injectedCount{0};
+  return injectedCount;
 }
 
 bool testingTriggerSpill() {
   // Do not evaluate further if trigger is not set.
-  if (testingSpillCounter() <= 0 || testingSpillPct() <= 0) {
+  if (testingSpillPct() <= 0) {
     return false;
   }
-  if (folly::Random::rand32() % 100 < testingSpillPct()) {
-    return testingSpillCounter()-- > 0;
+  if (folly::Random::rand32() % 100 > testingSpillPct()) {
+    return false;
   }
-  return false;
+  if (injectedSpillCount() >= maxSpillInjections()) {
+    return false;
+  }
+  ++injectedSpillCount();
+  return true;
 }
 
 void removeEmptyPartitions(SpillPartitionSet& partitionSet) {

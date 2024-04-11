@@ -131,10 +131,12 @@ class ApproxDistinctAggregate : public exec::Aggregate {
   explicit ApproxDistinctAggregate(
       const TypePtr& resultType,
       bool hllAsFinalResult,
-      bool hllAsRawInput)
+      bool hllAsRawInput,
+      double defaultError)
       : exec::Aggregate(resultType),
         hllAsFinalResult_{hllAsFinalResult},
-        hllAsRawInput_{hllAsRawInput} {}
+        hllAsRawInput_{hllAsRawInput},
+        indexBitLength_{common::hll::toIndexBitLength(defaultError)} {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(HllAccumulator);
@@ -148,14 +150,15 @@ class ApproxDistinctAggregate : public exec::Aggregate {
     return false;
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      auto group = groups[i];
-      new (group + offset_) HllAccumulator(allocator_);
-    }
+  bool supportsToIntermediate() const final {
+    return hllAsRawInput_;
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const final {
+    singleInputAsIntermediate(rows, args, result);
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -203,10 +206,6 @@ class ApproxDistinctAggregate : public exec::Aggregate {
           }
           result->setNoCopy(index, serialized);
         });
-  }
-
-  void destroy(folly::Range<char**> groups) override {
-    destroyAccumulators<HllAccumulator>(groups);
   }
 
   void addRawInput(
@@ -307,6 +306,21 @@ class ApproxDistinctAggregate : public exec::Aggregate {
     });
   }
 
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      auto group = groups[i];
+      new (group + offset_) HllAccumulator(allocator_);
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
+    destroyAccumulators<HllAccumulator>(groups);
+  }
+
  private:
   template <
       bool convertNullToZero,
@@ -404,8 +418,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
   /// serialized HLLs.
   const bool hllAsRawInput_;
 
-  int8_t indexBitLength_{
-      common::hll::toIndexBitLength(common::hll::kDefaultStandardError)};
+  int8_t indexBitLength_;
   double maxStandardError_{-1};
   DecodedVector decodedValue_;
   DecodedVector decodedMaxStandardError_;
@@ -416,10 +429,11 @@ template <TypeKind kind>
 std::unique_ptr<exec::Aggregate> createApproxDistinct(
     const TypePtr& resultType,
     bool hllAsFinalResult,
-    bool hllAsRawInput) {
+    bool hllAsRawInput,
+    double defaultError) {
   using T = typename TypeTraits<kind>::NativeType;
   return std::make_unique<ApproxDistinctAggregate<T>>(
-      resultType, hllAsFinalResult, hllAsRawInput);
+      resultType, hllAsFinalResult, hllAsRawInput, defaultError);
 }
 
 exec::AggregateRegistrationResult registerApproxDistinct(
@@ -427,7 +441,8 @@ exec::AggregateRegistrationResult registerApproxDistinct(
     bool hllAsFinalResult,
     bool hllAsRawInput,
     bool withCompanionFunctions,
-    bool overwrite) {
+    bool overwrite,
+    double defaultError) {
   auto returnType = hllAsFinalResult ? "hyperloglog" : "bigint";
 
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -483,7 +498,7 @@ exec::AggregateRegistrationResult registerApproxDistinct(
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
-      [name, hllAsFinalResult, hllAsRawInput](
+      [name, hllAsFinalResult, hllAsRawInput, defaultError](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
@@ -495,7 +510,8 @@ exec::AggregateRegistrationResult registerApproxDistinct(
             type->kind(),
             resultType,
             hllAsFinalResult,
-            hllAsRawInput);
+            hllAsRawInput,
+            defaultError);
       },
       withCompanionFunctions,
       overwrite);
@@ -515,11 +531,24 @@ void registerApproxDistinctAggregates(
       false,
       false,
       withCompanionFunctions,
-      overwrite);
+      overwrite,
+      common::hll::kDefaultApproxDistinctStandardError);
   // approx_set and merge are already companion functions themselves. Don't
   // register companion functions for them.
-  registerApproxDistinct(prefix + kApproxSet, true, false, false, overwrite);
-  registerApproxDistinct(prefix + kMerge, true, true, false, overwrite);
+  registerApproxDistinct(
+      prefix + kApproxSet,
+      true,
+      false,
+      false,
+      overwrite,
+      common::hll::kDefaultApproxSetStandardError);
+  registerApproxDistinct(
+      prefix + kMerge,
+      true,
+      true,
+      false,
+      overwrite,
+      common::hll::kDefaultApproxSetStandardError);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

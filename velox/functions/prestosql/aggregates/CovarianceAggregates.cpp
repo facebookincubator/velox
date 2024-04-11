@@ -413,10 +413,13 @@ struct RegrSxyResultAccessor {
 
 struct RegrR2ResultAccessor {
   static bool hasResult(const ExtendedRegrAccumulator& accumulator) {
-    return accumulator.m2Y() != 0 && accumulator.m2X() != 0;
+    return accumulator.m2X() != 0;
   }
 
   static double result(const ExtendedRegrAccumulator& accumulator) {
+    if (accumulator.m2X() != 0 && accumulator.m2Y() == 0) {
+      return 1;
+    }
     return std::pow(accumulator.c2(), 2) /
         (accumulator.m2X() * accumulator.m2Y());
   }
@@ -554,15 +557,6 @@ class CovarianceAggregate : public exec::Aggregate {
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(TAccumulator);
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) TAccumulator();
-    }
   }
 
   void addRawInput(
@@ -708,6 +702,16 @@ class CovarianceAggregate : public exec::Aggregate {
         clearNull(rawNulls, i);
         covarResult.set(i, *accumulator(group));
       }
+    }
+  }
+
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + offset_) TAccumulator();
     }
   }
 
