@@ -618,6 +618,11 @@ int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv};
 
+  if (int device; cudaGetDevice(&device) != cudaSuccess) {
+    std::cerr << "No CUDA detected, skipping all tests" << std::endl;
+    return 0;
+  }
+
   cudaDeviceProp prop;
   CUDA_CHECK_FATAL(cudaGetDeviceProperties(&prop, FLAGS_device_id));
   printf("Running on device: %s\n", prop.name);
