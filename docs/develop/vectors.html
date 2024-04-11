@@ -254,9 +254,10 @@ characters.</p>
 <span class="n">BufferPtr</span><span class="w"> </span><span class="n">stringBuffer_</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>BaseVector::wrapInConstant() static method can be used to create a constant
+<p>BaseVector::createConstant() static method can be used to create a constant
 vector from a scalar value.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="w"> </span><span class="n">createConstant</span><span class="p">(</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">type</span><span class="p">,</span>
 <span class="w">    </span><span class="n">variant</span><span class="w"> </span><span class="n">value</span><span class="p">,</span>
 <span class="w">    </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">size</span><span class="p">,</span>
 <span class="w">    </span><span class="n">velox</span><span class="o">::</span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="n">pool</span><span class="p">);</span>
