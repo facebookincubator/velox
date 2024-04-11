@@ -113,7 +113,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         id: get-head
-        working-directory: ${{ github.workspace }}
         run: |
           if [ '${{ github.event_name == 'push' }}' == "true" ]; then
             # get the parent commit of the current one to get the relevant function signatures
