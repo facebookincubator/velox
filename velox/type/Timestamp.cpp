@@ -243,9 +243,6 @@ StringView Timestamp::tmToStringView(
   VELOX_DCHECK_LT(nanos, 1'000'000'000);
   double kNanosecondsInMillisecond = 1'000'000;
   double kNanosecondsInMicrosecond = 1'000;
-  auto precisionWidth = static_cast<int8_t>(options.precision);
-  std::string out;
-  out.reserve(getCapacity(options));
 
   const auto appendDigits = [](const int value,
                                const std::optional<uint32_t> minWidth,
