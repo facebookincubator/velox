@@ -1523,7 +1523,7 @@ void HashProbe::ensureOutputFits() {
     return;
   }
 
-  if (testingTriggerSpill()) {
+  if (testingTriggerSpill(pool()->name())) {
     Operator::ReclaimableSectionGuard guard(this);
     memory::testingRunArbitration(pool());
   }
