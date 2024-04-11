@@ -1498,12 +1498,6 @@ template <typename T>
 struct ToISO8601Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result,
-      const arg_type<Date>& date) {
-    result = DateType::toIso8601(date);
-  }
-
   std::string sessionTzName = "";
   const date::time_zone* sessionTimezone = nullptr;
 
@@ -1516,8 +1510,17 @@ struct ToISO8601Function {
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+    result = DateType::toIso8601(date);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
       const arg_type<Timestamp>& timestamp) {
+    // move to init
     std::string tzOffsetStr = "";
+
+    // necessary? use arg directly?
     Timestamp ts = timestamp;
     TimestampToStringOptions options;
     options.mode = TimestampToStringOptions::Mode::kFull;

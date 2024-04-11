@@ -4034,6 +4034,8 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
 
   setQueryTimeZone("America/Denver");
 
+  // add DST tests
+
   EXPECT_EQ(
       "2017-07-17T19:54:57.828-06:00",
       toISO8601(Timestamp(1500321297, 827910000)));
