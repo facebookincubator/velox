@@ -1,7 +1,22 @@
+#!/usr/bin/env python3
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import argparse
 import sys
 import uuid
-from os.path import splitext, join
+from os.path import join, splitext
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -60,7 +75,7 @@ class BinarySizeAdapter(BenchmarkAdapter):
                     "unit": "B",
                     "iterations": 1,
                 },
-                tags={"name": path, "suite": suite, "source": "build_metrics"},
+                tags={"name": path, "suite": suite, "source": "build_metrics_size"},
                 info={},
                 context={"benchmark_language": "C++"},
             )
@@ -141,7 +156,11 @@ class NinjaLogAdapter(BenchmarkAdapter):
                     "unit": "s",
                     "iterations": 1,
                 },
-                tags={"name": object_path, "suite": suite, "source": "build_metrics"},
+                tags={
+                    "name": object_path,
+                    "suite": suite,
+                    "source": "build_metrics_time",
+                },
                 info={},
                 context={"benchmark_language": "C++"},
             )
@@ -157,7 +176,11 @@ class NinjaLogAdapter(BenchmarkAdapter):
                     "unit": "s",
                     "iterations": 1,
                 },
-                tags={"name": total_name, "suite": "total", "source": "build_metrics"},
+                tags={
+                    "name": total_name,
+                    "suite": "total",
+                    "source": "build_metrics_time",
+                },
                 info={},
                 context={"benchmark_language": "C++"},
             )
@@ -176,34 +199,34 @@ def upload(args):
     run_name = f"{run_reason}: {args.sha}"
     sizes = BinarySizeAdapter(
         command=["true"],
-        size_file = join(args.base_path, args.size_file),
+        size_file=join(args.base_path, args.size_file),
         result_fields_override={
             "run_id": args.run_id,
             "run_name": run_name,
             "run_reason": run_reason,
             "github": {
-                #TODO change
+                # TODO change
                 "repository": "https://github.com/assignUser/velox",
                 "pr_number": pr_number,
-                "commit": args.sha
+                "commit": args.sha,
             },
         },
     )
     sizes()
-    times = NinjaLogAdapter( 
+    times = NinjaLogAdapter(
         command=["true"],
-        ninja_log = join(args.base_path, args.ninja_log),
+        ninja_log=join(args.base_path, args.ninja_log),
         result_fields_override={
             "run_id": args.run_id,
             "run_name": run_name,
             "run_reason": run_reason,
             "github": {
-                #TODO change
+                # TODO change
                 "repository": "https://github.com/assignUser/velox",
                 "pr_number": pr_number,
-                "commit": args.sha
-            }
-        }
+                "commit": args.sha,
+            },
+        },
     )
     times()
 
@@ -217,7 +240,7 @@ def parse_args(args):
     upload_parser = subparsers.add_parser(
         "upload", help="Parse and upload build metrics"
     )
-    upload_parser.set_defaults(func= upload)
+    upload_parser.set_defaults(func=upload)
     upload_parser.add_argument(
         "--ninja_log", default=".ninja_log", help="Name of the ninja log file."
     )
@@ -238,7 +261,7 @@ def parse_args(args):
     )
     upload_parser.add_argument(
         "--pr_number",
-        required=True,
+        default=0,
         help="PR number for the result upload to conbench.",
     )
     upload_parser.add_argument(
@@ -246,8 +269,9 @@ def parse_args(args):
         default="/tmp/metrics",
         help="Path in which the .ninja_log and sizes_file are found.",
     )
-    
+
     return parser.parse_args()
+
 
 if __name__ == "__main__":
     args = parse_args(sys.argv[1:])

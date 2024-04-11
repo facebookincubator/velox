@@ -1,0 +1,101 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Collect Build Metrics
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "ref to check"
+        required: true
+
+  schedule:
+    - cron: "5 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  metrics:
+    name: Linux release with adapters
+    runs-on: 8-core
+    container: ghcr.io/facebookincubator/velox-dev:adapters
+    defaults:
+      run:
+        shell: bash
+    env:
+      CCACHE_DIR: "/__w/velox/velox/.ccache"
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
+      xsimd_SOURCE: BUNDLED
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory /__w/velox/velox
+
+      - name: Make Release Build
+        env:
+          MAKEFLAGS: 'NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4'
+        run: |
+          EXTRA_CMAKE_FLAGS=(
+            "-DVELOX_ENABLE_BENCHMARKS=ON"
+            "-DVELOX_ENABLE_ARROW=ON"
+            "-DVELOX_ENABLE_PARQUET=ON"
+            "-DVELOX_ENABLE_HDFS=ON"
+            "-DVELOX_ENABLE_S3=ON"
+            "-DVELOX_ENABLE_GCS=ON"
+            "-DVELOX_ENABLE_ABFS=ON"
+            "-DVELOX_ENABLE_SUBSTRAIT=ON"
+            "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
+          )
+          make release
+
+      - name: Log binary sizes
+        run: |
+          mkdir -p /tmp/metrics
+          sizes_file=/tmp/metrics/object_sizes
+          pushd _build/release
+
+          find velox -type f -name '*.so' -o -name '*.a' -exec ls -l -BB {} \; |
+            awk '{print $5, $9; total += $5} END {print total," total_lib_size"}' > $sizes_file
+
+          find velox -type f -name '*.o' -exec ls -l -BB {} \; |
+            awk '{print $5, $9; total += $5} END {print total," total_obj_size"}' >> $sizes_file
+
+          find velox -type f -name 'velox_*' -exec ls -l -BB {} \; |
+            awk '{print $5, $9; total += $5} END {print total," total_exec_size"}' >> $sizes_file
+
+      - name: Copy ninja_log
+        run: cp _build/release/.ninja_log /tmp/metrics/.ninja_log
+
+      - name: "Upload Metrics"
+        env:
+          CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
+          CONBENCH_MACHINE_INFO_NAME: "GitHub-runner-8-core"
+          CONBENCH_EMAIL: "${{ secrets.CONBENCH_EMAIL }}"
+          CONBENCH_PASSWORD: "${{ secrets.CONBENCH_PASSWORD }}"
+          CONBENCH_PROJECT_REPOSITORY: "${{ github.repository }}"
+          CONBENCH_PROJECT_COMMIT: "${{ inputs.ref || github.sha }}"
+        run: |
+          ./velox/scripts/build-metrics.py upload \
+            --run_id "bm-testing-GHA-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --pr_number "${{ steps.extract.outputs.pr_number }}" \
+            --sha "${{ inputs.ref || github.sha }}"
