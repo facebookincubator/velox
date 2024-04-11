@@ -378,7 +378,7 @@ reservation grows along a series of powers of (1 + N / 100). If the memory reser
 </tr>
 <tr class="row-even"><td><p>max_spill_level</p></td>
 <td><p>integer</p></td>
-<td><p>4</p></td>
+<td><p>1</p></td>
 <td><p>The maximum allowed spilling level with zero being the initial spilling level. Applies to hash join build
 spilling which might use recursive spilling when the build table is very large. -1 means unlimited.
 In this case an extremely large query might run out of spilling partition bits. The max spill level
