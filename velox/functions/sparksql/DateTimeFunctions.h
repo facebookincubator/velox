@@ -760,4 +760,51 @@ struct MakeYMIntervalFunction {
     result = totalMonths;
   }
 };
+
+template <typename T>
+struct TimestampToMicrosFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = timestamp.toMicros();
+  }
+};
+
+template <typename T>
+struct MicrosToTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const TInput micros) {
+    result = Timestamp::fromMicros(micros);
+  }
+};
+
+template <typename T>
+struct TimestampToMillisFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = timestamp.toMillis();
+  }
+};
+
+template <typename T>
+struct MillisToTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const TInput millis) {
+    result = Timestamp::fromMillis(millis);
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
