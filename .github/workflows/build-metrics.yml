@@ -87,12 +87,8 @@ jobs:
       - name: Copy ninja_log
         run: cp _build/release/.ninja_log /tmp/metrics/.ninja_log
 
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-
       - name: "Install dependencies"
-        run: python -m pip install -r velox/scripts/benchmark-requirements.txt
+        run: python3 -m pip install -r velox/scripts/benchmark-requirements.txt
 
       - name: "Upload Metrics"
         env:
