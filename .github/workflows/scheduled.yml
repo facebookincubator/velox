@@ -113,6 +113,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         id: get-head
+        working-directory: ${{ github.workspace }}
         run: |
           if [ '${{ github.event_name == 'push' }}' == "true" ]; then
             # get the parent commit of the current one to get the relevant function signatures
@@ -766,7 +767,7 @@ jobs:
           ls /tmp/signatures/
           echo "Biased functions:"
           cat /tmp/signatures/presto_aggregate_bias_functions
-          echo "Running Fuzzer"
+          echo "Running Fuzzer for $DURATION"
           ./velox_aggregation_fuzzer_test \
                 --seed ${RANDOM} \
                 --duration_sec $DURATION \
@@ -800,8 +801,13 @@ jobs:
           path: /tmp/signatures
 
       - name: Surface Presto function signature errors
-        if: ${{ needs.compile.outputs.presto_error == 'true' ||  needs.compile.outputs.presto_aggregate_error == 'true' }}
+        if: ${{ needs.compile.outputs.presto_error == 'true' }}
         run: |
           cat /tmp/signatures/presto_errors
+          exit 1
+
+      - name: Surface Aggregate function signature errors
+        if: ${{ needs.compile.outputs.presto_aggregate_error == 'true' }}
+        run: |
           cat /tmp/signatures/presto_aggregate_errors
           exit 1
