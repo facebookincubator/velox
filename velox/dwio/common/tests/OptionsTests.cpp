@@ -19,24 +19,31 @@
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;
 
-TEST(OptionsTests, defaultAppendRowNumberColumnTest) {
+TEST(OptionsTests, defaultRowNumberColumnInfoTest) {
   // appendRowNumberColumn flag should be false by default
   RowReaderOptions rowReaderOptions;
-  ASSERT_EQ(false, rowReaderOptions.getAppendRowNumberColumn());
+  ASSERT_EQ(std::nullopt, rowReaderOptions.getRowNumberColumnInfo());
 }
 
-TEST(OptionsTests, setAppendRowNumberColumnToTrueTest) {
+TEST(OptionsTests, setRowNumberColumnInfoTest) {
   RowReaderOptions rowReaderOptions;
-  rowReaderOptions.setAppendRowNumberColumn(true);
-  ASSERT_EQ(true, rowReaderOptions.getAppendRowNumberColumn());
+  RowNumberColumnInfo rowNumberColumnInfo;
+  rowNumberColumnInfo.insertPosition = 0;
+  rowNumberColumnInfo.name = "test";
+  rowReaderOptions.setRowNumberColumnInfo(rowNumberColumnInfo);
+  ASSERT_EQ(rowNumberColumnInfo, rowReaderOptions.getRowNumberColumnInfo());
 }
 
-TEST(OptionsTests, testAppendRowNumberColumnInCopy) {
+TEST(OptionsTests, testRowNumberColumnInfoInCopy) {
   RowReaderOptions rowReaderOptions;
   RowReaderOptions rowReaderOptionsCopy{rowReaderOptions};
-  ASSERT_EQ(false, rowReaderOptionsCopy.getAppendRowNumberColumn());
+  ASSERT_EQ(std::nullopt, rowReaderOptionsCopy.getRowNumberColumnInfo());
 
-  rowReaderOptions.setAppendRowNumberColumn(true);
+  RowNumberColumnInfo rowNumberColumnInfo;
+  rowNumberColumnInfo.insertPosition = 0;
+  rowNumberColumnInfo.name = "test";
+  rowReaderOptions.setRowNumberColumnInfo(rowNumberColumnInfo);
   RowReaderOptions rowReaderOptionsSecondCopy{rowReaderOptions};
-  ASSERT_EQ(true, rowReaderOptionsSecondCopy.getAppendRowNumberColumn());
+  ASSERT_EQ(
+      rowNumberColumnInfo, rowReaderOptionsSecondCopy.getRowNumberColumnInfo());
 }

@@ -296,7 +296,7 @@ void DwrfRowReader::readNext(
     }
     return;
   }
-  if (!options_.getAppendRowNumberColumn()) {
+  if (!options_.getRowNumberColumnInfo().has_value()) {
     selectiveColumnReader_->next(rowsToRead, result, mutation);
     return;
   }
