@@ -377,6 +377,14 @@ void Driver::enqueueInternal() {
         e.what());                                                         \
   }
 
+// Check whether the future is set by isBlocked method.
+#define CHECK_IS_BLOCK_FUTURE(operatorPtr, future)             \
+  VELOX_CHECK(                                                 \
+      future.valid(),                                          \
+      "The operator {} is blocked but blocking future is not " \
+      "set by isBlocked method.",                              \
+      operatorPtr->operatorType());
+
 void OpCallStatus::start(int32_t operatorId, const char* operatorMethod) {
   timeStartMs = getCurrentTimeMs();
   opId = operatorId;
@@ -511,7 +519,7 @@ StopReason Driver::runInternal(
     TestValue::adjust("facebook::velox::exec::Driver::runInternal", this);
 
     const int32_t numOperators = operators_.size();
-    ContinueFuture future;
+    ContinueFuture future = ContinueFuture::makeEmpty();
 
     for (;;) {
       for (int32_t i = numOperators - 1; i >= 0; --i) {
@@ -539,6 +547,7 @@ StopReason Driver::runInternal(
             curOperatorId_,
             kOpMethodIsBlocked);
         if (blockingReason_ != BlockingReason::kNotBlocked) {
+          CHECK_IS_BLOCK_FUTURE(op, future);
           blockingState = std::make_shared<BlockingState>(
               self, std::move(future), op, blockingReason_);
           guard.notThrown();
@@ -554,6 +563,7 @@ StopReason Driver::runInternal(
               curOperatorId_ + 1,
               kOpMethodIsBlocked);
           if (blockingReason_ != BlockingReason::kNotBlocked) {
+            CHECK_IS_BLOCK_FUTURE(nextOp, future);
             blockingState = std::make_shared<BlockingState>(
                 self, std::move(future), nextOp, blockingReason_);
             guard.notThrown();
@@ -643,6 +653,7 @@ StopReason Driver::runInternal(
                   curOperatorId_,
                   kOpMethodIsBlocked);
               if (blockingReason_ != BlockingReason::kNotBlocked) {
+                CHECK_IS_BLOCK_FUTURE(op, future);
                 blockingState = std::make_shared<BlockingState>(
                     self, std::move(future), op, blockingReason_);
                 guard.notThrown();
