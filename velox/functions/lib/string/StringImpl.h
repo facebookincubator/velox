@@ -695,10 +695,10 @@ FOLLY_ALWAYS_INLINE size_t initCapUnicode(
     newWord = utf8proc_category(nextCodePoint) ==
         UTF8PROC_CATEGORY_ZS; // Check if it's a space character.
 
-  VELOX_USER_CHECK(
-        (outputIdx + utf8proc_codepoint_length(modifiedCodePoint)) <
-            outputLength,
-	  "access out of bound, index {}",
+    VELOX_USER_CHECK_LT(
+        outputIdx + utf8proc_codepoint_length(modifiedCodePoint),
+	outputLength,
+	"Access out of bound, index {}",
 	outputIdx);
 
     auto newSize = utf8proc_encode_char(
@@ -726,7 +726,7 @@ FOLLY_ALWAYS_INLINE bool initCap(TOutString& output, const TInString& input) {
   return true;
 }
 
-/// Inplace ascii initCap
+// Inplace ascii initCap.
 template <typename T>
 FOLLY_ALWAYS_INLINE bool initCapAsciiInPlace(T& str) {
   initCapAscii(str.data(), str.data(), str.size());

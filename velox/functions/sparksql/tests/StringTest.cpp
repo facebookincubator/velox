@@ -867,7 +867,7 @@ TEST_F(StringTest, initCap) {
   const auto initCap = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t>("initCap(c0)", arg);
   };
-  // unicode only.
+  // Unicode only.
   EXPECT_EQ(
       initcap("àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"),
       "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ");
@@ -881,10 +881,10 @@ TEST_F(StringTest, initCap) {
   EXPECT_EQ(initcap("1234"), "1234");
   EXPECT_EQ(initcap("a b c d"), "A B C D");
   EXPECT_EQ(initcap("abcd"), "Abcd");
-  // numbers.
+  // Numbers.
   EXPECT_EQ(initcap("123"), "123");
   EXPECT_EQ(initcap("1abc"), "1abc");
-  // edge cases.
+  // Edge cases.
   EXPECT_EQ(initcap(""), "");
   EXPECT_EQ(initcap(std::nullopt), std::nullopt);
 }
