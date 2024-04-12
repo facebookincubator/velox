@@ -128,6 +128,6 @@ jobs:
           ./scripts/build-metrics.py upload \
             --build_type "${{ matrix.type }}" \
             --run_id "BM-${{ matrix.type }}-${{ github.run_id }}-${{ github.run_attempt }}" \
-            --pr_number "${{ github.event.number }}" \
+            --pr_number "0" \
             --sha "${{ inputs.ref || github.sha }}" \
             "/tmp/metrics"
