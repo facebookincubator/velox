@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   metrics:
-    name: Linux release with adapters
+    name: Linux ${{ matrix.type }} with adapters
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: ${{ matrix.runner }}
     container: ghcr.io/facebookincubator/velox-dev:adapters
@@ -38,7 +38,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: "8-core" # we could use 8-core here
+          - runner: "8-core"
             type: "release"
           - runner: "16-core"
             type: "debug"
@@ -59,7 +59,7 @@ jobs:
         # it doesn't work
         run: git config --global --add safe.directory /__w/velox/velox
 
-      - name: Make Release Build
+      - name: Make ${{ matrix.type }} Build
         env:
           MAKEFLAGS: 'NUM_THREADS=4 MAX_HIGH_MEM_JOBS=2 MAX_LINK_JOBS=2'
         run: |
