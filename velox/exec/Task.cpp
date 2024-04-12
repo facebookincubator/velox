@@ -1449,9 +1449,16 @@ exec::Split Task::getSplitLocked(
       if (!connectorSplit->dataSource) {
         // Initializes split->dataSource.
         preload(connectorSplit);
+        preloadingSplits_.push_back(connectorSplit);
       } else if (
           (readySplitIndex == -1) && (connectorSplit->dataSource->hasValue())) {
         readySplitIndex = i;
+        preloadingSplits_.erase(
+            std::remove(
+                preloadingSplits_.begin(),
+                preloadingSplits_.end(),
+                connectorSplit),
+            preloadingSplits_.end());
       }
     }
   }
@@ -1952,6 +1959,11 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   for (auto& bridge : oldBridges) {
     bridge->cancel();
   }
+
+  for (auto split : preloadingSplits_) {
+    split->dataSource->close();
+  }
+  preloadingSplits_.clear();
 
   return makeFinishFuture("Task::terminate");
 }

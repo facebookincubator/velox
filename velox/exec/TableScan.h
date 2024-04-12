@@ -49,16 +49,6 @@ class TableScan : public SourceOperator {
       column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) override;
 
-  void close() override {
-    if (splitPreloader_) {
-      for (auto split : preloadingSplits_) {
-        split->dataSource->close();
-      }
-      preloadingSplits_.clear();
-    }
-    Operator::close();
-  }
-
   /// Returns process-wide cumulative IO wait time for all table
   /// scan. This is the blocked time. If running entirely from memory
   /// this would be 0.
@@ -135,7 +125,5 @@ class TableScan : public SourceOperator {
   // The last value of the IO wait time of 'this' that has been added to the
   // global static 'ioWaitNanos_'.
   uint64_t lastIoWaitNanos_{0};
-
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> preloadingSplits_;
 };
 } // namespace facebook::velox::exec

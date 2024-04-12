@@ -42,6 +42,12 @@ class AsyncSource {
   explicit AsyncSource(std::function<std::unique_ptr<Item>()> make)
       : make_(std::move(make)) {}
 
+  ~AsyncSource() {
+    VELOX_CHECK(
+        moved_ || closed_,
+        "AsyncSource should be properly consumed or closed.");
+  }
+
   // Makes an item if it is not already made. To be called on a background
   // executor.
   void prepare() {
