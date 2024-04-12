@@ -773,6 +773,8 @@ class ParquetRowReader::Impl {
     auto rowNumberColumnInfo = options_.getRowNumberColumnInfo().value();
     auto rowNumberColumnIndex = rowNumberColumnInfo.insertPosition;
     auto rowNumberColumnName = rowNumberColumnInfo.name;
+    VELOX_CHECK_GE(rowNumberColumnIndex, 0);
+    VELOX_CHECK_LE(rowNumberColumnIndex, numChildren);
     if (rowVector->childrenSize() != numChildren) {
       VELOX_CHECK_EQ(rowVector->childrenSize(), numChildren + 1);
 

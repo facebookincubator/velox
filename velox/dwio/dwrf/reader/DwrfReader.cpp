@@ -315,17 +315,22 @@ void DwrfRowReader::readWithRowNumber(
     }
   }
   VectorPtr rowNumVector;
+  auto rowNumberColumnInfo = options_.getRowNumberColumnInfo().value();
+  auto rowNumberColumnIndex = rowNumberColumnInfo.insertPosition;
+  auto rowNumberColumnName = rowNumberColumnInfo.name;
+  VELOX_CHECK_GE(rowNumberColumnIndex, 0);
+  VELOX_CHECK_LE(rowNumberColumnIndex, numChildren);
   if (rowVector->childrenSize() != numChildren) {
     VELOX_CHECK_EQ(rowVector->childrenSize(), numChildren + 1);
-    rowNumVector = rowVector->childAt(numChildren);
+    rowNumVector = rowVector->childAt(rowNumberColumnIndex);
     auto& rowType = rowVector->type()->asRow();
     auto names = rowType.names();
     auto types = rowType.children();
     auto children = rowVector->children();
     VELOX_DCHECK(!names.empty() && !types.empty() && !children.empty());
-    names.pop_back();
-    types.pop_back();
-    children.pop_back();
+    names.erase(names.begin() + rowNumberColumnIndex);
+    types.erase(types.begin() + rowNumberColumnIndex);
+    children.erase(children.begin() + rowNumberColumnIndex);
     result = std::make_shared<RowVector>(
         rowVector->pool(),
         ROW(std::move(names), std::move(types)),
@@ -362,9 +367,9 @@ void DwrfRowReader::readWithRowNumber(
   auto names = rowType.names();
   auto types = rowType.children();
   auto children = rowVector->children();
-  names.emplace_back();
-  types.push_back(BIGINT());
-  children.push_back(rowNumVector);
+  names.insert(names.begin() + rowNumberColumnIndex, rowNumberColumnName);
+  types.insert(types.begin() + rowNumberColumnIndex, BIGINT());
+  children.insert(children.begin() + rowNumberColumnIndex, rowNumVector);
   result = std::make_shared<RowVector>(
       rowVector->pool(),
       ROW(std::move(names), std::move(types)),

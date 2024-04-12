@@ -2661,7 +2661,7 @@ TEST_F(TestReader, setRowNumberColumnInfo) {
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
   RowNumberColumnInfo rowNumberColumnInfo;
-  rowNumberColumnInfo.insertPosition = 0;
+  rowNumberColumnInfo.insertPosition = 1;
   rowNumberColumnInfo.name = "";
   rowReaderOpts.setRowNumberColumnInfo(rowNumberColumnInfo);
   {
@@ -2690,7 +2690,7 @@ TEST_F(TestReader, reuseRowNumberColumn) {
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
   RowNumberColumnInfo rowNumberColumnInfo;
-  rowNumberColumnInfo.insertPosition = 0;
+  rowNumberColumnInfo.insertPosition = 1;
   rowNumberColumnInfo.name = "";
   rowReaderOpts.setRowNumberColumnInfo(rowNumberColumnInfo);
   {
