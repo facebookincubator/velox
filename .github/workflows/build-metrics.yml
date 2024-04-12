@@ -112,4 +112,5 @@ jobs:
             --build_type "${{ matrix.type }}" \
             --run_id "BM-${{ matrix.type }}-${{ github.run_id }}-${{ github.run_attempt }}" \
             --pr_number "${{ steps.extract.outputs.pr_number }}" \
-            --sha "${{ inputs.ref || github.sha }}"
+            --sha "${{ inputs.ref || github.sha }}" \
+            "/tmp/metrics"

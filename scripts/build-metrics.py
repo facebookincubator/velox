@@ -286,7 +286,6 @@ def parse_args():
     )
     upload_parser.add_argument(
         "base_path",
-        default="/tmp/metrics",
         help="Path in which the .ninja_log and sizes_file are found.",
     )
 
