@@ -59,14 +59,7 @@ jobs:
         # it doesn't work
         run: git config --global --add safe.directory /__w/velox/velox
 
-      - uses: assignUser/stash/restore@v1
-        id: get-bm
-        with:
-          path: '/tmp/metrics'
-          key: build-metrics-${{ matrix.type }}
-
       - name: Make ${{ matrix.type }} Build
-        if: ${{ steps.get-bm.outputs.stash-hit != 'true' }}
         env:
           MAKEFLAGS: 'MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4'
         run: |
@@ -84,7 +77,6 @@ jobs:
           make '${{ matrix.type }}'
 
       - name: Log binary sizes
-        if: ${{ steps.get-bm.outputs.stash-hit != 'true' }}
         run: |
           mkdir -p /tmp/metrics
           sizes_file=/tmp/metrics/object_sizes
@@ -100,14 +92,7 @@ jobs:
             awk '{print $5, $9; total += $5} END {print total," total_exec_size"}' >> $sizes_file
 
       - name: Copy ninja_log
-        if: ${{ steps.get-bm.outputs.stash-hit != 'true' }}
         run: cp _build/${{ matrix.type }}/.ninja_log /tmp/metrics/.ninja_log
-
-      - uses: assignUser/stash/save@v1
-        if: ${{ steps.get-bm.outputs.stash-hit != 'true' }}
-        with:
-          path: '/tmp/metrics'
-          key: build-metrics-${{ matrix.type }}
 
       - name: "Install dependencies"
         run: |
