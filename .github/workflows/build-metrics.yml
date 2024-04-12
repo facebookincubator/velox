@@ -16,6 +16,9 @@ name: Collect Build Metrics
 
 on:
   pull_request:
+      paths:
+        - ".github/workflows/build-metrics.yml"
+
   workflow_dispatch:
     inputs:
       ref:
