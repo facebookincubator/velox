@@ -40,10 +40,14 @@ class BinarySizeAdapter(BenchmarkAdapter):
         self,
         command: List[str],
         size_file: str,
+        build_type: str,
         result_fields_override: Dict[str, Any] = {},
         result_fields_append: Dict[str, Any] = {},
     ) -> None:
         self.size_file = Path(size_file)
+        if build_type not in ["debug", "release"]:
+            raise ValueError(f"Build type '{build_type}' is not valid!")
+        self.build_type = build_type
         super().__init__(command, result_fields_override, result_fields_append)
 
     def _transform_results(self) -> List[BenchmarkResult]:
@@ -75,7 +79,11 @@ class BinarySizeAdapter(BenchmarkAdapter):
                     "unit": "B",
                     "iterations": 1,
                 },
-                tags={"name": path, "suite": suite, "source": "build_metrics_size"},
+                tags={
+                    "name": path,
+                    "suite": suite,
+                    "source": f"{self.build_type}_build_metrics_size",
+                },
                 info={},
                 context={"benchmark_language": "C++"},
             )
@@ -99,10 +107,14 @@ class NinjaLogAdapter(BenchmarkAdapter):
         self,
         command: List[str],
         ninja_log: str,
+        build_type: str,
         result_fields_override: Dict[str, Any] = {},
         result_fields_append: Dict[str, Any] = {},
     ) -> None:
         self.ninja_log = Path(ninja_log)
+        if build_type not in ["debug", "release"]:
+            raise ValueError(f"Build type '{build_type}' is not valid!")
+        self.build_type = build_type
         super().__init__(command, result_fields_override, result_fields_append)
 
     def _transform_results(self) -> List[BenchmarkResult]:
@@ -159,7 +171,7 @@ class NinjaLogAdapter(BenchmarkAdapter):
                 tags={
                     "name": object_path,
                     "suite": suite,
-                    "source": "build_metrics_time",
+                    "source": f"{self.build_type}_build_metrics_time",
                 },
                 info={},
                 context={"benchmark_language": "C++"},
@@ -179,7 +191,7 @@ class NinjaLogAdapter(BenchmarkAdapter):
                 tags={
                     "name": total_name,
                     "suite": "total",
-                    "source": "build_metrics_time",
+                    "source": f"{self.build_type}_build_metrics_time",
                 },
                 info={},
                 context={"benchmark_language": "C++"},
@@ -200,6 +212,7 @@ def upload(args):
     sizes = BinarySizeAdapter(
         command=["true"],
         size_file=join(args.base_path, args.size_file),
+        build_type=args.build_type,
         result_fields_override={
             "run_id": args.run_id,
             "run_name": run_name,
@@ -213,9 +226,11 @@ def upload(args):
         },
     )
     sizes()
+
     times = NinjaLogAdapter(
         command=["true"],
         ninja_log=join(args.base_path, args.ninja_log),
+        build_type=args.build_type,
         result_fields_override={
             "run_id": args.run_id,
             "run_name": run_name,
@@ -231,7 +246,7 @@ def upload(args):
     times()
 
 
-def parse_args(args):
+def parse_args():
     parser = argparse.ArgumentParser(description="Velox Build Metric Utility.")
     parser.set_defaults(func=lambda _: parser.print_help())
 
@@ -248,6 +263,11 @@ def parse_args(args):
         "--size_file",
         default="object_sizes",
         help="Name of the file containing size information.",
+    )
+    upload_parser.add_argument(
+        "--build_type",
+        required=True,
+        help="Type of build results come from, e.g. debug or release",
     )
     upload_parser.add_argument(
         "--run_id",
@@ -274,5 +294,5 @@ def parse_args(args):
 
 
 if __name__ == "__main__":
-    args = parse_args(sys.argv[1:])
+    args = parse_args()
     args.func(args)
