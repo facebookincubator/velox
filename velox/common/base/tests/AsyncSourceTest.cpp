@@ -150,6 +150,9 @@ TEST(AsyncSourceTest, errorsWithThreads) {
   // There will always be errors since the first to wait for any given
   // gizmo is sure to get an error.
   EXPECT_LT(0, numErrors);
+  for (auto& source : gizmos) {
+    source->close();
+  }
 }
 
 class DataCounter {

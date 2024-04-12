@@ -15,6 +15,7 @@
  */
 #include "velox/exec/TableScan.h"
 #include <folly/synchronization/Baton.h>
+#include <folly/synchronization/Latch.h>
 #include <atomic>
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1362,10 +1363,14 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   createDuckDbTable(vectors);
 
   auto executors = ioExecutor_.get();
+  folly::Latch latch(executors->numThreads());
   std::vector<folly::Baton<>> batons(executors->numThreads());
   // Simulate a busy IO thread pool by blocking all threads.
-  for (int32_t i = 0; i < executors->numThreads(); ++i) {
-    executors->add([&batons, i]() { batons[i].wait(); });
+  for (auto& baton : batons) {
+    executors->add([&]() {
+      baton.wait();
+      latch.count_down();
+    });
   }
   ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
   auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp", 2);
@@ -1379,9 +1384,10 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   // promptly match the count of created tasks.
   ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
   // Clean blocking items in the IO thread pool.
-  for (int i = 0; i < executors->numThreads(); ++i) {
-    batons[i].post();
+  for (auto& baton : batons) {
+    baton.post();
   }
+  latch.wait();
 }
 
 TEST_F(TableScanTest, waitForSplit) {
