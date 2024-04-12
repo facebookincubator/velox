@@ -120,8 +120,8 @@ jobs:
           CONBENCH_MACHINE_INFO_NAME: "GitHub-runner-${{ matrix.runner }}"
           CONBENCH_EMAIL: "${{ secrets.CONBENCH_EMAIL }}"
           CONBENCH_PASSWORD: "${{ secrets.CONBENCH_PASSWORD }}"
-          CONBENCH_PROJECT_REPOSITORY: "${{ github.repository }}"
-          CONBENCH_PROJECT_COMMIT: "${{ inputs.ref || github.sha }}"
+          # These don't actually work https://github.com/conbench/conbench/issues/1484
+          # TODO remove them here and in the benchmark job 
         run: |
           ./scripts/build-metrics.py upload \
             --build_type "${{ matrix.type }}" \
