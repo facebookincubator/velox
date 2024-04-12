@@ -1208,7 +1208,7 @@ void re2SplitAll(
     const re2::StringPiece remaining = input.substr(pos);
     arrayWriter.add_item().setNoCopy(
         StringView(remaining.data(), remaining.size()));
-  } else if (pos == input.size()) {
+  } else {
     arrayWriter.add_item().setNoCopy(StringView(nullptr, 0));
   }
 
@@ -2050,5 +2050,4 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2SplitAllSignatures() {
           .build(),
   };
 }
-
 } // namespace facebook::velox::functions
