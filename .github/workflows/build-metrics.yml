@@ -101,7 +101,7 @@ jobs:
 
       - name: Copy ninja_log
         if: ${{ steps.get-bm.outputs.stash-hit != 'true' }}
-        run: cp _build/release/.ninja_log /tmp/metrics/.ninja_log
+        run: cp _build/${{ matrix.type }}/.ninja_log /tmp/metrics/.ninja_log
 
       - uses: assignUser/stash/save@v1
         if: ${{ steps.get-bm.outputs.stash-hit != 'true' }}
@@ -126,6 +126,6 @@ jobs:
           ./scripts/build-metrics.py upload \
             --build_type "${{ matrix.type }}" \
             --run_id "BM-${{ matrix.type }}-${{ github.run_id }}-${{ github.run_attempt }}" \
-            --pr_number "${{ steps.extract.outputs.pr_number }}" \
+            --pr_number "${{ github.event.number }}" \
             --sha "${{ inputs.ref || github.sha }}" \
             "/tmp/metrics"
