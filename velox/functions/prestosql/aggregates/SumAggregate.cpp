@@ -48,7 +48,7 @@ exec::AggregateRegistrationResult registerSum(
           .build(),
   };
 
-  for (const auto& inputType : {"tintyint", "smallint", "integer", "bigint"}) {
+  for (const auto& inputType : {"tinyint", "smallint", "integer", "bigint"}) {
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .returnType("bigint")
                              .intermediateType("bigint")

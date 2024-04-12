@@ -150,14 +150,14 @@ jobs:
           mkdir -p /tmp/signatures
 
       - name: Checkout Main
-        if: ${{ github.even_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.get-head.outputs.head_main || 'main' }}
           path: velox_main
 
       - name: Build PyVelox
-        if: ${{ github.even_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
         run: |
           python3 -m venv .venv
@@ -166,7 +166,7 @@ jobs:
           make python-build
 
       - name: Create Baseline Signatures
-        if: ${{ github.even_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
         run: |
           source .venv/bin/activate
@@ -176,7 +176,7 @@ jobs:
           python3 scripts/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_main.json
 
       - name: Save Function Signature Stash
-        if: ${{ github.even_name == 'pull_request' && steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name == 'pull_request' && steps.get-sig.outputs.stash-hit != 'true' }}
         uses: assignUser/stash/save@v1
         with:
           path: /tmp/signatures
@@ -206,14 +206,14 @@ jobs:
       - name: Save ccache
         # see https://github.com/actions/upload-artifact/issues/543
         continue-on-error: true
-        if: ${{ github.even_name != 'schedule' }}
+        if: ${{ github.event_name != 'schedule' }}
         uses: assignUser/stash/save@v1
         with:
           path: "${{ env.CCACHE_DIR }}"
           key: ccache-fuzzer-centos
 
       - name: Build PyVelox
-        if: ${{ github.even_name != 'schedule' }}
+        if: ${{ github.event_name != 'schedule' }}
         env:
           VELOX_BUILD_DIR: "_build/debug"
         run: |
@@ -222,7 +222,7 @@ jobs:
           python3 -m pip install -e .
 
       - name: Create and test new function signatures
-        if: ${{ github.even_name != 'schedule' }}
+        if: ${{ github.event_name != 'schedule' }}
         id: sig-check
         run: |
           source .venv/bin/activate
@@ -234,7 +234,7 @@ jobs:
            /tmp/signatures/presto_aggregate_errors
 
       - name: Upload Signature Artifacts
-        if: ${{ github.even_name != 'schedule' }}
+        if: ${{ github.event_name != 'schedule' }}
         uses: actions/upload-artifact@v4
         with:
           name: signatures
@@ -254,7 +254,7 @@ jobs:
           done
 
       - name: Save Function Signature Stash
-        if: ${{ github.even_name == 'push' }}
+        if: ${{ github.event_name == 'push' }}
         uses: assignUser/stash/save@v1
         with:
           path: /tmp/signatures

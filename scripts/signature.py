@@ -230,11 +230,11 @@ def bias_aggregates(args):
         base_signatures, contender_signatures, args.error_path
     )
 
-    set_gh_output(f"presto_aggregate_error", status == 1)
+    set_gh_output("presto_aggregate_error", status == 1)
 
     if not delta:
         print(f"{bcolors.BOLD} No changes detected: Nothing to do!")
-        return "", status
+        return status
 
     function_set = set()
     for items in delta.values():
@@ -251,7 +251,9 @@ def bias_aggregates(args):
         with open(args.output_path, "w") as f:
             print(f"{biased_functions}", file=f, end="")
 
-        set_gh_output(f"presto_aggregate_functions", True)
+        set_gh_output("presto_aggregate_functions", True)
+
+    return 0
 
 
 def gh_bias_check(args):
