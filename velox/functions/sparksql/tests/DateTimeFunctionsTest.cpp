@@ -40,8 +40,8 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   static constexpr int16_t kMaxSmallint = std::numeric_limits<int16_t>::max();
   static constexpr int8_t kMinTinyint = std::numeric_limits<int8_t>::min();
   static constexpr int8_t kMaxTinyint = std::numeric_limits<int8_t>::max();
-  static constexpr int64_t kMinLong = std::numeric_limits<int64_t>::min();
-  static constexpr int64_t kMaxLong = std::numeric_limits<int64_t>::max();
+  static constexpr int64_t kMinBigint = std::numeric_limits<int64_t>::min();
+  static constexpr int64_t kMaxBigint = std::numeric_limits<int64_t>::max();
 
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
@@ -1015,10 +1015,10 @@ TEST_F(DateTimeFunctionsTest, microsToTimestamp) {
       microsToTimestamp(kMin),
       util::fromTimestampString("1969-12-31 23:24:12.516352"));
   EXPECT_EQ(
-      microsToTimestamp(kMaxLong),
+      microsToTimestamp(kMaxBigint),
       util::fromTimestampString("294247-01-10 04:00:54.775807"));
   EXPECT_EQ(
-      microsToTimestamp(kMinLong),
+      microsToTimestamp(kMinBigint),
       util::fromTimestampString("-290308-12-21 19:59:05.224192"));
 }
 
@@ -1052,10 +1052,10 @@ TEST_F(DateTimeFunctionsTest, millisToTimestamp) {
       millisToTimestamp(kMin),
       util::fromTimestampString("1969-12-07 03:28:36.352"));
   EXPECT_EQ(
-      millisToTimestamp(kMaxLong),
+      millisToTimestamp(kMaxBigint),
       util::fromTimestampString("292278994-08-17T07:12:55.807"));
   EXPECT_EQ(
-      millisToTimestamp(kMinLong),
+      millisToTimestamp(kMinBigint),
       util::fromTimestampString("-292275055-05-16T16:47:04.192"));
 }
 
@@ -1073,9 +1073,9 @@ TEST_F(DateTimeFunctionsTest, timestampToMicros) {
   EXPECT_EQ(timestampToMicros("1969-12-31 23:59:59.967232"), kMinSmallint);
   EXPECT_EQ(timestampToMicros("1970-01-01 00:35:47.483647"), kMax);
   EXPECT_EQ(timestampToMicros("1969-12-31 23:24:12.516352"), kMin);
-  EXPECT_EQ(timestampToMicros("294247-01-10 04:00:54.775807"), kMaxLong);
+  EXPECT_EQ(timestampToMicros("294247-01-10 04:00:54.775807"), kMaxBigint);
   EXPECT_EQ(
-      timestampToMicros("-290308-12-21 19:59:06.224192"), kMinLong + 1000000);
+      timestampToMicros("-290308-12-21 19:59:06.224192"), kMinBigint + 1000000);
 }
 
 TEST_F(DateTimeFunctionsTest, timestampToMillis) {
@@ -1092,8 +1092,8 @@ TEST_F(DateTimeFunctionsTest, timestampToMillis) {
   EXPECT_EQ(timestampToMillis("1969-12-31 23:59:27.232"), kMinSmallint);
   EXPECT_EQ(timestampToMillis("1970-01-25 20:31:23.647"), kMax);
   EXPECT_EQ(timestampToMillis("1969-12-07 03:28:36.352"), kMin);
-  EXPECT_EQ(timestampToMillis("292278994-08-17T07:12:55.807"), kMaxLong);
-  EXPECT_EQ(timestampToMillis("-292275055-05-16T16:47:04.192"), kMinLong);
+  EXPECT_EQ(timestampToMillis("292278994-08-17T07:12:55.807"), kMaxBigint);
+  EXPECT_EQ(timestampToMillis("-292275055-05-16T16:47:04.192"), kMinBigint);
 }
 
 } // namespace

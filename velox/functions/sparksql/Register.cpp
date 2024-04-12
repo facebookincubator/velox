@@ -149,6 +149,15 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions<Timestamp>(prefix);
   registerArrayMinMaxFunctions<Date>(prefix);
 }
+
+template <template <class> typename T>
+inline void registerIntegralToTimestamp(
+    const std::vector<std::string>& aliases) {
+  registerFunction<T, Timestamp, int8_t>(aliases);
+  registerFunction<T, Timestamp, int16_t>(aliases);
+  registerFunction<T, Timestamp, int32_t>(aliases);
+  registerFunction<T, Timestamp, int64_t>(aliases);
+}
 } // namespace
 
 void registerFunctions(const std::string& prefix) {
@@ -393,23 +402,11 @@ void registerFunctions(const std::string& prefix) {
 
   registerFunction<TimestampToMicrosFunction, int64_t, Timestamp>(
       {prefix + "unix_micros"});
-  registerFunction<MicrosToTimestampFunction, Timestamp, int8_t>(
-      {prefix + "timestamp_micros"});
-  registerFunction<MicrosToTimestampFunction, Timestamp, int16_t>(
-      {prefix + "timestamp_micros"});
-  registerFunction<MicrosToTimestampFunction, Timestamp, int32_t>(
-      {prefix + "timestamp_micros"});
-  registerFunction<MicrosToTimestampFunction, Timestamp, int64_t>(
+  registerIntegralToTimestamp<MicrosToTimestampFunction>(
       {prefix + "timestamp_micros"});
   registerFunction<TimestampToMillisFunction, int64_t, Timestamp>(
       {prefix + "unix_millis"});
-  registerFunction<MillisToTimestampFunction, Timestamp, int8_t>(
-      {prefix + "timestamp_millis"});
-  registerFunction<MillisToTimestampFunction, Timestamp, int16_t>(
-      {prefix + "timestamp_millis"});
-  registerFunction<MillisToTimestampFunction, Timestamp, int32_t>(
-      {prefix + "timestamp_millis"});
-  registerFunction<MillisToTimestampFunction, Timestamp, int64_t>(
+  registerIntegralToTimestamp<MillisToTimestampFunction>(
       {prefix + "timestamp_millis"});
 
   // Register bloom filter function
