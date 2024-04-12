@@ -31,14 +31,21 @@ permissions:
 jobs:
   metrics:
     name: Linux release with adapters
-    #if: ${{ github.repository == 'facebookincubator/velox' }}
-    runs-on: ubuntu-latest #8-core
+    if: ${{ github.repository == 'facebookincubator/velox' }}
+    runs-on: ${{ matrix.runner }}
     container: ghcr.io/facebookincubator/velox-dev:adapters
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: "8-core" # we could use 8-core here
+            type: "release"
+          - runner: "16-core"
+            type: "debug"
     defaults:
       run:
         shell: bash
     env:
-      CCACHE_DIR: "/__w/velox/velox/.ccache"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
@@ -67,7 +74,7 @@ jobs:
             "-DVELOX_ENABLE_SUBSTRAIT=ON"
             "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
           )
-          make release
+          make '${{ matrix.type }}'
 
       - name: Log binary sizes
         run: |
@@ -88,18 +95,21 @@ jobs:
         run: cp _build/release/.ninja_log /tmp/metrics/.ninja_log
 
       - name: "Install dependencies"
-        run: python3 -m pip install -r scripts/benchmark-requirements.txt
+        run: |
+          python3 -m pip install setuptools
+          python3 -m pip install -r scripts/benchmark-requirements.txt
 
       - name: "Upload Metrics"
         env:
           CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
-          CONBENCH_MACHINE_INFO_NAME: "GitHub-runner-8-core"
+          CONBENCH_MACHINE_INFO_NAME: "GitHub-runner-${{ matrix.runner }}"
           CONBENCH_EMAIL: "${{ secrets.CONBENCH_EMAIL }}"
           CONBENCH_PASSWORD: "${{ secrets.CONBENCH_PASSWORD }}"
           CONBENCH_PROJECT_REPOSITORY: "${{ github.repository }}"
           CONBENCH_PROJECT_COMMIT: "${{ inputs.ref || github.sha }}"
         run: |
           ./scripts/build-metrics.py upload \
-            --run_id "bm-testing-GHA-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --build_type "${{ matrix.type }}" \
+            --run_id "BM-${{ matrix.type }}-${{ github.run_id }}-${{ github.run_attempt }}" \
             --pr_number "${{ steps.extract.outputs.pr_number }}" \
             --sha "${{ inputs.ref || github.sha }}"
