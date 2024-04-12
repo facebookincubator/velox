@@ -68,7 +68,7 @@ jobs:
       - name: Make ${{ matrix.type }} Build
         if: ${{ steps.get-bm.outputs.stash-hit != 'true' }}
         env:
-          MAKEFLAGS: 'NUM_THREADS=4 MAX_HIGH_MEM_JOBS=2 MAX_LINK_JOBS=2'
+          MAKEFLAGS: 'MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4'
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DVELOX_ENABLE_BENCHMARKS=ON"
