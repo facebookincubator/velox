@@ -88,7 +88,7 @@ jobs:
         run: |
           mkdir -p /tmp/metrics
           sizes_file=/tmp/metrics/object_sizes
-          pushd _build/release
+          pushd '_build/${{ matrix.type }}'
 
           find velox -type f -name '*.so' -o -name '*.a' -exec ls -l -BB {} \; |
             awk '{print $5, $9; total += $5} END {print total," total_lib_size"}' > $sizes_file
