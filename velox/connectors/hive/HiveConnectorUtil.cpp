@@ -587,7 +587,6 @@ bool testFilters(
         // If missing column is partition key.
         auto iter = partitionKey.find(name);
         if (iter != partitionKey.end() && iter->second.has_value()) {
-          VELOX_CHECK_EQ(partitionKey.size(), partitionKeysHandle.size());
           auto handlesIter = partitionKeysHandle.find(name);
           VELOX_CHECK(handlesIter != partitionKeysHandle.end());
 
