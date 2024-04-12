@@ -1176,6 +1176,83 @@ class Re2ExtractAll final : public exec::VectorFunction {
   mutable ReCache cache_;
 };
 
+void re2SplitAll(
+    exec::VectorWriter<Array<Varchar>>& resultWriter,
+    const RE2& re,
+    const exec::LocalDecodedVector& inputStrs,
+    const int row,
+    std::vector<re2::StringPiece>& groups) {
+  resultWriter.setOffset(row);
+
+  auto& arrayWriter = resultWriter.current();
+
+  const StringView str = inputStrs->valueAt<StringView>(row);
+  const re2::StringPiece input = toStringPiece(str);
+  size_t pos = 0;
+
+  while (
+      re.Match(input, pos, input.size(), RE2::UNANCHORED, groups.data(), 1)) {
+    const re2::StringPiece fullMatch = groups[0];
+    const re2::StringPiece subMatch =
+        input.substr(pos, fullMatch.data() - input.data() - pos);
+
+    arrayWriter.add_item().setNoCopy(
+        StringView(subMatch.data(), subMatch.size()));
+    pos = fullMatch.data() + fullMatch.size() - input.data();
+    if (UNLIKELY(fullMatch.size() == 0)) {
+      ++pos;
+    }
+  }
+
+  if (pos < input.size()) {
+    const re2::StringPiece remaining = input.substr(pos);
+    arrayWriter.add_item().setNoCopy(
+        StringView(remaining.data(), remaining.size()));
+  } else if (pos == input.size()) {
+    arrayWriter.add_item().setNoCopy(StringView(nullptr, 0));
+  }
+
+  resultWriter.commit();
+}
+
+class Re2SplitAllConstantPattern final : public exec::VectorFunction {
+ public:
+  Re2SplitAllConstantPattern(StringView pattern)
+      : re_(toStringPiece(pattern), RE2::Quiet) {
+    checkForBadPattern(re_);
+  }
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& resultRef) const final {
+    BaseVector::ensureWritable(
+        rows, ARRAY(VARCHAR()), context.pool(), resultRef);
+    exec::VectorWriter<Array<Varchar>> resultWriter;
+    resultWriter.init(*resultRef->as<ArrayVector>());
+
+    exec::LocalDecodedVector inputStrs(context, *args[0], rows);
+    FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
+    groups.resize(1);
+
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      re2SplitAll(resultWriter, re_, inputStrs, row, groups);
+    });
+
+    resultWriter.finish();
+
+    resultRef->as<ArrayVector>()
+        ->elements()
+        ->asFlatVector<StringView>()
+        ->acquireSharedStringBuffers(inputStrs->base());
+  }
+
+ private:
+  RE2 re_;
+};
+
 template <bool (*Fn)(StringView, const RE2&)>
 std::shared_ptr<exec::VectorFunction> makeRe2MatchImpl(
     const std::string& name,
@@ -1922,6 +1999,54 @@ re2ExtractAllSignatures() {
           .argumentType("varchar")
           .argumentType("varchar")
           .argumentType("integer")
+          .build(),
+  };
+}
+
+std::shared_ptr<exec::VectorFunction> makeRe2SplitAll(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
+  auto numArgs = inputArgs.size();
+  VELOX_USER_CHECK_EQ(
+      numArgs, 2, "{} requires 2 arguments, but got {}", name, numArgs);
+
+  VELOX_USER_CHECK(
+      inputArgs[0].type->isVarchar(),
+      "{} requires first argument of type VARCHAR, but got {}",
+      name,
+      inputArgs[0].type->toString());
+
+  VELOX_USER_CHECK(
+      inputArgs[1].type->isVarchar(),
+      "{} requires second argument of type VARCHAR, but got {}",
+      name,
+      inputArgs[1].type->toString());
+
+  BaseVector* constantPattern = inputArgs[1].constantValue.get();
+  VELOX_USER_CHECK(
+      constantPattern != nullptr && !constantPattern->isNullAt(0),
+      "{} requires second argument of constant, but got {}",
+      name,
+      inputArgs[1].type->toString());
+
+  auto pattern = constantPattern->as<ConstantVector<StringView>>()->valueAt(0);
+
+  try {
+    return std::make_shared<Re2SplitAllConstantPattern>(pattern);
+  } catch (...) {
+    return std::make_shared<exec::AlwaysFailingVectorFunction>(
+        std::current_exception());
+  }
+}
+
+std::vector<std::shared_ptr<exec::FunctionSignature>> re2SplitAllSignatures() {
+  // varchar, varchar -> array<varchar>
+  return {
+      exec::FunctionSignatureBuilder()
+          .returnType("array(varchar)")
+          .argumentType("varchar")
+          .constantArgumentType("varchar")
           .build(),
   };
 }
