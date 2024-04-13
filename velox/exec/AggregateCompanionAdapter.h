@@ -39,6 +39,7 @@ class AggregateCompanionFunctionBase : public Aggregate {
   void destroy(folly::Range<char**> groups) override final;
 
   void initialize(
+      core::AggregationNode::Step step,
       const std::vector<TypePtr>& rawInputType,
       const TypePtr& resultType,
       const std::vector<VectorPtr>& constantInputs) override;

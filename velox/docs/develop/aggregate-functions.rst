@@ -161,6 +161,7 @@ A simple aggregation function is implemented as a class as the following.
 
     // Optional. Used only when the UDAF needs to use FunctionState.
     static void initialize(
+        core::AggregationNode::Step step,
         FunctionState& state,
         const std::vector<TypePtr>& rawInputTypes,
         const TypePtr& resultType,

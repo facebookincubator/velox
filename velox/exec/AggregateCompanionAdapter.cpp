@@ -74,10 +74,11 @@ void AggregateCompanionFunctionBase::clearInternal() {
 }
 
 void AggregateCompanionFunctionBase::initialize(
+    core::AggregationNode::Step step,
     const std::vector<TypePtr>& rawInputType,
     const facebook::velox::TypePtr& resultType,
     const std::vector<VectorPtr>& constantInputs) {
-  fn_->initialize(rawInputType, resultType, constantInputs);
+  fn_->initialize(step, rawInputType, resultType, constantInputs);
 }
 
 void AggregateCompanionFunctionBase::initializeNewGroups(
@@ -238,13 +239,15 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
   rows.applyToSelected([&](auto row) { allSelectedRange.push_back(row); });
 
   // Get the raw input types.
-  std::vector<TypePtr> rawInputTypes;
-  rawInputTypes.reserve(args.size());
-  for (const auto& arg : args) {
-    rawInputTypes.emplace_back(arg->type());
-  }
+  std::vector<TypePtr> rawInputTypes{args.size()};
+  std::transform(
+      args.begin(),
+      args.end(),
+      rawInputTypes.begin(),
+      [](const VectorPtr& arg) { return arg->type(); });
 
-  fn_->initialize(rawInputTypes, outputType, {});
+  fn_->initialize(
+      core::AggregationNode::Step::kFinal, rawInputTypes, outputType, {});
   fn_->initializeNewGroups(groups, allSelectedRange);
   fn_->enableValidateIntermediateInputs();
   fn_->addIntermediateResults(groups, rows, args, false);

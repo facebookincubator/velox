@@ -131,10 +131,12 @@ class Aggregate {
 
   // Initialize the function-level state of the simple function interface for
   // UDAF.
+  // @param step The aggregation step.
   // @param rawInputType The raw input type of the UDAF.
   // @param resultType The result type of the UDAF.
   // @param constantInputs Optional constant inputs.
   virtual void initialize(
+      core::AggregationNode::Step step,
       const std::vector<TypePtr>& rawInputType,
       const TypePtr& resultType,
       const std::vector<VectorPtr>& constantInputs) {}

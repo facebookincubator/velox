@@ -32,6 +32,8 @@ class CollectListAggregate {
 
   using OutputType = Array<Generic<T1>>;
 
+  struct FunctionState {};
+
   /// In Spark, when all inputs are null, the output is an empty array instead
   /// of null. Therefore, in the writeIntermediateResult and writeFinalResult,
   /// we still need to output the empty element_ when the group is null. This
@@ -51,14 +53,17 @@ class CollectListAggregate {
   struct AccumulatorType {
     ValueList elements_;
 
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/)
+    explicit AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/)
         : elements_{} {}
 
     static constexpr bool is_fixed_size_ = false;
 
     bool addInput(
         HashStringAllocator* allocator,
-        exec::optional_arg_type<Generic<T1>> data) {
+        exec::optional_arg_type<Generic<T1>> data,
+        const FunctionState& /*state*/) {
       if (data.has_value()) {
         elements_.appendValue(data, allocator);
         return true;
@@ -68,7 +73,8 @@ class CollectListAggregate {
 
     bool combine(
         HashStringAllocator* allocator,
-        exec::optional_arg_type<IntermediateType> other) {
+        exec::optional_arg_type<IntermediateType> other,
+        const FunctionState& /*state*/) {
       if (!other.has_value()) {
         return false;
       }
@@ -80,7 +86,8 @@ class CollectListAggregate {
 
     bool writeIntermediateResult(
         bool /*nonNullGroup*/,
-        exec::out_type<IntermediateType>& out) {
+        exec::out_type<IntermediateType>& out,
+        const FunctionState& /*state*/) {
       // If the group's accumulator is null, the corresponding intermediate
       // result is an empty array.
       copyValueListToArrayWriter(out, elements_);
@@ -89,7 +96,8 @@ class CollectListAggregate {
 
     bool writeFinalResult(
         bool /*nonNullGroup*/,
-        exec::out_type<OutputType>& out) {
+        exec::out_type<OutputType>& out,
+        const FunctionState& /*state*/) {
       // If the group's accumulator is null, the corresponding result is an
       // empty array.
       copyValueListToArrayWriter(out, elements_);

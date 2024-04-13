@@ -45,8 +45,10 @@ class AggregateWindowFunction : public exec::WindowFunction {
     argTypes_.reserve(args.size());
     argIndices_.reserve(args.size());
     argVectors_.reserve(args.size());
+    constantInputs_.reserve(args.size());
     for (const auto& arg : args) {
       argTypes_.push_back(arg.type);
+      constantInputs_.push_back(arg.constantValue);
       if (arg.constantValue) {
         argIndices_.push_back(kConstantChannel);
         argVectors_.push_back(arg.constantValue);
@@ -151,7 +153,11 @@ class AggregateWindowFunction : public exec::WindowFunction {
         // aggregate_ function object should be initialized.
         auto singleGroup = std::vector<vector_size_t>{0};
         aggregate_->clear();
-        aggregate_->initialize(argTypes_, resultType_, argVectors_);
+        aggregate_->initialize(
+            core::AggregationNode::Step::kSingle,
+            argTypes_,
+            resultType_,
+            constantInputs_);
         aggregate_->initializeNewGroups(&rawSingleGroupRow_, singleGroup);
         aggregateInitialized_ = true;
       }
@@ -333,7 +339,11 @@ class AggregateWindowFunction : public exec::WindowFunction {
       // the aggregation based on the frame changes with each row. This would
       // require adding new APIs to the Aggregate framework.
       aggregate_->clear();
-      aggregate_->initialize(argTypes_, resultType_, argVectors_);
+      aggregate_->initialize(
+          core::AggregationNode::Step::kSingle,
+          argTypes_,
+          resultType_,
+          constantInputs_);
       aggregate_->initializeNewGroups(&rawSingleGroupRow_, kSingleGroup);
       aggregateInitialized_ = true;
 
@@ -351,7 +361,11 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // This value is returned for rows with empty frames.
   void computeDefaultAggregateValue(const TypePtr& resultType) {
     aggregate_->clear();
-    aggregate_->initialize(argTypes_, resultType, argVectors_);
+    aggregate_->initialize(
+        core::AggregationNode::Step::kSingle,
+        argTypes_,
+        resultType,
+        constantInputs_);
     aggregate_->initializeNewGroups(
         &rawSingleGroupRow_, std::vector<vector_size_t>{0});
     aggregateInitialized_ = true;
@@ -377,6 +391,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
   std::vector<TypePtr> argTypes_;
   std::vector<column_index_t> argIndices_;
   std::vector<VectorPtr> argVectors_;
+  std::vector<VectorPtr> constantInputs_;
 
   // This is a single aggregate row needed by the aggregate function for its
   // computation. These values are for the row and its various components.

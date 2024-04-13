@@ -45,11 +45,12 @@ class SimpleAggregateAdapter : public Aggregate {
       : Aggregate(std::move(resultType)) {}
 
   // Function-level states are variables hold by a UDAF instance that are
-  // typically computed once and used at every row when adding inputs to
-  // accumulators or extracting values from accumulators.
+  // computed once and used at every row when adding inputs to accumulators or
+  // extracting values from accumulators.
   typename FUNC::FunctionState state_;
 
   void initialize(
+      core::AggregationNode::Step step,
       const std::vector<TypePtr>& rawInputTypes,
       const TypePtr& resultType,
       const std::vector<VectorPtr>& constantInputs) override {
