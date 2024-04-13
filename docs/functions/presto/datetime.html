@@ -163,7 +163,21 @@ negiative.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="from_iso8601_date">
 <span class="sig-name descname"><span class="pre">from_iso8601_date</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#from_iso8601_date" title="Link to this definition">¶</a></dt>
-<dd><p>Parses the ISO 8601 formatted <code class="docutils literal notranslate"><span class="pre">string</span></code> into a <code class="docutils literal notranslate"><span class="pre">date</span></code>.</p>
+<dd><p>Parses the ISO 8601 formatted <code class="docutils literal notranslate"><span class="pre">string</span></code> into a <code class="docutils literal notranslate"><span class="pre">date</span></code>.
+ISO 8601 <code class="docutils literal notranslate"><span class="pre">string</span></code> can be formatted as any of the following:
+<code class="docutils literal notranslate"><span class="pre">[+-][Y]Y*</span></code></p>
+<p><code class="docutils literal notranslate"><span class="pre">[+-][Y]Y*-[M]M*</span></code></p>
+<p><code class="docutils literal notranslate"><span class="pre">[+-][Y]Y*-[M]M*-[D]D*</span></code></p>
+<p><code class="docutils literal notranslate"><span class="pre">[+-][Y]Y*-[M]M*-[D]D*</span> <span class="pre">*</span></code></p>
+<p>Year value must contain at least one digit, and may contain up to six digits.
+Month and day values are optional and may each contain one or two digits.</p>
+<p>Examples of supported input strings:
+“2012”,
+“2012-4”,
+“2012-04”,
+“2012-4-7”,
+“2012-04-07”,
+“2012-04-07  ”</p>
 </dd></dl>
 
 <dl class="py function">
