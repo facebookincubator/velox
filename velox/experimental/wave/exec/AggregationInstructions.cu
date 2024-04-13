@@ -91,7 +91,7 @@ normalize(BlockInfo* block, void* idMap, Operand* key, int32_t& result) {
   auto* typedIdMap = reinterpret_cast<IdMap<T>*>(idMap);
   auto id = typedIdMap->makeId(value<T>(key, block->base, block->shared));
   if (id == -1) {
-    return ErrorCode::kInsuffcientMemory;
+    return ErrorCode::kInsufficientMemory;
   }
   assert(typedIdMap->cardinality() <= kNormalizationRadix);
   result = kNormalizationRadix * result + id - 1;
@@ -375,4 +375,6 @@ void call(
   CUDA_CHECK(cudaGetLastError());
 }
 
+REGISTER_KERNEL("agg", runPrograms);
+  
 } // namespace facebook::velox::wave::aggregation

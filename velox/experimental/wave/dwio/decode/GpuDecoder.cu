@@ -113,5 +113,6 @@ void launchDecode(
     }
   }
 }
-
+  REGISTER_KERNEL("decode", decodeKernel);
+  
 } // namespace facebook::velox::wave

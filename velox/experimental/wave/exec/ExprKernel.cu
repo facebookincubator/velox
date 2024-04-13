@@ -30,7 +30,7 @@ __device__ inline T opFunc_kPlus(T left, T right) {
 template <typename T, typename OpFunc>
 __device__ inline void binaryOpKernel(
     OpFunc func,
-    IBinary& op,
+    IBinary& instr,
     Operand** operands,
     int32_t blockBase,
     char* shared,
@@ -38,9 +38,15 @@ __device__ inline void binaryOpKernel(
   if (threadIdx.x >= status->numRows) {
     return;
   }
-  flatResult<T>(operands, op.result, blockBase, shared) = func(
-      getOperand<T>(operands, op.left, blockBase, shared),
-      getOperand<T>(operands, op.right, blockBase, shared));
+  T left;
+  T right;
+  if (operandOrNull(operands, instr.left, blockBase, shared, left) &&
+      operandOrNull(operands, instr.right, blockBase, shared, right)) {
+    flatResult<decltype(func(left, right))>(
+        operands, instr.result, blockBase, shared) = func(left, right);
+  } else {
+    resultNull(operands, instr.result, blockBase, shared);
+  }
 }
 
 __device__ void filterKernel(
@@ -78,13 +84,43 @@ __device__ void filterKernel(
 }
 
 __device__ void wrapKernel(
-    IWrap& wrap,
+    const IWrap& wrap,
     Operand** operands,
     int32_t blockBase,
-    int32_t& numRows) {}
+    int32_t numRows) {
+  Operand* op = operands[wrap.indices];
+  auto* filterIndices = reinterpret_cast<int32_t*>(op->base);
+  if (filterIndices[blockBase + numRows - 1] == numRows + blockBase - 1) {
+    // There is no cardinality change.
+    return;
+  }
+  bool rowActive = threadIdx.x < numRows;
+  for (auto column = 0; column < wrap.numColumns; ++column) {
+    int32_t newIndex;
+    int32_t** opIndices;
+    bool remap = false;
+    if (rowActive) {
+      auto opIndex = wrap.columns[column];
+      auto* op = operands[opIndex];
+      opIndices = &op->indices[blockBase / kBlockSize];
+      remap = *opIndices != nullptr;
+      if (remap) {
+	newIndex = (*opIndices)[filterIndices[threadIdx.x]];
+      } else if (threadIdx.x == 0) {
+	*opIndices = filterIndices + blockBase;
+      }
+    }
+    // All threads hit this.
+      __syncthreads();
+      if (remap) {
+	// remap can b true only on activ rows.
+        (*opIndices)[threadIdx.x] = newIndex;
+      }
+  }
+}
 
 #define BINARY_TYPES(opCode, OP)                             \
-  case OP_MIX(opCode, ScalarType::kInt64):                   \
+  case OP_MIX(opCode, WaveTypeKind::BIGINT):                 \
     binaryOpKernel<int64_t>(                                 \
         [](auto left, auto right) { return left OP right; }, \
         instruction->_.binary,                               \
@@ -125,7 +161,19 @@ __global__ void waveBaseKernel(
         break;
 
         BINARY_TYPES(OpCode::kPlus, +);
+        BINARY_TYPES(OpCode::kLT, <);
     }
+  }
+}
+
+int32_t instructionSharedMemory(const Instruction& instruction) {
+  using ScanAlgorithm = cub::BlockScan<int, 256, cub::BLOCK_SCAN_RAKING>;
+
+  switch (instruction.opCode) {
+    case OpCode::kFilter:
+      return sizeof(ScanAlgorithm::TempStorage);
+    default:
+      return 0;
   }
 }
 
@@ -145,5 +193,6 @@ void WaveKernelStream::call(
       alias ? alias->stream()->stream : stream()->stream>>>(
       bases, programIdx, programs, operands, status);
 }
-
+REGISTER_KERNEL("expr", waveBaseKernel);
+  
 } // namespace facebook::velox::wave

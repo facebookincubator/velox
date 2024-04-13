@@ -25,7 +25,12 @@ namespace facebook::velox::wave {
 
 void cudaCheck(cudaError_t err, const char* file, int line);
 
+void cudaCheckFatal(cudaError_t err, const char* file, int line);
+
 #define CUDA_CHECK(e) ::facebook::velox::wave::cudaCheck(e, __FILE__, __LINE__)
+
+#define CUDA_CHECK_FATAL(e) \
+  ::facebook::velox::wave::cudaCheckFatal(e, __FILE__, __LINE__)
 
 template <typename T, typename U>
 __host__ __device__ constexpr inline T roundUp(T value, U factor) {
@@ -47,4 +52,13 @@ memcmp(const void* lhs, const void* rhs, size_t n) {
 struct StreamImpl {
   cudaStream_t stream;
 };
+
+bool registerKernel(const char* name, const void* func);
+
+#define REGISTER_KERNEL(name, func)                              \
+  namespace {                                                    \
+  static bool func##_reg =                                       \
+      registerKernel(name, reinterpret_cast<const void*>(func)); \
+  }
+
 } // namespace facebook::velox::wave

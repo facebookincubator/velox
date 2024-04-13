@@ -33,15 +33,22 @@ class BlockTestStream : public Stream {
       int32_t** indices,
       int32_t* sizes,
       int64_t* times);
+  void testBoolToIndicesNoShared(
+      int32_t numBlocks,
+      uint8_t** flags,
+      int32_t** indices,
+      int32_t* sizes,
+      int64_t* times,
+      void*);
+
+  // Returns the smem size for block size 256 of boolToIndices().
+  static int32_t boolToIndicesSize();
 
   // calculates the sum over blocks of 256 int64s and returns the result for
   // numbers[i * 256] ... numbers[(i + 1) * 256 - 1] inclusive  in results[i].
   void testSum64(int32_t numBlocks, int64_t* numbers, int64_t* results);
 
-  /// Sorts 'rows'[i] using ids[i] as keys and stores the sorted order in
-  /// 'result[i]'.
-  // void dedup(int32_t numBlocks, uint16_t** ids, uint16_t** rows, uint16_t**
-  // resultRows);
+  void testSort16(int32_t numBlocks, uint16_t** keys, uint16_t** values);
 };
 
 } // namespace facebook::velox::wave

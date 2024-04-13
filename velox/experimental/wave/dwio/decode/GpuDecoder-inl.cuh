@@ -503,14 +503,30 @@ __device__ void decodeRle(GpuDecode& plan) {
   }
 }
 
-template <int kBlockSize>
-__device__ void makeScatterIndices(GpuDecode::MakeScatterIndices& op) {
-  auto indicesCount = scatterIndices<kBlockSize>(
-      op.bits, op.findSetBits, op.begin, op.end, op.indices);
+  template <int kBlockSize>
+  __device__ void makeScatterIndices(GpuDecode::MakeScatterIndices& op) {
+   auto indicesCount = scatterIndices<kBlockSize>(
+       op.bits, op.findSetBits, op.begin, op.end, op.indices);
   if (threadIdx.x == 0 && op.indicesCount) {
     *op.indicesCount = indicesCount;
   }
+} 
+
+  template <int kBlockSize>
+__device__ void setRowCountNoFilter(GpuDecode::RowCountNoFilter& op) {
+  auto numRows = op.numRows;
+  auto* status = op.status;
+  auto numCounts = roundUp(numRows, kBlockSize) / kBlockSize;
+  for (auto base = 0; base < numCounts; base += kBlockSize) {
+    auto idx = threadIdx.x + base;
+    if (idx < numCounts) {
+      // Every thread writes a row count and errors for kBlockSize rows. All errors are cleared and all row counts except the last are kBlockSize.
+      status[idx].numRows = idx < numCounts - 1 ? kBlockSize : numRows - idx * kBlockSize;
+      memset(&status[base + threadIdx.x].errors, 0, sizeof(status->errors));
+    }
+  }
 }
+  
 template <int32_t kBlockSize>
 __device__ void decodeSwitch(GpuDecode& op) {
   switch (op.step) {
@@ -538,7 +554,10 @@ __device__ void decodeSwitch(GpuDecode& op) {
     case DecodeStep::kMakeScatterIndices:
       detail::makeScatterIndices<kBlockSize>(op.data.makeScatterIndices);
       break;
-    default:
+    case DecodeStep::kRowCountNoFilter:
+      detail::setRowCountNoFilter<kBlockSize>(op.data.rowCountNoFilter);
+	break;
+  default:
       if (threadIdx.x == 0) {
         printf("ERROR: Unsupported DecodeStep (with shared memory)\n");
       }
@@ -546,7 +565,7 @@ __device__ void decodeSwitch(GpuDecode& op) {
 }
 
 template <int kBlockSize>
-__global__ void decodeGlobal(GpuDecode* plan) {
+void __global__  __launch_bounds__(1024, 3) decodeGlobal(GpuDecode* plan) {
   decodeSwitch<kBlockSize>(plan[blockIdx.x]);
 }
 
@@ -558,6 +577,7 @@ int32_t sharedMemorySizeForDecode(DecodeStep step) {
     case DecodeStep::kTrivial:
     case DecodeStep::kDictionaryOnBitpack:
     case DecodeStep::kSparseBool:
+      case DecodeStep::kRowCountNoFilter:
       return 0;
       break;
 
@@ -570,7 +590,7 @@ int32_t sharedMemorySizeForDecode(DecodeStep step) {
     case DecodeStep::kMakeScatterIndices:
     case DecodeStep::kLengthToOffset:
       return sizeof(typename BlockScan32::TempStorage);
-    default:
+  default:
       assert(false); // Undefined.
       return 0;
   }
