@@ -12,6 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+set(CPM_DOWNLOAD_VERSION v0.35.3)
+file(
+  DOWNLOAD
+  https://github.com/cpm-cmake/CPM.cmake/releases/download/${CPM_DOWNLOAD_VERSION}/get_cpm.cmake
+  ${CMAKE_BINARY_DIR}/cmake/get_cpm.cmake
+)
+include(${CMAKE_BINARY_DIR}/cmake/get_cpm.cmake)
+
+set(CUDF_REPO https://github.com/rapidsai/cudf)
+set(CUDF_TAG branch-24.06)
+set(CUDF_BUILD_TESTUTIL OFF)
+CPMFindPackage(
+  NAME cudf
+  GIT_REPOSITORY ${CUDF_REPO}
+  GIT_TAG ${CUDF_TAG}
+  GIT_SHALLOW
+    TRUE
+    SOURCE_SUBDIR
+    cpp
+)
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
