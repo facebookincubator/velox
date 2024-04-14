@@ -16,6 +16,7 @@
 
 #pragma once
 #include <folly/Likely.h>
+#include <vector/BaseVector.h>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
@@ -864,6 +865,15 @@ class RowWriter {
     std::get<I>(needCommit_) = false;
   }
 
+  template <vector_size_t I>
+  BaseVector* base() const {
+    return std::get<I>(childrenVectors_);
+  }
+
+  vector_size_t offset() const {
+    return offset_;
+  }
+
   template <size_t I>
   typename std::tuple_element_t<I, writers_t>::exec_out_t& get_writer_at() {
     using Type = std::tuple_element_t<I, std::tuple<T...>>;
@@ -1043,6 +1053,14 @@ class GenericWriter {
 
   const TypePtr& type() const {
     return vector_->type();
+  }
+
+  BaseVector* base() const {
+    return vector_;
+  }
+
+  vector_size_t offset() const {
+    return index_;
   }
 
   void copy_from(const GenericView& view);

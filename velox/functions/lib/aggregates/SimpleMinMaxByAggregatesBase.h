@@ -19,7 +19,12 @@
 #include <exec/SimpleAggregateAdapter.h>
 #include <type/SimpleFunctionApi.h>
 #include <type/StringView.h>
+#include <type/Timestamp.h>
+#include <type/Type.h>
+#include <cstdint>
+#include <memory>
 #include <optional>
+#include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
 #include "velox/functions/lib/aggregates/ValueSet.h"
 
@@ -36,22 +41,6 @@ constexpr bool isNumeric() {
       std::is_same_v<T, double> || std::is_same_v<T, Timestamp>;
 }
 
-struct ComplexStore {
-  ValueSet valueSet_;
-  HashStringAllocator::Position position_;
-
-  explicit ComplexStore(HashStringAllocator* allocator)
-      : valueSet_(allocator) {}
-
-  void Store(const BaseVector& vector, vector_size_t index) {
-    valueSet_.write(vector, index, position_);
-  }
-
-  void Store(const StringView& value) {
-    valueSet_.write(value);
-  }
-};
-
 template <typename T, typename = void>
 struct AccumulatorInternalTypeTraits {};
 
@@ -66,53 +55,316 @@ template <typename T>
 struct AccumulatorInternalTypeTraits<
     T,
     std::enable_if_t<!isNumeric<T>(), void>> {
-  using AccumulatorInternalType = ComplexStore;
+  using AccumulatorInternalType = SingleValueAccumulator;
 };
 
-template <typename C, typename V, bool isMin>
-class MinMaxByAggregate {
+template <
+    typename V,
+    typename C,
+    bool isMaxFunc,
+    template <bool B, typename C1, typename C2>
+    class Comparator,
+    bool throwOnNestedNulls>
+class SimpleMinMaxByAggregate {
  public:
-  using InputType = Row<Any, Orderable<T1>>;
-  using IntermediateType = Row<Any, Orderable<T1>>;
-  using OutputType = Array<Any>;
+  using InputType = Row<Generic<T1>, Orderable<T2>>;
+  using IntermediateType = Row<Generic<T1>, Orderable<T2>>;
+  using OutputType = Generic<T1>;
 
   using ValueAccumulatorType =
       typename AccumulatorInternalTypeTraits<V>::AccumulatorType;
   using ComparisonAccumulatorType =
       typename AccumulatorInternalTypeTraits<C>::AccumulatorType;
 
+  // Default null behavior is false because for both spark sql and presto sql,
+  // max/min_by can still be done if value is null
+  static constexpr bool default_null_behavior_ = false;
+
   struct AccumulatorType {
-    std::optional<ValueAccumulatorType> value_;
-    std::optional<ComparisonAccumulatorType> comparisons_;
+    std::optional<ValueAccumulatorType> currValue_;
+    std::optional<ComparisonAccumulatorType> currComparison_;
 
-    explicit AccumulatorType(HashStringAllocator* allocator);
+    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {}
 
-    void addInput(
+    bool addInput(
         HashStringAllocator* allocator,
-        exec::arg_type<Any> value,
-        exec::arg_type<Orderable<T1>> comparison) {}
+        exec::optional_arg_type<Generic<T1>> value,
+        exec::optional_arg_type<Orderable<T2>> comparison) {
+      // Input will be ignored if comparison is null
+      if (!comparison.has_value()) {
+        return false;
+      }
+      if (needUpdate(comparison.value())) {
+        update(allocator, value, comparison);
+      }
+
+      return true;
+    }
+
+    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+      if (!currComparison_.has_value()) {
+        return false;
+      }
+
+      if (!currValue_.has_value()) {
+        out.set_null_at<0>();
+      } else {
+        auto& valueWriter = out.get_writer_at<0>();
+        if (isNumeric<V>()) {
+          valueWriter.castTo<V>() = currValue_;
+        } else {
+          currValue_->read(valueWriter.base(), valueWriter.offset());
+        }
+      }
+
+      auto& comparisonWriter = out.get_writer_at<1>();
+
+      if (isNumeric<C>()) {
+        comparisonWriter.castTo<C>() = currComparison_;
+      } else {
+        currComparison_->read(
+            comparisonWriter.base(), comparisonWriter.offset());
+      }
+
+      return true;
+    }
+
+    bool combine(
+        HashStringAllocator* allocator,
+        exec::optional_arg_type<IntermediateType> other) {
+      if (!other.has_value()) {
+        return false;
+      }
+      auto value = other->at<0>();
+      auto comparison = other->at<1>();
+
+      if (!comparison.has_value()) {
+        return false;
+      }
+
+      if (needUpdate(comparison.value())) {
+        update(allocator, value, comparison);
+      }
+
+      return true;
+    }
+
+    bool writeFinalResult(exec::out_type<OutputType>& out) {
+      if (!currValue_.has_value()) {
+        return false;
+      }
+
+      if (isNumeric<V>()) {
+        out.castTo<V>() = currValue_;
+      } else {
+        currValue_->read(out.base(), out.offset());
+      }
+
+      return true;
+    }
 
    private:
-    void storeValue(
+    bool needUpdate(const exec::GenericView& newComparison) {
+      if (!currComparison_.has_value()) {
+        return true;
+      }
+
+      if (isNumeric<C>()) {
+        return Comparator<isMaxFunc, C, ComparisonAccumulatorType>::compare(
+            currComparison_.value(), newComparison.castTo<C>());
+      }
+
+      if constexpr (throwOnNestedNulls) {
+        VELOX_USER_CHECK(
+            !newComparison.decoded().base()->containsNullAt(
+                newComparison.decodedIndex()),
+            "{} comparison not supported for values that contain nulls",
+            mapTypeKindToName(newComparison.kind()));
+      }
+
+      return Comparator<isMaxFunc, C, ComparisonAccumulatorType>::compare(
+          currComparison_.value(),
+          newComparison.decoded(),
+          newComparison.decodedIndex());
+    }
+
+    void update(
         HashStringAllocator* allocator,
-        const exec::arg_type<Any>& value) {
-      if constexpr (isNumeric<V>()) {
-        value_.emplace(value.castTo<V>());
-        return;
+        const exec::optional_arg_type<Generic<T1>>& value,
+        const exec::optional_arg_type<Orderable<T2>>& comparison) {
+      if (isNumeric<C>()) {
+        currComparison_.emplace(comparison->castTo<C>());
+      } else {
+        currComparison_->write(
+            comparison->base(), comparison->decodedIndex(), allocator);
       }
 
-      if (!value_.has_value()) {
-        value_.emplace(allocator);
+      if (!value.has_value()) {
+        currValue_.reset();
+      } else {
+        if (isNumeric<V>()) {
+          currValue_.emplace(value->castTo<V>());
+        } else {
+          currValue_.write(value->base(), value->decodedIndex(), allocator);
+        }
       }
-
-      // We can store StringView type more optimally compared to complex types
-      if constexpr (std::is_same_v<V, StringView>) {
-        value_.value().Store(value.castTo<StringView>());
-        return;
-      }
-
-      value_.value().Store(*value.base(), value.decodedIndex());
     }
   };
 };
+
+template <
+    template <bool C0, typename C1, typename C2>
+    class Comparator,
+    bool isMaxFunc,
+    typename V,
+    bool throwOnNestedNulls>
+std::unique_ptr<exec::Aggregate> create(
+    TypePtr resultType,
+    TypePtr compareType,
+    const std::string& errorMessage) {
+  switch (compareType->kind()) {
+    case TypeKind::BOOLEAN:
+      return std::make_unique<
+          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
+              V,
+              bool,
+              isMaxFunc,
+              Comparator,
+              throwOnNestedNulls>>>(resultType);
+    case TypeKind::TINYINT:
+      return std::make_unique<
+          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
+              V,
+              int8_t,
+              isMaxFunc,
+              Comparator,
+              throwOnNestedNulls>>>(resultType);
+    case TypeKind::SMALLINT:
+      return std::make_unique<
+          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
+              V,
+              int16_t,
+              isMaxFunc,
+              Comparator,
+              throwOnNestedNulls>>>(resultType);
+    case TypeKind::INTEGER:
+      return std::make_unique<
+          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
+              V,
+              int32_t,
+              isMaxFunc,
+              Comparator,
+              throwOnNestedNulls>>>(resultType);
+    case TypeKind::BIGINT:
+      return std::make_unique<
+          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
+              V,
+              int64_t,
+              isMaxFunc,
+              Comparator,
+              throwOnNestedNulls>>>(resultType);
+    case TypeKind::REAL:
+      return std::make_unique<
+          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
+              V,
+              float,
+              isMaxFunc,
+              Comparator,
+              throwOnNestedNulls>>>(resultType);
+    case TypeKind::DOUBLE:
+      return std::make_unique<
+          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
+              V,
+              double,
+              isMaxFunc,
+              Comparator,
+              throwOnNestedNulls>>>(resultType);
+    case TypeKind::VARBINARY:
+      [[fallthrough]];
+    case TypeKind::VARCHAR:
+      return std::make_unique<
+          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
+              V,
+              StringView,
+              isMaxFunc,
+              Comparator,
+              throwOnNestedNulls>>>(resultType);
+    case TypeKind::TIMESTAMP:
+      return std::make_unique<
+          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
+              V,
+              Timestamp,
+              isMaxFunc,
+              Comparator,
+              throwOnNestedNulls>>>(resultType);
+    case TypeKind::ARRAY:
+      [[fallthrough]];
+    case TypeKind::MAP:
+      [[fallthrough]];
+    case TypeKind::ROW:
+      return std::make_unique<
+          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
+              V,
+              ComplexType,
+              isMaxFunc,
+              Comparator,
+              throwOnNestedNulls>>>(resultType);
+    default:
+      VELOX_FAIL("{}", errorMessage);
+      return nullptr;
+  }
+}
+
+template <
+    template <bool C0, typename C1, typename C2>
+    class Comparator,
+    bool isMaxFunc,
+    bool throwOnNestedNulls>
+std::unique_ptr<exec::Aggregate> createAll(
+    TypePtr resultType,
+    TypePtr valueType,
+    TypePtr compareType,
+    const std::string& errorMessage) {
+  switch (valueType->kind()) {
+    case TypeKind::BOOLEAN:
+      return create<Comparator, isMaxFunc, bool, throwOnNestedNulls>(
+          resultType, compareType, errorMessage);
+    case TypeKind::TINYINT:
+      return create<Comparator, isMaxFunc, int8_t, throwOnNestedNulls>(
+          resultType, compareType, errorMessage);
+    case TypeKind::SMALLINT:
+      return create<Comparator, isMaxFunc, int16_t, throwOnNestedNulls>(
+          resultType, compareType, errorMessage);
+    case TypeKind::INTEGER:
+      return create<Comparator, isMaxFunc, int32_t, throwOnNestedNulls>(
+          resultType, compareType, errorMessage);
+    case TypeKind::BIGINT:
+      return create<Comparator, isMaxFunc, int64_t, throwOnNestedNulls>(
+          resultType, compareType, errorMessage);
+    case TypeKind::REAL:
+      return create<Comparator, isMaxFunc, float, throwOnNestedNulls>(
+          resultType, compareType, errorMessage);
+    case TypeKind::DOUBLE:
+      return create<Comparator, isMaxFunc, double, throwOnNestedNulls>(
+          resultType, compareType, errorMessage);
+    case TypeKind::VARCHAR:
+      [[fallthrough]];
+    case TypeKind::VARBINARY:
+      return create<Comparator, isMaxFunc, StringView, throwOnNestedNulls>(
+          resultType, compareType, errorMessage);
+    case TypeKind::TIMESTAMP:
+      return create<Comparator, isMaxFunc, Timestamp, throwOnNestedNulls>(
+          resultType, compareType, errorMessage);
+    case TypeKind::ARRAY:
+      [[fallthrough]];
+    case TypeKind::MAP:
+      [[fallthrough]];
+    case TypeKind::ROW:
+      return create<Comparator, isMaxFunc, ComplexType, throwOnNestedNulls>(
+          resultType, compareType, errorMessage);
+    default:
+      VELOX_FAIL(errorMessage);
+  }
+}
+
 } // namespace facebook::velox::functions::aggregate

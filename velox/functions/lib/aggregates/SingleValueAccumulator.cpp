@@ -45,6 +45,14 @@ void SingleValueAccumulator::read(const VectorPtr& vector, vector_size_t index)
   exec::ContainerRowSerde::deserialize(stream, index, vector.get());
 }
 
+void SingleValueAccumulator::read(BaseVector* vector, vector_size_t index)
+    const {
+  VELOX_CHECK_NOT_NULL(start_.header);
+
+  auto stream = HashStringAllocator::prepareRead(start_.header);
+  exec::ContainerRowSerde::deserialize(stream, index, vector);
+}
+
 bool SingleValueAccumulator::hasValue() const {
   return start_.header != nullptr;
 }

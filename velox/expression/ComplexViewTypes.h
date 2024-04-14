@@ -1120,6 +1120,10 @@ class GenericView {
     return decoded_.toString(index_);
   }
 
+  const DecodedVector& decoded() const {
+    return decoded_;
+  }
+
   // If conversion is invalid, behavior is undefined. However, debug time
   // checks will throw an exception.
   template <typename ToType>
