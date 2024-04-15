@@ -15,6 +15,7 @@
  */
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
+#include <atomic>
 #include <thread>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/Exchange.h"
@@ -46,6 +47,8 @@ class ExchangeClientTest : public testing::Test,
       velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
     bufferManager_ = OutputBufferManager::getInstance().lock();
+
+    common::testutil::TestValue::enable();
   }
 
   void TearDown() override {
@@ -346,7 +349,6 @@ TEST_F(ExchangeClientTest, multiPageFetch) {
 
 TEST_F(ExchangeClientTest, sourceTimeout) {
   constexpr int32_t kNumSources = 3;
-  common::testutil::TestValue::enable();
   auto client =
       std::make_shared<ExchangeClient>("test", 17, 1 << 20, pool(), executor());
 
@@ -495,8 +497,12 @@ TEST_F(ExchangeClientTest, acknowledge) {
       executor());
   auto clientCloseGuard = folly::makeGuard([client]() { client->close(); });
 
-  client->addRemoteTaskId(sourceTaskId);
-  client->noMoreRemoteTasks();
+  std::atomic_int numberOfAcknowledgeRequests{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::test::LocalExchangeSource::pause",
+      std::function<void(void*)>(([&numberOfAcknowledgeRequests](void*) {
+        numberOfAcknowledgeRequests++;
+      })));
 
   {
     // adding the first page should not block as there is enough space in
@@ -511,10 +517,21 @@ TEST_F(ExchangeClientTest, acknowledge) {
     // client fetches a single page
     ContinueFuture future;
     bufferManager_->enqueue(sourceTaskId, 1, makePage(pageSize), &future);
+
+    // start fetching
+    client->addRemoteTaskId(sourceTaskId);
+    client->noMoreRemoteTasks();
+
     ASSERT_TRUE(std::move(future)
                     .via(executor())
                     .wait(std::chrono::seconds{10})
                     .isReady());
+
+#ifndef NDEBUG
+    // The client knew there is more data available but could not fetch any more
+    // Explicit acknowledge was required
+    EXPECT_EQ(numberOfAcknowledgeRequests, 1);
+#endif
   }
 
   {
@@ -541,6 +558,11 @@ TEST_F(ExchangeClientTest, acknowledge) {
 
     ASSERT_TRUE(
         std::move(enqueueFuture).wait(std::chrono::seconds{10}).isReady());
+#ifndef NDEBUG
+    // The client knew there is more data available but could not fetch any more
+    // Explicit acknowledge was required
+    EXPECT_EQ(numberOfAcknowledgeRequests, 2);
+#endif
   }
 
   // one page is still in the buffer at this point
@@ -562,6 +584,12 @@ TEST_F(ExchangeClientTest, acknowledge) {
       std::this_thread::sleep_for(std::chrono::milliseconds{100});
     }
     ASSERT_TRUE(outputBuffersEmpty);
+#ifndef NDEBUG
+    // The output buffer is empty now
+    // Explicit acknowledge is not necessary as a blocking getDataSize is sent
+    // right away
+    EXPECT_EQ(numberOfAcknowledgeRequests, 2);
+#endif
   }
 
   pages = fetchPages(*client, 1);
