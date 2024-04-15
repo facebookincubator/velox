@@ -968,5 +968,17 @@ TEST_F(DateTimeFunctionsTest, makeYMInterval) {
       fromYear(-178956971), "Integer overflow in make_ym_interval(-178956971)");
 }
 
+TEST_F(DateTimeFunctionsTest, unixSeconds) {
+  const auto unixSeconds = [&](const StringView time) {
+    return evaluateOnce<int64_t, Timestamp>(
+        "unix_seconds(c0)", util::fromTimestampString(time));
+  };
+  EXPECT_EQ(unixSeconds("1970-01-01 00:00:01"), 1);
+  EXPECT_EQ(unixSeconds("1970-01-01 00:00:00.000127"), 0);
+  EXPECT_EQ(unixSeconds("1969-12-31 23:59:59.999872"), -1);
+  EXPECT_EQ(unixSeconds("1970-01-01 00:35:47.483647"), 2147);
+  EXPECT_EQ(unixSeconds("1971-01-01 00:00:01.483647"), 31536001);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

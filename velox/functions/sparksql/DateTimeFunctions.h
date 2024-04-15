@@ -731,4 +731,15 @@ struct MakeYMIntervalFunction {
     result = totalMonths;
   }
 };
+
+template <typename T>
+struct UnixSecondsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = timestamp.getSeconds();
+  }
+};
 } // namespace facebook::velox::functions::sparksql
