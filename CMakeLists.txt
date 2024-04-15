@@ -81,6 +81,12 @@ set(VELOX_DEPENDENCY_SOURCE
       STRING
       "Default source for all dependencies with source builds enabled: AUTO SYSTEM BUNDLED."
 )
+set(VELOX_GFLAGS_TYPE
+    "shared"
+    CACHE
+      STRING
+      "Specify whether to find the gflags package as a shared or static package"
+)
 option(VELOX_ENABLE_EXEC "Build exec." ON)
 option(VELOX_ENABLE_AGGREGATES "Build aggregates." ON)
 option(VELOX_ENABLE_HIVE_CONNECTOR "Build Hive connector." ON)
@@ -336,8 +342,7 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-strict-aliasing \
          -Wno-type-limits \
          -Wno-stringop-overflow \
-         -Wno-stringop-overread \
-         -Wno-return-type")
+         -Wno-stringop-overread")
   endif()
 
   set(KNOWN_WARNINGS
@@ -375,13 +380,13 @@ set(BOOST_INCLUDE_LIBRARIES
     thread)
 
 set_source(Boost)
-resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
+resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 
 # Range-v3 will be enable when the codegen code actually lands keeping it here
 # for reference. find_package(range-v3)
 
 set_source(gflags)
-resolve_dependency(gflags COMPONENTS shared)
+resolve_dependency(gflags COMPONENTS ${VELOX_GFLAGS_TYPE})
 if(NOT TARGET gflags::gflags)
   # This is a bit convoluted, but we want to be able to use gflags::gflags as a
   # target even when velox is built as a subproject which uses
@@ -438,7 +443,7 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
 endif()
 
 set_source(simdjson)
-resolve_dependency(simdjson 3.2.0)
+resolve_dependency(simdjson 3.8.0)
 
 # Locate or build folly.
 add_compile_definitions(FOLLY_HAVE_INT128_T=1)

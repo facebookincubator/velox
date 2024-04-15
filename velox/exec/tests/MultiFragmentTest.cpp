@@ -47,8 +47,6 @@ class MultiFragmentTest : public HiveConnectorTestBase {
   }
 
   void TearDown() override {
-    waitForAllTasksToBeDeleted();
-
     // There might be lingering exchange source on executor even after all tasks
     // are deleted. This can cause memory leak because exchange source holds
     // reference to memory pool. We need to make sure they are properly cleaned.
@@ -108,11 +106,11 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       auto split = exec::Split(
           std::make_shared<connector::hive::HiveConnectorSplit>(
               kHiveConnectorId,
-              "file:" + filePath->path,
+              "file:" + filePath->getPath(),
               facebook::velox::dwio::common::FileFormat::DWRF),
           -1);
       task->addSplit("0", std::move(split));
-      VLOG(1) << filePath->path << "\n";
+      VLOG(1) << filePath->getPath() << "\n";
     }
     task->noMoreSplits("0");
   }
@@ -154,7 +152,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     filePaths_ = makeFilePaths(filePathCount);
     vectors_ = makeVectors(filePaths_.size(), rowsPerVector);
     for (int i = 0; i < filePaths_.size(); i++) {
-      writeToFile(filePaths_[i]->path, vectors_[i]);
+      writeToFile(filePaths_[i]->getPath(), vectors_[i]);
     }
     createDuckDbTable(vectors_);
   }
@@ -887,7 +885,7 @@ TEST_F(MultiFragmentTest, limit) {
       1'000, [](auto row) { return row; }, nullEvery(7))});
 
   auto file = TempFilePath::create();
-  writeToFile(file->path, {data});
+  writeToFile(file->getPath(), {data});
 
   // Make leaf task: Values -> PartialLimit(10) -> Repartitioning(0).
   auto leafTaskId = makeTaskId("leaf", 0);
@@ -901,7 +899,7 @@ TEST_F(MultiFragmentTest, limit) {
   leafTask->start(1);
 
   leafTask.get()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->path)));
+      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
 
   // Make final task: Exchange -> FinalLimit(10).
   auto plan = PlanBuilder()

@@ -50,8 +50,7 @@ void compareOutputs(
     while (!RE2::FullMatch(line, expectedLine.line)) {
       potentialLines.push_back(expectedLine.line);
       if (!expectedLine.optional) {
-        ASSERT_FALSE(true) << "Output did not match "
-                           << "Source:" << testName
+        ASSERT_FALSE(true) << "Output did not match " << "Source:" << testName
                            << ", Line number:" << lineCount
                            << ", Line: " << line << ", Expected Line one of: "
                            << folly::join(",", potentialLines);
@@ -89,7 +88,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
         makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
     });
     leftVectors.push_back(rowVector);
-    writeToFile(leftFiles[i]->path, rowVector);
+    writeToFile(leftFiles[i]->getPath(), rowVector);
   }
   auto probeType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
 
@@ -237,7 +236,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
     SCOPED_TRACE(fmt::format("numPrefetchSplit {}", numPrefetchSplit));
     asyncDataCache_->clear();
     auto filePath = TempFilePath::create();
-    writeToFile(filePath->path, vectors);
+    writeToFile(filePath->getPath(), vectors);
 
     auto op =
         PlanBuilder()

@@ -301,8 +301,8 @@ TEST_F(ApproxDistinctTest, globalAggIntegersWithError) {
 
 TEST_F(ApproxDistinctTest, globalAggAllNulls) {
   vector_size_t size = 1'000;
-  auto values = makeFlatVector<int32_t>(
-      size, [](auto row) { return row; }, nullEvery(1));
+  auto values =
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }, nullEvery(1));
 
   auto op = PlanBuilder()
                 .values({makeRowVector({values})})
@@ -405,6 +405,21 @@ TEST_F(ApproxDistinctTest, mergeWithEmpty) {
                 .project({"cardinality(a0)"})
                 .planNode();
   ASSERT_EQ(readSingleValue(op).value<TypeKind::BIGINT>(), 499);
+}
+
+TEST_F(ApproxDistinctTest, toIntermediate) {
+  constexpr int kSize = 1000;
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>(kSize, folly::identity),
+      makeConstant<int64_t>(1, kSize),
+  });
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .singleAggregation({"c0"}, {"approx_set(c1)"})
+                  .planNode();
+  auto digests = split(AssertQueryBuilder(plan).copyResults(pool()), 2);
+  testAggregations(
+      digests, {"c0"}, {"merge(a0)"}, {"c0", "cardinality(a0)"}, {input});
 }
 
 } // namespace
