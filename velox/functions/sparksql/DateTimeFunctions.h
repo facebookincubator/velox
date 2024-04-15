@@ -114,13 +114,12 @@ struct YearOfWeekSparkFunction : public InitSessionTimezone<T> {
     }
     // The first few days in January may belong to the last year if they are
     // in the same week as January 1 and January 1 is a Friday or after.
-    else if (UNLIKELY(
-                 dateTime.tm_mon == 0 && dateTime.tm_mday <= 3 &&
-                 isoWeekDay - (dateTime.tm_mday - 1) >= 5)) {
+    if (UNLIKELY(
+            dateTime.tm_mon == 0 && dateTime.tm_mday <= 3 &&
+            isoWeekDay - (dateTime.tm_mday - 1) >= 5)) {
       return 1900 + dateTime.tm_year - 1;
-    } else {
-      return 1900 + dateTime.tm_year;
     }
+    return 1900 + dateTime.tm_year;
   }
 
   FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
