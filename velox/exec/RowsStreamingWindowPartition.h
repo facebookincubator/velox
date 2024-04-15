@@ -41,32 +41,22 @@ class RowsStreamingWindowPartition : public WindowPartition {
     }
   }
 
-  // Returns the starting offset of the current partial window partition within
-  // the full partition.
   vector_size_t offsetInPartition() const override {
     return partitionStartRows_[currentPartition_];
   }
 
-  // Indicates support for rows streaming processing.
   bool supportRowsStreaming() const override {
     return true;
   }
 
-  // Sets the flag indicating that all input rows have been processed on the
-  // producer side.
   void setInputRowsFinished() override {
     inputRowsFinished_ = true;
   }
 
-  // Adds new rows to the partition using a streaming approach on the producer
-  // side.
   void addNewRows(std::vector<char*> rows) override;
 
-  // Builds the next set of available rows on the consumer side.
   bool buildNextRows() override;
 
-  // Determines if the current partition is complete and then proceed to the
-  // next partition.
   bool processFinished() const override {
     return (
         inputRowsFinished_ &&

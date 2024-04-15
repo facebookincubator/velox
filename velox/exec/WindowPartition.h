@@ -50,26 +50,36 @@ class WindowPartition {
     return partition_.size();
   }
 
+  // Returns the starting offset of the current partial window partition within
+  // the full partition.
   virtual vector_size_t offsetInPartition() const {
     return 0;
   }
 
+  // Indicates support for rows streaming processing.
   virtual bool supportRowsStreaming() const {
     return false;
-  };
+  }
 
+  // Sets the flag indicating that all input rows have been processed on the
+  // producer side.
   virtual void setInputRowsFinished() {
     return;
   }
 
+  // Adds new rows to the partition using a streaming approach on the producer
+  // side.
   virtual void addNewRows(std::vector<char*> rows) {
     return;
   }
 
+  // Builds the next set of available rows on the consumer side.
   virtual bool buildNextRows() {
     return false;
   }
 
+  // Determines if the current partition is complete and then proceed to the
+  // next partition.
   virtual bool processFinished() const {
     return true;
   }
