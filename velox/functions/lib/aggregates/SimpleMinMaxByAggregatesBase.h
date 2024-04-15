@@ -62,9 +62,8 @@ template <
     typename V,
     typename C,
     bool isMaxFunc,
-    template <bool B, typename C1, typename C2>
-    class Comparator,
-    bool throwOnNestedNulls>
+    template <bool C0, typename C1, typename C2>
+    class Comparator>
 class SimpleMinMaxByAggregate {
  public:
   using InputType = Row<Generic<T1>, Orderable<T2>>;
@@ -183,14 +182,6 @@ class SimpleMinMaxByAggregate {
         return Comparator<isMaxFunc, C, ComparisonAccumulatorType>::compare(
             currComparison_.value(), newComparison.castTo<C>());
       } else {
-        if constexpr (throwOnNestedNulls) {
-          VELOX_USER_CHECK(
-              !newComparison.decoded().base()->containsNullAt(
-                  newComparison.decodedIndex()),
-              "{} comparison not supported for values that contain nulls",
-              mapTypeKindToName(newComparison.kind()));
-        }
-
         return Comparator<isMaxFunc, C, ComparisonAccumulatorType>::compare(
             currComparison_.value(),
             newComparison.decoded(),
@@ -232,99 +223,57 @@ template <
     template <bool C0, typename C1, typename C2>
     class Comparator,
     bool isMaxFunc,
-    typename V,
-    bool throwOnNestedNulls>
+    typename V>
 std::unique_ptr<exec::Aggregate> create(
     TypePtr resultType,
     TypePtr compareType,
     const std::string& errorMessage) {
   switch (compareType->kind()) {
     case TypeKind::BOOLEAN:
-      return std::make_unique<
-          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
-              V,
-              bool,
-              isMaxFunc,
-              Comparator,
-              throwOnNestedNulls>>>(resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          SimpleMinMaxByAggregate<V, bool, isMaxFunc, Comparator>>>(resultType);
     case TypeKind::TINYINT:
-      return std::make_unique<
-          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
-              V,
-              int8_t,
-              isMaxFunc,
-              Comparator,
-              throwOnNestedNulls>>>(resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          SimpleMinMaxByAggregate<V, int8_t, isMaxFunc, Comparator>>>(
+          resultType);
     case TypeKind::SMALLINT:
-      return std::make_unique<
-          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
-              V,
-              int16_t,
-              isMaxFunc,
-              Comparator,
-              throwOnNestedNulls>>>(resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          SimpleMinMaxByAggregate<V, int16_t, isMaxFunc, Comparator>>>(
+          resultType);
     case TypeKind::INTEGER:
-      return std::make_unique<
-          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
-              V,
-              int32_t,
-              isMaxFunc,
-              Comparator,
-              throwOnNestedNulls>>>(resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          SimpleMinMaxByAggregate<V, int32_t, isMaxFunc, Comparator>>>(
+          resultType);
     case TypeKind::BIGINT:
-      return std::make_unique<
-          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
-              V,
-              int64_t,
-              isMaxFunc,
-              Comparator,
-              throwOnNestedNulls>>>(resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          SimpleMinMaxByAggregate<V, int64_t, isMaxFunc, Comparator>>>(
+          resultType);
     case TypeKind::REAL:
-      return std::make_unique<
-          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
-              V,
-              float,
-              isMaxFunc,
-              Comparator,
-              throwOnNestedNulls>>>(resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          SimpleMinMaxByAggregate<V, float, isMaxFunc, Comparator>>>(
+          resultType);
     case TypeKind::DOUBLE:
-      return std::make_unique<
-          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
-              V,
-              double,
-              isMaxFunc,
-              Comparator,
-              throwOnNestedNulls>>>(resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          SimpleMinMaxByAggregate<V, double, isMaxFunc, Comparator>>>(
+          resultType);
     case TypeKind::VARBINARY:
       [[fallthrough]];
     case TypeKind::VARCHAR:
-      return std::make_unique<
-          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
-              V,
-              StringView,
-              isMaxFunc,
-              Comparator,
-              throwOnNestedNulls>>>(resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          SimpleMinMaxByAggregate<V, StringView, isMaxFunc, Comparator>>>(
+          resultType);
     case TypeKind::TIMESTAMP:
-      return std::make_unique<
-          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
-              V,
-              Timestamp,
-              isMaxFunc,
-              Comparator,
-              throwOnNestedNulls>>>(resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          SimpleMinMaxByAggregate<V, Timestamp, isMaxFunc, Comparator>>>(
+          resultType);
     case TypeKind::ARRAY:
       [[fallthrough]];
     case TypeKind::MAP:
       [[fallthrough]];
     case TypeKind::ROW:
-      return std::make_unique<
-          exec::SimpleAggregateAdapter<SimpleMinMaxByAggregate<
-              V,
-              ComplexType,
-              isMaxFunc,
-              Comparator,
-              throwOnNestedNulls>>>(resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          SimpleMinMaxByAggregate<V, ComplexType, isMaxFunc, Comparator>>>(
+          resultType);
     default:
       VELOX_FAIL("{}", errorMessage);
       return nullptr;
@@ -334,8 +283,7 @@ std::unique_ptr<exec::Aggregate> create(
 template <
     template <bool C0, typename C1, typename C2>
     class Comparator,
-    bool isMaxFunc,
-    bool throwOnNestedNulls>
+    bool isMaxFunc>
 std::unique_ptr<exec::Aggregate> createAll(
     TypePtr resultType,
     TypePtr valueType,
@@ -343,40 +291,40 @@ std::unique_ptr<exec::Aggregate> createAll(
     const std::string& errorMessage) {
   switch (valueType->kind()) {
     case TypeKind::BOOLEAN:
-      return create<Comparator, isMaxFunc, bool, throwOnNestedNulls>(
+      return create<Comparator, isMaxFunc, bool>(
           resultType, compareType, errorMessage);
     case TypeKind::TINYINT:
-      return create<Comparator, isMaxFunc, int8_t, throwOnNestedNulls>(
+      return create<Comparator, isMaxFunc, int8_t>(
           resultType, compareType, errorMessage);
     case TypeKind::SMALLINT:
-      return create<Comparator, isMaxFunc, int16_t, throwOnNestedNulls>(
+      return create<Comparator, isMaxFunc, int16_t>(
           resultType, compareType, errorMessage);
     case TypeKind::INTEGER:
-      return create<Comparator, isMaxFunc, int32_t, throwOnNestedNulls>(
+      return create<Comparator, isMaxFunc, int32_t>(
           resultType, compareType, errorMessage);
     case TypeKind::BIGINT:
-      return create<Comparator, isMaxFunc, int64_t, throwOnNestedNulls>(
+      return create<Comparator, isMaxFunc, int64_t>(
           resultType, compareType, errorMessage);
     case TypeKind::REAL:
-      return create<Comparator, isMaxFunc, float, throwOnNestedNulls>(
+      return create<Comparator, isMaxFunc, float>(
           resultType, compareType, errorMessage);
     case TypeKind::DOUBLE:
-      return create<Comparator, isMaxFunc, double, throwOnNestedNulls>(
+      return create<Comparator, isMaxFunc, double>(
           resultType, compareType, errorMessage);
     case TypeKind::VARCHAR:
       [[fallthrough]];
     case TypeKind::VARBINARY:
-      return create<Comparator, isMaxFunc, StringView, throwOnNestedNulls>(
+      return create<Comparator, isMaxFunc, StringView>(
           resultType, compareType, errorMessage);
     case TypeKind::TIMESTAMP:
-      return create<Comparator, isMaxFunc, Timestamp, throwOnNestedNulls>(
+      return create<Comparator, isMaxFunc, Timestamp>(
           resultType, compareType, errorMessage);
     case TypeKind::ARRAY:
       [[fallthrough]];
     case TypeKind::MAP:
       [[fallthrough]];
     case TypeKind::ROW:
-      return create<Comparator, isMaxFunc, ComplexType, throwOnNestedNulls>(
+      return create<Comparator, isMaxFunc, ComplexType>(
           resultType, compareType, errorMessage);
     default:
       VELOX_FAIL(errorMessage);

@@ -97,14 +97,14 @@ exec::AggregateRegistrationResult registerMinMaxBy(
 
         if (isRawInput) {
           // Input is: V, C.
-          return createAll<SparkComparator, isMaxFunc, false>(
+          return createAll<SparkComparator, isMaxFunc>(
               resultType, argTypes[0], argTypes[1], errorMessage);
         } else {
           // Input is: ROW(V, C).
           const auto& rowType = argTypes[0];
           const auto& valueType = rowType->childAt(0);
           const auto& compareType = rowType->childAt(1);
-          return createAll<SparkComparator, isMaxFunc, false>(
+          return createAll<SparkComparator, isMaxFunc>(
               resultType, valueType, compareType, errorMessage);
         }
       },
