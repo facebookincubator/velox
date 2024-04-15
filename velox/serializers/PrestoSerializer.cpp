@@ -4475,7 +4475,7 @@ class PrestoVectorLexer {
     VELOX_RETURN_IF(
         numRows < 0, Status::Invalid("Negative num rows: {}", numRows));
 
-    int8_t hasNulls;
+    int8_t hasNulls = 0;
     VELOX_RETURN_NOT_OK(lexInt(TokenType::NULLS, &hasNulls));
     if (hasNulls != 0) {
       const auto numBytes = bits::nbytes(numRows);
