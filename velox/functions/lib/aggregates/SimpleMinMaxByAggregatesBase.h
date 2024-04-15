@@ -172,6 +172,20 @@ class SimpleMinMaxByAggregate {
       return true;
     }
 
+    void destroy(HashStringAllocator* allocator) {
+      if constexpr (!isNumeric<V>()) {
+        if (currValue_.has_value()) {
+          currValue_->destroy(allocator);
+        }
+      }
+
+      if constexpr (!isNumeric<C>()) {
+        if (currComparison_.has_value()) {
+          currComparison_->destroy(allocator);
+        }
+      }
+    }
+
    private:
     bool needUpdate(const exec::GenericView& newComparison) {
       if (!currComparison_.has_value()) {
@@ -185,7 +199,7 @@ class SimpleMinMaxByAggregate {
         return Comparator<isMaxFunc, C, ComparisonAccumulatorType>::compare(
             currComparison_.value(),
             newComparison.decoded(),
-            newComparison.decodedIndex());
+            newComparison.rowIndex());
       }
     }
 

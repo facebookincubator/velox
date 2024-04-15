@@ -39,10 +39,7 @@ void SingleValueAccumulator::write(
 
 void SingleValueAccumulator::read(const VectorPtr& vector, vector_size_t index)
     const {
-  VELOX_CHECK_NOT_NULL(start_.header);
-
-  auto stream = HashStringAllocator::prepareRead(start_.header);
-  exec::ContainerRowSerde::deserialize(stream, index, vector.get());
+  read(vector.get(), index);
 }
 
 void SingleValueAccumulator::read(BaseVector* vector, vector_size_t index)

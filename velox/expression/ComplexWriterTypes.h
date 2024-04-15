@@ -1079,6 +1079,8 @@ class GenericWriter {
             ? "DynamicRow"
             : CppToType<ToType>::create()->toString());
 
+    casted_ = true;
+
     if constexpr (SimpleTypeTrait<ToType>::isPrimitiveType) {
       // This is an optimization for when the type of the vector is a
       // primitive type, in that case there is only one possible option for
@@ -1112,6 +1114,8 @@ class GenericWriter {
     if (!CastTypeChecker<ToType>::check(type())) {
       return nullptr;
     }
+
+    casted_ = true;
 
     return &castToImpl<ToType>();
   }
@@ -1183,6 +1187,8 @@ class GenericWriter {
   TypePtr& castType_;
 
   vector_size_t& index_;
+
+  bool casted_ = false;
 
   template <typename A, typename B>
   friend struct VectorWriter;

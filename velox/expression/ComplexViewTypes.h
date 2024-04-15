@@ -1101,6 +1101,10 @@ class GenericView {
     return decoded_.index(index_);
   }
 
+  vector_size_t rowIndex() const {
+    return index_;
+  }
+
   std::optional<int64_t> compare(
       const GenericView& other,
       const CompareFlags flags) const {

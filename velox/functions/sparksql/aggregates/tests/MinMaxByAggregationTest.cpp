@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <type/StringView.h>
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
@@ -213,6 +214,80 @@ TEST_F(MinMaxByAggregateTest, rowCompare) {
 
   testAggregations(
       {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
+}
+
+TEST_F(MinMaxByAggregateTest, stringCompare) {
+  auto vectors = makeRowVector({
+      makeFlatVector<int32_t>({11, 12, 13}),
+      makeFlatVector<StringView>({"1", "2", "3"}),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>(std::vector<int32_t>({11})),
+      makeFlatVector<int32_t>(std::vector<int32_t>({13})),
+  });
+
+  testAggregations(
+      {vectors},
+      {},
+      {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"},
+      {expected});
+}
+
+TEST_F(MinMaxByAggregateTest, doubleFloatCompare) {
+  {
+    auto vectors = makeRowVector({
+        makeFlatVector<StringView>({"11", "12", "13"}),
+        makeFlatVector<double>({11.2, 13.5, 14.6}),
+    });
+
+    auto expected = makeRowVector({
+        makeFlatVector<StringView>({"11"}),
+        makeFlatVector<StringView>({"13"}),
+    });
+
+    testAggregations(
+        {vectors},
+        {},
+        {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"},
+        {expected});
+  }
+
+  {
+    auto vectors = makeRowVector({
+        makeFlatVector<StringView>({"11", "12", "13"}),
+        makeFlatVector<double>({11.8, 9.2, 10.6}),
+    });
+
+    auto expected = makeRowVector({
+        makeFlatVector<StringView>({"12"}),
+        makeFlatVector<StringView>({"11"}),
+    });
+
+    testAggregations(
+        {vectors},
+        {},
+        {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"},
+        {expected});
+  }
+}
+
+TEST_F(MinMaxByAggregateTest, boolCompare) {
+  auto vectors = makeRowVector({
+      makeFlatVector<StringView>({"11", "12", "13"}),
+      makeFlatVector<bool>({true, false, true}),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<StringView>({"12"}),
+      makeFlatVector<StringView>({"13"}),
+  });
+
+  testAggregations(
+      {vectors},
+      {},
+      {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"},
+      {expected});
 }
 
 } // namespace
