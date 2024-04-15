@@ -32,15 +32,11 @@ class BloomFilterAggAggregateTest
     allowInputShuffle();
   }
 
-  VectorPtr getSerializedBloomFilter(
-      int32_t capacity,
-      bool needInsertToBloomFilter = true) {
+  VectorPtr getSerializedBloomFilter(int32_t capacity) {
     BloomFilter bloomFilter;
     bloomFilter.reset(capacity);
-    if (needInsertToBloomFilter) {
-      for (auto i = 0; i < 9; ++i) {
-        bloomFilter.insert(folly::hasher<int64_t>()(i));
-      }
+    for (auto i = 0; i < 9; ++i) {
+      bloomFilter.insert(folly::hasher<int64_t>()(i));
     }
     std::string data;
     data.resize(bloomFilter.serializedSize());
@@ -75,11 +71,14 @@ TEST_F(BloomFilterAggAggregateTest, emptyInput) {
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
 }
 
-TEST_F(BloomFilterAggAggregateTest, nullInput) {
-  auto vectors = {makeRowVector({makeAllNullFlatVector<int64_t>(1)})};
-  // The bloom filter supports the input data are nulls and will skip them.
-  // The expected value is the serialized bloom filter without any input values.
-  auto expected = {makeRowVector({getSerializedBloomFilter(4, false)})};
+TEST_F(BloomFilterAggAggregateTest, withNullInput) {
+  // The first 10 values range from 0 to 9, and the last 10 values are nulls
+  auto vectors = {makeRowVector({makeFlatVector<int64_t>(
+      20,
+      [](vector_size_t row) { return row % 9; },
+      [](vector_size_t row) { return row > 9; })})};
+  // The expected value is the serialized bloom filter
+  auto expected = {makeRowVector({getSerializedBloomFilter(4)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
 }
 

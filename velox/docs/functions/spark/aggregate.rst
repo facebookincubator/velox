@@ -41,7 +41,7 @@ General Aggregate Functions
 
     A version of ``bloom_filter_agg`` that uses ``numBits`` computed as ``estimatedNumItems`` * 8.
 
-    ``hash`` cannot be null.
+    ``hash`` can be null.
     ``estimatedNumItems`` provides an estimate of the number of values of ``x`` under the fact of ``hash`` is xxhash64(x).
     Value of ``estimatedNumItems`` is capped at 4,000,000 like to match Spark's implementation.
     But Spark allows for changing the defaults while Velox does not.
@@ -50,7 +50,7 @@ General Aggregate Functions
     
     A version of ``bloom_filter_agg`` that use the value of spark.bloom_filter.max_num_bits configuration property as ``numBits``.
 
-    ``hash`` cannot be null.
+    ``hash`` can be null.
 
 .. spark:function:: collect_list(x) -> array<[same as x]>
 
