@@ -27,7 +27,7 @@ namespace {
 /// greater than/equal or less than/equal the value in the 'accumulator'.
 template <bool sparkGreaterThan, typename T, typename TAccumulator>
 struct SparkComparator {
-  static bool compare(T accumulator, T newComparison) {
+  FOLLY_ALWAYS_INLINE static bool compare(T accumulator, T newComparison) {
     if constexpr (sparkGreaterThan) {
       return newComparison >= accumulator;
     } else {
@@ -35,8 +35,8 @@ struct SparkComparator {
     }
   }
 
-  FOLLY_ALWAYS_INLINE static int32_t compare(
-      const SingleValueAccumulator& accumulator,
+  static bool compare(
+      const TAccumulator& accumulator,
       const DecodedVector& decoded,
       vector_size_t index) {
     static const CompareFlags kCompareFlags{

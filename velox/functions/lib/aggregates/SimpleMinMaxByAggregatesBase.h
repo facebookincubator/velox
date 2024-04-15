@@ -72,9 +72,9 @@ class SimpleMinMaxByAggregate {
   using OutputType = Generic<T1>;
 
   using ValueAccumulatorType =
-      typename AccumulatorInternalTypeTraits<V>::AccumulatorType;
+      typename AccumulatorInternalTypeTraits<V>::AccumulatorInternalType;
   using ComparisonAccumulatorType =
-      typename AccumulatorInternalTypeTraits<C>::AccumulatorType;
+      typename AccumulatorInternalTypeTraits<C>::AccumulatorInternalType;
 
   // Default null behavior is false because for both spark sql and presto sql,
   // max/min_by can still be done if value is null
@@ -101,7 +101,13 @@ class SimpleMinMaxByAggregate {
       return true;
     }
 
-    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+    bool writeIntermediateResult(
+        bool nonNullGroup,
+        exec::out_type<IntermediateType>& out) {
+      if (!nonNullGroup) {
+        return false;
+      }
+
       if (!currComparison_.has_value()) {
         return false;
       }
@@ -110,8 +116,8 @@ class SimpleMinMaxByAggregate {
         out.set_null_at<0>();
       } else {
         auto& valueWriter = out.get_writer_at<0>();
-        if (isNumeric<V>()) {
-          valueWriter.castTo<V>() = currValue_;
+        if constexpr (isNumeric<V>()) {
+          valueWriter.castTo<V>() = currValue_.value();
         } else {
           currValue_->read(valueWriter.base(), valueWriter.offset());
         }
@@ -119,8 +125,8 @@ class SimpleMinMaxByAggregate {
 
       auto& comparisonWriter = out.get_writer_at<1>();
 
-      if (isNumeric<C>()) {
-        comparisonWriter.castTo<C>() = currComparison_;
+      if constexpr (isNumeric<C>()) {
+        comparisonWriter.castTo<C>() = currComparison_.value();
       } else {
         currComparison_->read(
             comparisonWriter.base(), comparisonWriter.offset());
@@ -149,13 +155,17 @@ class SimpleMinMaxByAggregate {
       return true;
     }
 
-    bool writeFinalResult(exec::out_type<OutputType>& out) {
+    bool writeFinalResult(bool nonNullGroup, exec::out_type<OutputType>& out) {
+      if (!nonNullGroup) {
+        return false;
+      }
+
       if (!currValue_.has_value()) {
         return false;
       }
 
-      if (isNumeric<V>()) {
-        out.castTo<V>() = currValue_;
+      if constexpr (isNumeric<V>()) {
+        out.castTo<V>() = currValue_.value();
       } else {
         currValue_->read(out.base(), out.offset());
       }
@@ -169,32 +179,35 @@ class SimpleMinMaxByAggregate {
         return true;
       }
 
-      if (isNumeric<C>()) {
+      if constexpr (isNumeric<C>()) {
         return Comparator<isMaxFunc, C, ComparisonAccumulatorType>::compare(
             currComparison_.value(), newComparison.castTo<C>());
-      }
+      } else {
+        if constexpr (throwOnNestedNulls) {
+          VELOX_USER_CHECK(
+              !newComparison.decoded().base()->containsNullAt(
+                  newComparison.decodedIndex()),
+              "{} comparison not supported for values that contain nulls",
+              mapTypeKindToName(newComparison.kind()));
+        }
 
-      if constexpr (throwOnNestedNulls) {
-        VELOX_USER_CHECK(
-            !newComparison.decoded().base()->containsNullAt(
-                newComparison.decodedIndex()),
-            "{} comparison not supported for values that contain nulls",
-            mapTypeKindToName(newComparison.kind()));
+        return Comparator<isMaxFunc, C, ComparisonAccumulatorType>::compare(
+            currComparison_.value(),
+            newComparison.decoded(),
+            newComparison.decodedIndex());
       }
-
-      return Comparator<isMaxFunc, C, ComparisonAccumulatorType>::compare(
-          currComparison_.value(),
-          newComparison.decoded(),
-          newComparison.decodedIndex());
     }
 
     void update(
         HashStringAllocator* allocator,
         const exec::optional_arg_type<Generic<T1>>& value,
         const exec::optional_arg_type<Orderable<T2>>& comparison) {
-      if (isNumeric<C>()) {
+      if constexpr (isNumeric<C>()) {
         currComparison_.emplace(comparison->castTo<C>());
       } else {
+        if (!currComparison_.has_value()) {
+          currComparison_.emplace(SingleValueAccumulator());
+        }
         currComparison_->write(
             comparison->base(), comparison->decodedIndex(), allocator);
       }
@@ -202,10 +215,13 @@ class SimpleMinMaxByAggregate {
       if (!value.has_value()) {
         currValue_.reset();
       } else {
-        if (isNumeric<V>()) {
+        if constexpr (isNumeric<V>()) {
           currValue_.emplace(value->castTo<V>());
         } else {
-          currValue_.write(value->base(), value->decodedIndex(), allocator);
+          if (!currValue_.has_value()) {
+            currValue_.emplace(SingleValueAccumulator());
+          }
+          currValue_->write(value->base(), value->decodedIndex(), allocator);
         }
       }
     }
