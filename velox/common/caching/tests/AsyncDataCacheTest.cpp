@@ -92,7 +92,7 @@ class AsyncDataCacheTest : public testing::Test {
   void initializeCache(
       uint64_t maxBytes,
       int64_t ssdBytes = 0,
-      bool multiCachePath = false) {
+      int8_t ssdPathNum = 1) {
     if (cache_ != nullptr) {
       cache_->shutdown();
     }
@@ -108,12 +108,13 @@ class AsyncDataCacheTest : public testing::Test {
       if (tempDirectory_ == nullptr) {
         tempDirectory_ = exec::test::TempDirectoryPath::create();
       }
-      auto fileCachePrefix = fmt::format("{}/cache", tempDirectory_->path);
-      if (multiCachePath) {
-        fileCachePrefix = fmt::format(
-            "{}/multiCache0/cache,{}/multiCache1/cache",
-            tempDirectory_->path,
-            tempDirectory_->path);
+      std::string fileCachePrefix;
+      for (int8_t i = 0; i < ssdPathNum; ++i) {
+        fileCachePrefix +=
+            fmt::format("{}/multiCache{}/cache,", tempDirectory_->path, i);
+      }
+      if (!fileCachePrefix.empty()) {
+        fileCachePrefix.pop_back();
       }
       ssdCache = std::make_unique<SsdCache>(
           fileCachePrefix, ssdBytes, 4, executor(), ssdBytes / 20);
@@ -1157,7 +1158,8 @@ DEBUG_ONLY_TEST_F(AsyncDataCacheTest, ttl) {
 TEST_F(AsyncDataCacheTest, multiCachePath) {
   constexpr uint64_t kRamBytes = 32 << 20;
   constexpr uint64_t kSsdBytes = 512UL << 20;
-  initializeCache(kRamBytes, kSsdBytes, true);
+
+  initializeCache(kRamBytes, kSsdBytes, 2);
 
   ASSERT_EQ(
       filesystems::getFileSystem(tempDirectory_->path, nullptr)
