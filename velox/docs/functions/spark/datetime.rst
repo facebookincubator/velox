@@ -260,12 +260,16 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: unix_micros(timestamp) -> bigint
 
-    Returns the number of microseconds since 1970-01-01 00:00:00 UTC.
+    Returns the number of microseconds since 1970-01-01 00:00:00 UTC.::
+
+        SELECT unix_micros('1970-01-01 00:00:01'); -- 1000000
 
 .. spark:function:: unix_millis(timestamp) -> bigint
 
     Returns the number of milliseconds since 1970-01-01 00:00:00 UTC. Truncates
-    higher levels of precision.
+    higher levels of precision.::
+
+        SELECT unix_millis('1970-01-01 00:00:01'); -- 1000
 
 .. spark:function:: unix_timestamp() -> integer
 
