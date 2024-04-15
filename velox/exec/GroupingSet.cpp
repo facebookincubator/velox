@@ -839,7 +839,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   const int64_t flatBytes = input->estimateFlatSize();
 
   // Test-only spill path.
-  if (testingTriggerSpill()) {
+  if (testingTriggerSpill(pool_.name())) {
     memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
     memory::testingRunArbitration(&pool_);
     return;
@@ -900,12 +900,13 @@ void GroupingSet::ensureOutputFits() {
   // to reserve memory for the output as we can't reclaim much memory from this
   // operator itself. The output processing can reclaim memory from the other
   // operator or query through memory arbitration.
-  if (isPartial_ || spillConfig_ == nullptr || hasSpilled()) {
+  if (isPartial_ || spillConfig_ == nullptr || hasSpilled() ||
+      table_ == nullptr || table_->numDistinct() == 0) {
     return;
   }
 
   // Test-only spill path.
-  if (testingTriggerSpill()) {
+  if (testingTriggerSpill(pool_.name())) {
     memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
     memory::testingRunArbitration(&pool_);
     return;

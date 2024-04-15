@@ -280,8 +280,8 @@ class ExternalBlocker {
 };
 
 // A test node that normally just re-project/passthrough the output from input
-// When the node is blocked by external even (via externalBlocker), the operator
-// will signal kBlocked. The pipeline can ONLY proceed again when it is
+// When the node is blocked by external event (via externalBlocker), the
+// operator will signal kBlocked. The pipeline can ONLY proceed again when it is
 // unblocked externally.
 class TestExternalBlockableNode : public core::PlanNode {
  public:
@@ -460,11 +460,6 @@ class TestBadMemoryTranslator : public exec::Operator::PlanNodeTranslator {
 
 class TaskTest : public HiveConnectorTestBase {
  protected:
-  void TearDown() override {
-    waitForAllTasksToBeDeleted();
-    HiveConnectorTestBase::TearDown();
-  }
-
   static std::pair<std::shared_ptr<exec::Task>, std::vector<RowVectorPtr>>
   executeSingleThreaded(
       core::PlanFragment plan,
@@ -767,7 +762,7 @@ TEST_F(TaskTest, singleThreadedExecution) {
 
   // Project + Aggregation over TableScan.
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->path, {data, data});
+  writeToFile(filePath->getPath(), {data, data});
 
   core::PlanNodeId scanId;
   plan = PlanBuilder()
@@ -779,7 +774,7 @@ TEST_F(TaskTest, singleThreadedExecution) {
 
   {
     auto [task, results] =
-        executeSingleThreaded(plan, {{scanId, {filePath->path}}});
+        executeSingleThreaded(plan, {{scanId, {filePath->getPath()}}});
     assertEqualResults({expectedResult}, results);
   }
 
@@ -796,7 +791,7 @@ TEST_F(TaskTest, singleThreadedHashJoin) {
           makeFlatVector<int64_t>({10, 20, 30, 40}),
       });
   auto leftPath = TempFilePath::create();
-  writeToFile(leftPath->path, {left});
+  writeToFile(leftPath->getPath(), {left});
 
   auto right = makeRowVector(
       {"u_c0"},
@@ -804,7 +799,7 @@ TEST_F(TaskTest, singleThreadedHashJoin) {
           makeFlatVector<int64_t>({0, 1, 3, 5}),
       });
   auto rightPath = TempFilePath::create();
-  writeToFile(rightPath->path, {right});
+  writeToFile(rightPath->getPath(), {right});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanId;
@@ -832,7 +827,8 @@ TEST_F(TaskTest, singleThreadedHashJoin) {
   {
     auto [task, results] = executeSingleThreaded(
         plan,
-        {{leftScanId, {leftPath->path}}, {rightScanId, {rightPath->path}}});
+        {{leftScanId, {leftPath->getPath()}},
+         {rightScanId, {rightPath->getPath()}}});
     assertEqualResults({expectedResult}, results);
   }
 }
@@ -840,11 +836,11 @@ TEST_F(TaskTest, singleThreadedHashJoin) {
 TEST_F(TaskTest, singleThreadedCrossJoin) {
   auto left = makeRowVector({"t_c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
   auto leftPath = TempFilePath::create();
-  writeToFile(leftPath->path, {left});
+  writeToFile(leftPath->getPath(), {left});
 
   auto right = makeRowVector({"u_c0"}, {makeFlatVector<int64_t>({10, 20})});
   auto rightPath = TempFilePath::create();
-  writeToFile(rightPath->path, {right});
+  writeToFile(rightPath->getPath(), {right});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanId;
@@ -869,7 +865,8 @@ TEST_F(TaskTest, singleThreadedCrossJoin) {
   {
     auto [task, results] = executeSingleThreaded(
         plan,
-        {{leftScanId, {leftPath->path}}, {rightScanId, {rightPath->path}}});
+        {{leftScanId, {leftPath->getPath()}},
+         {rightScanId, {rightPath->getPath()}}});
     assertEqualResults({expectedResult}, results);
   }
 }
@@ -1349,7 +1346,7 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
   });
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->path, {data, data});
+  writeToFile(filePath->getPath(), {data, data});
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -1434,7 +1431,7 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
 
   // Now add a split, finalize splits and wait for the task to finish.
   auto split = exec::Split(makeHiveConnectorSplit(
-      filePath->path, 0, std::numeric_limits<uint64_t>::max(), 1));
+      filePath->getPath(), 0, std::numeric_limits<uint64_t>::max(), 1));
   task->addSplit(scanNodeId, std::move(split));
   task->noMoreSplits(scanNodeId);
   taskThread.join();
@@ -1500,7 +1497,7 @@ TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
   std::shared_ptr<Task> task = cursor->task();
   auto rootTempDir = exec::test::TempDirectoryPath::create();
   auto tmpDirectoryPath =
-      rootTempDir->path + "/spillDirectoryLifecycleManagement";
+      rootTempDir->getPath() + "/spillDirectoryLifecycleManagement";
   task->setSpillDirectory(tmpDirectoryPath, false);
 
   TestScopedSpillInjection scopedSpillInjection(100);
@@ -1556,7 +1553,7 @@ TEST_F(TaskTest, spillDirNotCreated) {
   auto cursor = TaskCursor::create(params);
   auto* task = cursor->task().get();
   auto rootTempDir = exec::test::TempDirectoryPath::create();
-  auto tmpDirectoryPath = rootTempDir->path + "/spillDirNotCreated";
+  auto tmpDirectoryPath = rootTempDir->getPath() + "/spillDirNotCreated";
   task->setSpillDirectory(tmpDirectoryPath, false);
 
   while (cursor->moveNext()) {
@@ -1619,6 +1616,127 @@ DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
   ASSERT_TRUE(waitForTaskCompletion(task.get()));
   task.reset();
   waitForAllTasksToBeDeleted();
+}
+
+DEBUG_ONLY_TEST_F(
+    TaskTest,
+    singleThreadedLongRunningOperatorInTaskReclaimerAbort) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+  });
+
+  // Filter + Project.
+  auto plan =
+      PlanBuilder().values({data, data, data}).project({"c0"}).planFragment();
+
+  auto queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
+
+  auto blockingTask = Task::create("blocking.task.0", plan, 0, queryCtx);
+
+  // Before we block, we expect `next` to get data normally.
+  EXPECT_NE(nullptr, blockingTask->next());
+
+  // Now, we want to block the pipeline by blocking Values operator. We expect
+  // `next` to return null.  The `future` should be updated for the caller to
+  // wait before calling next() again
+  folly::EventCount getOutputWait;
+  std::atomic_bool getOutputWaitFlag{false};
+  folly::EventCount abortWait;
+  std::atomic_bool abortWaitFlag{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(Values*)>([&](Values* /*unused*/) {
+        abortWaitFlag = true;
+        abortWait.notify();
+        getOutputWait.await([&]() { return getOutputWaitFlag.load(); });
+      }));
+
+  const std::string abortErrorMessage("Synthetic Exception");
+  auto thread = std::thread(
+      [&]() { VELOX_ASSERT_THROW(blockingTask->next(), abortErrorMessage); });
+
+  try {
+    VELOX_FAIL(abortErrorMessage);
+  } catch (VeloxException& e) {
+    abortWait.await([&]() { return abortWaitFlag.load(); });
+    blockingTask->pool()->abort(std::current_exception());
+  }
+
+  waitForTaskCompletion(blockingTask.get(), 5'000'000);
+
+  // We expect that abort does not trigger the operator abort by checking if the
+  // memory pool memory has been released or not.
+  blockingTask->pool()->visitChildren([](auto* child) {
+    if (child->isLeaf()) {
+      EXPECT_EQ(child->stats().numReleases, 0);
+    }
+    return true;
+  });
+
+  getOutputWaitFlag = true;
+  getOutputWait.notify();
+
+  thread.join();
+
+  blockingTask->taskCompletionFuture().wait();
+  blockingTask->pool()->visitChildren([](auto* child) {
+    if (child->isLeaf()) {
+      EXPECT_EQ(child->stats().numReleases, 1);
+    }
+    return true;
+  });
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, longRunningOperatorInTaskReclaimerAbort) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+  });
+  folly::EventCount getOutputWait;
+  std::atomic_bool getOutputWaitFlag{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(Values*)>([&](Values* /*unused*/) {
+        getOutputWait.await([&]() { return getOutputWaitFlag.load(); });
+      }));
+
+  // Project only dummy plan
+  auto plan =
+      PlanBuilder().values({data, data, data}).project({"c0"}).planFragment();
+
+  auto queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
+
+  auto blockingTask = Task::create("blocking.task.0", plan, 0, queryCtx);
+
+  blockingTask->start(4, 1);
+  const std::string abortErrorMessage("Synthetic Exception");
+  try {
+    VELOX_FAIL(abortErrorMessage);
+  } catch (VeloxException& e) {
+    blockingTask->pool()->abort(std::current_exception());
+  }
+  waitForTaskCompletion(blockingTask.get());
+
+  // We expect that arbitration does not trigger release of the operator pools.
+  blockingTask->pool()->visitChildren([](auto* child) {
+    if (child->isLeaf()) {
+      EXPECT_EQ(child->stats().numReleases, 0);
+    }
+    return true;
+  });
+
+  getOutputWaitFlag = true;
+  getOutputWait.notify();
+
+  VELOX_ASSERT_THROW(
+      std::rethrow_exception(blockingTask->error()), abortErrorMessage);
+
+  blockingTask->taskCompletionFuture().wait();
+  blockingTask->pool()->visitChildren([](auto* child) {
+    if (child->isLeaf()) {
+      EXPECT_EQ(child->stats().numReleases, 1);
+    }
+    return true;
+  });
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {

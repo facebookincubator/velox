@@ -43,7 +43,7 @@ class LocalPartitionTest : public HiveConnectorTestBase {
       const std::vector<RowVectorPtr>& vectors) {
     auto filePaths = makeFilePaths(vectors.size());
     for (auto i = 0; i < vectors.size(); i++) {
-      writeToFile(filePaths[i]->path, vectors[i]);
+      writeToFile(filePaths[i]->getPath(), vectors[i]);
     }
     return filePaths;
   }
@@ -78,7 +78,9 @@ class LocalPartitionTest : public HiveConnectorTestBase {
       exec::TaskState expected) {
     if (task->state() != expected) {
       auto& executor = folly::QueuedImmediateExecutor::instance();
-      auto future = task->taskCompletionFuture(1'000'000).via(&executor);
+      auto future = task->taskCompletionFuture()
+                        .within(std::chrono::microseconds(1'000'000))
+                        .via(&executor);
       future.wait();
       EXPECT_EQ(expected, task->state());
     }
@@ -138,7 +140,7 @@ TEST_F(LocalPartitionTest, gather) {
   AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
-        scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->path));
+        scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
   }
 
   task = queryBuilder.assertResults("SELECT 300, -71, 152");
@@ -184,7 +186,7 @@ TEST_F(LocalPartitionTest, partition) {
   queryBuilder.maxDrivers(2);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
-        scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->path));
+        scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
   }
 
   auto task =
@@ -265,7 +267,7 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
     queryBuilder.maxDrivers(2);
     for (auto i = 0; i < filePaths.size(); ++i) {
       queryBuilder.split(
-          scanNodeIds[i % 3], makeHiveConnectorSplit(filePaths[i]->path));
+          scanNodeIds[i % 3], makeHiveConnectorSplit(filePaths[i]->getPath()));
     }
     queryBuilder.config(
         core::QueryConfig::kMaxLocalExchangeBufferSize, bufferSize);
@@ -314,7 +316,7 @@ TEST_F(LocalPartitionTest, indicesBufferCapacity) {
   for (auto i = 0; i < filePaths.size(); ++i) {
     auto id = scanNodeIds[i % 3];
     cursor->task()->addSplit(
-        id, Split(makeHiveConnectorSplit(filePaths[i]->path)));
+        id, Split(makeHiveConnectorSplit(filePaths[i]->getPath())));
     cursor->task()->noMoreSplits(id);
   }
   int numRows = 0;
@@ -448,7 +450,7 @@ TEST_F(LocalPartitionTest, multipleExchanges) {
   AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
-        scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->path));
+        scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
   }
 
   queryBuilder.maxDrivers(2).assertResults(
@@ -557,8 +559,7 @@ TEST_F(LocalPartitionTest, producerError) {
   const auto& task = cursor->task();
 
   // Expect division by zero error.
-  ASSERT_THROW(
-      while (cursor->moveNext()) { ; }, VeloxException);
+  ASSERT_THROW(while (cursor->moveNext()) { ; }, VeloxException);
 
   // Wait for task to transition to failed state.
   waitForTaskCompletion(task, exec::kFailed);
