@@ -31,6 +31,8 @@ using facebook::velox::dwio::common::test::LoadUnitMock;
 using facebook::velox::dwio::common::test::ReaderMock;
 
 TEST(OnDemandUnitLoaderTests, LoadsCorrectlyWithReader) {
+  std::atomic_int test(0);
+  test.wait(1);
   size_t blockedOnIoCount = 0;
   OnDemandUnitLoaderFactory factory([&](uint64_t) { ++blockedOnIoCount; });
   ReaderMock readerMock{{10, 20, 30}, {0, 0, 0}, factory};
