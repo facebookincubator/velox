@@ -339,9 +339,7 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-maybe-uninitialized \
          -Wno-unused-result \
          -Wno-format-overflow \
-         -Wno-strict-aliasing \
-         -Wno-stringop-overflow \
-         -Wno-stringop-overread")
+         -Wno-strict-aliasing")
   endif()
 
   set(KNOWN_WARNINGS
