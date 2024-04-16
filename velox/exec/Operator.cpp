@@ -654,7 +654,7 @@ uint64_t Operator::MemoryReclaimer::reclaim(
   auto reclaimBytes = memory::MemoryReclaimer::run(
       [&]() {
         op_->reclaim(targetBytes, stats);
-        return pool->shrink(targetBytes);
+        return pool->shrink(targetBytes, false);
       },
       stats);
 

@@ -127,6 +127,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     uint16_t alignment{MemoryAllocator::kMaxAlignment};
     /// Specifies the max memory capacity of this memory pool.
     int64_t maxCapacity{kMaxMemory};
+    int64_t minCapacity{0};
 
     /// If true, tracks the memory usage from the leaf memory pool and aggregate
     /// up to the root memory pool for capacity enforcement. Otherwise there is
@@ -360,7 +361,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// this memory pool's capacity without actually freeing any used memory. The
   /// function returns the actually freed memory capacity in bytes. If
   /// 'targetBytes' is zero, the function frees all the free memory capacity.
-  virtual uint64_t shrink(uint64_t targetBytes = 0) = 0;
+  virtual uint64_t shrink(uint64_t targetBytes = 0, bool force = false) = 0;
 
   /// Invoked to increase the memory pool's capacity by 'bytes'. The function
   /// returns the memory pool's capacity after the growth.
@@ -469,6 +470,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Returns the stats of this memory pool.
   virtual Stats stats() const = 0;
 
+  std::atomic_int pendingArbitrations_{0};
+
   virtual std::string toString() const = 0;
 
   /// Invoked to generate a descriptive memory usage summary of the entire tree.
@@ -523,6 +526,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const uint16_t alignment_;
   const std::shared_ptr<MemoryPool> parent_;
   const int64_t maxCapacity_;
+  const int64_t minCapacity_;
   const bool trackUsage_;
   const bool threadSafe_;
   const bool debugEnabled_;
@@ -644,7 +648,7 @@ class MemoryPoolImpl : public MemoryPool {
       uint64_t maxWaitMs,
       memory::MemoryReclaimer::Stats& stats) override;
 
-  uint64_t shrink(uint64_t targetBytes = 0) override;
+  uint64_t shrink(uint64_t targetBytes = 0, bool force = false) override;
 
   uint64_t grow(uint64_t bytes) noexcept override;
 

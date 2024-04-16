@@ -219,11 +219,13 @@ MemoryPool::MemoryPool(
       alignment_(options.alignment),
       parent_(std::move(parent)),
       maxCapacity_(parent_ == nullptr ? options.maxCapacity : kMaxMemory),
+      minCapacity_(parent_ == nullptr ? options.minCapacity : 0),
       trackUsage_(options.trackUsage),
       threadSafe_(options.threadSafe),
       debugEnabled_(options.debugEnabled),
       coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled) {
   VELOX_CHECK(!isRoot() || !isLeaf());
+  VELOX_CHECK_LE(minCapacity_, maxCapacity_);
   VELOX_CHECK_GT(
       maxCapacity_, 0, "Memory pool {} max capacity can't be zero", name_);
   MemoryAllocator::alignmentCheck(0, alignment_);
@@ -805,6 +807,8 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
   VELOX_CHECK_NULL(parent_);
 
   ++numCapacityGrowths_;
+  ++pendingArbitrations_;
+  auto cleanupGuard = folly::makeGuard([&]() { --pendingArbitrations_; });
   if (growCapacityCb_(requestor, size)) {
     TestValue::adjust(
         "facebook::velox::memory::MemoryPoolImpl::incrementReservationThreadSafe::AfterGrowCallback",
@@ -821,13 +825,14 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
   }
   VELOX_MEM_POOL_CAP_EXCEEDED(fmt::format(
       "Exceeded memory pool cap of {} with max {} when requesting {}, memory "
-      "manager cap is {}, requestor '{}' with current usage {}\n{}",
+      "manager cap is {}, requestor '{}' with current usage {}, pending arbitrations {}\n{}",
       capacityToString(capacity()),
       capacityToString(maxCapacity_),
       succinctBytes(size),
       capacityToString(manager_->capacity()),
       requestor->name(),
       succinctBytes(requestor->currentBytes()),
+      pendingArbitrations_,
       treeMemoryUsage()));
 }
 
@@ -1014,19 +1019,30 @@ void MemoryPoolImpl::leaveArbitration() noexcept {
   }
 }
 
-uint64_t MemoryPoolImpl::shrink(uint64_t targetBytes) {
+uint64_t MemoryPoolImpl::shrink(uint64_t targetBytes, bool force) {
   if (parent_ != nullptr) {
-    return parent_->shrink(targetBytes);
+    return parent_->shrink(targetBytes, force);
   }
   std::lock_guard<std::mutex> l(mutex_);
   // We don't expect to shrink a memory pool without capacity limit.
   VELOX_CHECK_NE(capacity_, kMaxMemory);
-  uint64_t freeBytes = std::max<uint64_t>(0, capacity_ - reservationBytes_);
-  if (targetBytes != 0) {
-    freeBytes = std::min(targetBytes, freeBytes);
+  //VELOX_CHECK_LE(minCapacity_, capacity_, "Bad pool: {}", name_);
+  uint64_t availableBytes{0};
+  if (force) {
+    availableBytes = std::max<uint64_t>(0, capacity_ - reservationBytes_);
+  } else {
+    // NOTE: 'minCapacity_' could be less than 'capacity_'.
+    availableBytes = std::max<int64_t>(
+        0, capacity_ - std::max(minCapacity_, reservationBytes_));
   }
-  capacity_ -= freeBytes;
-  return freeBytes;
+  if (targetBytes != 0) {
+    availableBytes = std::min(targetBytes, availableBytes);
+  }
+  capacity_ -= availableBytes;
+  if (!force) {
+    CHECK_GE(capacity_, 64 << 20);
+  }
+  return availableBytes;
 }
 
 uint64_t MemoryPoolImpl::grow(uint64_t bytes) noexcept {

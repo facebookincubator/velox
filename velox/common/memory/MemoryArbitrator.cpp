@@ -93,7 +93,8 @@ class NoopArbitrator : public MemoryArbitrator {
 
   // Noop arbitrator has no memory capacity limit so no operation needed for
   // memory pool capacity reserve.
-  uint64_t growCapacity(MemoryPool* pool, uint64_t /*unused*/) override {
+  uint64_t growCapacity(MemoryPool* pool, uint64_t /*unused*/, bool /*unused*/)
+      override {
     pool->grow(pool->maxCapacity());
     return pool->maxCapacity();
   }
@@ -199,7 +200,10 @@ bool MemoryReclaimer::reclaimableBytes(
   if (pool.kind() == MemoryPool::Kind::kLeaf) {
     return false;
   }
-  bool reclaimable{false};
+  if (pool.capacity() <= pool.minCapacity_) {
+    return false;
+  }
+   bool reclaimable{false};
   pool.visitChildren([&](MemoryPool* pool) {
     auto reclaimableBytesOpt = pool->reclaimableBytes();
     reclaimable |= reclaimableBytesOpt.has_value();
@@ -216,6 +220,9 @@ uint64_t MemoryReclaimer::reclaim(
     uint64_t maxWaitMs,
     Stats& stats) {
   if (pool->kind() == MemoryPool::Kind::kLeaf) {
+    return 0;
+  }
+  if (pool->capacity() <= pool->minCapacity_) {
     return 0;
   }
 

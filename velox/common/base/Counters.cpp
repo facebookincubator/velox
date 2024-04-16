@@ -135,6 +135,10 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricArbitratorFreeCapacityBytes, facebook::velox::StatType::AVG);
 
+  DEFINE_METRIC(
+      kMetricArbitratorFreeReservedCapacityBytes,
+      facebook::velox::StatType::AVG);
+
   // Tracks the leaf memory pool usage leak in bytes.
   DEFINE_METRIC(
       kMetricMemoryPoolUsageLeakBytes, facebook::velox::StatType::SUM);
@@ -155,6 +159,10 @@ void registerVeloxMetrics() {
       90,
       99,
       100);
+
+  DEFINE_METRIC(
+      kMetricMemoryPoolInsufficientCapacityCount,
+      facebook::velox::StatType::COUNT);
 
   // The distribution of a root memory pool cappacity growth attempts through
   // memory arbitration in range of [0, 256] with 32 buckets. It is configured

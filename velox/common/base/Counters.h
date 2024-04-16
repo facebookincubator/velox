@@ -58,6 +58,9 @@ constexpr folly::StringPiece kMetricMemoryNonReclaimableCount{
 constexpr folly::StringPiece kMetricMemoryPoolInitialCapacityBytes{
     "velox.memory_pool_initial_capacity_bytes"};
 
+constexpr folly::StringPiece kMetricMemoryPoolInsufficientCapacityCount{
+    "velox.memory_pool_insufficient_capacity_count"};
+
 constexpr folly::StringPiece kMetricMemoryPoolCapacityGrowCount{
     "velox.memory_pool_capacity_growth_count"};
 
@@ -93,6 +96,9 @@ constexpr folly::StringPiece kMetricArbitratorArbitrationTimeMs{
 
 constexpr folly::StringPiece kMetricArbitratorFreeCapacityBytes{
     "velox.arbitrator_free_capacity_bytes"};
+
+constexpr folly::StringPiece kMetricArbitratorFreeReservedCapacityBytes{
+    "velox.arbitrator_free_reserved_capacity_bytes"};
 
 constexpr folly::StringPiece kMetricDriverYieldCount{
     "velox.driver_yield_count"};
