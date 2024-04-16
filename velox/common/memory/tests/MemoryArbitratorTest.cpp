@@ -105,7 +105,7 @@ TEST_F(MemoryArbitrationTest, queryMemoryCapacity) {
     MemoryManager manager(options);
     auto rootPool = manager.addRootPool("root-1", 8L << 20);
     auto leafPool = rootPool->addLeafChild("leaf-1.0");
-    void* buffer;
+    void* buffer = nullptr;
     ASSERT_NO_THROW({
       buffer = leafPool->allocate(7L << 20);
       leafPool->free(buffer, 7L << 20);
