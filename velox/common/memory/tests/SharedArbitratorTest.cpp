@@ -721,7 +721,7 @@ DEBUG_ONLY_TEST_F(
     VELOX_ASSERT_THROW(
         AssertQueryBuilder(duckDbQueryRunner_)
             .queryCtx(queryCtx)
-            .spillDirectory(spillDirectory->path)
+            .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, "true")
             .config(core::QueryConfig::kJoinSpillEnabled, "true")
             .config(core::QueryConfig::kSpillNumPartitionBits, "2")
@@ -792,7 +792,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, asyncArbitratonFromNonDriverContext) {
   std::thread queryThread([&]() {
     task = AssertQueryBuilder(duckDbQueryRunner_)
                .queryCtx(queryCtx)
-               .spillDirectory(spillDirectory->path)
+               .spillDirectory(spillDirectory->getPath())
                .config(core::QueryConfig::kSpillEnabled, "true")
                .config(core::QueryConfig::kJoinSpillEnabled, "true")
                .config(core::QueryConfig::kSpillNumPartitionBits, "2")
@@ -863,7 +863,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, runtimeStats) {
   auto writerPlan =
       PlanBuilder()
           .values(vectors)
-          .tableWrite(outputDirectory->path)
+          .tableWrite(outputDirectory->getPath())
           .singleAggregation(
               {},
               {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
@@ -873,7 +873,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, runtimeStats) {
         AssertQueryBuilder(duckDbQueryRunner_)
             .queryCtx(queryCtx)
             .maxDrivers(1)
-            .spillDirectory(spillDirectory->path)
+            .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, "true")
             .config(core::QueryConfig::kWriterSpillEnabled, "true")
             // Set 0 file writer flush threshold to always trigger flush in

@@ -770,8 +770,8 @@ TEST_P(ParameterizedExprTest, dictionaryAndConstantOverLazy) {
   auto row = makeRowVector({lazyVector});
   auto result = evaluate("plus5(c0)", row);
 
-  auto expected = makeFlatVector<int32_t>(
-      size, [](auto row) { return row + 5; }, isNullAt);
+  auto expected =
+      makeFlatVector<int32_t>(size, [](auto row) { return row + 5; }, isNullAt);
   assertEqualVectors(expected, result);
 
   // Wrap LazyVector in a dictionary (select only even rows).
@@ -1164,8 +1164,8 @@ TEST_P(ParameterizedExprTest, lazyVectors) {
 
   auto result = evaluate("c0 + coalesce(c0, 1)", row);
 
-  auto expected = makeFlatVector<int64_t>(
-      size, [](auto row) { return row * 2; }, nullptr);
+  auto expected =
+      makeFlatVector<int64_t>(size, [](auto row) { return row * 2; }, nullptr);
   assertEqualVectors(expected, result);
 
   // Make LazyVector with nulls
@@ -1175,8 +1175,8 @@ TEST_P(ParameterizedExprTest, lazyVectors) {
 
   result = evaluate("c0 + coalesce(c0, 1)", row);
 
-  expected = makeFlatVector<int64_t>(
-      size, [](auto row) { return row * 2; }, isNullAt);
+  expected =
+      makeFlatVector<int64_t>(size, [](auto row) { return row * 2; }, isNullAt);
   assertEqualVectors(expected, result);
 }
 
@@ -2415,7 +2415,7 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   // Enable saving vector and expression SQL for system errors only.
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   FLAGS_velox_save_input_on_expression_system_failure_path =
-      tempDirectory->path;
+      tempDirectory->getPath();
 
   try {
     evaluate("runtime_error(c0) + c1", data);
@@ -2449,7 +2449,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   }
 
   // Enable saving vector and expression SQL for all errors.
-  FLAGS_velox_save_input_on_expression_any_failure_path = tempDirectory->path;
+  FLAGS_velox_save_input_on_expression_any_failure_path =
+      tempDirectory->getPath();
   FLAGS_velox_save_input_on_expression_system_failure_path = "";
 
   try {
