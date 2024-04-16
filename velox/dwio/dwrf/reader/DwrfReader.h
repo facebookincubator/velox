@@ -221,11 +221,6 @@ class DwrfRowReader : public StrideIndexProvider,
       uint64_t rowsToRead,
       const dwio::common::Mutation*,
       VectorPtr& result);
-
-  void readWithRowNumber(
-      uint64_t rowsToRead,
-      const dwio::common::Mutation*,
-      VectorPtr& result);
 };
 
 class DwrfReader : public dwio::common::Reader {

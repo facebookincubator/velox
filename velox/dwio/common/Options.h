@@ -336,7 +336,7 @@ class RowReaderOptions {
     rowNumberColumnInfo_ = rowNumberColumnInfo;
   }
 
-  std::optional<RowNumberColumnInfo> getRowNumberColumnInfo() const {
+  const std::optional<RowNumberColumnInfo> getRowNumberColumnInfo() const {
     return rowNumberColumnInfo_;
   }
 
