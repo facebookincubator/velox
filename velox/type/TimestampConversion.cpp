@@ -105,20 +105,6 @@ constexpr int32_t kCumulativeYearDays[] = {
 
 namespace {
 
-// Enum to dictate parsing modes for date strings.
-//
-// kStrict: For date string conversion, align with DuckDB's implementation.
-//
-// kNonStrict: For timestamp string conversion, align with DuckDB's
-// implementation.
-//
-// kStandardCast: Strictly processes dates in the [+-](YYYY-MM-DD) format.
-// Align with Presto casting conventions.
-//
-// kNonStandardCast: Like standard but permits missing day/month and allows
-// trailing 'T' or spaces. Align with Spark SQL casting conventions.
-enum class ParseMode { kStrict, kNonStrict, kStandardCast, kNonStandardCast };
-
 inline bool characterIsSpace(char c) {
   return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' ||
       c == '\r';
@@ -217,7 +203,9 @@ bool tryParseDateString(
   }
 
   // No month or day.
-  if (mode == ParseMode::kNonStandardCast && pos == len) {
+  if ((mode == ParseMode::kNonStandardCast ||
+       mode == ParseMode::kNonStandardNoTimeCast) &&
+      pos == len) {
     if (!daysSinceEpochFromDate(year, 1, 1, daysSinceEpoch).ok()) {
       return false;
     }
@@ -230,7 +218,8 @@ bool tryParseDateString(
 
   // Fetch the separator.
   sep = buf[pos++];
-  if (mode == ParseMode::kStandardCast || mode == ParseMode::kNonStandardCast) {
+  if (mode == ParseMode::kStandardCast || mode == ParseMode::kNonStandardCast ||
+      mode == ParseMode::kNonStandardNoTimeCast) {
     // Only '-' is valid for cast.
     if (sep != '-') {
       return false;
@@ -248,7 +237,9 @@ bool tryParseDateString(
   }
 
   // No day.
-  if (mode == ParseMode::kNonStandardCast && pos == len) {
+  if ((mode == ParseMode::kNonStandardCast ||
+       mode == ParseMode::kNonStandardNoTimeCast) &&
+      pos == len) {
     if (!daysSinceEpochFromDate(year, month, 1, daysSinceEpoch).ok()) {
       return false;
     }
@@ -319,7 +310,7 @@ bool tryParseDateString(
   }
 
   // In strict mode, check remaining string for non-space characters.
-  if (mode == ParseMode::kStrict) {
+  if (mode == ParseMode::kStrict || mode == ParseMode::kNonStandardNoTimeCast) {
     // Skip trailing spaces.
     while (pos < len && characterIsSpace(buf[pos])) {
       pos++;
@@ -338,7 +329,8 @@ bool tryParseDateString(
   return daysSinceEpochFromDate(year, month, day, daysSinceEpoch).ok();
 }
 
-// String format is hh:mm:ss.microseconds (microseconds are optional).
+// String format is hh:mm:ss.microseconds (seconds and microseconds are
+// optional).
 // ISO 8601
 bool tryParseTimeString(
     const char* buf,
@@ -346,7 +338,7 @@ bool tryParseTimeString(
     size_t& pos,
     int64_t& result,
     bool strict) {
-  int32_t hour = -1, min = -1, sec = -1, micros = -1;
+  int32_t hour = 0, min = 0, sec = 0, micros = 0;
   pos = 0;
 
   if (len == 0) {
@@ -366,6 +358,7 @@ bool tryParseTimeString(
     return false;
   }
 
+  // Read the hours.
   if (!parseDoubleDigit(buf, len, pos, hour)) {
     return false;
   }
@@ -384,6 +377,7 @@ bool tryParseTimeString(
     return false;
   }
 
+  // Read the minutes.
   if (!parseDoubleDigit(buf, len, pos, min)) {
     return false;
   }
@@ -391,29 +385,30 @@ bool tryParseTimeString(
     return false;
   }
 
-  if (pos >= len) {
-    return false;
-  }
+  // Try to read seconds.
+  if (pos < len && buf[pos] == sep) {
+    ++pos;
+    if (!parseDoubleDigit(buf, len, pos, sec)) {
+      return false;
+    }
+    if (sec < 0 || sec > 60) {
+      return false;
+    }
 
-  if (buf[pos++] != sep) {
-    return false;
-  }
+    // Try to read microseconds.
+    if (pos < len && buf[pos] == '.') {
+      ++pos;
 
-  if (!parseDoubleDigit(buf, len, pos, sec)) {
-    return false;
-  }
-  if (sec < 0 || sec > 60) {
-    return false;
-  }
+      if (pos >= len) {
+        return false;
+      }
 
-  micros = 0;
-  if (pos < len && buf[pos] == '.') {
-    pos++;
-    // We expect microseconds.
-    int32_t mult = 100000;
-    for (; pos < len && characterIsDigit(buf[pos]); pos++, mult /= 10) {
-      if (mult > 0) {
-        micros += (buf[pos] - '0') * mult;
+      // We expect microseconds.
+      int32_t mult = 100000;
+      for (; pos < len && characterIsDigit(buf[pos]); pos++, mult /= 10) {
+        if (mult > 0) {
+          micros += (buf[pos] - '0') * mult;
+        }
       }
     }
   }
@@ -601,27 +596,36 @@ int64_t fromDateString(const char* str, size_t len) {
   return daysSinceEpoch;
 }
 
-int32_t castFromDateString(const char* str, size_t len, bool isIso8601) {
+int32_t castFromDateString(const char* str, size_t len, ParseMode mode) {
   int64_t daysSinceEpoch;
   size_t pos = 0;
 
-  auto mode =
-      isIso8601 ? ParseMode::kStandardCast : ParseMode::kNonStandardCast;
   if (!tryParseDateString(str, len, pos, daysSinceEpoch, mode)) {
-    if (isIso8601) {
-      VELOX_USER_FAIL(
-          "Unable to parse date value: \"{}\"."
-          "Valid date string pattern is (YYYY-MM-DD), "
-          "and can be prefixed with [+-]",
-          std::string(str, len));
-    } else {
-      VELOX_USER_FAIL(
-          "Unable to parse date value: \"{}\"."
-          "Valid date string patterns include "
-          "(yyyy*, yyyy*-[m]m, yyyy*-[m]m-[d]d, "
-          "yyyy*-[m]m-[d]d *, yyyy*-[m]m-[d]dT*), "
-          "and any pattern prefixed with [+-]",
-          std::string(str, len));
+    switch (mode) {
+      case ParseMode::kStandardCast:
+        VELOX_USER_FAIL(
+            "Unable to parse date value: \"{}\". "
+            "Valid date string pattern is (YYYY-MM-DD), "
+            "and can be prefixed with [+-]",
+            std::string(str, len));
+      case ParseMode::kNonStandardCast:
+        VELOX_USER_FAIL(
+            "Unable to parse date value: \"{}\". "
+            "Valid date string patterns include "
+            "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
+            "[y]y*-[m]m*-[d]d* *, [y]y*-[m]m*-[d]d*T*), "
+            "and any pattern prefixed with [+-]",
+            std::string(str, len));
+      case ParseMode::kNonStandardNoTimeCast:
+        VELOX_USER_FAIL(
+            "Unable to parse date value: \"{}\". "
+            "Valid date string patterns include "
+            "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
+            "[y]y*-[m]m*-[d]d* *), "
+            "and any pattern prefixed with [+-]",
+            std::string(str, len));
+      default:
+        VELOX_UNREACHABLE();
     }
   }
   return daysSinceEpoch;
