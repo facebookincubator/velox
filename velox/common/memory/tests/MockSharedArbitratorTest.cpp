@@ -951,7 +951,7 @@ TEST_F(MockSharedArbitrationTest, ensureMemoryPoolMaxCapacity) {
     auto requestorOp = addMemoryOp(requestor, testData.isReclaimable);
     requestorOp->allocate(testData.allocatedBytes);
     std::shared_ptr<MockTask> other;
-    MockMemoryOperator* otherOp;
+    MockMemoryOperator* otherOp = nullptr;
     if (testData.hasOtherTask) {
       other = addTask();
       otherOp = addMemoryOp(other, true);
