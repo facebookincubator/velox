@@ -318,7 +318,7 @@ class SimpleAggregateAdapter : public Aggregate {
       override {
     auto flatResult =
         (*result)
-            ->as<typename TypeToFlatVector<typename FUNC::OutputType>::type>();
+            ->as<typename VectorWriter<typename FUNC::OutputType>::vector_t>();
     flatResult->resize(numGroups);
 
     VectorWriter<typename FUNC::OutputType> writer;

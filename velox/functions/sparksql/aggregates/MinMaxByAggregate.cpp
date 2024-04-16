@@ -27,33 +27,16 @@ namespace {
 /// greater than/equal or less than/equal the value in the 'accumulator'.
 template <bool sparkGreaterThan, typename T, typename TAccumulator>
 struct SparkComparator {
-  static bool compare(
-      TAccumulator* accumulator,
-      const DecodedVector& newComparisons,
-      vector_size_t index,
-      bool isFirstValue) {
-    if constexpr (isNumeric<T>()) {
-      if (isFirstValue) {
-        return true;
-      }
-      if constexpr (sparkGreaterThan) {
-        return newComparisons.valueAt<T>(index) >= *accumulator;
-      } else {
-        return newComparisons.valueAt<T>(index) <= *accumulator;
-      }
+  FOLLY_ALWAYS_INLINE static bool compare(T accumulator, T newComparison) {
+    if constexpr (sparkGreaterThan) {
+      return newComparison >= accumulator;
     } else {
-      if constexpr (sparkGreaterThan) {
-        return !accumulator->hasValue() ||
-            compare(accumulator, newComparisons, index) <= 0;
-      } else {
-        return !accumulator->hasValue() ||
-            compare(accumulator, newComparisons, index) >= 0;
-      }
+      return newComparison <= accumulator;
     }
   }
 
-  FOLLY_ALWAYS_INLINE static int32_t compare(
-      const SingleValueAccumulator* accumulator,
+  static bool compare(
+      const TAccumulator& accumulator,
       const DecodedVector& decoded,
       vector_size_t index) {
     static const CompareFlags kCompareFlags{
@@ -61,8 +44,12 @@ struct SparkComparator {
         true, // ascending
         false, // equalsOnly
         CompareFlags::NullHandlingMode::kNullAsValue};
-    auto result = accumulator->compare(decoded, index, kCompareFlags);
-    return result.value();
+
+    int32_t result = accumulator.compare(decoded, index, kCompareFlags).value();
+    if constexpr (sparkGreaterThan) {
+      return result <= 0;
+    }
+    return result >= 0;
   }
 };
 
@@ -77,15 +64,7 @@ std::string toString(const std::vector<TypePtr>& types) {
   return out.str();
 }
 
-template <
-    template <
-        typename U,
-        typename V,
-        bool B1,
-        template <bool B2, typename C1, typename C2>
-        class C>
-    class Aggregate,
-    bool isMaxFunc>
+template <bool isMaxFunc>
 exec::AggregateRegistrationResult registerMinMaxBy(
     const std::string& name,
     bool withCompanionFunctions,
@@ -100,18 +79,6 @@ exec::AggregateRegistrationResult registerMinMaxBy(
                            .argumentType("V")
                            .argumentType("C")
                            .build());
-  const std::vector<std::string> supportedCompareTypes = {
-      "boolean",
-      "tinyint",
-      "smallint",
-      "integer",
-      "bigint",
-      "real",
-      "double",
-      "varchar",
-      "date",
-      "timestamp"};
-
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
@@ -130,14 +97,14 @@ exec::AggregateRegistrationResult registerMinMaxBy(
 
         if (isRawInput) {
           // Input is: V, C.
-          return create<Aggregate, SparkComparator, isMaxFunc>(
+          return createAll<SparkComparator, isMaxFunc>(
               resultType, argTypes[0], argTypes[1], errorMessage);
         } else {
           // Input is: ROW(V, C).
           const auto& rowType = argTypes[0];
           const auto& valueType = rowType->childAt(0);
           const auto& compareType = rowType->childAt(1);
-          return create<Aggregate, SparkComparator, isMaxFunc>(
+          return createAll<SparkComparator, isMaxFunc>(
               resultType, valueType, compareType, errorMessage);
         }
       },
@@ -151,10 +118,8 @@ void registerMinMaxByAggregates(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite) {
-  registerMinMaxBy<MinMaxByAggregateBase, true>(
-      prefix + "max_by", withCompanionFunctions, overwrite);
-  registerMinMaxBy<MinMaxByAggregateBase, false>(
-      prefix + "min_by", withCompanionFunctions, overwrite);
+  registerMinMaxBy<true>(prefix + "max_by", withCompanionFunctions, overwrite);
+  registerMinMaxBy<false>(prefix + "min_by", withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql

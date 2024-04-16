@@ -511,7 +511,7 @@ struct VectorWriter<Generic<T, comparable, orderable>>
   struct isRowWriter<writer_ptr_t<Row<F...>>> : public std::true_type {};
 
   void finalizeNull() override {
-    if (castType_) {
+    if (writer_.casted_) {
       castWriter_->finalizeNull();
     }
   }
@@ -520,7 +520,7 @@ struct VectorWriter<Generic<T, comparable, orderable>>
   // the actual used size. No need to call finish() if the generic writer is
   // never casted.
   void finish() override {
-    if (castType_) {
+    if (writer_.casted_) {
       castWriter_->finish();
     }
   }
@@ -573,20 +573,7 @@ struct VectorWriter<Generic<T, comparable, orderable>>
     if (!isSet) {
       commitNull();
     } else {
-      // It is possible that the writer hasn't been casted when commit(true) is
-      // called. This can happen when this generic writer is a child writer of a
-      // complex-type writer, i.e., array, map, or row writers, and the previous
-      // writing threw right after the parent's add_item was called. In this
-      // case, when the next writing calls the parent's add_item(), add_item()
-      // calls commitMostRecentChildItem() with the needsCommit_ (or
-      // keyNeedsCommit_ and valueNeedsCommit_) flag being true. So it will call
-      // commit(true) on the child writer even if the child writer is generic
-      // and hasn't been casted yet. In this situation, commitNull() should have
-      // been called on the parent writer at the row of the exception before
-      // add_item() is called for the next row. commitNull() of the parent
-      // writer resets length_ to 0, so we don't need to commit anything here
-      // from the last writing.
-      if (castType_) {
+      if (writer_.casted_) {
         castWriter_->commit(isSet);
       }
     }

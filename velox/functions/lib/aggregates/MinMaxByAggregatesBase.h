@@ -15,11 +15,14 @@
  */
 #pragma once
 
-#include "velox/exec/Aggregate.h"
-#include "velox/exec/ContainerRowSerde.h"
-#include "velox/functions/lib/CheckNestedNulls.h"
+#include <cstdint>
+#include <optional>
+
+#include "velox/common/memory/HashStringAllocator.h"
+#include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
-#include "velox/vector/FlatVector.h"
+#include "velox/type/SimpleFunctionApi.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::functions::aggregate {
 
@@ -31,571 +34,245 @@ constexpr bool isNumeric() {
       std::is_same_v<T, double> || std::is_same_v<T, Timestamp>;
 }
 
-template <typename T, typename TAccumulator>
-void extract(
-    TAccumulator* accumulator,
-    const VectorPtr& vector,
-    vector_size_t index,
-    T* rawValues,
-    uint64_t* rawBoolValues) {
-  if constexpr (isNumeric<T>()) {
-    if constexpr (std::is_same_v<T, bool>) {
-      bits::setBit(rawBoolValues, index, *accumulator);
-    } else {
-      rawValues[index] = *accumulator;
-    }
-  } else {
-    accumulator->read(vector, index);
-  }
-}
-
-template <typename T, typename TAccumulator>
-void store(
-    TAccumulator* accumulator,
-    const DecodedVector& decodedVector,
-    vector_size_t index,
-    HashStringAllocator* allocator) {
-  if constexpr (isNumeric<T>()) {
-    *accumulator = decodedVector.valueAt<T>(index);
-  } else {
-    accumulator->write(
-        decodedVector.base(), decodedVector.index(index), allocator);
-  }
-}
-
 template <typename T, typename = void>
-struct AccumulatorTypeTraits {};
+struct AccumulatorInternalTypeTraits {};
 
 template <typename T>
-struct AccumulatorTypeTraits<T, std::enable_if_t<isNumeric<T>(), void>> {
-  using AccumulatorType = T;
+struct AccumulatorInternalTypeTraits<
+    T,
+    std::enable_if_t<isNumeric<T>(), void>> {
+  using AccumulatorInternalType = T;
 };
 
 template <typename T>
-struct AccumulatorTypeTraits<T, std::enable_if_t<!isNumeric<T>(), void>> {
-  using AccumulatorType = SingleValueAccumulator;
+struct AccumulatorInternalTypeTraits<
+    T,
+    std::enable_if_t<!isNumeric<T>(), void>> {
+  using AccumulatorInternalType = SingleValueAccumulator;
 };
 
-/// MinMaxByAggregateBase is the base class for min_by and max_by functions
-/// with numeric value and comparison types. These functions return the value of
-/// X associated with the minimum/maximum value of Y over all input values.
-/// Partial aggregation produces a pair of X and min/max Y. Final aggregation
-/// takes a pair of X and min/max Y and returns X. T is the type of X and U is
-/// the type of Y.
 template <
-    typename T,
-    typename U,
+    typename V,
+    typename C,
     bool isMaxFunc,
-    template <bool B, typename C1, typename C2>
+    template <bool C0, typename C1, typename C2>
     class Comparator>
-class MinMaxByAggregateBase : public exec::Aggregate {
+class MinMaxByAggregate {
  public:
+  using InputType = Row<Generic<T1>, Orderable<T2>>;
+  using IntermediateType = Row<Generic<T1>, Orderable<T2>>;
+  using OutputType = Generic<T1>;
+
   using ValueAccumulatorType =
-      typename AccumulatorTypeTraits<T>::AccumulatorType;
+      typename AccumulatorInternalTypeTraits<V>::AccumulatorInternalType;
   using ComparisonAccumulatorType =
-      typename AccumulatorTypeTraits<U>::AccumulatorType;
+      typename AccumulatorInternalTypeTraits<C>::AccumulatorInternalType;
 
-  explicit MinMaxByAggregateBase(
-      TypePtr resultType,
-      bool throwOnNestedNulls = false)
-      : exec::Aggregate(resultType), throwOnNestedNulls_(throwOnNestedNulls) {}
+  // Default null behavior is false because for both spark sql and presto sql,
+  // max/min_by can still be done if value is null
+  static constexpr bool default_null_behavior_ = false;
 
-  int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(ValueAccumulatorType) + sizeof(ComparisonAccumulatorType) +
-        sizeof(bool);
-  }
+  struct AccumulatorType {
+    std::optional<ValueAccumulatorType> currValue_;
+    std::optional<ComparisonAccumulatorType> currComparison_;
 
-  void addRawInput(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*unused*/) override {
-    addRawInput(
-        groups,
-        rows,
-        args,
-        [&](auto* accumulator,
-            const auto& newComparisons,
-            auto index,
-            auto isFirstValue) {
-          return Comparator<isMaxFunc, U, ComparisonAccumulatorType>::compare(
-              accumulator, newComparisons, index, isFirstValue);
-        });
-  }
+    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {}
 
-  void addIntermediateResults(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*mayPushdown*/) override {
-    addIntermediateResults(
-        groups,
-        rows,
-        args,
-        [&](auto* accumulator,
-            const auto& newComparisons,
-            auto index,
-            auto isFirstValue) {
-          return Comparator<isMaxFunc, U, ComparisonAccumulatorType>::compare(
-              accumulator, newComparisons, index, isFirstValue);
-        });
-  }
+    bool addInput(
+        HashStringAllocator* allocator,
+        exec::optional_arg_type<Generic<T1>> value,
+        exec::optional_arg_type<Orderable<T2>> comparison) {
+      // Input will be ignored if comparison is null
+      if (!comparison.has_value()) {
+        return false;
+      }
+      if (needUpdate(comparison.value())) {
+        update(allocator, value, comparison);
+      }
 
-  void addSingleGroupRawInput(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*unused*/) override {
-    addSingleGroupRawInput(
-        group,
-        rows,
-        args,
-        [&](auto* accumulator,
-            const auto& newComparisons,
-            auto index,
-            auto isFirstValue) {
-          return Comparator<isMaxFunc, U, ComparisonAccumulatorType>::compare(
-              accumulator, newComparisons, index, isFirstValue);
-        });
-  }
+      return true;
+    }
 
-  void addSingleGroupIntermediateResults(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*mayPushdown*/) override {
-    addSingleGroupIntermediateResults(
-        group,
-        rows,
-        args,
-        [&](auto* accumulator,
-            const auto& newComparisons,
-            auto index,
-            auto isFirstValue) {
-          return Comparator<isMaxFunc, U, ComparisonAccumulatorType>::compare(
-              accumulator, newComparisons, index, isFirstValue);
-        });
-  }
+    bool writeIntermediateResult(
+        bool nonNullGroup,
+        exec::out_type<IntermediateType>& out) {
+      if (!nonNullGroup) {
+        return false;
+      }
 
-  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
-      override {
-    VELOX_CHECK(result);
-    (*result)->resize(numGroups);
-    uint64_t* rawNulls = getRawNulls(result->get());
+      if (!currComparison_.has_value()) {
+        return false;
+      }
 
-    T* rawValues = nullptr;
-    uint64_t* rawBoolValues = nullptr;
-    if constexpr (isNumeric<T>()) {
-      auto vector = (*result)->as<FlatVector<T>>();
-      VELOX_CHECK(vector != nullptr);
-      if constexpr (std::is_same_v<T, bool>) {
-        rawBoolValues = vector->template mutableRawValues<uint64_t>();
+      if (!currValue_.has_value()) {
+        out.set_null_at<0>();
       } else {
-        rawValues = vector->mutableRawValues();
+        auto& valueWriter = out.get_writer_at<0>();
+        if constexpr (isNumeric<V>()) {
+          valueWriter.castTo<V>() = currValue_.value();
+        } else {
+          currValue_->read(valueWriter.base(), valueWriter.offset());
+        }
       }
-    }
 
-    for (int32_t i = 0; i < numGroups; ++i) {
-      char* group = groups[i];
-      if (isNull(group) || valueIsNull(group)) {
-        (*result)->setNull(i, true);
+      auto& comparisonWriter = out.get_writer_at<1>();
+
+      if constexpr (isNumeric<C>()) {
+        comparisonWriter.castTo<C>() = currComparison_.value();
       } else {
-        clearNull(rawNulls, i);
-        extract<T, ValueAccumulatorType>(
-            value(group), *result, i, rawValues, rawBoolValues);
+        currComparison_->read(
+            comparisonWriter.base(), comparisonWriter.offset());
       }
+
+      return true;
     }
-  }
 
-  void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
-      override {
-    auto rowVector = (*result)->as<RowVector>();
-    rowVector->resize(numGroups);
+    bool combine(
+        HashStringAllocator* allocator,
+        exec::optional_arg_type<IntermediateType> other) {
+      if (!other.has_value()) {
+        return false;
+      }
+      auto value = other->at<0>();
+      auto comparison = other->at<1>();
 
-    auto valueVector = rowVector->childAt(0);
-    auto comparisonVector = rowVector->childAt(1);
-    uint64_t* rawNulls = getRawNulls(rowVector);
+      if (!comparison.has_value()) {
+        return false;
+      }
 
-    T* rawValues = nullptr;
-    uint64_t* rawBoolValues = nullptr;
-    if constexpr (isNumeric<T>()) {
-      auto flatValueVector = valueVector->as<FlatVector<T>>();
-      VELOX_CHECK(flatValueVector != nullptr);
-      if constexpr (std::is_same_v<T, bool>) {
-        rawBoolValues = flatValueVector->template mutableRawValues<uint64_t>();
+      if (needUpdate(comparison.value())) {
+        update(allocator, value, comparison);
+      }
+
+      return true;
+    }
+
+    bool writeFinalResult(bool nonNullGroup, exec::out_type<OutputType>& out) {
+      if (!nonNullGroup) {
+        return false;
+      }
+
+      if (!currValue_.has_value()) {
+        return false;
+      }
+
+      if constexpr (isNumeric<V>()) {
+        out.castTo<V>() = currValue_.value();
       } else {
-        rawValues = flatValueVector->mutableRawValues();
+        currValue_->read(out.base(), out.offset());
+      }
+
+      return true;
+    }
+
+    void destroy(HashStringAllocator* allocator) {
+      if constexpr (!isNumeric<V>()) {
+        if (currValue_.has_value()) {
+          currValue_->destroy(allocator);
+        }
+      }
+
+      if constexpr (!isNumeric<C>()) {
+        if (currComparison_.has_value()) {
+          currComparison_->destroy(allocator);
+        }
       }
     }
-    U* rawComparisonValues = nullptr;
-    uint64_t* rawBoolComparisonValues = nullptr;
-    if constexpr (isNumeric<U>()) {
-      auto flatComparisonVector = comparisonVector->as<FlatVector<U>>();
-      VELOX_CHECK(flatComparisonVector != nullptr);
-      if constexpr (std::is_same_v<U, bool>) {
-        rawBoolComparisonValues =
-            flatComparisonVector->template mutableRawValues<uint64_t>();
+
+   private:
+    bool needUpdate(const exec::GenericView& newComparison) {
+      if (!currComparison_.has_value()) {
+        return true;
+      }
+
+      if constexpr (isNumeric<C>()) {
+        return Comparator<isMaxFunc, C, ComparisonAccumulatorType>::compare(
+            currComparison_.value(), newComparison.castTo<C>());
       } else {
-        rawComparisonValues = flatComparisonVector->mutableRawValues();
+        return Comparator<isMaxFunc, C, ComparisonAccumulatorType>::compare(
+            currComparison_.value(),
+            newComparison.decoded(),
+            newComparison.rowIndex());
       }
     }
-    uint64_t* rawValueNulls =
-        valueVector->mutableNulls(rowVector->size())->asMutable<uint64_t>();
-    for (int32_t i = 0; i < numGroups; ++i) {
-      char* group = groups[i];
-      if (isNull(group)) {
-        rowVector->setNull(i, true);
+
+    void update(
+        HashStringAllocator* allocator,
+        const exec::optional_arg_type<Generic<T1>>& value,
+        const exec::optional_arg_type<Orderable<T2>>& comparison) {
+      if constexpr (isNumeric<C>()) {
+        currComparison_.emplace(comparison->castTo<C>());
       } else {
-        clearNull(rawNulls, i);
-        const bool isValueNull = valueIsNull(group);
-        bits::setNull(rawValueNulls, i, isValueNull);
-        if (LIKELY(!isValueNull)) {
-          extract<T, ValueAccumulatorType>(
-              value(group), valueVector, i, rawValues, rawBoolValues);
+        if (!currComparison_.has_value()) {
+          currComparison_.emplace(SingleValueAccumulator());
         }
-        extract<U, ComparisonAccumulatorType>(
-            comparisonValue(group),
-            comparisonVector,
-            i,
-            rawComparisonValues,
-            rawBoolComparisonValues);
+        currComparison_->write(
+            comparison->base(), comparison->decodedIndex(), allocator);
       }
-    }
-  }
 
- protected:
-  template <typename MayUpdate>
-  void addRawInput(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      MayUpdate mayUpdate) {
-    // decodedValue contains the values of column X. decodedComparisonValue
-    // contains the values of column Y which is used to select the minimum or
-    // the maximum.
-    decodedValue_.decode(*args[0], rows);
-    decodedComparison_.decode(*args[1], rows);
-
-    if (decodedValue_.isConstantMapping() &&
-        decodedComparison_.isConstantMapping() &&
-        decodedComparison_.isNullAt(0)) {
-      return;
-    }
-
-    const auto* indices = decodedComparison_.indices();
-    if (decodedValue_.mayHaveNulls() || decodedComparison_.mayHaveNulls()) {
-      rows.applyToSelected([&](vector_size_t i) {
-        if (checkNestedNulls(
-                decodedComparison_, indices, i, throwOnNestedNulls_)) {
-          return;
-        }
-        updateValues(
-            groups[i],
-            decodedValue_,
-            decodedComparison_,
-            i,
-            decodedValue_.isNullAt(i),
-            mayUpdate);
-      });
-    } else {
-      rows.applyToSelected([&](vector_size_t i) {
-        if (throwOnNestedNulls_) {
-          checkNestedNulls(decodedComparison_, indices, i, throwOnNestedNulls_);
-        }
-        updateValues(
-            groups[i], decodedValue_, decodedComparison_, i, false, mayUpdate);
-      });
-    }
-  }
-
-  template <typename MayUpdate>
-  void addIntermediateResults(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      MayUpdate mayUpdate) {
-    decodedIntermediateResult_.decode(*args[0], rows);
-    auto baseRowVector =
-        dynamic_cast<const RowVector*>(decodedIntermediateResult_.base());
-
-    decodedValue_.decode(*baseRowVector->childAt(0), rows);
-    decodedComparison_.decode(*baseRowVector->childAt(1), rows);
-
-    if (decodedIntermediateResult_.isConstantMapping() &&
-        decodedIntermediateResult_.isNullAt(0)) {
-      return;
-    }
-    if (decodedIntermediateResult_.mayHaveNulls()) {
-      rows.applyToSelected([&](vector_size_t i) {
-        if (decodedIntermediateResult_.isNullAt(i)) {
-          return;
-        }
-        const auto decodedIndex = decodedIntermediateResult_.index(i);
-        updateValues(
-            groups[i],
-            decodedValue_,
-            decodedComparison_,
-            decodedIndex,
-            decodedValue_.isNullAt(decodedIndex),
-            mayUpdate);
-      });
-    } else {
-      rows.applyToSelected([&](vector_size_t i) {
-        const auto decodedIndex = decodedIntermediateResult_.index(i);
-        updateValues(
-            groups[i],
-            decodedValue_,
-            decodedComparison_,
-            decodedIndex,
-            decodedValue_.isNullAt(decodedIndex),
-            mayUpdate);
-      });
-    }
-  }
-
-  template <typename MayUpdate>
-  void addSingleGroupRawInput(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      MayUpdate mayUpdate) {
-    // decodedValue contains the values of column X. decodedComparisonValue
-    // contains the values of column Y which is used to select the minimum or
-    // the maximum.
-    decodedValue_.decode(*args[0], rows);
-    decodedComparison_.decode(*args[1], rows);
-    const auto* indices = decodedComparison_.indices();
-
-    if (decodedValue_.isConstantMapping() &&
-        decodedComparison_.isConstantMapping()) {
-      if (checkNestedNulls(
-              decodedComparison_, indices, 0, throwOnNestedNulls_)) {
-        return;
-      }
-      updateValues(
-          group,
-          decodedValue_,
-          decodedComparison_,
-          0,
-          decodedValue_.isNullAt(0),
-          mayUpdate);
-    } else if (
-        decodedValue_.mayHaveNulls() || decodedComparison_.mayHaveNulls()) {
-      rows.applyToSelected([&](vector_size_t i) {
-        if (checkNestedNulls(
-                decodedComparison_, indices, i, throwOnNestedNulls_)) {
-          return;
-        }
-        updateValues(
-            group,
-            decodedValue_,
-            decodedComparison_,
-            i,
-            decodedValue_.isNullAt(i),
-            mayUpdate);
-      });
-    } else {
-      rows.applyToSelected([&](vector_size_t i) {
-        if (throwOnNestedNulls_) {
-          checkNestedNulls(decodedComparison_, indices, i, throwOnNestedNulls_);
-        }
-        updateValues(
-            group, decodedValue_, decodedComparison_, i, false, mayUpdate);
-      });
-    }
-  }
-
-  /// Final aggregation takes (value, comparisonValue) structs as inputs. It
-  /// produces the Value associated with the maximum/minimum of comparisonValue
-  /// over all structs.
-  template <typename MayUpdate>
-  void addSingleGroupIntermediateResults(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      MayUpdate mayUpdate) {
-    // Decode struct(Value, ComparisonValue) as individual vectors.
-    decodedIntermediateResult_.decode(*args[0], rows);
-    auto baseRowVector =
-        dynamic_cast<const RowVector*>(decodedIntermediateResult_.base());
-
-    decodedValue_.decode(*baseRowVector->childAt(0), rows);
-    decodedComparison_.decode(*baseRowVector->childAt(1), rows);
-
-    if (decodedIntermediateResult_.isConstantMapping()) {
-      if (decodedIntermediateResult_.isNullAt(0)) {
-        return;
-      }
-      const auto decodedIndex = decodedIntermediateResult_.index(0);
-      updateValues(
-          group,
-          decodedValue_,
-          decodedComparison_,
-          decodedIndex,
-          decodedValue_.isNullAt(decodedIndex),
-          mayUpdate);
-    } else if (decodedIntermediateResult_.mayHaveNulls()) {
-      rows.applyToSelected([&](vector_size_t i) {
-        if (decodedIntermediateResult_.isNullAt(i)) {
-          return;
-        }
-        const auto decodedIndex = decodedIntermediateResult_.index(i);
-        updateValues(
-            group,
-            decodedValue_,
-            decodedComparison_,
-            decodedIndex,
-            decodedValue_.isNullAt(decodedIndex),
-            mayUpdate);
-      });
-    } else {
-      rows.applyToSelected([&](vector_size_t i) {
-        const auto decodedIndex = decodedIntermediateResult_.index(i);
-        updateValues(
-            group,
-            decodedValue_,
-            decodedComparison_,
-            decodedIndex,
-            decodedValue_.isNullAt(decodedIndex),
-            mayUpdate);
-      });
-    }
-  }
-
-  void initializeNewGroupsInternal(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (const vector_size_t i : indices) {
-      auto group = groups[i];
-      valueIsNull(group) = true;
-
-      if constexpr (!isNumeric<T>()) {
-        new (group + offset_) SingleValueAccumulator();
+      if (!value.has_value()) {
+        currValue_.reset();
       } else {
-        *value(group) = ValueAccumulatorType();
-      }
-
-      if constexpr (isNumeric<U>()) {
-        *comparisonValue(group) = ComparisonAccumulatorType();
-      } else {
-        new (group + offset_ + sizeof(ValueAccumulatorType))
-            SingleValueAccumulator();
-      }
-    }
-  }
-
-  void destroyInternal(folly::Range<char**> groups) override {
-    for (auto group : groups) {
-      if (isInitialized(group)) {
-        if constexpr (!isNumeric<T>()) {
-          value(group)->destroy(allocator_);
-        }
-        if constexpr (!isNumeric<U>()) {
-          comparisonValue(group)->destroy(allocator_);
+        if constexpr (isNumeric<V>()) {
+          currValue_.emplace(value->castTo<V>());
+        } else {
+          if (!currValue_.has_value()) {
+            currValue_.emplace(SingleValueAccumulator());
+          }
+          currValue_->write(value->base(), value->decodedIndex(), allocator);
         }
       }
     }
-  }
-
- private:
-  template <typename MayUpdate>
-  inline void updateValues(
-      char* group,
-      const DecodedVector& decodedValues,
-      const DecodedVector& decodedComparisons,
-      vector_size_t index,
-      bool isValueNull,
-      MayUpdate mayUpdate) {
-    auto isFirstValue = isNull(group);
-    clearNull(group);
-    if (mayUpdate(
-            comparisonValue(group), decodedComparisons, index, isFirstValue)) {
-      valueIsNull(group) = isValueNull;
-      if (LIKELY(!isValueNull)) {
-        store<T, ValueAccumulatorType>(
-            value(group), decodedValues, index, allocator_);
-      }
-      store<U, ComparisonAccumulatorType>(
-          comparisonValue(group), decodedComparisons, index, allocator_);
-    }
-  }
-
-  inline ValueAccumulatorType* value(char* group) {
-    return reinterpret_cast<ValueAccumulatorType*>(group + Aggregate::offset_);
-  }
-
-  inline ComparisonAccumulatorType* comparisonValue(char* group) {
-    return reinterpret_cast<ComparisonAccumulatorType*>(
-        group + Aggregate::offset_ + sizeof(ValueAccumulatorType));
-  }
-
-  inline bool& valueIsNull(char* group) {
-    return *reinterpret_cast<bool*>(
-        group + Aggregate::offset_ + sizeof(ValueAccumulatorType) +
-        sizeof(ComparisonAccumulatorType));
-  }
-
-  const bool throwOnNestedNulls_;
-  DecodedVector decodedValue_;
-  DecodedVector decodedComparison_;
-  DecodedVector decodedIntermediateResult_;
+  };
 };
 
 template <
-    template <
-        typename U,
-        typename V,
-        bool B1,
-        template <bool B2, typename C1, typename C2>
-        class C>
-    class Aggregate,
-    bool isMaxFunc,
-    template <bool B2, typename C1, typename C2>
+    template <bool C0, typename C1, typename C2>
     class Comparator,
-    typename W>
+    bool isMaxFunc,
+    typename V>
 std::unique_ptr<exec::Aggregate> create(
     TypePtr resultType,
     TypePtr compareType,
-    const std::string& errorMessage,
-    bool throwOnNestedNulls = false) {
+    const std::string& errorMessage) {
   switch (compareType->kind()) {
     case TypeKind::BOOLEAN:
-      return std::make_unique<Aggregate<W, bool, isMaxFunc, Comparator>>(
-          resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          MinMaxByAggregate<V, bool, isMaxFunc, Comparator>>>(resultType);
     case TypeKind::TINYINT:
-      return std::make_unique<Aggregate<W, int8_t, isMaxFunc, Comparator>>(
-          resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          MinMaxByAggregate<V, int8_t, isMaxFunc, Comparator>>>(resultType);
     case TypeKind::SMALLINT:
-      return std::make_unique<Aggregate<W, int16_t, isMaxFunc, Comparator>>(
-          resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          MinMaxByAggregate<V, int16_t, isMaxFunc, Comparator>>>(resultType);
     case TypeKind::INTEGER:
-      return std::make_unique<Aggregate<W, int32_t, isMaxFunc, Comparator>>(
-          resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          MinMaxByAggregate<V, int32_t, isMaxFunc, Comparator>>>(resultType);
     case TypeKind::BIGINT:
-      return std::make_unique<Aggregate<W, int64_t, isMaxFunc, Comparator>>(
-          resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          MinMaxByAggregate<V, int64_t, isMaxFunc, Comparator>>>(resultType);
     case TypeKind::REAL:
-      return std::make_unique<Aggregate<W, float, isMaxFunc, Comparator>>(
-          resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          MinMaxByAggregate<V, float, isMaxFunc, Comparator>>>(resultType);
     case TypeKind::DOUBLE:
-      return std::make_unique<Aggregate<W, double, isMaxFunc, Comparator>>(
-          resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          MinMaxByAggregate<V, double, isMaxFunc, Comparator>>>(resultType);
     case TypeKind::VARBINARY:
       [[fallthrough]];
     case TypeKind::VARCHAR:
-      return std::make_unique<Aggregate<W, StringView, isMaxFunc, Comparator>>(
-          resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          MinMaxByAggregate<V, StringView, isMaxFunc, Comparator>>>(resultType);
     case TypeKind::TIMESTAMP:
-      return std::make_unique<Aggregate<W, Timestamp, isMaxFunc, Comparator>>(
-          resultType);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          MinMaxByAggregate<V, Timestamp, isMaxFunc, Comparator>>>(resultType);
     case TypeKind::ARRAY:
       [[fallthrough]];
     case TypeKind::MAP:
       [[fallthrough]];
     case TypeKind::ROW:
-      return std::make_unique<Aggregate<W, ComplexType, isMaxFunc, Comparator>>(
-          resultType, throwOnNestedNulls);
+      return std::make_unique<exec::SimpleAggregateAdapter<
+          MinMaxByAggregate<V, ComplexType, isMaxFunc, Comparator>>>(
+          resultType);
     default:
       VELOX_FAIL("{}", errorMessage);
       return nullptr;
@@ -603,59 +280,51 @@ std::unique_ptr<exec::Aggregate> create(
 }
 
 template <
-    template <
-        typename U,
-        typename V,
-        bool B1,
-        template <bool B2, typename C1, typename C2>
-        class C>
-    class Aggregate,
-    template <bool B2, typename C1, typename C2>
+    template <bool C0, typename C1, typename C2>
     class Comparator,
     bool isMaxFunc>
-std::unique_ptr<exec::Aggregate> create(
+std::unique_ptr<exec::Aggregate> createAll(
     TypePtr resultType,
     TypePtr valueType,
     TypePtr compareType,
-    const std::string& errorMessage,
-    bool throwOnNestedNulls = false) {
+    const std::string& errorMessage) {
   switch (valueType->kind()) {
     case TypeKind::BOOLEAN:
-      return create<Aggregate, isMaxFunc, Comparator, bool>(
-          resultType, compareType, errorMessage, throwOnNestedNulls);
+      return create<Comparator, isMaxFunc, bool>(
+          resultType, compareType, errorMessage);
     case TypeKind::TINYINT:
-      return create<Aggregate, isMaxFunc, Comparator, int8_t>(
-          resultType, compareType, errorMessage, throwOnNestedNulls);
+      return create<Comparator, isMaxFunc, int8_t>(
+          resultType, compareType, errorMessage);
     case TypeKind::SMALLINT:
-      return create<Aggregate, isMaxFunc, Comparator, int16_t>(
-          resultType, compareType, errorMessage, throwOnNestedNulls);
+      return create<Comparator, isMaxFunc, int16_t>(
+          resultType, compareType, errorMessage);
     case TypeKind::INTEGER:
-      return create<Aggregate, isMaxFunc, Comparator, int32_t>(
-          resultType, compareType, errorMessage, throwOnNestedNulls);
+      return create<Comparator, isMaxFunc, int32_t>(
+          resultType, compareType, errorMessage);
     case TypeKind::BIGINT:
-      return create<Aggregate, isMaxFunc, Comparator, int64_t>(
-          resultType, compareType, errorMessage, throwOnNestedNulls);
+      return create<Comparator, isMaxFunc, int64_t>(
+          resultType, compareType, errorMessage);
     case TypeKind::REAL:
-      return create<Aggregate, isMaxFunc, Comparator, float>(
-          resultType, compareType, errorMessage, throwOnNestedNulls);
+      return create<Comparator, isMaxFunc, float>(
+          resultType, compareType, errorMessage);
     case TypeKind::DOUBLE:
-      return create<Aggregate, isMaxFunc, Comparator, double>(
-          resultType, compareType, errorMessage, throwOnNestedNulls);
+      return create<Comparator, isMaxFunc, double>(
+          resultType, compareType, errorMessage);
     case TypeKind::VARCHAR:
       [[fallthrough]];
     case TypeKind::VARBINARY:
-      return create<Aggregate, isMaxFunc, Comparator, StringView>(
-          resultType, compareType, errorMessage, throwOnNestedNulls);
+      return create<Comparator, isMaxFunc, StringView>(
+          resultType, compareType, errorMessage);
     case TypeKind::TIMESTAMP:
-      return create<Aggregate, isMaxFunc, Comparator, Timestamp>(
-          resultType, compareType, errorMessage, throwOnNestedNulls);
+      return create<Comparator, isMaxFunc, Timestamp>(
+          resultType, compareType, errorMessage);
     case TypeKind::ARRAY:
       [[fallthrough]];
     case TypeKind::MAP:
       [[fallthrough]];
     case TypeKind::ROW:
-      return create<Aggregate, isMaxFunc, Comparator, ComplexType>(
-          resultType, compareType, errorMessage, throwOnNestedNulls);
+      return create<Comparator, isMaxFunc, ComplexType>(
+          resultType, compareType, errorMessage);
     default:
       VELOX_FAIL(errorMessage);
   }

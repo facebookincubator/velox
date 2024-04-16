@@ -30,6 +30,7 @@ struct SingleValueAccumulator {
       HashStringAllocator* allocator);
 
   void read(const VectorPtr& vector, vector_size_t index) const;
+  void read(BaseVector* vector, vector_size_t index) const;
 
   bool hasValue() const;
 

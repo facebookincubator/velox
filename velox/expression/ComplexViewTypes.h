@@ -1101,6 +1101,10 @@ class GenericView {
     return decoded_.index(index_);
   }
 
+  vector_size_t rowIndex() const {
+    return index_;
+  }
+
   std::optional<int64_t> compare(
       const GenericView& other,
       const CompareFlags flags) const {
@@ -1118,6 +1122,10 @@ class GenericView {
 
   std::string toString() const {
     return decoded_.toString(index_);
+  }
+
+  const DecodedVector& decoded() const {
+    return decoded_;
   }
 
   // If conversion is invalid, behavior is undefined. However, debug time

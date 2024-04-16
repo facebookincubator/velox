@@ -1045,6 +1045,14 @@ class GenericWriter {
     return vector_->type();
   }
 
+  BaseVector* base() const {
+    return vector_;
+  }
+
+  vector_size_t offset() const {
+    return index_;
+  }
+
   void copy_from(const GenericView& view);
 
   template <typename ToType>
@@ -1060,6 +1068,8 @@ class GenericWriter {
         std::is_same_v<ToType, DynamicRow>
             ? "DynamicRow"
             : CppToType<ToType>::create()->toString());
+
+    casted_ = true;
 
     if constexpr (SimpleTypeTrait<ToType>::isPrimitiveType) {
       // This is an optimization for when the type of the vector is a
@@ -1094,6 +1104,8 @@ class GenericWriter {
     if (!CastTypeChecker<ToType>::check(type())) {
       return nullptr;
     }
+
+    casted_ = true;
 
     return &castToImpl<ToType>();
   }
@@ -1165,6 +1177,8 @@ class GenericWriter {
   TypePtr& castType_;
 
   vector_size_t& index_;
+
+  bool casted_ = false;
 
   template <typename A, typename B>
   friend struct VectorWriter;
