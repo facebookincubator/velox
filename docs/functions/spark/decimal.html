@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Decimal Operators &#8212; Velox  documentation</title>
+    <title>Decimal functions and special forms &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
@@ -30,7 +30,7 @@
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../spark_functions.html" accesskey="U">Spark Functions</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Decimal Operators</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Decimal functions and special forms</a></li> 
       </ul>
     </div>  
 
@@ -39,43 +39,8 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="decimal-operators">
-<h1>Decimal Operators<a class="headerlink" href="#decimal-operators" title="Link to this heading">¶</a></h1>
-<p>When calculating the result precision and scale of arithmetic operators,
-the formulas follow Hive which is based on the SQL standard and MS SQL:</p>
-<p><a class="reference external" href="https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf">https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf</a></p>
-<p><a class="reference external" href="https://msdn.microsoft.com/en-us/library/ms190476.aspx">https://msdn.microsoft.com/en-us/library/ms190476.aspx</a></p>
-<section id="addition-and-subtraction">
-<h2>Addition and Subtraction<a class="headerlink" href="#addition-and-subtraction" title="Link to this heading">¶</a></h2>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span><span class="p">,</span> <span class="n">p2</span> <span class="o">-</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
-<span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
-</pre></div>
-</div>
-</section>
-<section id="multiplication">
-<h2>Multiplication<a class="headerlink" href="#multiplication" title="Link to this heading">¶</a></h2>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="n">p1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span>
-<span class="n">s</span> <span class="o">=</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">s2</span>
-</pre></div>
-</div>
-</section>
-<section id="division">
-<h2>Division<a class="headerlink" href="#division" title="Link to this heading">¶</a></h2>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">s2</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
-<span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>For above arithmetic operators, when the precision of result exceeds 38,
-caps p at 38 and reduces the scale, in order to prevent the truncation of
-the integer part of the decimals. Below formula illustrates how the result
-precision and scale are adjusted.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">precision</span> <span class="o">=</span> <span class="mi">38</span>
-<span class="n">scale</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">38</span> <span class="o">-</span> <span class="p">(</span><span class="n">p</span> <span class="o">-</span> <span class="n">s</span><span class="p">),</span> <span class="nb">min</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="mi">6</span><span class="p">))</span>
-</pre></div>
-</div>
-<p>Users experience runtime errors when the actual result cannot be represented
-with the calculated decimal type.</p>
-</section>
+  <section id="decimal-functions-and-special-forms">
+<h1>Decimal functions and special forms<a class="headerlink" href="#decimal-functions-and-special-forms" title="Link to this heading">¶</a></h1>
 <section id="decimal-functions">
 <h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
@@ -145,10 +110,7 @@ The result precision is decided with the number of integral digits and the resul
   <div>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
-<li><a class="reference internal" href="#">Decimal Operators</a><ul>
-<li><a class="reference internal" href="#addition-and-subtraction">Addition and Subtraction</a></li>
-<li><a class="reference internal" href="#multiplication">Multiplication</a></li>
-<li><a class="reference internal" href="#division">Division</a></li>
+<li><a class="reference internal" href="#">Decimal functions and special forms</a><ul>
 <li><a class="reference internal" href="#decimal-functions">Decimal Functions</a><ul>
 <li><a class="reference internal" href="#unscaled_value"><code class="docutils literal notranslate"><span class="pre">unscaled_value()</span></code></a></li>
 </ul>
@@ -208,7 +170,7 @@ The result precision is decided with the number of integral digits and the resul
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../spark_functions.html" >Spark Functions</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Decimal Operators</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Decimal functions and special forms</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">
