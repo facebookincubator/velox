@@ -458,7 +458,7 @@ void CastExpr::applyFloatingPointToDecimalCastKernel(
   const auto toPrecisionScale = getDecimalPrecisionScale(*toType);
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    TOutput output;
+    TOutput output = {};
     const auto status = DecimalUtil::rescaleFloatingPoint<TInput, TOutput>(
         floatingInput->valueAt(row),
         toPrecisionScale.first,
