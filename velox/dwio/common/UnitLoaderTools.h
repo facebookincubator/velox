@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -55,5 +56,26 @@ inline std::optional<Measure> measureBlockedOnIo(
   }
   return std::nullopt;
 }
+
+// This class can create many callbacks that can be distributed to unit loader
+// factories. Only when the last created callback is activated, this class will
+// emit the original callback.
+// If the callbacks created are never activated (because of an exception for
+// example), this will still work, since they will emit the signal on the
+// destructor.
+// The class expects that all callbacks are created before they start emiting
+// signals.
+class CallbackOnLastSignal {
+ public:
+  explicit CallbackOnLastSignal(std::function<void()> callback);
+
+  ~CallbackOnLastSignal();
+
+  std::function<void()> getCallback();
+
+ private:
+  std::shared_ptr<std::atomic_size_t> callbacksCount_;
+  std::function<void()> callback_;
+};
 
 } // namespace facebook::velox::dwio::common::unit_loader_tools

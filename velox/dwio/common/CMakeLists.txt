@@ -59,6 +59,7 @@ add_library(
   SortingWriter.h
   TypeUtils.cpp
   TypeWithId.cpp
+  UnitLoaderTools.cpp
   Writer.cpp
   WriterFactory.cpp)
 
