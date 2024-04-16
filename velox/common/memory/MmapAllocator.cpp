@@ -729,7 +729,7 @@ void MmapAllocator::SizeClass::allocateFromMappedFree(
 #endif
       const auto bits = mappedFreeBits(word);
 #if defined(__GNUC__)
-#pragma clang diagnostic pop
+#pragma GCC diagnostic pop
 #endif
       uint16_t wordMask = simd::allSetBitMask<int64_t>() ^
           simd::toBitMask(bits == xsimd::broadcast<uint64_t>(0));
