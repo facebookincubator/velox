@@ -71,7 +71,7 @@ vector_size_t VectorMaker::createOffsetsAndSizes(
   auto rawOffsets = (*offsets)->asMutable<vector_size_t>();
   auto rawSizes = (*sizes)->asMutable<vector_size_t>();
 
-  uint64_t* rawNulls;
+  uint64_t* rawNulls = nullptr;
   if (isNullAt) {
     *nulls = AlignedBuffer::allocate<bool>(size, pool_);
     rawNulls = (*nulls)->asMutable<uint64_t>();
