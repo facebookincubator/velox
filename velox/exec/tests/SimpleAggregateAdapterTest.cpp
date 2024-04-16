@@ -15,12 +15,13 @@
  */
 
 #include "velox/exec/SimpleAggregateAdapter.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using facebook::velox::common::testutil::TestValue;
 using facebook::velox::functions::aggregate::test::AggregationTestBase;
 
 namespace facebook::velox::aggregate::test {
@@ -29,6 +30,7 @@ namespace {
 const char* const kSimpleAvg = "simple_avg";
 const char* const kSimpleArrayAgg = "simple_array_agg";
 const char* const kSimpleCountNulls = "simple_count_nulls";
+const char* const kSimpleFunctionStateAgg = "simple_function_state_agg";
 
 class SimpleAverageAggregationTest : public AggregationTestBase {
  protected:
@@ -479,6 +481,235 @@ TEST_F(SimpleCountNullsAggregationTest, basic) {
 
   expected = makeRowVector({makeNullableFlatVector<int64_t>({3})});
   testAggregations({vectors}, {}, {"simple_count_nulls(c2)"}, {expected});
+}
+
+// A testing aggregation function that uses the function state.
+class FunctionStateTestAggregate {
+ public:
+  using InputType = Row<int64_t>; // Input vector type wrapped in Row.
+  using IntermediateType = int64_t; // Intermediate result type.
+  using OutputType = int64_t; // Output vector type.
+
+  struct FunctionState {
+    core::AggregationNode::Step step;
+    std::vector<TypePtr> rawInputType;
+    TypePtr resultType;
+    std::vector<VectorPtr> constantInputs;
+  };
+
+  static void initialize(
+      FunctionState& state,
+      core::AggregationNode::Step step,
+      const std::vector<TypePtr>& rawInputTypes,
+      const TypePtr& resultType,
+      const std::vector<VectorPtr>& constantInputs) {
+    state.step = step;
+    state.rawInputType = rawInputTypes;
+    state.resultType = resultType;
+    if (resultType == nullptr) {
+      LOG(INFO) << "nullptr";
+    }
+    state.constantInputs = constantInputs;
+  }
+
+  struct Accumulator {
+    int64_t sum{0};
+
+    explicit Accumulator(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/) {}
+
+    void checkpoint(FunctionState* state) {
+      TestValue::adjust(
+          "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
+          state);
+    }
+
+    void addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<int64_t> data,
+        const FunctionState& state) {
+      checkpoint(const_cast<FunctionState*>(&state));
+      sum += data;
+    }
+
+    void combine(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<IntermediateType> other,
+        const FunctionState& state) {
+      checkpoint(const_cast<FunctionState*>(&state));
+      sum += other;
+    }
+
+    bool writeIntermediateResult(
+        exec::out_type<IntermediateType>& out,
+        const FunctionState& state) {
+      checkpoint(const_cast<FunctionState*>(&state));
+      out = sum;
+      return true;
+    }
+
+    bool writeFinalResult(
+        exec::out_type<OutputType>& out,
+        const FunctionState& state) {
+      checkpoint(const_cast<FunctionState*>(&state));
+      out = sum;
+      return true;
+    }
+  };
+
+  using AccumulatorType = Accumulator;
+};
+
+exec::AggregateRegistrationResult registerSimpleFunctionStateTestAggregate(
+    const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("bigint")
+          .intermediateType("bigint")
+          .argumentType("bigint")
+          .build()};
+
+  return exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [name](
+          core::AggregationNode::Step /*step*/,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_LE(
+            argTypes.size(), 1, "{} takes at most one argument", name);
+        return std::make_unique<
+            SimpleAggregateAdapter<FunctionStateTestAggregate>>(resultType);
+      },
+      true /*registerCompanionFunctions*/,
+      true /*overwrite*/);
+}
+
+void registerFunctionStateTestAggregate() {
+  registerSimpleFunctionStateTestAggregate(kSimpleFunctionStateAgg);
+}
+
+class SimpleFunctionStateAggregationTest : public AggregationTestBase {
+ protected:
+  SimpleFunctionStateAggregationTest() {
+    registerFunctionStateTestAggregate();
+  }
+
+  static void checkState(
+      FunctionStateTestAggregate::FunctionState* state,
+      const std::string& step = "") {
+    VELOX_CHECK_NOT_NULL(state->resultType);
+    VELOX_CHECK(!state->rawInputType.empty());
+    if (!step.empty()) {
+      VELOX_CHECK_EQ(core::AggregationNode::stepName(state->step), step);
+    }
+  }
+};
+
+TEST_F(SimpleFunctionStateAggregationTest, aggregate) {
+  auto inputVectors = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  std::vector<int64_t> sum = {10};
+  auto expected = makeRowVector({makeFlatVector<int64_t>(sum)});
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
+      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
+          [&](FunctionStateTestAggregate::FunctionState* state) {
+            checkState(state);
+          }));
+
+  testAggregations(
+      {inputVectors}, {}, {"simple_function_state_agg(c0)"}, {expected});
+  testAggregationsWithCompanion(
+      {inputVectors},
+      [](auto& /*builder*/) {},
+      {},
+      {"simple_function_state_agg(c0)"},
+      {{BIGINT()}},
+      {},
+      {expected},
+      {});
+}
+
+TEST_F(SimpleFunctionStateAggregationTest, window) {
+  auto inputVectors =
+      makeRowVector({makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4})});
+  auto expected =
+      makeRowVector({makeFlatVector<int64_t>({2, 2, 4, 4, 6, 6, 4})});
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
+      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
+          [&](FunctionStateTestAggregate::FunctionState* state) {
+            checkState(state, "SINGLE");
+          }));
+  auto plan =
+      PlanBuilder()
+          .values({inputVectors})
+          .window({"simple_function_state_agg(c0) over (partition by c0)"})
+          .project({"w0"})
+          .planNode();
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(SimpleFunctionStateAggregationTest, aggregateStep) {
+  auto inputVectors = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  std::vector<int64_t> sum = {10};
+  auto expected = makeRowVector({makeFlatVector<int64_t>(sum)});
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
+      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
+          [&](FunctionStateTestAggregate::FunctionState* state) {
+            checkState(state, "PARTIAL");
+          }));
+  AssertQueryBuilder(
+      PlanBuilder()
+          .values({inputVectors})
+          .singleAggregation({}, {"simple_function_state_agg_partial(c0)"})
+          .planNode())
+      .assertResults(expected);
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
+      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
+          [&](FunctionStateTestAggregate::FunctionState* state) {
+            checkState(state, "INTERMEDIATE");
+          }));
+  AssertQueryBuilder(
+      PlanBuilder()
+          .values({inputVectors})
+          .singleAggregation({}, {"simple_function_state_agg_merge(c0)"})
+          .planNode())
+      .assertResults(expected);
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
+      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
+          [&](FunctionStateTestAggregate::FunctionState* state) {
+            checkState(state, "INTERMEDIATE");
+          }));
+  AssertQueryBuilder(
+      PlanBuilder()
+          .values({inputVectors})
+          .singleAggregation(
+              {}, {"simple_function_state_agg_merge_extract(c0)"})
+          .planNode())
+      .assertResults(expected);
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
+      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
+          [&](FunctionStateTestAggregate::FunctionState* state) {
+            checkState(state, "FINAL");
+          }));
+  AssertQueryBuilder(
+      PlanBuilder()
+          .values({inputVectors})
+          .finalAggregation({}, {"simple_function_state_agg(c0)"}, {{BIGINT()}})
+          .planNode())
+      .assertResults(expected);
 }
 
 } // namespace

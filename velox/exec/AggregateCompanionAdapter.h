@@ -38,12 +38,6 @@ class AggregateCompanionFunctionBase : public Aggregate {
 
   void destroy(folly::Range<char**> groups) override final;
 
-  void initialize(
-      core::AggregationNode::Step step,
-      const std::vector<TypePtr>& rawInputType,
-      const TypePtr& resultType,
-      const std::vector<VectorPtr>& constantInputs) override;
-
   void initializeNewGroups(
       char** groups,
       folly::Range<const vector_size_t*> indices) override final;
@@ -105,6 +99,12 @@ struct AggregateCompanionAdapter {
         const TypePtr& resultType)
         : AggregateCompanionFunctionBase{std::move(fn), resultType} {}
 
+    void initialize(
+        core::AggregationNode::Step step,
+        const std::vector<TypePtr>& rawInputType,
+        const TypePtr& resultType,
+        const std::vector<VectorPtr>& constantInputs) override;
+
     void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
         override;
   };
@@ -115,6 +115,12 @@ struct AggregateCompanionAdapter {
         std::unique_ptr<Aggregate> fn,
         const TypePtr& resultType)
         : AggregateCompanionFunctionBase{std::move(fn), resultType} {}
+
+    void initialize(
+        core::AggregationNode::Step step,
+        const std::vector<TypePtr>& rawInputType,
+        const TypePtr& resultType,
+        const std::vector<VectorPtr>& constantInputs) override;
 
     void addRawInput(
         char** groups,

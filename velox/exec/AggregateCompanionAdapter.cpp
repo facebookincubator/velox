@@ -73,14 +73,6 @@ void AggregateCompanionFunctionBase::clearInternal() {
   fn_->clear();
 }
 
-void AggregateCompanionFunctionBase::initialize(
-    core::AggregationNode::Step step,
-    const std::vector<TypePtr>& rawInputType,
-    const facebook::velox::TypePtr& resultType,
-    const std::vector<VectorPtr>& constantInputs) {
-  fn_->initialize(step, rawInputType, resultType, constantInputs);
-}
-
 void AggregateCompanionFunctionBase::initializeNewGroups(
     char** groups,
     folly::Range<const vector_size_t*> indices) {
@@ -132,11 +124,35 @@ void AggregateCompanionFunctionBase::extractAccumulators(
   fn_->extractAccumulators(groups, numGroups, result);
 }
 
+void AggregateCompanionAdapter::PartialFunction::initialize(
+    core::AggregationNode::Step /*step*/,
+    const std::vector<TypePtr>& rawInputType,
+    const facebook::velox::TypePtr& resultType,
+    const std::vector<VectorPtr>& constantInputs) {
+  fn_->initialize(
+      core::AggregationNode::Step::kPartial,
+      rawInputType,
+      resultType,
+      constantInputs);
+}
+
 void AggregateCompanionAdapter::PartialFunction::extractValues(
     char** groups,
     int32_t numGroups,
     VectorPtr* result) {
   fn_->extractAccumulators(groups, numGroups, result);
+}
+
+void AggregateCompanionAdapter::MergeFunction::initialize(
+    core::AggregationNode::Step /*step*/,
+    const std::vector<TypePtr>& rawInputType,
+    const facebook::velox::TypePtr& resultType,
+    const std::vector<VectorPtr>& constantInputs) {
+  fn_->initialize(
+      core::AggregationNode::Step::kIntermediate,
+      rawInputType,
+      resultType,
+      constantInputs);
 }
 
 void AggregateCompanionAdapter::MergeFunction::addRawInput(

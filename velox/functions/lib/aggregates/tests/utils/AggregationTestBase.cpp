@@ -1256,6 +1256,11 @@ void AggregationTestBase::testIncrementalAggregation(
     std::vector<char> group(kOffset + func->accumulatorFixedWidthSize());
     std::vector<char*> groups(inputSize, group.data());
     std::vector<vector_size_t> indices(1, 0);
+    func->initialize(
+        aggregationNode.step(),
+        aggregate.rawInputTypes,
+        func->resultType(),
+        {});
     func->initializeNewGroups(groups.data(), indices);
     func->addSingleGroupRawInput(
         group.data(), SelectivityVector(inputSize), input, false);
@@ -1308,6 +1313,11 @@ VectorPtr AggregationTestBase::testStreaming(
   std::vector<char> group(kOffset + func->accumulatorFixedWidthSize());
   std::vector<char*> groups(maxRowCount, group.data());
   std::vector<vector_size_t> indices(maxRowCount, 0);
+  func->initialize(
+      core::AggregationNode::Step::kSingle,
+      rawInputTypes,
+      func->resultType(),
+      {});
   func->initializeNewGroups(groups.data(), indices);
   if (testGlobal) {
     func->addSingleGroupRawInput(
@@ -1327,6 +1337,11 @@ VectorPtr AggregationTestBase::testStreaming(
   // Create a new function picking up the intermediate result.
   auto func2 =
       createAggregateFunction(functionName, rawInputTypes, allocator, config);
+  func2->initialize(
+      core::AggregationNode::Step::kSingle,
+      rawInputTypes,
+      func2->resultType(),
+      {});
   func2->initializeNewGroups(groups.data(), indices);
   if (testGlobal) {
     func2->addSingleGroupIntermediateResults(

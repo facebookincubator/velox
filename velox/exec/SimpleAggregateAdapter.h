@@ -55,7 +55,7 @@ class SimpleAggregateAdapter : public Aggregate {
       const TypePtr& resultType,
       const std::vector<VectorPtr>& constantInputs) override {
     if constexpr (support_initialize_function_state_) {
-      FUNC::initialize(state_, rawInputTypes, resultType, constantInputs);
+      FUNC::initialize(state_, step, rawInputTypes, resultType, constantInputs);
     }
   }
 
