@@ -119,7 +119,8 @@ class BufferedInput {
   // Create a new (clean) instance of BufferedInput sharing the same
   // underlying file and memory pool.  The enqueued regions are NOT copied.
   virtual std::unique_ptr<BufferedInput> clone() const {
-    return std::make_unique<BufferedInput>(input_, pool_);
+    return std::make_unique<BufferedInput>(
+        input_, pool_, maxMergeDistance_, wsVRLoad_);
   }
 
   std::unique_ptr<SeekableInputStream> loadCompleteFile() {
@@ -141,9 +142,7 @@ class BufferedInput {
     return nullptr;
   }
 
-  virtual int64_t prefetchSize() const {
-    return 0;
-  }
+  virtual uint64_t nextFetchSize() const;
 
  protected:
   std::shared_ptr<ReadFileInputStream> input_;
