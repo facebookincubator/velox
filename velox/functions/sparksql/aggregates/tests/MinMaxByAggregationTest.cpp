@@ -15,6 +15,7 @@
  */
 
 #include <type/StringView.h>
+#include <optional>
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
@@ -281,6 +282,42 @@ TEST_F(MinMaxByAggregateTest, boolCompare) {
   auto expected = makeRowVector({
       makeFlatVector<StringView>({"12"}),
       makeFlatVector<StringView>({"13"}),
+  });
+
+  testAggregations(
+      {vectors},
+      {},
+      {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"},
+      {expected});
+}
+
+TEST_F(MinMaxByAggregateTest, nullValue) {
+  auto vectors = makeRowVector({
+      makeNullableFlatVector<StringView>({"11", std::nullopt, "13"}),
+      makeFlatVector<bool>({true, false, true}),
+  });
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<StringView>({std::nullopt}),
+      makeFlatVector<StringView>({"13"}),
+  });
+
+  testAggregations(
+      {vectors},
+      {},
+      {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"},
+      {expected});
+}
+
+TEST_F(MinMaxByAggregateTest, nullComparison) {
+  auto vectors = makeRowVector({
+      makeFlatVector<StringView>({"11", "12", "13"}),
+      makeNullableFlatVector<bool>({true, std::nullopt, false}),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<StringView>({"13"}),
+      makeFlatVector<StringView>({"11"}),
   });
 
   testAggregations(
