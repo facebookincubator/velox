@@ -278,8 +278,8 @@ class ColumnStats : public AbstractColumnStats {
         return std::make_unique<velox::common::BigintRange>(0, 0, false);
       }
     }
-    int32_t lowerIndex;
-    int32_t upperIndex;
+    int32_t lowerIndex = 0;
+    int32_t upperIndex = 0;
     T lower = valueAtPct(filterSpec.startPct, &lowerIndex);
     T upper =
         valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
@@ -314,7 +314,7 @@ class ColumnStats : public AbstractColumnStats {
   std::unique_ptr<Filter> makeRowGroupSkipRangeFilter(
       const std::vector<RowVectorPtr>& batches,
       const Subfield& subfield) {
-    T max;
+    T max = {};
     bool hasMax = false;
     for (auto batch : batches) {
       auto values = getChildBySubfield(batch.get(), subfield, rootType_)
