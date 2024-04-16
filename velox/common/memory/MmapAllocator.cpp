@@ -722,7 +722,15 @@ void MmapAllocator::SizeClass::allocateFromMappedFree(
     const auto endWord = startWord + kWordsPerGroup;
     bool anyFound = false;
     for (auto word = startWord; word < endWord; word += kWidth) {
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
       const auto bits = mappedFreeBits(word);
+#if defined(__GNUC__)
+#pragma clang diagnostic pop
+#endif
       uint16_t wordMask = simd::allSetBitMask<int64_t>() ^
           simd::toBitMask(bits == xsimd::broadcast<uint64_t>(0));
       if (wordMask == 0) {
