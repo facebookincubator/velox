@@ -1111,7 +1111,8 @@ class Task : public std::enable_shared_from_this<Task> {
   std::atomic<bool> spillDirectoryCreated_{false};
 
   // Stores unconsumed preloading splits to ensure they are closed promptly.
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> preloadingSplits_;
+  folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>
+      preloadingSplits_;
 };
 
 /// Listener invoked on task completion.

@@ -18,11 +18,15 @@
 #include <fmt/format.h>
 #include <folly/Random.h>
 #include <folly/Synchronized.h>
+#include <folly/synchronization/Baton.h>
+#include <folly/synchronization/Latch.h>
 #include <gtest/gtest.h>
+#include <chrono>
 #include <thread>
 #include "velox/common/base/Exceptions.h"
 
 using namespace facebook::velox;
+using namespace std::chrono_literals;
 
 // A sample class to be constructed via AsyncSource.
 struct Gizmo {
@@ -214,7 +218,9 @@ TEST(AsyncSourceTest, close) {
   // invoked, invoking 'close()' will set 'item_' to nullptr. The deletion of
   // 'dateCounter' is used as a verification for this behavior.
   auto asyncSource = std::make_shared<AsyncSource<DataCounter>>([]() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    folly::Baton<> baton;
+    // Wait till timeout.
+    EXPECT_FALSE(baton.try_wait_for(1ms));
     return std::make_unique<DataCounter>();
   });
   auto thread = std::thread([&asyncSource] { asyncSource->prepare(); });
@@ -230,18 +236,18 @@ TEST(AsyncSourceTest, close) {
   // If 'prepare()' is currently being executed within the thread pool,
   // 'close()' should wait for the completion of 'prepare()' and set 'item_' to
   // nullptr.
-  std::atomic<bool> started = false;
+  folly::Latch latch(1);
   auto sleepAsyncSource =
-      std::make_shared<AsyncSource<DataCounter>>([&started]() {
-        started = true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::make_shared<AsyncSource<DataCounter>>([&latch]() {
+        latch.count_down();
+        folly::Baton<> baton;
+        // Wait till timeout.
+        baton.try_wait_for(10ms);
         return std::make_unique<DataCounter>();
       });
   auto thread1 =
       std::thread([&sleepAsyncSource] { sleepAsyncSource->prepare(); });
-  while (!started) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
+  latch.wait();
 
   sleepAsyncSource->close();
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);

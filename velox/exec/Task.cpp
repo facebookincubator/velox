@@ -1449,16 +1449,11 @@ exec::Split Task::getSplitLocked(
       if (!connectorSplit->dataSource) {
         // Initializes split->dataSource.
         preload(connectorSplit);
-        preloadingSplits_.push_back(connectorSplit);
+        preloadingSplits_.emplace(connectorSplit);
       } else if (
           (readySplitIndex == -1) && (connectorSplit->dataSource->hasValue())) {
         readySplitIndex = i;
-        preloadingSplits_.erase(
-            std::remove(
-                preloadingSplits_.begin(),
-                preloadingSplits_.end(),
-                connectorSplit),
-            preloadingSplits_.end());
+        preloadingSplits_.erase(connectorSplit);
       }
     }
   }
