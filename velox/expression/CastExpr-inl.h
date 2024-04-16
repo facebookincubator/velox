@@ -394,7 +394,8 @@ void CastExpr::applyDecimalCastKernel(
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
   const auto& fromPrecisionScale = getDecimalPrecisionScale(*fromType);
   const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
   applyToSelectedNoThrowLocal(
       context, rows, castResult, [&](vector_size_t row) {
         TOutput rescaledValue;
@@ -418,6 +419,7 @@ void CastExpr::applyDecimalCastKernel(
           }
         }
       });
+#pragma GCC diagnostic pop
 }
 
 template <typename TInput, typename TOutput>
