@@ -256,14 +256,21 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
 
   // Get the raw input types.
   std::vector<TypePtr> rawInputTypes{args.size()};
-  std::transform(
-      args.begin(),
-      args.end(),
-      rawInputTypes.begin(),
-      [](const VectorPtr& arg) { return arg->type(); });
+  std::vector<VectorPtr> constantInputs{args.size()};
+  for (auto i = 0; i < args.size(); i++) {
+    rawInputTypes[i] = args[i]->type();
+    if (args[i]->isConstantEncoding()) {
+      constantInputs[i] = args[i];
+    } else {
+      constantInputs[i] = nullptr;
+    }
+  }
 
   fn_->initialize(
-      core::AggregationNode::Step::kFinal, rawInputTypes, outputType, {});
+      core::AggregationNode::Step::kFinal,
+      rawInputTypes,
+      outputType,
+      constantInputs);
   fn_->initializeNewGroups(groups, allSelectedRange);
   fn_->enableValidateIntermediateInputs();
   fn_->addIntermediateResults(groups, rows, args, false);

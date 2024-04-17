@@ -29,6 +29,8 @@ class RegrReplacementAggregate {
           /*m2*/ double>;
   using OutputType = double;
 
+  struct FunctionState {};
+
   static bool toIntermediate(
       exec::out_type<Row<double, double, double>>& out,
       exec::arg_type<double> in) {
@@ -41,11 +43,14 @@ class RegrReplacementAggregate {
     double avg{0.0};
     double m2{0.0};
 
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {}
+    explicit AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/) {}
 
     void addInput(
         HashStringAllocator* /*allocator*/,
-        exec::arg_type<double> data) {
+        exec::arg_type<double> data,
+        const FunctionState& /*state*/) {
       n += 1.0;
       double delta = data - avg;
       double deltaN = delta / n;
@@ -55,7 +60,8 @@ class RegrReplacementAggregate {
 
     void combine(
         HashStringAllocator* /*allocator*/,
-        exec::arg_type<Row<double, double, double>> other) {
+        exec::arg_type<Row<double, double, double>> other,
+        const FunctionState& /*state*/) {
       VELOX_CHECK(other.at<0>().has_value());
       VELOX_CHECK(other.at<1>().has_value());
       VELOX_CHECK(other.at<2>().has_value());
@@ -72,12 +78,16 @@ class RegrReplacementAggregate {
       m2 += otherM2 + delta * deltaN * originN * otherN;
     }
 
-    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+    bool writeIntermediateResult(
+        exec::out_type<IntermediateType>& out,
+        const FunctionState& /*state*/) {
       out = std::make_tuple(n, avg, m2);
       return true;
     }
 
-    bool writeFinalResult(exec::out_type<OutputType>& out) {
+    bool writeFinalResult(
+        exec::out_type<OutputType>& out,
+        const FunctionState& /*state*/) {
       if (n == 0.0) {
         return false;
       }
