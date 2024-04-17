@@ -332,7 +332,6 @@ if("${ENABLE_ALL_WARNINGS}")
         "-Wno-implicit-fallthrough \
          -Wno-empty-body \
          -Wno-class-memaccess \
-         -Wno-comment \
          -Wno-int-in-bool-context \
          -Wno-redundant-move \
          -Wno-array-bounds \
