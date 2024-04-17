@@ -23,11 +23,6 @@
 #include <folly/init/Init.h>
 #include <iostream>
 
-DEFINE_bool(
-    include_rows_erase_function,
-    false,
-    "Whether to run rowsErase functions");
-
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::test;
@@ -48,12 +43,14 @@ struct HashTableBenchmarkParams {
       int64_t hashTableSize,
       int64_t probeSize,
       const std::vector<std::pair<int32_t, int32_t>>&
-          keyRepeatTimesDistribution)
+          keyRepeatTimesDistribution,
+      bool runErase)
       : mode{mode},
         buildType{buildType},
         hashTableSize{hashTableSize},
         probeSize{probeSize},
-        keyRepeatTimesDistribution{keyRepeatTimesDistribution} {
+        keyRepeatTimesDistribution{keyRepeatTimesDistribution},
+        runErase{runErase} {
     int32_t distSum = 0;
     buildSize = 0;
     buildKeyRepeat.reserve(keyRepeatTimesDistribution.size());
@@ -92,7 +89,10 @@ struct HashTableBenchmarkParams {
       distStr << fmt::format("{}%:{};", dist.first, dist.second);
     }
     title = fmt::format(
-        "{}_{}_{}", modeString, numDependentFields + 1, distStr.str());
+        "{},probe:{},buildDist:{}", modeString, probeSize, distStr.str());
+    if (runErase) {
+      title += ",withErase";
+    }
   }
 
   // Expected mode.
@@ -110,6 +110,8 @@ struct HashTableBenchmarkParams {
   // Key repeation distribution: {{80, 1}, {20, 0}}: 80% keys have 1
   // duplication, 20$ keys have no duplication.
   std::vector<std::pair<int32_t, int32_t>> keyRepeatTimesDistribution;
+
+  bool runErase;
 
   // Title for reporting
   std::string title;
@@ -185,7 +187,7 @@ struct HashTableBenchmarkResult {
         << (listJoinResultClocks / totalClock * 100)
         << "%) buildClocks=" << buildClocks << "("
         << (buildClocks / totalClock * 100) << "%)";
-    if (FLAGS_include_rows_erase_function) {
+    if (params.runErase) {
       out << " eraseClock=" << eraseClock << "("
           << (eraseClock / totalClock * 100) << "%)";
     }
@@ -206,7 +208,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
       result.numOutput = probeTableAndListResult();
       result.hashMode = topTable_->hashMode();
       VELOX_CHECK_EQ(result.hashMode, params_.mode);
-      if (FLAGS_include_rows_erase_function) {
+      if (params.runErase) {
         eraseTable();
         result.eraseClock += eraseTime_;
       }
@@ -499,8 +501,6 @@ int main(int argc, char** argv) {
   TypePtr keyAndDependentType{
       ROW({"k1", "d1", "d2"}, {BIGINT(), BIGINT(), BIGINT()})};
 
-  std::vector<TypePtr> buildTypes = {onlyKeyType};
-
   std::vector<BaseHashTable::HashMode> hashModes = {
       BaseHashTable::HashMode::kArray,
       BaseHashTable::HashMode::kNormalizedKey,
@@ -517,13 +517,19 @@ int main(int argc, char** argv) {
       {{10, 5}, {10, 1}, {80, 0}},
       {{10, 10}, {10, 5}, {10, 1}, {70, 0}},
       {{10, 20}, {10, 10}, {10, 5}, {10, 1}, {60, 0}},
-      {{10, 50}, {10, 20}, {10, 10}, {10, 5}, {10, 1}, {50, 0}}};
+      {{10, 50}, {10, 20}, {10, 10}, {10, 5}, {10, 1}, {50, 0}},
+      {{100, 1}},
+      {{100, 5}},
+      {{100, 10}},
+      {{100, 15}},
+      {{100, 20}},
+      {{100, 25}}};
   std::vector<HashTableBenchmarkParams> params;
-  for (auto mode : hashModes) {
-    for (auto type : buildTypes) {
+  for (auto withErase : {false, true}) {
+    for (auto mode : hashModes) {
       for (auto& dist : keyRepeatDists) {
         params.emplace_back(HashTableBenchmarkParams(
-            mode, type, hashTableSize, probeRowSize, dist));
+            mode, onlyKeyType, hashTableSize, probeRowSize, dist, withErase));
       }
     }
   }
