@@ -224,6 +224,38 @@ TEST_F(VectorHasherTest, flat) {
   }
 }
 
+TEST_F(VectorHasherTest, testHashDoubleNegativeZero) {
+  auto hasher = exec::VectorHasher::create(DOUBLE(), 1);
+  ASSERT_EQ(hasher->channel(), 1);
+  ASSERT_EQ(hasher->typeKind(), TypeKind::DOUBLE);
+
+  auto vector = makeFlatVector<double>({-0.0, 0.0});
+
+  raw_vector<uint64_t> hashes(2);
+  std::fill(hashes.begin(), hashes.end(), 0);
+  SelectivityVector selectivityVector = SelectivityVector(2);
+  hasher->decode(*vector, selectivityVector);
+  hasher->hash(selectivityVector, false, hashes);
+  EXPECT_EQ(hashes[0], 4316648529147585864);
+  EXPECT_EQ(hashes[1], 0);
+}
+
+TEST_F(VectorHasherTest, testHashFloatNegativeZero) {
+  auto hasher = exec::VectorHasher::create(REAL(), 1);
+  ASSERT_EQ(hasher->channel(), 1);
+  ASSERT_EQ(hasher->typeKind(), TypeKind::REAL);
+
+  auto vector = makeFlatVector<float>({-0.0, 0.0});
+
+  raw_vector<uint64_t> hashes(2);
+  std::fill(hashes.begin(), hashes.end(), 0);
+  SelectivityVector selectivityVector = SelectivityVector(2);
+  hasher->decode(*vector, selectivityVector);
+  hasher->hash(selectivityVector, false, hashes);
+  EXPECT_EQ(hashes[0], 3269171733);
+  EXPECT_EQ(hashes[1], 0);
+}
+
 TEST_F(VectorHasherTest, nonNullConstant) {
   auto hasher = exec::VectorHasher::create(INTEGER(), 1);
   auto vector = BaseVector::createConstant(INTEGER(), 123, 100, pool());

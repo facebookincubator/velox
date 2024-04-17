@@ -3577,6 +3577,40 @@ TEST_F(AggregationTest, ignoreOrderBy) {
       .assertResults("SELECT c0, sum(c1), avg(c1) FROM tmp GROUP BY 1");
 }
 
+TEST_F(AggregationTest, testGroupByDoubleNegativeZero) {
+  auto data = makeRowVector(
+      {makeFlatVector<double>({-0.0, 0.0}), makeFlatVector<int64_t>({1, 2})});
+
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  std::vector<RowVectorPtr> expected = {makeRowVector(
+      {makeFlatVector<double>({-0.0, 0.0}), makeFlatVector<int64_t>({1, 2})})};
+  test::assertQuery(plan, expected);
+}
+
+TEST_F(AggregationTest, testGroupByFloatNegativeZero) {
+  auto data = makeRowVector(
+      {makeFlatVector<float>({-0.0, 0.0}), makeFlatVector<int64_t>({1, 2})});
+
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  std::vector<RowVectorPtr> expected = {makeRowVector(
+      {makeFlatVector<float>({-0.0, 0.0}), makeFlatVector<int64_t>({1, 2})})};
+  test::assertQuery(plan, expected);
+}
+
 class TestAccumulator {
  public:
   ~TestAccumulator() {
