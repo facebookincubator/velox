@@ -32,6 +32,7 @@ set_tests_properties(velox_cudf_hash_test PROPERTIES TIMEOUT 3000)
 target_link_libraries(
   velox_cudf_hash_test
   velox_aggregates
+  velox_cudf_exec
   velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
