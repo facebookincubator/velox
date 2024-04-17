@@ -19,7 +19,6 @@
 #include <folly/Random.h>
 #include <folly/Synchronized.h>
 #include <folly/synchronization/Baton.h>
-#include <folly/synchronization/Latch.h>
 #include <gtest/gtest.h>
 #include <chrono>
 #include <thread>
@@ -217,12 +216,8 @@ TEST(AsyncSourceTest, close) {
   // If 'prepare()' is executed within the thread pool but 'move()' is not
   // invoked, invoking 'close()' will set 'item_' to nullptr. The deletion of
   // 'dateCounter' is used as a verification for this behavior.
-  auto asyncSource = std::make_shared<AsyncSource<DataCounter>>([]() {
-    folly::Baton<> baton;
-    // Wait till timeout.
-    EXPECT_FALSE(baton.try_wait_for(1ms));
-    return std::make_unique<DataCounter>();
-  });
+  auto asyncSource = std::make_shared<AsyncSource<DataCounter>>(
+      []() { return std::make_unique<DataCounter>(); });
   auto thread = std::thread([&asyncSource] { asyncSource->prepare(); });
   thread.join();
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
@@ -236,19 +231,15 @@ TEST(AsyncSourceTest, close) {
   // If 'prepare()' is currently being executed within the thread pool,
   // 'close()' should wait for the completion of 'prepare()' and set 'item_' to
   // nullptr.
-  folly::Latch latch(1);
+  folly::Baton<> baton;
   auto sleepAsyncSource =
-      std::make_shared<AsyncSource<DataCounter>>([&latch]() {
-        latch.count_down();
-        folly::Baton<> baton;
-        // Wait till timeout.
-        baton.try_wait_for(10ms);
+      std::make_shared<AsyncSource<DataCounter>>([&baton]() {
+        baton.post();
         return std::make_unique<DataCounter>();
       });
   auto thread1 =
       std::thread([&sleepAsyncSource] { sleepAsyncSource->prepare(); });
-  latch.wait();
-
+  EXPECT_TRUE(baton.try_wait_for(1s));
   sleepAsyncSource->close();
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 1);
