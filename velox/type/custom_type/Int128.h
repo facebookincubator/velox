@@ -23,14 +23,9 @@
 #include <stdint.h>
 #include <utility>
 #include <cmath>
-#ifndef DUCK_DB
 #include <folly/dynamic.h>
-#endif
-#include <folly/Range.h>
-#include <folly/Conv.h>
-#ifndef SIG_PARSER
-#include <boost/multiprecision/cpp_int.hpp>
-#endif
+#include <iostream>
+
 namespace facebook::velox::type {
 
 /**
@@ -88,10 +83,6 @@ class uint128 {
     return *this;
   }
   uint128 operator&(uint128 other) const {
-    uint128 a(*this);
-    return (a &= other);
-  }  
-  uint128 operator&(int other) const {
     uint128 a(*this);
     return (a &= other);
   }
@@ -229,14 +220,12 @@ class int128 {
   void setLo(uint64_t lo) {
     lo_ = lo;
   }
-  #ifndef DUCK_DB
   operator folly::dynamic() const {
     folly::dynamic dynamicObject = folly::dynamic::object;
     dynamicObject["lo"] = this->lo_;
     dynamicObject["hi"] = this->hi_;
     return dynamicObject;
   }
-  #endif
 
 
   int128& operator|=(int128 other) {
@@ -247,15 +236,6 @@ class int128 {
   int128 operator|(int128 other) const {
     int128 a(*this);
     return (a |= other);
-  }  
-  int128 operator|(uint64_t other) const {
-    int128 a(*this);
-    return (a |= other);
-  }  
-  
-  int128 operator|(int32_t other) const {
-    int128 a(*this);
-    return (a |= other);
   }
 
   int128& operator&=(int128 other) {
@@ -264,15 +244,6 @@ class int128 {
     return *this;
   }
   int128 operator&(int128 other) const {
-    int128 a(*this);
-    return (a &= other);
-  }    
-  int128 operator&(uint128 other) const {
-    int128 a(*this);
-    return (a &= other);
-  }  
-  
-  int128 operator&(uint64_t other) const {
     int128 a(*this);
     return (a &= other);
   }
@@ -290,11 +261,6 @@ class int128 {
   int128 operator<<(int n) const {
     int128 a(*this);
     return (a <<= n);
-  }  
-  
-  int128 operator<<(uint64_t n) const {
-    int128 a(*this);
-    return (a <<= n);
   }
 
   int128& operator>>=(int n) {
@@ -308,10 +274,6 @@ class int128 {
     return *this;
   }
   int128 operator>>(int n) const {
-    int128 a(*this);
-    return (a >>= n);
-  }  
-  int128 operator>>(uint64_t n) const {
     int128 a(*this);
     return (a >>= n);
   }
@@ -335,7 +297,9 @@ class int128 {
   }
   //TODO: davidmar implement /= operator.
   int128 operator/=(int other) const {
-    return *this;
+    int128 temp = *this;
+    temp = *this / int128(other);
+    return temp;
   }
 
   
@@ -349,21 +313,40 @@ class int128 {
   }
   constexpr int128 operator+(const int& other) const {
     return *this + int128(other);
-  }   
+  }
+
+  // TODO implement +=
   constexpr int128 operator+=(const int& other) const {
-    return int128(0);
-  }   
-  
-  constexpr int128 operator-=(const int& other) const {
-    return int128(0);
-  }
-  constexpr int128 operator-=(const int128& other) const {
-    return int128(0);
+    int128 temp;
+    temp = *this + int128(other);
+    return temp;
   } 
-  //TODO
-  constexpr int128 operator--() const {
-    return int128();
+
+  constexpr int128 operator++() const {
+    // predecrement
+    return *this + 1;
   }
+
+  //TODO postdecrement functions have constant problem
+  //constexpr int128 operator++(int) {
+  //  // postdecrement
+  //  int128 temp= int128(*this); // Create a copy of the current object
+  //  *this += 1;
+  //  return temp; // Return the copy (previous value)
+  //}
+
+  constexpr int128 operator--() const {
+    //predecrement
+    return *this - 1;
+  }
+
+ //constexpr int128 operator--(int) {
+ //    //postdecrement
+ //   int128 temp = int128(*this); // Create a copy of the current object
+ //   *this -= 1;
+ //   return temp; // Return the copy (previous value)
+ // }
+
   constexpr int128 operator-(const int128& other) const {
     uint64_t lo = this->lo_ - other.lo_;
     // Check for overflow.
@@ -379,6 +362,13 @@ class int128 {
   constexpr int128 operator-() const {
     return int128(0) - *this;
   }
+
+  //TODO implement -=
+  constexpr int128 operator-=(const int& other) {
+    *this = *this - other;
+    return *this;
+  } 
+
   constexpr bool operator<(const int128& other) const {
       int128 result = *this - other;
     return result.hi_ < 0;
@@ -391,96 +381,184 @@ class int128 {
       int128 result = *this - int128(other);
     return result < int128(0);
   }
-  //TODO: implement <= 
+ 
   constexpr bool operator<=(const int128& other) const {
-    return true;
-  }  
-  //TODO: implement <= 
-  constexpr bool operator<=(const int& other) const {
-    return true;
+    int128 result = *this - other;
+    if (result == int128(0)) {
+      return true;
+    }
+    else {
+        return result.hi_ < 0;
+    }
   }
-  //TODO: implement >=
-  constexpr bool operator>=(const int128& other) const {
-    return true;
-  }  
-  constexpr bool operator>=(const int& other) const {
-    return true;
-  }  
 
-  //TODO: implement division
+  constexpr bool operator<=(const int64_t& other) const {
+    int128 result = *this - int128(other);
+    return result <= int128(0);
+  }
+
+  constexpr bool operator<=(const int& other) const {
+    int128 result = *this - int128(other);
+    return result <= int128(0);
+  }
+
+  constexpr bool operator>(const int128& other) const {
+    //int128 result = *this - other;
+    //return result.hi_ > 0;
+
+    if (hi_ > other.hi_) {
+        return true;
+    } else if (hi_ < other.hi_) {
+        return false;
+    } else {
+        return lo_ > other.lo_;
+    }
+
+  }
+  constexpr bool operator>(const int64_t& other) const {
+    int128 result = *this - int128(other);
+    return result > int128(0);
+  }
+  constexpr bool operator>(const int& other) const {
+    int128 result = *this - int128(other);
+    return result > int128(0);
+  }
+
+
+  constexpr bool operator>=(const int128& other) const {
+    int128 result = *this - other;
+    if (result == int128(0)) {
+        return true;
+    } else {
+        return result > int128(0);
+    }
+  }
+  constexpr bool operator>=(const int64_t& other) const {
+    int128 result = *this - int128(other);
+    return result >= int128(0);
+  }
+  constexpr bool operator>=(const int& other) const {
+    int128 result = *this - int128(other);
+    return result >= int128(0);
+  }
+
+  //TODO: implement division, current implementation is not viable
   constexpr int128 operator/(const int& other) const {
-    return int128(0);
+    return *this / int128(other);
   }    
   constexpr int128 operator/(const int64_t& other) const {
-    return int128(0);
+    return *this / int128(other);
   }  
   constexpr int128 operator/(const int128& other) const {
-    return int128(0);
+    if (other.lo_ == 0 && other.hi_ == 0) {
+        // Division by zero exception
+        throw std::invalid_argument("Division by Zero Exception");
+    }
+    int128 result = int128(1);
+    int128 dividend(*this);
+    result = result + 1;
+    while (dividend >= other) {
+        dividend -= other;
+        result += 1;
+    }
+
+    return result;
+
+    //int128 rem = int128(0);
+    //int128 divisor = *other;
+    //int128 dividend = *this;
+    //if (divisor > dividend) {
+    //    if (rem > 0)
+    //      *rem = dividend;
+    //    return 0;
+    //}
+    //// Calculate the distance between most significant bits, 128 > shift >= 0.
+    //int shift = Distance(dividend, divisor);
+    //divisor <<= shift;
+    //int128 quotient = int128(0);
+    //for (; shift >= 0; –shift) {
+    //    quotient <<= 1;
+    //    if (dividend >= divisor) {
+    //      dividend -= divisor;
+    //      quotient |= 1;
+    //    }
+    //    divisor >>= 1;
+    //}
+    //if (rem > 0)
+    //    *rem = dividend;
+    //return quotient;
+    
   }
 
-  //TODO: implement modulo
+  
   constexpr int128 operator%(const int64_t& other) const {
-    return int128(0);
+    return *this % int128(other);
   }
-  //TODO: implement modulo
+
   constexpr int128 operator%(const int& other) const {
-    return int128(0);
+    return *this % int128(other);
   }
-  //TODO: implement modulo
+ 
   constexpr int128 operator%(const int128& other) const {
-    return int128(0);
+    if (other.lo_ == 0 && other.hi_ == 0) {
+        // Division by zero exception
+        throw std::invalid_argument("Division by Zero Exception");
+    }
+    int128 dividend(*this); // Copy of the dividend
+    int128 divisor(other);
+
+    //dividend = dividend - divisor;
+    // Perform modulo operation
+    while (dividend >= divisor) {
+        dividend = dividend - divisor;
+    }
+
+    return dividend;
   }  
-  // TODO: implement multiply
+
+ 
   constexpr int128 operator*(const int64_t other) const {
-    return int128(0);
+    return *this * int128(other);
   }
-  //TODO: implement multiply
+ 
   constexpr int128 operator*(const int& other) const {
-    return int128(0);
+    return *this * int128(other);
   }
-  //TODO: implement multply
+  //TODO: implement multply, current implementation is not viable
   constexpr int128 operator*(const int128& other) const {
-    return int128(0);
+    int128 mul;
+    for (int i = 0; i < *this; i++) {
+        mul = mul + other;
+    }
+    return mul;
   }  
   
   //TODO: implement multply=
-  constexpr int128 operator*=(const int128& other) const {
-    return int128(0);
+  constexpr int128 operator*=(const int128& other) {
+    *this = *this * other;
+    return *this;
   }  
   //TODO: implement multply=
-  constexpr int128 operator*=(const int& other) const {
-    return int128(0);
+  constexpr int128 operator*=(const int& other) {
+    *this = *this * int128(other);
+    return *this;
   }
   // TODO: implement multiply=
-  constexpr int128 operator*=(const int64_t& other) const {
-    return int128(0);
+  constexpr int128 operator*=(const int64_t& other) {
+    *this = *this * int128(other);
+    return *this;
   }
 
-
-  constexpr int128 operator++() const {
-    return *this + int128(1);
-  }
 
   operator int64_t() const {
     return this->lo_;
   }
-#ifndef SIG_PARSER
-  operator boost::multiprecision::int256_t() const {
-    return boost::multiprecision::int256_t(0);
-  }
-  operator boost::multiprecision::int128_t() const {
-    return boost::multiprecision::int128_t(0);
-  }
-#endif
+
   operator uint128() const {
     return uint128(this->hi_, this->lo_);
   }
 
 };
-
-int128 tryTo(folly::StringPiece sp) {
-  return int128(0);
-}
 
 bool mul_overflow(int128 a , int128 b ,int64_t result) {
   return true;
@@ -502,10 +580,6 @@ bool mul_overflow(int128 a , int128 b ,int128 *result) {
 } // namespace facebook::velox::type
 
 namespace std {
-
-template <>
-struct is_pod<facebook::velox::type::int128> : std::true_type {};
-
 template <>
 struct hash<facebook::velox::type::uint128> {
   // TODO: davidmar implement hashing operation for 128 bits.
@@ -525,46 +599,16 @@ template <>
 struct make_unsigned<facebook::velox::type::int128> {
   using type = facebook::velox::type::uint128; 
 };
-// TODO: add std::make_unsiged capabilities
-template <>
-struct make_unsigned<facebook::velox::type::uint128> {
-  using type = facebook::velox::type::uint128; 
-};
-// TODO: add std::make_signed capabilities
-template <>
-struct make_signed<facebook::velox::type::uint128> {
-  using type = facebook::velox::type::int128; 
-};
 // TODO: Implemente std::log for int128 
 double log(facebook::velox::type::int128 value) {
   return 0.0;
 }
 
 
-
 } // namespace std
-namespace folly {
-#ifndef DUCK_DB
 
+namespace folly {
 template <>
 struct hasher<facebook::velox::type::int128> : detail::integral_hasher<facebook::velox::type::int128> {};
-template <>
-struct hasher<facebook::velox::type::uint128> : detail::integral_hasher<facebook::velox::type::uint128> {};
-#endif
-
 } // namespace folly
-
-
-
-
-//namespace boost::multiprecision{
-//
-//template<>
-//inline int256_t int256_t::operator*(int128_t other) {
-//    return int256_t(other);
-//}
-//
-//}
-
-
 #endif /* TYPE_INT128_H__ */
