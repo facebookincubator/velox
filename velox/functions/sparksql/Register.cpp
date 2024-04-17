@@ -27,6 +27,7 @@
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
+#include "velox/functions/sparksql/ArraySizeFunction.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
@@ -57,6 +58,14 @@ template <typename T>
 inline void registerArrayRemoveFunctions(const std::string& prefix) {
   registerFunction<ArrayRemoveFunction, Array<T>, Array<T>, T>(
       {prefix + "array_remove"});
+}
+
+template <typename T>
+inline void registerArraySizeFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<sparksql::ArraySizeFunction, T>,
+      int32_t,
+      Array<T>>({prefix + "array_size"});
 }
 
 inline void registerArrayRemoveFunctions(const std::string& prefix) {
@@ -152,6 +161,18 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
 
 void registerFunctions(const std::string& prefix) {
   registerAllSpecialFormGeneralFunctions();
+
+  registerArraySizeFunctions<bool>(prefix);
+  registerArraySizeFunctions<int8_t>(prefix);
+  registerArraySizeFunctions<int16_t>(prefix);
+  registerArraySizeFunctions<int32_t>(prefix);
+  registerArraySizeFunctions<int64_t>(prefix);
+  registerArraySizeFunctions<int128_t>(prefix);
+  registerArraySizeFunctions<double>(prefix);
+  registerArraySizeFunctions<float>(prefix);
+  registerArraySizeFunctions<Varchar>(prefix);
+  registerArraySizeFunctions<Timestamp>(prefix);
+  registerArraySizeFunctions<Date>(prefix);
 
   // Register size functions
   registerSize(prefix + "size");
