@@ -16,6 +16,7 @@
 #include "velox/exec/TableScan.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
@@ -180,6 +181,7 @@ RowVectorPtr TableScan::getOutput() {
       } else {
         curStatus_ = "getOutput: adding split";
         dataSource_->addSplit(connectorSplit);
+        setInputFileName(connectorSplit);
       }
       curStatus_ = "getOutput: updating stats_.numSplits";
       ++stats_.wlock()->numSplits;
@@ -276,6 +278,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
   // a shared_ptr to it. This is required to keep memory pools live
   // for the duration. The callback checks for task cancellation to
   // avoid needless work.
+  setInputFileName(split);
   split->dataSource = std::make_unique<AsyncSource<connector::DataSource>>(
       [type = outputType_,
        table = tableHandle_,
@@ -332,6 +335,17 @@ void TableScan::checkPreload() {
             });
           };
     }
+  }
+}
+
+void TableScan::setInputFileName(
+    std::shared_ptr<connector::ConnectorSplit> split) {
+  if (auto hiveConnectorSplit =
+          std::dynamic_pointer_cast<connector::hive::HiveConnectorSplit>(
+              split)) {
+    driverCtx_->inputFileName = hiveConnectorSplit->getFileName();
+  } else {
+    driverCtx_->inputFileName = "";
   }
 }
 

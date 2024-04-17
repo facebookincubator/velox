@@ -14,19 +14,12 @@
  * limitations under the License.
  */
 #pragma once
-
-#include "velox/core/QueryConfig.h"
-#include "velox/functions/Macros.h"
-#include "velox/functions/prestosql/URLFunctions.h"
+#include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions::sparksql {
-template <typename T>
-struct InputFileNameFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result) {
-    facebook::velox::functions::urlEscape(
-        result, facebook::velox::core::inputFileName, false, "!$&'()*+,;=/:@");
-  }
-};
+std::shared_ptr<exec::VectorFunction> makeInputFileName(
+    const std::string& /*name*/,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/);
+std::vector<std::shared_ptr<exec::FunctionSignature>> inputFileNameSignatures();
 } // namespace facebook::velox::functions::sparksql

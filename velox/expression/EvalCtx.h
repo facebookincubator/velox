@@ -25,6 +25,7 @@
 
 namespace facebook::velox::exec {
 
+class DriverCtx;
 class Expr;
 class ExprSet;
 class LocalDecodedVector;
@@ -36,7 +37,11 @@ class PeeledEncoding;
 // flags for Expr interpreter.
 class EvalCtx {
  public:
-  EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row);
+  EvalCtx(
+      core::ExecCtx* execCtx,
+      ExprSet* exprSet,
+      const RowVector* row,
+      DriverCtx* driverCtx = nullptr);
 
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* execCtx);
@@ -238,6 +243,10 @@ class EvalCtx {
     return exprSet_;
   }
 
+  DriverCtx* driverCtx() const {
+    return driverCtx_;
+  }
+
   VectorEncoding::Simple wrapEncoding() const;
 
   void setPeeledEncoding(std::shared_ptr<PeeledEncoding>& peel) {
@@ -334,6 +343,7 @@ class EvalCtx {
   core::ExecCtx* const execCtx_;
   ExprSet* const exprSet_;
   const RowVector* row_;
+  DriverCtx* const driverCtx_;
   const bool cacheEnabled_;
   const uint32_t maxSharedSubexprResultsCached_;
   bool inputFlatNoNulls_;

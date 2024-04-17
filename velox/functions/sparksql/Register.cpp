@@ -409,8 +409,11 @@ void registerFunctions(const std::string& prefix) {
 
   registerFunction<UuidFunction, Varchar, Constant<int64_t>>({prefix + "uuid"});
 
-  registerFunction<InputFileNameFunction, Varchar>(
-      {prefix + "input_file_name"});
+  exec::registerStatefulVectorFunction(
+      prefix + "input_file_name",
+      inputFileNameSignatures(),
+      makeInputFileName,
+      {deterministic : false});
 }
 
 } // namespace sparksql

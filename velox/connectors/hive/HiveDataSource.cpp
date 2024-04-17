@@ -207,7 +207,6 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     resetSplit();
     return nullptr;
   }
-  facebook::velox::core::inputFileName = split_->getFileName();
   if (!output_) {
     output_ = BaseVector::create(readerOutputType_, 0, pool_);
   }
