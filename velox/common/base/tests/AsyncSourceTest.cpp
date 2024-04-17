@@ -218,8 +218,7 @@ TEST(AsyncSourceTest, close) {
   // 'dateCounter' is used as a verification for this behavior.
   auto asyncSource = std::make_shared<AsyncSource<DataCounter>>(
       []() { return std::make_unique<DataCounter>(); });
-  auto thread = std::thread([&asyncSource] { asyncSource->prepare(); });
-  thread.join();
+  asyncSource->prepare();
   EXPECT_EQ(DataCounter::numCreatedDataCounters(), 1);
   EXPECT_EQ(DataCounter::numDeletedDataCounters(), 0);
 
