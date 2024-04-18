@@ -181,8 +181,8 @@ RowVectorPtr TableScan::getOutput() {
       } else {
         curStatus_ = "getOutput: adding split";
         dataSource_->addSplit(connectorSplit);
-        setInputFileName(connectorSplit);
       }
+      setInputFileName(connectorSplit);
       curStatus_ = "getOutput: updating stats_.numSplits";
       ++stats_.wlock()->numSplits;
 
@@ -278,7 +278,6 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
   // a shared_ptr to it. This is required to keep memory pools live
   // for the duration. The callback checks for task cancellation to
   // avoid needless work.
-  setInputFileName(split);
   split->dataSource = std::make_unique<AsyncSource<connector::DataSource>>(
       [type = outputType_,
        table = tableHandle_,

@@ -32,27 +32,42 @@ class InputFileName final : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
+      const TypePtr& /*outputType*/,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     context.ensureWritable(rows, VARCHAR(), result);
-    auto* output = result->as<FlatVector<StringView>>();
+    BufferPtr values = AlignedBuffer::allocate<StringView>(1, context.pool());
+    std::vector<BufferPtr> stringBuffers;
+    stringBuffers.push_back(
+        AlignedBuffer::allocate<char>(1024, context.pool()));
+    auto localResult = std::make_shared<FlatVector<StringView>>(
+        context.pool(),
+        VARCHAR(),
+        nullptr,
+        1,
+        values,
+        std::move(stringBuffers));
     auto driverCtx = context.driverCtx();
-    rows.applyToSelected([&](vector_size_t row) {
-      auto writer = exec::StringWriter<>(output, row);
-      auto inputFileName = driverCtx != nullptr ? driverCtx->inputFileName : "";
-      facebook::velox::functions::urlEscape(
-          writer, driverCtx->inputFileName, false, "!$&'()*+,;=/:@");
-      writer.finalize();
-    });
+    auto writer = exec::StringWriter<>(localResult.get(), 0);
+    auto inputFileName = driverCtx != nullptr ? driverCtx->inputFileName : "";
+    facebook::velox::functions::detail::urlEscape(
+        writer, driverCtx->inputFileName, false, "!$&'()*+,;=/:@");
+    writer.finalize();
+    auto outFilename = localResult->valueAt(0);
+    context.moveOrCopyResult(
+        std::make_shared<ConstantVector<StringView>>(
+            context.pool(),
+            rows.end(),
+            false /*isNull*/,
+            VARCHAR(),
+            std::move(outFilename)),
+        rows,
+        result);
   }
 };
 } // namespace
-std::shared_ptr<exec::VectorFunction> makeInputFileName(
-    const std::string& /*name*/,
-    const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/) {
-  return std::make_shared<InputFileName>();
+std::unique_ptr<exec::VectorFunction> makeInputFileName() {
+  return std::make_unique<InputFileName>();
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>

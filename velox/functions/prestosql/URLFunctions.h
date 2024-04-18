@@ -23,7 +23,7 @@
 
 namespace facebook::velox::functions {
 
-namespace {
+namespace detail {
 
 const auto kScheme = 2;
 const auto kAuthority = 3;
@@ -38,7 +38,8 @@ FOLLY_ALWAYS_INLINE StringView submatch(const boost::cmatch& match, int idx) {
   return StringView(sub.first, sub.length());
 }
 
-bool parse(const char* rawUrlData, size_t rawUrlsize, boost::cmatch& match) {
+FOLLY_ALWAYS_INLINE bool
+parse(const char* rawUrlData, size_t rawUrlsize, boost::cmatch& match) {
   /// This regex is taken from RFC - 3986.
   /// See: https://www.rfc-editor.org/rfc/rfc3986#appendix-B
   /// The basic groups are:
@@ -73,7 +74,9 @@ bool parse(const char* rawUrlData, size_t rawUrlsize, boost::cmatch& match) {
 
 /// Parses the url and returns the matching subgroup if the particular sub group
 /// is matched by the call to parse call above.
-std::optional<StringView> parse(StringView rawUrl, int subGroup) {
+FOLLY_ALWAYS_INLINE std::optional<StringView> parse(
+    StringView rawUrl,
+    int subGroup) {
   boost::cmatch match;
   if (!parse(rawUrl.data(), rawUrl.size(), match)) {
     return std::nullopt;
@@ -98,15 +101,15 @@ FOLLY_ALWAYS_INLINE void charEscape(unsigned char c, char* output) {
   output[2] = toHex(c % 16);
 }
 
-bool isDigit(char c) {
+FOLLY_ALWAYS_INLINE bool isDigit(char c) {
   return c >= '0' && c <= '9';
 }
 
-bool isAlphaNumeric(char c) {
+FOLLY_ALWAYS_INLINE bool isAlphaNumeric(char c) {
   return isDigit(c) || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
 }
 
-bool shouldEncode(char c) {
+FOLLY_ALWAYS_INLINE bool shouldEncode(char c) {
   static std::unordered_set<char> const ExtraNonEncodableChars = {
       '-', '_', '.', '*'};
   return !isAlphaNumeric(c) &&
@@ -133,8 +136,10 @@ FOLLY_ALWAYS_INLINE void urlEscape(
 
   auto inputBuffer = input.data();
   auto outputBuffer = output.data();
-  std::unordered_set<char> const doNotEncodeSymbolsSet(
-      doNotEncodeSymbols.begin(), doNotEncodeSymbols.end());
+  std::vector<uint64_t> doNotEncodeSymbolsBits(4);
+  for (auto p : doNotEncodeSymbols) {
+    bits::setBit(doNotEncodeSymbolsBits.data(), static_cast<size_t>(p), true);
+  }
   size_t outIndex = 0;
   for (auto i = 0; i < inputSize; ++i) {
     unsigned char p = inputBuffer[i];
@@ -142,7 +147,8 @@ FOLLY_ALWAYS_INLINE void urlEscape(
       outputBuffer[outIndex++] = '+';
     } else if (
         shouldEncode(p) &&
-        doNotEncodeSymbolsSet.find(p) == doNotEncodeSymbolsSet.end()) {
+        !bits::isBitSet(
+            doNotEncodeSymbolsBits.data(), static_cast<size_t>(p))) {
       charEscape(p, outputBuffer + outIndex);
       outIndex += 3;
     } else {
@@ -155,7 +161,7 @@ FOLLY_ALWAYS_INLINE void urlEscape(
 /// Performs initial validation of the URI.
 /// Checks if the URI contains ascii whitespaces or
 /// unescaped '%' chars.
-bool isValidURI(StringView input) {
+FOLLY_ALWAYS_INLINE bool isValidURI(StringView input) {
   const char* p = input.data();
   const char* end = p + input.size();
   char buf[3];
@@ -221,7 +227,7 @@ FOLLY_ALWAYS_INLINE void urlUnescape(
   output.resize(outputBuffer - output.data());
 }
 
-} // namespace
+} // namespace detail
 
 /// Matches the authority (i.e host[:port], ipaddress), and path from a string
 /// representing the authority and path. Returns true if the regex matches, and
@@ -244,11 +250,11 @@ struct UrlExtractProtocolFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    if (!isValidURI(url)) {
+    if (!detail::isValidURI(url)) {
       return false;
     }
 
-    if (auto protocol = parse(url, kScheme)) {
+    if (auto protocol = detail::parse(url, detail::kScheme)) {
       result.setNoCopy(protocol.value());
     } else {
       result.setEmpty();
@@ -270,11 +276,11 @@ struct UrlExtractFragmentFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    if (!isValidURI(url)) {
+    if (!detail::isValidURI(url)) {
       return false;
     }
 
-    if (auto fragment = parse(url, kFragment)) {
+    if (auto fragment = detail::parse(url, detail::kFragment)) {
       result.setNoCopy(fragment.value());
     } else {
       result.setEmpty();
@@ -296,19 +302,19 @@ struct UrlExtractHostFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    if (!isValidURI(url)) {
+    if (!detail::isValidURI(url)) {
       return false;
     }
 
-    auto authAndPath = parse(url, kAuthority);
+    auto authAndPath = detail::parse(url, detail::kAuthority);
     if (!authAndPath) {
       result.setEmpty();
       return true;
     }
     boost::cmatch authorityMatch;
 
-    if (auto host =
-            matchAuthorityAndPath(authAndPath.value(), authorityMatch, kHost)) {
+    if (auto host = matchAuthorityAndPath(
+            authAndPath.value(), authorityMatch, detail::kHost)) {
       result.setNoCopy(host.value());
     } else {
       result.setEmpty();
@@ -322,18 +328,18 @@ struct UrlExtractPortFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Varchar>& url) {
-    if (!isValidURI(url)) {
+    if (!detail::isValidURI(url)) {
       return false;
     }
 
-    auto authAndPath = parse(url, kAuthority);
+    auto authAndPath = detail::parse(url, detail::kAuthority);
     if (!authAndPath) {
       return false;
     }
 
     boost::cmatch authorityMatch;
-    if (auto port =
-            matchAuthorityAndPath(authAndPath.value(), authorityMatch, kPort)) {
+    if (auto port = matchAuthorityAndPath(
+            authAndPath.value(), authorityMatch, detail::kPort)) {
       if (!port.value().empty()) {
         try {
           result = to<int64_t>(port.value());
@@ -355,14 +361,14 @@ struct UrlExtractPathFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    if (!isValidURI(url)) {
+    if (!detail::isValidURI(url)) {
       return false;
     }
 
-    auto path = parse(url, kPath);
+    auto path = detail::parse(url, detail::kPath);
     VELOX_USER_CHECK(
         path.has_value(), "Unable to determine path for URL: {}", url);
-    urlUnescape(result, path.value());
+    detail::urlUnescape(result, path.value());
 
     return true;
   }
@@ -381,11 +387,11 @@ struct UrlExtractQueryFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url) {
-    if (!isValidURI(url)) {
+    if (!detail::isValidURI(url)) {
       return false;
     }
 
-    if (auto query = parse(url, kQuery)) {
+    if (auto query = detail::parse(url, detail::kQuery)) {
       result.setNoCopy(query.value());
     } else {
       result.setEmpty();
@@ -409,11 +415,11 @@ struct UrlExtractParameterFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& url,
       const arg_type<Varchar>& param) {
-    if (!isValidURI(url)) {
+    if (!detail::isValidURI(url)) {
       return false;
     }
 
-    auto query = parse(url, kQuery);
+    auto query = detail::parse(url, detail::kQuery);
     if (!query) {
       return false;
     }
@@ -436,9 +442,9 @@ struct UrlExtractParameterFunction {
 
       for (auto it = begin; it != end; ++it) {
         if (it->length(2) != 0 && (*it)[2].matched) { // key shouldnt be empty.
-          auto key = submatch((*it), 2);
+          auto key = detail::submatch((*it), 2);
           if (param.compare(key) == 0) {
-            auto value = submatch((*it), 3);
+            auto value = detail::submatch((*it), 3);
             result.setNoCopy(value);
             return true;
           }
@@ -457,7 +463,7 @@ struct UrlEncodeFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    urlEscape(result, input);
+    detail::urlEscape(result, input);
   }
 };
 
@@ -468,7 +474,7 @@ struct UrlDecodeFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    urlUnescape(result, input);
+    detail::urlUnescape(result, input);
   }
 };
 

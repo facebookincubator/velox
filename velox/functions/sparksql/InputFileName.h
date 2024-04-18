@@ -17,9 +17,6 @@
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions::sparksql {
-std::shared_ptr<exec::VectorFunction> makeInputFileName(
-    const std::string& /*name*/,
-    const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/);
+std::unique_ptr<exec::VectorFunction> makeInputFileName();
 std::vector<std::shared_ptr<exec::FunctionSignature>> inputFileNameSignatures();
 } // namespace facebook::velox::functions::sparksql

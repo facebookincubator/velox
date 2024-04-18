@@ -207,6 +207,7 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     resetSplit();
     return nullptr;
   }
+
   if (!output_) {
     output_ = BaseVector::create(readerOutputType_, 0, pool_);
   }

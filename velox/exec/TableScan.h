@@ -49,8 +49,6 @@ class TableScan : public SourceOperator {
       column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) override;
 
-  void setInputFileName(std::shared_ptr<connector::ConnectorSplit> split);
-
   /// Returns process-wide cumulative IO wait time for all table
   /// scan. This is the blocked time. If running entirely from memory
   /// this would be 0.
@@ -59,6 +57,7 @@ class TableScan : public SourceOperator {
   }
 
  private:
+   void setInputFileName(std::shared_ptr<connector::ConnectorSplit> split);
   // Sets 'maxPreloadSplits' and 'splitPreloader' if prefetching splits is
   // appropriate. The preloader will be applied to the 'first 'maxPreloadSplits'
   // of the Task's split queue for 'this' when getting splits.

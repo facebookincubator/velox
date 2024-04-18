@@ -19,6 +19,7 @@
 #include "velox/core/QueryConfig.h"
 
 namespace facebook::velox::core {
+
 double toBytesPerCapacityUnit(CapacityUnit unit) {
   switch (unit) {
     case CapacityUnit::BYTE:
