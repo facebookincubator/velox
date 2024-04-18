@@ -118,4 +118,4 @@ jobs:
           LIBHDFS3_CONF: "/__w/velox/velox/scripts/hdfs-client.xml"
         working-directory: _build/release
         run: |
-          ctest -j 8 --output-on-failure --no-tests=error
+          ctest -j 8 --output-on-failure --no-tests=error --verbose
