@@ -18,6 +18,7 @@
 
 #include "velox/expression/StringWriter.h"
 #include "velox/type/Timestamp.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec {
 
@@ -43,5 +44,8 @@ class CastHooks {
 
   // Returns whether to cast to int by truncate.
   virtual bool truncate() const = 0;
+
+  virtual std::string castMapToString(const MapVector* mapVector, const int row)
+      const = 0;
 };
 } // namespace facebook::velox::exec

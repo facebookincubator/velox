@@ -44,6 +44,9 @@ class PrestoCastHooks : public CastHooks {
   // Returns false.
   bool truncate() const override;
 
+  std::string castMapToString(const MapVector* mapVector, const int row)
+      const override;
+
  private:
   const bool legacyCast_;
   TimestampToStringOptions options_ = {

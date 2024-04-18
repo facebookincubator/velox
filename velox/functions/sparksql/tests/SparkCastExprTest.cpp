@@ -30,6 +30,12 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     memory::MemoryManager::testingSetInstance({});
   }
 
+  void setLegacyCast(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kLegacyCast, std::to_string(value)},
+    });
+  }
+
   template <typename T>
   void testDecimalToIntegralCasts() {
     auto shortFlat = makeNullableFlatVector<int64_t>(
@@ -532,6 +538,20 @@ TEST_F(SparkCastExprTest, fromString) {
            -30000,
            -30000},
           DECIMAL(12, 2)));
+}
+
+TEST_F(SparkCastExprTest, castMapToString) {
+  setLegacyCast(false);
+  testCast(
+      makeMapVector<StringView, int64_t>(
+          {{{"1", 2}, {"3a", 4}}, {{"7", std::nullopt}}, {}}),
+      makeFlatVector<std::string>({"{1 -> 2, 3a -> 4}", "{7 -> null}", "{}"}));
+
+  setLegacyCast(true);
+  testCast(
+      makeMapVector<StringView, StringView>(
+          {{{"key1", "value1"}, {"null", std::nullopt}}, {}}),
+      makeFlatVector<std::string>({"[key1 -> value1, null ->]", "[]"}));
 }
 } // namespace
 } // namespace facebook::velox::test

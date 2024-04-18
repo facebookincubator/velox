@@ -73,4 +73,10 @@ const TimestampToStringOptions& PrestoCastHooks::timestampToStringOptions()
 bool PrestoCastHooks::truncate() const {
   return false;
 }
+
+std::string PrestoCastHooks::castMapToString(
+    const MapVector* mapVector,
+    const int row) const {
+  return mapVector->toString(row);
+}
 } // namespace facebook::velox::exec

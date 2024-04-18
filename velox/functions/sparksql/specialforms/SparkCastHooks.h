@@ -17,12 +17,15 @@
 #pragma once
 
 #include "velox/expression/CastHooks.h"
+#include "velox/expression/EvalCtx.h"
 
 namespace facebook::velox::functions::sparksql {
 
 // This class provides cast hooks following Spark semantics.
 class SparkCastHooks : public exec::CastHooks {
  public:
+  explicit SparkCastHooks(const core::QueryConfig& config);
+
   // TODO: Spark hook allows more string patterns than Presto.
   Timestamp castStringToTimestamp(const StringView& view) const override;
 
@@ -30,7 +33,7 @@ class SparkCastHooks : public exec::CastHooks {
   /// non-standard cast mode to cast from string to date.
   int32_t castStringToDate(const StringView& dateString) const override;
 
-  // Returns false.
+  // Follows 'isLegacyCast' config.
   bool legacy() const override;
 
   /// When casting from string to integral, floating-point, decimal, date, and
@@ -45,5 +48,11 @@ class SparkCastHooks : public exec::CastHooks {
 
   // Returns true.
   bool truncate() const override;
+
+  std::string castMapToString(const MapVector* mapVector, const int row)
+      const override;
+
+ private:
+  const bool legacyCast_;
 };
 } // namespace facebook::velox::functions::sparksql
