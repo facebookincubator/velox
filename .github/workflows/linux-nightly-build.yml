@@ -44,7 +44,7 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
-      CUDA_VERSION: "11.8"
+      CUDA_VERSION: "12.4"
       CUDA_ARCHITECTURES: 75
     steps:
       - uses: actions/checkout@v4
