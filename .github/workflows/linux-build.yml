@@ -62,7 +62,7 @@ jobs:
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
       CUDA_VERSION: "11.8"
-      CUDA_ARCHITECTURES: 75
+      CUDA_ARCHITECTURES: 60
     steps:
       - uses: actions/checkout@v4
 
