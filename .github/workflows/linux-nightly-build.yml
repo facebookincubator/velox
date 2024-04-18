@@ -30,12 +30,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  version-check:
-    name: Print CUDA version
-    # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
-    runs-on: 4-core-ubuntu-gpu-t4
-    steps:
   adapters:
     name: Linux release with adapters
     # prevent errors when forks ff their main branch
