@@ -18,6 +18,7 @@
 #include "velox/expression/RegisterSpecialForm.h"
 #include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
+#include "velox/functions/lib/ArrayShuffle.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
@@ -335,7 +336,11 @@ void registerFunctions(const std::string& prefix) {
       makeRepeatAllowNegativeCount,
       repeatMetadata());
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_shuffle, prefix + "array_shuffle");
+  exec::registerStatefulVectorFunction(
+      prefix + "array_shuffle",
+      arrayShuffleWithCustomSeedSignatures(),
+      makeArrayShuffleWithCustomSeed,
+      arrayShuffleMetadata());
 
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});

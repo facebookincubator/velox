@@ -16,7 +16,6 @@ add_subdirectory(specialforms)
 add_library(
   velox_functions_spark
   ArraySort.cpp
-  ArrayShuffle.cpp
   Bitwise.cpp
   Comparisons.cpp
   DecimalArithmetic.cpp
