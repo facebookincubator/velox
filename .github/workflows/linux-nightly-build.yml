@@ -12,32 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Linux Build
+name: Linux Nightly Build
 
 on:
-  push:
-    branches:
-      - "main"
-    paths:
-      - "velox/**"
-      - "!velox/docs/**"
-      - "CMakeLists.txt"
-      - "CMake/**"
-      - "third_party/**"
-      - "scripts/setup-ubuntu.sh"
-      - "scripts/setup-helper-functions.sh"
-      - ".github/workflows/linux-build.yml"
+  schedule:
+    - cron: '0 3 * * *'
 
-  pull_request:
-    paths:
-      - "velox/**"
-      - "!velox/docs/**"
-      - "CMakeLists.txt"
-      - "CMake/**"
-      - "third_party/**"
-      - "scripts/setup-ubuntu.sh"
-      - "scripts/setup-helper-functions.sh"
-      - ".github/workflows/linux-build.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -51,7 +32,7 @@ jobs:
     name: Linux release with adapters
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    runs-on: 8-core
+    runs-on: 4-core-ubuntu-gpu-t4
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
@@ -126,60 +107,3 @@ jobs:
         working-directory: _build/release
         run: |
           ctest -j 8 --output-on-failure --no-tests=error
-
-  ubuntu-debug:
-    runs-on: 8-core
-    # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
-    name: "Ubuntu debug with resolve_dependency"
-    env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache"
-    defaults:
-      run:
-        shell: bash
-        working-directory: velox
-    steps:
-
-      - name: Get Ccache Stash
-        uses: assignUser/stash/restore@v1
-        with:
-          path: '${{ env.CCACHE_DIR }}'
-          key: ccache-ubuntu-debug-default
-
-      - name: Ensure Stash Dirs Exists
-        working-directory: ${{ github.workspace }}
-        run: |
-          mkdir -p '${{ env.CCACHE_DIR }}'
-
-      - uses: actions/checkout@v4
-        with:
-          path: velox
-
-      - name: Install Dependencies
-        run: |
-          source scripts/setup-ubuntu.sh && install_apt_deps
-
-      - name: Clear CCache Statistics
-        run: |
-          ccache -sz
-
-      - name: Make Debug Build
-        env:
-          VELOX_DEPENDENCY_SOURCE: BUNDLED
-          MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
-          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON"
-        run: |
-          make debug 
-
-      - name: CCache after
-        run: |
-          ccache -vs
-
-      - uses: assignUser/stash/save@v1
-        with:
-          path: '${{ env.CCACHE_DIR }}'
-          key: ccache-ubuntu-debug-default
-
-      - name: Run Tests
-        run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error
