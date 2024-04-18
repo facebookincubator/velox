@@ -119,7 +119,8 @@ std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>>
 HiveConnectorTestBase::makeHiveConnectorSplits(
     const std::string& filePath,
     uint32_t splitCount,
-    dwio::common::FileFormat format) {
+    dwio::common::FileFormat format,
+    const std::optional<std::string>& rowIndexColumn) {
   auto file =
       filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
   const int64_t fileSize = file->size();
@@ -132,6 +133,7 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
                      .fileFormat(format)
                      .start(i * splitSize)
                      .length(splitSize)
+                     .rowIndexColumn(rowIndexColumn)
                      .build();
     splits.push_back(std::move(split));
   }

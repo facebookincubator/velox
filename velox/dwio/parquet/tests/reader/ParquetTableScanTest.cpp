@@ -56,6 +56,18 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     assertQuery(plan, splits_, sql);
   }
 
+  void assertSelectWithAssignments(
+      std::vector<std::string>&& outputColumnNames,
+      std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>&
+          assignments,
+      const std::string& sql) {
+    auto rowType = getRowType(std::move(outputColumnNames));
+    auto plan = PlanBuilder()
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+    assertQuery(plan, splits_, sql);
+  }
+
   void assertSelectWithFilter(
       std::vector<std::string>&& outputColumnNames,
       const std::vector<std::string>& subfieldFilters,
@@ -104,9 +116,12 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     assertQuery(plan, splits_, sql);
   }
 
-  void
-  loadData(const std::string& filePath, RowTypePtr rowType, RowVectorPtr data) {
-    splits_ = {makeSplit(filePath)};
+  void loadData(
+      const std::string& filePath,
+      RowTypePtr rowType,
+      RowVectorPtr data,
+      const std::optional<std::string>& rowIndexColumn = std::nullopt) {
+    splits_ = {makeSplit(filePath, rowIndexColumn)};
     rowType_ = rowType;
     createDuckDbTable({data});
   }
@@ -117,9 +132,12 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   }
 
   std::shared_ptr<connector::hive::HiveConnectorSplit> makeSplit(
-      const std::string& filePath) {
-    return makeHiveConnectorSplits(
-        filePath, 1, dwio::common::FileFormat::PARQUET)[0];
+      const std::string& filePath,
+      const std::optional<std::string>& rowIndexColumn = std::nullopt) {
+    auto split = makeHiveConnectorSplits(
+        filePath, 1, dwio::common::FileFormat::PARQUET, rowIndexColumn)[0];
+
+    return split;
   }
 
  private:
@@ -455,11 +473,31 @@ TEST_F(ParquetTableScanTest, rowIndex) {
               makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
               makeFlatVector<double>(20, [](auto row) { return row + 1; }),
               makeFlatVector<int64_t>(20, [](auto row) { return row; }),
-          }));
+          }),
+      std::optional<std::string>("_tmp_metadata_row_index"));
+  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+      assignments;
+  assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(
+      "a",
+      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT());
+  assignments["b"] = std::make_shared<connector::hive::HiveColumnHandle>(
+      "b",
+      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      DOUBLE(),
+      DOUBLE());
+  assignments["_tmp_metadata_row_index"] =
+      std::make_shared<connector::hive::HiveColumnHandle>(
+          "_tmp_metadata_row_index",
+          connector::hive::HiveColumnHandle::ColumnType::kRowIndex,
+          BIGINT(),
+          BIGINT());
 
   assertSelect({"a"}, "SELECT a FROM tmp");
-  assertSelect(
+  assertSelectWithAssignments(
       {"a", "_tmp_metadata_row_index"},
+      assignments,
       "SELECT a, _tmp_metadata_row_index FROM tmp");
   // case 2: file has `_tmp_metadata_row_index` column, then use user data
   // insteads of generating it.

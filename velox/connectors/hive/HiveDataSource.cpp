@@ -61,6 +61,10 @@ HiveDataSource::HiveDataSource(
     if (handle->columnType() == HiveColumnHandle::ColumnType::kSynthesized) {
       infoColumns_.emplace(handle->name(), handle);
     }
+
+    if (handle->columnType() == HiveColumnHandle::ColumnType::kRowIndex) {
+      rowIndexColumn_ = handle;
+    }
   }
 
   std::vector<std::string> readerRowNames;
@@ -154,6 +158,7 @@ HiveDataSource::HiveDataSource(
       hiveTableHandle_->dataColumns(),
       partitionKeys_,
       infoColumns_,
+      rowIndexColumn_,
       pool_);
   if (remainingFilter) {
     metadataFilter_ = std::make_shared<common::MetadataFilter>(

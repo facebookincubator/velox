@@ -284,7 +284,7 @@ void SplitReader::createRowReader(
       hiveTableHandle_->tableParameters(),
       scanSpec_,
       metadataFilter,
-      ROW(std::vector<std::string>(columnNames), std::move(columnTypes)),
+      ROW(std::move(columnNames), std::move(columnTypes)),
       hiveSplit_);
   // NOTE: we firstly reset the finished 'baseRowReader_' of previous split
   // before setting up for the next one to avoid doubling the peak memory usage.
@@ -296,20 +296,18 @@ void SplitReader::setRowIndexColumnInfoIfNeed(
     const RowTypePtr& fileType,
     std::vector<std::string>& columnNames,
     std::vector<facebook::velox::TypePtr>& columnTypes) {
-  auto rowIndexMetaColIdx =
-      readerOutputType_->getChildIdxIfExists(kSparkReservedTmpMetaRowIndex);
-  if (rowIndexMetaColIdx.has_value() &&
-      !fileType->containsChild(kSparkReservedTmpMetaRowIndex) &&
-      hiveSplit_->partitionKeys.find(kSparkReservedTmpMetaRowIndex) ==
-          hiveSplit_->partitionKeys.end()) {
-    dwio::common::RowNumberColumnInfo rowNumberColumnInfo;
-    rowNumberColumnInfo.insertPosition = rowIndexMetaColIdx.value();
-    rowNumberColumnInfo.name = kSparkReservedTmpMetaRowIndex;
-    baseRowReaderOpts_.setRowNumberColumnInfo(rowNumberColumnInfo);
-    auto rowIndexColumnScanSpec =
-        scanSpec_->childByName(kSparkReservedTmpMetaRowIndex);
-    if (rowIndexColumnScanSpec) {
-      scanSpec_->removeChild(rowIndexColumnScanSpec);
+  if (hiveSplit_->rowIndexColumn.has_value()) {
+    auto rowIndexColumn = hiveSplit_->rowIndexColumn.value();
+    auto rowIndexMetaColIdx =
+        readerOutputType_->getChildIdxIfExists(rowIndexColumn);
+    if (rowIndexMetaColIdx.has_value() &&
+        !fileType->containsChild(rowIndexColumn) &&
+        hiveSplit_->partitionKeys.find(rowIndexColumn) ==
+            hiveSplit_->partitionKeys.end()) {
+      dwio::common::RowNumberColumnInfo rowNumberColumnInfo;
+      rowNumberColumnInfo.insertPosition = rowIndexMetaColIdx.value();
+      rowNumberColumnInfo.name = rowIndexColumn;
+      baseRowReaderOpts_.setRowNumberColumnInfo(std::move(rowNumberColumnInfo));
     }
   }
 }
@@ -362,7 +360,8 @@ std::vector<TypePtr> SplitReader::adaptColumns(
     } else {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
       if (!fileTypeIdx.has_value()) {
-        if (fieldName != kSparkReservedTmpMetaRowIndex) {
+        if (hiveSplit_->rowIndexColumn.has_value() &&
+            fieldName != hiveSplit_->rowIndexColumn.value()) {
           // Column is missing. Most likely due to schema evolution.
           VELOX_CHECK(tableSchema);
           childSpec->setConstantValue(BaseVector::createNullConstant(

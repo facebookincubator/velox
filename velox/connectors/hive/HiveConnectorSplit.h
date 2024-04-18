@@ -42,6 +42,7 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   /// These represent columns like $file_size, $file_modified_time that are
   /// associated with the HiveSplit.
   std::unordered_map<std::string, std::string> infoColumns;
+  std::optional<std::string> rowIndexColumn;
 
   HiveConnectorSplit(
       const std::string& connectorId,
@@ -56,7 +57,8 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
       const std::shared_ptr<std::string>& _extraFileInfo = {},
       const std::unordered_map<std::string, std::string>& _serdeParameters = {},
       int64_t _splitWeight = 0,
-      const std::unordered_map<std::string, std::string>& _infoColumns = {})
+      const std::unordered_map<std::string, std::string>& _infoColumns = {},
+      const std::optional<std::string>& _rowIndexColumn = std::nullopt)
       : ConnectorSplit(connectorId, _splitWeight),
         filePath(_filePath),
         fileFormat(_fileFormat),
@@ -67,7 +69,8 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
         customSplitInfo(_customSplitInfo),
         extraFileInfo(_extraFileInfo),
         serdeParameters(_serdeParameters),
-        infoColumns(_infoColumns) {}
+        infoColumns(_infoColumns),
+        rowIndexColumn(_rowIndexColumn) {}
 
   std::string toString() const override {
     if (tableBucketNumber.has_value()) {

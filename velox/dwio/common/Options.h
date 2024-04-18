@@ -335,10 +335,10 @@ class RowReaderOptions {
 
   void setRowNumberColumnInfo(
       std::optional<RowNumberColumnInfo> rowNumberColumnInfo) {
-    rowNumberColumnInfo_ = rowNumberColumnInfo;
+    rowNumberColumnInfo_ = std::move(rowNumberColumnInfo);
   }
 
-  const std::optional<RowNumberColumnInfo> getRowNumberColumnInfo() const {
+  const std::optional<RowNumberColumnInfo>& getRowNumberColumnInfo() const {
     return rowNumberColumnInfo_;
   }
 

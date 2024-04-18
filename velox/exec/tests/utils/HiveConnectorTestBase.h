@@ -87,7 +87,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
   makeHiveConnectorSplits(
       const std::string& filePath,
       uint32_t splitCount,
-      dwio::common::FileFormat format);
+      dwio::common::FileFormat format,
+      const std::optional<std::string>& rowIndexColumn = std::nullopt);
 
   static std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
       common::test::SubfieldFilters subfieldFilters = {},
@@ -229,6 +230,11 @@ class HiveConnectorSplitBuilder {
     return *this;
   }
 
+  HiveConnectorSplitBuilder& rowIndexColumn(std::optional<std::string> name) {
+    rowIndexColumn_ = std::move(name);
+    return *this;
+  }
+
   HiveConnectorSplitBuilder& tableBucketNumber(int32_t bucket) {
     tableBucketNumber_ = bucket;
     return *this;
@@ -273,7 +279,8 @@ class HiveConnectorSplitBuilder {
         extraFileInfo,
         serdeParameters,
         splitWeight_,
-        infoColumns_);
+        infoColumns_,
+        rowIndexColumn_);
   }
 
  private:
@@ -282,6 +289,7 @@ class HiveConnectorSplitBuilder {
   uint64_t start_{0};
   uint64_t length_{std::numeric_limits<uint64_t>::max()};
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
+  std::optional<std::string> rowIndexColumn_;
   std::optional<int32_t> tableBucketNumber_;
   std::unordered_map<std::string, std::string> customSplitInfo_ = {};
   std::shared_ptr<std::string> extraFileInfo_ = {};
