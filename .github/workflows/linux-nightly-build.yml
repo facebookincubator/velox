@@ -61,11 +61,11 @@ jobs:
         run: |
           source scripts/setup-centos8.sh
           install_cuda_runtime ${CUDA_VERSION}
-          install_cuda_driver
+          # install_cuda_driver
 
-      - name: Print CUDA version
-        run: |
-          nvidia-smi
+      # - name: Print CUDA version
+      #   run: |
+      #     nvidia-smi
 
       - uses: assignUser/stash/restore@v1
         with:
