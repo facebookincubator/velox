@@ -185,16 +185,16 @@ function install_duckdb {
   fi
 }
 
-function install_cuda {
+function install_cuda_runtime {
   # See https://developer.nvidia.com/cuda-downloads
   dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
   yum install -y cuda-nvcc-$(echo $1 | tr '.' '-') cuda-cudart-devel-$(echo $1 | tr '.' '-')
 }
 
-function install_cuda_toolkit {
+function install_cuda_driver {
   # See https://developer.nvidia.com/cuda-downloads
   dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
-  yum install -y cuda-toolkit-$(echo $1 | tr '.' '-')
+  yum install -y nvidia-driver-cuda
 }
 
 function install_velox_deps {
