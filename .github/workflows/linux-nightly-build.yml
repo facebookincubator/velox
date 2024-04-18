@@ -44,6 +44,8 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
+      CUDA_VERSION: "11.8"
+      CUDA_ARCHITECTURES: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -72,9 +74,7 @@ jobs:
 
       - name: Make Release Build
         env:
-          MAKEFLAGS: 'NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4'
-          CUDA_VERSION: "11.8"
-          CUDA_ARCHITECTURES: 75
+          MAKEFLAGS: 'NUM_THREADS=4 MAX_HIGH_MEM_JOBS=2 MAX_LINK_JOBS=2'
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
           # Without that, nvcc picks /usr/bin/c++ which is GCC 8
           CUDA_FLAGS: "-ccbin /opt/rh/gcc-toolset-9/root/usr/bin"
