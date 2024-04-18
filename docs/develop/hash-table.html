@@ -7,9 +7,11 @@
 
     <title>Hash table &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
+    <script src="../_static/jquery.js?v=5d32c60e"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
@@ -41,12 +43,12 @@
           <div class="body" role="main">
             
   <section id="hash-table">
-<h1>Hash table<a class="headerlink" href="#hash-table" title="Link to this heading">¶</a></h1>
+<h1>Hash table<a class="headerlink" href="#hash-table" title="Link to this heading"></a></h1>
 <p>The hash table used in Velox is similar to the
 <a class="reference external" href="https://engineering.fb.com/2019/04/25/developer-tools/f14/">F14 hash table</a>.
 The main difference is that the Velox hash table allows vectorized inserts and lookups, while F14 doesn’t.</p>
 <section id="layout">
-<h2>Layout<a class="headerlink" href="#layout" title="Link to this heading">¶</a></h2>
+<h2>Layout<a class="headerlink" href="#layout" title="Link to this heading"></a></h2>
 <p>The hash table is implemented as an array of buckets. It is a linear data structure.
 Each bucket uses 128 bytes (2 * 64 = 2 cache lines) and contains 16 slots.
 Each hash table entry occupies one slot. The hash table’s capacity is the total number of slots: total
@@ -64,7 +66,7 @@ On resize the hash table’s capacity doubles.</p>
 If a bucket is partially full, then first N tags and N pointers are filled and the rest are free (N &lt; 16).</p>
 </section>
 <section id="inserting-an-entry">
-<h2>Inserting an entry<a class="headerlink" href="#inserting-an-entry" title="Link to this heading">¶</a></h2>
+<h2>Inserting an entry<a class="headerlink" href="#inserting-an-entry" title="Link to this heading"></a></h2>
 <p>To insert a new entry we need to figure out which slot to put it in.
 A slot is identified by bucket and offset within the bucket. First, we compute a hash of the entry.
 Then, we compute a tag and a bucket number from the hash.</p>
@@ -117,7 +119,7 @@ duplicate existing entry or an empty slot for the new entry. That’s why it is 
 the hash table is never full and there are enough gaps in the form of empty slots.</p>
 </section>
 <section id="resizing">
-<h2>Resizing<a class="headerlink" href="#resizing" title="Link to this heading">¶</a></h2>
+<h2>Resizing<a class="headerlink" href="#resizing" title="Link to this heading"></a></h2>
 <p>If the hash table fills up beyond <span class="raw-html"><text style="font-size:1.2em;background-color:none">⅞</text></span>
 of capacity, it needs to be resized. Each resize doubles the capacity.
 A new hash table is allocated and all existing entries inserted using the “Inserting an entry” process.
@@ -128,7 +130,7 @@ entry if there is space. If the bucket is full, we proceed to the next bucket an
 find a bucket with an empty slot. We insert the new entry there.</p>
 </section>
 <section id="use-cases">
-<h2>Use Cases<a class="headerlink" href="#use-cases" title="Link to this heading">¶</a></h2>
+<h2>Use Cases<a class="headerlink" href="#use-cases" title="Link to this heading"></a></h2>
 <p>The main use cases for the hash table are <a class="reference external" href="joins.html">Join</a> and
 <a class="reference external" href="aggregations.html">Aggregation</a> operators.</p>
 <p>The HashBuild operator builds the hash table to store unique values of the join keys found on the build
@@ -141,7 +143,7 @@ refer to rows in a RowContainer that store grouping keys along with accumulators
 functions.</p>
 </section>
 <section id="implementation">
-<h2>Implementation<a class="headerlink" href="#implementation" title="Link to this heading">¶</a></h2>
+<h2>Implementation<a class="headerlink" href="#implementation" title="Link to this heading"></a></h2>
 <p>The hash table is implemented by the <code class="docutils literal notranslate"><span class="pre">HashTable</span></code> class in namespace <code class="docutils literal notranslate"><span class="pre">facebook::velox::exec</span></code>.</p>
 </section>
 </section>
@@ -184,7 +186,7 @@ functions.</p>
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
-<div id="searchbox" style="display: none" role="search">
+<search id="searchbox" style="display: none" role="search">
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../search.html" method="get">
@@ -192,7 +194,7 @@ functions.</p>
       <input type="submit" value="Go" />
     </form>
     </div>
-</div>
+</search>
 <script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
@@ -217,7 +219,7 @@ functions.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
     </div>
   </body>
 </html>

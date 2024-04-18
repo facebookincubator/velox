@@ -7,9 +7,11 @@
 
     <title>December 2023 Update &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/jquery.js?v=5d32c60e"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -41,15 +43,15 @@
           <div class="body" role="main">
             
   <section id="december-2023-update">
-<h1>December 2023 Update<a class="headerlink" href="#december-2023-update" title="Link to this heading">¶</a></h1>
+<h1>December 2023 Update<a class="headerlink" href="#december-2023-update" title="Link to this heading"></a></h1>
 <section id="documentation">
-<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add documentation for <span class="xref std std-doc">Runtime Metrics</span>.</p></li>
 </ul>
 </section>
 <section id="core-library">
-<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add support for <code class="docutils literal notranslate"><span class="pre">k</span> <span class="pre">range</span> <span class="pre">frames</span></code> in <code class="docutils literal notranslate"><span class="pre">Window</span></code> operator.</p></li>
 <li><p>Add support for aggregations over sorted inputs to <code class="docutils literal notranslate"><span class="pre">StreamingAggregation</span></code>.</p></li>
@@ -72,7 +74,7 @@ when the buffer size exceeds this config.</p></li>
 </ul>
 </section>
 <section id="presto-functions">
-<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add support for TIMESTAMP WITH TIME ZONE input type to <code class="xref py py-func docutils literal notranslate"><span class="pre">format_datetime()</span></code> function.</p></li>
 <li><p>Add support for UNKNOWN key type to <a class="reference internal" href="../../functions/presto/map.html#map_keys" title="map_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_keys()</span></code></a> and <a class="reference internal" href="../../functions/presto/map.html#map_values" title="map_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_values()</span></code></a> functions.</p></li>
@@ -94,14 +96,14 @@ invalid offsets and sizes.</p></li>
 </ul>
 </section>
 <section id="spark-functions">
-<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference internal" href="../../functions/spark/string.html#str_to_map" title="str_to_map"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">str_to_map()</span></code></a>, <a class="reference internal" href="../../functions/spark/datetime.html#next_day" title="next_day"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">next_day()</span></code></a>, <a class="reference internal" href="../../functions/spark/math.html#atan2" title="atan2"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">atan2()</span></code></a> functions.</p></li>
 <li><p>Add support for DECIMAL types to <a class="reference internal" href="../../functions/spark/math.html#id0" title="add"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">add()</span></code></a> and <a class="reference internal" href="../../functions/spark/math.html#id7" title="subtract"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">subtract()</span></code></a> functions.</p></li>
 </ul>
 </section>
 <section id="hive-connector">
-<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add support for multiple S3 FileSystems. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7388">#7388</a></p></li>
 <li><p>Add support to write dictionary and constant encoded vectors to Parquet by flattening them.</p></li>
@@ -111,20 +113,20 @@ invalid offsets and sizes.</p></li>
 </ul>
 </section>
 <section id="arrow">
-<h2>Arrow<a class="headerlink" href="#arrow" title="Link to this heading">¶</a></h2>
+<h2>Arrow<a class="headerlink" href="#arrow" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Fix exporting an REE array by setting the child name to the canonical name defined in the Arrow spec. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7802">#7802</a></p></li>
 </ul>
 </section>
 <section id="performance-and-correctness">
-<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add support for lambda functions to ExpressionFuzzer.</p></li>
 <li><p>Add ExchangeFuzzer.</p></li>
 </ul>
 </section>
 <section id="build">
-<h2>Build<a class="headerlink" href="#build" title="Link to this heading">¶</a></h2>
+<h2>Build<a class="headerlink" href="#build" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add support for docker image with Presto.</p></li>
 <li><p>Add support for <a class="reference external" href="https://github.com/Azure/azure-sdk-for-cpp/releases/tag/azure-storage-files-datalake_12.8.0">azure-storage-files-datalake</a> version 12.8.0.</p></li>
@@ -133,7 +135,7 @@ invalid offsets and sizes.</p></li>
 </ul>
 </section>
 <section id="credits">
-<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading"></a></h2>
 <p>Aditi Pandit, Amit Dutta, Bikramjeet Vig, Chengcheng Jin, Christian Zentgraf, Daniel Munoz,
 Deepak Majeti, Ge Gao, Harvey Hunt, HolyLow, Hongze Zhang, Jacob Wujciak-Jens, Jia, Jia Ke,
 Jialiang Tan, Jimmy Lu, Jubin Chheda, Karteekmurthys, Ke, Kevin Wilfong, Krishna Pai,
@@ -188,7 +190,7 @@ zhli, zhli1142015, 高阳阳</p>
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
-<div id="searchbox" style="display: none" role="search">
+<search id="searchbox" style="display: none" role="search">
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../../search.html" method="get">
@@ -196,7 +198,7 @@ zhli, zhli1142015, 高阳阳</p>
       <input type="submit" value="Go" />
     </form>
     </div>
-</div>
+</search>
 <script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
@@ -222,7 +224,7 @@ zhli, zhli1142015, 高阳阳</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
     </div>
   </body>
 </html>

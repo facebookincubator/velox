@@ -7,9 +7,11 @@
 
     <title>Aggregations &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
+    <script src="../_static/jquery.js?v=5d32c60e"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -40,7 +42,7 @@
           <div class="body" role="main">
             
   <section id="aggregations">
-<h1>Aggregations<a class="headerlink" href="#aggregations" title="Link to this heading">¶</a></h1>
+<h1>Aggregations<a class="headerlink" href="#aggregations" title="Link to this heading"></a></h1>
 <p>This article discusses aggregation-related optimizations in Velox. We go through
 the different techniques and provide examples and define the conditions for the
 application of each.</p>
@@ -127,7 +129,7 @@ expression:</p>
 <li><p>AggregationNode: groupingKeys = {}, aggregates = {sum(a), avg(b)}</p></li>
 </ul>
 <section id="hashaggregation-and-streamingaggregation-operators">
-<h2>HashAggregation and StreamingAggregation Operators<a class="headerlink" href="#hashaggregation-and-streamingaggregation-operators" title="Link to this heading">¶</a></h2>
+<h2>HashAggregation and StreamingAggregation Operators<a class="headerlink" href="#hashaggregation-and-streamingaggregation-operators" title="Link to this heading"></a></h2>
 <p>AggregationNode is translated to the HashAggregation operator for execution.
 Distinct aggregations, e.g. aggregations with no aggregates, run in streaming
 mode. For each batch of input rows, the operator determines a set of new
@@ -146,7 +148,7 @@ the total amount of memory used and allows to unblock downstream operators
 faster.</p>
 </section>
 <section id="push-down-into-table-scan">
-<h2>Push-Down into Table Scan<a class="headerlink" href="#push-down-into-table-scan" title="Link to this heading">¶</a></h2>
+<h2>Push-Down into Table Scan<a class="headerlink" href="#push-down-into-table-scan" title="Link to this heading"></a></h2>
 <p>HashAggregation operator supports pushing down aggregations into table scan.
 Pushdown is enabled when all of the following conditions are met:</p>
 <ul class="simple">
@@ -176,7 +178,7 @@ the accumulator. No intermediate vector is produced in this case.</p>
 <a class="reference internal" href="../functions/presto/aggregate.html#bool_or" title="bool_or"><code class="xref py py-func docutils literal notranslate"><span class="pre">bool_or()</span></code></a>.</p>
 </section>
 <section id="adaptive-array-based-aggregation">
-<h2>Adaptive Array-Based Aggregation<a class="headerlink" href="#adaptive-array-based-aggregation" title="Link to this heading">¶</a></h2>
+<h2>Adaptive Array-Based Aggregation<a class="headerlink" href="#adaptive-array-based-aggregation" title="Link to this heading"></a></h2>
 <p>HashAggregation operator stores aggregated data in rows. Each row corresponds to
 a unique combination of grouping key values. Global aggregations store data in
 a single row. Check out the Memory Layout section of <a class="reference internal" href="aggregate-functions.html"><span class="doc">How to add an aggregate
@@ -184,7 +186,7 @@ function?</span></a> guide for details.</p>
 <p>Data rows are organized into a hash table which can be in either hash, array or
 normalized key mode.</p>
 <section id="hash-mode">
-<h3>Hash mode<a class="headerlink" href="#hash-mode" title="Link to this heading">¶</a></h3>
+<h3>Hash mode<a class="headerlink" href="#hash-mode" title="Link to this heading"></a></h3>
 <p>In hash mode, the processing of incoming rows consists of the following steps:</p>
 <ul class="simple">
 <li><p>calculate a hash of the grouping keys,</p></li>
@@ -195,7 +197,7 @@ normalized key mode.</p>
 </ul>
 </section>
 <section id="array-mode">
-<h3>Array mode<a class="headerlink" href="#array-mode" title="Link to this heading">¶</a></h3>
+<h3>Array mode<a class="headerlink" href="#array-mode" title="Link to this heading"></a></h3>
 <p>In array mode, there is an array of pointers to data rows. The grouping key
 values of the incoming rows are mapped to a single integer which is used as an
 index into the array. Entries with no matching grouping keys store nullptr.</p>
@@ -288,7 +290,7 @@ Otherwise, the resulting number could be used in normalized key mode.</p>
 value IDs.</p>
 </section>
 <section id="normalized-key-mode">
-<h3>Normalized Key Mode<a class="headerlink" href="#normalized-key-mode" title="Link to this heading">¶</a></h3>
+<h3>Normalized Key Mode<a class="headerlink" href="#normalized-key-mode" title="Link to this heading"></a></h3>
 <p>In normalized key mode, multiple grouping key values are mapped to a single
 64-bit integer and the processing continues as in hash mode with a single
 64-bit integer grouping key. This mode is less efficient than array mode, but
@@ -296,7 +298,7 @@ is more efficient than hash mode because hashing and comparing a single 64-bit
 integer value is faster than hashing and comparing multiple values.</p>
 </section>
 <section id="adaptivity">
-<h3>Adaptivity<a class="headerlink" href="#adaptivity" title="Link to this heading">¶</a></h3>
+<h3>Adaptivity<a class="headerlink" href="#adaptivity" title="Link to this heading"></a></h3>
 <p>Hash table mode is decided adaptively starting with array mode and switching to
 normalized key or hash mode if the new values of the grouping keys require
 that. When switching modes the hash table needs to be re-organized. Once in
@@ -313,7 +315,7 @@ following types: boolean, tinyint, smallint, integer, bigint, varchar.</p>
 </section>
 </section>
 <section id="adaptive-disabling-of-partial-aggregation">
-<h2>Adaptive Disabling of Partial Aggregation<a class="headerlink" href="#adaptive-disabling-of-partial-aggregation" title="Link to this heading">¶</a></h2>
+<h2>Adaptive Disabling of Partial Aggregation<a class="headerlink" href="#adaptive-disabling-of-partial-aggregation" title="Link to this heading"></a></h2>
 <p>Sometimes partial aggregation encounters mostly unique keys and is not able to
 meaningfully reduce cardinality of the data. In this case, it is more efficient
 to skip partial aggregation and proceed to shuffle the data and compute final
@@ -421,7 +423,7 @@ partial aggregation was abandoned.</p>
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
-<div id="searchbox" style="display: none" role="search">
+<search id="searchbox" style="display: none" role="search">
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../search.html" method="get">
@@ -429,7 +431,7 @@ partial aggregation was abandoned.</p>
       <input type="submit" value="Go" />
     </form>
     </div>
-</div>
+</search>
 <script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
@@ -454,7 +456,7 @@ partial aggregation was abandoned.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
     </div>
   </body>
 </html>

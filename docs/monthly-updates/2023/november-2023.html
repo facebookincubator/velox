@@ -7,9 +7,11 @@
 
     <title>November 2023 Update &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/jquery.js?v=5d32c60e"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -41,9 +43,9 @@
           <div class="body" role="main">
             
   <section id="november-2023-update">
-<h1>November 2023 Update<a class="headerlink" href="#november-2023-update" title="Link to this heading">¶</a></h1>
+<h1>November 2023 Update<a class="headerlink" href="#november-2023-update" title="Link to this heading"></a></h1>
 <section id="core-library">
-<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add spilling support for aggregations over distinct or sorted inputs. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7305">#7305</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7526">#7526</a></p></li>
 <li><p>Add support to lazily create the spill directory. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7660">#7660</a></p></li>
@@ -63,7 +65,7 @@ the expected result is a row per global grouping set with the groupId as the key
 </ul>
 </section>
 <section id="presto-functions">
-<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference internal" href="../../functions/presto/math.html#cosine_similarity" title="cosine_similarity"><code class="xref py py-func docutils literal notranslate"><span class="pre">cosine_similarity()</span></code></a> scalar function.</p></li>
 <li><p>Add support for INTERVAL DAY TO SECOND type input to <a class="reference internal" href="../../functions/presto/math.html#plus" title="plus"><code class="xref py py-func docutils literal notranslate"><span class="pre">plus()</span></code></a>, <a class="reference internal" href="../../functions/presto/math.html#minus" title="minus"><code class="xref py py-func docutils literal notranslate"><span class="pre">minus()</span></code></a>, <a class="reference internal" href="../../functions/presto/math.html#multiply" title="multiply"><code class="xref py py-func docutils literal notranslate"><span class="pre">multiply()</span></code></a> functions.</p></li>
@@ -81,7 +83,7 @@ the expected result is a row per global grouping set with the groupId as the key
 </ul>
 </section>
 <section id="spark-functions">
-<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference internal" href="../../functions/spark/datetime.html#month" title="month"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">month()</span></code></a>, <a class="reference internal" href="../../functions/spark/datetime.html#quarter" title="quarter"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">quarter()</span></code></a>, <a class="reference internal" href="../../functions/spark/decimal.html#unscaled_value" title="unscaled_value"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">unscaled_value()</span></code></a>, <code class="xref spark spark-func docutils literal notranslate"><span class="pre">regex_replace()</span></code>
 scalar functions.</p></li>
@@ -93,7 +95,7 @@ scalar functions.</p></li>
 </ul>
 </section>
 <section id="hive-connector">
-<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add DirectBufferedInput: a selective BufferedInput without caching. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7217">#7217</a></p></li>
 <li><p>Add support for reading UNSIGNED INTEGER types in Parquet format. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6728">#6728</a></p></li>
@@ -104,7 +106,7 @@ scalar functions.</p></li>
 </ul>
 </section>
 <section id="arrow">
-<h2>Arrow<a class="headerlink" href="#arrow" title="Link to this heading">¶</a></h2>
+<h2>Arrow<a class="headerlink" href="#arrow" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add support to export constant vector as <a class="reference external" href="https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout">Arrow REE
 array</a>. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7327">#7327</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7398">#7398</a></p></li>
@@ -113,7 +115,7 @@ array</a>. <a class="reference external" href="https://github.com/facebookincuba
 </ul>
 </section>
 <section id="performance-and-correctness">
-<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add PrestoQueryRunner that can be used to verify test results against Presto. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7628">#7628</a></p></li>
 <li><p>Add support for plans with TableScan in Join Fuzzer. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7571">#7571</a></p></li>
@@ -134,7 +136,7 @@ array</a>. <a class="reference external" href="https://github.com/facebookincuba
 </ul>
 </section>
 <section id="build">
-<h2>Build<a class="headerlink" href="#build" title="Link to this heading">¶</a></h2>
+<h2>Build<a class="headerlink" href="#build" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Add DuckDB version 0.8.1 as an external dependency and remove DuckDB amalgamation. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/6725">#6725</a></p></li>
 <li><p>Add <a class="reference external" href="https://github.com/libcpr/cpr">libcpr</a> a lightweight http client. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/7385">#7385</a></p></li>
@@ -142,7 +144,7 @@ array</a>. <a class="reference external" href="https://github.com/facebookincuba
 </ul>
 </section>
 <section id="credits">
-<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading"></a></h2>
 <p>Alex Hornby, Amit Dutta, Andrii Rosa, Austin Dickey Bikramjeet Vig, Cheng Huang, Chengcheng Jin, Christopher Ponce de Leon,
 Daniel Munoz, Deepak Majeti, Ge Gao, Genevieve (Genna) Helsel, Harvey Hunt, Jake Jung, Jia, Jia Ke, Jialiang Tan,
 Jimmy Lu, John Elliott, Karteekmurthys, Ke, Kevin Wilfong, Krishna Pai, Laith Sakka, Masha Basmanova, Orri Erling,
@@ -193,7 +195,7 @@ xumingming, yangchuan, yaqi-zhao, yingsu00, yiweiHeOSS, youxiduo, zhli, 高阳�
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
-<div id="searchbox" style="display: none" role="search">
+<search id="searchbox" style="display: none" role="search">
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../../search.html" method="get">
@@ -201,7 +203,7 @@ xumingming, yangchuan, yaqi-zhao, yingsu00, yiweiHeOSS, youxiduo, zhli, 高阳�
       <input type="submit" value="Go" />
     </form>
     </div>
-</div>
+</search>
 <script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
@@ -227,7 +229,7 @@ xumingming, yangchuan, yaqi-zhao, yingsu00, yiweiHeOSS, youxiduo, zhli, 高阳�
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
     </div>
   </body>
 </html>

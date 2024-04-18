@@ -7,9 +7,11 @@
 
     <title>Plan Nodes and Operators &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=601dbdee" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
+    <script src="../_static/jquery.js?v=5d32c60e"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -40,7 +42,7 @@
           <div class="body" role="main">
             
   <section id="plan-nodes-and-operators">
-<h1>Plan Nodes and Operators<a class="headerlink" href="#plan-nodes-and-operators" title="Link to this heading">¶</a></h1>
+<h1>Plan Nodes and Operators<a class="headerlink" href="#plan-nodes-and-operators" title="Link to this heading"></a></h1>
 <p>Velox query plan is a tree of PlanNode’s. Each PlanNode has zero or more child
 PlanNode’s. To execute a query plan, Velox converts it into a set of pipelines.
 Each pipeline is made of a linear sequence of operators that corresponds to a
@@ -186,9 +188,9 @@ of plan nodes can be located at the leaves of the plan tree. These are:</p>
 </tbody>
 </table>
 <section id="plan-nodes">
-<h2>Plan Nodes<a class="headerlink" href="#plan-nodes" title="Link to this heading">¶</a></h2>
+<h2>Plan Nodes<a class="headerlink" href="#plan-nodes" title="Link to this heading"></a></h2>
 <section id="tablescannode">
-<span id="id1"></span><h3>TableScanNode<a class="headerlink" href="#tablescannode" title="Link to this heading">¶</a></h3>
+<span id="id1"></span><h3>TableScanNode<a class="headerlink" href="#tablescannode" title="Link to this heading"></a></h3>
 <p>The table scan operation reads data from a <a class="reference internal" href="connectors.html"><span class="doc">connector</span></a>. For example, when used
 with HiveConnector, table scan reads data from ORC or Parquet files.</p>
 <table class="docutils align-left">
@@ -215,7 +217,7 @@ with HiveConnector, table scan reads data from ORC or Parquet files.</p>
 </table>
 </section>
 <section id="arrowstreamnode">
-<span id="arrowstream-operator"></span><h3>ArrowStreamNode<a class="headerlink" href="#arrowstreamnode" title="Link to this heading">¶</a></h3>
+<span id="arrowstream-operator"></span><h3>ArrowStreamNode<a class="headerlink" href="#arrowstreamnode" title="Link to this heading"></a></h3>
 <p>The Arrow stream operation reads data from an Arrow array stream. The ArrowArrayStream structure is defined in Arrow abi,
 and provides the required callbacks to interact with a streaming source of Arrow arrays.</p>
 <table class="docutils align-left">
@@ -236,7 +238,7 @@ and provides the required callbacks to interact with a streaming source of Arrow
 </table>
 </section>
 <section id="filternode">
-<h3>FilterNode<a class="headerlink" href="#filternode" title="Link to this heading">¶</a></h3>
+<h3>FilterNode<a class="headerlink" href="#filternode" title="Link to this heading"></a></h3>
 <p>The filter operation eliminates one or more records from the input data based
 on a boolean filter expression.</p>
 <table class="docutils align-left">
@@ -257,7 +259,7 @@ on a boolean filter expression.</p>
 </table>
 </section>
 <section id="projectnode">
-<h3>ProjectNode<a class="headerlink" href="#projectnode" title="Link to this heading">¶</a></h3>
+<h3>ProjectNode<a class="headerlink" href="#projectnode" title="Link to this heading"></a></h3>
 <p>The project operation produces one or more additional expressions based on the
 inputs of the dataset. The project operation may also drop one or more of the
 input columns.</p>
@@ -282,7 +284,7 @@ input columns.</p>
 </table>
 </section>
 <section id="aggregationnode">
-<span id="id2"></span><h3>AggregationNode<a class="headerlink" href="#aggregationnode" title="Link to this heading">¶</a></h3>
+<span id="id2"></span><h3>AggregationNode<a class="headerlink" href="#aggregationnode" title="Link to this heading"></a></h3>
 <p>The aggregate operation groups input data on a set of grouping keys, calculating
 each measure for each combination of the grouping keys. Optionally, inputs for
 individual measures are sorted and de-duplicated.</p>
@@ -431,7 +433,7 @@ returns a single row for it with the aggregates default value.</p>
 <p>Hence, globalGroupingSets is a vector of groupIds.</p>
 </section>
 <section id="expandnode">
-<span id="id3"></span><h3>ExpandNode<a class="headerlink" href="#expandnode" title="Link to this heading">¶</a></h3>
+<span id="id3"></span><h3>ExpandNode<a class="headerlink" href="#expandnode" title="Link to this heading"></a></h3>
 <p>For each input row, generates N rows with M columns according to specified ‘projections’.
 ‘projections’ is an N x M matrix of expressions: a vector of N rows each having M columns.
 Each expression is either a column reference or a constant. Both null and non-null constants are allowed.
@@ -543,7 +545,7 @@ constructor within the Project operation.</p>
 </div>
 </section>
 <section id="groupidnode">
-<span id="id4"></span><h3>GroupIdNode<a class="headerlink" href="#groupidnode" title="Link to this heading">¶</a></h3>
+<span id="id4"></span><h3>GroupIdNode<a class="headerlink" href="#groupidnode" title="Link to this heading"></a></h3>
 <p>Duplicates the input for each of the specified grouping key sets. Used to
 implement aggregations over grouping sets.</p>
 <p>The output consists of grouping keys, followed by aggregation inputs,
@@ -629,7 +631,7 @@ distinct orderkeys and the count of all orderkeys.</p>
 </div>
 </section>
 <section id="hashjoinnode-and-mergejoinnode">
-<h3>HashJoinNode and MergeJoinNode<a class="headerlink" href="#hashjoinnode-and-mergejoinnode" title="Link to this heading">¶</a></h3>
+<h3>HashJoinNode and MergeJoinNode<a class="headerlink" href="#hashjoinnode-and-mergejoinnode" title="Link to this heading"></a></h3>
 <p>The join operation combines two separate inputs into a single output, based on a
 join expression. A common subtype of joins is an equality join where the join
 expression is constrained to a list of equality (or equality + null equality)
@@ -673,7 +675,7 @@ and emitting results.</p>
 </table>
 </section>
 <section id="nestedloopjoinnode">
-<h3>NestedLoopJoinNode<a class="headerlink" href="#nestedloopjoinnode" title="Link to this heading">¶</a></h3>
+<h3>NestedLoopJoinNode<a class="headerlink" href="#nestedloopjoinnode" title="Link to this heading"></a></h3>
 <p>NestedLoopJoinNode represents an implementation that iterates through each row from
 the left side of the join and, for each row, iterates through all rows from the right
 side of the join, comparing them based on the join condition to find matching rows
@@ -702,7 +704,7 @@ and emitting results. Nested loop join supports non-equality join.</p>
 </table>
 </section>
 <section id="orderbynode">
-<h3>OrderByNode<a class="headerlink" href="#orderbynode" title="Link to this heading">¶</a></h3>
+<h3>OrderByNode<a class="headerlink" href="#orderbynode" title="Link to this heading"></a></h3>
 <p>The sort or order by operation reorders a dataset based on one or more
 identified sort fields as well as a sorting order.</p>
 <table class="docutils align-left">
@@ -729,7 +731,7 @@ identified sort fields as well as a sorting order.</p>
 </table>
 </section>
 <section id="topnnode">
-<h3>TopNNode<a class="headerlink" href="#topnnode" title="Link to this heading">¶</a></h3>
+<h3>TopNNode<a class="headerlink" href="#topnnode" title="Link to this heading"></a></h3>
 <p>The top-n operation reorders a dataset based on one or more identified sort
 fields as well as a sorting order. Rather than sort the entire dataset, the
 top-n will only maintain the total number of records required to ensure a
@@ -762,7 +764,7 @@ operations.</p>
 </table>
 </section>
 <section id="limitnode">
-<h3>LimitNode<a class="headerlink" href="#limitnode" title="Link to this heading">¶</a></h3>
+<h3>LimitNode<a class="headerlink" href="#limitnode" title="Link to this heading"></a></h3>
 <p>The limit operation skips a specified number of input rows and then keeps up to a
 specified number of rows and drops the rest.</p>
 <table class="docutils align-left">
@@ -789,7 +791,7 @@ specified number of rows and drops the rest.</p>
 </table>
 </section>
 <section id="unnestnode">
-<h3>UnnestNode<a class="headerlink" href="#unnestnode" title="Link to this heading">¶</a></h3>
+<h3>UnnestNode<a class="headerlink" href="#unnestnode" title="Link to this heading"></a></h3>
 <p>The unnest operation expands arrays and maps into separate columns. Arrays are
 expanded into a single column, and maps are expanded into two columns
 (key, value). Can be used to expand multiple columns. In this case produces as
@@ -823,7 +825,7 @@ number starting with 1.</p>
 </table>
 </section>
 <section id="tablewritenode">
-<span id="id5"></span><h3>TableWriteNode<a class="headerlink" href="#tablewritenode" title="Link to this heading">¶</a></h3>
+<span id="id5"></span><h3>TableWriteNode<a class="headerlink" href="#tablewritenode" title="Link to this heading"></a></h3>
 <p>The table write operation consumes one output and writes it to storage via a
 <a class="reference internal" href="connectors.html"><span class="doc">connector</span></a>. An example would be writing ORC or Parquet files. The table write
 operation return a list of columns containing the metadata of the written
@@ -859,7 +861,7 @@ the written file paths on storage and the collected column stats.</p>
 </table>
 </section>
 <section id="tablewritemergenode">
-<h3>TableWriteMergeNode<a class="headerlink" href="#tablewritemergenode" title="Link to this heading">¶</a></h3>
+<h3>TableWriteMergeNode<a class="headerlink" href="#tablewritemergenode" title="Link to this heading"></a></h3>
 <p>The table write merge operation aggregates the metadata outputs from multiple
 table write operations and returns the aggregated result.</p>
 <table class="docutils align-left">
@@ -880,7 +882,7 @@ table write operations and returns the aggregated result.</p>
 </table>
 </section>
 <section id="partitionedoutputnode">
-<h3>PartitionedOutputNode<a class="headerlink" href="#partitionedoutputnode" title="Link to this heading">¶</a></h3>
+<h3>PartitionedOutputNode<a class="headerlink" href="#partitionedoutputnode" title="Link to this heading"></a></h3>
 <p>The partitioned output operation redistributes data based on zero or more
 distribution fields.</p>
 <table class="docutils align-left">
@@ -916,7 +918,7 @@ distribution fields.</p>
 </table>
 </section>
 <section id="valuesnode">
-<h3>ValuesNode<a class="headerlink" href="#valuesnode" title="Link to this heading">¶</a></h3>
+<h3>ValuesNode<a class="headerlink" href="#valuesnode" title="Link to this heading"></a></h3>
 <p>The values operation returns specified data.</p>
 <table class="docutils align-left">
 <colgroup>
@@ -942,7 +944,7 @@ distribution fields.</p>
 </table>
 </section>
 <section id="exchangenode">
-<h3>ExchangeNode<a class="headerlink" href="#exchangenode" title="Link to this heading">¶</a></h3>
+<h3>ExchangeNode<a class="headerlink" href="#exchangenode" title="Link to this heading"></a></h3>
 <p>A receiving operation that merges multiple streams in an arbitrary order. Input
 streams are coming from remote exchange or shuffle.</p>
 <table class="docutils align-left">
@@ -963,7 +965,7 @@ streams are coming from remote exchange or shuffle.</p>
 </table>
 </section>
 <section id="mergeexchangenode">
-<h3>MergeExchangeNode<a class="headerlink" href="#mergeexchangenode" title="Link to this heading">¶</a></h3>
+<h3>MergeExchangeNode<a class="headerlink" href="#mergeexchangenode" title="Link to this heading"></a></h3>
 <p>A receiving operation that merges multiple ordered streams to maintain
 orderedness. Input streams are coming from remote exchange or shuffle.</p>
 <table class="docutils align-left">
@@ -990,7 +992,7 @@ orderedness. Input streams are coming from remote exchange or shuffle.</p>
 </table>
 </section>
 <section id="localmergenode">
-<h3>LocalMergeNode<a class="headerlink" href="#localmergenode" title="Link to this heading">¶</a></h3>
+<h3>LocalMergeNode<a class="headerlink" href="#localmergenode" title="Link to this heading"></a></h3>
 <p>An operation that merges multiple ordered streams to maintain orderedness. Input
 streams are coming from local exchange.</p>
 <table class="docutils align-left">
@@ -1014,7 +1016,7 @@ streams are coming from local exchange.</p>
 </table>
 </section>
 <section id="localpartitionnode">
-<h3>LocalPartitionNode<a class="headerlink" href="#localpartitionnode" title="Link to this heading">¶</a></h3>
+<h3>LocalPartitionNode<a class="headerlink" href="#localpartitionnode" title="Link to this heading"></a></h3>
 <p>A local exchange operation that partitions input data into multiple streams or
 combines data from multiple streams into a single stream.</p>
 <table class="docutils align-left">
@@ -1041,14 +1043,14 @@ combines data from multiple streams into a single stream.</p>
 </table>
 </section>
 <section id="enforcesinglerownode">
-<h3>EnforceSingleRowNode<a class="headerlink" href="#enforcesinglerownode" title="Link to this heading">¶</a></h3>
+<h3>EnforceSingleRowNode<a class="headerlink" href="#enforcesinglerownode" title="Link to this heading"></a></h3>
 <p>The enforce single row operation checks that input contains at most one row and
 returns that row unmodified. If input is empty, returns a single row with all
 values set to null. If input contains more than one row raises an exception.</p>
 <p>Used for queries with non-correlated sub-queries.</p>
 </section>
 <section id="assignuniqueidnode">
-<h3>AssignUniqueIdNode<a class="headerlink" href="#assignuniqueidnode" title="Link to this heading">¶</a></h3>
+<h3>AssignUniqueIdNode<a class="headerlink" href="#assignuniqueidnode" title="Link to this heading"></a></h3>
 <p>The assign unique id operation adds one column at the end of the input columns
 with unique value per row. This unique value marks each output row to be unique
 among all output rows of this operator.</p>
@@ -1078,7 +1080,7 @@ the nodes executing the same query stage in a distributed query execution.</p>
 </table>
 </section>
 <section id="windownode">
-<span id="id6"></span><h3>WindowNode<a class="headerlink" href="#windownode" title="Link to this heading">¶</a></h3>
+<span id="id6"></span><h3>WindowNode<a class="headerlink" href="#windownode" title="Link to this heading"></a></h3>
 <p>The Window operator is used to evaluate window functions. The operator adds columns
 for the window functions output at the end of the input columns.</p>
 <p>The window operator groups the input data into partitions based on the values
@@ -1120,7 +1122,7 @@ If no sorting columns are specified then the order of the results is unspecified
 </table>
 </section>
 <section id="rownumbernode">
-<h3>RowNumberNode<a class="headerlink" href="#rownumbernode" title="Link to this heading">¶</a></h3>
+<h3>RowNumberNode<a class="headerlink" href="#rownumbernode" title="Link to this heading"></a></h3>
 <p>An optimized version of a WindowNode with a single row_number function, an
 optional limit, and no sorting.</p>
 <p>Partitions the input using specified partitioning keys and assigns row numbers
@@ -1157,7 +1159,7 @@ results available before seeing all input.</p>
 </table>
 </section>
 <section id="topnrownumbernode">
-<h3>TopNRowNumberNode<a class="headerlink" href="#topnrownumbernode" title="Link to this heading">¶</a></h3>
+<h3>TopNRowNumberNode<a class="headerlink" href="#topnrownumbernode" title="Link to this heading"></a></h3>
 <p>An optimized version of a WindowNode with a single row_number function and a
 limit over sorted partitions.</p>
 <p>Partitions the input using specified partitioning keys and maintains up to
@@ -1198,7 +1200,7 @@ FilterNode(row_number &lt;= limit), but it uses less memory and CPU.</p>
 </table>
 </section>
 <section id="markdistinctnode">
-<h3>MarkDistinctNode<a class="headerlink" href="#markdistinctnode" title="Link to this heading">¶</a></h3>
+<h3>MarkDistinctNode<a class="headerlink" href="#markdistinctnode" title="Link to this heading"></a></h3>
 <p>The MarkDistinct operator is used to produce aggregate mask columns for aggregations over distinct values, e.g. agg(DISTINCT a).
 Mask is a boolean column set to true for a subset of input rows that collectively represent a set of unique values of ‘distinctKeys’.</p>
 <table class="docutils align-left">
@@ -1223,9 +1225,9 @@ Mask is a boolean column set to true for a subset of input rows that collectivel
 </section>
 </section>
 <section id="examples">
-<h2>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h2>
+<h2>Examples<a class="headerlink" href="#examples" title="Link to this heading"></a></h2>
 <section id="join">
-<h3>Join<a class="headerlink" href="#join" title="Link to this heading">¶</a></h3>
+<h3>Join<a class="headerlink" href="#join" title="Link to this heading"></a></h3>
 <p>A query plan with a join includes a HashJoinNode. Such a plan is translated into
 two pipelines: build and probe. Build pipeline is processing input from the
 build side of the join and uses HashBuild operator to build a hash table. Probe
@@ -1247,7 +1249,7 @@ condition.</p>
 <a class="reference internal image-reference" href="../_images/join.png"><img alt="../_images/join.png" class="align-center" src="../_images/join.png" style="width: 400px;" /></a>
 </section>
 <section id="local-exchange">
-<h3>Local Exchange<a class="headerlink" href="#local-exchange" title="Link to this heading">¶</a></h3>
+<h3>Local Exchange<a class="headerlink" href="#local-exchange" title="Link to this heading"></a></h3>
 <p>A local exchange operation has multiple uses. It is used to change the
 parallelism of the data processing from multi-threaded to single-threaded or
 vice versa. For example, local exchange can be used in a sort operation where
@@ -1336,7 +1338,7 @@ ALL.</p>
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
-<div id="searchbox" style="display: none" role="search">
+<search id="searchbox" style="display: none" role="search">
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../search.html" method="get">
@@ -1344,7 +1346,7 @@ ALL.</p>
       <input type="submit" value="Go" />
     </form>
     </div>
-</div>
+</search>
 <script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
@@ -1369,7 +1371,7 @@ ALL.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
     </div>
   </body>
 </html>

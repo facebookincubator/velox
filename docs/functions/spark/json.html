@@ -7,9 +7,11 @@
 
     <title>JSON Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/jquery.js?v=5d32c60e"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -40,9 +42,9 @@
           <div class="body" role="main">
             
   <section id="json-functions">
-<h1>JSON Functions<a class="headerlink" href="#json-functions" title="Link to this heading">¶</a></h1>
+<h1>JSON Functions<a class="headerlink" href="#json-functions" title="Link to this heading"></a></h1>
 <section id="json-format">
-<h2>JSON Format<a class="headerlink" href="#json-format" title="Link to this heading">¶</a></h2>
+<h2>JSON Format<a class="headerlink" href="#json-format" title="Link to this heading"></a></h2>
 <p>JSON is a language-independent data format that represents data as
 human-readable text. A JSON text can represent a number, a boolean, a
 string, an array, an object, or a null, with slightly different grammar.
@@ -54,10 +56,10 @@ such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</sp
 <a class="reference external" href="https://www.json.org">this JSON introduction</a>.</p>
 </section>
 <section id="id1">
-<h2>JSON Functions<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<h2>JSON Functions<a class="headerlink" href="#id1" title="Link to this heading"></a></h2>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="get_json_object">
-<span class="sig-name descname"><span class="pre">get_json_object</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#get_json_object" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">get_json_object</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#get_json_object" title="Link to this definition"></a></dt>
 <dd><p>Extracts a json object from path:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">get_json_object</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;:&quot;b&quot;}&#39;</span><span class="p">,</span> <span class="s1">&#39;$.a&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">b</span>
 </pre></div>
@@ -105,7 +107,7 @@ such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</sp
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
-<div id="searchbox" style="display: none" role="search">
+<search id="searchbox" style="display: none" role="search">
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../../search.html" method="get">
@@ -113,7 +115,7 @@ such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</sp
       <input type="submit" value="Go" />
     </form>
     </div>
-</div>
+</search>
 <script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
@@ -138,7 +140,7 @@ such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</sp
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
     </div>
   </body>
 </html>

@@ -7,9 +7,11 @@
 
     <title>Decimal Operators &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/jquery.js?v=5d32c60e"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -40,7 +42,7 @@
           <div class="body" role="main">
             
   <section id="decimal-operators">
-<h1>Decimal Operators<a class="headerlink" href="#decimal-operators" title="Link to this heading">¶</a></h1>
+<h1>Decimal Operators<a class="headerlink" href="#decimal-operators" title="Link to this heading"></a></h1>
 <p>DECIMAL type is designed to represent floating point numbers precisely.
 Mathematical operations on decimal values are exact, except for division. On
 the other hand, DOUBLE and REAL types are designed to represent floating point
@@ -69,7 +71,7 @@ using any DECIMAL type where scale &gt;= 2 and precision is &gt;= scale + 16.</p
 not uncommon to think about the number of digits after the decimal point as
 precision and the number of digits before the decimal point as scale.</p>
 <section id="addition-and-subtraction">
-<h2>Addition and Subtraction<a class="headerlink" href="#addition-and-subtraction" title="Link to this heading">¶</a></h2>
+<h2>Addition and Subtraction<a class="headerlink" href="#addition-and-subtraction" title="Link to this heading"></a></h2>
 <p>To represent the results of adding two decimal numbers we need to use max
 (s1, s2) digits after the decimal point and max(p1 - s1, p2 - s2) + 1 digits
 before the decimal point.</p>
@@ -96,7 +98,7 @@ cannot be represented using 38 digits. Presto implements the second option. Velo
 implementation matches Presto.</p>
 </section>
 <section id="multiplication">
-<h2>Multiplication<a class="headerlink" href="#multiplication" title="Link to this heading">¶</a></h2>
+<h2>Multiplication<a class="headerlink" href="#multiplication" title="Link to this heading"></a></h2>
 <p>To represent the results of multiplying two decimal numbers we need s1 + s2
 digits after the decimal point and p1 + p2 digits overall.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="n">p1</span> <span class="o">+</span> <span class="n">p2</span>
@@ -125,7 +127,7 @@ outright while others are allowed to proceed, but may produce runtime errors. Ve
 implementation matches Presto.</p>
 </section>
 <section id="division">
-<h2>Division<a class="headerlink" href="#division" title="Link to this heading">¶</a></h2>
+<h2>Division<a class="headerlink" href="#division" title="Link to this heading"></a></h2>
 <p>Perfect division is not possible. For example, 1 / 3 cannot be represented as a
 decimal value.</p>
 <p>When dividing a number with p1 digits over a number of s2 scale, the biggest result requires s2 extra digits before the
@@ -179,16 +181,16 @@ digits after the decimal point, hence, max(s1, s2).</p>
 </div>
 </section>
 <section id="decimal-functions">
-<h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading">¶</a></h2>
+<h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading"></a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="abs">
-<span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abs" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abs" title="Link to this definition"></a></dt>
 <dd><p>Returns absolute value of x (r = <cite>|x|</cite>).</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="divide">
-<span class="sig-name descname"><span class="pre">divide</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#divide" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">divide</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#divide" title="Link to this definition"></a></dt>
 <dd><p>Returns the result of dividing x by y (r = x / y).</p>
 <p>x and y are decimal values with possibly different precisions and scales. The
 precision and scale of the result are calculated as follows:</p>
@@ -202,7 +204,7 @@ above, or rescale factor <cite>max(s1, s2) - s1 + s2</cite> exceeds 38.</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="floor">
-<span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(pr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#floor" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(pr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#floor" title="Link to this definition"></a></dt>
 <dd><p>Returns ‘x’ rounded down to the nearest integer. The scale of the result is 0.
 The precision is calculated as:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pr</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="n">p</span> <span class="o">-</span> <span class="n">s</span> <span class="o">+</span> <span class="nb">min</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
@@ -212,7 +214,7 @@ The precision is calculated as:</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="minus">
-<span class="sig-name descname"><span class="pre">minus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#minus" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">minus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#minus" title="Link to this definition"></a></dt>
 <dd><p>Returns the result of subtracting y from x (r = x - y).</p>
 <p>x and y are decimal values with possibly different precisions and scales. The
 precision and scale of the result are calculated as follows:</p>
@@ -225,7 +227,7 @@ precision and scale of the result are calculated as follows:</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="multiply">
-<span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#multiply" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#multiply" title="Link to this definition"></a></dt>
 <dd><p>Returns the result of multiplying x by y (r = x * y).</p>
 <p>x and y are decimal values with possibly different precisions and scales. The
 precision and scale of the result are calculated as follows:</p>
@@ -239,13 +241,13 @@ precision and scale of the result are calculated as follows:</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="negate">
-<span class="sig-name descname"><span class="pre">negate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#negate" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">negate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#negate" title="Link to this definition"></a></dt>
 <dd><p>Returns negated value of x (r = -x).</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="plus">
-<span class="sig-name descname"><span class="pre">plus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#plus" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">plus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#plus" title="Link to this definition"></a></dt>
 <dd><p>Returns the result of adding x to y (r = x + y).</p>
 <p>x and y are decimal values with possibly different precisions and scales. The
 precision and scale of the result are calculated as follows:</p>
@@ -258,7 +260,7 @@ precision and scale of the result are calculated as follows:</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="round">
-<span class="sig-name descname"><span class="pre">round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(rp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#round" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(rp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#round" title="Link to this definition"></a></dt>
 <dd><p>Returns ‘x’ rounded to the nearest integer. The scale of the result is 0.
 The precision is calculated as:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pr</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="n">p</span> <span class="o">-</span> <span class="n">s</span> <span class="o">+</span> <span class="nb">min</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
@@ -268,7 +270,7 @@ The precision is calculated as:</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">d:</span> <span class="pre">integer)</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(rp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">d:</span> <span class="pre">integer)</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(rp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id0" title="Link to this definition"></a></dt>
 <dd><p>Returns ‘x’ rounded to ‘d’ decimal places. The scale of the result is
 the same as the scale of the input. The precision is calculated as:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="n">p</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
@@ -338,7 +340,7 @@ the scale of the input.</p>
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
-<div id="searchbox" style="display: none" role="search">
+<search id="searchbox" style="display: none" role="search">
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../../search.html" method="get">
@@ -346,7 +348,7 @@ the scale of the input.</p>
       <input type="submit" value="Go" />
     </form>
     </div>
-</div>
+</search>
 <script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
@@ -371,7 +373,7 @@ the scale of the input.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
     </div>
   </body>
 </html>

@@ -7,9 +7,11 @@
 
     <title>Configuration properties &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="_static/nature.css?v=601dbdee" />
+    <link rel="stylesheet" type="text/css" href="_static/nature.css?v=0f882399" />
+    <script src="_static/jquery.js?v=5d32c60e"></script>
+    <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="_static/doctools.js?v=888ff710"></script>
+    <script src="_static/doctools.js?v=9a2dae69"></script>
     <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
@@ -39,9 +41,9 @@
           <div class="body" role="main">
             
   <section id="configuration-properties">
-<h1>Configuration properties<a class="headerlink" href="#configuration-properties" title="Link to this heading">¶</a></h1>
+<h1>Configuration properties<a class="headerlink" href="#configuration-properties" title="Link to this heading"></a></h1>
 <section id="generic-configuration">
-<h2>Generic Configuration<a class="headerlink" href="#generic-configuration" title="Link to this heading">¶</a></h2>
+<h2>Generic Configuration<a class="headerlink" href="#generic-configuration" title="Link to this heading"></a></h2>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 18.2%" />
@@ -201,7 +203,7 @@ run on a thread before yield. If it is zero, then it no limit.</p></td>
 </table>
 </section>
 <section id="expression-evaluation-configuration">
-<span id="expression-evaluation-conf"></span><h2>Expression Evaluation Configuration<a class="headerlink" href="#expression-evaluation-configuration" title="Link to this heading">¶</a></h2>
+<span id="expression-evaluation-conf"></span><h2>Expression Evaluation Configuration<a class="headerlink" href="#expression-evaluation-configuration" title="Link to this heading"></a></h2>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 18.2%" />
@@ -243,7 +245,7 @@ time (instead of a space), and the year part is not padded.</p></td>
 </table>
 </section>
 <section id="memory-management">
-<h2>Memory Management<a class="headerlink" href="#memory-management" title="Link to this heading">¶</a></h2>
+<h2>Memory Management<a class="headerlink" href="#memory-management" title="Link to this heading"></a></h2>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 18.2%" />
@@ -282,7 +284,7 @@ value of <cite>max_partial_aggregation_memory</cite>. Specify higher value for <
 </table>
 </section>
 <section id="spilling">
-<h2>Spilling<a class="headerlink" href="#spilling" title="Link to this heading">¶</a></h2>
+<h2>Spilling<a class="headerlink" href="#spilling" title="Link to this heading"></a></h2>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 18.2%" />
@@ -454,7 +456,7 @@ value is 3, meaning we only support up to 8-way spill partitioning.ing.</p></td>
 </table>
 </section>
 <section id="table-scan">
-<h2>Table Scan<a class="headerlink" href="#table-scan" title="Link to this heading">¶</a></h2>
+<h2>Table Scan<a class="headerlink" href="#table-scan" title="Link to this heading"></a></h2>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 18.2%" />
@@ -479,7 +481,7 @@ value is 3, meaning we only support up to 8-way spill partitioning.ing.</p></td>
 </table>
 </section>
 <section id="table-writer">
-<h2>Table Writer<a class="headerlink" href="#table-writer" title="Link to this heading">¶</a></h2>
+<h2>Table Writer<a class="headerlink" href="#table-writer" title="Link to this heading"></a></h2>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 18.2%" />
@@ -509,7 +511,7 @@ value is 3, meaning we only support up to 8-way spill partitioning.ing.</p></td>
 </table>
 </section>
 <section id="hive-connector">
-<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading"></a></h2>
 <p>Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
 Each query can override the config by setting corresponding query session properties such as in Prestissimo.</p>
 <table class="docutils align-default">
@@ -650,7 +652,7 @@ Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).</
 </tbody>
 </table>
 <section id="amazon-s3-configuration">
-<h3><code class="docutils literal notranslate"><span class="pre">Amazon</span> <span class="pre">S3</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#amazon-s3-configuration" title="Link to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">Amazon</span> <span class="pre">S3</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#amazon-s3-configuration" title="Link to this heading"></a></h3>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 25.0%" />
@@ -718,11 +720,26 @@ Granularity of logging generated by the AWS C++ SDK library.</p></td>
 <td><p>false</p></td>
 <td><p>Utilize the configuration of the environment variables http_proxy, https_proxy, and no_proxy for use with the S3 API.</p></td>
 </tr>
+<tr class="row-even"><td><p>hive.s3.connect-timeout</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>Socket connect timeout.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.s3.socket-timeout</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>Socket read timeout.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.s3.max-connections</p></td>
+<td><p>integer</p></td>
+<td></td>
+<td><p>Maximum concurrent TCP connections for a single http client.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
 <section id="google-cloud-storage-configuration">
-<h3><code class="docutils literal notranslate"><span class="pre">Google</span> <span class="pre">Cloud</span> <span class="pre">Storage</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#google-cloud-storage-configuration" title="Link to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">Google</span> <span class="pre">Cloud</span> <span class="pre">Storage</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#google-cloud-storage-configuration" title="Link to this heading"></a></h3>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 27.3%" />
@@ -757,7 +774,7 @@ Granularity of logging generated by the AWS C++ SDK library.</p></td>
 </table>
 </section>
 <section id="azure-blob-storage-configuration">
-<h3><code class="docutils literal notranslate"><span class="pre">Azure</span> <span class="pre">Blob</span> <span class="pre">Storage</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#azure-blob-storage-configuration" title="Link to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">Azure</span> <span class="pre">Blob</span> <span class="pre">Storage</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#azure-blob-storage-configuration" title="Link to this heading"></a></h3>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 27.3%" />
@@ -785,7 +802,7 @@ times with different storage account names, you can access multiple Azure storag
 </section>
 </section>
 <section id="presto-specific-configuration">
-<h2>Presto-specific Configuration<a class="headerlink" href="#presto-specific-configuration" title="Link to this heading">¶</a></h2>
+<h2>Presto-specific Configuration<a class="headerlink" href="#presto-specific-configuration" title="Link to this heading"></a></h2>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 18.2%" />
@@ -810,7 +827,7 @@ times with different storage account names, you can access multiple Azure storag
 </table>
 </section>
 <section id="spark-specific-configuration">
-<h2>Spark-specific Configuration<a class="headerlink" href="#spark-specific-configuration" title="Link to this heading">¶</a></h2>
+<h2>Spark-specific Configuration<a class="headerlink" href="#spark-specific-configuration" title="Link to this heading"></a></h2>
 </section>
 </section>
 
@@ -861,7 +878,7 @@ times with different storage account names, you can access multiple Azure storag
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
-<div id="searchbox" style="display: none" role="search">
+<search id="searchbox" style="display: none" role="search">
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="search.html" method="get">
@@ -869,7 +886,7 @@ times with different storage account names, you can access multiple Azure storag
       <input type="submit" value="Go" />
     </form>
     </div>
-</div>
+</search>
 <script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
@@ -893,7 +910,7 @@ times with different storage account names, you can access multiple Azure storag
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
     </div>
   </body>
 </html>

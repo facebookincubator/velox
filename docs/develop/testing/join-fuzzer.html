@@ -7,9 +7,11 @@
 
     <title>Join Fuzzer &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/jquery.js?v=5d32c60e"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -41,7 +43,7 @@
           <div class="body" role="main">
             
   <section id="join-fuzzer">
-<h1>Join Fuzzer<a class="headerlink" href="#join-fuzzer" title="Link to this heading">¶</a></h1>
+<h1>Join Fuzzer<a class="headerlink" href="#join-fuzzer" title="Link to this heading"></a></h1>
 <p>Join fuzzer tests all types of hash and merge joins with up to 5 join keys and
 up to 3 payload columns with and without spilling.</p>
 <p>At each iteration, fuzzer randomly picks a join type (INNER, LEFT, FULL, LEFT
@@ -75,7 +77,7 @@ Values -&gt; LocalExchange(ROUND_ROBIN) -&gt; HashJoin</p></li>
 types (INNER, LEFT).</p></li>
 </ul>
 <section id="how-to-run">
-<h2>How to run<a class="headerlink" href="#how-to-run" title="Link to this heading">¶</a></h2>
+<h2>How to run<a class="headerlink" href="#how-to-run" title="Link to this heading"></a></h2>
 <p>Use velox_join_fuzzer_test binary to run join fuzzer:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">velox</span><span class="o">/</span><span class="n">exec</span><span class="o">/</span><span class="n">tests</span><span class="o">/</span><span class="n">velox_join_fuzzer_test</span>
 </pre></div>
@@ -134,7 +136,7 @@ generate. Default is 5.</p></li>
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
-<div id="searchbox" style="display: none" role="search">
+<search id="searchbox" style="display: none" role="search">
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../../search.html" method="get">
@@ -142,7 +144,7 @@ generate. Default is 5.</p></li>
       <input type="submit" value="Go" />
     </form>
     </div>
-</div>
+</search>
 <script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
@@ -168,7 +170,7 @@ generate. Default is 5.</p></li>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
     </div>
   </body>
 </html>

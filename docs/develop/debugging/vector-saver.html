@@ -7,9 +7,11 @@
 
     <title>VectorSaver: Encoding-Preserving Serialization &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=601dbdee" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/jquery.js?v=5d32c60e"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -41,7 +43,7 @@
           <div class="body" role="main">
             
   <section id="vectorsaver-encoding-preserving-serialization">
-<h1>VectorSaver: Encoding-Preserving Serialization<a class="headerlink" href="#vectorsaver-encoding-preserving-serialization" title="Link to this heading">¶</a></h1>
+<h1>VectorSaver: Encoding-Preserving Serialization<a class="headerlink" href="#vectorsaver-encoding-preserving-serialization" title="Link to this heading"></a></h1>
 <p>When an error occurs during expression evaluation, it is useful to save the
 input vector as well as the expression to enable reproducing and debugging the
 error in isolation. Saving the input vector can also be useful when an error
@@ -55,7 +57,7 @@ The examples of usage can be found in VectorSaverTest.cpp. This functionlity
 was introduced in <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2563">#2563</a></p>
 <p>Before we proceed to describe the format, we’d like to show an example use case.</p>
 <section id="use-case">
-<h2>Use Case<a class="headerlink" href="#use-case" title="Link to this heading">¶</a></h2>
+<h2>Use Case<a class="headerlink" href="#use-case" title="Link to this heading"></a></h2>
 <p>When an error happens during expression evaluation we save the input vector to a
 file and include the file path in the Context field of the exception along with
 the expression that was evaluated. The exception may look like this:</p>
@@ -94,12 +96,12 @@ evaluate it on the input vector (with minimal tweaking to replace
 </div>
 </section>
 <section id="serialization-format">
-<h2>Serialization Format<a class="headerlink" href="#serialization-format" title="Link to this heading">¶</a></h2>
+<h2>Serialization Format<a class="headerlink" href="#serialization-format" title="Link to this heading"></a></h2>
 <p>Serialization of flat, constant and dictionary vectors is supported.
 Serialization of lazy, bias and sequence vectors is not supported. Most types
 are supported. Decimal, opaque and function types are not supported.</p>
 <section id="header">
-<h3>Header<a class="headerlink" href="#header" title="Link to this heading">¶</a></h3>
+<h3>Header<a class="headerlink" href="#header" title="Link to this heading"></a></h3>
 <p>Vector serialization starts with a header:</p>
 <ul class="simple">
 <li><dl class="simple">
@@ -114,7 +116,7 @@ are supported. Decimal, opaque and function types are not supported.</p>
 </ul>
 </section>
 <section id="type">
-<h3>Type<a class="headerlink" href="#type" title="Link to this heading">¶</a></h3>
+<h3>Type<a class="headerlink" href="#type" title="Link to this heading"></a></h3>
 <p>Scalar types are fully defined by the TypeKind enum. These are serialized into 4
 bytes that contain the integer value of the TypeKind.</p>
 <p>Complex types are serialized recursively. Array type is serialized into 4 bytes
@@ -128,13 +130,13 @@ followed by that many bytes of the name itself.</p>
 <p>Serialization of decimal, opaque and function types is not supported.</p>
 </section>
 <section id="buffer">
-<h3>Buffer<a class="headerlink" href="#buffer" title="Link to this heading">¶</a></h3>
+<h3>Buffer<a class="headerlink" href="#buffer" title="Link to this heading"></a></h3>
 <p>Serialization of nulls, values, strings, indices, offsets and sizes buffers
 starts with 4 bytes for buffer size, followed by that many bytes of the buffer
 content.</p>
 </section>
 <section id="flat-vector-of-scalar-type">
-<h3>Flat Vector of Scalar Type<a class="headerlink" href="#flat-vector-of-scalar-type" title="Link to this heading">¶</a></h3>
+<h3>Flat Vector of Scalar Type<a class="headerlink" href="#flat-vector-of-scalar-type" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
@@ -155,7 +157,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 <p>Both inlined and non-inlined string views serialize into 16 bytes each.</p>
 </section>
 <section id="flat-row-vector">
-<h3>Flat Row Vector<a class="headerlink" href="#flat-row-vector" title="Link to this heading">¶</a></h3>
+<h3>Flat Row Vector<a class="headerlink" href="#flat-row-vector" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
@@ -165,7 +167,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 </ul>
 </section>
 <section id="flat-array-vector">
-<h3>Flat Array Vector<a class="headerlink" href="#flat-array-vector" title="Link to this heading">¶</a></h3>
+<h3>Flat Array Vector<a class="headerlink" href="#flat-array-vector" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
@@ -176,7 +178,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 </ul>
 </section>
 <section id="flat-map-vector">
-<h3>Flat Map Vector<a class="headerlink" href="#flat-map-vector" title="Link to this heading">¶</a></h3>
+<h3>Flat Map Vector<a class="headerlink" href="#flat-map-vector" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
@@ -186,7 +188,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 </ul>
 </section>
 <section id="constant-vector">
-<h3>Constant Vector<a class="headerlink" href="#constant-vector" title="Link to this heading">¶</a></h3>
+<h3>Constant Vector<a class="headerlink" href="#constant-vector" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Is-null flag. 1 byte.</p></li>
@@ -210,7 +212,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 </ul>
 </section>
 <section id="dictionary-vector">
-<h3>Dictionary Vector<a class="headerlink" href="#dictionary-vector" title="Link to this heading">¶</a></h3>
+<h3>Dictionary Vector<a class="headerlink" href="#dictionary-vector" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
@@ -220,7 +222,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 </ul>
 </section>
 <section id="lazy-vector">
-<h3>Lazy Vector<a class="headerlink" href="#lazy-vector" title="Link to this heading">¶</a></h3>
+<h3>Lazy Vector<a class="headerlink" href="#lazy-vector" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Header</p></li>
 <li><p>Boolean indicating the presence of the loaded vector. 1 byte.</p></li>
@@ -287,7 +289,7 @@ be used to reproduce the error and not in any other context like testing a fix.<
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
-<div id="searchbox" style="display: none" role="search">
+<search id="searchbox" style="display: none" role="search">
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../../search.html" method="get">
@@ -295,7 +297,7 @@ be used to reproduce the error and not in any other context like testing a fix.<
       <input type="submit" value="Go" />
     </form>
     </div>
-</div>
+</search>
 <script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
@@ -321,7 +323,7 @@ be used to reproduce the error and not in any other context like testing a fix.<
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.2.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
     </div>
   </body>
 </html>
