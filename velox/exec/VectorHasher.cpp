@@ -63,7 +63,7 @@ uint64_t hashOne(DecodedVector& decoded, vector_size_t index) {
   // cast double/float to longBits, then call folly::hasher to get hash value.
   if constexpr (Kind == TypeKind::DOUBLE) {
     double val = decoded.valueAt<double>(index);
-    auto* buf = reinterpret_cast<int64_t*>(&val);
+    int64_t* buf = reinterpret_cast<int64_t*>(&val);
     // double -0.0 => *buf = -9223372036854775808
     if (*buf == -9223372036854775808) {
       uint64_t res = folly::hasher<int64_t>()(*buf);
@@ -72,7 +72,7 @@ uint64_t hashOne(DecodedVector& decoded, vector_size_t index) {
   }
   if constexpr (Kind == TypeKind::REAL) {
     float val = decoded.valueAt<float>(index);
-    auto* buf = reinterpret_cast<int32_t*>(&val);
+    int32_t* buf = reinterpret_cast<int32_t*>(&val);
     // float -0.0 => *buf = -2147483648
     if (*buf == -2147483648) {
       uint64_t res = folly::hasher<int32_t>()(*buf);
