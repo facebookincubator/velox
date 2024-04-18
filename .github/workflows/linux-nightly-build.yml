@@ -35,7 +35,10 @@ jobs:
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 4-core-ubuntu-gpu-t4
-    container: ghcr.io/facebookincubator/velox-dev:adapters
+    container:
+      image: ghcr.io/facebookincubator/velox-dev:adapters
+      options: >
+        --gpus all
     defaults:
       run:
         shell: bash
