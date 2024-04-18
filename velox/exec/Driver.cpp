@@ -197,7 +197,7 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
           state->operator_->recordBlockingTime(
               state->sinceMicros_, state->reason_);
         }
-        VELOX_CHECK(!driver->state().isSuspended);
+        VELOX_CHECK(!driver->state().suspended());
         VELOX_CHECK(driver->state().hasBlockingFuture);
         driver->state().hasBlockingFuture = false;
         if (task->pauseRequested()) {
@@ -308,7 +308,8 @@ void Driver::pushdownFilters(int operatorIndex) {
       }
 
       const auto& identityProjections = prevOp->identityProjections();
-      auto inputChannel = getIdentityProjection(identityProjections, channel);
+      const auto inputChannel =
+          getIdentityProjection(identityProjections, channel);
       if (!inputChannel.has_value()) {
         // Filter channel is not an identity projection.
         VELOX_CHECK(
@@ -342,7 +343,7 @@ RowVectorPtr Driver::next(std::shared_ptr<BlockingState>& blockingState) {
   // error.
   VELOX_CHECK(
       stop == StopReason::kBlock || stop == StopReason::kAtEnd ||
-      stop == StopReason::kAlreadyTerminated);
+      stop == StopReason::kAlreadyTerminated || stop == StopReason::kTerminate);
 
   return result;
 }
@@ -828,10 +829,14 @@ void Driver::closeOperators() {
 
 void Driver::updateStats() {
   DriverStats stats;
-  stats.runtimeStats[DriverStats::kTotalPauseTime] = RuntimeMetric(
-      1'000'000 * state_.totalPauseTimeMs, RuntimeCounter::Unit::kNanos);
-  stats.runtimeStats[DriverStats::kTotalOffThreadTime] = RuntimeMetric(
-      1'000'000 * state_.totalOffThreadTimeMs, RuntimeCounter::Unit::kNanos);
+  if (state_.totalPauseTimeMs > 0) {
+    stats.runtimeStats[DriverStats::kTotalPauseTime] = RuntimeMetric(
+        1'000'000 * state_.totalPauseTimeMs, RuntimeCounter::Unit::kNanos);
+  }
+  if (state_.totalOffThreadTimeMs > 0) {
+    stats.runtimeStats[DriverStats::kTotalOffThreadTime] = RuntimeMetric(
+        1'000'000 * state_.totalOffThreadTimeMs, RuntimeCounter::Unit::kNanos);
+  }
   task()->addDriverStats(ctx_->pipelineId, std::move(stats));
 }
 
@@ -893,7 +898,7 @@ std::unordered_set<column_index_t> Driver::canPushdownFilters(
   for (auto i = 0; i < channels.size(); ++i) {
     auto channel = channels[i];
     for (auto j = filterSourceIndex - 1; j >= 0; --j) {
-      auto prevOp = operators_[j].get();
+      auto* prevOp = operators_[j].get();
 
       if (j == 0) {
         // Source operator.
@@ -904,7 +909,8 @@ std::unordered_set<column_index_t> Driver::canPushdownFilters(
       }
 
       const auto& identityProjections = prevOp->identityProjections();
-      auto inputChannel = getIdentityProjection(identityProjections, channel);
+      const auto inputChannel =
+          getIdentityProjection(identityProjections, channel);
       if (!inputChannel.has_value()) {
         // Filter channel is not an identity projection.
         if (prevOp->canAddDynamicFilter()) {
@@ -1001,7 +1007,10 @@ SuspendedSection::SuspendedSection(Driver* driver) : driver_(driver) {
 
 SuspendedSection::~SuspendedSection() {
   if (driver_->task()->leaveSuspended(driver_->state()) != StopReason::kNone) {
-    VELOX_FAIL("Terminate detected when leaving suspended section");
+    LOG(WARNING)
+        << "Terminate detected when leaving suspended section for driver "
+        << driver_->driverCtx()->driverId << " from task "
+        << driver_->task()->taskId();
   }
 }
 

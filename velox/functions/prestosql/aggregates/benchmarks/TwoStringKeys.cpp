@@ -37,8 +37,7 @@ namespace {
 // Compare performance of sum(x) with equivalent reduce_agg(x,..).
 class TwoStringKeysBenchmark : public HiveConnectorTestBase {
  public:
-  explicit TwoStringKeysBenchmark() {
-    OperatorTestBase::SetUpTestCase();
+  TwoStringKeysBenchmark() {
     HiveConnectorTestBase::SetUp();
 
     inputType_ = ROW({
@@ -59,7 +58,7 @@ class TwoStringKeysBenchmark : public HiveConnectorTestBase {
     }
 
     filePath_ = TempFilePath::create();
-    writeToFile(filePath_->path, vectors);
+    writeToFile(filePath_->getPath(), vectors);
   }
 
   ~TwoStringKeysBenchmark() override {
@@ -116,7 +115,8 @@ class TwoStringKeysBenchmark : public HiveConnectorTestBase {
         0,
         std::make_shared<core::QueryCtx>(executor_.get()));
 
-    task->addSplit("0", exec::Split(makeHiveConnectorSplit(filePath_->path)));
+    task->addSplit(
+        "0", exec::Split(makeHiveConnectorSplit((filePath_->getPath()))));
     task->noMoreSplits("0");
     return task;
   }
@@ -135,10 +135,10 @@ BENCHMARK(two_string_keys) {
 
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
-  memory::MemoryManager::initialize({});
+  OperatorTestBase::SetUpTestCase();
   benchmark = std::make_unique<TwoStringKeysBenchmark>();
   benchmark->verify();
-  //   folly::runBenchmarks();
   benchmark.reset();
+  OperatorTestBase::TearDownTestCase();
   return 0;
 }

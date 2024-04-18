@@ -35,7 +35,7 @@ source $SCRIPTDIR/setup-helper-functions.sh
 CPU_TARGET="${CPU_TARGET:-avx}"
 COMPILER_FLAGS=$(get_cxx_flags "$CPU_TARGET")
 export COMPILER_FLAGS
-FB_OS_VERSION=v2024.02.26.00
+FB_OS_VERSION=v2024.04.01.00
 FMT_VERSION=10.1.1
 BOOST_VERSION=boost-1.84.0
 NPROC=$(getconf _NPROCESSORS_ONLN)
@@ -135,12 +135,22 @@ function install_conda {
     echo "Unsupported architecture: $ARCH"
     exit 1
   fi
-  
+
   mkdir -p conda && cd conda
   wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh
   bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
 
+function install_cuda {
+  # See https://developer.nvidia.com/cuda-downloads
+  if ! dpkg -l cuda-keyring 1>/dev/null; then
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    $SUDO dpkg -i cuda-keyring_1.1-1_all.deb
+    rm cuda-keyring_1.1-1_all.deb
+    $SUDO apt update
+  fi
+  $SUDO apt install -y cuda-nvcc-$(echo $1 | tr '.' '-') cuda-cudart-dev-$(echo $1 | tr '.' '-')
+}
 
 function install_velox_deps {
   run_and_time install_velox_deps_from_apt

@@ -15,6 +15,9 @@
  */
 
 #include "velox/common/memory/Memory.h"
+
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/MmapAllocator.h"
 
@@ -207,6 +210,8 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   VELOX_CHECK_EQ(pool->capacity(), 0);
   arbitrator_->growCapacity(
       pool.get(), std::min<uint64_t>(poolInitCapacity_, maxCapacity));
+  RECORD_HISTOGRAM_METRIC_VALUE(
+      kMetricMemoryPoolInitialCapacityBytes, pool->capacity());
   return pool;
 }
 
@@ -259,7 +264,6 @@ int64_t MemoryManager::getTotalBytes() const {
 
 size_t MemoryManager::numPools() const {
   size_t numPools = defaultRoot_->getChildCount();
-  VELOX_CHECK_GE(numPools, 0);
   {
     std::shared_lock guard{mutex_};
     numPools += pools_.size() - sharedLeafPools_.size();

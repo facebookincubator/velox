@@ -381,6 +381,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
+    core::PlanNodeId finalNodeId;
     builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeysWithPartialKey, paritialAggregates)
         .capturePlanNodeId(partialNodeId)
@@ -390,6 +391,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeys)
         .finalAggregation()
+        .capturePlanNodeId(finalNodeId)
         .project(extractExpressions);
 
     if (!postAggregationProjections.empty()) {
@@ -402,25 +404,29 @@ void AggregationTestBase::testAggregationsWithCompanion(
     queryBuilder.configs(config)
         .config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kAggregationSpillEnabled, true)
-        .spillDirectory(spillDirectory->path)
+        .spillDirectory(spillDirectory->getPath())
         .maxDrivers(4);
 
     exec::TestScopedSpillInjection scopedSpillInjection(100);
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    const auto inputRows =
+    const auto partialInputRows =
         toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    if (inputRows > 1) {
+    const auto finalInputRows =
+        toPlanStats(task->taskStats()).at(finalNodeId).inputRows;
+    if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
-          << "inputRows: " << inputRows
+          << "partial inputRows: " << partialInputRows
+          << " final inputRows: " << finalInputRows
           << " spilledRows: " << spilledRows(*task)
           << " spilledInputBytes: " << spilledInputBytes(*task)
           << " spilledFiles: " << spilledFiles(*task)
           << " injectedSpills: " << exec::injectedSpillCount();
     } else {
       EXPECT_EQ(0, spilledBytes(*task))
-          << "inputRows: " << inputRows
+          << "partial inputRows: " << partialInputRows
+          << " final inputRows: " << finalInputRows
           << " spilledRows: " << spilledRows(*task)
           << " spilledInputBytes: " << spilledInputBytes(*task)
           << " spilledFiles: " << spilledFiles(*task)
@@ -641,10 +647,10 @@ void AggregationTestBase::testReadFromFiles(
 
   for (auto& vector : inputs) {
     auto file = exec::test::TempFilePath::create();
-    writeToFile(file->path, vector, writerPool.get());
+    writeToFile(file->getPath(), vector, writerPool.get());
     files.push_back(file);
     splits.emplace_back(std::make_shared<connector::hive::HiveConnectorSplit>(
-        kHiveConnectorId, file->path, dwio::common::FileFormat::DWRF));
+        kHiveConnectorId, file->getPath(), dwio::common::FileFormat::DWRF));
   }
   // No need to test streaming as the streaming test generates its own inputs,
   // so it would be the same as the original test.
@@ -660,7 +666,7 @@ void AggregationTestBase::testReadFromFiles(
   }
 
   for (const auto& file : files) {
-    remove(file->path.c_str());
+    remove(file->getPath().c_str());
   }
 }
 
@@ -816,11 +822,13 @@ void AggregationTestBase::testAggregationsImpl(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
+    core::PlanNodeId finalNodeId;
     builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeys, aggregates)
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeys)
-        .finalAggregation();
+        .finalAggregation()
+        .capturePlanNodeId(finalNodeId);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -835,17 +843,21 @@ void AggregationTestBase::testAggregationsImpl(
     queryBuilder.configs(config)
         .config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kAggregationSpillEnabled, true)
-        .spillDirectory(spillDirectory->path)
+        .spillDirectory(spillDirectory->getPath())
         .maxDrivers(4);
 
     exec::TestScopedSpillInjection scopedSpillInjection(100);
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    auto inputRows = toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    if (inputRows > 1) {
+    const auto partialInputRows =
+        toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
+    const auto finalInputRows =
+        toPlanStats(task->taskStats()).at(finalNodeId).inputRows;
+    if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
-          << "inputRows: " << inputRows
+          << "partial inputRows: " << partialInputRows
+          << " final inputRows: " << finalInputRows
           << " spilledRows: " << spilledRows(*task)
           << " spilledInputBytes: " << spilledInputBytes(*task)
           << " spilledFiles: " << spilledFiles(*task)
@@ -856,7 +868,8 @@ void AggregationTestBase::testAggregationsImpl(
           memory::spillMemoryPool()->stats().peakBytes, peakSpillMemoryUsage);
     } else {
       EXPECT_EQ(0, spilledBytes(*task))
-          << "inputRows: " << inputRows
+          << "partial inputRows: " << partialInputRows
+          << " final inputRows: " << finalInputRows
           << " spilledRows: " << spilledRows(*task)
           << " spilledInputBytes: " << spilledInputBytes(*task)
           << " spilledFiles: " << spilledFiles(*task)
@@ -932,7 +945,7 @@ void AggregationTestBase::testAggregationsImpl(
     queryBuilder.configs(config)
         .config(core::QueryConfig::kSpillEnabled, "true")
         .config(core::QueryConfig::kAggregationSpillEnabled, "true")
-        .spillDirectory(spillDirectory->path);
+        .spillDirectory(spillDirectory->getPath());
 
     TestScopedSpillInjection scopedSpillInjection(100);
     auto task = assertResults(queryBuilder);

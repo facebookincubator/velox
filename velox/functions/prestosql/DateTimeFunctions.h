@@ -1271,7 +1271,8 @@ struct FromIso8601Date {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Varchar>& input) {
-    result = util::fromDateString(input.data(), input.size());
+    result = util::castFromDateString(
+        input.data(), input.size(), util::ParseMode::kNonStandardNoTimeCast);
   }
 };
 
@@ -1485,6 +1486,17 @@ struct TimeZoneMinuteFunction : public TimestampWithTimezoneSupport<T> {
     // Get offset in seconds with GMT and convert to minute
     auto offset = this->getGMTOffsetSec(input);
     result = (offset / 60) % 60;
+  }
+};
+
+template <typename T>
+struct ToISO8601Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+    result = DateType::toIso8601(date);
   }
 };
 

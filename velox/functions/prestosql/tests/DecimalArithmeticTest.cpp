@@ -291,6 +291,14 @@ TEST_F(DecimalArithmeticTest, multiply) {
                   HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)},
               DECIMAL(38, 0))}),
       "Decimal overflow. Value '119630519620642428561342635425231011830' is not in the range of Decimal Type");
+
+  // The sum of input scales exceeds 38.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "c0 * c0",
+          makeRowVector(
+              {makeFlatVector<int128_t>({1000, 2000}, DECIMAL(38, 30))})),
+      "");
 }
 
 TEST_F(DecimalArithmeticTest, decimalDivTest) {
@@ -370,6 +378,15 @@ TEST_F(DecimalArithmeticTest, decimalDivTest) {
               std::vector<int128_t>{DecimalUtil::kLongDecimalMax},
               DECIMAL(38, 0))}),
       "Decimal overflow: 99999999999999999999999999999999999999 * 10000");
+
+  // Rescale factor > max precision (38).
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "divide(c0, c1)",
+          makeRowVector(
+              {makeFlatVector<int128_t>({5000, 20000}, DECIMAL(20, 1)),
+               makeFlatVector<int128_t>({5000, 20000}, DECIMAL(33, 32))})),
+      "Decimal overflow");
 }
 
 TEST_F(DecimalArithmeticTest, decimalDivDifferentTypes) {

@@ -95,6 +95,25 @@ Date and Time Functions
 .. function:: from_iso8601_date(string) -> date
 
     Parses the ISO 8601 formatted ``string`` into a ``date``.
+    ISO 8601 ``string`` can be formatted as any of the following:
+    ``[+-][Y]Y*``
+
+    ``[+-][Y]Y*-[M]M*``
+
+    ``[+-][Y]Y*-[M]M*-[D]D*``
+
+    ``[+-][Y]Y*-[M]M*-[D]D* *``
+
+    Year value must contain at least one digit, and may contain up to six digits.
+    Month and day values are optional and may each contain one or two digits.
+
+    Examples of supported input strings:
+    "2012",
+    "2012-4",
+    "2012-04",
+    "2012-4-7",
+    "2012-04-07",
+    "2012-04-07  ”
 
 .. function:: from_unixtime(unixtime) -> timestamp
 
@@ -105,6 +124,10 @@ Date and Time Functions
 
     Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
     using ``string`` for the time zone.
+
+.. function:: to_iso8601(x) -> varchar
+
+    Formats ``x`` as an ISO 8601 string. Supported types for ``x`` are: DATE.
 
 .. function:: to_unixtime(timestamp) -> double
 

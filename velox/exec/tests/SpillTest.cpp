@@ -157,7 +157,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     // partitions produce an ascending sequence of integers without gaps.
     spillStats_.wlock()->reset();
     state_ = std::make_unique<SpillState>(
-        [&]() -> const std::string& { return tempDir_->path; },
+        [&]() -> const std::string& { return tempDir_->getPath(); },
         updateSpilledBytesCb_,
         fileNamePrefix_,
         numPartitions,
@@ -337,7 +337,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(expectedNumSpilledFiles, spilledFileSet.size());
     // Verify the spilled file exist on file system.
     std::shared_ptr<FileSystem> fs =
-        filesystems::getFileSystem(tempDir_->path, nullptr);
+        filesystems::getFileSystem(tempDir_->getPath(), nullptr);
     uint64_t totalFileBytes{0};
     for (const auto& spilledFile : spilledFileSet) {
       auto readFile = fs->openFileForRead(spilledFile);
@@ -467,7 +467,7 @@ TEST_P(SpillTest, spillTimestamp) {
   // read back.
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   std::vector<CompareFlags> emptyCompareFlags;
-  const std::string spillPath = tempDirectory->path + "/test";
+  const std::string spillPath = tempDirectory->getPath() + "/test";
   std::vector<Timestamp> timeValues = {
       Timestamp{0, 0},
       Timestamp{12, 0},
@@ -478,7 +478,7 @@ TEST_P(SpillTest, spillTimestamp) {
       Timestamp{Timestamp::kMinSeconds, 0}};
 
   SpillState state(
-      [&]() -> const std::string& { return tempDirectory->path; },
+      [&]() -> const std::string& { return tempDirectory->getPath(); },
       updateSpilledBytesCb_,
       "test",
       1,
@@ -774,13 +774,13 @@ SpillFiles makeFakeSpillFiles(int32_t numFiles) {
   static uint32_t fakeFileId{0};
   SpillFiles files;
   files.reserve(numFiles);
-  const std::string filePathPrefix = tempDir->path + "/Spill";
+  const std::string filePathPrefix = tempDir->getPath() + "/Spill";
   for (int32_t i = 0; i < numFiles; ++i) {
     const auto fileId = fakeFileId;
     files.push_back(
         {fileId,
          ROW({"k1", "k2"}, {BIGINT(), BIGINT()}),
-         tempDir->path + "/Spill_" + std::to_string(fileId),
+         tempDir->getPath() + "/Spill_" + std::to_string(fileId),
          1024,
          1,
          std::vector<CompareFlags>({}),
@@ -817,6 +817,47 @@ TEST(SpillTest, removeEmptyPartitions) {
     ASSERT_EQ(partitionSet.at(id)->id().partitionBitOffset(), partitionOffset);
     ASSERT_EQ(partitionSet.at(id)->id().partitionNumber(), partitionNum);
     ASSERT_EQ(partitionSet.at(id)->numFiles(), 1 + partitionNum / 2);
+  }
+}
+
+TEST(SpillTest, scopedSpillInjectionRegex) {
+  {
+    TestScopedSpillInjection scopedSpillInjection(100, ".*?(TableWrite).*");
+    ASSERT_TRUE(testingTriggerSpill("op.1.0.0.TableWrite"));
+    ASSERT_TRUE(testingTriggerSpill("op.1.0.0.TableWrite.hive-xyz"));
+    ASSERT_TRUE(testingTriggerSpill("op.1.0.0.TableWrite-hive-xyz"));
+    ASSERT_FALSE(testingTriggerSpill("op.1.0.0.RowNumber"));
+    ASSERT_TRUE(testingTriggerSpill(""));
+  }
+
+  {
+    TestScopedSpillInjection scopedSpillInjection(
+        100, ".*?(RowNumber|TableWrite|HashBuild).*");
+    ASSERT_TRUE(testingTriggerSpill("op.1.0.RowNumber"));
+    ASSERT_TRUE(testingTriggerSpill("op.1.0.0.TableWrite.hive-xyz"));
+    ASSERT_TRUE(testingTriggerSpill("op.1.0.0.TableWrite-hive-xyz"));
+    ASSERT_TRUE(testingTriggerSpill("op.1..0.HashBuild"));
+    ASSERT_FALSE(testingTriggerSpill("op.1.0.0.Aggregation"));
+    ASSERT_TRUE(testingTriggerSpill(""));
+  }
+
+  {
+    TestScopedSpillInjection scopedSpillInjection(
+        100, R"(.*?(RowNumber|TableWrite|HashBuild)(?:\..*)?)");
+    ASSERT_TRUE(testingTriggerSpill("op.1.RowNumber"));
+    ASSERT_TRUE(testingTriggerSpill("op.1.0.0.TableWrite.hive-xyz"));
+    ASSERT_FALSE(testingTriggerSpill("op.1.0.0.TableWrite-hive-xyz"));
+    ASSERT_FALSE(testingTriggerSpill("op.1.0.0.Aggregation"));
+    ASSERT_TRUE(testingTriggerSpill(""));
+  }
+
+  {
+    TestScopedSpillInjection scopedSpillInjection(100);
+    ASSERT_TRUE(testingTriggerSpill("op.1.RowNumber"));
+    ASSERT_TRUE(testingTriggerSpill("op.1.0.0.TableWrite.hive-xyz"));
+    ASSERT_TRUE(testingTriggerSpill("op.1.0.0.TableWrite-hive-xyz"));
+    ASSERT_TRUE(testingTriggerSpill("op.1.0.0.Aggregation"));
+    ASSERT_TRUE(testingTriggerSpill());
   }
 }
 

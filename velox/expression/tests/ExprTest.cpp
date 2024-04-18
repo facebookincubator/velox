@@ -770,8 +770,8 @@ TEST_P(ParameterizedExprTest, dictionaryAndConstantOverLazy) {
   auto row = makeRowVector({lazyVector});
   auto result = evaluate("plus5(c0)", row);
 
-  auto expected = makeFlatVector<int32_t>(
-      size, [](auto row) { return row + 5; }, isNullAt);
+  auto expected =
+      makeFlatVector<int32_t>(size, [](auto row) { return row + 5; }, isNullAt);
   assertEqualVectors(expected, result);
 
   // Wrap LazyVector in a dictionary (select only even rows).
@@ -1164,8 +1164,8 @@ TEST_P(ParameterizedExprTest, lazyVectors) {
 
   auto result = evaluate("c0 + coalesce(c0, 1)", row);
 
-  auto expected = makeFlatVector<int64_t>(
-      size, [](auto row) { return row * 2; }, nullptr);
+  auto expected =
+      makeFlatVector<int64_t>(size, [](auto row) { return row * 2; }, nullptr);
   assertEqualVectors(expected, result);
 
   // Make LazyVector with nulls
@@ -1175,8 +1175,8 @@ TEST_P(ParameterizedExprTest, lazyVectors) {
 
   result = evaluate("c0 + coalesce(c0, 1)", row);
 
-  expected = makeFlatVector<int64_t>(
-      size, [](auto row) { return row * 2; }, isNullAt);
+  expected =
+      makeFlatVector<int64_t>(size, [](auto row) { return row * 2; }, isNullAt);
   assertEqualVectors(expected, result);
 }
 
@@ -2415,7 +2415,7 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   // Enable saving vector and expression SQL for system errors only.
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   FLAGS_velox_save_input_on_expression_system_failure_path =
-      tempDirectory->path;
+      tempDirectory->getPath();
 
   try {
     evaluate("runtime_error(c0) + c1", data);
@@ -2449,7 +2449,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   }
 
   // Enable saving vector and expression SQL for all errors.
-  FLAGS_velox_save_input_on_expression_any_failure_path = tempDirectory->path;
+  FLAGS_velox_save_input_on_expression_any_failure_path =
+      tempDirectory->getPath();
   FLAGS_velox_save_input_on_expression_system_failure_path = "";
 
   try {
@@ -2635,8 +2636,7 @@ TEST_P(ParameterizedExprTest, constantToSql) {
   ASSERT_EQ(toSql(variant::null(TypeKind::TIMESTAMP)), "NULL::TIMESTAMP");
 
   ASSERT_EQ(
-      toSql(123'456LL, INTERVAL_DAY_TIME()),
-      "'123456'::INTERVAL DAY TO SECOND");
+      toSql(123'456LL, INTERVAL_DAY_TIME()), "INTERVAL 123456 MILLISECOND");
   ASSERT_EQ(
       toSql(variant::null(TypeKind::BIGINT), INTERVAL_DAY_TIME()),
       "NULL::INTERVAL DAY TO SECOND");
@@ -3662,6 +3662,99 @@ TEST_P(ParameterizedExprTest, cseUnderTry) {
           std::nullopt,
           std::nullopt,
           true,
+          std::nullopt,
+      }),
+      result);
+}
+
+namespace {
+// This UDF throws an exception for any argument equal to 31, otherwise it's the
+// identity function. Important for the test, it sizes the result only large
+// enough to hold all rows that didn't throw an error.
+class TestingShrinkForErrorsFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    VELOX_CHECK(args[0]->isFlatEncoding());
+
+    const auto* flatArg = args[0]->as<FlatVector<int8_t>>();
+
+    exec::LocalSelectivityVector remainingRows(context, rows);
+    context.applyToSelectedNoThrow(*remainingRows, [&](vector_size_t row) {
+      // Throw a user error (so it can be caught be try) if the argument is
+      // equal to 31.
+      VELOX_USER_CHECK_NE(flatArg->valueAt(row), 31, "Expected");
+    });
+
+    context.deselectErrors(*remainingRows);
+
+    // Create the result, importantly the size is rows.end() so may be smaller
+    // than the rows being processed after errors are deselected.
+    const auto localResult = std::make_shared<FlatVector<int8_t>>(
+        context.pool(),
+        outputType,
+        nullptr,
+        rows.end(),
+        flatArg->values(),
+        std::vector<BufferPtr>{});
+
+    context.moveOrCopyResult(localResult, *remainingRows, result);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("tinyint")
+                .argumentType("tinyint")
+                .build()};
+  }
+};
+} // namespace
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_testing_shrink_for_errors,
+    TestingShrinkForErrorsFunction::signatures(),
+    std::make_unique<TestingShrinkForErrorsFunction>());
+
+TEST_P(ParameterizedExprTest, cseUnderTryWithIf) {
+  // This tests a particular case where shared subexpression computation can hit
+  // errors when combined with TRY. In this case a VectorFunction sizes the
+  // result based on rows.end(), can throw user exceptions, and doesn't resize
+  // the result Vector to include rows that produced exceptions. If that
+  // funciton is evaluated as part of CSE, e.g. on both sides of an if
+  // statement, and the last row produces an exception, the result Vector will
+  // be smaller than rows.size(). This test validates that in CSE we can
+  // tolerate this and does not rely on the fact the result Vector is at least
+  // rows.size() large, particularly when we're updating the result of a CSE to
+  // add new values, e.g. in the else portion of an if statement.
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_testing_shrink_for_errors, "testing_shrink_for_errors");
+
+  auto input = makeRowVector({
+      makeNullableFlatVector<bool>({true, false, true, false, true, false}),
+      makeNullableFlatVector<int8_t>({31, 3, 31, 31, 2, 31}),
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "if(c0, testing_shrink_for_errors(c1), testing_shrink_for_errors(c1))",
+          input),
+      "Expected");
+
+  auto result = evaluate(
+      "try(if(c0, testing_shrink_for_errors(c1), testing_shrink_for_errors(c1)))",
+      input);
+
+  assertEqualVectors(
+      makeNullableFlatVector<int8_t>({
+          std::nullopt,
+          3,
+          std::nullopt,
+          std::nullopt,
+          2,
           std::nullopt,
       }),
       result);

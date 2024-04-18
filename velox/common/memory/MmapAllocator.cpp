@@ -18,7 +18,9 @@
 
 #include <sys/mman.h>
 
+#include "velox/common/base/Counters.h"
 #include "velox/common/base/Portability.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::memory {
@@ -336,12 +338,13 @@ bool MmapAllocator::allocateContiguousImpl(
           0);
     }
   }
-  // TODO: add handling of MAP_FAILED.
-  if (data == nullptr) {
+  if (data == nullptr || data == MAP_FAILED) {
     const std::string errorMsg = fmt::format(
-        "Mmap failed with {} pages use MmapArena {}",
+        "Mmap failed with {} pages use MmapArena {}, errno {}, Mmap Allocator: {}",
         numPages,
-        (useMmapArena_ ? "true" : "false"));
+        (useMmapArena_ ? "true" : "false"),
+        folly::errnoStr(errno),
+        toString());
     VELOX_MEM_LOG(ERROR) << errorMsg;
     setAllocatorFailureMessage(errorMsg);
     // If the mmap failed, we have unmapped former 'allocation' and the extra to
@@ -435,7 +438,7 @@ void* MmapAllocator::allocateBytesWithoutRetry(
       VELOX_MEM_LOG(ERROR) << "Failed to allocateBytes " << bytes
                            << " bytes with " << alignment << " alignment";
     } else {
-      numMallocBytes_.fetch_add(bytes);
+      numMallocBytes_ += bytes;
     }
     return result;
   }
@@ -470,7 +473,7 @@ void* MmapAllocator::allocateBytesWithoutRetry(
 void MmapAllocator::freeBytes(void* p, uint64_t bytes) noexcept {
   if (useMalloc(bytes)) {
     ::free(p); // NOLINT
-    numMallocBytes_.fetch_sub(bytes);
+    numMallocBytes_ -= bytes;
     return;
   }
 
@@ -877,10 +880,10 @@ MachinePageCount MmapAllocator::SizeClass::free(Allocation& allocation) {
     const int firstBit =
         (runAddress - address_) / (AllocationTraits::kPageSize * unitSize_);
     for (auto page = firstBit; page < firstBit + numPages; ++page) {
-      if (!bits::isBitSet(pageAllocated_.data(), page)) {
-        // TODO: change this to a velox failure to catch the bug.
+      if (FOLLY_UNLIKELY(!bits::isBitSet(pageAllocated_.data(), page))) {
         VELOX_MEM_LOG(ERROR)
             << "Double free: page = " << page << " sizeclass = " << unitSize_;
+        RECORD_METRIC_VALUE(kMetricMemoryAllocatorDoubleFreeCount);
         continue;
       }
       if (bits::isBitSet(pageMapped_.data(), page)) {

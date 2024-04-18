@@ -50,8 +50,7 @@ void compareOutputs(
     while (!RE2::FullMatch(line, expectedLine.line)) {
       potentialLines.push_back(expectedLine.line);
       if (!expectedLine.optional) {
-        ASSERT_FALSE(true) << "Output did not match "
-                           << "Source:" << testName
+        ASSERT_FALSE(true) << "Output did not match " << "Source:" << testName
                            << ", Line number:" << lineCount
                            << ", Line: " << line << ", Expected Line one of: "
                            << folly::join(",", potentialLines);
@@ -89,7 +88,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
         makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
     });
     leftVectors.push_back(rowVector);
-    writeToFile(leftFiles[i]->path, rowVector);
+    writeToFile(leftFiles[i]->getPath(), rowVector);
   }
   auto probeType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
 
@@ -186,7 +185,8 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"    -- TableScan\\[table: hive_table\\] -> c0:INTEGER, c1:BIGINT"},
        {"       Input: 2000 rows \\(.+\\), Raw Input: 20480 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 20"},
-       {"          dataSourceWallNanos [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"          dataSourceAddSplitWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"          dataSourceReadWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
        {"          dynamicFiltersAccepted[ ]* sum: 1, count: 1, min: 1, max: 1"},
        {"          flattenStringDictionaryValues [ ]* sum: 0, count: 1, min: 0, max: 0"},
        {"          ioWaitNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
@@ -237,7 +237,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
     SCOPED_TRACE(fmt::format("numPrefetchSplit {}", numPrefetchSplit));
     asyncDataCache_->clear();
     auto filePath = TempFilePath::create();
-    writeToFile(filePath->path, vectors);
+    writeToFile(filePath->getPath(), vectors);
 
     auto op =
         PlanBuilder()
@@ -281,7 +281,8 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
          {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
          {"  -- TableScan\\[table: hive_table\\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR"},
          {"     Input: 10000 rows \\(.+\\), Output: 10000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1"},
-         {"        dataSourceWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
+         {"        dataSourceAddSplitWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
+         {"        dataSourceReadWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
          {"        flattenStringDictionaryValues [ ]* sum: 0, count: 1, min: 0, max: 0"},
          {"        ioWaitNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
          {"        localReadBytes   [ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
