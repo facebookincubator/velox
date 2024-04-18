@@ -15,9 +15,7 @@
 name: Linux Nightly Build
 
 on:
-  push:
-    branches:
-      - "gha-add-cuda"
+  pull_request:
 
   schedule:
     - cron: '0 3 * * *'
