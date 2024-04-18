@@ -191,6 +191,12 @@ function install_cuda {
   yum install -y cuda-nvcc-$(echo $1 | tr '.' '-') cuda-cudart-devel-$(echo $1 | tr '.' '-')
 }
 
+function install_cuda_toolkit {
+  # See https://developer.nvidia.com/cuda-downloads
+  dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
+  yum install -y cuda-toolkit-$(echo $1 | tr '.' '-')
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_dnf
   run_and_time install_conda
