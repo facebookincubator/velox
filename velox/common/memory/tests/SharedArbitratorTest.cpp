@@ -143,7 +143,7 @@ class FakeMemoryOperator : public Operator {
       override {
     VELOX_CHECK(canReclaim());
     auto* driver = operatorCtx_->driver();
-    VELOX_CHECK(!driver->state().isOnThread() || driver->state().isSuspended);
+    VELOX_CHECK(!driver->state().isOnThread() || driver->state().suspended());
     VELOX_CHECK(driver->task()->pauseRequested());
     VELOX_CHECK_GT(targetBytes, 0);
 
@@ -160,14 +160,12 @@ class FakeMemoryOperator : public Operator {
       pool()->free(allocIt->buffer, allocIt->size);
       allocIt = allocations_.erase(allocIt);
     }
-    VELOX_CHECK_GE(totalBytes_, 0);
   }
 
  private:
   void clear() {
     for (auto& allocation : allocations_) {
       totalBytes_ -= allocation.free();
-      VELOX_CHECK_GE(totalBytes_, 0);
     }
     allocations_.clear();
     VELOX_CHECK_EQ(totalBytes_.load(), 0);

@@ -14,9 +14,15 @@
  * limitations under the License.
  */
 #include "velox/exec/TableScan.h"
+#include <folly/synchronization/Baton.h>
+#include <folly/synchronization/Latch.h>
 #include <atomic>
+#include "folly/experimental/EventCount.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/tests/FaultyFile.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -29,6 +35,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
@@ -40,6 +47,7 @@ using namespace facebook::velox::core;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::common::test;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::tests::utils;
 
 namespace {
 void verifyCacheStats(
@@ -108,6 +116,20 @@ class TableScanTest : public virtual HiveConnectorTestBase {
         .config(
             core::QueryConfig::kMaxSplitPreloadPerDriver,
             std::to_string(numPrefetchSplit))
+        .splits(makeHiveConnectorSplits(filePaths))
+        .assertResults(duckDbSql);
+  }
+
+  // Run query with spill enabled.
+  std::shared_ptr<Task> assertQuery(
+      const PlanNodePtr& plan,
+      const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
+      const std::string& spillDirectory,
+      const std::string& duckDbSql) {
+    return AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .spillDirectory(spillDirectory)
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(core::QueryConfig::kAggregationSpillEnabled, true)
         .splits(makeHiveConnectorSplits(filePaths))
         .assertResults(duckDbSql);
   }
@@ -1350,6 +1372,42 @@ TEST_F(TableScanTest, multipleSplits) {
       ASSERT_EQ(stats.count("preloadedSplits"), 0);
     }
   }
+}
+
+TEST_F(TableScanTest, preloadingSplitClose) {
+  auto filePaths = makeFilePaths(100);
+  auto vectors = makeVectors(100, 100);
+  for (int32_t i = 0; i < vectors.size(); i++) {
+    writeToFile(filePaths[i]->path, vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  auto executors = ioExecutor_.get();
+  folly::Latch latch(executors->numThreads());
+  std::vector<folly::Baton<>> batons(executors->numThreads());
+  // Simulate a busy IO thread pool by blocking all threads.
+  for (auto& baton : batons) {
+    executors->add([&]() {
+      baton.wait();
+      latch.count_down();
+    });
+  }
+  ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
+  auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp", 2);
+  auto stats = getTableScanRuntimeStats(task);
+
+  // Verify that split preloading is enabled.
+  ASSERT_GT(stats.at("preloadedSplits").sum, 1);
+
+  task.reset();
+  // Once all task references are cleared, the count of deleted tasks should
+  // promptly match the count of created tasks.
+  ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
+  // Clean blocking items in the IO thread pool.
+  for (auto& baton : batons) {
+    baton.post();
+  }
+  latch.wait();
 }
 
 TEST_F(TableScanTest, waitForSplit) {
@@ -4046,4 +4104,134 @@ TEST_F(TableScanTest, timestampPartitionKey) {
                   .endTableScan()
                   .planNode();
   AssertQueryBuilder(plan).splits(std::move(splits)).assertResults(expected);
+}
+
+TEST_F(TableScanTest, partitionKeyNotMatchPartitionKeysHandle) {
+  auto vectors = makeVectors(1, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, vectors);
+  createDuckDbTable(vectors);
+
+  auto split = HiveConnectorSplitBuilder(filePath->path)
+                   .partitionKey("ds", "2021-12-02")
+                   .build();
+
+  auto outputType = ROW({"c0"}, {BIGINT()});
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(outputType)
+                .endTableScan()
+                .planNode();
+
+  assertQuery(op, split, "SELECT c0 FROM tmp");
+}
+
+TEST_F(TableScanTest, memoryArbitrationWithSlowTableScan) {
+  const size_t numFiles{2};
+  std::vector<std::shared_ptr<TempFilePath>> filePaths;
+  std::vector<RowVectorPtr> vectorsForDuckDb;
+  filePaths.reserve(numFiles);
+  vectorsForDuckDb.reserve(numFiles);
+  for (auto i = 0; i < numFiles; ++i) {
+    auto vectors = makeVectors(5, 128);
+    filePaths.emplace_back(TempFilePath::create(true));
+    writeToFile(filePaths.back()->path, vectors);
+    for (const auto& vector : vectors) {
+      vectorsForDuckDb.emplace_back(vector);
+    }
+  }
+  createDuckDbTable(vectorsForDuckDb);
+
+  std::atomic_bool readWaitFlag{true};
+  folly::EventCount readWait;
+  std::atomic_bool readResumeFlag{true};
+  folly::EventCount readResume;
+
+  auto faultyFs = faultyFileSystem();
+  std::atomic_bool injectOnce{true};
+  faultyFs->setFileInjectionHook([&](FaultFileOperation* readOp) {
+    // Inject memory arbitration at the second read file so as to make sure the
+    // aggregation has accumulated state to spill.
+    if (readOp->path != filePaths.back()->getPath()) {
+      return;
+    }
+    if (!injectOnce.exchange(false)) {
+      return;
+    }
+    readWaitFlag = false;
+    readWait.notifyAll();
+    readResume.await([&]() { return !readResumeFlag.load(); });
+  });
+
+  // Get the number of values processed via aggregation pushdown into scan.
+  auto loadedToValueHook = [](const std::shared_ptr<Task> task,
+                              int operatorIndex = 0) {
+    auto stats = task->taskStats()
+                     .pipelineStats[0]
+                     .operatorStats[operatorIndex]
+                     .runtimeStats;
+    auto it = stats.find("loadedToValueHook");
+    return it != stats.end() ? it->second.sum : 0;
+  };
+
+  core::PlanNodeId aggNodeId;
+  auto op =
+      PlanBuilder()
+          .tableScan(rowType_)
+          .singleAggregation(
+              {"c5"}, {"max(c0)", "max(c1)", "max(c2)", "max(c3)", "max(c4)"})
+          .capturePlanNodeId(aggNodeId)
+          .planNode();
+
+  std::thread queryThread([&]() {
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto task = assertQuery(
+        op,
+        filePaths,
+        spillDirectory->getPath(),
+        "SELECT c5, max(c0), max(c1), max(c2), max(c3), max(c4) FROM tmp group by c5");
+    EXPECT_EQ(6400, loadedToValueHook(task, 1));
+    EXPECT_GT(toPlanStats(task->taskStats()).at(aggNodeId).spilledBytes, 0);
+  });
+
+  readWait.await([&]() { return !readWaitFlag.load(); });
+
+  memory::testingRunArbitration();
+
+  readResumeFlag = false;
+  readResume.notifyAll();
+
+  queryThread.join();
+}
+
+DEBUG_ONLY_TEST_F(TableScanTest, memoryArbitrationByTableScanAllocation) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  std::atomic_bool injectOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::MemoryPoolImpl::reserveThreadSafe",
+      std::function<void(memory::MemoryPool*)>([&](memory::MemoryPool* pool) {
+        const std::string re(".*TableScan.*");
+        if (!RE2::FullMatch(pool->name(), re)) {
+          return;
+        }
+        if (!injectOnce.exchange(false)) {
+          return;
+        }
+        memory::memoryManager()->testingGrowPool(pool, 1 << 20);
+      }));
+
+  auto op =
+      PlanBuilder()
+          .tableScan(rowType_)
+          .singleAggregation(
+              {"c5"}, {"max(c0)", "max(c1)", "max(c2)", "max(c3)", "max(c4)"})
+          .planNode();
+  assertQuery(
+      op,
+      {filePath},
+      "SELECT c5, max(c0), max(c1), max(c2), max(c3), max(c4) FROM tmp group by c5");
 }
