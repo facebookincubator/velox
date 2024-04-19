@@ -26,6 +26,7 @@ on:
         required: true
 
   schedule:
+    # Run every day at 04:05
     - cron: "5 4 * * *"
 
 permissions:

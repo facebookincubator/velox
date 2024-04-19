@@ -218,7 +218,6 @@ def upload(args):
             "run_name": run_name,
             "run_reason": run_reason,
             "github": {
-                # TODO change
                 "repository": "https://github.com/facebookincubator/velox",
                 "pr_number": pr_number,
                 "commit": args.sha,
