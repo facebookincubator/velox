@@ -155,7 +155,12 @@ FOLLY_ALWAYS_INLINE void urlEscape(
       outputBuffer[outIndex++] = p;
     }
   }
-  output.resize(outIndex);
+  if constexpr (std::is_same<TOutString, std::string>::value) {
+    output = std::string(outputBuffer, outIndex);
+  } else {
+    // StringWriter, etc.
+    output.resize(outIndex);
+  }
 }
 
 /// Performs initial validation of the URI.
