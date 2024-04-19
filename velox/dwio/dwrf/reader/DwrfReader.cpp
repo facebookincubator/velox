@@ -473,7 +473,7 @@ DwrfRowReader::prefetchUnits() {
 DwrfRowReader::FetchResult DwrfRowReader::fetch(uint32_t stripeIndex) {
   FetchStatus prevStatus;
   stripeLoadStatuses_.withWLock([&](auto& stripeLoadStatus) {
-    if (stripeIndex < 0 || stripeIndex >= stripeLoadStatus.size()) {
+    if (stripeIndex >= stripeLoadStatus.size()) {
       prevStatus = FetchStatus::ERROR;
     }
 
