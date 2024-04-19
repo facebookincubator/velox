@@ -52,7 +52,7 @@ dependencies:
   - libaio
   - libdwarf-dev
   - libevent
-  - libprotobuf=3.21
+  - libprotobuf=3.26
   - libsodium
   - libtool
   - libunwind

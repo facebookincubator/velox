@@ -51,7 +51,7 @@ dependencies:
   - gtest=1.13
   - libdwarf-dev
   - libevent
-  - libprotobuf=3.21
+  - libprotobuf=3.26
   - libsodium
   - libtool
   - lz4-c

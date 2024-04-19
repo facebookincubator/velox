@@ -122,7 +122,7 @@ function install_fmt {
 }
 
 function install_protobuf {
-  wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protobuf-all-21.4.tar.gz protobuf
+  wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v26.4/protobuf-all-21.4.tar.gz protobuf
   (
     cd protobuf
     ./configure --prefix=/usr
