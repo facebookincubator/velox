@@ -65,7 +65,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
         partitionKeys,
-    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& ioStats,
@@ -106,7 +106,7 @@ SplitReader::SplitReader(
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
         partitionKeys,
-    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& ioStats,
@@ -237,7 +237,11 @@ void SplitReader::createReader() {
     cacheTTLController->addOpenFileInfo(fileHandle->uuid.id());
   }
   auto baseFileInput = createBufferedInput(
-      *fileHandle, baseReaderOpts_, connectorQueryCtx_, ioStats_, executor_);
+      *fileHandle,
+      baseReaderOpts_,
+      connectorQueryCtx_.get(),
+      ioStats_,
+      executor_);
 
   baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.getFileFormat())
                     ->createReader(std::move(baseFileInput), baseReaderOpts_);

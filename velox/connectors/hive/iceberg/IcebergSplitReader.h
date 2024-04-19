@@ -31,7 +31,7 @@ class IcebergSplitReader : public SplitReader {
       const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
       const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
           partitionKeys,
-      const ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStats,

@@ -367,7 +367,7 @@ class Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      ConnectorQueryCtx* connectorQueryCtx) = 0;
+      const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx) = 0;
 
   /// Returns true if addSplit of DataSource can use 'dataSource' from
   /// ConnectorSplit in addSplit(). If so, TableScan can preload splits

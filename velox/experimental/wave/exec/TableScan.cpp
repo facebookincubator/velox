@@ -84,7 +84,7 @@ BlockingReason TableScan::nextSplit(ContinueFuture* future) {
     connectorQueryCtx_ = driver_->operatorCtx()->createConnectorQueryCtx(
         connectorSplit->connectorId, planNodeId_, connectorPool_);
     dataSource_ = connector_->createDataSource(
-        outputType_, tableHandle_, columnHandles_, connectorQueryCtx_.get());
+        outputType_, tableHandle_, columnHandles_, connectorQueryCtx_);
     waveDataSource_ = dataSource_->toWaveDataSource();
     WithSubfieldMap subfields(driver_->subfields());
     waveDataSource_->setOutputOperands(defines_);
@@ -145,7 +145,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
              },
              &debugString});
 
-        auto ptr = connector->createDataSource(type, table, columns, ctx.get());
+        auto ptr = connector->createDataSource(type, table, columns, ctx);
         if (task->isCancelled()) {
           return nullptr;
         }

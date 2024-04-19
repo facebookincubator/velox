@@ -48,7 +48,7 @@ class HiveConnector : public Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      ConnectorQueryCtx* connectorQueryCtx) override;
+      const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx) override;
 
   bool supportsSplitPreload() override {
     return true;

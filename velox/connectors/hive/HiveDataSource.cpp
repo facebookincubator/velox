@@ -37,7 +37,7 @@ HiveDataSource::HiveDataSource(
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
-    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig)
     : pool_(connectorQueryCtx->memoryPool()),
       fileHandleFactory_(fileHandleFactory),
@@ -377,7 +377,7 @@ std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
         &partitionKeys_,
         fileHandleFactory_,
         executor_,
-        connectorQueryCtx_,
+        connectorQueryCtx_.get(),
         hiveConfig_,
         ioStats_,
         remainingFilterExprSet_.get(),
