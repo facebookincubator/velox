@@ -360,7 +360,7 @@ std::vector<TypePtr> SplitReader::adaptColumns(
     } else {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
       if (!fileTypeIdx.has_value()) {
-        if (hiveSplit_->rowIndexColumn.has_value() &&
+        if (!hiveSplit_->rowIndexColumn.has_value() ||
             fieldName != hiveSplit_->rowIndexColumn.value()) {
           // Column is missing. Most likely due to schema evolution.
           VELOX_CHECK(tableSchema);
