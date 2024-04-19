@@ -14,6 +14,6 @@ make build
 
 cd _build/release
 
-ctest -R cudf
+ctest -R cudf -V
 
 popd
