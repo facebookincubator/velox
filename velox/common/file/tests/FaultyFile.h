@@ -26,6 +26,7 @@ struct FaultFileOperation {
     /// Injects faults for file read operations.
     kRead,
     kReadv,
+    kWrite,
     /// TODO: add to support fault injections for the other file operation
     /// types.
   };
@@ -77,6 +78,17 @@ struct FaultFileReadvOperation : FaultFileOperation {
         buffers(_buffers) {}
 };
 
+/// Fault injection parameters for file write API.
+struct FaultFileWriteOperation : FaultFileOperation {
+  std::string_view data;
+
+  FaultFileWriteOperation(
+      const std::string& _path,
+      const std::string_view& _data)
+      : FaultFileOperation(FaultFileOperation::Type::kWrite, _path),
+        data(_data) {}
+};
+
 /// The fault injection hook on the file operation path.
 using FileFaultInjectionHook = std::function<void(FaultFileOperation*)>;
 
@@ -125,6 +137,7 @@ class FaultyReadFile : public ReadFile {
 class FaultyWriteFile : public WriteFile {
  public:
   FaultyWriteFile(
+      const std::string& path,
       std::shared_ptr<WriteFile> delegatedFile,
       FileFaultInjectionHook injectionHook);
 
@@ -143,6 +156,7 @@ class FaultyWriteFile : public WriteFile {
   }
 
  private:
+  const std::string path_;
   const std::shared_ptr<WriteFile> delegatedFile_;
   const FileFaultInjectionHook injectionHook_;
 };
