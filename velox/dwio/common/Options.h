@@ -45,7 +45,7 @@ enum class FileFormat {
   TEXT = 5,
   JSON = 6,
   PARQUET = 7,
-  ALPHA = 8,
+  NIMBLE = 8,
   ORC = 9,
 };
 
