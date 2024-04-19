@@ -77,7 +77,7 @@ jobs:
           # docker container before. It simplifies testing new/different versions
           if ! yum list installed cuda-nvcc-$(echo ${CUDA_VERSION} | tr '.' '-') 1>/dev/null; then
             source scripts/setup-centos8.sh
-            install_cuda_runtime ${CUDA_VERSION}
+            install_cuda ${CUDA_VERSION}
           fi
 
       - uses: assignUser/stash/restore@v1
