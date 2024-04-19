@@ -16,7 +16,27 @@
 
 #pragma once
 
+#include "velox/exec/Operator.h"
+#include "velox/exec/Driver.h"
+
 namespace facebook::velox::cudf_velox {
+
+class CompileState {
+ public:
+  CompileState(const exec::DriverFactory& driverFactory, exec::Driver& driver)
+      : driverFactory_(driverFactory), driver_(driver) {}
+
+  exec::Driver& driver() {
+    return driver_;
+  }
+
+  // Replaces sequences of Operators in the Driver given at construction with
+  // cuDF equivalents. Returns true if the Driver was changed.
+  bool compile();
+
+  const exec::DriverFactory& driverFactory_;
+  exec::Driver& driver_;
+};
 
 /// Registers adapter to add cuDF operators to Drivers.
 void registerCudf();
