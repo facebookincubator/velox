@@ -50,8 +50,12 @@ class InputFileName final : public exec::VectorFunction {
     auto driverCtx = context.driverCtx();
     auto writer = exec::StringWriter<>(localResult.get(), 0);
     auto inputFileName = driverCtx != nullptr ? driverCtx->inputFileName : "";
+    std::vector<uint64_t> doNotEncodeSymbolsBits(4);
+    for (auto p : "!$&'()*+,;=/:@") {
+      bits::setBit(doNotEncodeSymbolsBits.data(), static_cast<size_t>(p), true);
+    }
     facebook::velox::functions::detail::urlEscape(
-        writer, driverCtx->inputFileName, false, "!$&'()*+,;=/:@");
+        writer, driverCtx->inputFileName, false, doNotEncodeSymbolsBits.data());
     writer.finalize();
     auto outFilename = localResult->valueAt(0);
     context.moveOrCopyResult(

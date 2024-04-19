@@ -110,10 +110,14 @@ FOLLY_ALWAYS_INLINE bool isAlphaNumeric(char c) {
 }
 
 FOLLY_ALWAYS_INLINE bool shouldEncode(char c) {
-  static std::unordered_set<char> const ExtraNonEncodableChars = {
-      '-', '_', '.', '*'};
-  return !isAlphaNumeric(c) &&
-      ExtraNonEncodableChars.find(c) == ExtraNonEncodableChars.end();
+  switch (c) {
+    case '-':
+    case '_':
+    case '.':
+    case '*':
+      return false;
+  };
+  return !isAlphaNumeric(c);
 }
 
 /// Escapes ``input`` by encoding it so that it can be safely included in
@@ -130,16 +134,12 @@ FOLLY_ALWAYS_INLINE void urlEscape(
     TOutString& output,
     const TInString& input,
     bool usePlusForSpace = true,
-    const std::string& doNotEncodeSymbols = "") {
+    const uint64_t* doNotEncodeSymbolsBits = nullptr) {
   auto inputSize = input.size();
   output.reserve(inputSize * 3);
 
   auto inputBuffer = input.data();
   auto outputBuffer = output.data();
-  std::vector<uint64_t> doNotEncodeSymbolsBits(4);
-  for (auto p : doNotEncodeSymbols) {
-    bits::setBit(doNotEncodeSymbolsBits.data(), static_cast<size_t>(p), true);
-  }
   size_t outIndex = 0;
   for (auto i = 0; i < inputSize; ++i) {
     unsigned char p = inputBuffer[i];
@@ -147,8 +147,8 @@ FOLLY_ALWAYS_INLINE void urlEscape(
       outputBuffer[outIndex++] = '+';
     } else if (
         shouldEncode(p) &&
-        !bits::isBitSet(
-            doNotEncodeSymbolsBits.data(), static_cast<size_t>(p))) {
+        (!doNotEncodeSymbolsBits ||
+         !bits::isBitSet(doNotEncodeSymbolsBits, static_cast<size_t>(p)))) {
       charEscape(p, outputBuffer + outIndex);
       outIndex += 3;
     } else {
