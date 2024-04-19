@@ -536,7 +536,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       const std::vector<std::string>& partitionedBy,
       const std::shared_ptr<HiveBucketProperty> bucketProperty,
       const std::optional<CompressionKind> compressionKind = {},
-      const std::string& stripSize = "") {
+      const std::string& stripeSize = "1GB") {
     return std::make_shared<core::InsertTableHandle>(
         kHiveConnectorId,
         makeHiveInsertTableHandle(
@@ -548,7 +548,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                 outputDirectoryPath, std::nullopt, outputTableType),
             fileFormat_,
             compressionKind,
-            stripSize));
+            stripeSize));
   }
 
   // Returns a table insert plan node.
@@ -565,7 +565,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit,
       bool aggregateResult = true,
       std::shared_ptr<core::AggregationNode> aggregationNode = nullptr,
-      const std::string& stripSize = "") {
+      const std::string& stripeSize = "1GB") {
     return createInsertPlan(
         inputPlan,
         inputPlan.planNode()->outputType(),
@@ -579,7 +579,7 @@ class TableWriteTest : public HiveConnectorTestBase {
         outputCommitStrategy,
         aggregateResult,
         aggregationNode,
-        stripSize);
+        stripeSize);
   }
 
   PlanNodePtr createInsertPlan(
@@ -596,7 +596,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit,
       bool aggregateResult = true,
       std::shared_ptr<core::AggregationNode> aggregationNode = nullptr,
-      const std::string& stripSize = "") {
+      const std::string& stripeSize = "1GB") {
     if (numTableWriters == 1) {
       auto insertPlan = inputPlan
                             .addNode(addTableWriter(
@@ -610,7 +610,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                                     partitionedBy,
                                     bucketProperty,
                                     compressionKind,
-                                    stripSize),
+                                    stripeSize),
                                 bucketProperty != nullptr,
                                 outputCommitStrategy))
                             .capturePlanNodeId(tableWriteNodeId_);
@@ -635,7 +635,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                                     partitionedBy,
                                     bucketProperty,
                                     compressionKind,
-                                    stripSize),
+                                    stripeSize),
                                 bucketProperty != nullptr,
                                 outputCommitStrategy))
                             .capturePlanNodeId(tableWriteNodeId_)
@@ -677,7 +677,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                       partitionedBy,
                       bucketProperty,
                       compressionKind,
-                      stripSize),
+                      stripeSize),
                   bucketProperty != nullptr,
                   outputCommitStrategy))
               .capturePlanNodeId(tableWriteNodeId_)

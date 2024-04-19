@@ -289,7 +289,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
-    const std::string& stripSize) {
+    const std::string& stripeSize) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -342,9 +342,9 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   std::function<std::shared_ptr<dwio::common::FlushPolicy>()>
       flushPolicyFactory = nullptr;
   if (tableStorageFormat == dwio::common::FileFormat::DWRF) {
-    flushPolicyFactory = [&stripSize]() {
+    flushPolicyFactory = [stripeSize]() {
       return std::make_shared<velox::dwrf::DefaultFlushPolicy>(
-          toCapacity(stripSize, core::CapacityUnit::BYTE), 16777216);
+          toCapacity(stripeSize, core::CapacityUnit::BYTE), 16777216);
     };
   }
 
