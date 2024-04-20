@@ -13,14 +13,14 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_PROTOBUF_BUILD_VERSION 21.4)
+set(VELOX_PROTOBUF_BUILD_VERSION 26.1)
 set(VELOX_PROTOBUF_BUILD_SHA256_CHECKSUM
     6c5e1b0788afba4569aeebb2cfe205cb154aa01deacaba0cd26442f3b761a836)
 string(
   CONCAT
     VELOX_PROTOBUF_SOURCE_URL
     "https://github.com/protocolbuffers/protobuf/releases/download/"
-    "v${VELOX_PROTOBUF_BUILD_VERSION}/protobuf-all-${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz"
+    "v${VELOX_PROTOBUF_BUILD_VERSION}/protobuf-${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz"
 )
 
 resolve_dependency_url(PROTOBUF)
