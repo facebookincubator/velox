@@ -37,14 +37,14 @@ class InputFileName final : public exec::VectorFunction {
       VectorPtr& result) const override {
     context.ensureWritable(rows, VARCHAR(), result);
     auto driverCtx = context.driverCtx();
-    auto inputFileName = driverCtx != nullptr ? driverCtx->inputFileName : "";
-    std::vector<uint64_t> doNotEncodeSymbolsBits(4);
+    auto inputFileName = driverCtx->inputFileName;
+    uint64_t doNotEncodeSymbolsBits[4] = {};
     for (auto p : "!$&'()*+,;=/:@") {
-      bits::setBit(doNotEncodeSymbolsBits.data(), static_cast<size_t>(p), true);
+      bits::setBit(doNotEncodeSymbolsBits, static_cast<size_t>(p), true);
     }
     std::string outFileName = inputFileName;
     facebook::velox::functions::detail::urlEscape(
-        outFileName, inputFileName, false, doNotEncodeSymbolsBits.data());
+        outFileName, inputFileName, false, doNotEncodeSymbolsBits);
     context.moveOrCopyResult(
         std::make_shared<ConstantVector<StringView>>(
             context.pool(),
